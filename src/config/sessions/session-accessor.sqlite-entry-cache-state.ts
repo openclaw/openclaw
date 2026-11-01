@@ -1,4 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import {
   publishSqliteCommittedState,
   stageSqliteTransactionState,
@@ -25,7 +26,7 @@ export type SqliteSessionEntryCache = SessionEntryCacheSnapshot & {
 // snapshots current; narrow tracked upserts patch one authoritative row after commit, while
 // structural/unknown writes invalidate. Without both, every read would re-query and re-parse
 // every entry_json document.
-export const sessionEntryCaches = new WeakMap<DatabaseSync, SqliteSessionEntryCache>();
+export const sessionEntryCaches = new WeakMap<EngineConnection, SqliteSessionEntryCache>();
 
 export function publishTrackedCacheUpdate(
   database: SessionEntryCacheDatabase,
@@ -45,14 +46,17 @@ export function publishTrackedCacheUpdate(
   };
   // Committed cache state must settle before observers can reenter with newer writes.
   if (
-    stageSqliteTransactionState(database.db, {
-      stage: () => {
-        settle = stage?.();
+    stageSqliteTransactionState(
+      isPostgresSqlConnection(database.db) ? database.db.anchor : database.db,
+      {
+        stage: () => {
+          settle = stage?.();
+        },
+        rollback: () => settle?.(),
+        commit,
+        invalidate,
       },
-      rollback: () => settle?.(),
-      commit,
-      invalidate,
-    })
+    )
   ) {
     return true;
   }
@@ -67,7 +71,7 @@ export function publishTrackedCacheUpdate(
 
 /** Participant display facts may be borrowed in a transaction only at its native revision. */
 export function readCurrentSessionEntryCacheParticipants(
-  database: DatabaseSync,
+  database: EngineConnection,
   sessionKey: string,
 ): SessionParticipantProjection | undefined {
   const cached = sessionEntryCaches.get(database);

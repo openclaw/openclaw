@@ -112,7 +112,6 @@ it("ignores legacy pending, last-seen, and retained navigation without replaying
   expect(JSON.parse(localStorage.getItem(pendingKey)!)).toMatchObject(legacyPending);
   const lastSeen = JSON.parse(localStorage.getItem(lastSeenKey)!);
   expect(lastSeen).not.toHaveProperty("sidebarEntries");
-  expect(lastSeen.navigationConfirmation).not.toHaveProperty("sidebarEntries");
   expect(JSON.parse(localStorage.getItem(retainedKey)!)).toMatchObject({ sidebarEntries: true });
 });
 

@@ -3,8 +3,6 @@ import type {
   PluginStateOperationTransaction,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { base64url } from "../protocol/encoding.js";
-import { generateIdentity } from "../protocol/identity.js";
 import type { ReviewApproval, ReviewRequest } from "../protocol/pipeline.js";
 import {
   parseReefIdentityBinding,
@@ -19,18 +17,19 @@ import {
   REEF_KEYS_MIGRATION_KEY,
   type ReefReviewRecord,
 } from "./state-format.js";
+import {
+  assertReefIdentityMigrationComplete,
+  completedReefReviewToEvict,
+  generateReefKeys,
+  reefReviewDecision,
+} from "./state-policy.js";
 import type { ReefKeys } from "./types.js";
 
 export type ReefInboxCursorRecord = ReefIdentityBinding & { cursor: number };
-export const REEF_INBOX_CURSOR_KEY = "current";
+const REEF_INBOX_CURSOR_KEY = "current";
 type ReefReviewDecision = "none" | "pending" | { approved: boolean };
 
-export class ReefReviewCapacityError extends Error {
-  constructor() {
-    super("Reef pending review capacity is exhausted");
-    this.name = "ReefReviewCapacityError";
-  }
-}
+export { ReefReviewCapacityError } from "./state-policy.js";
 
 export type ReefStateOperations = {
   "identity.generate": { input: undefined; output: ReefKeys };
@@ -50,19 +49,6 @@ export type ReefStateOperations = {
   "cursor.advance": { input: ReefInboxCursorRecord; output: undefined };
 };
 
-function assertIdentityMigrationComplete(durable: unknown, identity: unknown): void {
-  if (durable) {
-    throw new Error(
-      "Reef durable state migration is incomplete; repair the legacy state files and rerun openclaw doctor --fix",
-    );
-  }
-  if (identity) {
-    throw new Error(
-      "Reef identity migration is incomplete; repair the legacy identity files and rerun openclaw doctor --fix",
-    );
-  }
-}
-
 export function requestReefReview(
   tx: PluginStateOperationTransaction,
   store: number,
@@ -76,15 +62,9 @@ export function requestReefReview(
       ? undefined
       : { approved: current.approved, approvalDigest: key };
   }
-  const entries = tx.entries<ReefReviewRecord>(store);
-  if (entries.length >= maxEntries) {
-    const completed = entries
-      .filter((entry) => entry.value.approved !== undefined)
-      .toSorted((left, right) => left.createdAt - right.createdAt)[0];
-    if (!completed) {
-      throw new ReefReviewCapacityError();
-    }
-    tx.delete(store, completed.key);
+  const evicted = completedReefReviewToEvict(tx.entries<ReefReviewRecord>(store), maxEntries);
+  if (evicted !== undefined) {
+    tx.delete(store, evicted);
   }
   tx.set(store, key, { review });
   return undefined;
@@ -110,14 +90,10 @@ export function lookupReefReviewDecision(
   digest: string,
 ): ReefReviewDecision {
   const current = parseReefReviewRecord(tx.lookup(store, digest));
-  return !current
-    ? "none"
-    : current.approved === undefined
-      ? "pending"
-      : { approved: current.approved };
+  return reefReviewDecision(current);
 }
 
-export function requireReefInboxCursorRecord(
+function requireReefInboxCursorRecord(
   value: unknown,
   binding: ReefIdentityBinding,
 ): ReefInboxCursorRecord {
@@ -151,18 +127,17 @@ export function runReefStateOperation(
         { store: 2, key: REEF_KEYS_KEY },
         { store: 3, key: REEF_REGISTRATION_IDENTITY_KEY },
       ]);
-      assertIdentityMigrationComplete(durable, migration);
+      assertReefIdentityMigrationComplete(durable, migration);
       const binding = parseReefIdentityBinding(registered);
       if (binding) {
         throw new Error(
-          `Reef identity @${binding.handle} on ${binding.relayUrl} has no canonical keys; restore the original keys before registration`,
+          `Reef identity @${binding.handle} on ${binding.relayUrl} has no stored keys; restore the original keys before registration`,
         );
       }
       if (existing !== undefined) {
         throw new Error("Reef keys already exist in plugin state");
       }
-      const random = () => base64url(crypto.getRandomValues(new Uint8Array(32)));
-      const keys = { ...generateIdentity(), auditKey: random(), replayKey: random(), keyEpoch: 1 };
+      const keys = generateReefKeys();
       tx.set(2, REEF_KEYS_KEY, keys);
       return keys;
     }
@@ -172,7 +147,7 @@ export function runReefStateOperation(
         { store: 1, key: REEF_KEYS_MIGRATION_KEY },
         { store: 2, key: REEF_KEYS_KEY },
       ]);
-      assertIdentityMigrationComplete(durable, migration);
+      assertReefIdentityMigrationComplete(durable, migration);
       return value ? parseReefKeys(value) : undefined;
     }
     case "identity.admit": {
@@ -180,7 +155,7 @@ export function runReefStateOperation(
         { store: 0, key: REEF_DURABLE_MIGRATION_KEY },
         { store: 1, key: REEF_KEYS_MIGRATION_KEY },
       ]);
-      assertIdentityMigrationComplete(durable, migration);
+      assertReefIdentityMigrationComplete(durable, migration);
       return undefined;
     }
     case "review.request":

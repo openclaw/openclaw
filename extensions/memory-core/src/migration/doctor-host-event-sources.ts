@@ -139,7 +139,7 @@ export async function collectLegacyMemoryHostEventSources(
         kind: "rejected",
         workspaceDir: canonicalWorkspaceDir,
         filePath,
-        reason: `Skipped unsafe Memory Core host event source ${filePath}: ${String(error)}. Check permissions and use regular files and directories inside the workspace, then rerun openclaw doctor --fix. For shared notes, use canonical paths in memory.search.extraPaths; this does not migrate legacy events.`,
+        reason: `Skipped unsafe Memory Core host event source ${filePath}: ${String(error)}. Check permissions and use regular files and directories inside the workspace, then rerun openclaw doctor --fix. For shared notes, use resolved paths in memory.search.extraPaths; this does not migrate legacy events.`,
       });
     }
   }

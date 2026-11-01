@@ -37,9 +37,9 @@ agent:<agentId>:<rest>
 
 The `<rest>` portion may be a simple name, several colon-delimited routing
 segments, or a value ending in a UUID. A Gateway configured with global session
-scope uses the canonical `global` session instead. When an agent-only URL is
+scope uses the primary `global` session instead. When an agent-only URL is
 opened against a global-scope Gateway, the CLI asks the Gateway for its session
-scope and resolves the URL to that canonical global session.
+scope and resolves the URL to that primary global session.
 
 See [Session management](/concepts/session) for routing, isolation, lifecycle,
 and storage details.
@@ -76,7 +76,7 @@ literal encoding and stability contract.
 ### Gateway version requirement
 
 The Gateway resolves short references at the session store owner, and the
-Control UI and CLI use the returned canonical key and owning agent, including
+Control UI and CLI use the returned normalized key and owning agent, including
 global sessions reached through a stale URL. Short links require a current
 Gateway. If an older or custom Gateway rejects the `shortId` selector, upgrade
 it or use a full session key.
@@ -105,7 +105,7 @@ agent-qualified session key and selected Gateway WebSocket URL. The key is
 bounded to 512 user-perceived characters. Its URL-safe alphabet needs no shell
 quoting, so the command is safe to paste in common POSIX shells, PowerShell, and
 `cmd.exe`. Run it in an OpenClaw CLI profile that is already configured for that
-Gateway; the terminal authenticates independently. The Gateway canonicalizes
+Gateway; the terminal authenticates independently. The Gateway normalizes
 the key before the TUI attaches, and a missing session produces recovery
 guidance instead of creating another session. The session ACL still applies.
 
@@ -135,7 +135,7 @@ You can also paste a complete session URL directly at the CLI root:
 openclaw https://claw.example.com/dashboard/main/deploy-monitor-6db92d48
 ```
 
-This opens the TUI on the canonical session key returned by the Gateway. It does
+This opens the TUI on the normalized session key returned by the Gateway. It does
 not clone the transcript or create a new session. See [TUI](/cli/tui) for target
 conflicts, supported bare-URL options, and examples.
 

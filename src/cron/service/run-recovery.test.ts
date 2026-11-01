@@ -6,15 +6,20 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cronRunLogEntryToDetail } from "../run-history-detail.js";
 import { projectCronRunHistoryPage } from "../run-history.js";
+import type { CronRunLogEntry } from "../run-log-types.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { readCronRunRecords } from "../store/read-only.js";
+import { readCronRunHistoryCandidates, readCronRunHistoryRecords } from "../store/read-only.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import { createCronScheduledRunId } from "../store/run-request-id.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
+import { recoverCronRuns } from "./run-recovery.js";
+import { makeCronRecoveryState } from "./run-recovery.test-support.js";
 import { createCronServiceState } from "./state.js";
+import { ensureLoaded } from "./store.js";
+import { authorCronRunCompletion } from "./timer-job-runner.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-run-recovery-" });
 const now = 1_800_000_000_000;
@@ -73,8 +78,16 @@ async function recoveryStore(jobs: CronJob[]) {
           ],
         },
       }),
-    history: async () =>
-      projectCronRunHistoryPage(await readCronRunRecords(storeKey), { storeKey }).entries,
+    history: async () => {
+      const { records } = await readCronRunHistoryCandidates(storeKey);
+      return projectCronRunHistoryPage(
+        await readCronRunHistoryRecords(
+          storeKey,
+          records.map((row) => row.id),
+        ),
+        { storeKey },
+      ).entries;
+    },
   };
 }
 
@@ -110,7 +123,10 @@ async function record(
   store: Awaited<ReturnType<typeof recoveryStore>>,
   receipt: CronRunReceiptHandle,
   entry: {
-    status: "ok";
+    status: "ok" | "error";
+    error?: string;
+    provider?: string;
+    errorReason?: CronRunLogEntry["errorReason"];
     delivered?: boolean;
     deliveryStatus?: "delivered";
     nextRunAtMs?: number;
@@ -126,7 +142,7 @@ async function record(
       agentId: receipt.agentId,
       startedAt: now,
       endedAt: now + 500,
-      status: "succeeded",
+      status: entry.status === "ok" ? "succeeded" : "failed",
       detail: cronRunLogEntryToDetail(
         {
           ts: now + 500,
@@ -134,7 +150,7 @@ async function record(
           action: "finished",
           runAtMs: now,
           durationMs: 500,
-          completionStatus: "succeeded",
+          completionStatus: entry.status === "ok" ? "succeeded" : "failed",
           ...entry,
         },
         { storeKey: store.storeKey, triggerEval },
@@ -144,49 +160,95 @@ async function record(
 }
 
 describe("worker-owned startup recovery", () => {
-  it("records an interrupted one-shot durably and never replays its uncertain payload", async () => {
-    const entry = job("one-shot", { schedule: { kind: "at", at: new Date(now).toISOString() } });
+  it("keeps recovered rows resident and observes a later in-process write", async () => {
+    const entry = job("resident-recovery");
     const store = await recoveryStore([entry]);
-    await activateManual(store, entry, "acknowledged-manual-run");
-    const runCommandJob = vi.fn();
-    const onEvent = vi.fn();
-    const state = createCronServiceState({
-      scheduler: createTestGatewayScheduler(),
-      storePath: store.storePath,
-      cronEnabled: true,
-      nowMs: () => now + 1_000,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(),
-      runCommandJob,
-      onEvent,
+    await activateManual(store, entry);
+    const state = makeCronRecoveryState(logger, store.storePath, now + 1_000);
+    await ensureLoaded(state);
+    await recoverCronRuns(state);
+
+    const resident = state.store;
+    expect(resident?.jobs[0]?.state).toMatchObject({
+      lastRunStatus: "error",
+      lastError: "cron: job interrupted by gateway restart",
     });
-    try {
-      await start(state);
-      expect((await loadCronStore(store.storePath)).jobs[0]).toMatchObject({
-        enabled: false,
-        state: { lastRunStatus: "error", lastError: "cron: job interrupted by gateway restart" },
-      });
-      expect(await store.history()).toMatchObject([
-        {
-          runId: "acknowledged-manual-run",
-          status: "error",
-          deliveryStatus: "unknown",
-        },
-      ]);
-      expect(runCommandJob).not.toHaveBeenCalled();
-      expect(onEvent.mock.calls.filter(([event]) => event.action === "finished")).toHaveLength(1);
-      stop(state);
-      await state.schedulerDrain;
-      await start(state);
-      expect(await store.history()).toHaveLength(1);
-      expect(runCommandJob).not.toHaveBeenCalled();
-    } finally {
-      stop(state);
-      await state.schedulerDrain;
-    }
+    expect(resident?.jobs[0]?.state.runningAtMs).toBeUndefined();
+    await ensureLoaded(state);
+    expect(state.store).toBe(resident);
+
+    const recovered = (await loadCronStore(store.storePath)).jobs[0]!;
+    await writeCronStoreSnapshot({
+      storePath: store.storePath,
+      jobs: [{ ...recovered, name: "updated after recovery" }],
+    });
+    await ensureLoaded(state);
+    expect(state.store?.jobs[0]?.name).toBe("updated after recovery");
+    expect(state.store?.jobs[0]?.state).toEqual(recovered.state);
   });
+
+  it.each(["at", "every"] as const)(
+    "records an interrupted %s run without counting a failure or replaying its uncertain payload",
+    async (kind) => {
+      const entry = job("interrupted", {
+        schedule:
+          kind === "at"
+            ? { kind: "at", at: new Date(now).toISOString() }
+            : { kind: "every", everyMs: 60_000, anchorMs: now },
+        state: { nextRunAtMs: now, consecutiveErrors: 9 },
+        failureAlert: { after: 1, cooldownMs: 0 },
+      });
+      const store = await recoveryStore([entry]);
+      await activateManual(store, entry, "acknowledged-manual-run");
+      const runCommandJob = vi.fn();
+      const onEvent = vi.fn();
+      const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
+        storePath: store.storePath,
+        cronEnabled: true,
+        nowMs: () => now + 1_000,
+        log: logger,
+        enqueueSystemEvent: vi.fn(),
+        runIsolatedAgentJob: vi.fn(),
+        runCommandJob,
+        onEvent,
+      });
+      try {
+        await start(state);
+        expect((await loadCronStore(store.storePath)).jobs[0]).toMatchObject({
+          enabled: kind !== "at",
+          state: {
+            lastRunStatus: "error",
+            lastError: "cron: job interrupted by gateway restart",
+            consecutiveErrors: 9,
+            lastFailureNotificationDeliveryStatus: "not-requested",
+          },
+        });
+        expect(await store.history()).toMatchObject([
+          {
+            runId: "acknowledged-manual-run",
+            status: "error",
+            deliveryStatus: "unknown",
+          },
+        ]);
+        const recovered = (await loadCronStore(store.storePath)).jobs[0]!;
+        expect(recovered.state.nextRunAtMs).toBe(kind === "at" ? undefined : now + 3_601_000);
+        expect(recovered.state.autoDisabled).toBeUndefined();
+        expect(recovered.state.failureAlertIncident).toBeUndefined();
+        expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(runCommandJob).not.toHaveBeenCalled();
+        expect(onEvent.mock.calls.filter(([event]) => event.action === "finished")).toHaveLength(1);
+        stop(state);
+        await state.schedulerDrain;
+        await start(state);
+        expect(await store.history()).toHaveLength(1);
+        expect(runCommandJob).not.toHaveBeenCalled();
+      } finally {
+        stop(state);
+        await state.schedulerDrain;
+      }
+    },
+  );
 
   it("finishes an existing legacy history row while preserving the acknowledged public ID", async () => {
     const entry = job("legacy-active");
@@ -199,12 +261,12 @@ describe("worker-owned startup recovery", () => {
         "UPDATE task_runs SET status = 'running', ended_at = NULL, detail_json = ? WHERE runtime = 'cron' AND run_id = ?",
       )
       .run(JSON.stringify({ storeKey: store.storeKey }), internalRunId);
-    const previous = (await readCronRunRecords(store.storeKey)).find(
+    const previous = (await readCronRunHistoryCandidates(store.storeKey)).records.find(
       (row) => row.runId === internalRunId,
     )!;
     expect(previous.endedAt).toBeUndefined();
     await store.recover();
-    const rows = (await readCronRunRecords(store.storeKey)).filter((row) => row.jobId === entry.id);
+    const { records: rows } = await readCronRunHistoryCandidates(store.storeKey, entry.id);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ id: previous.id, runId: internalRunId, status: "failed" });
     expect(
@@ -255,6 +317,75 @@ describe("worker-owned startup recovery", () => {
       expect(await store.history()).toHaveLength(1);
     },
   );
+
+  it.each([undefined, "timeout"] as const)(
+    "restores the recorded failure reason %s without changing history or replaying notices",
+    async (errorReason) => {
+      const entry = job("recorded-failure", { failureAlert: { after: 1, cooldownMs: 0 } });
+      const store = await recoveryStore([entry]);
+      const receipt = await activateManual(store, entry);
+      await record(store, receipt, {
+        status: "error",
+        error: "internal_error from provider",
+        provider: "anthropic",
+        errorReason,
+        nextRunAtMs: now + 60_000,
+      });
+      const before = await store.history();
+      const outcome = await store.recover();
+      expect(outcome.jobs[0]?.state.lastErrorReason).toBe(errorReason);
+      expect(outcome.jobs[0]?.state.nextRunAtMs).toBe(now + 60_000);
+      expect(outcome.notifications).toEqual([]);
+      expect(await store.history()).toEqual(before);
+      expect(
+        openOpenClawStateDatabase()
+          .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+          .get(receipt.receiptId),
+      ).toMatchObject({ status: "error" });
+    },
+  );
+
+  it("settles a recorded timeout receipt after restart without recording the outcome twice", async () => {
+    const entry = job("recorded-pending-timeout");
+    const store = await recoveryStore([entry]);
+    const receipt = await activateManual(store, entry);
+    await executeOpenClawStateWorker(store.context, {
+      type: "cron.finalizeRuns",
+      input: {
+        storeKey: store.storeKey,
+        snapshot: {
+          nowMs: now + 500,
+          outcomes: [
+            authorCronRunCompletion(entry, {
+              jobId: entry.id,
+              job: entry,
+              runReceipt: receipt,
+              executionPending: true,
+              status: "error" as const,
+              error: "cron: job execution timed out",
+              errorReason: "timeout" as const,
+              startedAt: now,
+              endedAt: now + 500,
+            }),
+          ],
+        },
+      },
+    });
+    const beforeJob = (await loadCronStore(store.storePath)).jobs[0];
+    const beforeHistory = await store.history();
+    expect(beforeHistory).toHaveLength(1);
+    const result = await store.recover();
+    expect(result.interruptedRuns).toEqual([]);
+    expect((await loadCronStore(store.storePath)).jobs[0]).toEqual(beforeJob);
+    expect(await store.history()).toEqual(beforeHistory);
+    expect(
+      openOpenClawStateDatabase()
+        .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+        .get(receipt.receiptId),
+    ).toMatchObject({ status: "error" });
+    await store.recover();
+    expect(await store.history()).toEqual(beforeHistory);
+  });
 
   it("restores a recorded result and primary delivery before one-shot deletion", async () => {
     const entry = job("complete", {

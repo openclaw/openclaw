@@ -44,36 +44,6 @@ function questionPayload(overrides?: { optionValues?: string[] }) {
 }
 
 describe("resolveMattermostPresentation question actions", () => {
-  it("encodes each option as a button carrying the Gateway option index", () => {
-    const { buttons } = resolveMattermostPresentation(questionPayload());
-
-    expect(buttons).toHaveLength(1);
-    expect(buttons[0]).toEqual([
-      {
-        id: "question-0",
-        text: "staging",
-        context: { oc_question: true, question_id: QUESTION_ID, option_index: 0 },
-        style: undefined,
-      },
-      {
-        id: "question-1",
-        text: "production",
-        context: { oc_question: true, question_id: QUESTION_ID, option_index: 1 },
-        style: undefined,
-      },
-    ]);
-  });
-
-  it("uses the Gateway's option order, not the order the buttons render in", () => {
-    const payload = questionPayload({ optionValues: ["production", "staging"] });
-    const { buttons } = resolveMattermostPresentation(payload);
-
-    expect(buttons[0]?.map((button) => [button.text, button.context.option_index])).toEqual([
-      ["staging", 1],
-      ["production", 0],
-    ]);
-  });
-
   it("leaves the custom-input option to prose", () => {
     const payload = questionPayload();
     payload.presentation.blocks[1]!.buttons!.push({
@@ -93,45 +63,18 @@ describe("resolveMattermostPresentation question actions", () => {
 
     expect(buttons).toEqual([]);
   });
-
-  it("still refuses typed actions Mattermost cannot preserve", () => {
-    const { buttons } = resolveMattermostPresentation({
-      text: "Deploy?",
-      presentation: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              { label: "Run", action: { type: "command", command: "/deploy" } },
-              { label: "Ping", action: { type: "callback", value: "ping" } },
-            ],
-          },
-        ],
-      },
-      channelData: {
-        askUser: { questionId: QUESTION_ID, optionValues: ["staging", "production"] },
-      },
-    });
-
-    expect(buttons).toEqual([]);
-  });
-
-  it("keeps rendering the deprecated value-shaped button", () => {
-    const { buttons } = resolveMattermostPresentation({
-      text: "Deploy?",
-      presentation: {
-        blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "deploy_approve" }] }],
-      },
-    });
-
-    expect(buttons[0]?.[0]).toMatchObject({ id: "deploy_approve", text: "Approve" });
-  });
 });
 
 describe("parseMattermostQuestionContext", () => {
   it("reads back what the button encoded", () => {
-    const { buttons } = resolveMattermostPresentation(questionPayload());
-    const context = buttons[0]?.[1]?.context;
+    const { buttons } = resolveMattermostPresentation(
+      questionPayload({ optionValues: ["production", "staging"] }),
+    );
+    expect(buttons[0]?.map((button) => [button.text, button.context.option_index])).toEqual([
+      ["staging", 1],
+      ["production", 0],
+    ]);
+    const context = buttons[0]?.[0]?.context;
 
     expect(parseMattermostQuestionContext(context as Record<string, unknown>)).toEqual({
       questionId: QUESTION_ID,

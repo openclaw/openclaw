@@ -20,6 +20,7 @@ import type { authorizeScopedGatewayHttpRequestOrReply } from "./http-utils.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 
 const lifecycle = vi.hoisted(() => ({
   authorize:
@@ -255,7 +256,8 @@ describe("POST /tools/invoke request cancellation", () => {
   });
 
   it("retains each child's original grant after HTTP completion without adopting a replacement", async () => {
-    await withOpenClawTestState({ label: "http-tool-child-authority" }, async () => {
+    const stateOptions = { label: "http-tool-child-authority", prepareProfileCatalog: true };
+    await withOpenClawTestState(stateOptions, async () => {
       const cfg: OpenClawConfig = {
         gateway: {
           roles: {
@@ -315,12 +317,11 @@ describe("POST /tools/invoke request cancellation", () => {
             requestAuth: authorizedRequest({
               authMethod: "trusted-proxy",
               trustDeclaredOperatorScopes: true,
-              authenticatedUserProfile: {
-                profileId: person.id,
-                displayName: person.displayName,
-                hasAvatar: false,
-                updatedAt: person.updatedAt,
-              },
+              authenticatedUserProfile: gatewayProfile(
+                person.id,
+                person.displayName,
+                person.updatedAt,
+              ),
               operatorAccessAuthority: {
                 signal: grant.signal,
                 assertCurrent: () => grant.signal.throwIfAborted(),

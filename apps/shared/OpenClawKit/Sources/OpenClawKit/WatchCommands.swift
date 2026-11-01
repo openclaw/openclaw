@@ -542,32 +542,22 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
             OpenClawWatchChatDeliveryContext.self, forKey: .chatDeliveryContext)
 
         let gatewayStatusText = try container.decodeIfPresent(String.self, forKey: .gatewayStatusText)
-        if let gatewayStatus = OpenClawWatchAppStatus.decode(
+        self.gatewayStatus = OpenClawWatchAppStatus.decode(
             from: container,
             forKey: .gatewayStatus,
-            fallbackText: gatewayStatusText)
-        {
-            self.gatewayStatus = gatewayStatus
-        } else {
-            self.gatewayStatus = OpenClawWatchAppStatus.decodeLegacyGateway(
-                text: gatewayStatusText,
-                connected: self.gatewayConnected)
-        }
+            fallbackText: gatewayStatusText) ?? OpenClawWatchAppStatus.decodeLegacyGateway(
+            text: gatewayStatusText,
+            connected: self.gatewayConnected)
         self.gatewayStatusText = gatewayStatusText ?? Self.legacyText(for: self.gatewayStatus)
         let talkStatusText = try container.decodeIfPresent(String.self, forKey: .talkStatusText)
-        if let talkStatus = OpenClawWatchAppStatus.decode(
+        self.talkStatus = OpenClawWatchAppStatus.decode(
             from: container,
             forKey: .talkStatus,
-            fallbackText: talkStatusText)
-        {
-            self.talkStatus = talkStatus
-        } else {
-            self.talkStatus = OpenClawWatchAppStatus.decodeLegacyTalk(
-                text: talkStatusText,
-                enabled: self.talkEnabled,
-                listening: self.talkListening,
-                speaking: self.talkSpeaking)
-        }
+            fallbackText: talkStatusText) ?? OpenClawWatchAppStatus.decodeLegacyTalk(
+            text: talkStatusText,
+            enabled: self.talkEnabled,
+            listening: self.talkListening,
+            speaking: self.talkSpeaking)
         self.talkStatusText = talkStatusText ?? Self.legacyText(for: self.talkStatus)
         let chatStatusText = try container.decodeIfPresent(String.self, forKey: .chatStatusText)
         let chatStatusCode = try decoder.container(keyedBy: LegacyCodingKeys.self)

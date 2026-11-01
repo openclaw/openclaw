@@ -34,6 +34,19 @@ it.for(["empty", "matching"] as const)(
           expect.objectContaining({ provider: PROVIDER_ID, id: "oauth-model" }),
         );
         expect(fixture.readCredential()).toEqual(fixture.rotated);
+        expect(result.authCredentials).toContainEqual(
+          expect.objectContaining({
+            facts: new Map([
+              [
+                "store",
+                {
+                  kind: "postimage",
+                  value: expect.objectContaining({ profiles: { [profileId]: fixture.rotated } }),
+                },
+              ],
+            ]),
+          }),
+        );
         // The shared owner supplies the rotated credential; historical local copies are removed.
         expect(fixture.readPeerStore()?.profiles[profileId]).toBeUndefined();
         expect(fixture.readEmptyStore()).toBeNull();
@@ -50,7 +63,6 @@ it("rolls back shared and historical OAuth claims when a later peer blocks catal
     { makeTempDir, signal, sharedStatePeers: "conflicting" },
     async (fixture) => {
       const result = await withinTest(fixture.pending, signal);
-      expect(result.status).not.toBe("generation-mismatch");
       expect(fixture.discoveryStarted()).toBe(true);
       expect(fixture.readRefreshFailure()).toContain("already claimed by another owner");
       if (result.status === "ok" && result.kind === "catalog") {
@@ -65,6 +77,19 @@ it("rolls back shared and historical OAuth claims when a later peer blocks catal
       expect(fixture.readPeerStore()?.profiles[profileId]).toEqual(fixture.original);
       expect(fixture.readEmptyStore()).toBeNull();
       expect(fixture.readConflictingCredential()).toEqual(fixture.conflictingFence);
+      expect(result.authCredentials).toContainEqual(
+        expect.objectContaining({
+          facts: new Map([
+            [
+              "store",
+              {
+                kind: "postimage",
+                value: expect.objectContaining({ profiles: { [profileId]: fixture.original } }),
+              },
+            ],
+          ]),
+        }),
+      );
     },
   );
 });

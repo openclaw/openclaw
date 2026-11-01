@@ -774,7 +774,7 @@ defineDiscordVoiceTests(
       }
     });
 
-    it("closes candidates on cancellation and aborts retained delegation when the room leaves", async () => {
+    it("closes candidates on cancellation and aborts retained delegation when the manager stops", async () => {
       useNativeVoices();
       const { entry, manager } = await createJoinedAgentProxyFixture();
       const connection = createDeferred<void>();
@@ -808,7 +808,7 @@ defineDiscordVoiceTests(
         const consultation = original.bridgeParams.runAgentConsult!({
           prompt: "Switch voice and check the agenda.",
         });
-        const abandoned = expect(consultation).rejects.toThrow("Discord voice call closed");
+        const abandoned = expect(consultation).rejects.toThrow("Discord voice manager stopped");
         await vi.waitFor(() => expect(selectionOwner().read()).toMatchObject({ voice: "cedar" }));
         await manager.destroy();
         expect(sourceSignal?.aborted).toBe(true);

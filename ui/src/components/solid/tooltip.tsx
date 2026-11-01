@@ -1,46 +1,28 @@
-import { render } from "@solidjs/web";
 import type { JSX } from "@solidjs/web";
-import { Show, createSignal, flush } from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
+import { listen } from "../../lib/reactive/listener.ts";
 import { createOverlayAnchor } from "../overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../overlay-lifecycle.ts";
-import type { TooltipController } from "../tooltip-controller.ts";
-import { TooltipElement, type TooltipProps, type TooltipRuntime } from "../tooltip.ts";
+import type { TooltipOwner, TooltipPolicyProps } from "../tooltip-owner.ts";
+import { TooltipElement, type TooltipRuntime } from "../tooltip.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
+import kbdStyles from "../kbd.css?inline";
 import overlayStyles from "./overlay.css?inline";
 import tooltipStyles from "./tooltip.css?inline";
 
 export type { TooltipElement } from "../tooltip.ts";
 
-/** The native tag owns policy and slots; Solid owns only its lazily loaded text content. */
+/** Policy and slots stay on the native tag; presentation loads only on reveal. */
 export function mountTooltipView(
   host: TooltipElement,
   surface: HTMLDivElement,
   rich: HTMLSpanElement,
-  policy: TooltipController,
+  policy: TooltipOwner,
 ): TooltipRuntime {
   const content = host.ownerDocument.createElement("span");
   content.className = "tooltip-content";
   surface.insertBefore(content, rich);
-  let updateContent = () => {};
-  const disposeContent = render(() => {
-    const [revision, setRevision] = createSignal(0);
-    updateContent = () => setRevision((value) => value + 1);
-    const template = () => {
-      revision();
-      return host.contentTemplate;
-    };
-    const text = () => {
-      revision();
-      return host.content;
-    };
-    return (
-      <Show when={template()} fallback={text()}>
-        {(value) => <LitContent value={value()} />}
-      </Show>
-    );
-  }, content);
+  content.textContent = host.content;
   let anchorBinding: ReturnType<typeof createOverlayAnchor> | undefined;
   let anchoredTrigger: HTMLElement | SVGElement | null = null;
   let anchoredPlacement: string | undefined;
@@ -56,19 +38,14 @@ export function mountTooltipView(
     interactionElements: () => (policy.trigger ? [policy.trigger] : []),
     onRootChange: (root) =>
       root === host.shadowRoot
-        ? retainShadowStyles(root, [overlayStyles, tooltipStyles])
+        ? retainShadowStyles(root, [overlayStyles, tooltipStyles, kbdStyles])
         : undefined,
   });
   overlay.bindSurface(surface);
   overlay.setParent(findOverlayParent(policy.trigger ?? host));
+  // Apply accepted-open policy synchronously; only completion events need forwarding.
   const unsubscribe = overlay.subscribe((open) => policy.acceptedOpen(open));
-  const events = [
-    ["overlay-show", "wa-show"],
-    ["overlay-hide", "wa-hide"],
-    ["overlay-after-show", "wa-after-show"],
-    ["overlay-after-hide", "wa-after-hide"],
-  ] as const;
-  const listeners = events.map(([source, target]) => {
+  const listeners = ["overlay-after-show", "overlay-after-hide"].map((type) => {
     const listener = (event: Event) => {
       if (event.target !== surface) {
         return;
@@ -76,14 +53,13 @@ export function mountTooltipView(
       event.stopPropagation();
       if (
         !host.dispatchEvent(
-          new CustomEvent(target, { bubbles: true, composed: true, cancelable: event.cancelable }),
+          new CustomEvent(type, { bubbles: true, composed: true, cancelable: event.cancelable }),
         )
       ) {
         event.preventDefault();
       }
     };
-    surface.addEventListener(source, listener);
-    return () => surface.removeEventListener(source, listener);
+    return listen(surface, type, listener);
   });
   const updateAnchor = () => {
     const trigger = policy.trigger;
@@ -110,8 +86,7 @@ export function mountTooltipView(
       return overlay.request(open);
     },
     update() {
-      updateContent();
-      flush();
+      content.textContent = host.content;
       if (overlay.open) {
         updateAnchor();
       }
@@ -121,7 +96,6 @@ export function mountTooltipView(
       unsubscribe();
       overlay.dispose();
       anchorBinding?.dispose();
-      disposeContent();
       content.remove();
       for (const remove of listeners) {
         remove();
@@ -130,7 +104,8 @@ export function mountTooltipView(
   };
 }
 
-type ComponentProps = TooltipProps & Omit<JSX.HTMLAttributes<TooltipElement>, keyof TooltipProps>;
+type ComponentProps = TooltipPolicyProps &
+  Omit<JSX.HTMLAttributes<TooltipElement>, keyof TooltipPolicyProps>;
 
 /** Solid callers use the same native tag without pulling presentation into startup. */
 export const Tooltip = Object.assign(
@@ -139,12 +114,13 @@ export const Tooltip = Object.assign(
       <openclaw-tooltip
         {...props}
         prop:content={props.content ?? ""}
-        prop:contentTemplate={props.contentTemplate}
-        prop:placement={props.placement ?? "top"}
+        prop:placement={props.placement}
         prop:closeDelay={props.closeDelay ?? 100}
         prop:hoverDismissDelay={props.hoverDismissDelay}
         prop:delay={props.delay}
         prop:describe={props.describe ?? true}
+        prop:descriptionTarget={props.descriptionTarget}
+        prop:pointerThrough={props.pointerThrough ?? false}
         prop:autoSize={props.autoSize ?? false}
         prop:disabled={props.disabled ?? false}
         prop:openOnClick={props.openOnClick ?? false}

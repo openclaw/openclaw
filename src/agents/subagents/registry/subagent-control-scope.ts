@@ -1,9 +1,12 @@
+import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import {
   execRequestMatches,
   type ExecRequestIdentity,
   type ExecRequestOwner,
 } from "../../../infra/exec-request-context.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import {
   isSubagentSessionKey,
@@ -29,11 +32,15 @@ import {
 } from "./subagent-exec-request-ownership.js";
 import { observeSubagentExecution } from "./subagent-execution-observation.js";
 import { captureSubagentListReadContext, type SubagentListReadContext } from "./subagent-list.js";
-import { getSubagentRunsForRequesterSession, subagentRuns } from "./subagent-registry-memory.js";
+import { captureSubagentRetainedWork } from "./subagent-registry-execution-cleanup.js";
+import {
+  getCurrentSubagentRunOwner,
+  getSubagentRunsForRequesterSession,
+  subagentRuns,
+} from "./subagent-registry-memory.js";
 import {
   buildSubagentRunReadIndexFromRuns,
   listRunsForControllerFromRuns,
-  type SubagentRunReadIndex,
 } from "./subagent-registry-queries.js";
 import {
   getLatestLiveSubagentRunByChildSessionKey,
@@ -41,7 +48,7 @@ import {
 } from "./subagent-registry-read.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import {
-  getSubagentSessionListRunsSnapshotForRead,
+  getSubagentControlRunsSnapshotForRead,
   withSubagentRunReadSnapshot,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -55,6 +62,84 @@ import {
 
 export const DEFAULT_RECENT_MINUTES = 30;
 export const MAX_RECENT_MINUTES = 24 * 60;
+
+/** Lifecycle cleanup owns both the requester and its separately scoped controller. */
+export async function prepareSessionSubagentKillSelection(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId: string;
+  assertCurrent?: () => void;
+}) {
+  const controller = { controllerSessionKey: params.sessionKey, controllerAgentId: params.agentId };
+  const ownsRoot = (entry: SubagentRunRecord) =>
+    !ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry }) ||
+    (entry.requesterSessionKey === params.sessionKey &&
+      resolveSubagentRequesterAgentId(params.cfg, entry) === params.agentId);
+  const runs = new Map(
+    [
+      ...listSubagentRunsForRequester(params.sessionKey, { requesterAgentId: params.agentId }),
+      ...listRunsForControllerFromRuns(subagentRuns, params.sessionKey, params.agentId),
+    ].map((entry) => [entry.runId, entry]),
+  );
+  const preparationErrors: string[] = [];
+  const hasRetainedWork = captureSubagentRetainedWork();
+  // Inert history needs no session preparation; its original incarnation may be gone.
+  // Select before any awaited notice retirement, which can publish new run state.
+  for (const entry of runs.values()) {
+    if (
+      entry.execution.suppressSessionEffects !== true &&
+      ownsRoot(entry) &&
+      !hasRetainedWork(entry)
+    ) {
+      runs.delete(entry.runId);
+    }
+  }
+  for (const entry of runs.values()) {
+    if (
+      entry.execution.status !== "terminal" ||
+      entry.execution.suppressSessionEffects !== true ||
+      entry.pauseReason === "sessions_yield" ||
+      !ownsRoot(entry)
+    ) {
+      continue;
+    }
+    // The old task owns only its notice, never the replacement child's work.
+    const assertCurrent = () => {
+      params.assertCurrent?.();
+      const current = getCurrentSubagentRunOwner(subagentRuns, entry);
+      if (
+        !current ||
+        !ownsRoot(current) ||
+        current.execution.status !== "terminal" ||
+        current.execution.suppressSessionEffects !== true ||
+        current.pauseReason === "sessions_yield"
+      ) {
+        throw new Error("Subagent completion changed during session cleanup; retry.");
+      }
+    };
+    try {
+      const { retireSubagentObligations } = await import("./subagent-registry.js");
+      assertCurrent();
+      await retireSubagentObligations(entry, assertCurrent, { requesterNotified: true });
+    } catch (error) {
+      if (hasSqliteWorkerOutcomeUnknown(error)) {
+        throw error;
+      }
+      preparationErrors.push(`${resolveSubagentLabel(entry)}: ${formatErrorMessage(error)}`);
+    }
+    runs.delete(entry.runId);
+  }
+  return {
+    cfg: params.cfg,
+    assertCurrent: params.assertCurrent,
+    runs: runs.values(),
+    // Ordinary controller mutations retain their narrower authority. Only an admitted
+    // lifecycle boundary can retire work whose completion belongs to this session.
+    ownsRoot,
+    suppressTaskDelivery: true,
+    preparationErrors,
+  };
+}
 
 /** Resolve caller routing before preparing its persisted capability facts. */
 export function resolveSubagentControllerIdentity(params: {
@@ -321,16 +406,29 @@ export type ControlledSubagentRunsReadContext = {
 };
 
 function selectControlledSubagentRunFacts(
-  index: SubagentRunReadIndex<SubagentRunReadRecord>,
+  snapshot: Map<string, SubagentRunReadRecord>,
   sessionKey: string,
   agentId: string,
   cfg?: OpenClawConfig,
+  selectedRunId?: string,
 ): SubagentRunReadRecord[] {
-  return [...index.runsByChildSessionKey.values()].flatMap((runs) =>
+  const children = new Map<string, SubagentRunReadRecord[]>();
+  for (const entry of snapshot.values()) {
+    const key = entry.childSessionKey.trim();
+    const runs = children.get(key);
+    if (runs) {
+      runs.push(entry);
+    } else {
+      children.set(key, [entry]);
+    }
+  }
+  children.delete("");
+  return [...children.values()].flatMap((runs) =>
     runs.filter(
       (entry) =>
         isSubagentRunVisibleToSession(entry, sessionKey, agentId, cfg) &&
-        (resolveSubagentChildAgentId(entry) === undefined ||
+        (entry.runId === selectedRunId ||
+          resolveSubagentChildAgentId(entry) === undefined ||
           latestSubagentRun(runs, (candidate) =>
             matchesSubagentChildSessionOwner(candidate, entry.childSessionKey, entry.childAgentId),
           ) === entry),
@@ -361,13 +459,9 @@ export async function buildControlledSubagentRunsReadContext(
   }
 
   const select = (snapshot: Map<string, SubagentRunReadRecord>) => {
-    const index = buildSubagentRunReadIndexFromRuns({
-      runs: snapshot,
-      inMemoryRuns: [...snapshot.keys()].flatMap((id) => subagentRuns.get(id) ?? []),
-    });
-    const visible = selectControlledSubagentRunFacts(index, key, agentId, cfg);
+    const visible = selectControlledSubagentRunFacts(snapshot, key, agentId, cfg);
     return {
-      index,
+      snapshot,
       runIds: visible.map((entry) => entry.runId),
       sessionKeys: visible
         .filter((entry) => entry.pauseReason === "sessions_yield")
@@ -380,7 +474,11 @@ export async function buildControlledSubagentRunsReadContext(
     (selection, snapshot) => {
       const visibleIds = new Set(selection.runIds);
       const runs = [...snapshot.values()].filter((entry) => visibleIds.has(entry.runId));
-      const list = captureSubagentListReadContext(runs, selection.index, snapshot, recentMinutes);
+      const index = buildSubagentRunReadIndexFromRuns({
+        runs: selection.snapshot,
+        inMemoryRuns: [...selection.snapshot.keys()].flatMap((id) => subagentRuns.get(id) ?? []),
+      });
+      const list = captureSubagentListReadContext(runs, index, snapshot, recentMinutes);
       return {
         runs: list.view.latest,
         list,
@@ -400,14 +498,18 @@ export function listControlledSubagentRunFacts(
   controllerSessionKey: string,
   controllerAgentId: string | undefined,
   cfg: OpenClawConfig,
+  selectedRunId?: string,
 ): SubagentRunReadRecord[] {
   if (!controllerAgentId) {
     return [];
   }
-  const index = buildSubagentRunReadIndexFromRuns({
-    runs: getSubagentSessionListRunsSnapshotForRead(subagentRuns),
-  });
-  return selectControlledSubagentRunFacts(index, controllerSessionKey, controllerAgentId, cfg);
+  return selectControlledSubagentRunFacts(
+    getSubagentControlRunsSnapshotForRead(controllerSessionKey),
+    controllerSessionKey,
+    controllerAgentId,
+    cfg,
+    selectedRunId,
+  );
 }
 
 export function ensureSubagentControllerOwnsRun(params: {

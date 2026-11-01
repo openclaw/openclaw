@@ -1,6 +1,7 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   listMessageReceiptSourceTargets,
   resolveMessageReceiptPrimaryId,
@@ -10,8 +11,9 @@ import type { MessageActionResult } from "../infra/outbound/message-action-contr
 import type { MessagePollResult, MessageSendResult } from "../infra/outbound/message.js";
 import { normalizeMessageDeliveryStatus } from "./embedded-agent-messaging-status.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { markFinalSourceReplyResult } from "./tool-source-reply-completion.js";
 
-type EmbeddedMessageDeliveryFact = {
+export type EmbeddedMessageDeliveryFact = {
   status: "settled" | "suppressed" | "dryRun" | "failed";
   sourceReplyDelivered?: true;
   primaryPlatformMessageId?: string;
@@ -189,10 +191,11 @@ export function pluginEnvelopeHas(value: unknown, signal: keyof typeof PLUGIN_SI
   return visitPluginEnvelope(value, PLUGIN_SIGNALS[signal]);
 }
 
-function readPluginDeliveryIdentity(value: unknown) {
+function readPluginDeliveryIdentity(records: readonly Record<string, unknown>[]) {
   let primaryPlatformMessageId: string | undefined;
   const deliveredTargets = new Set<string>();
-  visitPluginEnvelope(value, (record) => {
+  const createdThreadIds = new Set<string>();
+  for (const record of records) {
     primaryPlatformMessageId ??= [
       record.messageId,
       record.pollId,
@@ -203,36 +206,60 @@ function readPluginDeliveryIdentity(value: unknown) {
     for (const target of listMessageReceiptSourceTargets(record)) {
       deliveredTargets.add(target);
     }
-    return false;
-  });
+    // Adapter receipts can report the thread a send created or landed in.
+    const receipt = asOptionalRecord(record.receipt);
+    const parts = Array.isArray(receipt?.parts) ? receipt.parts : [];
+    for (const id of [
+      record.topicId,
+      record.threadId,
+      record.messageThreadId,
+      asOptionalRecord(record.thread)?.id,
+      receipt?.threadId,
+      ...parts.map((part) => asOptionalRecord(part)?.threadId),
+    ]) {
+      if (hasNonEmptyString(id)) {
+        createdThreadIds.add(id.trim());
+      } else if (typeof id === "number" && Number.isFinite(id)) {
+        createdThreadIds.add(String(id));
+      }
+    }
+  }
   return {
     ...(primaryPlatformMessageId ? { primaryPlatformMessageId } : {}),
     ...(deliveredTargets.size ? { deliveredTargets: [...deliveredTargets] } : {}),
+    createdThreadIds: [...createdThreadIds],
   };
 }
 
 export function projectPluginMessageDeliveryFact(
   value: unknown,
 ): EmbeddedMessageDeliveryFact | undefined {
-  if (pluginEnvelopeHas(value, "dryRun")) {
+  const envelopes: Array<{ record: Record<string, unknown>; status: string | undefined }> = [];
+  visitPluginEnvelope(value, (record, status) => {
+    envelopes.push({ record, status });
+    return false;
+  });
+  const has = (signal: keyof typeof PLUGIN_SIGNALS) =>
+    envelopes.some(({ record, status }) => PLUGIN_SIGNALS[signal](record, status));
+  if (has("dryRun")) {
     return { status: "dryRun", ...EMPTY_DELIVERY_FACT };
   }
-  if (pluginEnvelopeHas(value, "partial")) {
+  if (has("partial")) {
     return { status: "settled", partialDelivery: true, createdThreadIds: [] };
   }
-  if (pluginEnvelopeHas(value, "nonDelivery")) {
+  if (has("nonDelivery")) {
     return { status: "suppressed", ...EMPTY_DELIVERY_FACT };
   }
-  if (pluginEnvelopeHas(value, "noOp") || pluginEnvelopeHas(value, "failure")) {
+  if (has("noOp") || has("failure")) {
     return { status: "failed", ...EMPTY_DELIVERY_FACT };
   }
-  if (!pluginEnvelopeHas(value, "delivery") && !pluginEnvelopeHas(value, "ok")) {
+  if (!has("delivery") && !has("ok")) {
     return undefined;
   }
   return {
-    status: "settled",
-    ...readPluginDeliveryIdentity(value),
     ...EMPTY_DELIVERY_FACT,
+    ...readPluginDeliveryIdentity(envelopes.map(({ record }) => record)),
+    status: "settled",
   };
 }
 
@@ -287,9 +314,7 @@ export function projectEmbeddedMessageDeliveryFact(
     : projectPluginMessageDeliveryFact(result.payload);
   const partialDelivery = payloadDelivery?.partialDelivery ? payloadDelivery : undefined;
   if (currentSourceReply && result.handledBy === "plugin") {
-    return result.dryRun
-      ? { status: "dryRun", ...EMPTY_DELIVERY_FACT }
-      : projectPluginMessageDeliveryFact(result.payload);
+    return result.dryRun ? { status: "dryRun", ...EMPTY_DELIVERY_FACT } : payloadDelivery;
   }
   if (result.kind === "send") {
     return result.handledBy === "core" && result.sendResult
@@ -362,7 +387,10 @@ export function attachEmbeddedMessageDeliveryFact(
     const { messageDelivery: _reserved, ...rest } = details;
     return { ...result, details: rest };
   }
-  return { ...result, details: { ...details, messageDelivery: fact } };
+  const delivered = { ...result, details: { ...details, messageDelivery: fact } };
+  return fact.sourceReplyDelivered === true && fact.status === "settled" && !fact.partialDelivery
+    ? markFinalSourceReplyResult(delivered)
+    : delivered;
 }
 
 export function isDeliveredCoreCurrentChannelWidgetResult(params: {
@@ -400,9 +428,7 @@ export function readEmbeddedMessageDeliveryFact(
   value: unknown,
 ): EmbeddedMessageDeliveryFact | undefined {
   const fact = asOptionalRecord(value);
-  const createdThreadIds = Array.isArray(fact?.createdThreadIds)
-    ? fact.createdThreadIds.filter((id): id is string => typeof id === "string")
-    : [];
+  const createdThreadIds = filterStringEntries(fact?.createdThreadIds);
   if (
     !fact ||
     !isDeliveryStatus(fact.status) ||

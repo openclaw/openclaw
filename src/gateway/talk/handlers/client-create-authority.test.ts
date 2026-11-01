@@ -7,7 +7,6 @@ import {
   isSessionEntryDataSql,
   observeHostDataSql,
   observeSqliteReadSql,
-  trackSqliteStatementExecutions,
 } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { closeAuthProfileReadPool } from "../../../agents/auth-profiles/sqlite-read-pool.js";
 import {
@@ -16,26 +15,19 @@ import {
 } from "../../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
+  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
 import { applySessionEntryOperation } from "../../../config/sessions/session-accessor.sqlite-entry.js";
-import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
-import * as sessionSourcePredicates from "../../../config/sessions/session-source-predicate.worker.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target-paths.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as sqliteSnapshotSource from "../../../infra/sqlite-snapshot-source.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
-import {
-  findOpenClawAgentDatabaseIdentity,
-  readOpenClawAgentDatabaseIdentity,
-} from "../../../state/openclaw-agent-db-identity.js";
 import {
   closeCachedOpenClawAgentDatabase,
   closeOpenClawAgentDatabasesAsync,
 } from "../../../state/openclaw-agent-db-lifecycle.js";
 import * as readonlyOpen from "../../../state/openclaw-agent-db-readonly-open.js";
 import { closeIdleOpenClawAgentDatabaseReadOnly } from "../../../state/openclaw-agent-db-readonly-scope.js";
-import { retainOpenClawAgentDatabaseReadOnly } from "../../../state/openclaw-agent-db-readonly.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
@@ -45,7 +37,6 @@ import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import { prepareClientVoiceSessionClose } from "../../../talk/client-voice-session-lifecycle.js";
 import { readVoiceSessionRecordInTransaction } from "../../../talk/client-voice-session-store.js";
 import * as voiceWriters from "../../../talk/client-voice-session-write.js";
-import * as voiceKernel from "../../../talk/client-voice-session-write.kernel.js";
 import * as voiceSessions from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
@@ -53,22 +44,17 @@ import {
   drainSessionStateForTest,
   useSessionStoreTempDirs,
 } from "../../../test-utils/session-state-cleanup.js";
+import { useUserProfileCatalogForTest } from "../../../test-utils/user-profile-catalog.js";
 import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
-import { prepareGatewayRecipientProfile } from "../../expected-profile.js";
 import { makeClient } from "../../server-broadcast.test-helpers.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
 import {
   bindGatewayRequestHandlerMutationAuthority,
   bindWebSocketRequestMutationAuthority,
 } from "../../server-methods/session-mutation-guards.js";
-import type {
-  GatewayRequestHandlerOptions,
-  SessionMutationAuthorization,
-} from "../../server-methods/types.js";
+import type { GatewayRequestHandlerOptions } from "../../server-methods/types.js";
 import { SharedGatewaySessionGenerationState } from "../../server-shared-auth-generation.js";
-import { SessionMutationAuthorizationChangedError } from "../../session-mutation-authorization-error.js";
 import { resolveSessionMutationAuthorizationAsync } from "../../session-sharing-authorization-async.js";
-import { roleClient, rolePolicyConfig } from "../../session-sharing.test-utils.js";
 import { closeTalkClientGatewayControlSession } from "../client-gateway-control.js";
 import { cleanupTalkConnection, prepareTalkConnectionClose } from "../session-registry.js";
 import {
@@ -82,6 +68,7 @@ import { registerClientCreateSourceAuthorityTests } from "./client-create-source
 import { createTalkClient } from "./client-create.js";
 import {
   browserSession,
+  observeTalkVoiceChangeRequest,
   createDelegatedBrowserProviderFixture,
   type BrowserRequest,
 } from "./client-fixtures.test-support.js";
@@ -101,7 +88,6 @@ let tempDir: string;
 let ownedVoiceSessionId: string | undefined;
 let ownedVoiceSessionKey = sessionKey;
 let forbiddenSnapshotStacks: string[] = [];
-const authorizations: SessionMutationAuthorization[] = [];
 let observeAdmission:
   | ((request: operationAdmission.SqliteWorkerAdmissionRequest, run: () => void) => void)
   | undefined;
@@ -117,7 +103,7 @@ function configureDelegatedBrowserProvider(
   });
   return fixture;
 }
-async function invokeCreate(options: GatewayRequestHandlerOptions) {
+async function invokeCreate(options: GatewayRequestHandlerOptions, retainRequestAuthority = false) {
   setRuntimeConfigSnapshot(options.context.getRuntimeConfig());
   using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
   const admission = await resolveSessionMutationAuthorizationAsync({
@@ -131,28 +117,21 @@ async function invokeCreate(options: GatewayRequestHandlerOptions) {
     return;
   }
   try {
-    await createTalkClient({ ...options, sessionMutationAuthorization: admission.authorization });
+    const handlerOptions = { ...options, sessionMutationAuthorization: admission.authorization };
+    await createTalkClient(
+      retainRequestAuthority
+        ? bindGatewayRequestHandlerMutationAuthority(options, handlerOptions, undefined)
+        : handlerOptions,
+    );
   } finally {
     admission.authorization?.release?.();
   }
 }
-async function invokeClose(params: Record<string, unknown>) {
-  const respond = vi.fn();
-  await talkClientHandlers["talk.client.close"]?.({
-    params,
-    respond,
-    context: { getRuntimeConfig: () => ({}) },
-    client: { connId: "conn-close" },
-  } as never);
-  return respond;
-}
 
 describe("voice creation authority", () => {
+  const prepareProfiles = useUserProfileCatalogForTest();
   const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-voice-authority-");
   afterEach(async () => {
-    for (const authorization of authorizations.splice(0)) {
-      authorization.release?.();
-    }
     if (ownedVoiceSessionId) {
       await closeTalkClientGatewayControlSession({
         voiceSessionId: ownedVoiceSessionId,
@@ -213,6 +192,7 @@ describe("voice creation authority", () => {
     ownedVoiceSessionKey = sessionKey;
     tempDir = tempDirs.make();
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    await prepareProfiles();
     setRuntimeConfigSnapshot({});
     const seedEntry = { sessionId, updatedAt: Date.now() };
     await applySessionEntryOperation(
@@ -260,188 +240,6 @@ describe("voice creation authority", () => {
     }
   });
 
-  it.each([
-    { mixed: false, grant: false, revoked: undefined },
-    { mixed: false, grant: false, revoked: "foreign" },
-    { mixed: true, grant: false, revoked: undefined },
-    { mixed: true, grant: false, revoked: "foreign" },
-    { mixed: true, grant: false, revoked: "local" },
-    { mixed: false, grant: true, revoked: undefined },
-    { mixed: false, grant: true, revoked: "local" },
-  ])(
-    "validates cross-store voice authority atomically (mixed=$mixed, grant=$grant, revoked=$revoked)",
-    async ({ mixed, grant, revoked }) => {
-      const local = { agentId: "main", sessionKey };
-      const foreign = { agentId: "source", sessionKey: "agent:source:main" };
-      const foreignEntry = { sessionId: "foreign-source", updatedAt: 1 };
-      // The injected foreign commit must not compete with automatic fixture reclamation.
-      await applySessionEntryOperation(
-        foreign,
-        { kind: "fields", patch: foreignEntry },
-        { fallbackEntry: foreignEntry, replaceEntry: true, skipMaintenance: true },
-      );
-      const config: OpenClawConfig = {
-        ...rolePolicyConfig(),
-        agents: { entries: { main: {}, source: {} } },
-      };
-      setRuntimeConfigSnapshot(config);
-      const client = roleClient("write", "cross-store-voice");
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      prepareGatewayRecipientProfile(client);
-      const prepare = async (scope: typeof local, method = "sessions.patch") => {
-        const result = await resolveSessionMutationAuthorizationAsync({
-          method,
-          requestParams:
-            method === "talk.client.create"
-              ? { sessionKey: scope.sessionKey }
-              : { key: scope.sessionKey, agentId: scope.agentId },
-          context: { getRuntimeConfig: () => config } as GatewayRequestHandlerOptions["context"],
-          client,
-        });
-        expect(result.error).toBeNull();
-        authorizations.push(result.authorization!);
-        return result.authorization!;
-      };
-      openOpenClawAgentDatabase(local);
-      const localReader = retainOpenClawAgentDatabaseReadOnly(local);
-      if (!localReader.found) {
-        throw new Error("Expected the authorization owner's native reader");
-      }
-      const localReads = trackSqliteStatementExecutions(localReader.database.db, ["data"], (sql) =>
-        isSessionEntryDataSql(sql) || /\bcache_entries\b/i.test(sql) ? "data" : null,
-      );
-      const foreignAuthority = (await prepare(foreign)).assertCurrent;
-      const localAuthority = mixed ? (await prepare(local)).assertCurrent : undefined;
-      const transactionAuthority = grant ? await prepare(local, "talk.client.create") : undefined;
-      expect(localReads.counts.data).toBe(0);
-      let grantLocalReads = 0;
-      let revokedSource = false;
-      let inGrant = false;
-      const voiceSessionId = "cross-store-voice";
-      const foreignDatabase = openOpenClawAgentDatabase(foreign);
-      const foreignIdentity = readOpenClawAgentDatabaseIdentity(foreignDatabase);
-      let checkedBeforeWrite = false;
-      let checkedAfterWrite = false;
-      let sdkSawCommittedVoice = false;
-      let sdkMutation: Promise<void> | undefined;
-      const observeSourceRead = () => {
-        if (localReader.database.db.isTransaction) {
-          const written = readVoiceSessionRecordInTransaction(localReader.database, voiceSessionId);
-          checkedBeforeWrite ||= !written;
-          checkedAfterWrite ||= Boolean(written);
-          if (!revoked && !sdkMutation) {
-            sdkMutation = Promise.resolve().then(() => {
-              sdkSawCommittedVoice =
-                !localReader.database.db.isTransaction &&
-                readVoiceSessionRecordInTransaction(localReader.database, voiceSessionId)
-                  ?.status === "open";
-              replaceSessionEntrySync(foreign, { sessionId: "sdk-successor", updatedAt: 2 });
-            });
-            void sdkMutation.catch(() => {});
-          }
-        }
-      };
-      const validateSource = sessionSourcePredicates.readSessionSourceValidation;
-      const foreignReads = vi
-        .spyOn(sessionSourcePredicates, "readSessionSourceValidation")
-        .mockImplementation((database, ...args) => {
-          if (
-            database.db === localReader.database.db ||
-            findOpenClawAgentDatabaseIdentity(database)?.identity === foreignIdentity.identity
-          ) {
-            observeSourceRead();
-          }
-          return validateSource(database, ...args);
-        });
-      const mutateVoice = voiceKernel.mutateVoiceSessionInDatabase;
-      const mutationSpy = vi
-        .spyOn(voiceKernel, "mutateVoiceSessionInDatabase")
-        .mockImplementation((database, mutation) => {
-          const result = mutateVoice(database, mutation);
-          if (revoked && mutation.voiceSessionId === voiceSessionId && !revokedSource) {
-            // Revoke before final validation without depending on source-check order.
-            revokedSource = true;
-            const source = revoked === "local" ? database : foreignDatabase;
-            source.db
-              .prepare(
-                "UPDATE session_nodes SET current_session_id = 'revoked-source', entry_json = json_set(entry_json, '$.sessionId', 'revoked-source') WHERE session_key = ?",
-              )
-              .run(revoked === "local" ? local.sessionKey : foreign.sessionKey);
-          }
-          return result;
-        });
-      const open = readonlyOpen.openOpenClawAgentDatabaseReadOnly;
-      const openSpy = vi
-        .spyOn(readonlyOpen, "openOpenClawAgentDatabaseReadOnly")
-        .mockImplementation((...args) => {
-          if (inGrant) {
-            throw new Error("Cold source admission ran inside the voice worker grant");
-          }
-          return open(...args);
-        });
-      observeAdmission = (_request, run) => {
-        const start = localReads.counts.data;
-        inGrant = true;
-        try {
-          run();
-        } finally {
-          inGrant = false;
-          grantLocalReads += localReads.counts.data - start;
-        }
-      };
-      try {
-        const creating = voiceSessions.createOrResumeClientVoiceSession({
-          ...local,
-          voiceSessionId,
-          origin: "client",
-          ...(transactionAuthority
-            ? {
-                requester: foreignAuthority,
-                source: {
-                  storePath: resolveOpenClawAgentSqlitePath(local),
-                  assertCurrent: transactionAuthority.assertCurrent,
-                  prepareWorkerGrant: transactionAuthority.prepareWorkerGrant,
-                },
-              }
-            : mixed
-              ? {
-                  source: {
-                    storePath: resolveOpenClawAgentSqlitePath(foreign),
-                    assertCurrent: composeSessionSourceAssertion([
-                      localAuthority,
-                      foreignAuthority,
-                    ]),
-                  },
-                }
-              : { requester: foreignAuthority }),
-        });
-        if (revoked) {
-          await expect(creating).rejects.toBeInstanceOf(SessionMutationAuthorizationChangedError);
-          await expect(creating).rejects.toThrow(
-            `session changed before ${grant ? "talk.client.create" : "sessions.patch"}; retry the request`,
-          );
-          expect(revokedSource).toBe(true);
-          expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)).toBeUndefined();
-        } else {
-          await expect(creating).resolves.toBe(voiceSessionId);
-          await sdkMutation;
-          expect(sdkSawCommittedVoice).toBe(true);
-          expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.status).toBe("open");
-        }
-        expect(checkedBeforeWrite).toBe(true);
-        expect(checkedAfterWrite).toBe(true);
-        expect(grantLocalReads).toBe(0);
-      } finally {
-        observeAdmission = undefined;
-        await sdkMutation;
-        foreignReads.mockRestore();
-        mutationSpy.mockRestore();
-        openSpy.mockRestore();
-        localReads.restore();
-        localReader.claim.release();
-      }
-    },
-  );
   it("replaces a voice on the same chat only after both the browser and provider are ready", async () => {
     const createBrowserSession = vi.fn(async (request: BrowserRequest) => ({
       ...browserSession,
@@ -495,11 +293,14 @@ describe("voice creation authority", () => {
       expect.objectContaining({ message: "A voice replacement requires a fresh voice session id" }),
     );
     expect(createBrowserSession).toHaveBeenCalledOnce();
-    expect(await invokeClose({ sessionKey, voiceSessionId: originalId })).toHaveBeenCalledWith(
-      true,
-      { ok: true },
-      undefined,
-    );
+    const closeRespond = vi.fn();
+    await talkClientHandlers["talk.client.close"]?.({
+      params: { sessionKey, voiceSessionId: originalId },
+      respond: closeRespond,
+      context: { getRuntimeConfig: () => ({}) },
+      client: { connId: "conn-close" },
+    } as never);
+    expect(closeRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     await create({ voiceChangeId: changeId, model: "gpt-realtime-2.1", voice: "cove" });
     expect(respond).toHaveBeenLastCalledWith(
       true,
@@ -539,13 +340,14 @@ describe("voice creation authority", () => {
     expect(clientVoiceSessionTesting.readRecord("main", replacementId)?.status).toBe("open");
   });
 
-  it.each(
-    ["same-store", "custom-store", "incognito"].flatMap((kind) =>
-      [false, true].map((revoked) => ({ kind, revoked })),
+  it.each([
+    ...["same-store", "custom-store", "incognito"].flatMap((kind) =>
+      [false, true].map((revoked) => ({ kind, revoked, authority: "compatibility" })),
     ),
-  )(
-    "creates a $kind replacement without cold reads in write grants (revoked=$revoked)",
-    async ({ kind, revoked }) => {
+    { kind: "custom-store", revoked: false, authority: "worker" },
+  ])(
+    "creates a $kind replacement without cold reads in write grants (revoked=$revoked, authority=$authority)",
+    async ({ kind, revoked, authority }) => {
       const createBrowserSession = vi.fn(async (request: BrowserRequest) => ({
         ...browserSession,
         voice: request.voice ?? "cove",
@@ -574,13 +376,44 @@ describe("voice creation authority", () => {
         { fallbackEntry: seedEntry, replaceEntry: true, skipMaintenance: true },
       );
       const respond = vi.fn();
-      const create = (voiceChangeId?: string) =>
-        invokeCreate({
-          params: { sessionKey: key, capabilities: ["voice-selection"], voiceChangeId },
-          respond,
-          context: fixture.context,
-          client: fixture.client,
-        } as never);
+      const workerClient =
+        authority === "worker"
+          ? makeClient(fixture.client.connId, "operator", ["operator.admin"]).client
+          : undefined;
+      const client = workerClient ?? fixture.client;
+      fixture.clients.clear();
+      fixture.clients.add(client);
+      using deviceAuthority =
+        authority === "worker"
+          ? (() => {
+              const lifetime = captureGatewayDeviceRevocation(fixture.context, {}, () => true);
+              return { ...lifetime, [Symbol.dispose]: lifetime.release };
+            })()
+          : undefined;
+      const generation = new SharedGatewaySessionGenerationState({
+        current: undefined,
+        required: undefined,
+      });
+      const bindAuthority = (options: GatewayRequestHandlerOptions) => {
+        if (deviceAuthority && workerClient) {
+          options.hasCurrentClientAuthority = deviceAuthority.isCurrent;
+          bindWebSocketRequestMutationAuthority(options, workerClient, generation.reader);
+        }
+        return options;
+      };
+      const create = async (voiceChangeId?: string) => {
+        await invokeCreate(
+          bindAuthority({
+            req: { type: "req", id: "voice-create", method: "talk.client.create" },
+            params: { sessionKey: key, capabilities: ["voice-selection"], voiceChangeId },
+            respond,
+            context: fixture.context,
+            client,
+            isWebchatConnect: () => false,
+          } as never),
+          authority === "worker",
+        );
+      };
       await create();
       expect(respond.mock.lastCall?.[0], respond.mock.lastCall?.[2]?.message).toBe(true);
       ownedVoiceSessionId = respond.mock.lastCall?.[1].voiceSessionId;
@@ -594,27 +427,20 @@ describe("voice creation authority", () => {
         original.sessionTarget.storePath,
       ).path;
       const changed = vi.fn();
-      const changeRequested = createDeferred();
-      fixture.context.broadcastToConnIds.mockImplementation((event) => {
-        if (event === "talk.voice.change") {
-          changeRequested.resolve();
-        }
-      });
+      const waitForVoiceChange = observeTalkVoiceChangeRequest(fixture.context.broadcastToConnIds);
       const change = Promise.resolve(
-        talkVoiceHandlers["talk.voice.set"]!({
-          req: { type: "req", id: "change", method: "talk.voice.set", params: {} },
-          params: { voiceSessionId: ownedVoiceSessionId, voice: "ember" },
-          respond: changed,
-          context: fixture.context,
-          client: fixture.client,
-          isWebchatConnect: () => false,
-        } as never),
+        talkVoiceHandlers["talk.voice.set"]!(
+          bindAuthority({
+            req: { type: "req", id: "change", method: "talk.voice.set", params: {} },
+            params: { voiceSessionId: ownedVoiceSessionId, voice: "ember" },
+            respond: changed,
+            context: fixture.context,
+            client,
+            isWebchatConnect: () => false,
+          } as never),
+        ),
       );
-      await awaitGateBeforeSettlement(
-        changeRequested.promise,
-        change,
-        "Voice change settled before requesting a replacement",
-      );
+      await waitForVoiceChange(change);
       const changeId = fixture.context.broadcastToConnIds.mock.calls.find(
         ([event]) => event === "talk.voice.change",
       )?.[1]?.changeId;
@@ -663,13 +489,21 @@ describe("voice creation authority", () => {
       const createSpy = vi
         .spyOn(voiceSessions, "createOrResumeClientVoiceSession")
         .mockImplementation(async (params) => {
+          if (kind === "incognito" && revoked) {
+            await replaceSessionEntry(scope, {
+              sessionId: "reset-voice-source",
+              updatedAt: Date.now(),
+              incognito: true,
+            });
+            resetSource = true;
+          }
           if (kind !== "incognito") {
             const database = getOpenClawAgentDatabaseIfOpen({
               agentId: "main",
               path: sourcePath,
             });
             if (database) {
-              closeCachedOpenClawAgentDatabase(database, { eviction: true });
+              closeCachedOpenClawAgentDatabase(database);
             }
           }
           creatingVoice = true;
@@ -678,11 +512,10 @@ describe("voice creation authority", () => {
               ...params,
               assertCurrent: () => {
                 params.assertCurrent?.();
-                if (kind !== "same-store" && revoked && !resetSource) {
+                if (kind === "custom-store" && revoked && !resetSource) {
                   replaceSessionEntrySync(scope, {
                     sessionId: "reset-voice-source",
                     updatedAt: Date.now(),
-                    ...(kind === "incognito" ? { incognito: true } : {}),
                   });
                   resetSource = true;
                 }
@@ -745,7 +578,6 @@ describe("voice creation authority", () => {
           context: createDirectChatContext({
             getRuntimeConfig: fixture.context.getRuntimeConfig,
             getClientConnIds: (filter) => new Set(!filter || filter(client) ? [client.connId] : []),
-            chatAbortControllers: fixture.context.chatAbortControllers,
             broadcastToConnIds: fixture.context.broadcastToConnIds,
           }),
           client,
@@ -766,16 +598,17 @@ describe("voice creation authority", () => {
             client,
           });
           expect(admitted.error).toBeNull();
-          if (admitted.authorization) {
-            authorizations.push(admitted.authorization);
+          try {
+            await createTalkClient(
+              bindGatewayRequestHandlerMutationAuthority(
+                options,
+                { ...options, sessionMutationAuthorization: admitted.authorization },
+                undefined,
+              ),
+            );
+          } finally {
+            admitted.authorization?.release?.();
           }
-          await createTalkClient(
-            bindGatewayRequestHandlerMutationAuthority(
-              options,
-              { ...options, sessionMutationAuthorization: admitted.authorization },
-              undefined,
-            ),
-          );
         } else {
           await invokeCreate(options);
         }
@@ -824,14 +657,10 @@ describe("voice creation authority", () => {
         renameSync(sourcePath, displacedPath);
         copyFileSync(displacedPath, sourcePath);
         replacementBytes = readFileSync(sourcePath);
-        const copied = new DatabaseSync(sourcePath, { readOnly: true });
-        try {
-          expect(readVoiceSessionRecordInTransaction({ db: copied }, voiceSessionId)?.status).toBe(
-            "open",
-          );
-        } finally {
-          copied.close();
-        }
+        using copied = new DatabaseSync(sourcePath, { readOnly: true });
+        expect(readVoiceSessionRecordInTransaction({ db: copied }, voiceSessionId)?.status).toBe(
+          "open",
+        );
       };
       const createVoice = voiceSessions.createOrResumeClientVoiceSession;
       const intercepted = vi

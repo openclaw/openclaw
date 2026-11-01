@@ -1,6 +1,6 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 
-export const matrixSingleAccountKeysToMove = [
+const matrixAuthBootstrapKeys = [
   "homeserver",
   "userId",
   "accessToken",
@@ -10,6 +10,10 @@ export const matrixSingleAccountKeysToMove = [
   "avatarUrl",
   "initialSyncLimit",
   "encryption",
+] as const;
+
+export const matrixSingleAccountKeysToMove = [
+  ...matrixAuthBootstrapKeys,
   "allowlistOnly",
   "dangerouslyAllowNameMatching",
   "allowBots",
@@ -37,15 +41,7 @@ export const matrixNamedAccountPromotionKeys = [
   // When named accounts already exist, only move auth/bootstrap fields into the
   // promoted account. Shared delivery-policy fields stay at the top level.
   "name",
-  "homeserver",
-  "userId",
-  "accessToken",
-  "password",
-  "deviceId",
-  "deviceName",
-  "avatarUrl",
-  "initialSyncLimit",
-  "encryption",
+  ...matrixAuthBootstrapKeys,
 ] as const;
 
 export const singleAccountKeysToMove = [...matrixSingleAccountKeysToMove];

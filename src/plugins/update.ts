@@ -2,6 +2,7 @@
 export type { PluginUpdateIntegrityDriftParams, PluginUpdateOutcome } from "./update-source.js";
 
 export {
+  createOperatorManagedPluginUpdateOutcome,
   isPluginInstallRecordUpdateSource,
   pluginInstallRecordMayMigrateConfigId,
 } from "./update-source.js";

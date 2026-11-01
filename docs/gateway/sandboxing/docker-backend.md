@@ -10,7 +10,7 @@ The default local backend: its restricted defaults, GPU and Docker-out-of-Docker
 
 The Docker backend runs tools locally through the `docker` CLI. Its selection and error behavior are unchanged; it does not check or fall back to Podman.
 
-Defaults: `network: "none"` (no egress), `readOnlyRoot: true`, `capDrop: ["ALL"]`, image `openclaw-sandbox:bookworm-slim`.
+Defaults: `network: "none"` (no egress), `readOnlyRoot: true`, `capDrop: ["ALL"]`, image `openclaw-sandbox:trixie-slim`.
 
 This explicit configuration keeps the agent workspace read-only and preserves
 the default restricted runtime posture:
@@ -25,7 +25,7 @@ the default restricted runtime posture:
         scope: "session",
         workspaceAccess: "ro",
         docker: {
-          image: "openclaw-sandbox:bookworm-slim",
+          image: "openclaw-sandbox:trixie-slim",
           readOnlyRoot: true,
           tmpfs: ["/tmp", "/var/tmp", "/run"],
           network: "none",
@@ -56,6 +56,17 @@ Other tmpfs options, such as size, mode, and uid, keep the normal configuration
 change behavior: a hot container stays running with a recreation notice, while
 a stopped or expired container is replaced. Recreate explicitly to apply those
 options immediately.
+
+After a Gateway restart, Docker and Podman tool containers can be replaced on
+their first use when an upgrade adds Gateway-managed read-only skill or resource
+mounts. Every existing mount must still match; replaced sources do not qualify. The
+old container must have a read-only root, no image volumes, and no retained
+persistent-exec custody; its last successful use must predate this Gateway
+process. Workspace and user bind sources and access modes must still match.
+Workspace files remain on the host, but replacement discards temporary container
+state and untracked background processes. Writable roots, user mount changes,
+restricted dispatch requiring current config, and hot browser containers still
+require explicit recreation.
 
 To expose host GPUs, set `agents.defaults.sandbox.docker.gpus` (or the per-agent override) to a value like `"all"` or `"device=GPU-uuid"`. This is passed to the selected container engine's Docker-compatible `--gpus` flag and requires compatible host GPU setup. Podman requires version 5.0 or newer for this option.
 

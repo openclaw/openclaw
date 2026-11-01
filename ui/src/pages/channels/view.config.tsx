@@ -32,17 +32,29 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
   const value = createMemo(
     () => resolveChannelConfigValue(params.props.config.configForm ?? {}, params.channelId) ?? {},
   );
-  const extraFields = createMemo(() => EXTRA_CHANNEL_FIELDS.filter((field) => field in value()));
+  const extraFields = () => EXTRA_CHANNEL_FIELDS.filter((field) => field in value());
   const unsupported = createMemo(() => new Set(analysis().unsupportedPaths));
   const disabled = createMemo(
-    () => params.props.config.configSaving || params.props.config.configSchemaLoading,
+    () =>
+      params.props.mutationBusy?.config ||
+      params.props.config.configSaving ||
+      params.props.config.configSchemaLoading,
   );
   return (
     <Show
       when={!params.props.config.configSchemaLoading}
       fallback={<SettingsLoadingSkeleton label={t("channels.config.loadingSchema")} rows={2} />}
     >
-      <div class="settings-row settings-row--stacked">
+      <form
+        class="settings-row settings-row--stacked"
+        novalidate
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (event.currentTarget.reportValidity()) {
+            params.props.onConfigSave();
+          }
+        }}
+      >
         <Show
           when={node()}
           fallback={
@@ -104,16 +116,25 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
         <div class="settings-row__control">
           <button
             class="btn primary"
-            disabled={disabled() || !params.props.config.configFormDirty}
-            onClick={() => params.props.onConfigSave()}
+            type="submit"
+            disabled={
+              !params.props.channels.connected || disabled() || !params.props.config.configFormDirty
+            }
           >
-            {params.props.config.configSaving ? t("common.saving") : t("common.save")}
+            {params.props.mutationBusy?.config || params.props.config.configSaving
+              ? t("common.saving")
+              : t("common.save")}
           </button>
-          <button class="btn" disabled={disabled()} onClick={() => params.props.onConfigReload()}>
+          <button
+            class="btn"
+            type="button"
+            disabled={!params.props.channels.connected || disabled()}
+            onClick={() => params.props.onConfigReload()}
+          >
             {t("common.reload")}
           </button>
         </div>
-      </div>
+      </form>
     </Show>
   );
 }

@@ -682,41 +682,39 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         processGeneration: UUID,
         gatewayGeneration: UInt64) async
     {
+        let result: Result<Data, Error>
         do {
             let paramsJSON = String(bytes: paramsData, encoding: .utf8)!
-            let data = try await self.session.request(
+            result = try await .success(self.session.request(
                 method: method,
                 paramsJSON: paramsJSON,
                 timeoutSeconds: max(1, Int(ceil(Double(timeoutMs) / 1000.0))),
                 ifCurrentRoute: route,
-                distinguishPreDispatchRouteChange: true)
-            self.queue.async {
-                // A replacement worker restarts request ids. Never deliver an old
-                // route response into the replacement process.
-                guard self.processGeneration == processGeneration,
-                      self.gatewayGeneration == gatewayGeneration,
-                      self.route == route else { return }
-                guard let result = try? JSONSerialization.jsonObject(with: data) else { return }
-                try? self.enqueueWriteLocked([
-                    "type": "gateway-response",
-                    "generation": gatewayGeneration,
-                    "id": id,
-                    "ok": true,
-                    "result": result,
-                ])
-            }
+                distinguishPreDispatchRouteChange: true))
         } catch {
-            // Preserve only the public RPC code/message for shared publication classification.
-            let responseError = error as? GatewayResponseError
-            let code = responseError?.code ?? "UNAVAILABLE"
-            let publicMessage = responseError?.message
-            let message = code == "INVALID_REQUEST" &&
-                (publicMessage == "unknown method: \(method)" || publicMessage == "unauthorized role: node")
-                ? publicMessage! : "Gateway request unavailable"
-            self.queue.async {
-                guard self.processGeneration == processGeneration,
-                      self.gatewayGeneration == gatewayGeneration,
-                      self.route == route else { return }
+            result = .failure(error)
+        }
+        self.queue.async {
+            // A replacement worker restarts request ids. Never deliver an old
+            // route response into the replacement process.
+            guard self.processGeneration == processGeneration,
+                  self.gatewayGeneration == gatewayGeneration,
+                  self.route == route else { return }
+            switch result {
+            case let .success(data):
+                guard let payload = try? JSONSerialization.jsonObject(with: data) else { return }
+                try? self.enqueueWriteLocked([
+                    "type": "gateway-response", "generation": gatewayGeneration, "id": id,
+                    "ok": true, "result": payload,
+                ])
+            case let .failure(error):
+                // Preserve only public RPC errors used for shared publication classification.
+                let responseError = error as? GatewayResponseError
+                let code = responseError?.code ?? "UNAVAILABLE"
+                let publicMessage = responseError?.message
+                let message = code == "INVALID_REQUEST" &&
+                    (publicMessage == "unknown method: \(method)" || publicMessage == "unauthorized role: node")
+                    ? publicMessage! : "Gateway request unavailable"
                 self.writeGatewayUnavailableLocked(id: id, code: code, message: message)
             }
         }
@@ -828,9 +826,14 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         let payloadJSON = result["payloadJSON"] as? String
         let rawError = result["error"] as? [String: Any]
         let code = OpenClawNodeErrorCode(rawValue: rawError?["code"] as? String ?? "UNAVAILABLE") ?? .unavailable
+        let details = rawError?["details"].flatMap { rawDetails -> OpenClawPermissionDetails? in
+            guard let data = try? JSONSerialization.data(withJSONObject: rawDetails) else { return nil }
+            return try? JSONDecoder().decode(OpenClawPermissionDetails.self, from: data)
+        }
         let error = ok ? nil : OpenClawNodeError(
             code: code,
-            message: rawError?["message"] as? String ?? "UNAVAILABLE: node-host worker failed")
+            message: rawError?["message"] as? String ?? "UNAVAILABLE: node-host worker failed",
+            details: details)
         return BridgeInvokeResponse(id: id, ok: ok, payload: payload, payloadJSON: payloadJSON, error: error)
     }
 

@@ -1,3 +1,7 @@
+export function normalizeBase64ForCompare(value: string): string {
+  return value.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
+}
+
 /** Validates base64 structure and returns its decoded size without allocating a decode buffer. */
 export function inspectStrictBase64(value: string): number | undefined {
   const match = /^[A-Za-z0-9+/_-]*={0,2}$/u.exec(value);

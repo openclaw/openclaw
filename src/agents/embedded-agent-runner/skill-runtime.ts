@@ -1,3 +1,4 @@
+import path from "node:path";
 import { prepareSkillLibrarySelection } from "../../skills/library/selection.js";
 import {
   buildSkillSnapshot,
@@ -8,8 +9,10 @@ import {
   applySkillEnvOverridesFromSnapshot,
 } from "../../skills/runtime/env-overrides.js";
 import { resolveSkillResourceCandidates } from "../../skills/runtime/resource-candidates.js";
+import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { prepareInstalledSkillCatalog } from "../installed-skill-runtime.js";
 import type { SandboxContext } from "../sandbox/types.js";
+import { resolveSessionSkillResourceSnapshot } from "../session-placement-skill-resources.js";
 import { isToolExecutionAllowed } from "../tool-policy-shared.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 import { prepareRuntimeSkillEntries } from "./skills-prompt.js";
@@ -27,6 +30,10 @@ export async function prepareEmbeddedSkills(params: {
     | "contextTokenBudget"
     | "toolExecutionAllow"
     | "operation"
+    | "sessionPersistence"
+    | "disableTools"
+    | "modelRun"
+    | "promptMode"
   >;
   effectiveWorkspace: string;
   sandbox: SandboxContext | null | undefined;
@@ -36,8 +43,12 @@ export async function prepareEmbeddedSkills(params: {
   const executionAllow = params.attempt.toolExecutionAllow;
   // Retained schemas are not execution permission. An unreadable skill catalog
   // creates impossible prerequisites and exposes an ungated Code Mode reader.
+  // Detached tool-free raw requests consume neither skills nor their environment.
   if (
     params.attempt.operation === "settled-tool-finalization" ||
+    (params.attempt.sessionPersistence === "detached" &&
+      params.attempt.disableTools === true &&
+      (params.attempt.modelRun === true || params.attempt.promptMode === "none")) ||
     (executionAllow && !isToolExecutionAllowed(executionAllow, "read"))
   ) {
     return {
@@ -63,7 +74,10 @@ export async function prepareEmbeddedSkills(params: {
     mapEntries,
   } = await prepareRuntimeSkillEntries({
     sandbox: params.sandbox,
-    skillsAnchorWorkspace: params.attempt.bootstrapWorkspaceDir ?? params.effectiveWorkspace,
+    skillsAnchorWorkspace:
+      params.attempt.config && hasAgentRosterProperty(params.attempt.config)
+        ? resolveAgentWorkspaceDir(params.attempt.config, params.sessionAgentId)
+        : (params.attempt.bootstrapWorkspaceDir ?? params.effectiveWorkspace),
     skillsSnapshot: params.attempt.skillsSnapshot,
     assertCurrent: params.assertCurrent,
     config: params.attempt.config,
@@ -142,4 +156,33 @@ export async function prepareEmbeddedSkills(params: {
     restoreSkillEnv();
     throw error;
   }
+}
+
+/** Prepares prompt-only plugin skill inputs from delivered mounts or sandbox copies. */
+export async function preparePluginHarnessSkills(
+  params: Pick<
+    Parameters<typeof prepareEmbeddedSkills>[0],
+    "assertCurrent" | "attempt" | "effectiveWorkspace" | "sandbox" | "sessionAgentId"
+  >,
+) {
+  const sandbox = params.sandbox;
+  let skillsSnapshot = resolveSessionSkillResourceSnapshot(params.attempt.skillsSnapshot);
+  let skillReferencePaths = sandbox?.readOnlyResourceMounts?.map((mount) => ({
+    skillFile: path.join(mount.hostPath, "SKILL.md"),
+    readPath: path.posix.join(mount.containerPath, "SKILL.md"),
+  }));
+  if (sandbox?.enabled && !sandbox.readOnlyResourceMounts?.length && skillsSnapshot) {
+    const prepared = await prepareEmbeddedSkills({
+      ...params,
+      applySkillEnvironment: false,
+      includeCodeModeSkills: false,
+      attempt: { ...params.attempt, skillsSnapshot },
+    });
+    skillsSnapshot = {
+      ...(prepared.skillsSnapshotForRun ?? skillsSnapshot),
+      prompt: prepared.skillsPrompt,
+    };
+    skillReferencePaths = prepared.skillUsagePaths;
+  }
+  return { skillsSnapshot, skillReferencePaths };
 }

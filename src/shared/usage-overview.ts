@@ -1,120 +1,257 @@
-import { createSessionCostSummaryAccumulator } from "../infra/session-cost-usage-rollup.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "../infra/session-cost-usage-totals.js";
-import type {
-  CostUsageTotals,
-  SessionCostSummary,
-  UsageDailyBucket,
-} from "../infra/session-cost-usage.types.js";
+import type { UsageDailyBucket } from "../infra/session-cost-usage.types.js";
 import { createUsageAggregateAccumulator } from "./usage-aggregates.js";
-import { filterSessionsByQuery } from "./usage-query.js";
+import { createUsageCalendar, type UsageCalendar } from "./usage-calendar.js";
+import { extractQueryTerms } from "./usage-query.js";
+import {
+  sessionRowTotals,
+  USAGE_OVERVIEW_PAGE_SIZE,
+  usageOverviewPage,
+} from "./usage-table-page.js";
 import type {
   SessionUsageEntry,
   SessionsUsageOverview,
   UsageOverviewOptions,
-  UsageOverviewSession,
   UsageOverviewSlice,
 } from "./usage-types.js";
 
-const PAGE_SIZE = 50;
-
-function createCalendar(bucket: UsageDailyBucket) {
-  const formatter =
-    bucket.mode === "time-zone"
-      ? new Intl.DateTimeFormat("en-US", {
-          timeZone: bucket.timeZone,
-          year: "numeric",
-          month: "2-digit",
-          day: "2-digit",
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-          hourCycle: "h23",
-        })
-      : undefined;
-  const cache = new Map<
-    number,
-    { date: string; hour: number; weekday: number; minute: number; second: number; offset: number }
-  >();
-  function at(timestamp: number) {
-    const found = cache.get(timestamp);
-    if (found) {
-      return found;
+function matchesGlob(value: string, pattern: string): boolean {
+  const text = value.toLowerCase();
+  let cursor = 0;
+  let token = 0;
+  let star = -1;
+  let retry = 0;
+  const matchesWildcard = (index: number) => !/[\r\n\u2028\u2029]/.test(text[index]!);
+  // Revisit only the most recent star, bounding work by text length × pattern length.
+  // A regexp's overlapping .* groups can instead backtrack exponentially.
+  while (cursor < text.length) {
+    if (pattern[token] === "*") {
+      star = token++;
+      retry = cursor;
+    } else if (
+      token < pattern.length &&
+      (pattern[token] === "?" ? matchesWildcard(cursor) : pattern[token] === text[cursor])
+    ) {
+      token++;
+      cursor++;
+    } else if (star >= 0 && retry < text.length && matchesWildcard(retry)) {
+      cursor = ++retry;
+      token = star + 1;
+    } else {
+      return false;
     }
-    const date = new Date(
-      timestamp + (bucket.mode === "utc-offset" ? bucket.utcOffsetMinutes * 60_000 : 0),
-    );
-    let year = date.getUTCFullYear(),
-      month = date.getUTCMonth() + 1,
-      day = date.getUTCDate();
-    let hour = date.getUTCHours(),
-      minute = date.getUTCMinutes(),
-      second = date.getUTCSeconds();
-    if (formatter) {
-      const parts = formatter.formatToParts(timestamp);
-      const value = (type: Intl.DateTimeFormatPartTypes) =>
-        Number(parts.find((part) => part.type === type)?.value);
-      year = value("year");
-      month = value("month");
-      day = value("day");
-      hour = value("hour");
-      minute = value("minute");
-      second = value("second");
-    }
-    const calendarMs = Date.UTC(year, month - 1, day, hour, minute, second);
-    const result = {
-      date: `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
-      hour,
-      minute,
-      second,
-      weekday: new Date(Date.UTC(year, month - 1, day)).getUTCDay(),
-      offset: calendarMs - (timestamp - (((timestamp % 1000) + 1000) % 1000)),
-    };
-    cache.set(timestamp, result);
-    return result;
   }
-  function quarter(date: string, index: number) {
-    if (!Number.isInteger(index) || index < 0 || index > 95 || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      return null;
-    }
-    const time = Date.parse(`${date}T00:00:00Z`);
-    if (!Number.isFinite(time) || new Date(time).toISOString().slice(0, 10) !== date) {
-      return null;
-    }
-    return at(time + index * 900_000);
+  while (pattern[token] === "*") {
+    token++;
   }
-  function nextHour(timestamp: number) {
-    const current = at(timestamp);
-    const next =
-      timestamp +
-      (60 - current.minute) * 60_000 -
-      current.second * 1000 -
-      (((timestamp % 1000) + 1000) % 1000);
-    if (at(next - 1).offset === current.offset) {
-      return next;
-    }
-    let low = timestamp + 1,
-      high = next - 1;
-    while (low < high) {
-      const middle = low + Math.floor((high - low) / 2);
-      if (at(middle).offset === current.offset) {
-        low = middle + 1;
-      } else {
-        high = middle;
-      }
-    }
-    return low;
-  }
-  return { at, quarter, nextHour };
+  return token === pattern.length;
 }
 
-type Calendar = ReturnType<typeof createCalendar>;
+const parseQueryNumber = (value: string): number | null => {
+  let raw = normalizeLowercaseStringOrEmpty(value);
+  if (!raw) {
+    return null;
+  }
+  if (raw.startsWith("$")) {
+    raw = raw.slice(1);
+  }
+  let multiplier = 1;
+  if (raw.endsWith("k")) {
+    multiplier = 1_000;
+    raw = raw.slice(0, -1);
+  } else if (raw.endsWith("m")) {
+    multiplier = 1_000_000;
+    raw = raw.slice(0, -1);
+  }
+  if (!/^\d+(?:\.\d+)?$/.test(raw)) {
+    return null;
+  }
+  const parsed = Number(raw);
+  const normalized = parsed * multiplier;
+  if (!Number.isFinite(normalized) || !Number.isSafeInteger(Math.round(normalized))) {
+    return null;
+  }
+  return normalized;
+};
+
+const normalizeQueryValues = (items: Array<string | undefined>): string[] =>
+  items
+    .filter((item): item is string => Boolean(item))
+    .map((item) => normalizeLowercaseStringOrEmpty(item));
+
+const getSessionProviders = (session: SessionUsageEntry): string[] =>
+  normalizeQueryValues([
+    session.modelProvider,
+    session.providerOverride,
+    session.origin?.provider,
+    ...(session.usage?.modelUsage ?? []).map((entry) => entry.provider),
+  ]);
+
+export const getSessionModels = (session: SessionUsageEntry): string[] =>
+  normalizeQueryValues([
+    session.model,
+    ...(session.usage?.modelUsage ?? []).map((entry) => entry.model),
+  ]);
+
+const getSessionTools = (session: SessionUsageEntry): string[] =>
+  (session.usage?.toolUsage?.tools ?? []).map((tool) => normalizeLowercaseStringOrEmpty(tool.name));
+
+type UsageQueryPredicate = (session: SessionUsageEntry) => boolean;
+
+const HAS_PREDICATES: Readonly<Record<string, UsageQueryPredicate>> = {
+  tools: (session) => (session.usage?.toolUsage?.totalCalls ?? 0) > 0,
+  errors: (session) => (session.usage?.messageCounts?.errors ?? 0) > 0,
+  context: (session) => session.hasContextWeight === true,
+  usage: (session) => Boolean(session.usage),
+  model: (session) => getSessionModels(session).length > 0,
+  provider: (session) => getSessionProviders(session).length > 0,
+};
+
+type NumericQuerySpec = readonly [
+  value: (session: SessionUsageEntry) => number,
+  matches: (value: number, threshold: number) => boolean,
+];
+
+const atLeast = (value: number, threshold: number): boolean => value >= threshold;
+
+const atMost = (value: number, threshold: number): boolean => value <= threshold;
+
+const NUMERIC_QUERY_SPECS: Readonly<Record<string, NumericQuerySpec>> = {
+  mintokens: [(session) => session.usage?.totalTokens ?? 0, atLeast],
+  maxtokens: [(session) => session.usage?.totalTokens ?? 0, atMost],
+  mincost: [(session) => session.usage?.totalCost ?? 0, atLeast],
+  maxcost: [(session) => session.usage?.totalCost ?? 0, atMost],
+  minmessages: [(session) => session.usage?.messageCounts?.total ?? 0, atLeast],
+  maxmessages: [(session) => session.usage?.messageCounts?.total ?? 0, atMost],
+};
+
+const QUERY_KEYS = new Set([
+  "agent",
+  "channel",
+  "chat",
+  "provider",
+  "model",
+  "tool",
+  "label",
+  "key",
+  "session",
+  "id",
+  "has",
+  ...Object.keys(NUMERIC_QUERY_SPECS),
+]);
+
+const MULTI_VALUE_QUERY_KEYS = new Set(["channel", "provider", "model", "tool"]);
+
+const matchesEverySession: UsageQueryPredicate = () => true;
+
+const prepareUsageQuery = (
+  term: ReturnType<typeof extractQueryTerms>[number],
+  key: string,
+  warnings: string[],
+): UsageQueryPredicate => {
+  if (term.key && !QUERY_KEYS.has(key)) {
+    warnings.push(`Unknown filter: ${term.key}`);
+    return matchesEverySession;
+  }
+  if (term.key && term.value === "") {
+    warnings.push(`Missing value for ${term.key}`);
+  }
+
+  const value = normalizeLowercaseStringOrEmpty(term.value ?? "");
+  const numericSpec = Object.hasOwn(NUMERIC_QUERY_SPECS, key)
+    ? NUMERIC_QUERY_SPECS[key]
+    : undefined;
+  const threshold = numericSpec && term.value ? parseQueryNumber(term.value) : null;
+  if (numericSpec && term.value && threshold === null) {
+    warnings.push(`Invalid number for ${term.key}`);
+  }
+  if (key === "has") {
+    const predicate = Object.hasOwn(HAS_PREDICATES, value) ? HAS_PREDICATES[value] : undefined;
+    if (term.value && !predicate) {
+      warnings.push(`Unknown has:${term.value}`);
+    }
+    return predicate ?? matchesEverySession;
+  }
+  if (!value) {
+    return matchesEverySession;
+  }
+  if (!term.key) {
+    return (session) =>
+      normalizeQueryValues([session.label, session.key, session.sessionId]).some((text) =>
+        text.includes(value),
+      );
+  }
+
+  switch (key) {
+    case "agent":
+      return (session) => normalizeLowercaseStringOrEmpty(session.agentId).includes(value);
+    case "channel":
+      return (session) => normalizeLowercaseStringOrEmpty(session.channel).includes(value);
+    case "chat":
+      return (session) => normalizeLowercaseStringOrEmpty(session.chatType).includes(value);
+    case "provider":
+      return (session) => getSessionProviders(session).some((provider) => provider.includes(value));
+    case "model":
+      return (session) => getSessionModels(session).some((model) => model.includes(value));
+    case "tool":
+      return (session) => getSessionTools(session).some((tool) => tool.includes(value));
+    case "label":
+      return (session) => normalizeLowercaseStringOrEmpty(session.label).includes(value);
+    case "key":
+    case "session":
+    case "id":
+      if (value.includes("*") || value.includes("?")) {
+        return (session) =>
+          matchesGlob(session.key, value) ||
+          (session.sessionId ? matchesGlob(session.sessionId, value) : false);
+      }
+      return (session) =>
+        normalizeLowercaseStringOrEmpty(session.key).includes(value) ||
+        normalizeLowercaseStringOrEmpty(session.sessionId).includes(value);
+  }
+
+  if (!numericSpec || threshold === null) {
+    return matchesEverySession;
+  }
+  const [getValue, matches] = numericSpec;
+  return (session) => matches(getValue(session), threshold);
+};
+
+const filterSessionsByQuery = (sessions: SessionUsageEntry[], query: string) => {
+  const terms = extractQueryTerms(query);
+  if (terms.length === 0) {
+    return { sessions, warnings: [] };
+  }
+
+  const warnings: string[] = [];
+  const categoricalTerms = new Map<string, UsageQueryPredicate[]>();
+  const predicates = terms.map((term) => {
+    const key = normalizeLowercaseStringOrEmpty(term.key ?? "");
+    const predicate = prepareUsageQuery(term, key, warnings);
+    if (!MULTI_VALUE_QUERY_KEYS.has(key)) {
+      return predicate;
+    }
+    const alternatives = categoricalTerms.get(key) ?? [];
+    if (term.value) {
+      alternatives.push(predicate);
+    }
+    categoricalTerms.set(key, alternatives);
+    // Every original term still revisits its completed OR group, including empty terms.
+    return (session: SessionUsageEntry) =>
+      alternatives.length === 0 || alternatives.some((match) => match(session));
+  });
+
+  const filtered = sessions.filter((session) => predicates.every((match) => match(session)));
+  return { sessions: filtered, warnings };
+};
 
 function visitHours(
   session: SessionUsageEntry,
-  calendar: Calendar,
+  calendar: UsageCalendar,
   inclusive: boolean,
   visit: (hour: number, weekday: number, share: number) => boolean | void,
 ) {
@@ -140,12 +277,52 @@ function visitHours(
   return true;
 }
 
-function touchesHours(session: SessionUsageEntry, hours: Set<number>, calendar: Calendar) {
-  if (hours.size === 0) {
-    return true;
+type SessionHours = {
+  tokens: ArrayLike<number>;
+  weekdayTokens: ArrayLike<number>;
+  /** Hour-level activity: tokens per hour are positive only where quarters had tokens. */
+  precise: boolean;
+  messages?: { total: ArrayLike<number>; errors: ArrayLike<number> };
+};
+
+// Filtering and chart folding read the same profile; detail rows map UTC quarters once per calendar.
+const hourProfiles = new WeakMap<UsageCalendar, WeakMap<object, SessionHours>>();
+// Report-local hours already follow the request calendar; their views are reused across reads.
+const localProfiles = new WeakMap<object, SessionHours>();
+
+/** Worker-folded rows carry report-calendar hours; detail rows still carry UTC quarters. */
+function sessionHours(
+  usage: NonNullable<SessionUsageEntry["usage"]>,
+  calendar: UsageCalendar,
+): SessionHours {
+  if (usage.localHours) {
+    const cached = localProfiles.get(usage.localHours);
+    if (cached) {
+      return cached;
+    }
+    const { values, precise } = usage.localHours;
+    const hours = {
+      tokens: values.subarray(0, 24),
+      weekdayTokens: values.subarray(24, 31),
+      precise,
+      messages: { total: values.subarray(31, 55), errors: values.subarray(55, 79) },
+    };
+    localProfiles.set(usage.localHours, hours);
+    return hours;
   }
-  let precise = false;
-  for (const value of session.usage?.utcQuarterHourTokenUsage ?? []) {
+  let profiles = hourProfiles.get(calendar);
+  if (!profiles) {
+    profiles = new WeakMap();
+    hourProfiles.set(calendar, profiles);
+  }
+  const cached = profiles.get(usage);
+  if (cached) {
+    return cached;
+  }
+  const tokens = Array<number>(24).fill(0);
+  const weekdayTokens = Array<number>(7).fill(0);
+  const hours: SessionHours = { tokens, weekdayTokens, precise: false };
+  for (const value of usage.utcQuarterHourTokenUsage ?? []) {
     if (value.totalTokens <= 0) {
       continue;
     }
@@ -153,13 +330,34 @@ function touchesHours(session: SessionUsageEntry, hours: Set<number>, calendar: 
     if (!mapped) {
       continue;
     }
-    precise = true;
-    if (hours.has(mapped.hour)) {
-      return true;
-    }
+    hours.precise = true;
+    tokens[mapped.hour]! += value.totalTokens;
+    weekdayTokens[mapped.weekday]! += value.totalTokens;
   }
-  if (precise) {
-    return false;
+  if (usage.utcQuarterHourMessageCounts?.length) {
+    const total = Array<number>(24).fill(0);
+    const errors = Array<number>(24).fill(0);
+    for (const value of usage.utcQuarterHourMessageCounts) {
+      const mapped = calendar.quarter(value.date, value.quarterIndex);
+      if (!mapped) {
+        continue;
+      }
+      total[mapped.hour]! += value.total;
+      errors[mapped.hour]! += value.errors;
+    }
+    hours.messages = { total, errors };
+  }
+  profiles.set(usage, hours);
+  return hours;
+}
+
+function touchesHours(session: SessionUsageEntry, hours: Set<number>, calendar: UsageCalendar) {
+  if (hours.size === 0) {
+    return true;
+  }
+  const profile = session.usage ? sessionHours(session.usage, calendar) : undefined;
+  if (profile?.precise) {
+    return [...hours].some((hour) => (profile.tokens[hour] ?? 0) > 0);
   }
   let touches = false;
   visitHours(session, calendar, true, (hour) => {
@@ -169,122 +367,91 @@ function touchesHours(session: SessionUsageEntry, hours: Set<number>, calendar: 
   return touches;
 }
 
-function sessionRowTotals(session: SessionUsageEntry, days: ReadonlySet<string>) {
-  const usage = session.usage;
-  let tokens = usage?.totalTokens ?? 0;
-  let cost = usage?.totalCost ?? 0;
-  if (days.size && usage?.dailyBreakdown?.length) {
-    tokens = 0;
-    cost = 0;
-    for (const day of usage.dailyBreakdown) {
-      if (days.has(day.date)) {
-        tokens += day.tokens;
-        cost += day.cost;
-      }
-    }
-  }
-  return { tokens, cost };
-}
-
-function compareUsageOverviewSessions(options: UsageOverviewOptions) {
-  if (options.recentKeys) {
-    const recentKeys = options.recentKeys;
-    return (a: SessionUsageEntry, b: SessionUsageEntry) =>
-      recentKeys.indexOf(a.key) - recentKeys.indexOf(b.key);
-  }
-  const days = new Set(options.selectedDays);
-  const rowTotals = new Map<SessionUsageEntry, ReturnType<typeof sessionRowTotals>>();
-  const totals = (entry: SessionUsageEntry) => {
-    let result = rowTotals.get(entry);
-    if (!result) {
-      result = sessionRowTotals(entry, days);
-      rowTotals.set(entry, result);
-    }
-    return result;
-  };
-  const value = (entry: SessionUsageEntry) => {
-    switch (options.sort) {
-      case "tokens":
-        return totals(entry).tokens;
-      case "cost":
-        return totals(entry).cost;
-      case "messages":
-        return entry.usage?.messageCounts?.total ?? 0;
-      case "errors":
-        return entry.usage?.messageCounts?.errors ?? 0;
-      default:
-        return entry.updatedAt ?? 0;
-    }
-  };
-  const direction = options.sortDirection === "asc" ? -1 : 1;
-  return (a: SessionUsageEntry, b: SessionUsageEntry) =>
-    direction *
-    (value(b) - value(a) ||
-      (b.updatedAt ?? 0) - (a.updatedAt ?? 0) ||
-      (a.label || a.key).localeCompare(b.label || b.key));
-}
-
-function compactSession(session: SessionUsageEntry, days: ReadonlySet<string>): SessionUsageEntry {
+export function compactUsageOverviewSession(
+  session: SessionUsageEntry,
+  days: ReadonlySet<string>,
+): SessionUsageEntry {
   if (!session.usage) {
     return session;
   }
+  const source = session.usage;
   const row = sessionRowTotals(session, days);
-  const usage = { ...session.usage, totalTokens: row.tokens, totalCost: row.cost };
-  for (const field of [
-    "dailyBreakdown",
-    "dailyMessageCounts",
-    "dailyModelUsage",
-    "dailyLatency",
-    "utcQuarterHourTokenUsage",
-    "utcQuarterHourMessageCounts",
-    "activityDates",
-    "sessionFile",
-  ] as const) {
-    delete usage[field];
-  }
+  // Build the retained table record directly; deleting history fields makes it a dictionary.
+  const usage = {
+    input: row.input,
+    output: row.output,
+    cacheRead: row.cacheRead,
+    cacheWrite: row.cacheWrite,
+    totalTokens: row.totalTokens,
+    totalCost: row.totalCost,
+    inputCost: row.inputCost,
+    outputCost: row.outputCost,
+    cacheReadCost: row.cacheReadCost,
+    cacheWriteCost: row.cacheWriteCost,
+    missingCostEntries: row.missingCostEntries,
+    missingCostByModel: row.missingCostByModel ?? source.missingCostByModel,
+    computedAt: source.computedAt,
+    staleSince: source.staleSince,
+    refreshing: source.refreshing,
+    sessionId: source.sessionId,
+    firstActivity: source.firstActivity,
+    lastActivity: source.lastActivity,
+    durationMs: source.durationMs,
+    messageCounts: source.messageCounts,
+    toolUsage: source.toolUsage,
+    modelUsage: source.modelUsage,
+    latency: source.latency,
+  };
   return { ...session, usage };
 }
 
-export function buildUsageOverview(
-  params: (
-    | { sessions: UsageOverviewSession[]; summaries: Array<SessionCostSummary | null> }
-    | { rows: SessionUsageEntry[] }
-  ) & {
-    options: UsageOverviewOptions;
-    dayBucket: UsageDailyBucket;
-    compact?: boolean;
-  },
-): UsageOverviewSlice {
-  const { options } = params;
-  const calendar = createCalendar(params.dayBucket);
-  let index = 0;
-  const sessions =
-    "rows" in params
-      ? params.rows
-      : params.sessions.map(({ instances, ...entry }): SessionUsageEntry => {
-          if (instances.length === 1) {
-            const usage = params.summaries[index++] ?? null;
-            return { ...entry, usage, ...(!usage ? { computing: true } : {}) };
-          }
-          const accumulator = createSessionCostSummaryAccumulator({
-            sessionId: entry.sessionId,
-            sessionFile: instances[0]?.sessionFile,
-          });
-          let present = false;
-          for (const [offset] of instances.entries()) {
-            const summary = params.summaries[index + offset];
-            if (summary) {
-              accumulator.add(summary);
-              present = true;
-            }
-          }
-          index += instances.length;
-          return {
-            ...entry,
-            usage: present ? accumulator.finish() : null,
-            ...(!present ? { computing: true } : {}),
-          };
-        });
+function selectUsageOverviewSessions(
+  sessions: SessionUsageEntry[],
+  options: UsageOverviewOptions,
+  calendar: UsageCalendar,
+) {
+  const days = new Set(options.selectedDays);
+  const hours = new Set(options.selectedHours);
+  const queried = filterSessionsByQuery(
+    sessions.filter((session) => touchesHours(session, hours, calendar)),
+    options.query ?? "",
+  );
+  const matched = queried.sessions.filter(
+    (session) =>
+      !days.size ||
+      (session.usage?.activityDates?.length
+        ? session.usage.activityDates.some((day) => days.has(day))
+        : Boolean(session.updatedAt && days.has(calendar.at(session.updatedAt).date))),
+  );
+  const selected = new Set(options.selectedSessions);
+  const scoped = selected.size ? matched.filter((session) => selected.has(session.key)) : matched;
+  const recent = options.recentKeys === undefined ? undefined : new Set(options.recentKeys);
+  const roster = recent ? matched.filter((session) => recent.has(session.key)) : matched;
+  return { days, queried, matched, selected, scoped, roster };
+}
+
+/** Selects rows for context hydration without calculating the full report twice. */
+export function selectUsageOverviewPage(params: {
+  rows: SessionUsageEntry[];
+  options: UsageOverviewOptions;
+  dayBucket: UsageDailyBucket;
+}): SessionUsageEntry[] {
+  const { roster } = selectUsageOverviewSessions(
+    params.rows,
+    params.options,
+    createUsageCalendar(params.dayBucket),
+  );
+  return usageOverviewPage(roster, params.options);
+}
+
+export function buildUsageOverview(params: {
+  rows: SessionUsageEntry[];
+  options: UsageOverviewOptions;
+  dayBucket: UsageDailyBucket;
+  compact?: boolean;
+}): UsageOverviewSlice {
+  const { options, rows: sessions } = params;
+  const calendar = createUsageCalendar(params.dayBucket);
   const filters = {
     agent: new Set<string>(),
     channel: new Set<string>(),
@@ -323,34 +490,38 @@ export function buildUsageOverview(
       filters.tool.add(tool.name);
     }
   }
-  const days = new Set(options.selectedDays);
-  const hours = new Set(options.selectedHours);
-  const queried = filterSessionsByQuery(
-    sessions.filter((session) => touchesHours(session, hours, calendar)),
-    options.query ?? "",
+  const { days, queried, matched, selected, scoped, roster } = selectUsageOverviewSessions(
+    sessions,
+    options,
+    calendar,
   );
-  const matched = queried.sessions.filter(
-    (session) =>
-      !days.size ||
-      (session.usage?.activityDates?.length
-        ? session.usage.activityDates.some((day) => days.has(day))
-        : Boolean(session.updatedAt && days.has(calendar.at(session.updatedAt).date))),
+  const selectedSources = new Map(
+    sessions
+      .filter((session) => selected.has(session.key))
+      .map((session) => [session.key, session]),
   );
-  const selected = new Set(options.selectedSessions);
-  const scoped = selected.size ? matched.filter((session) => selected.has(session.key)) : matched;
+  const selectedUsageComplete = selected.size
+    ? selectedSources.size === selected.size &&
+      [...selectedSources.values()].every(
+        (session) =>
+          session.usage &&
+          !session.computing &&
+          session.usage.staleSince === undefined &&
+          !session.usage.refreshing,
+      )
+    : undefined;
   const selectedRows = new Map(
     selected.size ? scoped.map((session) => [session.key, session]) : [],
   );
   const toRow = (session: SessionUsageEntry) =>
-    params.compact === false ? session : compactSession(session, days);
-  const recent = options.recentKeys === undefined ? undefined : new Set(options.recentKeys);
-  const roster = recent ? matched.filter((session) => recent.has(session.key)) : matched;
+    params.compact === false ? session : compactUsageOverviewSession(session, days);
   const accumulator = createUsageAggregateAccumulator();
   const overview: SessionsUsageOverview = {
     total: roster.length,
     unfilteredSessionCount: sessions.length,
     selectedSessionCount: 0,
     selectedRowCount: scoped.length,
+    selectedUsageComplete,
     selectedRows: [...selected].flatMap((key) => {
       const session = selectedRows.get(key);
       return session ? [toRow(session)] : [];
@@ -358,7 +529,7 @@ export function buildUsageOverview(
     tableSessionCount: matched.length,
     tableTotals: { tokens: 0, cost: 0, errors: 0 },
     offset: options.offset ?? 0,
-    limit: options.limit ?? PAGE_SIZE,
+    limit: options.limit ?? USAGE_OVERVIEW_PAGE_SIZE,
     queryWarnings: queried.warnings,
     hourTokens: Array.from({ length: 24 }, () => 0),
     weekdayTokens: Array.from({ length: 7 }, () => 0),
@@ -368,17 +539,22 @@ export function buildUsageOverview(
     hourlyMessages: Array.from({ length: 24 }, () => 0),
     hourlyErrors: Array.from({ length: 24 }, () => 0),
     filterOptions: {
-      agent: [...filters.agent].toSorted(),
-      channel: [...filters.channel].toSorted(),
-      provider: [...filters.provider].toSorted(),
-      model: [...filters.model].toSorted(),
-      tool: [...filters.tool].toSorted(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
+      agent: [...filters.agent].sort(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
+      channel: [...filters.channel].sort(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
+      provider: [...filters.provider].sort(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
+      model: [...filters.model].sort(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
+      tool: [...filters.tool].sort(),
     },
   };
   for (const session of matched) {
     const row = sessionRowTotals(session, days);
-    overview.tableTotals.tokens += row.tokens;
-    overview.tableTotals.cost += row.cost;
+    overview.tableTotals.tokens += row.totalTokens;
+    overview.tableTotals.cost += row.totalCost;
     overview.tableTotals.errors += session.usage?.messageCounts?.errors ?? 0;
   }
   for (const session of scoped) {
@@ -391,22 +567,17 @@ export function buildUsageOverview(
       overview.durationMs += usage.durationMs!;
       overview.durationCount++;
     }
+    const hours = sessionHours(usage, calendar);
     if (usage.totalTokens > 0) {
-      let precise = false;
-      for (const value of usage.utcQuarterHourTokenUsage ?? []) {
-        if (value.totalTokens <= 0) {
-          continue;
+      if (hours.precise) {
+        overview.hasTimelineData = true;
+        for (let hour = 0; hour < 24; hour += 1) {
+          overview.hourTokens[hour]! += hours.tokens[hour]!;
         }
-        const mapped = calendar.quarter(value.date, value.quarterIndex);
-        if (!mapped) {
-          continue;
+        for (let weekday = 0; weekday < 7; weekday += 1) {
+          overview.weekdayTokens[weekday]! += hours.weekdayTokens[weekday]!;
         }
-        precise = true;
-        overview.hourTokens[mapped.hour]! += value.totalTokens;
-        overview.weekdayTokens[mapped.weekday]! += value.totalTokens;
-      }
-      overview.hasTimelineData = overview.hasTimelineData || precise;
-      if (!precise) {
+      } else {
         overview.hasTimelineData =
           visitHours(session, calendar, false, (hour, weekday, share) => {
             overview.hourTokens[hour]! += usage.totalTokens * share;
@@ -415,14 +586,10 @@ export function buildUsageOverview(
       }
     }
     if (usage.messageCounts?.total) {
-      if (usage.utcQuarterHourMessageCounts?.length) {
-        for (const value of usage.utcQuarterHourMessageCounts) {
-          const mapped = calendar.quarter(value.date, value.quarterIndex);
-          if (!mapped) {
-            continue;
-          }
-          overview.hourlyMessages[mapped.hour]! += value.total;
-          overview.hourlyErrors[mapped.hour]! += value.errors;
+      if (hours.messages) {
+        for (let hour = 0; hour < 24; hour += 1) {
+          overview.hourlyMessages[hour]! += hours.messages.total[hour]!;
+          overview.hourlyErrors[hour]! += hours.messages.errors[hour]!;
         }
       } else {
         visitHours(session, calendar, false, (hour, _weekday, share) => {
@@ -432,31 +599,20 @@ export function buildUsageOverview(
       }
     }
   }
+  const totals = days.size ? accumulator.totalsForDays(days) : accumulator.totals;
+  if (days.size) {
+    // Only the calendar ignores its own day selection. Already accumulated rows
+    // retain their totals and provider attribution without being processed twice.
+    const accumulated = new Set(scoped);
+    for (const session of queried.sessions) {
+      if (!accumulated.has(session) && (!selected.size || selected.has(session.key))) {
+        accumulator.addCalendar(session.usage);
+      }
+    }
+  }
   const aggregates = accumulator.finish();
   overview.selectedSessionCount = aggregates.sessionCount ?? 0;
-  let totals = accumulator.totals;
   if (days.size) {
-    totals = createEmptyCostUsageTotals();
-    for (const day of aggregates.costDaily ?? []) {
-      if (days.has(day.date)) {
-        addCostUsageTotals(totals, day);
-      }
-    }
-    // Keep the calendar facet before its own selection, so another day remains selectable.
-    const calendarDaily = new Map<string, CostUsageTotals>();
-    for (const session of queried.sessions) {
-      if (selected.size && !selected.has(session.key)) {
-        continue;
-      }
-      for (const day of session.usage?.dailyBreakdown ?? []) {
-        const dayTotals = calendarDaily.get(day.date) ?? createEmptyCostUsageTotals();
-        addCostUsageTotals(dayTotals, day);
-        calendarDaily.set(day.date, dayTotals);
-      }
-    }
-    aggregates.costDaily = [...calendarDaily]
-      .map(([date, dayTotals]) => Object.assign({ date }, dayTotals))
-      .toSorted((a, b) => a.date.localeCompare(b.date));
     for (const creator of aggregates.byCreator ?? []) {
       creator.daily = creator.daily.filter((day) => days.has(day.date));
       creator.totals = createEmptyCostUsageTotals();
@@ -471,10 +627,7 @@ export function buildUsageOverview(
     }
   }
   return {
-    sessions: roster
-      .toSorted(compareUsageOverviewSessions(options))
-      .slice(options.offset ?? 0, (options.offset ?? 0) + (options.limit ?? PAGE_SIZE))
-      .map(toRow),
+    sessions: usageOverviewPage(roster, options).map(toRow),
     totals,
     aggregates,
     overview,

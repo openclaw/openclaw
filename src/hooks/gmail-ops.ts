@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -36,7 +37,6 @@ import {
   DEFAULT_GMAIL_SUBSCRIPTION,
   DEFAULT_GMAIL_TOPIC,
   type GmailHookOverrides,
-  generateHookToken,
   mergeHookPresets,
   normalizeHooksPath,
   normalizeServePath,
@@ -84,8 +84,9 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
   const baseConfig = configSnapshot.config;
   const hooksPath = normalizeHooksPath(baseConfig.hooks?.path);
-  const hookToken = opts.hookToken ?? baseConfig.hooks?.token ?? generateHookToken();
-  const pushToken = opts.pushToken ?? baseConfig.hooks?.gmail?.pushToken ?? generateHookToken();
+  const hookToken = opts.hookToken ?? baseConfig.hooks?.token ?? randomBytes(24).toString("hex");
+  const pushToken =
+    opts.pushToken ?? baseConfig.hooks?.gmail?.pushToken ?? randomBytes(24).toString("hex");
 
   const topicInput = opts.topic ?? baseConfig.hooks?.gmail?.topic ?? DEFAULT_GMAIL_TOPIC;
   const parsedTopic = parseTopicPath(topicInput);
@@ -96,7 +97,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   // Gmail watch requires the Pub/Sub topic to live in the OAuth client project.
   if (!projectId) {
     throw new Error(
-      "GCP project id required (use --project or ensure gog credentials are available)",
+      "GCP project id required (use --project or check that gog credentials are available)",
     );
   }
 

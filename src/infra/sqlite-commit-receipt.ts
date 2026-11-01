@@ -83,3 +83,36 @@ export function hasSqliteCommitReceiptCoverage(
     })
   );
 }
+
+/** Validate a worker receipt once, leaving postimage and ownership policy with its domain. */
+export function readSqliteCommitReceipt<T>(
+  value: unknown,
+  expected: {
+    domain: string;
+    isFact(this: void, key: string, fact: SqliteCommittedFact<unknown>): boolean;
+    source?: SqliteCommitSource;
+    keys?: readonly string[];
+    invalidReceiptMessage?: string;
+  },
+): SqliteCommitReceipt<T> {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.source) ||
+    typeof value.source.identity !== "string" ||
+    typeof value.source.incarnation !== "string" ||
+    !(value.facts instanceof Map) ||
+    !hasSqliteCommitReceiptCoverage(value, {
+      source: expected.source ?? {
+        identity: value.source.identity,
+        incarnation: value.source.incarnation,
+      },
+      domain: expected.domain,
+      keys: expected.keys ?? [...value.facts.keys()],
+    }) ||
+    ![...value.facts].every(([key, fact]) => typeof key === "string" && expected.isFact(key, fact))
+  ) {
+    throw new Error(expected.invalidReceiptMessage ?? "State domain commit receipt is invalid");
+  }
+  // SAFETY: The envelope, exact coverage, and domain postimages were checked above.
+  return value as SqliteCommitReceipt<T>;
+}

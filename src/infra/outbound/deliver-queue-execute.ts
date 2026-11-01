@@ -96,7 +96,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     }
     await settleDurableDelivery(
       params.deliveryCompletion,
-      result ? { result } : { platformSendStarted: platformSendStarted && !allPayloadsSuppressed },
+      result
+        ? { result, batch: { results: deliveredResults, payloadCount, payloadOutcomes } }
+        : { platformSendStarted: platformSendStarted && !allPayloadsSuppressed },
       platformQueueStateDir,
       params.deliveryQueueStateContext,
       params.conversationDeliveryTarget,
@@ -189,6 +191,8 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   };
   const wrappedParams: InternalDeliverOutboundPayloadsParams = {
     ...params,
+    transcriptDeliveryId: platformQueueId,
+    transcriptStateDir: params.deliveryQueueStateDir,
     // A provider marker can represent the whole durable intent only when one payload owns it.
     // Adapters must narrow further when one payload can fan out into multiple platform sends.
     ...(exactReconciliationRequired && params.payloads.length === 1
@@ -652,7 +656,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   } finally {
     writer?.release();
     generation?.release();
-    await producerLease?.stop();
     for (const outcome of payloadOutcomes) {
       if (outcome.status === "failed" && params.deliveryQueueOwner) {
         outcome.error = params.deliveryQueueOwner.project(outcome.error);

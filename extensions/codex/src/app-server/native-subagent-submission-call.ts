@@ -70,7 +70,6 @@ export function createNativeSubagentSubmissionCalls(
   dependencies: NativeSubmissionCallDependencies,
   operations: SubmissionCallOperations,
 ) {
-  const { isCurrent } = operations;
   function admitModelInput(
     state: ParentState,
     owner: ParentOwner,
@@ -78,7 +77,7 @@ export function createNativeSubagentSubmissionCalls(
     pendingModelSources: number,
     preparedOwner?: ParentOwner,
   ): void {
-    if (!owner.modelSource || !isCurrent(state)) {
+    if (!owner.modelSource || !operations.isCurrent(state)) {
       throw new Error("Codex native input has no admitted model source");
     }
     const receiver = dependencies.currentModelExecution(request.targetThreadId);
@@ -157,7 +156,7 @@ export function createNativeSubagentSubmissionCalls(
 
   function observeCall(state: ParentState, turnId: string | undefined, item: JsonObject): void {
     const callId = readString(item, "id");
-    if (!turnId || !callId || !isCurrent(state)) {
+    if (!turnId || !callId || !operations.isCurrent(state)) {
       return;
     }
     const owner = dependencies.parentOwner(state, turnId);
@@ -397,7 +396,7 @@ export function createNativeSubagentSubmissionCalls(
       !owner ||
       (call.owner && owner !== call.owner) ||
       !call.submissionId ||
-      !isCurrent(state)
+      !operations.isCurrent(state)
     ) {
       return;
     }

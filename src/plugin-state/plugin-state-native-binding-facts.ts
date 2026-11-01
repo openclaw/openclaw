@@ -1,14 +1,19 @@
+import { toUSVString } from "node:util";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { parseStoredJson } from "./plugin-state-error.js";
-import { readCommittedPluginStateObservationCache } from "./plugin-state-observation-cache.js";
-import { pluginStatePublication, pluginStatePublicationKey } from "./plugin-state-publication.js";
+import { readCommittedPluginStateNamespace } from "./plugin-state-namespace-owner.js";
+import {
+  assertPluginStatePublicationSettled,
+  assertPluginStatePublicationPreserves,
+  pluginStatePublication,
+  pluginStatePublicationKey,
+} from "./plugin-state-publication.js";
 import type { PluginStateReadRow } from "./plugin-state-store.kernel.js";
 import type { capturePluginStateNativeBindingStore } from "./plugin-state-store.native-binding.js";
-import { observePluginStateInWorker } from "./plugin-state-worker-client.js";
+import { observePluginStateRowInWorker } from "./plugin-state-worker-client.js";
 
 export type PluginStatePinnedEntry = {
   read(): unknown;
-  refresh(): Promise<void>;
   release(): void;
 };
 
@@ -16,11 +21,20 @@ export type PluginStatePinnedEntry = {
 export async function capturePluginStateNativeBindingFacts(
   store: NonNullable<ReturnType<typeof capturePluginStateNativeBindingStore>>,
   key: string,
+  authority = false,
+  assertValueCurrent?: (value: unknown) => void,
 ): Promise<PluginStatePinnedEntry> {
   const { options } = store;
   const context = captureOpenClawStateWorkerContext({ env: options.env });
-  const identity = context.admission.identity.key;
+  const identity = () => context.admission.identity.key;
   const scope = { pluginId: options.pluginId, namespace: options.namespace, key };
+  const assertPublicationCurrent = () => {
+    if (assertValueCurrent) {
+      assertPluginStatePublicationPreserves(identity(), scope, assertValueCurrent);
+    } else {
+      assertPluginStatePublicationSettled(identity(), scope);
+    }
+  };
   const entryKey = pluginStatePublicationKey({
     plugin_id: scope.pluginId,
     namespace: scope.namespace,
@@ -31,9 +45,9 @@ export async function capturePluginStateNativeBindingFacts(
   let row: PluginStateReadRow | undefined;
   let unavailable = false;
   const stop = pluginStatePublication.subscribeFacts((change) => {
-    if (change.kind === "unknown" && change.identity === identity) {
+    if (change.kind === "unknown" && change.identity === identity()) {
       unavailable = true;
-    } else if (change.kind === "committed" && change.receipt.source.identity === identity) {
+    } else if (change.kind === "committed" && change.receipt.source.identity === identity()) {
       const fact = change.receipt.facts.get(entryKey);
       if (fact?.kind === "unknown") {
         unavailable = true;
@@ -48,14 +62,13 @@ export async function capturePluginStateNativeBindingFacts(
     row = undefined;
     stop();
   };
-  const refresh = async () => {
-    if (!active) {
+  const load = async () => {
+    if (!active || unavailable) {
       throw new Error("Native binding committed state is unavailable");
     }
     loaded = false;
-    unavailable = false;
     row = undefined;
-    await observePluginStateInWorker({
+    const observation = await observePluginStateRowInWorker({
       ...scope,
       env: options.env,
       context,
@@ -64,35 +77,42 @@ export async function capturePluginStateNativeBindingFacts(
     });
     // A concurrent receipt wins over the read that was already in flight.
     if (!loaded) {
-      const observed = readCommittedPluginStateObservationCache(identity, scope);
-      if (observed) {
-        row = observed.row;
-        loaded = true;
-      }
+      const observed = readCommittedPluginStateNamespace(identity(), scope);
+      row = observed ? observed.get(toUSVString(key)) : observation.row;
+      loaded = true;
     }
     if (!active || !loaded || unavailable) {
       throw new Error("Native binding committed state is unavailable");
     }
   };
   try {
-    const cached = readCommittedPluginStateObservationCache(identity, scope);
+    if (authority) {
+      assertPublicationCurrent();
+    }
+    const cached = readCommittedPluginStateNamespace(identity(), scope);
     if (cached) {
-      row = cached.row;
+      row = cached.get(toUSVString(key));
       loaded = true;
     } else {
-      await refresh();
+      await load();
     }
     return {
       read() {
         if (!active || !loaded || unavailable) {
           throw new Error("Native binding committed state is unavailable");
         }
+        if (authority) {
+          assertPublicationCurrent();
+          store.assertCurrent?.();
+        }
         (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
-        return row && (row.expires_at == null || row.expires_at > Date.now())
-          ? parseStoredJson(row.value_json, "lookup", context.admission.databasePath)
-          : undefined;
+        const value =
+          row && (row.expires_at == null || row.expires_at > Date.now())
+            ? parseStoredJson(row.value_json, "lookup", context.admission.databasePath)
+            : undefined;
+        assertValueCurrent?.(value);
+        return value;
       },
-      refresh,
       release,
     };
   } catch (error) {

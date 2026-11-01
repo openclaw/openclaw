@@ -42,9 +42,8 @@ const DRAINING_GROUPS = resolveGlobalSingleton(
  *
  * Known wait edges at this base: outer `cron` -> `cron-nested`
  * (`server-cron.ts` passes lane "cron"; `agents/lanes.ts` remaps inner work),
- * `main` -> `system-agent` -> `session:<key>` -> `system-agent-inference`
- * (delegated expert inference), and `session:<key>` -> global lane
- * (embedded-agent-runner run + compaction).
+ * `main` -> `system-agent` -> `system-agent-inference` (delegated expert
+ * inference), and setup probes -> their embedded-agent global lane.
  */
 const GROUP_INELIGIBLE_LANES: ReadonlySet<string> = new Set<string>([
   CommandLane.Cron,
@@ -55,7 +54,7 @@ const GROUP_INELIGIBLE_LANES: ReadonlySet<string> = new Set<string>([
 ]);
 
 const GROUP_INELIGIBLE_PREFIXES = [
-  "session:",
+  "session:probe-",
   "nested:",
   SUBAGENT_LANE_PREFIX,
   "context-engine-turn-maintenance:",
@@ -87,7 +86,7 @@ export function getLaneGroup(lane: string): LaneGroupState | undefined {
  * here would resurrect lanes that `retireIdleScopedCommandLane` just removed.
  */
 function getMemberActiveCount(lane: string): number {
-  return getQueueState().lanes.get(lane)?.activeTaskIds.size ?? 0;
+  return getQueueState().lanes.get(lane)?.activeTasks.size ?? 0;
 }
 
 type GroupCapacity = { active: number; reserved: number };
@@ -218,7 +217,7 @@ function resolveNextGroupLane(group: LaneGroupState): string | undefined {
   for (const lane of group.members) {
     const state = getQueueState().lanes.get(lane);
     const head = state ? peekLaneQueue(state.queue) : undefined;
-    if (!state || !head || state.draining || state.activeTaskIds.size >= state.maxConcurrent) {
+    if (!state || !head || state.draining || state.activeTasks.size >= state.maxConcurrent) {
       continue;
     }
     // No callbacks run during selection. Recompute on the next selection after

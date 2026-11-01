@@ -221,15 +221,106 @@ export function validatePreparedNpmBundleDescriptor({
   return descriptor;
 }
 
-function githubJson(repository, suffix, runGh, query) {
-  return JSON.parse(
-    runGh([
-      "api",
-      `repos/${repository}/${suffix}`,
-      "--method",
-      "GET",
-      ...(query ? ["--jq", query] : []),
+function githubJson(repository, suffix, runGh, query, includeHeaders = false) {
+  const raw = runGh([
+    "api",
+    `repos/${repository}/${suffix}`,
+    "--method",
+    "GET",
+    ...(query ? ["--jq", query] : []),
+    ...(includeHeaders ? ["--include"] : []),
+  ]);
+  return JSON.parse(includeHeaders ? githubResponse(raw).body : raw);
+}
+
+function githubResponse(raw) {
+  const boundary = /\r?\n\r?\n/u.exec(raw);
+  const lines = boundary ? raw.slice(0, boundary.index).split(/\r?\n/u) : [];
+  const status = Number(/^HTTP\/\d+(?:\.\d+)? ([1-5]\d{2})\b/u.exec(lines.shift() ?? "")?.[1]);
+  const headers = new Map();
+  for (const line of lines) {
+    const colon = line.indexOf(":");
+    if (colon > 0) {
+      headers.set(line.slice(0, colon).toLowerCase(), line.slice(colon + 1).trim());
+    }
+  }
+  return { status, headers, body: boundary ? raw.slice(boundary.index + boundary[0].length) : raw };
+}
+
+function readCurrentProducerJob(repository, jobId, runGh) {
+  // Fit one primary quota reset inside the producer's six-hour job / 350-minute
+  // artifact wait. Only this read retries; shared identity/mutation transport does not.
+  const deadline = performance.now() + 65 * 60_000;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return githubJson(repository, `actions/jobs/${jobId}`, runGh, undefined, true);
+    } catch (error) {
+      const { status, headers, body } = githubResponse(String(error?.stdout ?? ""));
+      const retryAfter = headers.get("retry-after");
+      const retryAt =
+        retryAfter === undefined
+          ? Number.NaN
+          : /^\d+$/u.test(retryAfter)
+            ? Date.now() + Number(retryAfter) * 1000
+            : Date.parse(retryAfter);
+      const reset = headers.get("x-ratelimit-reset");
+      const resetAt =
+        headers.get("x-ratelimit-remaining") === "0" && /^\d+$/u.test(reset ?? "")
+          ? Number(reset) * 1000
+          : Number.NaN;
+      const throttled =
+        status === 429 ||
+        (status === 403 &&
+          (Number.isFinite(retryAt) ||
+            headers.get("x-ratelimit-remaining") === "0" ||
+            /API rate limit (?:already )?exceeded|secondary rate limit/iu.test(
+              `${body}\n${error?.stderr ?? ""}`,
+            )));
+      if (error?.status !== 1 || error?.signal || !throttled) {
+        throw error;
+      }
+      const directives = [retryAt, resetAt].filter(Number.isFinite);
+      const delay = directives.length
+        ? Math.max(1000, ...directives.map((at) => at - Date.now()))
+        : 60_000 * 2 ** attempt;
+      // Never truncate a server delay to fit the budget or extend the 60s gh timeout.
+      if (attempt >= 3 || delay + 60_000 > deadline - performance.now()) {
+        throw new Error(
+          `Current npm producer metadata rate-limit recovery exhausted (HTTP ${status}).`,
+          { cause: error },
+        );
+      }
+      console.error(
+        `Current npm producer metadata throttled (HTTP ${status}); retrying in ${Math.ceil(delay / 1000)}s.`,
+      );
+      // This owner is a synchronous CLI; keep its producer validation synchronous too.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
+    }
+  }
+}
+
+function jobExecution(job) {
+  return JSON.stringify([
+    job.status,
+    job.conclusion,
+    job.started_at,
+    job.completed_at,
+    (job.steps ?? []).map((step) => [
+      step.number,
+      step.name,
+      step.status,
+      step.conclusion,
+      step.started_at,
+      step.completed_at,
     ]),
+  ]);
+}
+
+// Failed-job reruns list each retained green job again under the new attempt
+// with a fresh job ID; the copy keeps the original execution timestamps.
+export function sameJobExecution(left, right) {
+  return (
+    Boolean(left.started_at && left.completed_at) && jobExecution(left) === jobExecution(right)
   );
 }
 
@@ -240,7 +331,8 @@ function readAttemptJobs(repository, producer, runGh) {
       repository,
       `actions/runs/${producer.runId}/attempts/${producer.runAttempt}/jobs?per_page=100&page=${page}`,
       runGh,
-      "{total_count,jobs:[.jobs[] | {id,name,run_id,run_attempt,head_sha,status,conclusion}]}",
+      // Keep the execution fields sameJobExecution compares.
+      "{total_count,jobs:[.jobs[] | {id,name,run_id,run_attempt,head_sha,status,conclusion,started_at,completed_at,steps:[(.steps // [])[] | {number,name,status,conclusion,started_at,completed_at}]}]}",
     );
     if (
       !Array.isArray(response.jobs) ||
@@ -363,7 +455,7 @@ export function verifyNpmBundleProducer({
     ) {
       throw new Error("Incomplete or mismatched npm producer attempt evidence.");
     }
-    if (jobs.some((entry) => entry.name === producer.jobName)) {
+    if (jobs.some((entry) => entry.name === producer.jobName && !sameJobExecution(job, entry))) {
       throw new Error("npm bundle producer job was superseded by a later attempt.");
     }
   }
@@ -664,7 +756,7 @@ function resolveCurrentProducer(env, jobName, runGh = runReleaseToolingGh) {
     toolingSha: producer.workflowSha,
     jobName,
   });
-  const job = githubJson(producer.repository, `actions/jobs/${producer.jobId}`, runGh);
+  const job = readCurrentProducerJob(producer.repository, producer.jobId, runGh);
   if (
     String(job.id) !== producer.jobId ||
     String(job.run_id) !== producer.runId ||

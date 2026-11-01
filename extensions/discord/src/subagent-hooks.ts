@@ -2,6 +2,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { warnPluginSdkDeprecation } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import {
   listThreadBindingsBySessionKey,
   listThreadBindingsBySessionKeyAsync,
@@ -9,14 +10,6 @@ import {
   type ThreadBindingTargetKind,
   unbindThreadBindingsBySessionKeyAsync,
 } from "./monitor/thread-bindings.js";
-
-type DiscordSubagentEndedEvent = {
-  targetSessionKey: string;
-  accountId?: string;
-  targetKind?: ThreadBindingTargetKind;
-  reason?: string;
-  sendFarewell?: boolean;
-};
 
 type DiscordSubagentDeliveryTargetEvent = {
   expectsCompletionMessage?: boolean;
@@ -39,7 +32,13 @@ type DiscordSubagentDeliveryTargetResult =
     }
   | undefined;
 
-export async function handleDiscordSubagentEnded(event: DiscordSubagentEndedEvent) {
+export async function handleDiscordSubagentEnded(event: {
+  targetSessionKey: string;
+  accountId?: string;
+  targetKind?: ThreadBindingTargetKind;
+  reason?: string;
+  sendFarewell?: boolean;
+}) {
   const targetKind = normalizeOptionalLowercaseString(event.targetKind);
   await unbindThreadBindingsBySessionKeyAsync({
     targetSessionKey: event.targetSessionKey,
@@ -57,10 +56,15 @@ function shouldResolveDiscordDeliveryTarget(event: DiscordSubagentDeliveryTarget
   );
 }
 
-/** @deprecated Use handleDiscordSubagentDeliveryTargetAsync; removed in the next Plugin SDK major. */
+/** @deprecated Use handleDiscordSubagentDeliveryTargetAsync; compatible through 2026-12-31, removed in the first January 2027 stable. */
 export function handleDiscordSubagentDeliveryTarget(
   event: DiscordSubagentDeliveryTargetEvent,
 ): DiscordSubagentDeliveryTargetResult {
+  warnPluginSdkDeprecation({
+    family: "conversation-bindings",
+    method: "handleDiscordSubagentDeliveryTarget",
+    replacement: "handleDiscordSubagentDeliveryTargetAsync",
+  });
   if (!shouldResolveDiscordDeliveryTarget(event)) {
     return undefined;
   }

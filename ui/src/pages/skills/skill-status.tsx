@@ -1,4 +1,4 @@
-import { createMemo } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import type { SkillStatusEntry } from "../../api/types.ts";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -10,6 +10,23 @@ import {
 import { clawhubVerdictKey, type ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
 
 registerSkillsBrowserEnglish();
+
+export function SkillStatusChips(props: { skill: SkillStatusEntry; showBundledBadge?: boolean }) {
+  return (
+    <div class="chip-row" style={{ "margin-top": "6px" }}>
+      <span class="chip">{props.skill.source}</span>
+      <Show when={props.showBundledBadge}>
+        <span class="chip">{t("skillStatus.bundled")}</span>
+      </Show>
+      <span class={["chip", isSkillAvailable(props.skill) ? "chip-ok" : "chip-warn"]}>
+        {t(isSkillAvailable(props.skill) ? "skillStatus.eligible" : "skillStatus.blocked")}
+      </span>
+      <Show when={props.skill.disabled}>
+        <span class="chip chip-warn">{t("skillStatus.disabled")}</span>
+      </Show>
+    </div>
+  );
+}
 
 export function verdictForSkill(
   skill: SkillStatusEntry,
@@ -79,7 +96,15 @@ export function SkillStateStatus(props: {
   });
   return (
     <span
-      class={["plugin-catalog-card__status settings-status", `settings-status--${status().tone}`]}
+      class={[
+        "plugin-catalog-card__status settings-status",
+        {
+          "settings-status--danger": status().tone === "danger",
+          "settings-status--warn": status().tone === "warn",
+          "settings-status--muted": status().tone === "muted",
+          "settings-status--ok": status().tone === "ok",
+        },
+      ]}
       role="img"
       tabindex="0"
       aria-label={status().tooltip}

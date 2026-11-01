@@ -181,7 +181,12 @@ describe("gateway presence audience", () => {
           scopes,
           role,
           client,
-          deviceIdentityPath: path.join(identityDir, `${name}-${sockets.length}.sqlite`),
+          deviceIdentityPath: path.join(
+            identityDir,
+            `${name}-${sockets.length}`,
+            "client",
+            "credentials.sqlite",
+          ),
           browserOrigin: BROWSER_ORIGIN,
         });
         expect(connected.ok, `${name} connect: ${JSON.stringify(connected.error)}`).toBe(true);

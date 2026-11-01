@@ -23,12 +23,6 @@ export type PolicyRuleMetadata = {
     | "string"
     | "string-list";
   readonly checkIds: readonly (typeof POLICY_CHECK_IDS)[number][];
-  /**
-   * Evidence source of the runtime invariant that satisfies this rule unconditionally.
-   * Set only when `checkIds` is empty, so a rule can never enforce nothing without saying
-   * why; `metadata.test.ts` asserts the pairing and that policy state emits the source.
-   */
-  readonly satisfiedByInvariant?: string;
   readonly emptyList?: PolicyEmptyListSemantics;
   readonly allowedValues?: readonly string[];
   readonly caseSensitive?: boolean;
@@ -280,12 +274,11 @@ export const POLICY_RULE_METADATA: readonly PolicyRuleMetadata[] = [
   {
     // Redaction is unconditional in src/logging/redact.ts, so no doctor check can fail for
     // this rule. The key stays a policy contract: `openclaw policy compare` still enforces
-    // baseline strictness, and policy state records the invariant below as satisfied.
+    // baseline strictness, and policy state records redaction as satisfied.
     policyPath: ["dataHandling", "sensitiveLogging", "requireRedaction"],
     strictness: "requires-true",
     valueType: "boolean",
     checkIds: [],
-    satisfiedByInvariant: "oc://openclaw.invariant/logging/redaction",
   },
   booleanRule(
     "dataHandling.telemetry.denyContentCapture",

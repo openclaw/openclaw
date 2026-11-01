@@ -8,7 +8,7 @@ import type {
   GatewaySessionStoreOptions,
   ResolvedGatewaySessionStoreTargets,
 } from "./combined-store.types.js";
-import { listKnownSessionStoreAgentIds } from "./targets.js";
+import { listKnownSessionStoreAgentIds } from "./targets-discovery.native.js";
 
 /** Resolve durable federation in the existing discovery worker; the host owns incognito rows. */
 export function readCombinedSessionStoreTopology(

@@ -524,20 +524,10 @@ extension OpenClawChatViewModel {
         verboseOverrideCleared: Bool = false)
     {
         let session = self.currentSessionEntry()
-        if fastOverrideCleared {
+        if fastOverrideCleared || result.fastMode != nil || result.effectiveFastMode != nil {
             self.updateCurrentSessionFastMode(
-                nil,
+                fastOverrideCleared ? nil : result.fastMode ?? session?.fastMode,
                 effective: result.effectiveFastMode ?? result.fastMode ?? session?.effectiveFastMode,
-                sessionKey: sessionKey)
-        } else if let fastMode = result.fastMode {
-            self.updateCurrentSessionFastMode(
-                fastMode,
-                effective: result.effectiveFastMode ?? fastMode,
-                sessionKey: sessionKey)
-        } else if let effectiveFastMode = result.effectiveFastMode {
-            self.updateCurrentSessionFastMode(
-                session?.fastMode,
-                effective: effectiveFastMode,
                 sessionKey: sessionKey)
         }
         if verboseOverrideCleared {

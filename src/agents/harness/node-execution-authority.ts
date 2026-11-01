@@ -1,7 +1,10 @@
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { SessionRowProjectionBinding } from "../../gateway/session-row-projection-binding.js";
 import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycle.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
@@ -65,11 +68,10 @@ export async function createSessionNodeAuthorities(
     sessionKey: attempt.sessionKey,
     storePath: target.storePath,
   };
-  const source = captureIncognitoSessionSource(session);
-  const claim =
-    source && !("kind" in source)
-      ? source.actor.sessions.captureCurrent(session.sessionKey)
-      : undefined;
+  const source = captureSessionActorStorageOwner(session, {
+    assertCurrent: assertActive,
+    authorize() {},
+  });
   const readProjected = () => {
     const owner = context.sessionRowProjectionOwner;
     return owner instanceof SessionRowProjectionBinding
@@ -121,17 +123,11 @@ export async function createSessionNodeAuthorities(
   const assertRequestCurrent = (request: SessionNodeRequest) => {
     assertActive();
     // Live facts can revoke the admitted permission, never create Full authority.
-    source?.admissionSignal?.throwIfAborted();
-    if (source && "kind" in source) {
-      source.assertCurrent();
-    }
-    claim?.assertCurrent();
-    const entry =
-      source && !("kind" in source)
-        ? source.actor.sessions.readMedia(session.sessionKey)
-        : projected
-          ? readProjected()?.entry
-          : undefined;
+    const entry = source
+      ? readCapturedSessionActorEntry(source, session.sessionKey)
+      : projected
+        ? readProjected()?.entry
+        : undefined;
     const currentSessionAllowed =
       source || projected
         ? entry !== undefined &&

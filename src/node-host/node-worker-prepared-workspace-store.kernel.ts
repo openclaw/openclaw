@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -27,11 +27,11 @@ type PreparedDatabase = Pick<DB, "node_worker_prepared_workspaces">;
 export type NodeWorkerPreparedWorkspaceRow = Selectable<DB["node_worker_prepared_workspaces"]>;
 const TABLE = "node_worker_prepared_workspaces";
 
-function query(db: DatabaseSync) {
+function query(db: EngineConnection) {
   return getNodeSqliteKysely<PreparedDatabase>(db);
 }
 
-function selectRow(db: DatabaseSync, preparationKey: string) {
+function selectRow(db: EngineConnection, preparationKey: string) {
   return executeSqliteQueryTakeFirstSync(
     db,
     query(db).selectFrom(TABLE).selectAll().where("preparation_key", "=", preparationKey),
@@ -52,7 +52,7 @@ function requireUnchanged(
 export class NodeWorkerPreparedWorkspaceKernel {
   constructor(private readonly options: OpenClawStateDatabaseOptions) {}
 
-  private write<T>(operationLabel: string, operation: (database: DatabaseSync) => T): T {
+  private write<T>(operationLabel: string, operation: (database: EngineConnection) => T): T {
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
         requestSqliteWorkerOperationAdmission({

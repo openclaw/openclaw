@@ -2,6 +2,7 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveSqliteAgentId } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import {
   acceptSessionSourceValidation,
+  admitPublishedSessionSource,
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
 } from "../config/sessions/session-source-authority.js";
@@ -16,7 +17,8 @@ import {
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { toAgentExecutionConstraints } from "../state/openclaw-agent-execution-scope.js";
+import { captureOpenClawAgentDatabasePreparationExecution } from "../state/openclaw-agent-execution.js";
 import {
   assertClientVoiceSessionSettlementCurrent,
   captureClientVoiceSessionSettlementContext,
@@ -57,19 +59,11 @@ export async function captureClientVoiceEntrySource(
     }
     const observed = captured.resolveIdentity(target.path);
     const options = { agentId: target.agentId, path: observed.canonicalPath, env: original.env };
-    const execution = captureOpenClawAgentDatabaseExecution(options, {
-      ...(observed.key.startsWith("file:")
-        ? {
-            expectedIdentity: {
-              kind: "file" as const,
-              physicalIdentity: observed.key.slice("file:".length),
-              nativeLocation: observed.canonicalPath,
-              birthtime: observed.birthtime,
-            },
-          }
-        : { expectedCreationIdentity: observed }),
-      requestedPath: target.path,
-    });
+    const execution = captureOpenClawAgentDatabasePreparationExecution(
+      options,
+      toAgentExecutionConstraints(observed).expectedIdentity,
+      target.path,
+    );
     return {
       options,
       execution,
@@ -113,6 +107,28 @@ export function captureClientVoiceSessionSource(agentId: string) {
 
 export type ClientVoiceSessionSource = ReturnType<typeof captureClientVoiceSessionSource>;
 
+export function selectPreparedClientVoiceSource(
+  authority: PreparedSessionSourceAuthority,
+  identities: ReadonlyMap<string, DatabasePathIdentity>,
+) {
+  const preparedSources = [
+    ...authority.checks.map(({ predicate }) => predicate.source),
+    ...(authority.transaction ? [authority.transaction.source] : []),
+  ].filter((source) =>
+    [...identities.values()].some(
+      (identity) =>
+        typeof source.databaseIdentity === "string" &&
+        identity.key === `file:${source.databaseIdentity}` &&
+        identity.birthtime === source.databaseBirthtime,
+    ),
+  );
+  return preparedSources.every(
+    (source) => source.databaseIdentity === preparedSources[0]?.databaseIdentity,
+  )
+    ? preparedSources[0]
+    : undefined;
+}
+
 /** An explicit source qualifies the run's store; an omitted source retains replay custody. */
 export function matchesClientVoiceRunSource(
   owner: { binding: ClientVoiceRunBinding; source: ClientVoiceSessionSource } | undefined,
@@ -129,13 +145,18 @@ export function matchesClientVoiceRunSource(
   );
 }
 
-/** Foreign source checks retain their own readers; local predicates belong to the voice writer. */
+/** Foreign sources use their publication owner; local predicates belong to the voice writer. */
 export async function prepareClientVoiceSessionSourceChecks(
   writer: Pick<ClientVoiceSessionSource, "options" | "identity">,
   authorities: readonly PreparedSessionSourceAuthority[],
 ): Promise<PreparedSessionSourceAuthority> {
   const checks: PreparedSessionSourceAuthority["checks"] = [];
+  const publishedChecks: PreparedSessionSourceAuthority["checks"] = [];
   const foreign = new Map<string | symbol, PreparedSessionSourceAuthority["checks"]>();
+  const canAdmitOnce = authorities.every(
+    (authority) =>
+      !authority.nativeSource && !authority.opaqueCommitGuard && !authority.hasOpaqueCheck,
+  );
   for (const check of authorities.flatMap((authority) => authority.checks)) {
     const source = check.predicate.source;
     if (
@@ -145,15 +166,32 @@ export async function prepareClientVoiceSessionSourceChecks(
     ) {
       checks.push(check);
     } else {
+      if (admitPublishedSessionSource(check.predicate)) {
+        // Opaque guards keep live checks through native commit; ordinary writes admit once.
+        if (!canAdmitOnce) {
+          publishedChecks.push(check);
+        }
+        continue;
+      }
       const group = foreign.get(source.databaseIdentity) ?? [];
       group.push(check);
       foreign.set(source.databaseIdentity, group);
     }
   }
-  const assertAuthoritiesCurrent = () =>
+  const assertAuthoritiesCurrent = () => {
     authorities.forEach((authority) => authority.assertCurrent());
+    publishedChecks.forEach(({ predicate }) => {
+      if (!admitPublishedSessionSource(predicate)) {
+        throw new Error("Voice session source is unavailable");
+      }
+    });
+  };
   if (foreign.size === 0) {
-    return { checks, assertCurrent: assertAuthoritiesCurrent };
+    return {
+      nativeSource: publishedChecks.length > 0,
+      checks,
+      assertCurrent: assertAuthoritiesCurrent,
+    };
   }
   const [
     { retainOpenClawAgentDatabaseReadOnly },

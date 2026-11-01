@@ -62,8 +62,6 @@ export const THREAD_BINDINGS_STATE = resolveGlobalSingleton(
   THREAD_BINDINGS_STATE_KEY,
   createThreadBindingsGlobalState,
 );
-// Source-plugin reloads retain the previous generation's shared registry.
-THREAD_BINDINGS_STATE.accountOperationTails ??= new WeakMap();
 
 export const MANAGERS_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.managersByAccountId;
 export const BINDINGS_BY_THREAD_ID = THREAD_BINDINGS_STATE.bindingsByThreadId;
@@ -105,7 +103,7 @@ export function openThreadBindingsStore() {
 }
 
 export function openThreadBindingsStoreAsync() {
-  return getDiscordRuntime().state.openKeyedStore<ThreadBindingRecord>({
+  return getDiscordRuntime().state.openKeyedStoreV2<ThreadBindingRecord>({
     namespace: THREAD_BINDINGS_NAMESPACE,
     maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
   });
@@ -136,10 +134,7 @@ export function resolveBindingRecordKey(params: {
   return toBindingRecordKey({ accountId: params.accountId, threadId });
 }
 
-export function normalizePersistedBinding(
-  threadIdKey: string,
-  raw: unknown,
-): ThreadBindingRecord | null {
+function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBindingRecord | null {
   if (!raw || typeof raw !== "object") {
     return null;
   }
@@ -279,7 +274,7 @@ export function toReusableWebhookKey(params: { accountId: string; channelId: str
   return `${normalizeLowercaseStringOrEmpty(params.accountId)}:${params.channelId.trim()}`;
 }
 
-export function rememberReusableWebhook(record: ThreadBindingRecord) {
+function rememberReusableWebhook(record: ThreadBindingRecord) {
   const webhookId = record.webhookId?.trim();
   const webhookToken = record.webhookToken?.trim();
   if (!webhookId || !webhookToken) {

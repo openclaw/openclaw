@@ -33,7 +33,6 @@ import { ensureInstallTargetAvailableForMode, loadPluginInstallRuntime } from ".
 import {
   attachPluginInstallTransaction,
   resolvePluginInstallTransactionRequest,
-  type PluginInstallTransaction,
 } from "./install-transaction.js";
 import type { PluginInstallArtifactConsentHandler, PluginInstallLogger } from "./install-types.js";
 import {
@@ -222,94 +221,6 @@ function createGitCommandEnv(): NodeJS.ProcessEnv {
   };
 }
 
-async function withGitStagingDir<T>(
-  persistentRepoDir: string | undefined,
-  fn: (tmpDir: string) => Promise<T>,
-): Promise<T> {
-  if (!persistentRepoDir) {
-    return await withInstallWorkspace("openclaw-git-plugin-", fn);
-  }
-  const targetParent = path.dirname(persistentRepoDir);
-  try {
-    await fs.mkdir(targetParent, { recursive: true, mode: 0o700 });
-  } catch {
-    return await withInstallWorkspace("openclaw-git-plugin-", fn);
-  }
-
-  let callbackStarted = false;
-  try {
-    return await withInstallWorkspace(
-      "openclaw-git-plugin-",
-      async (tmpDir) => {
-        callbackStarted = true;
-        return await fn(tmpDir);
-      },
-      { rootDir: targetParent },
-    );
-  } catch (err) {
-    // Workspace creation can fail on read-only mounts. Never retry after the
-    // callback starts, because that could clone or install dependencies twice.
-    if (callbackStarted) {
-      throw err;
-    }
-    return await withInstallWorkspace("openclaw-git-plugin-", fn);
-  }
-}
-
-async function replaceManagedGitRepo(params: {
-  stagedRepoDir: string;
-  persistentRepoDir: string;
-  deferCommit?: boolean;
-  onBeforePublish?: (stagedRepoDir: string) => Promise<void>;
-  beforePersistentApply?: () => void;
-  assertOwned?: () => void;
-}): Promise<{ ok: true; transaction?: PluginInstallTransaction } | { ok: false; error: string }> {
-  let artifactConsentFailure: { error: unknown } | undefined;
-  const reviewFinalArtifact = async (stagedRepoDir: string) => {
-    try {
-      await params.onBeforePublish?.(stagedRepoDir);
-      return { ok: true as const };
-    } catch (error) {
-      artifactConsentFailure = { error };
-      throw error;
-    }
-  };
-  try {
-    const installParams = {
-      sourceDir: params.stagedRepoDir,
-      targetDir: params.persistentRepoDir,
-      mode: (await pathExists(params.persistentRepoDir))
-        ? ("update" as const)
-        : ("install" as const),
-      timeoutMs: DEFAULT_GIT_TIMEOUT_MS,
-      copyErrorPrefix: "failed to replace managed git plugin repository",
-      hasDeps: false,
-      depsLogMessage: "",
-      // Publication copies the clone again; review that final copy.
-      afterInstall: reviewFinalArtifact,
-      beforePersistentApply: params.beforePersistentApply,
-    };
-    const result = await installPackageDir(
-      params.deferCommit
-        ? requestDeferredPackageDirInstall(installParams, params.assertOwned)
-        : installParams,
-    );
-    if (artifactConsentFailure) {
-      throw artifactConsentFailure.error;
-    }
-    const transaction = result.ok ? resolvePackageDirInstallTransaction(result) : undefined;
-    return result.ok ? { ok: true, ...(transaction ? { transaction } : {}) } : result;
-  } catch (err) {
-    if (artifactConsentFailure) {
-      throw artifactConsentFailure.error;
-    }
-    return {
-      ok: false,
-      error: `failed to replace managed git plugin repository: ${String(err)}`,
-    };
-  }
-}
-
 export async function installPluginFromGitSpec(
   params: InstallSafetyOverrides & {
     spec: string;
@@ -351,9 +262,7 @@ export async function installPluginFromGitSpec(
   if (!availability.ok) {
     return availability;
   }
-  const stagingRepoDir = params.dryRun ? undefined : persistentRepoDir;
-  return await withGitStagingDir(stagingRepoDir, async (tmpDir) => {
-    const repoDir = path.join(tmpDir, "repo");
+  const prepare = async (repoDir: string): Promise<GitPluginInstallResult> => {
     params.logger?.info?.(
       `Cloning ${sanitizeForLog(redactSensitiveUrlLikeString(parsed.label))}...`,
     );
@@ -364,6 +273,7 @@ export async function installPluginFromGitSpec(
       timeoutMs: params.timeoutMs,
       workTimeoutMs,
       commandEnv: () => ({ env: createGitCommandEnv() }),
+      cloneNoHardlinks: !params.dryRun,
     });
     if (!acquired.ok) {
       return acquired;
@@ -455,41 +365,16 @@ export async function installPluginFromGitSpec(
     if (!result.ok) {
       return result;
     }
-    let transaction: PluginInstallTransaction | undefined;
     if (!params.dryRun) {
-      const transactionRequest = resolvePluginInstallTransactionRequest(params);
-      const replaceResult = await replaceManagedGitRepo({
-        stagedRepoDir: repoDir,
-        persistentRepoDir,
-        deferCommit: transactionRequest?.deferCommit,
-        assertOwned: transactionRequest?.assertOwned,
-        onBeforePublish: async (stagedArtifactDir) => {
-          await params.onBeforePluginArtifactCommit?.({
-            pluginId: result.pluginId,
-            ...(effectiveMode === "update" ? { currentArtifactDir: persistentRepoDir } : {}),
-            stagedArtifactDir,
-            mode: effectiveMode,
-          });
-        },
-        beforePersistentApply: params.beforePersistentApply,
-      });
-      if (!replaceResult.ok) {
-        return replaceResult;
-      }
-      transaction = replaceResult.transaction;
-      emitPluginInstallSecurityEvent({
+      await params.onBeforePluginArtifactCommit?.({
         pluginId: result.pluginId,
+        ...(effectiveMode === "update" ? { currentArtifactDir: persistentRepoDir } : {}),
+        stagedArtifactDir: repoDir,
         mode: effectiveMode,
-        sourceFamily: "git",
-        extensionCount: result.extensions.length,
-        hasVersion: Boolean(result.version),
-        trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
       });
     }
-
-    const installed = {
+    return {
       ...result,
-      targetDir: params.dryRun ? result.targetDir : persistentRepoDir,
       git: {
         url: parsed.url,
         ref: parsed.ref,
@@ -497,6 +382,63 @@ export async function installPluginFromGitSpec(
         resolvedAt: new Date().toISOString(),
       },
     };
-    return transaction ? attachPluginInstallTransaction(installed, transaction) : installed;
+  };
+  if (params.dryRun) {
+    return await withInstallWorkspace("openclaw-git-plugin-", (tmpDir) =>
+      prepare(path.join(tmpDir, "repo")),
+    );
+  }
+
+  try {
+    await fs.mkdir(path.dirname(persistentRepoDir), { recursive: true, mode: 0o700 });
+  } catch (error) {
+    return {
+      ok: false,
+      error: `failed to replace managed git plugin repository: ${String(error)}`,
+    };
+  }
+  let preparation: Promise<GitPluginInstallResult> | undefined;
+  const transactionRequest = resolvePluginInstallTransactionRequest(params);
+  const installParams: Parameters<typeof installPackageDir>[0] = {
+    targetDir: persistentRepoDir,
+    mode: effectiveMode,
+    timeoutMs: DEFAULT_GIT_TIMEOUT_MS,
+    copyErrorPrefix: "failed to replace managed git plugin repository",
+    hasDeps: false,
+    depsLogMessage: "",
+    beforePersistentApply: params.beforePersistentApply,
+    afterInstall: (stageDir: string) => (preparation = prepare(stageDir)),
+  };
+  const published = await installPackageDir(
+    transactionRequest
+      ? requestDeferredPackageDirInstall(
+          installParams,
+          transactionRequest.assertOwned,
+          transactionRequest.prepareSettlement,
+        )
+      : installParams,
+  ).catch((error: unknown) => ({
+    ok: false as const,
+    error: `failed to replace managed git plugin repository: ${String(error)}`,
+  }));
+  // The directory owner settles its stage before the preparation's original error escapes.
+  const result = preparation ? await preparation : undefined;
+  if (!published.ok) {
+    return published;
+  }
+  if (!result?.ok) {
+    throw new Error("Git repository published without a validated plugin");
+  }
+
+  const installed = { ...result, targetDir: persistentRepoDir };
+  emitPluginInstallSecurityEvent({
+    pluginId: installed.pluginId,
+    mode: effectiveMode,
+    sourceFamily: "git",
+    extensionCount: installed.extensions.length,
+    hasVersion: Boolean(installed.version),
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
   });
+  const transaction = resolvePackageDirInstallTransaction(published);
+  return transaction ? attachPluginInstallTransaction(installed, transaction) : installed;
 }

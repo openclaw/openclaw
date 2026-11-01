@@ -40,6 +40,7 @@ type WorkerInferenceStreamAdapterOptions = {
   turnId: string;
   modelRef: WorkerInferenceModelRef;
   computerContextEpoch?: ComputerContextEpoch;
+  onCancelled?: (reason: Error) => void;
 };
 
 type WorkerInferenceStreamRequest = {
@@ -197,7 +198,8 @@ function transcriptSafeErrorMessage(
     message.errorMessage ?? "Worker inference result exceeds the transcript message limit.",
     256,
   );
-  replacement.usage = structuredClone(message.usage);
+  replacement.usage = message.usage;
+  replacement.retryAfterMs = message.retryAfterMs;
   return replacement;
 }
 
@@ -270,6 +272,7 @@ export function createWorkerInferenceStreamAdapter(
       error: unknown,
       reason: "aborted" | "error",
       usage?: AssistantMessage["usage"],
+      retryAfterMs?: number | null,
     ) => {
       if (settled) {
         return;
@@ -277,8 +280,9 @@ export function createWorkerInferenceStreamAdapter(
       settled = true;
       partial.stopReason = reason;
       partial.errorMessage = error instanceof Error ? error.message : String(error);
+      partial.retryAfterMs = retryAfterMs;
       if (usage) {
-        partial.usage = structuredClone(usage);
+        partial.usage = usage;
       }
       stream.push({
         type: "error",
@@ -353,21 +357,28 @@ export function createWorkerInferenceStreamAdapter(
             const message = emptyAssistantMessage(adapter.modelRef);
             message.stopReason = "error";
             message.errorMessage = "Worker inference result exceeds the transcript message limit.";
-            message.usage = structuredClone(outcome.message.usage);
+            message.usage = outcome.message.usage;
             stream.push({ type: "error", reason: "error", error: message });
             stream.end();
             return;
           }
           const reason = outcome.message.stopReason;
-          const message = structuredClone(outcome.message) as AssistantMessage;
+          const message: AssistantMessage = outcome.message;
           stream.push({ type: "done", reason, message });
           stream.end();
           return;
+        }
+        if (outcome.reason === "cancelled") {
+          // Remote cancellation can precede local delivery. Stop the turn before
+          // the agent persists its terminal message, without sending a cancel back.
+          inferenceRequest.signal?.removeEventListener("abort", abort);
+          adapter.onCancelled?.(new Error(outcome.message));
         }
         finishError(
           outcome.message,
           outcome.reason === "cancelled" ? "aborted" : "error",
           outcome.usage,
+          outcome.retryAfterMs,
         );
       })
       .catch(fail)

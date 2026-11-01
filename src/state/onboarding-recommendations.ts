@@ -1,5 +1,6 @@
 import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import {
+  ONBOARDING_RECOMMENDATIONS_STATE_KEY_PREFIX,
   prepareOnboardingRecommendationOffer,
   prepareOnboardingRecommendationPending,
   type OnboardingRecommendationsRecord,
@@ -24,7 +25,8 @@ export function createOnboardingRecommendationsStore(params: {
 }) {
   // Doctor owns the one-time `primary` migration; a runtime fallback would recreate
   // cross-workspace reads. Every operation stays bound to one canonical workspace key.
-  const configKey = `onboarding.recommendations.${resolveWorkspaceStateIdentity(params.workspaceDir).workspaceKey}`;
+  const { workspaceKey } = resolveWorkspaceStateIdentity(params.workspaceDir);
+  const configKey = `${ONBOARDING_RECOMMENDATIONS_STATE_KEY_PREFIX}${workspaceKey}`;
   const database = params.database ?? {};
   return {
     read: async (): Promise<OnboardingRecommendationsRecord | null> => {
@@ -42,15 +44,15 @@ export function createOnboardingRecommendationsStore(params: {
       const context = captureOpenClawStateWorkerContext(database);
       return executeOpenClawStateWorker(context, {
         type: "onboardingRecommendations.writeOffer",
-        input: { configKey, params: captured },
+        input: { workspaceKey, params: captured },
       });
     },
     acknowledge: (options: AcknowledgeOnboardingRecommendationsParams = {}) => {
       const context = captureOpenClawStateWorkerContext(database);
-      const captured = structuredClone({ ...options, nowMs: options.nowMs ?? Date.now() });
+      const captured = { ...options, nowMs: options.nowMs ?? Date.now() };
       return executeOpenClawStateWorker(context, {
         type: "onboardingRecommendations.acknowledge",
-        input: { configKey, params: captured },
+        input: { workspaceKey, params: captured },
       });
     },
     updatePending: (options: UpdatePendingOnboardingRecommendationsParams) => {
@@ -58,21 +60,20 @@ export function createOnboardingRecommendationsStore(params: {
       const context = captureOpenClawStateWorkerContext(database);
       return executeOpenClawStateWorker(context, {
         type: "onboardingRecommendations.updatePending",
-        input: { configKey, params: captured },
+        input: { workspaceKey, params: captured },
       });
     },
     clearPending: (options: ClearPendingOnboardingRecommendationsParams) => {
       const context = captureOpenClawStateWorkerContext(database);
-      const captured = structuredClone(options);
       return executeOpenClawStateWorker(context, {
         type: "onboardingRecommendations.clearPending",
-        input: { configKey, params: captured },
+        input: { workspaceKey, params: options },
       });
     },
     clear: () => {
       return executeOpenClawStateWorker(captureOpenClawStateWorkerContext(database), {
         type: "onboardingRecommendations.clear",
-        input: { configKey },
+        input: { workspaceKey },
       });
     },
   };

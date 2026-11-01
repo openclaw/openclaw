@@ -34,7 +34,7 @@ import {
   buildDiscordInteractiveComponents,
   buildDiscordPresentationComponents,
 } from "../shared-interactive.js";
-import { parseDiscordTarget, resolveDiscordChannelId } from "../targets.js";
+import { parseDiscordTarget, resolveDiscordChannelId } from "../target-parsing.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
 import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.js";
 import { readDiscordAutoArchiveDurationParam } from "./runtime.shared.js";
@@ -130,7 +130,7 @@ async function dispatchDiscordMessageAction(
       return result;
     }
     discordInboundEventDelivery.notify({
-      sessionKey: ctx.sessionKey ?? fallbackSessionKey ?? undefined,
+      sessionKey: ctx.sessionKey ?? fallbackSessionKey,
       to,
       accountId,
       inboundEventKind: ctx.inboundEventKind,
@@ -252,14 +252,14 @@ async function dispatchDiscordMessageAction(
       to,
       content: deliveryContent,
       ...(threadName ? { threadName } : {}),
-      mediaUrl: mediaUrl ?? undefined,
-      filename: filename ?? undefined,
-      replyTo: replyTo ?? undefined,
+      mediaUrl,
+      filename,
+      replyTo,
       ...(action === "send" ? { components, embeds, asVoice } : {}),
       silent,
       ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
-      __sessionKey: sessionKey ?? undefined,
-      __agentId: agentId ?? undefined,
+      __sessionKey: sessionKey,
+      __agentId: agentId,
     });
     return completeOutbound(result, to, sessionKey);
   }
@@ -356,7 +356,7 @@ async function dispatchDiscordMessageAction(
       messageId,
       content,
       autoArchiveMinutes,
-      appliedTags: appliedTags ?? undefined,
+      appliedTags,
     });
     const details =
       result.details && typeof result.details === "object" && !Array.isArray(result.details)

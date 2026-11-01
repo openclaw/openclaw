@@ -34,6 +34,7 @@ export {
 } from "./host/embedding-provider-adapter-utils.js";
 export { sanitizeAndNormalizeEmbedding } from "./host/embedding-vectors.js";
 export { debugEmbeddingsLog } from "./host/embeddings-debug.js";
+export { extractEmbeddingUsage } from "../../llm-core/src/usage-cost.js";
 export { normalizeEmbeddingModelWithPrefixes } from "./host/embeddings-model-normalize.js";
 export {
   embeddingProviderOwnsDestination,
@@ -57,5 +58,9 @@ export {
   resolveEmbeddingInputFormatVersion,
   type EmbeddingInput,
 } from "./host/embedding-inputs.js";
-export { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./host/remote-http.js";
+export {
+  buildRemoteBaseUrlPolicy,
+  withRemoteHttpResponse,
+  type RemoteEmbeddingRequestAuth,
+} from "./host/remote-http.js";
 export { classifyMemoryMultimodalPath } from "./host/multimodal.js";

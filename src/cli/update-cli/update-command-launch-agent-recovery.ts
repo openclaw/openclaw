@@ -1,3 +1,4 @@
+import type { GatewayServiceControlArgs } from "../../daemon/service-types.js";
 import {
   readGatewayServiceState,
   resolveGatewayService,
@@ -12,6 +13,7 @@ export type PostUpdateLaunchAgentRecoveryResult =
 
 export async function recoverInstalledLaunchAgentAfterUpdate(params: {
   service?: GatewayService;
+  deadline?: GatewayServiceControlArgs["deadline"];
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
   onGatewayStartAttempted?: () => void;
@@ -22,9 +24,10 @@ export async function recoverInstalledLaunchAgentAfterUpdate(params: {
   }
 
   const service = params.service ?? resolveGatewayService();
-  const state = await readGatewayServiceState(service, { env: params.env }).catch(
-    (error: unknown) => ({ error }),
-  );
+  const state = await readGatewayServiceState(service, {
+    env: params.env,
+    timeoutMs: params.deadline?.remainingMs(),
+  }).catch((error: unknown) => ({ error }));
   params.assertCurrent?.();
   const inspectionFailed = (error: unknown): PostUpdateLaunchAgentRecoveryResult => ({
     status: "inspection-failed",
@@ -43,7 +46,11 @@ export async function recoverInstalledLaunchAgentAfterUpdate(params: {
   let recovered: Awaited<ReturnType<typeof recoverInstalledLaunchAgent>>;
   try {
     params.onGatewayStartAttempted?.();
-    recovered = await recoverInstalledLaunchAgent({ result: "restarted", env: state.env });
+    recovered = await recoverInstalledLaunchAgent({
+      result: "restarted",
+      env: state.env,
+      deadline: params.deadline,
+    });
     params.assertCurrent?.();
   } catch (error) {
     params.assertCurrent?.();

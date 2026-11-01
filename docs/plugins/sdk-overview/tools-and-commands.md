@@ -35,7 +35,7 @@ operation continue to own their signal and work lifetime.
 
 Explicit widget presenters declare a unique model-visible target such as `node_panel`. Current-channel presenters use `target: "current_channel"`, provide a synchronous `match(context)` predicate over trusted delivery facts, and declare supported source kinds and delivery limits. Multiple transport presenters may coexist, but core selects an implicit route only when exactly one matches.
 
-Core validates the canonical `show_widget` schema, composes the bounded HTML document, and passes immutable HTML plus an optional hosted URL to `present(...)`. Presenters return either a generic message receipt or a node receipt. Expected availability and presentation failures use the closed error result instead of throwing; core falls back inline only for an actual `inline-widgets` client and otherwise surfaces the failure.
+Core validates the shared `show_widget` schema, composes the bounded HTML document, and passes immutable HTML plus an optional hosted URL to `present(...)`. Presenters return either a generic message receipt or a node receipt. Expected availability and presentation failures use the closed error result instead of throwing; core falls back inline only for an actual `inline-widgets` client and otherwise surfaces the failure.
 
 Computer Use providers use `registerComputerUseProvider(api, provider)` from
 `openclaw/plugin-sdk/computer-use`. It registers the shared
@@ -48,6 +48,10 @@ Plugin commands can set `agentPromptGuidance` when the agent needs a short,
 command-owned routing hint. Keep that text about the command itself; do not add
 provider- or plugin-specific policy to core prompt builders.
 
+A command handler that sends its own response can return `{ suppressReply: true }`:
+OpenClaw then sends no reply of its own for that command, neither the result text
+nor a missing-reply notice.
+
 Commands that receive `senderIsOwner` also receive the host's optional
 `assertOwnerCurrent` callback when admitted as an owner. Capture that callback
 before awaiting preparation and pass it to the mutation owner's current-authority
@@ -57,6 +61,11 @@ original identity and command invocation; retaining it cannot start new work
 after the handler returns. Already accepted operations still finish their
 settlement and cleanup. Ordinary authorized read commands and explicit Gateway
 scope checks retain their existing behavior.
+
+For native Discord commands, OpenClaw lowercases the selected command name and
+skips names longer than 32 characters with a diagnostic. Use
+`nativeNames: { discord: "short-name" }` when the primary name is longer. Slack
+retains its selected alias spelling.
 
 Commands may also declare a bounded client presentation action for parsed no-argument
 invocations:

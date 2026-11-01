@@ -441,18 +441,6 @@ function createAskUserPromptDelivery(
   return { state, delivery };
 }
 
-function resetPendingAskUserQuestionsForTest(): void {
-  for (const questionId of askUserQuestions.keys()) {
-    releaseAskUserQuestion(questionId);
-  }
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.askUserToolTestApi")] = {
-    resetPendingAskUserQuestionsForTest,
-  };
-}
-
 /** Creates the main-session-only blocking ask_user tool. */
 export function createAskUserTool(params: {
   agentId?: string;
@@ -598,19 +586,8 @@ export function createAskUserTool(params: {
           signal ? { signal } : undefined,
         ).finally(prompt.close) as Promise<QuestionWaitAnswerResult>;
         state.claim.setAnswer(answerPromise);
-        // A refused registration-time claim releases prompt delivery, not the question.
-        let consumed: boolean;
-        do {
-          consumed = await Promise.race([
-            state.claim.waitForResolution(),
-            answerPromise.then(() => true),
-          ]);
-        } while (!consumed && state.claim.isResolving());
-        if (!consumed) {
-          // Registration-time answer claims must settle before a prompt can become visible.
-          delivery.markReady();
-        }
-        if (delivery.hasSubscriber && !consumed) {
+        delivery.markReady();
+        if (delivery.hasSubscriber) {
           const promptDeliveryPromise = delivery.waitForDelivery(signal);
           const first = await Promise.race([
             promptDeliveryPromise.then((result) => ({

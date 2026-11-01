@@ -231,9 +231,9 @@ export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS + 45_000;
 export const CROSS_OS_GATEWAY_READY_TIMEOUT_MS = 3 * 60_000;
 export const CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS = 5 * 60_000;
-export function managedGatewayRestartCommandTimeoutMs(platform = process.platform) {
-  // The CLI performs its own restart health loop. Keep the outer release
-  // harness alive long enough to receive that result plus service-manager overhead.
+export function managedGatewayStartupCommandTimeoutMs(platform = process.platform) {
+  // Start and restart both wait for readiness. Share the existing bounded release
+  // startup allowance, including service-manager overhead, across both commands.
   return gatewayReadyDeadlineMs(platform) + 60_000;
 }
 const CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE = "minimal";
@@ -380,7 +380,7 @@ export function resolveRunnerMatrix(params: {
     {
       os_id: "macos",
       display_name: "macOS",
-      runner: pick(params.macosRunner, params.varMacosRunner, "blacksmith-6vcpu-macos-15"),
+      runner: pick(params.macosRunner, params.varMacosRunner, "xcode-27"),
       artifact_name: "macos",
     },
   ];
@@ -388,13 +388,10 @@ export function resolveRunnerMatrix(params: {
     suites
       .filter((suite) => suiteFilter.matches(runner.os_id, suite))
       .flatMap((suite) => {
-        // Windows packaged-fresh retains the validated version before the
-        // Node 24.19 libuv fs-event crash on Windows Server 2025 RUNNER~1 paths.
-        const node24Version =
-          runner.os_id === "windows" && suite === "packaged-fresh" ? "24.16.0" : "24.21.0";
+        const node24Version = "24.22.1";
         const nodeVersions =
           suite === "packaged-fresh" || suite === "packaged-upgrade"
-            ? [node24Version, "26.1.0"]
+            ? [node24Version, "26.12.1"]
             : [node24Version];
         return nodeVersions.map((nodeVersion) =>
           Object.assign({}, runner, {

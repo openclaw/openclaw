@@ -1,26 +1,23 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
+import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { emitJsonOrText, formatEnvelopeForText } from "./output.js";
 import { registerLocalProvidersCommand } from "./providers-command.js";
 
 function describeWebResultFailure(result: Record<string, unknown>): string | undefined {
-  const statusCode =
-    typeof result.statusCode === "number" && Number.isFinite(result.statusCode)
-      ? result.statusCode
-      : undefined;
+  const statusCode = asFiniteNumber(result.statusCode);
   const error = result.error;
   const errorMessage =
-    typeof error === "string"
-      ? error
-      : error &&
-          typeof error === "object" &&
-          typeof (error as { message?: unknown }).message === "string"
-        ? (error as { message: string }).message
-        : undefined;
+    readStringValue(error) ?? readStringValue(asOptionalObjectRecord(error)?.message);
   if (result.ok !== false && (statusCode === undefined || statusCode < 400) && !errorMessage) {
     return undefined;
   }
@@ -66,7 +63,6 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action((opts) =>
       runWebCommand("web.search", opts.json, async () => {
-        const { parseOptionalPositiveInteger } = await import("./shared.js");
         const query = String(opts.query);
         const provider = opts.provider as string | undefined;
         const limit = parseOptionalPositiveInteger(opts.limit, "--limit");
@@ -112,7 +108,6 @@ export function registerWebCapabilityCommands(capability: Command): void {
         const { getCapabilityWebFetchCommandSecretTargets } =
           await import("../command-secret-targets.js");
         const { resolveLocalCapabilityRuntimeConfig } = await import("./shared.js");
-        const { resolveWebFetchDefinition } = await import("../../web-fetch/runtime.js");
         const rawConfig = await captureRuntimeConfigAsyncReader()();
         const scopedTargets = getCapabilityWebFetchCommandSecretTargets(rawConfig, {
           providerId: provider,
@@ -122,12 +117,41 @@ export function registerWebCapabilityCommands(capability: Command): void {
           ...scopedTargets,
           config: rawConfig,
         });
+        const disabledMessage =
+          "web.fetch is disabled. Set tools.web.fetch.enabled=true to enable it.";
+        if (provider === undefined) {
+          const { createWebFetchTool } = await import("../../agents/tools/web-fetch.js");
+          const tool = createWebFetchTool({ config: cfg });
+          if (!tool) {
+            throw new Error(disabledMessage);
+          }
+          const { details: result } = await tool.execute("infer-web-fetch", {
+            url,
+            extractMode: format,
+          });
+          if (!isRecord(result)) {
+            throw new Error("web.fetch returned no structured result.");
+          }
+          const resultProvider = isRecord(result.externalContent)
+            ? result.externalContent.provider
+            : undefined;
+          return {
+            provider: typeof resultProvider === "string" ? resultProvider : "direct",
+            result,
+          };
+        }
+        // A provider flag pins execution, rather than selecting the tool's fallback.
+        const { resolveWebFetchDefinition } = await import("../../web-fetch/runtime.js");
         const resolved = resolveWebFetchDefinition({
           config: cfg,
           providerId: provider,
         });
         if (!resolved) {
-          throw new Error("web.fetch is disabled or no provider is available.");
+          throw new Error(
+            cfg.tools?.web?.fetch?.enabled === false
+              ? disabledMessage
+              : `web.fetch provider "${provider}" is not available; check it with \`openclaw infer web providers\`.`,
+          );
         }
         const result = await resolved.definition.execute({
           url,
@@ -141,7 +165,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
     const { resolveAgentDir } = await import("../../agents/agent-scope.js");
     const { isWebFetchProviderConfigured, listWebFetchProviders } =
       await import("../../web-fetch/runtime.js");
-    const { isWebSearchProviderConfigured, listWebSearchProviders } =
+    const { isWebSearchProviderConfigured, listWebSearchProvidersAsync } =
       await import("../../web-search/runtime.js");
     const agentDir = resolveAgentDir(cfg, agentId);
     const { ensureAuthProfileStoreWithoutExternalProfilesAsync } =
@@ -152,7 +176,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
     );
     const selectedFetchProvider = normalizeLowercaseStringOrEmpty(cfg.tools?.web?.fetch?.provider);
     return {
-      search: listWebSearchProviders({ config: cfg }).map((provider) => ({
+      search: (await listWebSearchProvidersAsync({ config: cfg })).map((provider) => ({
         available: true,
         configured: isWebSearchProviderConfigured({ provider, config: cfg, agentDir, authStore }),
         selected: provider.id === selectedSearchProvider,

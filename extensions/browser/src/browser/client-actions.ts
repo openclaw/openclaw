@@ -56,7 +56,7 @@ type BrowserActionOptions = {
 
 type BrowserTimedActionOptions = BrowserActionOptions & { timeoutMs?: number };
 
-function resolveBrowserOperationRequestTimeoutMs(timeoutMs: unknown): number {
+export function resolveBrowserOperationRequestTimeoutMs(timeoutMs: unknown): number {
   const operationTimeoutMs =
     clampPositiveTimerTimeoutMs(timeoutMs) ?? DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS;
   // Let the browser operation report its own timeout/error before the client watchdog fires.

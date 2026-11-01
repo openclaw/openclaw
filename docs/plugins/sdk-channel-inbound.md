@@ -142,12 +142,24 @@ dispatchers that keep platform delivery in the delivery adapter. New send
 paths should use message adapters and durable message helpers from
 `channel-outbound` instead.
 
+## Debouncing
+
+`createInboundDebouncer` from `openclaw/plugin-sdk/channel-inbound-debounce`
+releases a keyed queue when the flush's `admission` promise settles and keeps its
+`completion` promise available to `drain()`. New `onFlush` callbacks should use
+the supplied `createFlush` helper or return those two promises explicitly.
+
+Plugins built against the stable `v2026.7.x` releases can still return a
+Promise or thenable. The host waits for that result for both admission and
+completion, preserving same-key ordering and rejection handling. No removal date
+has been announced for this runtime compatibility path.
+
 ## Platform-selected history windows
 
 When the platform owns recent history, pass the selected entries as
 `message.inboundHistory` and set
 `sessionTranscript: { historyLimit, historyKind: "recent" }`. The host renders that
-configured window without merging canonical transcript rows back into it.
+configured window without merging stored transcript rows back into it.
 Without `"recent"`, existing transcript enrichment and the legacy defensive
 20-entry prompt cap remain unchanged.
 
@@ -271,7 +283,7 @@ The delivery result fields have these meanings:
 | `finalization`           | A promise for delayed native settlement of the same logical payload, such as closing or editing an in-place streaming card. Its resolved fields override the immediate result before terminal observation and `onDelivered`. |
 
 Set the delivery adapter's `observeMessageSent` option to `true` when core
-should emit the canonical plugin and internal `message_sent` events for this
+should emit the standard plugin and internal `message_sent` events for this
 adapter's non-durable sends. Do not return this option from `deliver`, and do
 not emit those events in the plugin too. Durable sends already emit through
 the shared outbound owner and are not duplicated.

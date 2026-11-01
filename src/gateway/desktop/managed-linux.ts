@@ -7,7 +7,7 @@ import { tryListenOnPort } from "../../infra/ports-probe.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { runCommandBuffered } from "../../process/exec.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
-import type { ManagedRun, ProcessSupervisor, RunExit } from "../../process/supervisor/types.js";
+import type { ManagedRun, RunExit } from "../../process/supervisor/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getHostDesktopGuidance } from "./host-guidance.js";
 import {
@@ -128,15 +128,34 @@ function lastStderrLine(stderr: string): string | undefined {
     ?.trim();
 }
 
-async function readDisplaySocketNames(socketDir: string): Promise<string[]> {
+async function readDisplaySocketNames(
+  socketDir: string,
+  unixSocketTable: string,
+): Promise<string[]> {
+  let names: string[];
   try {
-    return await fs.readdir(socketDir);
+    names = await fs.readdir(socketDir);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
     }
-    throw error;
+    names = [];
   }
+  let table: string;
+  try {
+    // Read the Gateway's network namespace, including X servers with a private /tmp.
+    table = await fs.readFile(unixSocketTable, "utf8");
+  } catch {
+    return names;
+  }
+  const prefix = `${socketDir}/`;
+  for (const line of table.split("\n")) {
+    const socketPath = line.trim().split(/\s+/u)[7]?.replace(/^@/u, "");
+    if (socketPath?.startsWith(prefix)) {
+      names.push(socketPath.slice(prefix.length));
+    }
+  }
+  return names;
 }
 
 function binaryError(
@@ -152,41 +171,18 @@ function binaryError(
 
 export function createManagedLinuxDesktop(
   params: {
-    supervisor?: ProcessSupervisor;
     onFailed?: (error: string) => void;
     runtime?: {
-      createAudio?: typeof createManagedLinuxAudio;
-      nowMs?: () => number;
-      probeRfb?: typeof probeRfbServer;
-      randomBytes?: typeof crypto.randomBytes;
-      readinessPollMs?: number;
-      readinessTimeoutMs?: number;
-      runPasswordTool?: typeof runCommandBuffered;
-      sleep?: (ms: number) => Promise<void>;
       tempRoot?: string;
-      tryListenOnPort?: (params: {
-        port: 0;
-        host: "127.0.0.1";
-        exclusive: true;
-      }) => Promise<number>;
+      unixSocketTable?: string;
       x11SocketDir?: string;
     };
   } = {},
 ): ManagedLinuxDesktop {
-  const supervisor = params.supervisor ?? getProcessSupervisor();
-  const nowMs = params.runtime?.nowMs ?? Date.now;
-  const createAudio = params.runtime?.createAudio ?? createManagedLinuxAudio;
-  const probeRfb = params.runtime?.probeRfb ?? probeRfbServer;
-  const randomBytes = params.runtime?.randomBytes ?? crypto.randomBytes;
-  const readinessPollMs = params.runtime?.readinessPollMs ?? MANAGED_READINESS_POLL_MS;
-  const readinessTimeoutMs = params.runtime?.readinessTimeoutMs ?? MANAGED_READINESS_TIMEOUT_MS;
-  const runPasswordTool = params.runtime?.runPasswordTool ?? runCommandBuffered;
-  // ref:false keeps readiness polling from pinning an otherwise idle process alive.
-  const wait =
-    params.runtime?.sleep ?? ((ms: number) => sleepWithAbort(ms, undefined, { ref: false }));
+  const supervisor = getProcessSupervisor();
   const tempRoot = params.runtime?.tempRoot ?? os.tmpdir();
-  const pickPort = params.runtime?.tryListenOnPort ?? tryListenOnPort;
   const x11SocketDir = params.runtime?.x11SocketDir ?? "/tmp/.X11-unix";
+  const unixSocketTable = params.runtime?.unixSocketTable ?? "/proc/self/net/unix";
   const scopeKey = `host-desktop-managed-linux:${crypto.randomUUID()}`;
 
   let status: ManagedLinuxDesktopStatus = { state: "not-started" };
@@ -200,7 +196,7 @@ export function createManagedLinuxDesktop(
   let stderrTail = "";
   const restartTimes = new Map<"desktop" | "audio", number[]>();
   const claimRestart = (kind: "desktop" | "audio") => {
-    const now = nowMs();
+    const now = Date.now();
     const recent = (restartTimes.get(kind) ?? []).filter(
       (startedAt) => now - startedAt < RESTART_WINDOW_MS,
     );
@@ -274,9 +270,9 @@ export function createManagedLinuxDesktop(
     await fs.chmod(tempDir, 0o700);
     const passwordFile = path.join(tempDir, "passwd");
     try {
-      const password = randomBytes(12).toString("base64url").slice(0, 8);
+      const password = crypto.randomBytes(12).toString("base64url").slice(0, 8);
       registerSecretValueForRedaction(password);
-      const filtered = await runPasswordTool(["tigervncpasswd", "-f"], {
+      const filtered = await runCommandBuffered(["tigervncpasswd", "-f"], {
         input: Buffer.from(password),
         maxOutputBytes: { stdout: 64, stderr: 4_096 },
         timeoutMs: 10_000,
@@ -286,8 +282,10 @@ export function createManagedLinuxDesktop(
         throw binaryError("tigervncpasswd", detail || `exit code ${filtered.code ?? "none"}`);
       }
       await fs.writeFile(passwordFile, filtered.stdout, { mode: 0o600, flag: "wx" });
-      const port = await pickPort({ port: 0, host: "127.0.0.1", exclusive: true });
-      const display = chooseDisplayNumber(await readDisplaySocketNames(x11SocketDir));
+      const port = await tryListenOnPort({ port: 0, host: "127.0.0.1", exclusive: true });
+      const display = chooseDisplayNumber(
+        await readDisplaySocketNames(x11SocketDir, unixSocketTable),
+      );
       const env: NodeJS.ProcessEnv = {
         ...process.env,
         DISPLAY: `:${display}`,
@@ -306,29 +304,30 @@ export function createManagedLinuxDesktop(
   };
 
   const waitUntilReady = async (active: ManagedResources) => {
-    const deadline = nowMs() + readinessTimeoutMs;
+    const deadline = Date.now() + MANAGED_READINESS_TIMEOUT_MS;
     let lastProbe = "unreachable";
     for (;;) {
       if (stopping) {
         break;
       }
-      const probe = await probeRfb({
+      const probe = await probeRfbServer({
         host: "127.0.0.1",
         port: active.port,
-        timeoutMs: Math.min(1_000, readinessTimeoutMs),
+        timeoutMs: 1_000,
       });
       lastProbe = probe.kind;
       if (probe.kind === "rfb" && probe.securityTypes.includes(2)) {
         return;
       }
-      if (nowMs() >= deadline) {
+      if (Date.now() >= deadline) {
         break;
       }
-      await wait(readinessPollMs);
+      // ref:false keeps readiness polling from pinning an otherwise idle process alive.
+      await sleepWithAbort(MANAGED_READINESS_POLL_MS, undefined, { ref: false });
     }
     assertStartupCurrent();
     throw new Error(
-      `managed Linux desktop did not become ready on 127.0.0.1:${active.port} within ${readinessTimeoutMs}ms (last check: ${lastProbe})`,
+      `managed Linux desktop did not become ready on 127.0.0.1:${active.port} within ${MANAGED_READINESS_TIMEOUT_MS}ms (last check: ${lastProbe})`,
     );
   };
 
@@ -419,7 +418,7 @@ export function createManagedLinuxDesktop(
   };
 
   const createPairAudio = (active: ManagedResources, assertCurrent: () => void) =>
-    createAudio({
+    createManagedLinuxAudio({
       supervisor,
       tempDir: active.tempDir,
       env: active.env,
@@ -482,7 +481,7 @@ export function createManagedLinuxDesktop(
             throw new Error(describeExit("Xtigervnc", exit));
           }),
         ]),
-        readinessTimeoutMs,
+        MANAGED_READINESS_TIMEOUT_MS,
         () => {
           throw new Error("managed Linux desktop D-Bus session did not become ready");
         },

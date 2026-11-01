@@ -2,7 +2,7 @@ import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion
 /**
  * Shared helpers for live prompt-cache integration tests.
  */
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { completeSimple } from "../llm/stream.js";
 import type { Api, AssistantMessage, Model } from "../llm/types.js";
@@ -187,7 +187,7 @@ export async function resolveLiveDirectModelPool(params: {
   preferredModelIds: readonly string[];
 }): Promise<LiveResolvedModelPool> {
   const { resolveModelAsync } = await import("./embedded-agent-runner/model.js");
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const agentDir = resolveDefaultAgentDir(cfg);
   const { authStorage } = await discoverAuthStorageFacts(agentDir);
   const modelRegistry = await discoverModelsAsync(authStorage, agentDir, { config: cfg });
@@ -277,4 +277,24 @@ export function withLiveDirectModelApiKey(
   apiKey: string,
 ): LiveResolvedModel {
   return { ...fixture, apiKey };
+}
+
+export function resolveLiveCacheModel(
+  provider: "openai" | "anthropic",
+): Promise<LiveResolvedModel> {
+  return resolveLiveDirectModel(
+    provider === "openai"
+      ? {
+          provider: "openai",
+          api: "openai-responses",
+          envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
+          preferredModelIds: ["gpt-5.6-luna", "gpt-5.5", "gpt-5.4-mini", "gpt-5.4"],
+        }
+      : {
+          provider: "anthropic",
+          api: "anthropic-messages",
+          envVar: "OPENCLAW_LIVE_ANTHROPIC_CACHE_MODEL",
+          preferredModelIds: ["claude-sonnet-5", "claude-haiku-4-5"],
+        },
+  );
 }

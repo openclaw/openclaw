@@ -5,6 +5,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import type { Api, Model } from "../llm/types.js";
 import {
+  assertProviderAuthAuthority,
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+  getProviderRequestAuth,
+} from "../plugins/provider-auth-authority.js";
+import {
   attachModelProviderRuntimePluginHandle,
   getModelProviderRuntimePluginHandle,
   resolveProviderRuntimePluginHandle,
@@ -65,6 +71,7 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
       provider: runtimeModel.provider,
       modelId: runtimeModel.id,
       model: pluginModel,
+      requestAuth: getProviderRequestAuth(runtimeModel),
     },
   });
   const transportFallback = providerStreamFn
@@ -99,14 +106,22 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
           streamFn,
         }) ?? streamFn)
       : streamFn;
-  const preparedStreamFn: StreamFn = runtimeHandle
-    ? (model, context, options) =>
-        providerWrappedStreamFn(
-          attachModelProviderRuntimePluginHandle(model, runtimeHandle),
-          context,
-          options,
-        )
-    : providerWrappedStreamFn;
+  const authAuthority = getProviderAuthAuthority(runtimeModel);
+  const preparedStreamFn: StreamFn =
+    runtimeHandle || authAuthority
+      ? (model, context, options) => {
+          authAuthority?.();
+          assertProviderAuthAuthority(model);
+          const requestModel = attachProviderAuthAuthority(model, authAuthority);
+          return providerWrappedStreamFn(
+            runtimeHandle
+              ? attachModelProviderRuntimePluginHandle(requestModel, runtimeHandle)
+              : requestModel,
+            context,
+            options,
+          );
+        }
+      : providerWrappedStreamFn;
   // Register custom APIs only after a concrete stream exists, so later callers
   // can route by model.api without reloading provider runtime hooks.
   if (apiRegistry) {

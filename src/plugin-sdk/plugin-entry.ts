@@ -21,6 +21,10 @@ export type {
 } from "../plugins/capability-catalog-context.types.js";
 export type { PluginCapabilityCatalog } from "../plugins/capability-catalog.types.js";
 export type { OpenClawConfig } from "../config/types.openclaw.js";
+export type {
+  SuggestedWorkerProfile,
+  WorkerProfileSuggestionDiscovery,
+} from "../plugins/worker-profile-suggestion.types.js";
 
 export type {
   AgentHarness,
@@ -121,6 +125,8 @@ export type {
   ProviderPrepareDynamicModelContext,
   ProviderPrepareExtraParamsContext,
   ProviderPrepareRuntimeAuthContext,
+  ProviderPrepareRuntimeAuthContextV2,
+  ProviderRuntimeAuthModel,
   ProviderPreparedRuntimeAuth,
   ProviderReconcileLocalServiceContext,
   ProviderReasoningOutputMode,
@@ -155,6 +161,7 @@ export type {
   WorkerDesktopEndpoint,
   WorkerLease,
   WorkerLeaseStatus,
+  WorkerResourceReceipt,
   WorkerMachineOption,
   WorkerProfile,
   WorkerProvider,
@@ -263,3 +270,18 @@ export function definePluginEntry({
     register,
   };
 }
+
+export type {
+  PluginHookBeforeChannelIngressContext,
+  PluginHookBeforeChannelIngressEvent,
+  PluginHookBeforeChannelIngressResult,
+} from "../plugins/hook-message.types.js";
+
+export type {
+  RepositoryIntegration,
+  RepositoryActor,
+  RepositoryOperation,
+  RepositoryCredentialScope,
+  RepositoryConnectionIdentity,
+  RepositoryAdmission,
+} from "../plugins/repository-integration.types.js";

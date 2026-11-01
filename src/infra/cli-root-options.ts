@@ -2,6 +2,7 @@ export {
   FLAG_TERMINATOR,
   consumeRootOptionToken,
   consumeRootCommandOptionToken,
+  consumeKnownOptionToken,
   getRootOptionAwareCommandPath,
   getCommandPositionalsWithRootOptions,
   getCommandArgsWithRootOptions,

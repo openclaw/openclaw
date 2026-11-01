@@ -46,7 +46,7 @@ suite.define(() => {
       if (!returnEarly) {
         await gateway.resolveDeferred("sessions.create");
       }
-      await page.locator(".sidebar-session-toolbar .sidebar-new-session").click();
+      await page.locator(".sidebar-rail .sidebar-new-session").click();
       await page.waitForURL((url) => url.pathname.endsWith("/new"));
       await composer.waitFor();
       const expected = replacement === "same" ? message : (replacement ?? "");
@@ -77,9 +77,9 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       await page.reload();
       await expect.poll(() => composer.inputValue()).toBe(expected);
-      expect(await page.getByRole("button", { name: "Open image favicon-32.png" }).count()).toBe(
-        replacement ? 1 : 0,
-      );
+      await expect
+        .poll(() => page.getByRole("button", { name: "Open image favicon-32.png" }).count())
+        .toBe(replacement ? 1 : 0);
     });
   });
 
@@ -102,7 +102,7 @@ suite.define(() => {
         .locator(".sidebar-recent-session")
         .filter({ hasText: "Created session" });
       await existingSession.waitFor();
-      await pageA.locator(".sidebar-session-toolbar .sidebar-new-session").click();
+      await pageA.locator(".sidebar-rail .sidebar-new-session").click();
       await pageA.waitForURL(
         (url) => url.pathname.endsWith("/new") && url.search === "?agent=main",
       );
@@ -142,7 +142,7 @@ suite.define(() => {
       ).resolves.toBe(0);
       await pageB.close();
 
-      await pageA.locator(".sidebar-session-toolbar .sidebar-new-session").click();
+      await pageA.locator(".sidebar-rail .sidebar-new-session").click();
       await pageA.waitForURL(
         (url) => url.pathname.endsWith("/new") && url.search === "?agent=main",
       );

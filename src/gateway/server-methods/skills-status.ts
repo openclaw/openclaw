@@ -7,7 +7,7 @@ import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/s
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { resolveNodeExecEligibilityAsync } from "../../agents/exec-defaults.js";
 import { prepareWorkspaceSkillStatus } from "../../skills/discovery/status.js";
-import { ensureSkillsWatcher } from "../../skills/runtime/refresh.js";
+import { ensureSkillsWatcher, refreshSkillsDiscovery } from "../../skills/runtime/refresh.js";
 import { prepareRemoteSkillConnections } from "../../skills/runtime/remote-skills.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { withSessionDiscoveryAccess } from "./session-discovery-access.js";
@@ -15,8 +15,7 @@ import {
   resolveSkillsAgentWorkspace,
   type ResolvedSkillsWorkspace,
 } from "./skills-workspace-handler.js";
-import type { GatewayRequestHandler } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 export async function buildRemoteAwareWorkspaceSkillStatus(
   resolved: ResolvedSkillsWorkspace,
@@ -42,45 +41,42 @@ export async function buildRemoteAwareWorkspaceSkillStatus(
   });
 }
 
-export const handleSkillsStatus: GatewayRequestHandler = async ({
-  params,
-  respond,
-  context,
-  client,
-  signal,
-  hasCurrentClientAuthority,
-}) => {
-  if (!assertValidParams(params, validateSkillsStatusParams, "skills.status", respond)) {
-    return;
-  }
-  const agentId = params.agentId ?? tryResolveAmbientOwnerAgentId(context.getRuntimeConfig());
-  const resolved = resolveSkillsAgentWorkspace({ ...params, agentId }, context);
-  if (!resolved.ok) {
-    respond(false, undefined, resolved.error);
-    return;
-  }
-  await withSessionDiscoveryAccess(
-    {
-      client,
-      context,
-      respond,
-      signal,
-      hasCurrentClientAuthority,
-      sessionKey: params.sessionKey,
-      agentId: resolved.agentId,
-      changedError: errorShape(ErrorCodes.INVALID_REQUEST, "Session changed; retry."),
-    },
-    async (entry) => {
-      ensureSkillsWatcher({
-        workspaceDir: resolved.workspaceDir,
-        config: resolved.cfg,
+export const handleSkillsStatus = defineValidatedGatewayHandler(
+  "skills.status",
+  validateSkillsStatusParams,
+  async ({ params, respond, context, client, signal, hasCurrentClientAuthority }) => {
+    const agentId = params.agentId ?? tryResolveAmbientOwnerAgentId(context.getRuntimeConfig());
+    const resolved = resolveSkillsAgentWorkspace({ ...params, agentId }, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    await withSessionDiscoveryAccess(
+      {
+        client,
+        context,
+        respond,
+        signal,
+        hasCurrentClientAuthority,
+        sessionKey: params.sessionKey,
         agentId: resolved.agentId,
-      });
-      const { report } = await buildRemoteAwareWorkspaceSkillStatus(
-        resolved,
-        entry?.skillLibrarySelections,
-      );
-      return report;
-    },
-  );
-};
+        changedError: errorShape(ErrorCodes.INVALID_REQUEST, "Session changed; retry."),
+      },
+      async (entry) => {
+        await ensureSkillsWatcher({
+          workspaceDir: resolved.workspaceDir,
+          config: resolved.cfg,
+          agentId: resolved.agentId,
+        });
+        if (params.refresh === true) {
+          await refreshSkillsDiscovery({ config: resolved.cfg });
+        }
+        const { report } = await buildRemoteAwareWorkspaceSkillStatus(
+          resolved,
+          entry?.skillLibrarySelections,
+        );
+        return report;
+      },
+    );
+  },
+);

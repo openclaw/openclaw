@@ -31,6 +31,7 @@ export function markEmbeddedRunAuthProfileSuccess(input: {
   profileId?: string;
   profileStore: AuthProfileStore;
   provider: string;
+  modelId?: string;
   agentDir?: string;
   runId: string;
   sessionId: string;
@@ -46,6 +47,7 @@ export function markEmbeddedRunAuthProfileSuccess(input: {
   const bookkeeping = markAuthProfileSuccess({
     store: input.profileStore,
     provider: successProvider,
+    modelId: input.modelId,
     profileId: successProfileId,
     agentDir: input.agentDir,
   })
@@ -56,11 +58,6 @@ export function markEmbeddedRunAuthProfileSuccess(input: {
           `post-run auth-profile success bookkeeping completed after ${durationMs}ms: ` +
             `runId=${input.runId} sessionId=${input.sessionId} ` +
             `provider=${sanitizeForLog(successProvider)} profileId=${safeSuccessProfileId}`,
-        );
-      } else if (log.isEnabled("trace")) {
-        log.trace(
-          `post-run auth-profile success bookkeeping completed: ` +
-            `runId=${input.runId} sessionId=${input.sessionId} durationMs=${durationMs}`,
         );
       }
     })

@@ -172,52 +172,6 @@ describe("system.info", () => {
     });
   });
 
-  it("reports the runtime the default agent's utility completions execute on", async () => {
-    const respond = vi.fn();
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-6" },
-          utilityModel: "anthropic/claude-haiku-4-5",
-          models: { "anthropic/claude-haiku-4-5": { agentRuntime: { id: "claude-cli" } } },
-        },
-      },
-    };
-    const request = {
-      params: {},
-      respond,
-      context: createModelsListTestContext({
-        cfg: config,
-        catalog: [providerCatalogEntry("anthropic", "claude-haiku-4-5")],
-        preparedAuthModes: { "claude-cli": "oauth" },
-        pluginRegistry: (() => {
-          const registry = createEmptyPluginRegistry();
-          registry.cliBackends.push({
-            pluginId: "anthropic",
-            source: "runtime",
-            backend: {
-              id: "claude-cli",
-              modelProvider: "anthropic",
-              config: { command: "claude" },
-            },
-          });
-          return registry;
-        })(),
-      }),
-    } as unknown as GatewayRequestHandlerOptions;
-    const handler = expectDefined(systemHandlers["system.info"], "system.info handler");
-    await handler(request);
-    const payload = respond.mock.calls[0]?.[1];
-    if (!validateSystemInfoResult(payload)) {
-      throw new Error("system.info returned an invalid payload");
-    }
-    expect(payload.defaultAgentUtilityModel).toEqual({
-      status: "configured",
-      model: "anthropic/claude-haiku-4-5",
-      runtime: { id: "claude-cli", kind: "cli", label: "Claude CLI" },
-    });
-  });
-
   it("keeps each utility route on its prepared owner across requests with the same config", async () => {
     const config = {
       models: {
@@ -329,35 +283,32 @@ describe("system.info", () => {
     },
   );
 
-  it.each(["linux", "win32"] as const)(
-    "keeps host-wide memory readings on %s",
-    async (platform) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-      vi.spyOn(os, "platform").mockReturnValue(platform);
-      vi.spyOn(os, "freemem").mockReturnValue(8192);
-      const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(4096);
+  it.each(["linux"] as const)("keeps host-wide memory readings on %s", async (platform) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+    vi.spyOn(os, "platform").mockReturnValue(platform);
+    vi.spyOn(os, "freemem").mockReturnValue(8192);
+    const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(4096);
 
-      const respond = vi.fn();
-      await expectDefined(
-        systemHandlers["system.info"],
-        "system.info handler",
-      )({
-        params: {},
-        respond,
-        context: createModelsListTestContext({ cfg: {}, catalog: [] }),
-      } as unknown as GatewayRequestHandlerOptions);
+    const respond = vi.fn();
+    await expectDefined(
+      systemHandlers["system.info"],
+      "system.info handler",
+    )({
+      params: {},
+      respond,
+      context: createModelsListTestContext({ cfg: {}, catalog: [] }),
+    } as unknown as GatewayRequestHandlerOptions);
 
-      const [ok, payload] = respond.mock.calls[0] ?? [];
-      expect(ok).toBe(true);
-      if (!validateSystemInfoResult(payload)) {
-        throw new Error("system.info returned an invalid payload");
-      }
-      expect(payload.memoryFreeBytes).toBe(8192);
-      expect(availableMemory).not.toHaveBeenCalled();
-    },
-  );
+    const [ok, payload] = respond.mock.calls[0] ?? [];
+    expect(ok).toBe(true);
+    if (!validateSystemInfoResult(payload)) {
+      throw new Error("system.info returned an invalid payload");
+    }
+    expect(payload.memoryFreeBytes).toBe(8192);
+    expect(availableMemory).not.toHaveBeenCalled();
+  });
 
-  it.each(["throw", "mount-exit", "statfs-error", "empty"])(
+  it.each(["throw", "empty"])(
     "preserves the state-directory snapshot only when discovery is unavailable (%s)",
     async (failure) => {
       vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({

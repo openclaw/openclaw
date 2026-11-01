@@ -5,7 +5,6 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { withAgentTurnCompletion } from "../../../auto-reply/reply/agent-runner-completion.js";
-import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { prepareReplyToolAuthority } from "../../../auto-reply/reply/reply-tool-authority.js";
 import { prepareSessionUsageUpdate } from "../../../auto-reply/reply/session-usage.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../../../config/sessions.js";
@@ -17,6 +16,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { createReplyOperation } from "../../../sessions/session-controller.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
@@ -31,6 +31,8 @@ import { registerAgentHarness } from "../../harness/registry.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../harness/tool-authority.runtime.js";
 import type { AgentHarness } from "../../harness/types.js";
 import { modelCatalogRowToEntry } from "../../model-catalog-entry.js";
+import { withPreparedModelRuntimePluginGenerationScope } from "../../prepared-model-runtime-generation-scope.js";
+import { capturePreparedModelRuntimeCatalog } from "../../prepared-model-runtime.capture.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.types.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../session-runtime-compat.js";
 import { resolveExtraParams } from "../extra-params.js";
@@ -40,14 +42,14 @@ import {
   resetModelGenerationFixtureState,
 } from "../model.generation-scope.test-support.js";
 import {
-  clearActiveEmbeddedRun,
-  queueEmbeddedAgentMessageWithOutcomeAsync,
-  setActiveEmbeddedRun,
-} from "../runs.js";
-import { createEmbeddedRunHandle } from "../runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+  steerTestSessionTurn,
+} from "../runs.test-support.js";
 import { resolveEmbeddedRunModelSetup } from "./model-setup.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
-import { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import { prepareEmbeddedRunRuntime } from "./runtime.js";
 import { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
 
 // Installation is outside this composition. Selection, concrete model resolution,
@@ -158,6 +160,7 @@ async function createFixture(
       runtime: Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>,
       admission: ReturnType<typeof prepareSystemAgentRunAdmission>,
     ) => void | Promise<void>,
+    preparedModelRuntime: PreparedModelRuntimeSnapshot = generation.preparedModelRuntime,
   ) => {
     const actualParams = { ...runParams, ...overrides };
     const admission = prepareSystemAgentRunAdmission(
@@ -182,7 +185,7 @@ async function createFixture(
         markStartupStage: () => {},
         notifyExecutionPhase: () => {},
         fallbackConfigured: false,
-        preparedModelRuntime: generation.preparedModelRuntime,
+        preparedModelRuntime,
       });
       await use(runtime, admission);
     } finally {
@@ -395,6 +398,108 @@ describe("model chat and native model ownership", () => {
     },
   );
 
+  it("retains admitted account routes when projecting native model capabilities", async () => {
+    // First prove the admitted route without authored transport; then prove configured policy
+    // through the same runtime owner using a subscription-compatible authored endpoint.
+    for (const authoredContextTokenCap of [undefined, 500_000]) {
+      const config: OpenClawConfig = {};
+      if (authoredContextTokenCap !== undefined) {
+        config.models = {
+          providers: {
+            openai: {
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+              models: [
+                {
+                  id: "fixture-model",
+                  name: "Configured account-only model",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 20_000,
+                  contextWindow: 1_000_000,
+                  contextTokens: authoredContextTokenCap,
+                },
+              ],
+            },
+          },
+        };
+      }
+      const fixture = await createFixture(config);
+      const model = {
+        provider: "openai",
+        id: fixture.generation.modelId,
+        name: "Account-only model",
+      };
+      const source: PreparedModelRuntimeSnapshot = {
+        ...fixture.generation.preparedModelRuntime,
+        readFullModelCatalog: () => ({
+          entries: [{ ...model, nativeRuntime: "codex" }],
+          routeVariants: [
+            {
+              ...model,
+              api: "openai-chatgpt-responses",
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+            },
+          ],
+        }),
+      };
+      const admitted = capturePreparedModelRuntimeCatalog(source, source);
+      // The orchestrator adds project facts without retaining the capture's object identity.
+      const projected = Object.freeze({ ...admitted, projectKey: null });
+      expect(projected.modelCatalog.entries).toEqual([{ ...model, nativeRuntime: "codex" }]);
+      expect(projected.modelCatalog.routeVariants).toEqual([]);
+      await fixture.state.writeAuthProfiles({
+        version: 1,
+        profiles: {
+          "openai:account-only": {
+            type: "oauth",
+            provider: "openai",
+            access: "synthetic-account-access",
+            refresh: "synthetic-account-refresh",
+            expires: Date.now() + 86_400_000,
+            accountId: "synthetic-account",
+          },
+        },
+      });
+      await withPreparedModelRuntimePluginGenerationScope(
+        {
+          remoteCatalog: null,
+          pluginMetadataSnapshot: fixture.generation.metadataSnapshot,
+          pluginRegistry: fixture.generation.pluginRegistry,
+          inlineProviderModels: [],
+          configuredCatalogEntries: [],
+        },
+        () =>
+          fixture.withRuntime(
+            { authProfileId: "openai:account-only", authProfileIdSource: "user" },
+            (runtime) => {
+              const snapshot = runtime.snapshot();
+              expect(runtime.nativeModelOwned).toBe(true);
+              expect(snapshot.agentHarness.id).toBe("codex");
+              expect(snapshot.contextTokenBudget).toBe(authoredContextTokenCap);
+              expect(snapshot.authoredContextTokenCap).toBe(authoredContextTokenCap);
+              if (authoredContextTokenCap !== undefined) {
+                expect(snapshot.contextWindowInfo?.source).toBe("modelsConfig");
+              }
+              expect(snapshot.activePreparedAuthPlan).toMatchObject({
+                forwardedAuthProfileId: "openai:account-only",
+                selectedAuthMode: "oauth",
+                modelRoute: {
+                  api: "openai-chatgpt-responses",
+                  baseUrl: "https://chatgpt.com/backend-api/codex",
+                  authRequirement: "subscription",
+                  runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+                },
+              });
+              expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+            },
+            projected,
+          ),
+        () => admitted,
+      );
+    }
+  });
+
   it("keeps model and plugin ownership across usage writes and subsequent turns", async () => {
     const fixture = await createFixture();
     for (const observation of [undefined, "codex", "openclaw"]) {
@@ -569,27 +674,30 @@ describe("model chat and native model ownership", () => {
       sessionKey: fixture.target.sessionKey,
       sessionFile: `${fixture.state.workspaceDir}/native-ownership-transcript`,
       senderIsOwner: true,
-      messageProvider: "webchat",
+      messageProvider: "telegram",
+      senderId: "model-owner",
     };
     const caller = {
+      senderId: execution.senderId,
       senderIsOwner: true,
       disableTools: false,
       traceAuthorized: true,
-      messageProvider: "webchat",
+      messageProvider: execution.messageProvider,
       clientCaps: ["task_suggestions"],
       approvalReviewerDeviceId: "review-device",
     };
     const authority = prepareReplyToolAuthority({
       run: {
+        ...profile,
         config: execution.config,
         agentId: execution.agentId,
         sessionId: execution.sessionId,
         sessionKey: execution.sessionKey,
         sessionFile: execution.sessionFile,
         workspaceDir: execution.workspaceDir,
-        authProfileId: execution.authProfileId,
-        senderIsOwner: execution.senderIsOwner,
         messageProvider: execution.messageProvider,
+        senderId: execution.senderId,
+        senderIsOwner: execution.senderIsOwner,
         traceAuthorized: caller.traceAuthorized,
         clientCaps: caller.clientCaps,
         approvalReviewerDeviceId: caller.approvalReviewerDeviceId,
@@ -627,6 +735,7 @@ describe("model chat and native model ownership", () => {
                 runId: execution.runId,
                 toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
                 queueMessage,
+                guarded: true,
               }),
               kind: "embedded" as const,
               cancel: () => {},
@@ -637,30 +746,21 @@ describe("model chat and native model ownership", () => {
               execution.sessionKey,
               execution.sessionFile,
             );
-            operation.attachBackend(handle);
             operation.setPhase("running");
             try {
               await expect(
-                queueEmbeddedAgentMessageWithOutcomeAsync(
-                  execution.sessionId,
-                  "Keep the current task",
-                  {
-                    isInboundUserMessage: true,
-                    toolAuthorityOverlay: caller,
-                  },
-                ),
-              ).resolves.toMatchObject({ queued: true });
+                steerTestSessionTurn(execution.sessionId, "Keep the current task", {
+                  isInboundUserMessage: true,
+                  toolAuthorityOverlay: caller,
+                }),
+              ).resolves.toMatchObject({ status: "accepted" });
               await expect(
-                queueEmbeddedAgentMessageWithOutcomeAsync(
-                  execution.sessionId,
-                  "Use different permissions",
-                  {
-                    isInboundUserMessage: true,
-                    toolAuthorityOverlay: { ...caller, clientCaps: [] },
-                    toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
-                  },
-                ),
-              ).resolves.toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
+                steerTestSessionTurn(execution.sessionId, "Use different permissions", {
+                  isInboundUserMessage: true,
+                  toolAuthorityOverlay: { ...caller, clientCaps: [] },
+                  toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
+                }),
+              ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
               expect(queueMessage).toHaveBeenCalledOnce();
               expect(prepared.toolAuthorityFingerprint).not.toBe(authority.fingerprint());
             } finally {

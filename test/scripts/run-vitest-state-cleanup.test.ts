@@ -13,6 +13,7 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { proveNestedRetention } from "./nested-retention.test-support.js";
+import { captureOutput, repoRoot, scriptFiles } from "./run-vitest.test-support.js";
 import { createPreparedWorkerCompiler } from "./vitest-worker-artifacts.prepared.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -23,25 +24,29 @@ beforeAll(() => {
 });
 const nestedLifetime = createFixtureLifetime();
 afterEach(() => nestedLifetime.cleanup());
-const repoRoot = path.resolve(import.meta.dirname, "../..");
 const posixIt = process.platform === "win32" ? it.skip : it;
 const testNodeExecPath = resolveTestNodeExecPath();
 const preparedCompiler = process.platform === "win32" ? undefined : createPreparedWorkerCompiler();
 beforeAll(() => preparedCompiler?.prepare());
 afterAll(() => preparedCompiler?.cleanup());
 
+function homeEnv(home: string, tmp: string) {
+  return { HOME: home, USERPROFILE: home, TMPDIR: tmp, TMP: tmp, TEMP: tmp };
+}
+
 function prepareVitestFixture(root: string, homeName = "home") {
+  const files = scriptFiles(root);
   const tmp = path.join(root, "tmp");
   const home = path.join(root, homeName);
   fs.mkdirSync(tmp);
   fs.mkdirSync(home);
-  fs.writeFileSync(
-    path.join(root, "package.json"),
+  files.write(
+    "package.json",
     JSON.stringify({ private: true, type: "module", packageManager: packageJson.packageManager }),
   );
   // Keep pnpm's pinned toolchain record without sharing lockfile writes.
   fs.copyFileSync(path.join(repoRoot, "pnpm-lock.yaml"), path.join(root, "pnpm-lock.yaml"));
-  fs.symlinkSync(path.join(repoRoot, "node_modules"), path.join(root, "node_modules"), "junction");
+  files.linkModules();
   return { tmp, home };
 }
 
@@ -67,16 +72,13 @@ function expectFixtureResults(
   expect(report.testResults.map((file) => file.name)).toEqual(
     fixtureTests.map(([filename]) => path.join(testRoot, filename)),
   );
+  const failures = [
+    failFirstFile ? counterfactualFailure : undefined,
+    failRun ? intentionalFailure : undefined,
+  ];
   for (const [index, [, expectedTitle]] of fixtureTests.entries()) {
     const file = report.testResults[index]!;
-    const failure =
-      index === 0
-        ? failFirstFile
-          ? counterfactualFailure
-          : undefined
-        : failRun
-          ? intentionalFailure
-          : undefined;
+    const failure = failures[index];
     const expectedStatus = failure ? "failed" : "passed";
     const childFailureMessages = file.assertionResults
       .flatMap(({ failureMessages }) => failureMessages ?? [])
@@ -85,18 +87,12 @@ function expectFixtureResults(
       expectedStatus,
     );
     expect(file.message, file.name).toBe("");
-    expect(
-      file.assertionResults.map(
-        ({ ancestorTitles, fullName, title: caseTitle, status, failureMessages }) => ({
-          ancestorTitles,
-          fullName,
-          title: caseTitle,
-          status,
-          failureMessages: failureMessages?.map((message) => message.split("\n")[0]),
-        }),
-      ),
-      file.name,
-    ).toEqual([
+    const assertions = file.assertionResults.map((result) => ({
+      ...result,
+      failureMessages: result.failureMessages?.map((message) => message.split("\n")[0]),
+    }));
+    expect(assertions).toHaveLength(1);
+    expect(assertions, file.name).toMatchObject([
       {
         ancestorTitles: [],
         fullName: expectedTitle,
@@ -121,45 +117,38 @@ function expectFixtureResults(
   });
 }
 
-const cleanupCases = [
-  { route: "main", pool: "threads", failRun: false },
-  { route: "main", pool: "threads", failRun: true },
-  { route: "main", pool: "forks", failRun: false },
-  { route: "main", pool: "forks", failRun: true },
-  ...["batch", "live", "profile-main", "profile-runner", "pty"].flatMap((route) => [
-    { route, pool: "threads", failRun: false },
-    { route, pool: "forks", failRun: true },
-  ]),
-  ...["profile-main", "profile-runner"].flatMap((route) => [
-    { route, pool: "forks", failRun: false },
-    { route, pool: "threads", failRun: true },
-  ]),
-].map((testCase) =>
-  Object.assign(testCase, {
-    pauseAfterAck: false,
-    failFirstFile: false,
-    homePolicy: "isolated",
-  }),
-);
-cleanupCases.push({
-  route: "profile-runner",
-  pool: "forks",
-  failRun: true,
-  pauseAfterAck: true,
+const cleanupDefaults = {
+  failRun: false,
+  pauseAfterAck: false,
   failFirstFile: false,
   homePolicy: "isolated",
-});
+};
+const cleanupCase = (
+  route: string,
+  pool: string,
+  changes: Partial<typeof cleanupDefaults> = {},
+) => ({ route, pool, ...cleanupDefaults, ...changes });
+const cleanupCases = [
+  cleanupCase("main", "threads"),
+  cleanupCase("main", "threads", { failRun: true }),
+  cleanupCase("main", "forks"),
+  cleanupCase("main", "forks", { failRun: true }),
+  ...["batch", "live", "profile-main", "profile-runner", "pty"].flatMap((route) => [
+    cleanupCase(route, "threads"),
+    cleanupCase(route, "forks", { failRun: true }),
+  ]),
+  ...["profile-main", "profile-runner"].flatMap((route) => [
+    cleanupCase(route, "forks"),
+    cleanupCase(route, "threads", { failRun: true }),
+  ]),
+  cleanupCase("profile-runner", "forks", { failRun: true, pauseAfterAck: true }),
+];
 
 posixIt.each([
   ...cleanupCases,
-  ...["threads", "forks"].map((pool) => ({
-    route: "main",
-    pool,
-    failRun: true,
-    pauseAfterAck: false,
-    failFirstFile: true,
-    homePolicy: "isolated",
-  })),
+  ...["threads", "forks"].map((pool) =>
+    cleanupCase("main", pool, { failRun: true, failFirstFile: true }),
+  ),
   ...[
     "hermetic-ambient",
     "staged-live",
@@ -167,19 +156,15 @@ posixIt.each([
     "profile-only",
     "profile-only-parent-shell",
   ].flatMap((homePolicy) =>
-    ["threads", "forks"].map((pool) => ({
-      route: homePolicy === "staged-live" ? "live" : "owned",
-      pool,
-      homePolicy,
-      failRun: false,
-      pauseAfterAck: false,
-      failFirstFile: false,
-    })),
+    ["threads", "forks"].map((pool) =>
+      cleanupCase(homePolicy === "staged-live" ? "live" : "owned", pool, { homePolicy }),
+    ),
   ),
 ])(
   "$route cleans its namespace after $pool completion ($homePolicy, failed run: $failRun, paused after acknowledgement: $pauseAfterAck, first-file failure: $failFirstFile)",
   async ({ route, pool, failRun, pauseAfterAck, failFirstFile, homePolicy }) => {
     const root = tempDirs.make("oc-vt-state-");
+    const files = scriptFiles(root);
     const profileOnly = homePolicy === "profile-only" || homePolicy === "profile-only-parent-shell";
     const { tmp, home } = prepareVitestFixture(root, profileOnly ? "home-$source" : "home");
     const realHome = homePolicy === "real-home";
@@ -210,9 +195,9 @@ posixIt.each([
     const configRoot = path.join(root, "test/vitest");
     fs.mkdirSync(testRoot, { recursive: true });
     fs.mkdirSync(configRoot, { recursive: true });
-    fs.writeFileSync(path.join(root, "tiny.ts"), "export const answer: number = 42;");
-    fs.writeFileSync(
-      path.join(root, "resources.ts"),
+    files.write("tiny.ts", "export const answer: number = 42;");
+    files.write(
+      "resources.ts",
       `
 import fs from "node:fs";
 import path from "node:path";
@@ -311,9 +296,7 @@ const { openOpenClawStateDatabase } = await import(${databaseModule});
 const resources = await allocateResources();
 it(${JSON.stringify(fixtureTests[1][1])}, () => {
   expect(process.pid).toBe(previous.pid);
-  expect(previous.reopened.db.isOpen).toBe(false);
-  expect(previous.explicit.db.isOpen).toBe(false);
-  expect(previous.fallback.db.isOpen).toBe(false);
+  expect(previous).toMatchObject({ reopened: { db: { isOpen: false } }, explicit: { db: { isOpen: false } }, fallback: { db: { isOpen: false } } });
   expect(assertHomeBoundary()).toBe(previous.fallback.path);
   const current = openOpenClawStateDatabase();
   expect(current.path).toBe(previous.reopened.path);
@@ -370,11 +353,7 @@ export default {
     const env: NodeJS.ProcessEnv = {
       PATH: process.env.PATH,
       COREPACK_HOME: process.env.COREPACK_HOME,
-      HOME: home,
-      USERPROFILE: home,
-      TMPDIR: tmp,
-      TMP: tmp,
-      TEMP: tmp,
+      ...homeEnv(home, tmp),
       XDG_CONFIG_HOME: path.join(home, "config"),
       XDG_CACHE_HOME: path.join(home, "cache"),
       XDG_DATA_HOME: path.join(home, "data"),
@@ -503,46 +482,37 @@ const { completion } = spawnOwnedVitestProcess({
 });
 process.exitCode = (await completion).code ?? 1;`,
     );
-    const args =
-      route === "owned"
-        ? [ownedEntry]
-        : route === "main"
-          ? [
-              path.join(repoRoot, "scripts/run-vitest.mjs"),
-              "run",
-              "--config",
-              configPath,
-              ...vitestArgs,
-            ]
-          : route === "batch"
-            ? [batchEntry]
-            : route === "live"
-              ? [path.join(repoRoot, "scripts/test-live.mts"), "--", ...vitestArgs]
-              : route === "pty"
-                ? [
-                    path.join(repoRoot, "scripts/dev/tui-pty-test-watch.ts"),
-                    "--mode",
-                    "all",
-                    "--no-alt-screen",
-                    "--mirror-path",
-                    mirrorPath,
-                    "--",
-                    // The watcher supplies --reporter=dot, overriding config reporters.
-                    "--reporter=default",
-                    "--reporter=json",
-                    ...vitestArgs,
-                  ]
-                : [
-                    path.join(repoRoot, "scripts/run-vitest-profile.mts"),
-                    route === "profile-main" ? "main" : "runner",
-                    "--output-dir",
-                    profileDir,
-                    "--",
-                    ...vitestArgs,
-                  ];
+    const script = (name: string) => path.join(repoRoot, "scripts", name);
+    const routes: Record<string, string[]> = {
+      owned: [ownedEntry],
+      main: [script("run-vitest.mjs"), "run", "--config", configPath, ...vitestArgs],
+      batch: [batchEntry],
+      live: [script("test-live.mts"), "--", ...vitestArgs],
+      // The watcher supplies --reporter=dot, overriding config reporters.
+      pty: [
+        script("dev/tui-pty-test-watch.ts"),
+        "--mode",
+        "all",
+        "--no-alt-screen",
+        "--mirror-path",
+        mirrorPath,
+        "--",
+        "--reporter=default",
+        "--reporter=json",
+        ...vitestArgs,
+      ],
+    };
+    const args = routes[route] ?? [
+      script("run-vitest-profile.mts"),
+      route === "profile-main" ? "main" : "runner",
+      "--output-dir",
+      profileDir,
+      "--",
+      ...vitestArgs,
+    ];
     // Keep each real runner's generation and cleanup independent; reuse only compiled bytes.
     const childEnv =
-      preparedCompiler && (route === "main" || route === "batch")
+      preparedCompiler && (route === "main" || route === "batch" || route === "live")
         ? preparedCompiler.env(env, "node")
         : env;
     try {
@@ -563,20 +533,20 @@ process.exitCode = (await completion).code ?? 1;`,
         expect(result.output).toContain(intentionalFailure);
       }
       if (pauseAfterAck) {
-        expect(JSON.parse(fs.readFileSync(pauseReceipt, "utf8"))).toEqual({
+        expect(files.json("pause.json")).toEqual({
           acknowledged: true,
           code: null,
           signal: "SIGKILL",
           deadline: { delay: 60_000, liveTimers: 1, stopped: true, advanced: 1, error: null },
         });
       }
-      const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8")) as {
+      const receipt: {
         path: string;
         resetVerified: boolean;
         resources: Array<{ home: string; cache: string; tempHomes: string[] }>;
-      };
+      } = files.json("receipt.json");
       expect(receipt.resetVerified).toBe(true);
-      const configReceipt = JSON.parse(fs.readFileSync(configReceiptPath, "utf8"));
+      const configReceipt = files.json("config-home.json");
       expect(path.dirname(configReceipt.namespace)).toBe(tmp);
       expect(configReceipt.nativeHome).toBe(
         realHome ? home : path.join(configReceipt.namespace, "home"),
@@ -633,9 +603,7 @@ process.exitCode = (await completion).code ?? 1;`,
       }
       // Receipts can be written before Vitest marks a callback failed. Require its verdict,
       // independently of the paused-worker control's separately asserted forced teardown.
-      const report = JSON.parse(
-        fs.readFileSync(path.join(root, "report.json"), "utf8"),
-      ) as JsonTestResults;
+      const report: JsonTestResults = files.json("report.json");
       if (failFirstFile) {
         // Both failures must be exact before testing rejection by the normal matrix validator.
         expectFixtureResults(report, testRoot, failRun, true);
@@ -655,80 +623,53 @@ process.exitCode = (await completion).code ?? 1;`,
   },
 );
 
+const config = (name: string) => `test/vitest/vitest.${name}.config.ts`;
+function selection(args: string[], expected: string, defaultConfig?: string) {
+  return { args: ["run", ...args], expected, defaultConfig };
+}
+
 it.each([
-  { args: ["run", "--config", "test/vitest/vitest.unit-fast.config.ts"], expected: "hermetic" },
-  {
-    args: ["run", "--config=test/vitest/vitest.full-core-unit-fast.config.ts"],
-    expected: "hermetic",
-  },
-  { args: ["run", "--project=unit-fast", "--project=unit-fast-isolated"], expected: "hermetic" },
-  { args: ["run", "--project=unit"], expected: "live-aware" },
-  { args: ["run", "--config", "test/vitest/vitest.live.config.ts"], expected: "live-aware" },
-  {
-    args: ["run", "--config", "test/vitest/vitest.package-contract.config.ts"],
-    expected: "live-aware",
-  },
-  {
-    args: ["run", "--config", "test/vitest/vitest.full-core-runtime.config.ts", "--project=*"],
-    expected: "live-aware",
-  },
-  { args: ["run", "--project=unit", "--project=unit-fast"], expected: "mixed" },
-  ...["--silent", "--update", "-u", "--coverage.enabled"].map((option) => ({
-    args: ["run", "--project=unit", option, "--project=unit-fast"],
-    expected: "mixed",
-  })),
-  {
-    args: ["run", "--silent", "--config", "test/vitest/vitest.live.config.ts"],
-    expected: "live-aware",
-  },
-  {
-    args: ["run", "--c=test/vitest/vitest.unit-fast.config.ts"],
-    defaultConfig: "test/vitest/vitest.unit.config.ts",
-    expected: "hermetic",
-  },
-  {
-    args: ["run", "--r=custom-root"],
-    defaultConfig: "test/vitest/vitest.unit.config.ts",
-    expected: "unknown",
-  },
+  selection(["--config", config("unit-fast")], "hermetic"),
+  selection([`--config=${config("full-core-unit-fast")}`], "hermetic"),
+  selection(["--project=unit-fast", "--project=unit-fast-isolated"], "hermetic"),
+  selection(["--project=unit"], "live-aware"),
+  selection(["--config", config("live")], "live-aware"),
+  selection(["--config", config("package-contract")], "live-aware"),
+  selection(["--config", config("full-core-runtime"), "--project=*"], "live-aware"),
+  selection(["--project=unit", "--project=unit-fast"], "mixed"),
+  ...["--silent", "--update", "-u", "--coverage.enabled"].map((option) =>
+    selection(["--project=unit", option, "--project=unit-fast"], "mixed"),
+  ),
+  selection(["--silent", "--config", config("live")], "live-aware"),
+  selection([`--c=${config("unit-fast")}`], "hermetic", config("unit")),
+  selection(["--r=custom-root"], "unknown", config("unit")),
   ...[
-    ["-uc", "test/vitest/vitest.unit-fast.config.ts"],
-    ["---c=test/vitest/vitest.unit-fast.config.ts"],
-    ["--config=test/vitest/vitest.unit.config.ts", "--c=test/vitest/vitest.unit-fast.config.ts"],
+    ["-uc", config("unit-fast")],
+    [`---c=${config("unit-fast")}`],
+    [`--config=${config("unit")}`, `--c=${config("unit-fast")}`],
     ["--project=unit", "--no-project"],
     ["--project=unit", "--project.1=unit-fast"],
     ["--project=unit", "--project.length=0"],
-    ["--config=test/vitest/vitest.unit.config.ts", "--c.root=custom-root"],
-  ].map((args) => ({
-    args: ["run", ...args],
-    defaultConfig: "test/vitest/vitest.unit.config.ts",
-    expected: "unknown",
-  })),
-  { args: ["run"], expected: "mixed" },
-  { args: ["run", "--config", "test/vitest/vitest.full-agentic.config.ts"], expected: "mixed" },
-  { args: ["run", "--project=unit*"], expected: "unknown" },
-  { args: ["run", "--config", "custom.config.ts"], expected: "unknown" },
-  {
-    args: [
-      "run",
-      "--root",
-      "custom-root",
-      "--config",
-      path.join(repoRoot, "test/vitest/vitest.ui-e2e.config.ts"),
-    ],
-    expected: "unknown",
-  },
-  {
-    args: [
-      "run",
+    [`--config=${config("unit")}`, "--c.root=custom-root"],
+  ].map((args) => selection(args, "unknown", config("unit"))),
+  selection([], "mixed"),
+  selection(["--config", config("full-agentic")], "mixed"),
+  selection(["--project=unit*"], "unknown"),
+  selection(["--config", "custom.config.ts"], "unknown"),
+  selection(
+    ["--root", "custom-root", "--config", path.join(repoRoot, config("ui-e2e"))],
+    "unknown",
+  ),
+  selection(
+    [
       "--root",
       "custom-root",
       "--config",
       path.join(repoRoot, "vitest.config.ts"),
       "--project=unit-fast",
     ],
-    expected: "unknown",
-  },
+    "unknown",
+  ),
 ])(
   "enforces $expected selection before admitting an explicit real-home child: $args",
   async ({ args, expected, defaultConfig }) => {
@@ -744,11 +685,7 @@ it.each([
       `throw new Error("config evaluated before admission");`,
     );
     const env = {
-      HOME: home,
-      USERPROFILE: home,
-      TMPDIR: tmp,
-      TMP: tmp,
-      TEMP: tmp,
+      ...homeEnv(home, tmp),
       LIVE: "1",
       OPENCLAW_LIVE_TEST: "1",
       OPENCLAW_LIVE_GATEWAY: "1",
@@ -792,13 +729,10 @@ console.log(JSON.stringify({ namespace: os.tmpdir(), homes: [os.homedir(), homed
       return;
     }
     const { child, completion } = spawnOwnedVitestProcess(spec);
-    let output = "";
-    child.stdout!.on("data", (chunk) => {
-      output += chunk;
-    });
+    const output = captureOutput(child.stdout!);
     child.stderr!.resume();
     expect((await completion).code).toBe(0);
-    const observed = JSON.parse(output);
+    const observed = JSON.parse(output.text);
     expect(observed.homes).toEqual(
       Array(4).fill(expected === "hermetic" ? path.join(observed.namespace, "home") : home),
     );
@@ -822,14 +756,11 @@ it("retains native home after child and pipes close when descendants cannot be v
     homeMode: "hermetic",
     options: { detached: false, env: { TMPDIR: root }, stdio: ["ignore", "pipe", "pipe"] },
   });
-  let output = "";
-  child.stdout!.on("data", (chunk) => {
-    output += chunk;
-  });
+  const output = captureOutput(child.stdout!);
   child.stderr!.resume();
   try {
     expect((await completion).code).toBe(0);
-    const observed = JSON.parse(output);
+    const observed = JSON.parse(output.text);
     expect(observed.home).toBe(path.join(observed.namespace, "home"));
     expect(path.dirname(observed.namespace)).toBe(root);
     expect(fs.existsSync(observed.home)).toBe(true);

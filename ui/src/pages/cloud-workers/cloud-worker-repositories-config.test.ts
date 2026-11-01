@@ -3,8 +3,7 @@ import { describe, expect, it } from "vitest";
 import { applyMergePatch } from "../../../../src/config/merge-patch.js";
 import {
   buildCloudWorkerPreparedPoolPatch,
-  buildCloudWorkerRepositoryDeletePatch,
-  buildCloudWorkerRepositoryUpsertPatch,
+  buildCloudWorkerRepositoryProfilePatch,
   readCloudWorkerPreparedPool,
   readCloudWorkerRepositories,
   type CloudWorkerRepositoryPatch,
@@ -35,90 +34,29 @@ describe("cloud worker repository defaults", () => {
     ).toEqual([{ repository: "github.com/acme/app", profileId: "removed" }]);
   });
 
-  it("changes the profile and moves the identity while preserving unrelated mappings", () => {
+  it("changes only the chosen repository default", () => {
     const built = requirePatch(
-      buildCloudWorkerRepositoryUpsertPatch(
-        config,
-        { repository: "github.com/acme/new", profileId: "small" },
-        { repository: "github.com/acme/app", profileId: "production" },
-      ),
+      buildCloudWorkerRepositoryProfilePatch(config, "github.com/acme/app", "small"),
     );
     expect(applyMergePatch(config, built.patch)).toEqual({
       cloudWorkers: {
         ...config.cloudWorkers,
-        projectProfiles: { "github.com/acme/new": "small", "github.com/acme/docs": "small" },
+        projectProfiles: { "github.com/acme/app": "small", "github.com/acme/docs": "small" },
       },
-    });
-    const retarget = requirePatch(
-      buildCloudWorkerRepositoryUpsertPatch(
-        config,
-        { repository: "github.com/acme/app", profileId: "small" },
-        { repository: "github.com/acme/app", profileId: "production" },
-      ),
-    );
-    expect(retarget.patch).toEqual({
-      cloudWorkers: { projectProfiles: { "github.com/acme/app": "small" } },
     });
   });
 
   it.each([
-    ["https://github.com/acme/%2e%2e/new", "small", null, "repository"],
-    ["github.com/acme/docs", "small", "github.com/acme/app", "repositoryExists"],
-    ["github.com/acme/new", "removed", null, "repositoryProfile"],
-  ])("refuses invalid or stale mappings (%s, %s, %s)", (repository, profileId, original, error) => {
-    expect(
-      buildCloudWorkerRepositoryUpsertPatch(
-        config,
-        { repository: repository ?? "", profileId: profileId ?? "" },
-        original ? { repository: original, profileId: "production" } : null,
-      ),
-    ).toEqual({ error });
-  });
-
-  it("rejects an edit after another update retargets the mapping", () => {
-    const changed = {
-      cloudWorkers: {
-        ...config.cloudWorkers,
-        projectProfiles: { ...config.cloudWorkers.projectProfiles, "github.com/acme/app": "small" },
-      },
-    };
-    expect(
-      buildCloudWorkerRepositoryDeletePatch(changed, {
-        repository: "github.com/acme/app",
-        profileId: "production",
-      }),
-    ).toEqual({ error: "repositoryMissing" });
-    expect(
-      buildCloudWorkerRepositoryUpsertPatch(
-        changed,
-        { repository: "github.com/acme/new", profileId: "production" },
-        { repository: "github.com/acme/app", profileId: "production" },
-      ),
-    ).toEqual({ error: "repositoryMissing" });
-  });
-
-  it("deletes only the requested mapping and refuses a stale delete", () => {
-    const built = requirePatch(
-      buildCloudWorkerRepositoryDeletePatch(config, {
-        repository: "github.com/acme/app",
-        profileId: "production",
-      }),
-    );
-    expect(applyMergePatch(config, built.patch)).toEqual({
-      cloudWorkers: {
-        ...config.cloudWorkers,
-        projectProfiles: { "github.com/acme/docs": "small" },
-      },
-    });
-    expect(
-      buildCloudWorkerRepositoryDeletePatch(config, {
-        repository: "github.com/acme/missing",
-        profileId: "production",
-      }),
-    ).toEqual({
-      error: "repositoryMissing",
-    });
-  });
+    ["https://github.com/acme/%2e%2e/new", "small", "repository"],
+    ["github.com/acme/new", "removed", "repositoryProfile"],
+  ])(
+    "refuses invalid repositories or unavailable profiles (%s, %s)",
+    (repository, profileId, error) => {
+      expect(buildCloudWorkerRepositoryProfilePatch(config, repository, profileId)).toEqual({
+        error,
+      });
+    },
+  );
 });
 
 describe("cloud worker prepared pool", () => {

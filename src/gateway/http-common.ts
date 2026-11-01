@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { z } from "zod";
 import { buildMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/index.js";
+import { sendJson } from "../infra/http-json.js";
 import {
   clearHttpResponseRepresentationHeaders,
   sendHttpRequestRejection,
@@ -10,6 +11,7 @@ import {
   parseContentLengthHeader,
 } from "../logging/diagnostic-payload.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
+import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
 import type { GatewayAuthResult } from "./auth.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
 import { readJsonBody } from "./hooks.js";
@@ -19,7 +21,7 @@ import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "./ingress-attribution.js";
  * Apply baseline security headers that are safe for all response types (API JSON,
  * HTML pages, static assets, SSE streams). Headers that restrict framing or set a
  * Content-Security-Policy are intentionally omitted here because some handlers
- * (canvas host, A2UI) serve content that may be loaded inside frames.
+ * (canvas host) serve content that may be loaded inside frames.
  */
 export function setDefaultSecurityHeaders(
   res: ServerResponse,
@@ -64,11 +66,25 @@ export function finishFailedGatewayHttpResponse(res: ServerResponse): void {
   }
 }
 
-export function sendJson(res: ServerResponse, status: number, body: unknown) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(body));
+/** The listener can serve requests before background agent preparation finishes. */
+export function finishGatewayHttpDatabaseAdmissionError(
+  res: ServerResponse,
+  error: unknown,
+): boolean {
+  if (
+    !(error instanceof AgentDatabaseAdmissionError) ||
+    error.refusal.code !== "agent-database-inspection-pending"
+  ) {
+    return false;
+  }
+  if (prepareGatewayHttpErrorResponse(res, "Service Unavailable")) {
+    res.setHeader("Retry-After", "1");
+    respondPlainText(res, 503, "Agent database is starting. Please retry.");
+  }
+  return true;
 }
+
+export { sendJson };
 
 export function sendMethodNotAllowed(res: ServerResponse, allow = "POST") {
   res.setHeader("Allow", allow);
@@ -153,6 +169,15 @@ export function sendMissingScopeForbidden(res: ServerResponse, missingScope: str
       message: `missing scope: ${missingScope}`,
       ...(details ? { details } : {}),
     },
+  });
+}
+
+/** The session exists but is not visible to the authenticated profile. */
+export function sendSessionReadForbidden(res: ServerResponse) {
+  res.setHeader("cache-control", "no-store");
+  sendJson(res, 403, {
+    ok: false,
+    error: { type: "forbidden", message: "session access required" },
   });
 }
 
@@ -256,9 +281,7 @@ export function watchClientDisconnect(
   const handleClose = () => {
     stopWatchingDisconnect();
     onDisconnect?.();
-    if (!abortController.signal.aborted) {
-      abortController.abort(new ClientDisconnectError());
-    }
+    abortController.abort(new ClientDisconnectError());
   };
   const handleResponseClose = () => {
     res.off("error", handleClose);

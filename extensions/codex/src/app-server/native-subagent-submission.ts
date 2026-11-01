@@ -7,6 +7,54 @@ import {
 } from "./native-subagent-history-owner.js";
 
 const identifier = z.string().refine((value) => Boolean(value.trim()));
+export const CODEX_NATIVE_SUBAGENT_SUBMISSION_HOOK_TOOL = "multi_agent_v1send_input";
+const nativeSubmissionHookSchema = z.object({
+  agent_id: identifier.optional(),
+  turn_id: identifier,
+  hook_event_name: z.literal("PostToolUse"),
+  tool_name: z.literal(CODEX_NATIVE_SUBAGENT_SUBMISSION_HOOK_TOOL),
+  tool_use_id: identifier,
+  tool_input: z.object({ target: identifier }),
+  tool_response: z.string(),
+});
+const nativeSubmissionResultSchema = z.object({ submission_id: identifier });
+
+function canonicalizeNativeThreadId(value: string): string {
+  // Successful send_input accepts UUID aliases but collaboration items serialize canonical IDs.
+  const hex = value
+    .replace(/^urn:uuid:/i, "")
+    .replace(/^\{(.*)\}$/, "$1")
+    .replaceAll("-", "")
+    .toLowerCase();
+  return hex.replace(
+    /^([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$/,
+    "$1-$2-$3-$4-$5",
+  );
+}
+
+export type CodexNativeSubagentSubmissionAcknowledgement = {
+  senderThreadId?: string;
+  parentTurnId: string;
+  callId: string;
+  childThreadId: string;
+  submissionId: string;
+};
+
+/** Successful native results retain their nested call identity before Code Mode wraps them. */
+export function readCodexNativeSubagentSubmissionAcknowledgement(
+  rawPayload: unknown,
+): CodexNativeSubagentSubmissionAcknowledgement {
+  const payload = nativeSubmissionHookSchema.parse(rawPayload);
+  const result = nativeSubmissionResultSchema.parse(JSON.parse(payload.tool_response));
+  return {
+    senderThreadId: payload.agent_id,
+    parentTurnId: payload.turn_id,
+    callId: payload.tool_use_id,
+    childThreadId: canonicalizeNativeThreadId(payload.tool_input.target),
+    submissionId: result.submission_id,
+  };
+}
+
 export const submissionSchema = z
   .object({
     parentTurnId: identifier,
@@ -74,8 +122,7 @@ export function mutateCodexNativeSubagentSubmissions(params: {
   consume: boolean;
 }): { applied: boolean; next?: CodexNativeSubagentSubmissions } {
   const current = readCodexNativeSubagentSubmissions(params.current);
-  const owner = codexNativeSubagentHistoryOwnerSchema.parse(params.owner);
-  const receipt = submissionSchema.parse(params.receipt);
+  const { owner, receipt } = params;
   if (current && !matchesCodexNativeSubagentSubmissionOwner(current.owner, owner)) {
     return { applied: false };
   }

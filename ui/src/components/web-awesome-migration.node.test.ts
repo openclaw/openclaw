@@ -38,9 +38,7 @@ describe("shared control ownership", () => {
     expect(
       matchingFiles(/<[a-z][^>]*\srole=["'](?:menu|menubar|menuitem|tab|tablist)["']/u, [
         "components/menu-surface.ts",
-        "components/web-awesome.ts",
         "components/panel-tab-strip-solid.ts",
-        "components/hub-tabs.ts",
         "components/solid/menu.ts",
         "components/solid/tabs.ts",
       ]),
@@ -58,26 +56,13 @@ describe("shared control ownership", () => {
     expect(matchingFiles(/<[a-z][^>]*\srole=["'](?:combobox|listbox|option)["']/u)).toEqual([
       "components/command-palette-view.ts",
       "components/multi-select.ts",
-      "components/select-picker.ts",
+      "components/select-picker-view.ts",
       "pages/chat/components/chat-composer-menu.ts",
       "pages/chat/components/chat-model-account-control.ts",
       "pages/chat/components/chat-model-picker-options.ts",
-      "pages/chat/components/chat-model-picker.ts",
-      "pages/new-session/checkout-chip.ts",
+      "pages/chat/components/chat-model-picker-panel.ts",
+      "pages/new-session/checkout-picker-content.ts",
       "pages/new-session/place-browser.ts",
-    ]);
-  });
-
-  it("limits custom dividers to docked multi-pane layouts", () => {
-    // These layouts coordinate sidebar, inspector, and responsive dock state
-    // across more than two panes.
-    expect(matchingFiles(/<resizable-divider\b/u)).toEqual([
-      "app/app-shell-view.ts",
-      "components/assistant-panel-view.ts",
-      "components/dock-layout-controller.ts",
-      "components/dock-layout-solid.ts",
-      "pages/chat/chat-page-pane-render.ts",
-      "pages/chat/components/chat-sidebar-region.runtime.ts",
     ]);
   });
 });

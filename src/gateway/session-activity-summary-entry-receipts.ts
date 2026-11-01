@@ -10,8 +10,25 @@ type EntryState = {
   agentId: string;
   key: string;
   storePath: string;
-  entry: SessionEntry;
+  entry: ReturnType<typeof projectActivitySummaryEntry>;
 };
+
+/** Recap ownership retains eligibility and the saved recap, not unrelated session payloads. */
+export function projectActivitySummaryEntry(entry: SessionEntry) {
+  return {
+    sessionId: entry.sessionId,
+    updatedAt: entry.updatedAt,
+    lifecycleRevision: entry.lifecycleRevision,
+    activitySummary: entry.activitySummary,
+    initializationPending: entry.initializationPending,
+    incognito: entry.incognito,
+    heartbeatIsolatedBaseSessionKey: entry.heartbeatIsolatedBaseSessionKey,
+    spawnedBy: entry.spawnedBy,
+    category: entry.category,
+    owner: entry.owner,
+    createdActor: entry.createdActor,
+  };
+}
 
 /** Refresh tracked recap entries from the same receipts that publish committed session rows. */
 export function subscribeActivitySummaryEntryReceipts<T extends EntryState>(
@@ -37,7 +54,9 @@ export function subscribeActivitySummaryEntryReceipts<T extends EntryState>(
       }
       const receipt = readPreparedSessionEntryChange(change, state.key);
       if (receipt?.entry) {
-        state.entry = receipt.fullEntry ?? { ...state.entry, ...receipt.entry };
+        state.entry = projectActivitySummaryEntry(
+          receipt.fullEntry ?? { ...state.entry, ...receipt.entry },
+        );
       } else if (receipt || change.factsInvalidated) {
         drop(state);
       }

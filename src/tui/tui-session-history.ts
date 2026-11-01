@@ -35,9 +35,6 @@ export async function readTuiSessionHistory(params: {
     return { history };
   }
   // The public history shape omits identity only for an absent row. Errors never fall back.
-  if (!isCurrent()) {
-    return undefined;
-  }
   history = await client.loadHistory({ sessionKey: homeSessionKey, agentId, limit });
   return isCurrent() ? { history, legacyHistoryKey: homeSessionKey } : undefined;
 }

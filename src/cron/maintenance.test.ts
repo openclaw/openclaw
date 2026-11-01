@@ -1,18 +1,21 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { resetConfigRuntimeState } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, resetConfigRuntimeState } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { clearCronJobActive, markCronJobActive, resetCronActiveJobs } from "./active-jobs.js";
 import { startCronMaintenance, stopCronMaintenance } from "./maintenance.js";
 import { saveCronStore } from "./store.js";
-import { maintainCronRunHistory } from "./store/run-history.js";
+import { maintainCronRunHistory, recordCronRun } from "./store/run-history.js";
 import { readCronRunRecordsInDatabase } from "./store/run-history.kernel.js";
 import {
   claimCronRunReceiptForTest,
@@ -74,7 +77,7 @@ it("runs Gateway retention with scheduling disabled and reconciles only unowned 
           { sessionKey, storePath: sessionStore },
           { sessionId: "old", updatedAt: now - 8 * DAY },
         );
-        startCronMaintenance(gatewayScheduler);
+        startCronMaintenance(gatewayScheduler, () => storePath);
         await vi.advanceTimersByTimeAsync(4_999);
         expect(readHistory().find((row) => row.id === "terminal")).toBeDefined();
         await vi.advanceTimersByTimeAsync(1);
@@ -209,6 +212,42 @@ it("recovers the first durable duplicate only within its existing Cron partition
         );
       } finally {
         clearCronJobActive("live", marker);
+      }
+    },
+  );
+});
+
+it("rearms parked retention from a committed worker history write", async () => {
+  await withOpenClawTestState(
+    { layout: "state-only", prefix: "cron-maintenance-receipt-" },
+    async () => {
+      resetGatewayWorkAdmission();
+      const now = Date.now();
+      const clock = createGatewaySchedulerClock(now);
+      const scheduler = createTestGatewayScheduler(clock.clock);
+      try {
+        await captureRuntimeConfigAsyncReader()();
+        startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
+        await clock.advanceBy(5_000);
+        expect(scheduler.nextWakeAtMs).toBeNull();
+        await recordCronRun({
+          storeKey: "/synthetic/cron/jobs.json",
+          jobId: "expired",
+          runId: "expired-run",
+          startedAt: now - 8 * DAY,
+          endedAt: now - 8 * DAY,
+          status: "succeeded",
+          detail: {},
+        });
+        await expect.poll(() => scheduler.nextWakeAtMs).toBe(now + 65_000);
+        expect(readHistory()).toHaveLength(1);
+        await clock.advanceBy(60_000);
+        await stopCronMaintenance();
+        expect(readHistory()).toEqual([]);
+      } finally {
+        await stopCronMaintenance();
+        await scheduler.stop();
+        resetGatewayWorkAdmission();
       }
     },
   );

@@ -1,6 +1,3 @@
-/**
- * Tests channel route helpers and session route resolution.
- */
 import { describe, expect, it } from "vitest";
 import {
   channelRouteCompactKey,
@@ -13,49 +10,34 @@ import {
   stringifyRouteThreadId,
 } from "./channel-route.js";
 
+const slack = { channel: " Slack ", accountId: " Work ", to: " C1 ", threadId: " 171234.567 " };
+const telegram = { channel: "telegram", to: "-100123" };
+const parent = { channel: "slack", to: "channel:C1" };
+
 describe("plugin-sdk channel-route", () => {
   it("normalizes target, account, and thread fields", () => {
     expect(
       normalizeChannelRouteRef({
-        channel: " Slack ",
-        accountId: " Work ",
+        ...slack,
         rawTo: " channel:C1 ",
-        to: " C1 ",
-        threadId: " 171234.567 ",
       }),
     ).toEqual({
       channel: "slack",
       accountId: "work",
-      target: {
-        rawTo: "channel:C1",
-        to: "C1",
-      },
-      thread: {
-        id: "171234.567",
-      },
+      target: { rawTo: "channel:C1", to: "C1" },
+      thread: { id: "171234.567" },
     });
   });
 
   it("normalizes numeric thread ids for route keys", () => {
-    const route = normalizeChannelRouteRef({
-      channel: "telegram",
-      to: "-100123",
-      threadId: 42.9,
-    });
+    const route = normalizeChannelRouteRef({ ...telegram, threadId: 42.9 });
 
     expect(stringifyRouteThreadId(route?.thread?.id)).toBe("42");
     expect(channelRouteCompactKey(route)).toBe("telegram|-100123||42");
   });
 
   it("builds compact route keys from raw route-like input", () => {
-    expect(
-      channelRouteCompactKey({
-        channel: " Slack ",
-        to: " C1 ",
-        accountId: " Work ",
-        threadId: " 171234.567 ",
-      }),
-    ).toBe("slack|C1|work|171234.567");
+    expect(channelRouteCompactKey(slack)).toBe("slack|C1|work|171234.567");
   });
 
   it("builds a stable dedupe key from route-like input", () => {
@@ -77,34 +59,15 @@ describe("plugin-sdk channel-route", () => {
   });
 
   it("matches exact routes when numeric and string thread ids are equivalent", () => {
+    const left = { ...telegram, threadId: 42 };
+    const right = { ...telegram, threadId: "42" };
     expect(
       channelRoutesMatchExact({
-        left: normalizeChannelRouteRef({
-          channel: "telegram",
-          to: "-100123",
-          threadId: 42,
-        }),
-        right: normalizeChannelRouteRef({
-          channel: "telegram",
-          to: "-100123",
-          threadId: "42",
-        }),
+        left: normalizeChannelRouteRef(left),
+        right: normalizeChannelRouteRef(right),
       }),
     ).toBe(true);
-    expect(
-      channelRouteTargetsMatchExact({
-        left: {
-          channel: "telegram",
-          to: "-100123",
-          threadId: 42,
-        },
-        right: {
-          channel: "telegram",
-          to: "-100123",
-          threadId: "42",
-        },
-      }),
-    ).toBe(true);
+    expect(channelRouteTargetsMatchExact({ left, right })).toBe(true);
   });
 
   it("requires account equality for exact route matches", () => {
@@ -124,32 +87,14 @@ describe("plugin-sdk channel-route", () => {
   });
 
   it("shares conversation when one side is the parent route", () => {
+    const left = { ...parent, threadId: "171234.567" };
     expect(
       channelRoutesShareConversation({
-        left: normalizeChannelRouteRef({
-          channel: "slack",
-          to: "channel:C1",
-          threadId: "171234.567",
-        }),
-        right: normalizeChannelRouteRef({
-          channel: "slack",
-          to: "channel:C1",
-        }),
+        left: normalizeChannelRouteRef(left),
+        right: normalizeChannelRouteRef(parent),
       }),
     ).toBe(true);
-    expect(
-      channelRouteTargetsShareConversation({
-        left: {
-          channel: "slack",
-          to: "channel:C1",
-          threadId: "171234.567",
-        },
-        right: {
-          channel: "slack",
-          to: "channel:C1",
-        },
-      }),
-    ).toBe(true);
+    expect(channelRouteTargetsShareConversation({ left, right: parent })).toBe(true);
   });
 
   it("does not share different child threads", () => {

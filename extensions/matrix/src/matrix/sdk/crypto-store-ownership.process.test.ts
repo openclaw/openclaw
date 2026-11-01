@@ -1,11 +1,11 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime, resetMatrixTestStores } from "../../test-runtime.js";
 import { acquireMatrixCryptoStoreOwnership } from "./crypto-store-ownership.js";
-import { observeCryptoStoreContention } from "./crypto-store-ownership.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -35,7 +35,7 @@ function waitForChildLock(child: ReturnType<typeof spawn>): Promise<void> {
 }
 
 describe("Matrix crypto-store ownership across processes", () => {
-  it("keeps custody in the OS owner until its explicit retirement", async () => {
+  it("waits for a departing process to release crypto custody before starting its successor", async () => {
     const snapshotPath = path.join(tempDirs.make("matrix-crypto-process-owner-"), "snapshot.json");
     installMatrixTestRuntime({ stateDir: path.dirname(snapshotPath) });
     const moduleUrl = pathToFileURL(
@@ -60,24 +60,32 @@ describe("Matrix crypto-store ownership across processes", () => {
       },
     );
 
+    const open = fs.open;
+    const contention = Promise.withResolvers<void>();
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      try {
+        return await open(...args);
+      } finally {
+        // Native exclusive create reports contention before opening the existing lock for reading.
+        if (args[0] === `${snapshotPath}.owner.lock`) {
+          contention.resolve();
+        }
+      }
+    });
     try {
       await waitForChildLock(child);
-      const contention = observeCryptoStoreContention(snapshotPath);
-      const caller = new AbortController();
-      const pending = acquireMatrixCryptoStoreOwnership(snapshotPath, { signal: caller.signal });
-      try {
-        await contention.waitFor(pending);
-        expect(child.exitCode).toBeNull();
-        child.stdin?.end();
-        const next = await pending;
-        await next.release();
-      } finally {
-        contention.close();
-        caller.abort();
-        const acquired = await pending.catch(() => undefined);
-        await acquired?.release();
-      }
+      const successor = acquireMatrixCryptoStoreOwnership(snapshotPath);
+      await contention.promise;
+      expect(child.exitCode).toBeNull();
+      const exited = new Promise<void>((resolve) => {
+        child.once("exit", () => resolve());
+      });
+      child.stdin?.end();
+      await exited;
+      const next = await successor;
+      await next.release();
     } finally {
+      openSpy.mockRestore();
       child.stdin?.end();
       if (child.exitCode === null) {
         await new Promise<void>((resolve) => {

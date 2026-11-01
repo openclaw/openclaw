@@ -48,14 +48,18 @@ export async function prepareSessionBindingSelection(
 ) {
   const conversations = refs.map(captureConversationRef);
   let changed = false;
+  const pendingOperations = new Set<object>();
   let active = true;
   const unsubscribe = currentConversationBindingPublication.subscribeFacts((change) => {
-    if (
-      "receipt" in change ||
-      change.kind === "pending" ||
-      change.kind === "unknown" ||
-      (change.kind === "settled" && change.outcome === "unknown")
-    ) {
+    // Native finish drains committed receipts before declaring this operation unchanged.
+    // Clearing its token must not revive a selection invalidated by any other operation.
+    if ("kind" in change && change.kind === "settled" && change.outcome === "unchanged") {
+      pendingOperations.delete(change.operation);
+      return;
+    }
+    if (!("receipt" in change) && change.kind === "pending") {
+      pendingOperations.add(change.operation);
+    } else {
       changed = true;
     }
   });
@@ -126,7 +130,7 @@ export async function prepareSessionBindingSelection(
         if (!active) {
           throw new Error("Conversation binding inspection is no longer active");
         }
-        if (changed) {
+        if (changed || pendingOperations.size > 0) {
           throw new Error("Conversation binding ownership changed. Retry the request.");
         }
         for (const check of checks) {

@@ -5,6 +5,7 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { withAgentDeletionJournalPublication } from "../state/agent-deletion-journal-publication.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
@@ -31,7 +32,7 @@ export function claimCompletedAgentDeletion(
       }),
     {
       assertCurrent: context.admission.assertCurrent,
-      createAdmission: () => {
+      createAdmission: (retained) => {
         const admission = createSqliteWorkerOperationAdmission((request, grant) => {
           if (request.stage !== "transaction" && request.stage !== "commit") {
             throw new Error("Agent creation claim requires transaction admission");
@@ -39,6 +40,10 @@ export function claimCompletedAgentDeletion(
           context.admission.assertCurrent();
           grant();
         });
+        const owner = withAgentDeletionJournalPublication(
+          () => ({ admission, nativeLocations: [context.admission.databasePath] }),
+          context,
+        )(retained);
         observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
           if (
             !isRecord(facts) ||
@@ -58,7 +63,7 @@ export function claimCompletedAgentDeletion(
             sessionChanges.emit({ all: true, scope: "stores" });
           }
         });
-        return { admission, nativeLocations: [context.admission.databasePath] };
+        return owner;
       },
     },
   );

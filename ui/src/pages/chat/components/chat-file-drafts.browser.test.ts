@@ -1,11 +1,13 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { canReloadControlUiDocument } from "../../../app/document-reload-guard.ts";
+import "../../../lib/toast-host.tsx";
 import {
   retryStaleChunkReloadWhenReachable,
   scheduleStaleChunkReload,
 } from "../../../app/stale-chunk-reload.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
+import "../../../styles/chat/side-panel.css";
 import "./chat-detail-panel.tsx";
 import { setFileDraft } from "./chat-file-drafts.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -35,10 +37,19 @@ afterEach(() => {
 const button = (name: string) => page.getByRole("button", { name, exact: true });
 const textbox = (name: string) => page.getByRole("textbox", { name, exact: true });
 
+async function editFile() {
+  await button("More file actions").click();
+  await page.getByRole("menuitem", { name: "Edit file", exact: true }).click();
+}
+
 async function openFile(content: FileContent) {
   const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
+  Object.assign(panel, { filePresentation: "desktop" });
   panel.content = content;
+  panel.className = "chat-sidebar";
   const container = createChatSidebarContainer();
+  container.className = "side-panel__panel";
+  container.style.cssText = "display:flex;height:320px;width:min(480px,100%)";
   container.append(panel);
   document.body.append(container);
   await panel.updateComplete;
@@ -58,10 +69,10 @@ describe.runIf(browserMode)("file draft document reload protection", () => {
     };
     files.push(file);
     const panel = await openFile(file);
-    await button("Edit file").click();
+    await editFile();
     const draft = "Unsaved café 雪 🦞\nKeep these bytes.\n";
     await textbox(file.name).fill(draft);
-    panel.remove();
+    panel.parentElement!.remove();
     const route = document.createElement("openclaw-router-outlet");
     route.inert = true;
     document.body.append(route);
@@ -180,7 +191,7 @@ describe.runIf(browserMode)("file draft document reload protection", () => {
       await button("Save").click();
       await expect.element(button("Save")).toBeDisabled();
       expect(file.edit?.save).toHaveBeenCalledWith({ content: text, expectedHash: hash });
-      panel.remove();
+      panel.parentElement!.remove();
       expect(canReloadControlUiDocument()).toBe(file === later);
     }
   });
@@ -235,9 +246,9 @@ describe.runIf(browserMode)("file draft document reload protection", () => {
         if (file === second) {
           panel = await openFile(file);
         }
-        await button("Edit file").click();
+        await editFile();
         await textbox(file.name).fill(`Draft for ${file.name}`);
-        panel.remove();
+        panel.parentElement!.remove();
       }
       await expect(attempt()).resolves.toBe(false);
       expect(fetchDocument).not.toHaveBeenCalled();
@@ -251,6 +262,9 @@ describe.runIf(browserMode)("file draft document reload protection", () => {
       }
 
       for (const file of [first, second]) {
+        if (mode === "manual") {
+          await button("Dismiss").click();
+        }
         panel = await openFile(file);
         await expect.element(textbox(file.name)).toHaveTextContent(`Draft for ${file.name}`);
         await button(settle).click();
@@ -261,7 +275,7 @@ describe.runIf(browserMode)("file draft document reload protection", () => {
             expectedHash: "original-hash",
           });
         }
-        panel.remove();
+        panel.parentElement!.remove();
         await expect(attempt()).resolves.toBe(file === second);
       }
       expect(reload).toHaveBeenCalledOnce();

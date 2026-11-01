@@ -1,22 +1,24 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo } from "solid-js";
-import { containsRedactedSentinel } from "../lib/config-form-utils.ts";
+import { For, Show, createMemo, createSignal } from "solid-js";
+import { containsRedactedSentinel, copyWithPathPatch } from "../lib/config-form-utils.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { liveValue } from "../lib/reactive/live-value.ts";
 import {
-  openCollectionDraft,
-  ConfigCollectionDraftHost,
-  type ConfigFormCollectionDraftCommit,
+  ConfigCollectionDraft,
+  type ConfigCollectionDraftHandle,
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.tsx";
-import { defaultValue, NO_SAFE_DEFAULT } from "./config-form.constraints.ts";
+import { configValuesEqual, defaultValue, NO_SAFE_DEFAULT } from "./config-form.constraints.ts";
 import {
   configChildRenderOptions,
+  createCollectionFocus,
   getSensitiveRenderState,
   isAnySchema,
   jsonValue,
   CollectionRemoveButton,
   FieldRow,
   JsonTextareaControl,
+  type CollectionRowFocus,
   type ConfigNodeRenderer,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.tsx";
@@ -51,19 +53,28 @@ function resolveMapContent(params: MapParams) {
 }
 
 function ConfigMapRow(
-  props: MapProps & { entry: [string, unknown]; anySchema: boolean },
+  props: MapProps & {
+    entry: [string, unknown];
+    anySchema: boolean;
+    focus: CollectionRowFocus;
+  },
 ): JSX.Element {
   const key = createMemo(() => props.entry[0]);
   const entryValue = () => props.entry[1];
   const valuePath = createMemo(() => [...props.params.path, key()]);
-  const sensitiveState = createMemo(() =>
-    getSensitiveRenderState({
-      path: valuePath(),
-      value: entryValue(),
-      hints: props.params.hints,
-      revealSensitive: props.params.revealSensitive ?? false,
-      isSensitivePathRevealed: props.params.isSensitivePathRevealed,
-    }),
+  const errorId = createMemo(() => configFieldId(valuePath(), "key-error"));
+  const [renameError, setRenameError] = createSignal("");
+  const keyValue = liveValue<HTMLInputElement>(() => key());
+  const sensitiveState = createMemo(
+    () =>
+      getSensitiveRenderState({
+        path: valuePath(),
+        value: entryValue(),
+        hints: props.params.hints,
+        revealSensitive: props.params.revealSensitive ?? false,
+        isSensitivePathRevealed: props.params.isSensitivePathRevealed,
+      }),
+    { lazy: true },
   );
   const node = createMemo(
     () =>
@@ -79,6 +90,7 @@ function ConfigMapRow(
         showLabel: false,
         onPatch: props.params.onPatch,
       }) satisfies ConfigNodeRenderParams,
+    { lazy: true },
   );
   return (
     <>
@@ -89,41 +101,51 @@ function ConfigMapRow(
             class="settings-input"
             placeholder={t("configForm.key")}
             aria-label={`${t("configForm.key")}: ${key()}`}
-            value={key()}
+            ref={keyValue}
+            aria-describedby={renameError() ? errorId() : undefined}
             disabled={props.params.disabled}
+            onInput={() => setRenameError("")}
             onChange={(event) => {
+              setRenameError("");
               const target = event.currentTarget;
               const nextKey = target.value.trim();
-              if (!nextKey || nextKey === key()) {
+              if (nextKey === key()) {
                 target.value = key();
                 return;
               }
               // A new key must never carry a server-redacted credential sentinel.
-              const error = !props.params.validateKey(nextKey)
-                ? t("configForm.invalidString")
-                : containsRedactedSentinel(props.params.value[key()])
-                  ? t("configForm.renameRedactedBlocked")
-                  : "";
-              if (nextKey in props.params.value || error) {
+              const error =
+                Object.hasOwn(props.params.value, nextKey) || props.params.reservedKeys.has(nextKey)
+                  ? t("configForm.renameDuplicateKey")
+                  : !nextKey || !props.params.validateKey(nextKey)
+                    ? t("configForm.renameInvalidKey")
+                    : containsRedactedSentinel(props.params.value[key()])
+                      ? t("configForm.renameRedactedBlocked")
+                      : "";
+              if (error) {
                 target.value = key();
-                if (error) {
-                  target.setCustomValidity(error);
-                  target.reportValidity();
-                  target.setCustomValidity("");
-                }
+                // The restored key is valid; describe the rejected action, not an invalid field.
+                setRenameError(t("configForm.renameRejected", { reason: error }));
                 return;
               }
               const nextValue = { ...props.params.value, [nextKey]: props.params.value[key()] };
               delete nextValue[key()];
               if (props.params.onPatch(props.params.path, nextValue) === false) {
                 target.value = key();
+                setRenameError(
+                  t("configForm.renameRejected", { reason: t("configForm.renameChangeRejected") }),
+                );
               }
             }}
           />
+          <span id={errorId()} class="cfg-field__error" role="alert" hidden={!renameError()}>
+            {renameError()}
+          </span>
         </div>
         <div class="settings-row__control">
           <CollectionRemoveButton
-            label={t("configForm.removeEntry")}
+            focus={props.focus}
+            label={t("configForm.removeEntryKey", { key: key() })}
             disabled={props.params.disabled}
             remove={() => {
               const nextValue = { ...props.params.value };
@@ -160,7 +182,54 @@ function ConfigMapRow(
 }
 
 export function ConfigMapField(props: MapProps): JSX.Element {
+  let draft!: ConfigCollectionDraftHandle;
   const content = createMemo(() => resolveMapContent(props.params));
+  let localEdit: { expected: unknown; retained: unknown } | undefined;
+  let sourceRevision = 0;
+  let sourceSnapshot: { source: unknown; revision: number } | undefined;
+  const draftSource = createMemo(() => {
+    const source = props.params.sourceIdentity ?? props.params.value;
+    if (localEdit && configValuesEqual(source, localEdit.expected)) {
+      return localEdit.retained;
+    }
+    // Returning to the pre-edit value is still an external context change.
+    // Keep its reset distinct from the retained source, without changing draft ownership.
+    if (localEdit) {
+      sourceRevision += 1;
+      localEdit = undefined;
+    }
+    // Unset maps use a symbol, which cannot survive JSON equality in a cloned wrapper.
+    if (
+      !sourceSnapshot ||
+      !Object.is(sourceSnapshot.source, source) ||
+      sourceSnapshot.revision !== sourceRevision
+    ) {
+      sourceSnapshot = { source, revision: sourceRevision };
+    }
+    return sourceSnapshot;
+  });
+  const patchChild: MapParams["onPatch"] = (path, value) => {
+    const root = props.params.path;
+    const previous = localEdit;
+    if (path.length > root.length && root.every((segment, index) => path[index] === segment)) {
+      const next = copyWithPathPatch(
+        props.params.value,
+        path.slice(root.length),
+        value,
+        "copy-set",
+      );
+      if (next.ok) {
+        // The parent may synchronously render; record this exact local result before dispatch.
+        localEdit = { expected: next.value, retained: draftSource() };
+      }
+    }
+    const accepted = props.params.onPatch(path, value);
+    if (accepted === false) {
+      localEdit = previous;
+    }
+    return accepted;
+  };
+  const focus = createCollectionFocus(() => content().visibleEntries.map(([key]) => key));
   return (
     <Show when={content().visible}>
       <div class="cfg-block cfg-map">
@@ -172,25 +241,26 @@ export function ConfigMapField(props: MapProps): JSX.Element {
           </Show>
           <div class="settings-row__control">
             <button
+              ref={focus.addRef}
               type="button"
               class="btn btn--sm"
               aria-controls={content().draftId}
               disabled={props.params.disabled}
-              onClick={(event) => {
+              onClick={() => {
                 if (content().entryDefault === NO_SAFE_DEFAULT) {
-                  openCollectionDraft(event, content().draftId);
+                  draft.openDraft();
                   return;
                 }
                 const nextValue = { ...props.params.value };
                 let index = 1;
                 let key = `custom-${index}`;
-                while (key in nextValue) {
+                while (Object.hasOwn(nextValue, key) || props.params.reservedKeys.has(key)) {
                   index += 1;
                   key = `custom-${index}`;
                 }
                 nextValue[key] = content().entryDefault;
                 if (props.params.onPatch(props.params.path, nextValue) === false) {
-                  openCollectionDraft(event, content().draftId);
+                  draft.openDraft();
                 }
               }}
             >
@@ -198,35 +268,31 @@ export function ConfigMapField(props: MapProps): JSX.Element {
             </button>
           </div>
         </div>
-        <ConfigCollectionDraftHost
+        <ConfigCollectionDraft
+          {...content().draftProps}
+          sourceIdentity={draftSource()}
           id={content().draftId}
-          props={content().draftProps}
-          onConfig-collection-draft-commit={(
-            event: CustomEvent<ConfigFormCollectionDraftCommit>,
-          ) => {
-            const key = event.detail.key;
-            if (
-              !key ||
-              Object.hasOwn(props.params.value, key) ||
-              props.params.reservedKeys.has(key) ||
+          ref={(handle) => (draft = handle)}
+          onCommit={({ key, value }) =>
+            Boolean(
+              key &&
               props.params.onPatch(props.params.path, {
                 ...props.params.value,
-                [key]: event.detail.value,
-              }) === false
-            ) {
-              event.preventDefault();
-            }
-          }}
+                [key]: value,
+              }) !== false,
+            )
+          }
         />
         <Show when={content().visibleEntries.length > 0}>
           <div class="settings-subrows">
             <For each={content().visibleEntries} keyed={(entry) => entry[0]}>
               {(entry) => (
                 <ConfigMapRow
-                  params={props.params}
+                  params={{ ...props.params, onPatch: patchChild }}
                   renderNode={props.renderNode}
                   entry={entry()}
                   anySchema={content().anySchema}
+                  focus={focus.row(() => entry()[0])}
                 />
               )}
             </For>

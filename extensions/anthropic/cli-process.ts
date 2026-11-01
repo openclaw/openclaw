@@ -1,11 +1,9 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
 import { attachErrorDiagnostic } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveFieldValue, redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import {
-  killProcessTree,
-  prepareSecretInputStdio,
-  type SpawnStdioEntry,
+  createOwnedStdioProcess,
+  type OwnedStdioProcess,
 } from "openclaw/plugin-sdk/process-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
@@ -28,41 +26,6 @@ const STDERR_CAPTURE_CHARS = 8_192;
 const STDERR_PREVIEW_CHARS = 2_000;
 const STDERR_DRAIN_GRACE_MS = 200;
 
-function spawnClaudeCliProcess(
-  options: ClaudeCliSpawnOptions,
-  secretInput: ClaudeCliSecretInput | undefined,
-  observeStderr: (child: ChildProcessWithoutNullStreams) => void,
-): ChildProcessWithoutNullStreams {
-  const stdio: ["pipe", "pipe", "pipe", ...SpawnStdioEntry[]] = ["pipe", "pipe", "pipe"];
-  using secretDelivery = prepareSecretInputStdio(stdio, secretInput);
-  const child = spawn(options.command, options.args, {
-    argv0: options.argv0,
-    cwd: options.cwd,
-    detached: process.platform !== "win32",
-    env: options.env,
-    signal: options.signal,
-    stdio,
-    windowsHide: true,
-  }) as ChildProcessWithoutNullStreams; // SAFETY: stdio[0..2] are pipes.
-  // Drain independently of stdout: a full diagnostic pipe must never stall a turn.
-  observeStderr(child);
-  const killChild = child.kill.bind(child);
-  child.kill = (signal?: NodeJS.Signals | number) => {
-    if (!child.pid || (signal !== undefined && signal !== "SIGTERM" && signal !== "SIGKILL")) {
-      return killChild(signal);
-    }
-    // Windows must enumerate descendants before the root disappears; POSIX
-    // children own a detached group so cancellation never reaches the host.
-    killProcessTree(child.pid, {
-      detached: process.platform !== "win32",
-      ...(signal === "SIGKILL" ? { force: true } : {}),
-    });
-    return true;
-  };
-  void secretDelivery?.deliverTo(child).catch(() => child.kill());
-  return child;
-}
-
 /** Owns process-wide diagnostics and the credentials needed to redact warm turns. */
 export function createClaudeCliProcessOwner(
   currentContext: () => ClaudeCliProcessContext | undefined,
@@ -79,19 +42,17 @@ export function createClaudeCliProcessOwner(
   // Prepared credentials are destroyed after each turn; a warm child outlives that preparation.
   const credential = secretInput?.createData();
   let environment: ClaudeCliSpawnOptions["env"] = {};
-  let child: ChildProcessWithoutNullStreams | undefined;
-  let drained: Promise<void> | undefined;
+  let child: OwnedStdioProcess | undefined;
+  let exited = false;
   let disposed = false;
   let tail = "";
   let dropPartialLine = false;
-  const observeStderr = (process: ChildProcessWithoutNullStreams) => {
+  const observeStderr = (process: OwnedStdioProcess) => {
     child = process;
-    drained = new Promise<void>((resolve) => {
-      process.stderr.once("close", resolve);
+    process.onExit(() => {
+      exited = true;
     });
-    process.stderr.setEncoding("utf8");
-    process.stderr.on("error", () => {}); // A failed diagnostic pipe must not crash the Gateway.
-    process.stderr.on("data", (chunk: string) => {
+    process.onStderr((chunk) => {
       let text = chunk;
       if (disposed) {
         return;
@@ -121,10 +82,23 @@ export function createClaudeCliProcessOwner(
       environment = {};
       tail = "";
     },
-    spawn: (options: ClaudeCliSpawnOptions) => {
+    spawn: async (options: ClaudeCliSpawnOptions) => {
       assertCurrent();
       environment = options.env;
-      return spawnClaudeCliProcess(options, secretInput, observeStderr);
+      const spawned = await createOwnedStdioProcess({
+        argv: [options.command, ...options.args],
+        argv0: options.argv0,
+        cwd: options.cwd,
+        env: options.env,
+        exactEnv: true,
+        abortSignal: options.signal,
+        assertCurrent,
+        secretInput,
+        terminateOnHostLoss: true,
+        stdoutConsumption: "awaited",
+      });
+      observeStderr(spawned);
+      return spawned;
     },
     async withDiagnostics(error: unknown): Promise<unknown> {
       const context = currentContext();
@@ -132,8 +106,12 @@ export function createClaudeCliProcessOwner(
         return error;
       }
       // Process exit can precede stderr EOF. Descendants may keep the pipe open.
-      if (child && (child.exitCode !== null || child.signalCode !== null)) {
-        await raceWithTimeout(Promise.resolve(drained), STDERR_DRAIN_GRACE_MS, () => undefined);
+      if (child && exited) {
+        await raceWithTimeout(
+          child.wait().catch(() => undefined),
+          STDERR_DRAIN_GRACE_MS,
+          () => undefined,
+        );
       }
       if (disposed || currentContext() !== context || context.abortSignal?.aborted) {
         return error;

@@ -1,10 +1,7 @@
 import path from "node:path";
 
 /** Keep built runtime imports and their children away from operator state. */
-export function createBuildSmokeEnv(
-  home: string,
-  env: NodeJS.ProcessEnv = process.env,
-): NodeJS.ProcessEnv {
+export function createBuildSmokeEnv(home: string, env: NodeJS.ProcessEnv = process.env) {
   const stateDir = path.join(home, ".openclaw");
   return {
     ...env,

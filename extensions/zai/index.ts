@@ -1,9 +1,9 @@
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type {
   ProviderAuthContext,
   ProviderAuthResult,
   ProviderAuthMethod,
   ProviderAuthMethodNonInteractiveContext,
-  ProviderResolveDynamicModelContext,
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -26,7 +26,6 @@ import {
 import { fetchZaiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
-import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildZaiModelDefinition, resolveZaiBaseUrl } from "./model-definitions.js";
 import {
   applyZaiConnectionConfig,
@@ -40,36 +39,6 @@ import { buildZaiVideoGenerationProvider } from "./video-generation-provider.js"
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
-function resolveGlm5ForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
-  return resolveFamilyForwardCompatModel({
-    providerId: PROVIDER_ID,
-    ctx,
-    cases: [
-      {
-        match: (id) => id.startsWith("glm-5"),
-        templateIds: [GLM5_TEMPLATE_MODEL_ID],
-        patch: ({ modelId, template }) => {
-          const def = buildZaiModelDefinition({ id: modelId });
-          return {
-            name: def.name,
-            // Native models must never fall through to the OpenAI SDK's default host.
-            baseUrl: ctx.providerConfig?.baseUrl ?? template?.baseUrl ?? resolveZaiBaseUrl(),
-            api: "openai-completions",
-            provider: PROVIDER_ID,
-            reasoning: def.reasoning,
-            input: def.input as ("text" | "image")[],
-            cost: def.cost,
-            contextWindow: def.contextWindow,
-            maxTokens: def.maxTokens,
-          };
-        },
-      },
-    ],
-    preserveExisting: true,
-    synthesize: true,
-  });
-}
-
 function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
   const streamFn = createToolStreamWrapper(ctx.streamFn, ctx.extraParams?.tool_stream !== false);
   const preserveThinking =
@@ -82,7 +51,7 @@ function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
   }
 
   return createPayloadPatchStreamWrapper(streamFn, ({ payload, model }) => {
-    if (model.api !== "openai-completions" || model.provider !== PROVIDER_ID) {
+    if ((ctx.sourceApi ?? model.api) !== "openai-completions" || model.provider !== PROVIDER_ID) {
       return;
     }
 
@@ -93,12 +62,25 @@ function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
 
     if (reasoningEffort) {
       payload.reasoning_effort = reasoningEffort;
+      delete payload.thinking;
+      delete payload.enable_thinking;
     }
 
     if (preserveThinking) {
       payload.thinking = { type: "enabled", clear_thinking: false };
     }
   });
+}
+
+function wrapZaiSimpleCompletionStreamFn(ctx: ProviderWrapStreamFnContext): StreamFn {
+  // Direct completion wrappers are prepared once and reused across requests.
+  return (model, context, options) => {
+    const thinkingLevel =
+      options?.reasoning ??
+      ctx.thinkingLevel ??
+      resolveThinkingProfile({ provider: ctx.provider, modelId: model.id }).defaultLevel;
+    return wrapZaiStreamFn({ ...ctx, modelId: model.id, thinkingLevel })(model, context, options);
+  };
 }
 
 async function promptForZaiEndpoint(ctx: ProviderAuthContext): Promise<ZaiEndpointId> {
@@ -144,7 +126,7 @@ async function runZaiApiKeyAuth(
   const modelIdOverride = detected?.modelId;
   const nextEndpoint = detected?.endpoint ?? endpoint ?? (await promptForZaiEndpoint(ctx));
   const preset = {
-    ...(nextEndpoint ? { endpoint: nextEndpoint } : {}),
+    endpoint: nextEndpoint,
     ...(modelIdOverride ? { modelId: modelIdOverride } : {}),
   };
   return {
@@ -242,7 +224,34 @@ export default defineSingleProviderPluginEntry({
     auth: [],
     extraAuth: manifest.providerAuthChoices.map(buildZaiApiKeyMethod),
     catalog: { allowExplicitBaseUrl: true, liveModelDiscovery: true, discoveryMode: "strict" },
-    resolveDynamicModel: resolveGlm5ForwardCompatModel,
+    resolveDynamicModel: (ctx) =>
+      resolveFamilyForwardCompatModel({
+        providerId: PROVIDER_ID,
+        ctx,
+        cases: [
+          {
+            match: (id) => id.startsWith("glm-5"),
+            templateIds: [GLM5_TEMPLATE_MODEL_ID],
+            patch: ({ modelId, template }) => {
+              const def = buildZaiModelDefinition({ id: modelId });
+              return {
+                name: def.name,
+                // Native models must never fall through to the OpenAI SDK's default host.
+                baseUrl: ctx.providerConfig?.baseUrl ?? template?.baseUrl ?? resolveZaiBaseUrl(),
+                api: "openai-completions",
+                provider: PROVIDER_ID,
+                reasoning: def.reasoning,
+                input: def.input as ("text" | "image")[],
+                cost: def.cost,
+                contextWindow: def.contextWindow,
+                maxTokens: def.maxTokens,
+              };
+            },
+          },
+        ],
+        preserveExisting: true,
+        synthesize: true,
+      }),
     matchesContextOverflowError: ({ errorMessage }) =>
       /\b(?:tokens? in request more than max tokens? allowed|prompt exceeds max(?:imum)? length)\b/i.test(
         errorMessage,
@@ -253,6 +262,7 @@ export default defineSingleProviderPluginEntry({
     }),
     prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
     wrapStreamFn: wrapZaiStreamFn,
+    wrapSimpleCompletionStreamFn: wrapZaiSimpleCompletionStreamFn,
     resolveThinkingProfile,
     isModernModelRef: ({ modelId }) => {
       const lower = normalizeLowercaseStringOrEmpty(modelId);
@@ -271,7 +281,14 @@ export default defineSingleProviderPluginEntry({
     isCacheTtlEligible: () => true,
   },
   register(api) {
-    api.registerMediaUnderstandingProvider(zaiMediaUnderstandingProvider);
+    api.registerMediaUnderstandingProvider({
+      id: "zai",
+      capabilities: ["image"],
+      defaultModels: { image: "glm-4.6v" },
+      autoPriority: { image: 60 },
+      describeImage: undefined,
+      describeImages: undefined,
+    });
     api.registerVideoGenerationProvider(buildZaiVideoGenerationProvider());
   },
 });

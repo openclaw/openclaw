@@ -99,7 +99,7 @@ pub enum LifecycleEvent {
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum LifecycleError {
     #[error("node reconnect paused")]
-    Paused(ReconnectPause),
+    Paused(Box<ReconnectPause>),
 }
 
 /// Gateway-issued credential handed to the platform persistence owner.
@@ -328,7 +328,7 @@ impl NodeLifecycle {
                     attempt,
                     reason: pause.clone(),
                 });
-                return Err(LifecycleError::Paused(pause));
+                return Err(LifecycleError::Paused(Box::new(pause)));
             }
             // The policy reserves KeepSession for request-scoped errors. At this
             // boundary the old session is already retired, so reconnect safely.
@@ -530,7 +530,9 @@ mod tests {
 
         assert_eq!(
             result,
-            Err(LifecycleError::Paused(ReconnectPause::Configuration))
+            Err(LifecycleError::Paused(Box::new(
+                ReconnectPause::Configuration,
+            )))
         );
         assert_eq!(
             *events.lock().unwrap(),

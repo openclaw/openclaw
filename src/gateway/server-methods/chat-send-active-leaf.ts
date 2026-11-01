@@ -1,41 +1,21 @@
-import { readSessionTranscriptActivePathEntryRelation } from "../../config/sessions/session-accessor.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session-transcript-anchor-read.types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import type { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils.js";
+import type { GatewaySessionEntryRead } from "../session-utils.js";
 
 export const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
 
 export function assertExpectedLeafActive(
-  session: Pick<
-    Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
-    "canonicalKey" | "entry" | "storePath"
-  > & {
+  session: Pick<GatewaySessionEntryRead, "canonicalKey" | "entry" | "storePath"> & {
     transcript?: SessionTranscriptAnchorFacts;
   },
-  agentId: string,
   expectedLeafEntryId: string | null,
   requestedSessionId: string | undefined,
   options?: { allowEmptyAncestor?: boolean },
 ) {
   const activePathRelation =
     session.transcript?.activePathRelation ??
-    (session.entry?.sessionId
-      ? isIncognitoSessionKey(session.canonicalKey)
-        ? readSessionTranscriptActivePathEntryRelation(
-            {
-              agentId,
-              sessionId: session.entry.sessionId,
-              sessionKey: session.canonicalKey,
-              sessionEntry: session.entry,
-              storePath: session.storePath,
-            },
-            expectedLeafEntryId,
-          )
-        : undefined
-      : expectedLeafEntryId === null
-        ? "exact"
-        : "off-path");
+    (session.entry?.sessionId ? undefined : expectedLeafEntryId === null ? "exact" : "off-path");
   if (activePathRelation === undefined) {
     throw new Error("Chat admission omitted its worker-prepared active path");
   }
@@ -56,17 +36,13 @@ export function assertExpectedLeafActive(
 
 /** Read the current row and active path in one existing worker snapshot before a Stop effect. */
 export async function assertExpectedLeafActiveAsync(
-  session: Pick<
-    Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
-    "canonicalKey" | "entry" | "storePath"
-  >,
+  session: Pick<GatewaySessionEntryRead, "canonicalKey" | "entry" | "storePath">,
   agentId: string,
   expectedLeafEntryId: string | null,
   requestedSessionId: string | undefined,
-  options?: { allowEmptyAncestor?: boolean },
 ): Promise<void> {
   if (isIncognitoSessionKey(session.canonicalKey)) {
-    assertExpectedLeafActive(session, agentId, expectedLeafEntryId, requestedSessionId, options);
+    assertExpectedLeafActive(session, expectedLeafEntryId, requestedSessionId);
     return;
   }
   await withSessionEntriesFromStoresInWorker(
@@ -92,10 +68,8 @@ export async function assertExpectedLeafActiveAsync(
           entry: owner!.result.entries[0]?.entry,
           transcript: owner!.result.transcript,
         },
-        agentId,
         expectedLeafEntryId,
         requestedSessionId,
-        options,
       );
     },
     { ordered: true },

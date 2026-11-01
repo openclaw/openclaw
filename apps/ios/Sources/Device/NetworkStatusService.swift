@@ -1,37 +1,21 @@
 import Foundation
 import Network
 import OpenClawKit
-import os
 
 final class NetworkStatusService: Sendable {
     func currentStatus(timeoutMs: Int = 1500) async throws -> OpenClawNetworkStatusPayload {
         guard timeoutMs > 0 else { throw URLError(.timedOut) }
 
-        return try await withCheckedThrowingContinuation { cont in
-            let monitor = NWPathMonitor()
-            let queue = DispatchQueue(label: "ai.openclawfoundation.app.network-status")
-            let completed = OSAllocatedUnfairLock(initialState: false)
-
-            monitor.pathUpdateHandler = { path in
-                guard completed.withLock({ completed in
-                    defer { completed = true }
-                    return !completed
-                }) else { return }
-                monitor.cancel()
-                cont.resume(returning: Self.payload(from: path))
-            }
-
-            monitor.start(queue: queue)
-
-            queue.asyncAfter(deadline: .now() + .milliseconds(timeoutMs)) {
-                guard completed.withLock({ completed in
-                    defer { completed = true }
-                    return !completed
-                }) else { return }
-                monitor.cancel()
-                cont.resume(throwing: URLError(.timedOut))
-            }
-        }
+        return try await AsyncTimeout.withTimeoutMs(
+            timeoutMs: timeoutMs,
+            onTimeout: { URLError(.timedOut) },
+            operation: {
+                let monitor = NWPathMonitor()
+                defer { monitor.cancel() }
+                var iterator = monitor.makeAsyncIterator()
+                guard let path = await iterator.next() else { throw URLError(.timedOut) }
+                return Self.payload(from: path)
+            })
     }
 
     private static func payload(from path: NWPath) -> OpenClawNetworkStatusPayload {

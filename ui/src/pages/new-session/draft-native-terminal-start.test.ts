@@ -11,18 +11,12 @@ import {
 import {
   createDraftFixture,
   registerTextPayload,
+  resetSubmissionMocks,
   stubObjectUrls,
 } from "./draft-submission-flow.test-support.ts";
 import { loadNewSessionPreference, replaceBrowserPreference } from "./preferences.ts";
 
-afterEach(() => {
-  document.body.replaceChildren();
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-  sessionStorage.clear();
-  localStorage.clear();
-});
+afterEach(resetSubmissionMocks);
 
 const nativeTerminalController = vi.fn(async () => createTerminalController());
 const nativeTerminalElement = defineTestTerminalPanelElement(nativeTerminalController);
@@ -61,20 +55,39 @@ function mountNativeTerminal(context: ApplicationContext) {
   };
 }
 
+const nativeData = {
+  agentId: "main",
+  requestedAgentId: "main",
+  catalogId: "codex",
+  catalogLabel: "Codex",
+  startTerminal: true,
+  terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
+};
+
 function createNativeFixture(options: Parameters<typeof createDraftFixture>[0] = {}) {
   return createDraftFixture({
     scopes: ["operator.admin"],
     methods: ["sessions.catalog.startTerminal", "terminal.open"],
-    data: {
-      agentId: "main",
-      requestedAgentId: "main",
-      catalogId: "codex",
-      catalogLabel: "Codex",
-      startTerminal: true,
-      terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
-    },
+    data: nativeData,
     ...options,
   });
+}
+
+function startCalls(request: ReturnType<typeof createDraftFixture>["request"]) {
+  return request.mock.calls.filter(([method]) => method === "sessions.catalog.startTerminal");
+}
+const waitForStart = (request: ReturnType<typeof createDraftFixture>["request"]) =>
+  vi.waitFor(() => expect(startCalls(request)).toHaveLength(1));
+
+function expectNativeStart(
+  request: ReturnType<typeof createDraftFixture>["request"],
+  params: { catalogId?: string; cwd?: string; hostId?: string; initialMessage?: string },
+) {
+  expect(request).toHaveBeenCalledWith(
+    "sessions.catalog.startTerminal",
+    { agentId: "main", catalogId: "codex", hostId: "gateway:local", cwd: "/workspace", ...params },
+    { timeoutMs: 35_000 },
+  );
 }
 
 describe("DraftSubmissionFlow native terminal", () => {
@@ -88,15 +101,13 @@ describe("DraftSubmissionFlow native terminal", () => {
       const outputWritten = createDeferred();
       controller.write.mockImplementation(() => outputWritten.resolve());
       nativeTerminalController.mockResolvedValueOnce(controller);
-      const { context, flow, request } = createDraftFixture({
+      const { context, flow, request } = createNativeFixture({
         scopes: ["operator.admin", "operator.read", "operator.write"],
         methods: ["sessions.create", "sessions.catalog.startTerminal", "terminal.open"],
         data: {
-          agentId: "main",
-          requestedAgentId: "main",
+          ...nativeData,
           catalogId,
           catalogLabel: catalogId,
-          startTerminal: true,
           terminalHosts: [{ hostId: "gateway:local", label: "Local CLI" }],
         },
         request: async (method) => {
@@ -128,194 +139,118 @@ describe("DraftSubmissionFlow native terminal", () => {
       expect(controller.write).toHaveBeenCalledWith(
         new TextEncoder().encode("Native CLI startup text"),
       );
-      expect(request).toHaveBeenCalledWith(
-        "sessions.catalog.startTerminal",
-        {
-          catalogId,
-          agentId: "main",
-          hostId: "gateway:local",
-          cwd: "/workspace",
-          initialMessage: "start this task",
-        },
-        { timeoutMs: 35_000 },
-      );
+      expectNativeStart(request, { catalogId, initialMessage: "start this task" });
       expect(context.sessions.createResult).not.toHaveBeenCalled();
       expect(request.mock.calls.some(([method]) => method === "sessions.create")).toBe(false);
       expect(context.navigateAndWait).not.toHaveBeenCalled();
       expect(flow.message).toBe("");
       await terminal.panel.updateComplete;
-      expect(terminal.panel.renderRoot.textContent).toContain(exitLabel);
-      expect(terminal.panel.renderRoot.textContent).not.toContain("Could not attach");
+      expect(terminal.panel.textContent).toContain(exitLabel);
+      expect(terminal.panel.textContent).not.toContain("Could not attach");
       expect(request.mock.calls.some(([method]) => method === "terminal.attach")).toBe(false);
       expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBeNull();
       expect(sessionStorage.getItem("openclaw.terminal.actions.v1")).toBeNull();
     },
   );
 
-  it("keeps an empty native start busy until acceptance and refuses a duplicate", async () => {
-    let finishStart!: (result: ReturnType<typeof terminalOpenResult>) => void;
-    const starting = new Promise<ReturnType<typeof terminalOpenResult>>((resolve) => {
-      finishStart = resolve;
-    });
-    const { context, flow, request } = createDraftFixture({
-      scopes: ["operator.admin"],
-      methods: ["sessions.catalog.startTerminal", "terminal.open"],
-      data: {
-        agentId: "main",
-        requestedAgentId: "main",
-        catalogId: "synthetic-cli",
-        catalogLabel: "Synthetic CLI",
-        startTerminal: true,
-        terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
-      },
-      request: async (method) => (method === "sessions.catalog.startTerminal" ? starting : {}),
-    });
-    mountNativeTerminal(context);
-    const first = flow.submit();
-    await vi.waitFor(() =>
-      expect(
-        request.mock.calls.filter(([method]) => method === "sessions.catalog.startTerminal"),
-      ).toHaveLength(1),
-    );
-    expect(flow.submitting).toBe(true);
-    const duplicate = flow.submit();
-    finishStart(terminalOpenResult("empty-native"));
-    await Promise.all([first, duplicate]);
-    expect(
-      request.mock.calls.filter(([method]) => method === "sessions.catalog.startTerminal"),
-    ).toHaveLength(1);
-    expect(context.replace).toHaveBeenCalledOnce();
-    expect(context.sessions.createResult).not.toHaveBeenCalled();
-    expect(flow.submitting).toBe(false);
-  });
-
-  it("keeps the native prompt until terminal startup succeeds", async () => {
-    let rejectStart!: (error: Error) => void;
-    const started = new Promise<never>((_, reject) => {
-      rejectStart = reject;
-    });
-    const { context, flow, request } = createNativeFixture({
-      request: (method) =>
-        method === "sessions.catalog.startTerminal" ? started : Promise.resolve({}),
-    });
-    const { panel } = mountNativeTerminal(context);
-    flow.setMessage("keep my prompt");
-    const submitting = flow.submit();
-    await vi.waitFor(() =>
-      expect(
-        request.mock.calls.some(([method]) => method === "sessions.catalog.startTerminal"),
-      ).toBe(true),
-    );
-    expect(flow.message).toBe("keep my prompt");
-    expect(flow.submitting).toBe(true);
-    rejectStart(new Error("Native CLI is unavailable"));
-    await submitting;
-    expect(flow.message).toBe("keep my prompt");
-    expect(flow.error).toContain("Native CLI is unavailable");
-    expect(context.replace).not.toHaveBeenCalled();
-    expect(panel.isConnected).toBe(false);
-  });
-
-  it("does not navigate a cancelled draft when its native start returns", async () => {
-    let finishStart!: (result: ReturnType<typeof terminalOpenResult>) => void;
-    const starting = new Promise<ReturnType<typeof terminalOpenResult>>((resolve) => {
-      finishStart = resolve;
-    });
-    const { context, flow, request } = createNativeFixture({
-      request: async (method) => (method === "sessions.catalog.startTerminal" ? starting : {}),
-    });
-    mountNativeTerminal(context);
-    flow.setMessage("do not navigate this stale draft");
-    const submitting = flow.submit();
-    await vi.waitFor(() =>
-      expect(
-        request.mock.calls.some(([method]) => method === "sessions.catalog.startTerminal"),
-      ).toBe(true),
-    );
-    flow.invalidate("gateway-changed");
-    finishStart(terminalOpenResult("cancelled-start"));
-    await submitting;
-    expect(context.replace).not.toHaveBeenCalled();
-    expect(flow.message).toBe("do not navigate this stale draft");
-    expect(request).toHaveBeenCalledWith("terminal.close", { sessionId: "cancelled-start" });
-  });
-
-  it.each(["accepted"])(
-    "provisions the chosen worktree and consumes its name only for %s native startup",
+  it.each(["accepted", "rejected", "cancelled"] as const)(
+    "keeps a native start pending until %s",
     async (outcome) => {
-      replaceBrowserPreference("ws://gateway.example", "main", {
-        workspace: "/repo",
-        folder: "/repo",
-        worktree: true,
-        worktreeName: "ordinary-draft",
-        baseRef: "main",
+      const starting = createDeferred<ReturnType<typeof terminalOpenResult>>();
+      const { context, flow, request } = createNativeFixture({
+        data:
+          outcome === "accepted"
+            ? { ...nativeData, catalogId: "synthetic-cli", catalogLabel: "Synthetic CLI" }
+            : nativeData,
+        request: async (method) =>
+          method === "sessions.catalog.startTerminal" ? starting.promise : {},
       });
-      const { flow, place, request, context } = createNativeFixture({
-        methods: ["sessions.catalog.startTerminal", "worktrees.create", "terminal.open"],
-        agents: [{ id: "main", workspace: "/repo", workspaceGit: true }],
-        request: async (method) => {
-          if (method === "worktrees.branches") {
-            return { repositoryStatus: "git", branches: ["main"], headBranch: "main" };
-          }
-          if (method === "worktrees.create") {
-            return { path: "/repo/worktrees/native" };
-          }
-          if (method === "sessions.catalog.startTerminal" && outcome === "rejected") {
-            throw new Error("Native CLI unavailable");
-          }
-          return terminalOpenResult("native-worktree");
-        },
-      });
-      mountNativeTerminal(context);
-      await vi.waitFor(() => expect(place.repository.kind).toBe("git"));
-      expect(place.worktreeName).toBe("");
-      place.selectWorktree(true);
-      place.setWorktreeName("native");
-      place.setBaseRef("main");
-      await flow.submit();
-      expect(request).toHaveBeenCalledWith("worktrees.create", {
-        repoRoot: "/repo",
-        name: "native",
-        baseRef: "main",
-      });
-      expect(request).toHaveBeenCalledWith(
-        "sessions.catalog.startTerminal",
-        {
-          catalogId: "codex",
-          agentId: "main",
-          hostId: "gateway:local",
-          cwd: "/repo/worktrees/native",
-        },
-        { timeoutMs: 35_000 },
-      );
-      expect(context.sessions.createResult).not.toHaveBeenCalled();
-      expect(place.worktreeName).toBe(outcome === "accepted" ? "" : "native");
+      const { panel } = mountNativeTerminal(context);
+      const message = outcome === "accepted" ? "" : "keep my prompt";
+      flow.setMessage(message);
+      const submitting = flow.submit();
+      await waitForStart(request);
+      expect(flow).toMatchObject({ message, submitting: true });
+      const duplicate = outcome === "accepted" ? flow.submit() : undefined;
       if (outcome === "rejected") {
-        expect(context.replace).not.toHaveBeenCalled();
+        starting.reject(new Error("Native CLI is unavailable"));
+      } else {
+        if (outcome === "cancelled") {
+          flow.invalidate("gateway-changed");
+        }
+        starting.resolve(terminalOpenResult("native-start"));
       }
-      expect(place.worktree).toBe(true);
-      expect(place.baseRef).toBe("main");
-      expect(loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName).toBe(
-        "ordinary-draft",
-      );
+      await Promise.all([submitting, duplicate]);
+      expect(context.sessions.createResult).not.toHaveBeenCalled();
+      if (outcome === "accepted") {
+        expect(startCalls(request)).toHaveLength(1);
+        expect(context.replace).toHaveBeenCalledOnce();
+        expect(flow.submitting).toBe(false);
+      } else {
+        expect(flow.message).toBe(message);
+        expect(context.replace).not.toHaveBeenCalled();
+        if (outcome === "cancelled") {
+          expect(request).toHaveBeenCalledWith("terminal.close", { sessionId: "native-start" });
+        } else {
+          expect(flow.error).toContain("Native CLI is unavailable");
+          expect(panel.isConnected).toBe(false);
+        }
+      }
     },
   );
+
+  it("provisions the chosen worktree and consumes its name for accepted native startup", async () => {
+    replaceBrowserPreference("ws://gateway.example", "main", {
+      workspace: "/repo",
+      folder: "/repo",
+      worktree: true,
+      worktreeName: "ordinary-draft",
+      baseRef: "main",
+    });
+    const { flow, place, request, context } = createNativeFixture({
+      methods: ["sessions.catalog.startTerminal", "worktrees.create", "terminal.open"],
+      agents: [{ id: "main", workspace: "/repo", workspaceGit: true }],
+      request: async (method) => {
+        if (method === "worktrees.branches") {
+          return { repositoryStatus: "git", branches: ["main"], headBranch: "main" };
+        }
+        if (method === "worktrees.create") {
+          return { path: "/repo/worktrees/native" };
+        }
+        return terminalOpenResult("native-worktree");
+      },
+    });
+    mountNativeTerminal(context);
+    await vi.waitFor(() => expect(place.repository.kind).toBe("git"));
+    expect(place.worktreeName).toBe("");
+    place.selectWorktree(true);
+    place.setWorktreeName("native");
+    place.setBaseRef("main");
+    await flow.submit();
+    expect(request).toHaveBeenCalledWith("worktrees.create", {
+      repoRoot: "/repo",
+      name: "native",
+      baseRef: "main",
+    });
+    expectNativeStart(request, { cwd: "/repo/worktrees/native" });
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    expect(place).toMatchObject({ worktreeName: "", worktree: true, baseRef: "main" });
+    expect(loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName).toBe(
+      "ordinary-draft",
+    );
+  });
 
   it("native launch preserves node ownership and refuses stale capabilities", async () => {
     const catalogId = "claude";
     const data = {
-      agentId: "main",
-      requestedAgentId: "main",
+      ...nativeData,
       catalogId,
       catalogLabel: catalogId,
-      startTerminal: true,
       terminalHosts: [{ hostId: "node:chosen", label: "Chosen" }],
     };
-    const { context, flow, gateway, place, request } = createDraftFixture({
+    const { context, flow, gateway, place, request } = createNativeFixture({
       data,
       agents: [{ id: "main", workspace: "/gateway-only" }],
-      scopes: ["operator.admin"],
-      methods: ["sessions.catalog.startTerminal", "terminal.open"],
       request: async () => terminalOpenResult("native-node"),
     });
     mountNativeTerminal(context);
@@ -330,25 +265,22 @@ describe("DraftSubmissionFlow native terminal", () => {
     expect(request).not.toHaveBeenCalled();
     flow.setMessage("native prompt");
     await flow.submit();
-    expect(request).toHaveBeenCalledWith(
-      "sessions.catalog.startTerminal",
-      {
-        catalogId,
-        agentId: "main",
-        hostId: "node:chosen",
-        cwd: "/node/existing-project",
-        initialMessage: "native prompt",
-      },
-      { timeoutMs: 35_000 },
-    );
+    expectNativeStart(request, {
+      catalogId,
+      hostId: "node:chosen",
+      cwd: "/node/existing-project",
+      initialMessage: "native prompt",
+    });
     expect(context.sessions.createResult).not.toHaveBeenCalled();
     request.mockClear();
     data.terminalHosts = [];
     await flow.submit();
     expect(flow.blockedSubmitNotice()).toContain("Native CLI host unavailable");
     expect(request).not.toHaveBeenCalled();
-    expect(place.terminalHostId).toBe("node:chosen");
-    expect(place.folder).toBe("/node/existing-project");
+    expect(place).toMatchObject({
+      terminalHostId: "node:chosen",
+      folder: "/node/existing-project",
+    });
 
     // Same-route revalidation can retire the capability without changing the chosen node.
     data.startTerminal = false;
@@ -359,8 +291,10 @@ describe("DraftSubmissionFlow native terminal", () => {
     place.applyFolder("/node/revalidated-project");
     expect(request).not.toHaveBeenCalled();
     expect(persistPreference).not.toHaveBeenCalled();
-    expect(place.terminalHostId).toBe("node:chosen");
-    expect(place.folder).toBe("/node/revalidated-project");
+    expect(place).toMatchObject({
+      terminalHostId: "node:chosen",
+      folder: "/node/revalidated-project",
+    });
     await flow.submit();
     expect(flow.blockedSubmitNotice()).toBe("This session target is unavailable.");
     expect(context.sessions.createResult).not.toHaveBeenCalled();
@@ -370,20 +304,12 @@ describe("DraftSubmissionFlow native terminal", () => {
   it.each(["disabled", "attachments", "overrides", "mentions", "missing method", "non-admin"])(
     "native launch fails visibly for %s without Chat fallback",
     async (failure) => {
-      const { context, flow, request } = createDraftFixture({
+      const { context, flow, request } = createNativeFixture({
         scopes: failure === "non-admin" ? ["operator.write"] : ["operator.admin"],
         methods:
           failure === "missing method"
             ? ["sessions.create"]
             : ["sessions.catalog.startTerminal", "terminal.open"],
-        data: {
-          agentId: "main",
-          requestedAgentId: "main",
-          catalogId: "codex",
-          catalogLabel: "Codex",
-          startTerminal: true,
-          terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
-        },
       });
       if (failure === "disabled") {
         context.config.current.cliAgentsEnabled = false;

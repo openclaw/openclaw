@@ -7,7 +7,6 @@ import { explainShellCommand } from "../infra/command-explainer/extract.js";
 import { formatCommandSpans } from "../infra/command-explainer/format.js";
 import type { ExecApprovalCommandSpan } from "../infra/exec-approvals.js";
 
-/** Resolve command spans used to highlight exec approval prompts. */
 export async function resolveExecApprovalCommandSpans(
   command: string,
 ): Promise<ExecApprovalCommandSpan[] | undefined> {

@@ -1,9 +1,5 @@
 import type { Locator, Page } from "playwright";
-import {
-  closeChatLayoutMenu,
-  openChatLayoutMenu,
-  selectChatLayoutAction,
-} from "../test-helpers/chat-layout-menu.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 
 export async function failNextDeviceIdentityMint(page: Page): Promise<void> {
   await page.addInitScript(() => {
@@ -42,39 +38,21 @@ export async function openChatSidePanelType(page: Page | Locator, label: string)
   if (await content?.isVisible()) {
     return;
   }
-  if (panel?.slot === "subagents" && content) {
-    const menu = await openChatLayoutMenu(page);
-    await menu
-      .getByRole("menuitemcheckbox", { name: panel.action, exact: true })
-      .evaluate((item) => {
-        // Hydration can auto-open Subagents while Playwright waits for a pointer click.
-        // Read and activate together so an open request cannot become a close request.
-        const checkbox = item as HTMLElement & { checked: boolean };
-        const visiblePanel = checkbox
-          .closest("openclaw-chat-pane")
-          ?.querySelector<HTMLElement>('[data-panel-slot="subagents"]:not([hidden])');
-        const visible = visiblePanel && visiblePanel.getClientRects().length > 0;
-        if (!visible && !checkbox.checked) {
-          checkbox.click();
-        }
-      });
-    await closeChatLayoutMenu(page);
-    await content.waitFor({ state: "visible" });
-    return;
-  }
   await selectChatLayoutAction(page, panel?.action ?? label);
 }
 
 export async function focusChatSidePanel(page: Page): Promise<void> {
-  await selectChatLayoutAction(page, /^Swap /);
   await selectChatLayoutAction(page, "Focus");
   await page.locator(".sidebar-region--expanded").waitFor();
 }
 
 export async function restoreChatAsMain(page: Page): Promise<void> {
-  const side = page.locator('[data-region-header="side"]');
-  await side.locator('.tabstrip-tab[data-tab-value="conversation"]').click();
-  await selectChatLayoutAction(page, /^Swap /);
+  const chat = page.locator(".sidebar-region__primary");
+  if ((await chat.getAttribute("data-region")) !== "main") {
+    const side = page.locator('[data-region-header="side"]');
+    await side.locator('.tabstrip-tab[data-tab-value="conversation"]').click();
+    await selectChatLayoutAction(page, /^Swap /);
+  }
   await page.locator('.sidebar-region__primary[data-region="main"]').waitFor();
 }
 

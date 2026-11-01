@@ -1,9 +1,7 @@
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type { SessionEntryReadScope, SessionEntrySummary } from "./session-accessor.types.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
-import { listIncognitoSessionChildEntriesReadOnly } from "./session-entry-children-incognito.js";
 import { captureSessionEntryReadScope } from "./session-entry-read-request.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 
@@ -12,24 +10,9 @@ export async function listSessionChildEntriesReadOnly(
   scope: SessionEntryReadScope,
   parentSessionKeys: readonly string[] = [scope.sessionKey],
 ): Promise<SessionEntrySummary[]> {
-  const parents = new Set(parentSessionKeys);
-  const memory = getSessionActorStorageBinding({ ...scope, sessionKey: undefined });
+  const memory = captureMemoryExactSessionReader(scope);
   if (memory) {
-    return memory.actor
-      .storage!.readCurrent(
-        { type: "session.entries.read", input: { projection: scope.projection } },
-        memory.authority,
-      )
-      .filter(
-        ({ sessionKey, entry }) =>
-          !parents.has(sessionKey) &&
-          (parents.has(entry.parentSessionKey ?? "") || parents.has(entry.spawnedBy ?? "")),
-      )
-      .toSorted((a, b) => a.sessionKey.localeCompare(b.sessionKey));
-  }
-  // Native incognito ownership is retired separately from durable worker reads.
-  if (isIncognitoSessionKey(scope.sessionKey)) {
-    return listIncognitoSessionChildEntriesReadOnly(scope);
+    return memory.children(parentSessionKeys, scope.projection);
   }
   const captured = captureSessionEntryReadScope(scope);
   const storePath =

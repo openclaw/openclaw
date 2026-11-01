@@ -3,7 +3,8 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { hasErrnoCode } from "../infra/errno.js";
+import { registerSignalExitFinalizer } from "../cli/signal-exit-barrier.js";
+import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
@@ -13,13 +14,13 @@ import {
   SQLITE_STAGING_TOKEN_FILES,
   type SqliteStagingToken,
 } from "../infra/sqlite-staging-token.js";
-import { removeTemporaryArtifacts } from "../infra/temp-artifact-cleanup.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import {
   pluginSourceCaptureMaintenance,
+  pluginSourceCaptureOwnedRoots,
   resolvePluginSourceCaptureStorage,
-  runInPluginSourceCaptureContext,
 } from "./plugin-source-capture-context.js";
 import {
   createPluginNativeCaptureCustody,
@@ -27,7 +28,10 @@ import {
 } from "./plugin-source-capture-native-loads.js";
 import {
   isLegacyPluginSourceCaptureName,
+  mkdtempPluginCaptureSync,
   PLUGIN_SOURCE_CAPTURE_PREFIX,
+  PLUGIN_SOURCE_SNAPSHOT_PREFIX,
+  PLUGIN_SOURCE_SNAPSHOT_STAGING_PREFIX,
   resolvePluginSourceCaptureFallbackPrefix,
   resolvePluginSourceCapturesDirectory,
 } from "./plugin-source-capture-path.js";
@@ -44,6 +48,7 @@ type Instance = {
   root?: string;
   managedRoot?: string;
   token?: SqliteStagingToken;
+  releaseSignalExit?: () => void;
 };
 const {
   instances,
@@ -54,20 +59,11 @@ const {
   retainPluginNativeCapturePath,
   sweeps,
 } = resolveGlobalSingleton(Symbol.for("openclaw.pluginSourceCaptureInstances"), () => {
-  const instanceRoots = new Set<string>();
+  const instanceRoots = pluginSourceCaptureOwnedRoots;
   const nativeCustody = createPluginNativeCaptureCustody(instanceRoots);
   process.once("exit", () => {
-    // Explicit exits cannot await generation disposal. These native leases belong
-    // only to this exiting process; worker overrides remain with their parent.
     for (const [key, instance] of instances) {
-      try {
-        const root = retireInstance(key, instance);
-        if (root) {
-          removeInstanceSync(root, instance.pendingNative);
-        }
-      } catch (error) {
-        process.stderr.write(`Plugin source capture exit cleanup failed: ${String(error)}\n`);
-      }
+      retireInstanceForExit(key, instance);
     }
   });
   return {
@@ -84,6 +80,19 @@ export {
   retainPluginNativeCapturePath,
 };
 
+/** Explicit exits cannot await generation disposal. These native leases belong
+ * only to this exiting process; worker overrides remain with their parent. */
+function retireInstanceForExit(key: string, instance: Instance): void {
+  try {
+    const root = retireInstance(key, instance);
+    if (root) {
+      removeInstanceSync(root, instance.pendingNative);
+    }
+  } catch (error) {
+    process.stderr.write(`Plugin source capture exit cleanup failed: ${String(error)}\n`);
+  }
+}
+
 function retireInstance(key: string, instance: Instance): string | undefined {
   if (instance.root && retainLoadedPluginSourceCapture(instance.root)) {
     instance.references.clear();
@@ -96,9 +105,7 @@ function retireInstance(key: string, instance: Instance): string | undefined {
   try {
     instance.token?.(true);
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
+    ignoreMissingPath(error);
     // Enclosing state can disappear before deferred disposal. Missing ownership
     // permits closing our handle, never deleting residual or replacement files.
     instance.token?.();
@@ -108,7 +115,11 @@ function retireInstance(key: string, instance: Instance): string | undefined {
     ownedRoots.delete(instance.root);
   }
   instance.references.clear();
-  instances.delete(key);
+  // Signal cleanup may retire first; a later release must not remove a successor.
+  if (instances.get(key) === instance) {
+    instances.delete(key);
+  }
+  instance.releaseSignalExit?.();
   scheduleCaptureCleanup(key, instance);
   return removalRoot;
 }
@@ -143,25 +154,20 @@ async function reclaimInstances(
   try {
     entries = await fsPromises.readdir(root, { withFileTypes: true });
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
+    ignoreMissingPath(error);
     return;
   }
   if (entries.length === 0) {
     return;
   }
   const cutoff = Date.now() - CAPTURE_GRACE_MS;
-  const lstatIfPresent = (file: string) =>
-    fsPromises.lstat(file).catch((error: unknown) => {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
-      return undefined;
-    });
+  const lstatIfPresent = (file: string) => fsPromises.lstat(file).catch(ignoreMissingPath);
   for (const entry of entries) {
+    const snapshotStage =
+      !legacy && !fallbackPrefix && entry.name.startsWith(PLUGIN_SOURCE_SNAPSHOT_STAGING_PREFIX);
     if (
       !entry.isDirectory() ||
+      (entry.name.startsWith(PLUGIN_SOURCE_SNAPSHOT_PREFIX) && !snapshotStage) ||
       (legacy && !isLegacyPluginSourceCaptureName(entry.name)) ||
       (fallbackPrefix && !entry.name.startsWith(fallbackPrefix))
     ) {
@@ -188,6 +194,9 @@ async function reclaimInstances(
         continue;
       }
       if (!tokenStat) {
+        if (snapshotStage) {
+          continue;
+        }
         // A qualified name selects the state; only its token proves released custody.
         if (fallbackPrefix || changed > cutoff) {
           continue;
@@ -229,13 +238,16 @@ export async function hasPluginNativeCaptureCleanupCandidates(stateDir: string):
     try {
       entries = await fsPromises.readdir(root, { withFileTypes: true });
     } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
+      ignoreMissingPath(error);
       continue;
     }
     for (const entry of entries) {
-      if (!entry.isDirectory() || (prefix && !entry.name.startsWith(prefix))) {
+      if (
+        !entry.isDirectory() ||
+        (entry.name.startsWith(PLUGIN_SOURCE_SNAPSHOT_PREFIX) &&
+          (prefix || !entry.name.startsWith(PLUGIN_SOURCE_SNAPSHOT_STAGING_PREFIX))) ||
+        (prefix && !entry.name.startsWith(prefix))
+      ) {
         continue;
       }
       try {
@@ -243,9 +255,7 @@ export async function hasPluginNativeCaptureCleanupCandidates(stateDir: string):
           return true;
         }
       } catch (error) {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
+        ignoreMissingPath(error);
       }
     }
   }
@@ -339,14 +349,12 @@ function createCaptureDirectory(instance: Instance, prefix: string, kind = "capt
   if (instance.root) {
     const captures = path.join(instance.root, kind);
     try {
-      return fs.mkdtempSync(path.join(captures, prefix));
+      return mkdtempPluginCaptureSync(path.join(captures, prefix));
     } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
+      ignoreMissingPath(error);
       // Repair only the payload directory; recreating its parent would lose native custody.
       fs.mkdirSync(captures, { mode: 0o700 });
-      return fs.mkdtempSync(path.join(captures, prefix));
+      return mkdtempPluginCaptureSync(path.join(captures, prefix));
     }
   }
   const prepare = (fallback: boolean): string => {
@@ -354,22 +362,24 @@ function createCaptureDirectory(instance: Instance, prefix: string, kind = "capt
     let token: SqliteStagingToken | undefined;
     try {
       if (fallback) {
-        directory = fs.mkdtempSync(
+        directory = mkdtempPluginCaptureSync(
           path.join(tmpdir(), resolvePluginSourceCaptureFallbackPrefix(stateDir)),
         );
       } else {
         const parent = resolvePluginSourceCapturesDirectory(stateDir);
         fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
-        instance.managedRoot = fs.realpathSync(parent);
+        // Native spelling expands Windows 8.3 names, matching fs-safe copy admission
+        // and the fs.promises.realpath reclaim scan.
+        instance.managedRoot = fs.realpathSync.native(parent);
         const candidate = path.join(instance.managedRoot, randomUUID());
         fs.mkdirSync(candidate, { mode: 0o700 });
         directory = candidate;
       }
-      const canonical = fs.realpathSync(directory);
+      const canonical = fs.realpathSync.native(directory);
       token = acquireSqliteStagingToken(canonical, "create");
       const captures = path.join(canonical, kind);
       fs.mkdirSync(captures, { mode: 0o700 });
-      const capture = fs.mkdtempSync(path.join(captures, prefix));
+      const capture = mkdtempPluginCaptureSync(path.join(captures, prefix));
       instance.root = canonical;
       instance.token = token;
       ownedRoots.add(canonical);
@@ -436,7 +446,7 @@ function scheduleCaptureCleanup(key: string, instance: Instance): void {
   scope.signal.addEventListener("abort", () => scheduleCaptureCleanup(key, instance), {
     once: true,
   });
-  runInPluginSourceCaptureContext(() =>
+  runInDetachedAsyncContext(() =>
     scope.schedule({
       id: `plugin-source-captures:${key}`,
       delayMs: CAPTURE_GRACE_MS,
@@ -450,8 +460,20 @@ function scheduleCaptureCleanup(key: string, instance: Instance): void {
 export function retainPluginSourceCaptureInstance(
   stateDir?: string,
   placement?: PluginSourceCaptureStorage["placement"],
+  purpose: "source" | "native" = "source",
 ) {
-  const storage = resolvePluginSourceCaptureStorage(stateDir, placement);
+  const updateTmp = process.env.TMPDIR?.trim();
+  // Older update drivers already mark candidate helpers and select their TMPDIR.
+  // Native admissions can be published to the installed index; keep their durable placement.
+  const storage = resolvePluginSourceCaptureStorage(
+    stateDir,
+    purpose === "source" &&
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" &&
+      updateTmp &&
+      path.isAbsolute(updateTmp)
+      ? "temporary"
+      : placement,
+  );
   const key = JSON.stringify([storage.stateDir, storage.placement]);
   const maintenance = pluginSourceCaptureMaintenance.getStore();
   const scheduler = maintenance?.scheduler;
@@ -465,6 +487,12 @@ export function retainPluginSourceCaptureInstance(
   if (!instance) {
     instance = { storage, references: new Set(), pendingNative: new Set() };
     instances.set(key, instance);
+    // A signalled process can outlive its drain until supervisors force-kill it,
+    // which skips "exit"; retire after other shutdown owners have settled.
+    const created = instance;
+    created.releaseSignalExit = registerSignalExitFinalizer(async () =>
+      retireInstanceForExit(key, created),
+    );
     if (storage.placement === "state") {
       if (maintenance) {
         void maintenance.run(() => sweepPluginSourceCaptureDirectories(storage.stateDir));
@@ -546,9 +574,7 @@ export function retainPluginSourceCaptureInstance(
           const native = await fsPromises
             .readdir(path.join(root, "native"))
             .catch((error: unknown) => {
-              if (!hasErrnoCode(error, "ENOENT")) {
-                throw error;
-              }
+              ignoreMissingPath(error);
               return [];
             });
           if (native.length === 0) {
@@ -567,7 +593,7 @@ export function createPluginNativeCaptureRoot(
   stateDir?: string,
   placement?: PluginSourceCaptureStorage["placement"],
 ) {
-  const instance = retainPluginSourceCaptureInstance(stateDir, placement);
+  const instance = retainPluginSourceCaptureInstance(stateDir, placement, "native");
   try {
     const root = instance.createNativeDirectory();
     let committed = false;
@@ -591,6 +617,7 @@ export function createPluginNativeCaptureRoot(
         }
       },
       async disposeAsync() {
+        const { removeTemporaryArtifacts } = await import("../infra/temp-artifact-cleanup.js");
         if (!disposed) {
           if (!committed && !retainLoadedPluginSourceCapture(root.directory)) {
             await removeTemporaryArtifacts(root.directory, "Plugin native capture");
@@ -607,14 +634,19 @@ export function createPluginNativeCaptureRoot(
 }
 
 /** The producer retains this root until its worker has confirmed exit. */
-export function createPluginSourceCaptureRoot(stateDir: string, prefix: string) {
-  const instance = retainPluginSourceCaptureInstance(stateDir);
+export function createPluginSourceCaptureRoot(
+  stateDir: string,
+  prefix: string,
+  placement?: PluginSourceCaptureStorage["placement"],
+) {
+  const instance = retainPluginSourceCaptureInstance(stateDir, placement);
   try {
     const directory = instance.createDirectory(prefix);
     return {
       directory,
       managedRoot: instance.managedRoot,
       release: async () => {
+        const { removeTemporaryArtifacts } = await import("../infra/temp-artifact-cleanup.js");
         if (!retainLoadedPluginSourceCapture(directory)) {
           await removeTemporaryArtifacts(directory, "Plugin source worker");
         }

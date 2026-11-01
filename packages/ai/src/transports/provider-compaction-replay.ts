@@ -16,6 +16,7 @@ import {
 export {
   isCompactionReplayCheckpoint,
   stripCompactionReplayCheckpoint,
+  stripCompactionReplayCheckpointInPlace,
 } from "./provider-compaction-checkpoint.js";
 
 export { CompactionReplayRefreshRequiredError } from "./openai-responses-compaction-replay.js";
@@ -245,15 +246,6 @@ export function resolveCompactionReplayPressure<T extends ReplayMessage>(
     ],
     prefixTokens,
   };
-}
-
-/** Strip prefix-bound checkpoint state from an in-place message rewrite. */
-export function stripCompactionReplayCheckpointInPlace(message: {
-  providerReplay?: unknown;
-}): void {
-  if (isCompactionReplayCheckpoint(message.providerReplay)) {
-    delete message.providerReplay;
-  }
 }
 
 /** Preserve the covered prefix and reindex checkpoints after known content removals. */

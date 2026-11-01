@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { WorkerHelloOk } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { waitForExecScope } from "../agents/bash-process-registry.js";
 import type { ComputerContextEpoch } from "../agents/tools/computer-tool.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -19,12 +20,15 @@ import {
 import type { NativeRuntime, NativeRuntimeResolved } from "./native-runtime.js";
 import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
+import { createWorkerExecApprovalTransport } from "./worker-exec-approval.js";
+import { WorkerNodeLostError } from "./worker-node-loss.js";
 import type { WorkerRuntimeResult } from "./worker-process-protocol.js";
 import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
 import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
 import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
 
 const WORKER_REMOTE_CANCEL_GRACE_MS = 1_000;
+const WORKER_TURN_ADMISSION_TIMEOUT_MS = 10 * 60_000;
 declare const WORKER_DEPLOY_BUILD: boolean;
 
 function toWorkerRuntimeError(value: unknown, fallback: string): Error {
@@ -49,6 +53,11 @@ async function assertWorkerDirectory(pathname: string, label: string): Promise<s
 
 /** Holds process-local state until every command owned by this environment has exited. */
 export async function createWorkerRuntimeEnvironment(sessionId: string) {
+  // The dedicated node supplies this process-local transport outside the descriptor.
+  // Register again in the worker process before any turn can emit diagnostics.
+  if (process.env.IDENTITY_HEADER) {
+    registerSecretValueForRedaction(process.env.IDENTITY_HEADER);
+  }
   const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-"));
   await chmod(stateDir, 0o700);
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -126,6 +135,8 @@ export async function runWorkerDescriptor(
     /** Supplied by the managed process owner, which closes state after its final turn. */
     environmentStateDir?: string;
     nativeInference?: NativeInferenceStartup;
+    /** Managed device folders retain the node-approved canonical target across startup. */
+    assertWorkspaceCurrent?: () => void;
   } = {},
 ): Promise<WorkerRuntimeResult> {
   if (
@@ -143,6 +154,7 @@ export async function runWorkerDescriptor(
     }
     assertNativeInferenceAssignment(options.nativeInference, descriptor);
   }
+  options.assertWorkspaceCurrent?.();
   const workspaceDir = await assertWorkerDirectory(descriptor.assignment.workspaceDir, "workspace");
   const workerContainmentRoot = descriptor.assignment.workerContainmentRoot
     ? await assertWorkerDirectory(descriptor.assignment.workerContainmentRoot, "containment root")
@@ -156,6 +168,7 @@ export async function runWorkerDescriptor(
       "worker workspace path escapes its assigned containment root; reprovision the worker workspace and retry",
     );
   }
+  options.assertWorkspaceCurrent?.();
   const environment = options.environmentStateDir
     ? undefined
     : await createWorkerRuntimeEnvironment(descriptor.admission.sessionId);
@@ -166,9 +179,45 @@ export async function runWorkerDescriptor(
   let turnStarted = false;
   let resultFenceAcked = false;
   let forcedStopTimer: NodeJS.Timeout | undefined;
+  let githubGeneration: number | undefined;
+  let githubRefresh: Awaited<
+    ReturnType<typeof import("./github-binding.runtime.js").prepareWorkerGitHubEnvironment>
+  >;
   const connection = createWorkerConnection({
     endpoint: descriptor.connectionEndpoint,
     connectParams: buildWorkerConnectParams(descriptor),
+    heartbeatParams: () => (githubGeneration === undefined ? {} : { githubGeneration }),
+    onHeartbeat: async (result, assertCurrent) => {
+      if (
+        resultFenceAcked ||
+        !result.github ||
+        !githubRefresh ||
+        result.github.generation <= (githubGeneration ?? 0)
+      ) {
+        return;
+      }
+      const retired = new Error("Worker GitHub refresh retired after terminal acknowledgment");
+      const assertRefreshCurrent = () => {
+        assertCurrent();
+        if (resultFenceAcked) {
+          throw retired;
+        }
+      };
+      try {
+        await githubRefresh.refresh(result.github, assertRefreshCurrent);
+      } catch (error) {
+        // Terminal retirement stops credential publication without failing accepted work.
+        assertCurrent();
+        if (error === retired) {
+          return;
+        }
+        throw error;
+      }
+      assertCurrent();
+      if (!resultFenceAcked) {
+        githubGeneration = result.github.generation;
+      }
+    },
     onConnectionFailure: (error) => {
       options.onConnectionFailure?.(error?.message);
     },
@@ -205,12 +254,16 @@ export async function runWorkerDescriptor(
     } else if (state.kind === "fenced") {
       abortController.abort(new Error(`worker fenced: ${state.reason}`));
     } else if (state.kind === "failed") {
-      abortController.abort(state.error);
+      abortController.abort(
+        wasAdmitted && state.error instanceof WorkerAdmissionDeadlineExceededError
+          ? new WorkerNodeLostError({ cause: state.error })
+          : state.error,
+      );
     } else if (wasAdmitted && descriptor.assignment.inference === "runtime-local") {
       // Startup may retry before admission. Once admitted, any transport loss
       // ends local provider authority, even while runtime setup is still awaited.
       // Reconnection may settle the failed turn; it cannot revive its producer.
-      abortController.abort(new Error("Runtime-local inference lost Gateway admission"));
+      abortController.abort(new WorkerNodeLostError());
     }
   });
 
@@ -257,18 +310,25 @@ export async function runWorkerDescriptor(
             turnId: descriptor.assignment.turnId,
             modelRef: descriptor.assignment.modelRef,
             computerContextEpoch,
+            onCancelled: (reason) => abortController.abort(reason),
           });
+    options.assertWorkspaceCurrent?.();
     const github = descriptor.assignment.github
-      ? await import("./github-binding.runtime.js").then(({ prepareWorkerGitHubEnvironment }) =>
-          prepareWorkerGitHubEnvironment({
+      ? await import("./github-binding.runtime.js").then(({ prepareWorkerGitHubEnvironment }) => {
+          options.assertWorkspaceCurrent?.();
+          return prepareWorkerGitHubEnvironment({
             binding: descriptor.assignment.github!,
             stateDir,
             turnId: descriptor.assignment.turnId,
             cwd: workspaceDir,
             signal: abortController.signal,
-          }),
-        )
+          });
+        })
       : undefined;
+    githubRefresh = github;
+    if (github) {
+      githubGeneration = 0;
+    }
     try {
       turnStarted = true;
       const {
@@ -281,8 +341,9 @@ export async function runWorkerDescriptor(
         inference: _inference,
         ...assignment
       } = descriptor.assignment;
-      const runTurn = (nativeInference?: NativeRuntimeResolved) =>
-        runWorkerEmbeddedTurn({
+      const runTurn = (nativeInference?: NativeRuntimeResolved) => {
+        options.assertWorkspaceCurrent?.();
+        return runWorkerEmbeddedTurn({
           ...assignment,
           nativeInference,
           cwd: workspaceDir,
@@ -305,21 +366,41 @@ export async function runWorkerDescriptor(
             : {}),
           ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
           inference: { stream },
-          transcript: {
-            commit: async (messages) => {
-              await transcript.commit(messages);
-            },
-          },
+          admitTurn: hello.protocolFeatures.includes(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE)
+            ? async (event) => {
+                const response = await connection.rpc.request(
+                  "turn-admission",
+                  { ...event, runEpoch: descriptor.admission.ownerEpoch },
+                  undefined,
+                  // Hooks run sequentially with their own Gateway-enforced deadlines (15 s each),
+                  // so several plugins can exceed the 30 s RPC default; the Gateway always answers.
+                  WORKER_TURN_ADMISSION_TIMEOUT_MS,
+                );
+                if (!response.ok) {
+                  throw new Error("Gateway rejected worker turn admission");
+                }
+                if (response.payload.outcome === "block") {
+                  return false;
+                }
+                transcript.admitInput(response.payload.baseLeafId);
+                return true;
+              }
+            : undefined,
+          transcript,
           live: {
             enqueuePreview: (event) => live.enqueuePreview(descriptor.assignment.runId, event),
             emitTerminal: async (event) => {
               await live.emitTerminal(descriptor.assignment.runId, event);
               resultFenceAcked = true;
+              githubGeneration = undefined;
             },
           },
           gatewayTools: connection,
+          createApprovalTransport: (toolCallId, signal) =>
+            createWorkerExecApprovalTransport(connection, toolCallId, signal),
           signal: abortController.signal,
         });
+      };
       if (descriptor.assignment.inference === "runtime-local") {
         const startup = options.nativeInference!;
         const { createNativeRuntime } = await import("./native-runtime.js");
@@ -356,10 +437,11 @@ export async function runWorkerDescriptor(
       if (options.signal?.aborted && !options.environmentStateDir) {
         throw toWorkerRuntimeError(options.signal.reason, "worker interrupted");
       }
-      if (resultFenceAcked && connection.state.kind === "ready") {
+      const nodeLost = abortController.signal.reason instanceof WorkerNodeLostError;
+      if (nodeLost || (resultFenceAcked && connection.state.kind === "ready")) {
         return {
           status: "failed",
-          reason: "turn-failed",
+          reason: nodeLost ? "node-lost" : "turn-failed",
           transcriptLeafId: transcript.baseLeafId,
           transcriptNextSeq: transcript.nextSeq,
         };
@@ -382,11 +464,14 @@ export async function runWorkerDescriptor(
     if (forcedStopTimer) {
       clearTimeout(forcedStopTimer);
     }
+    githubRefresh = undefined;
     unsubscribeState();
     options.signal?.removeEventListener("abort", abortFromCaller);
     nativeRuntime?.close();
     inference.dispose();
     live.dispose();
+    // The environment/command owner removes profiles after admitted background
+    // commands settle; stop joins credential writes before handing cleanup back.
     await connection.stop();
     await environment?.close();
   }

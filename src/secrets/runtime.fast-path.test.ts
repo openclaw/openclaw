@@ -10,7 +10,14 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.j
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { clearSecretsRuntimeSnapshot } from "./runtime.js";
+import { prepareSecretsRuntimeFastPathSnapshot } from "./runtime-fast-path.js";
+import {
+  activateSecretsRuntimeSnapshot,
+  clearSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshot,
+  prepareSecretsRuntimeSnapshot,
+  refreshActiveProviderAuthRuntimeSnapshot,
+} from "./runtime.js";
 import { asConfig } from "./runtime.test-support.js";
 
 const { collectConfigAssignmentsMock, resolveRuntimeWebToolsMock, runtimePrepareImportMock } =
@@ -33,6 +40,61 @@ const { collectConfigAssignmentsMock, resolveRuntimeWebToolsMock, runtimePrepare
 
 function explicitMainRoster() {
   return { agents: { entries: { main: {} } } };
+}
+
+function agentConfig(agentDir: string, port?: number) {
+  return asConfig({
+    agents: { entries: { main: { agentDir } } },
+    ...(port === undefined ? {} : { gateway: { port } }),
+  });
+}
+
+function prepareAgentSnapshot(
+  agentDir: string,
+  loadAuthStore: () => AuthProfileStore,
+  port?: number,
+) {
+  return prepareSecretsRuntimeSnapshot({
+    config: agentConfig(agentDir, port),
+    agentDirs: [agentDir],
+    loadAuthStore,
+  });
+}
+
+function prepareSnapshot(
+  config: unknown,
+  overrides: Omit<Parameters<typeof prepareSecretsRuntimeSnapshot>[0], "config"> = {},
+) {
+  return prepareSecretsRuntimeSnapshot({
+    config: asConfig(config),
+    env: {},
+    agentDirs: ["/tmp/openclaw-agent-main"],
+    loadAuthStore: emptyAuthStore,
+    ...overrides,
+  });
+}
+
+function authStore(key: string): AuthProfileStore {
+  return createAuthProfileStoreFixture({
+    "openai:default": { type: "api_key", provider: "openai", key },
+  });
+}
+
+const startupRoots: string[] = [];
+
+async function createStartupStore(inherited = false) {
+  const { prepareSharedAuthStoreOwnershipForNative } =
+    await import("../agents/auth-profiles/path-resolve.native.js");
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-runtime-fast-path-"));
+  startupRoots.push(root);
+  const env = { HOME: root, OPENCLAW_STATE_DIR: root };
+  const agentDir = path.join(root, "custom-agent");
+  mkdirSync(agentDir, { recursive: true });
+  if (inherited) {
+    writeAuthProfileStore(path.join(root, "agents", "main", "agent"));
+  }
+  prepareSharedAuthStoreOwnershipForNative(env);
+  return { agentDir, env, config: agentConfig(agentDir) };
 }
 
 vi.mock("./runtime-prepare.runtime.js", () => {
@@ -75,17 +137,10 @@ function emptyAuthStore(): AuthProfileStore {
 
 function writeAuthProfileStore(agentDir: string): void {
   mkdirSync(agentDir, { recursive: true });
-  saveAuthProfileStore(
-    createAuthProfileStoreFixture({
-      "openai:default": {
-        type: "api_key",
-        provider: "openai",
-        key: "sk-test",
-      },
-    }),
-    agentDir,
-    { filterExternalAuthProfiles: false, syncExternalCli: false },
-  );
+  saveAuthProfileStore(authStore("sk-test"), agentDir, {
+    filterExternalAuthProfiles: false,
+    syncExternalCli: false,
+  });
 }
 
 describe("secrets runtime fast path", () => {
@@ -98,33 +153,16 @@ describe("secrets runtime fast path", () => {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     closeOpenClawAgentDatabasesForTest();
-    vi.resetModules();
+    for (const root of startupRoots.splice(0)) {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("uses the fast path when web fetch only configures runtime limits", async () => {
-    const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
-
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        ...explicitMainRoster(),
-        tools: {
-          web: {
-            fetch: {
-              enabled: true,
-              maxChars: 200_000,
-              maxCharsCap: 2_000_000,
-            },
-          },
-        },
-        plugins: {
-          enabled: true,
-          allow: [],
-          entries: {},
-        },
-      }),
-      env: {},
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: emptyAuthStore,
+    const snapshot = await prepareSnapshot({
+      ...explicitMainRoster(),
+      tools: { web: { fetch: { enabled: true, maxChars: 200_000, maxCharsCap: 2_000_000 } } },
+      plugins: { enabled: true, allow: [], entries: {} },
     });
 
     expect(runtimePrepareImportMock).not.toHaveBeenCalled();
@@ -132,52 +170,24 @@ describe("secrets runtime fast path", () => {
   });
 
   it("uses the fast path when web fetch is explicitly disabled", async () => {
-    const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
-
-    await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        ...explicitMainRoster(),
-        tools: {
-          web: {
-            fetch: {
-              enabled: false,
-              maxChars: 200_000,
-            },
-          },
-        },
-      }),
-      env: {},
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: emptyAuthStore,
+    await prepareSnapshot({
+      ...explicitMainRoster(),
+      tools: { web: { fetch: { enabled: false, maxChars: 200_000 } } },
     });
 
     expect(runtimePrepareImportMock).not.toHaveBeenCalled();
   });
 
   it("keeps explicit web fetch provider config on the resolver path", async () => {
-    const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
-
-    await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        ...explicitMainRoster(),
-        tools: {
-          web: {
-            fetch: {
-              provider: "firecrawl",
-            },
-          },
-        },
-      }),
-      env: {},
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: emptyAuthStore,
+    await prepareSnapshot({
+      ...explicitMainRoster(),
+      tools: { web: { fetch: { provider: "firecrawl" } } },
     });
 
     expect(resolveRuntimeWebToolsMock).toHaveBeenCalledTimes(1);
   });
 
   it("reuses published plugin metadata without reopening manifests for configured web search", async () => {
-    const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
     const { collectConfigAssignments } = await import("./runtime-config-collectors.js");
     const { resolveRuntimeWebTools } = await import("./runtime-web-tools.js");
     const { loadPluginMetadataSnapshot } = await import("../plugins/plugin-metadata-snapshot.js");
@@ -199,17 +209,10 @@ describe("secrets runtime fast path", () => {
       },
     });
     const workspaceDir = listAgentWorkspaceDirs(config, process.env)[0];
-    const pluginMetadataSnapshot = loadPluginMetadataSnapshot({
-      config,
-      env: process.env,
-      workspaceDir,
-    });
+    const metadataContext = { config, env: process.env, workspaceDir };
+    const pluginMetadataSnapshot = loadPluginMetadataSnapshot(metadataContext);
     expect(pluginMetadataSnapshot.plugins.length).toBeGreaterThan(0);
-    setCurrentPluginMetadataSnapshot(pluginMetadataSnapshot, {
-      config,
-      env: process.env,
-      workspaceDir,
-    });
+    setCurrentPluginMetadataSnapshot(pluginMetadataSnapshot, metadataContext);
     collectConfigAssignmentsMock.mockImplementationOnce(collectConfigAssignments);
     resolveRuntimeWebToolsMock.mockImplementationOnce(resolveRuntimeWebTools);
     const openSyncSpy = vi.spyOn(fs, "openSync");
@@ -219,12 +222,7 @@ describe("secrets runtime fast path", () => {
     openSyncSpy.mockClear();
 
     try {
-      const snapshot = await prepareSecretsRuntimeSnapshot({
-        config,
-        env: process.env,
-        agentDirs: ["/tmp/openclaw-agent-main"],
-        loadAuthStore: emptyAuthStore,
-      });
+      const snapshot = await prepareSnapshot(config, { env: process.env });
 
       const manifestOpens = openSyncSpy.mock.calls.filter(
         ([filePath]) => typeof filePath === "string" && filePath.endsWith("/openclaw.plugin.json"),
@@ -238,90 +236,41 @@ describe("secrets runtime fast path", () => {
   });
 
   it("skips the startup-only fast path when the inherited main auth store exists", async () => {
-    const { prepareSecretsRuntimeFastPathSnapshot } = await import("./runtime-fast-path.js");
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-runtime-fast-path-"));
-    const env: NodeJS.ProcessEnv = {
-      HOME: root,
-      OPENCLAW_STATE_DIR: root,
-    };
-    const mainAgentDir = path.join(root, "agents", "main", "agent");
-    const agentDir = path.join(root, "custom-agent");
-    mkdirSync(agentDir, { recursive: true });
-    writeAuthProfileStore(mainAgentDir);
-
-    try {
-      const snapshot = prepareSecretsRuntimeFastPathSnapshot({
-        config: asConfig({
-          agents: {
-            entries: { main: { agentDir } },
-          },
-        }),
-        env,
-      });
-
-      expect(snapshot).toBeNull();
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    const { config, env } = await createStartupStore(true);
+    expect(prepareSecretsRuntimeFastPathSnapshot({ config, env })).toBeNull();
   });
 
-  it("refreshes startup-only fast-path snapshots from persisted auth stores after startup", async () => {
+  it("publishes owner writes after a startup-only fast path and preserves them on refresh", async () => {
     const { ensureAuthProfileStoreWithoutExternalProfiles } =
       await import("../agents/auth-profiles/store-runtime.js");
-    const { prepareSecretsRuntimeFastPathSnapshot } = await import("./runtime-fast-path.js");
     const { activateSecretsRuntimeSnapshotState, getActiveSecretsRuntimeSnapshotState } =
       await import("./runtime-state.js");
-    const { refreshActiveProviderAuthRuntimeSnapshot } = await import("./runtime.js");
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-runtime-fast-path-refresh-"));
-    const env: NodeJS.ProcessEnv = {
-      HOME: root,
-      OPENCLAW_STATE_DIR: root,
-    };
-    const agentDir = path.join(root, "custom-agent");
-    mkdirSync(agentDir, { recursive: true });
+    const { config, env, agentDir } = await createStartupStore();
+    const fastPath = prepareSecretsRuntimeFastPathSnapshot({ config, env });
 
-    try {
-      const fastPath = prepareSecretsRuntimeFastPathSnapshot({
-        config: asConfig({
-          agents: {
-            entries: { main: { agentDir } },
-          },
-        }),
-        env,
-      });
+    expect(fastPath).not.toBeNull();
+    activateSecretsRuntimeSnapshotState({
+      snapshot: fastPath!.snapshot,
+      refreshContext: fastPath!.refreshContext,
+      refreshHandler: null,
+    });
+    writeAuthProfileStore(agentDir);
 
-      expect(fastPath).not.toBeNull();
-      activateSecretsRuntimeSnapshotState({
-        snapshot: fastPath!.snapshot,
-        refreshContext: fastPath!.refreshContext,
-        refreshHandler: null,
-      });
-      writeAuthProfileStore(agentDir);
+    expect(
+      ensureAuthProfileStoreWithoutExternalProfiles(agentDir).profiles["openai:default"],
+    ).toMatchObject({ type: "api_key", provider: "openai", key: "sk-test" });
 
-      expect(
-        ensureAuthProfileStoreWithoutExternalProfiles(agentDir).profiles["openai:default"],
-      ).toBeUndefined();
-
-      await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
-      const active = getActiveSecretsRuntimeSnapshotState();
-      expect(active?.authStores[0]?.agentDir).toBe(agentDir);
-      expect(active?.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
-        type: "api_key",
-        provider: "openai",
-        key: "sk-test",
-      });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
+    const active = getActiveSecretsRuntimeSnapshotState();
+    expect(active?.authStores[0]?.agentDir).toBe(agentDir);
+    expect(active?.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
+      type: "api_key",
+      provider: "openai",
+      key: "sk-test",
+    });
   });
 
   it("does not let an active refresh overwrite a snapshot published during preparation", async () => {
-    const {
-      activateSecretsRuntimeSnapshot,
-      getActiveSecretsRuntimeSnapshot,
-      prepareSecretsRuntimeSnapshot,
-      refreshActiveProviderAuthRuntimeSnapshot,
-    } = await import("./runtime.js");
     const agentDir = "/tmp/openclaw-agent-refresh-cas";
     let publishNewerSnapshot = false;
     let newerSnapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>> | null = null;
@@ -332,22 +281,9 @@ describe("secrets runtime fast path", () => {
       }
       return emptyAuthStore();
     };
-    const config = (port: number) =>
-      asConfig({
-        agents: { entries: { main: { agentDir } } },
-        gateway: { port },
-      });
-    const initialSnapshot = await prepareSecretsRuntimeSnapshot({
-      config: config(19_001),
-      agentDirs: [agentDir],
-      loadAuthStore: loadInitialAuthStore,
-    });
+    const initialSnapshot = await prepareAgentSnapshot(agentDir, loadInitialAuthStore, 19_001);
     activateSecretsRuntimeSnapshot(initialSnapshot);
-    newerSnapshot = await prepareSecretsRuntimeSnapshot({
-      config: config(19_002),
-      agentDirs: [agentDir],
-      loadAuthStore: emptyAuthStore,
-    });
+    newerSnapshot = await prepareAgentSnapshot(agentDir, emptyAuthStore, 19_002);
 
     publishNewerSnapshot = true;
     await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
@@ -358,19 +294,9 @@ describe("secrets runtime fast path", () => {
   it("does not let an active refresh overwrite auth stores mutated during preparation", async () => {
     const { getRuntimeAuthProfileStoreSnapshotCore, setRuntimeAuthProfileStoreSnapshot } =
       await import("../agents/auth-profiles/runtime-snapshots.js");
-    const {
-      activateSecretsRuntimeSnapshot,
-      getActiveSecretsRuntimeSnapshot,
-      prepareSecretsRuntimeSnapshot,
-      refreshActiveProviderAuthRuntimeSnapshot,
-    } = await import("./runtime.js");
     const agentDir = "/tmp/openclaw-agent-auth-store-refresh-cas";
-    const oldStore: AuthProfileStore = createAuthProfileStoreFixture({
-      "openai:default": { type: "api_key", provider: "openai", key: "sk-old" },
-    });
-    const newStore: AuthProfileStore = createAuthProfileStoreFixture({
-      "openai:default": { type: "api_key", provider: "openai", key: "sk-new" },
-    });
+    const oldStore = authStore("sk-old");
+    const newStore = authStore("sk-new");
     let mutateDuringRefresh = false;
     const loadAuthStore = () => {
       if (mutateDuringRefresh) {
@@ -380,13 +306,7 @@ describe("secrets runtime fast path", () => {
       }
       return getRuntimeAuthProfileStoreSnapshotCore(agentDir) ?? oldStore;
     };
-    const initial = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        agents: { entries: { main: { agentDir } } },
-      }),
-      agentDirs: [agentDir],
-      loadAuthStore,
-    });
+    const initial = await prepareAgentSnapshot(agentDir, loadAuthStore);
     activateSecretsRuntimeSnapshot(initial);
 
     mutateDuringRefresh = true;
@@ -405,37 +325,15 @@ describe("secrets runtime fast path", () => {
   it("re-prepares a preflighted config refresh after its snapshot revision goes stale", async () => {
     const { getRuntimeConfigSnapshotRefreshHandler } =
       await import("../config/runtime-snapshot.js");
-    const {
-      activateSecretsRuntimeSnapshot,
-      getActiveSecretsRuntimeSnapshot,
-      prepareSecretsRuntimeSnapshot,
-    } = await import("./runtime.js");
     const agentDir = "/tmp/openclaw-agent-preflight-cas";
-    const authStore = (key: string): AuthProfileStore =>
-      createAuthProfileStoreFixture({
-        "openai:default": { type: "api_key", provider: "openai", key },
-      });
-    const config = (port: number) =>
-      asConfig({
-        agents: { entries: { main: { agentDir } } },
-        gateway: { port },
-      });
-    const initial = await prepareSecretsRuntimeSnapshot({
-      config: config(19_011),
-      agentDirs: [agentDir],
-      loadAuthStore: () => authStore("old-key"),
-    });
+    const initial = await prepareAgentSnapshot(agentDir, () => authStore("old-key"), 19_011);
     activateSecretsRuntimeSnapshot(initial);
-    const concurrent = await prepareSecretsRuntimeSnapshot({
-      config: config(19_012),
-      agentDirs: [agentDir],
-      loadAuthStore: () => authStore("new-key"),
-    });
+    const concurrent = await prepareAgentSnapshot(agentDir, () => authStore("new-key"), 19_012);
     const staleRefreshHandler = getRuntimeConfigSnapshotRefreshHandler();
     if (!staleRefreshHandler?.preflight) {
       throw new Error("expected active runtime refresh preflight handler");
     }
-    const desiredConfig = config(19_013);
+    const desiredConfig = agentConfig(agentDir, 19_013);
     const preflightResult = await staleRefreshHandler.preflight({
       sourceConfig: desiredConfig,
     });

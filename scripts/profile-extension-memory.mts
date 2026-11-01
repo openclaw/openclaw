@@ -19,6 +19,7 @@ import {
 } from "./ensure-extension-memory-build.mts";
 import { requireOptionArgument, stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import { appendBoundedTail, formatBoundedTail } from "./lib/bounded-output-tail.mjs";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { formatErrorMessage } from "./lib/error-format.mts";
 import {
   captureImportIdentity,
@@ -617,12 +618,7 @@ async function main(): Promise<void> {
   );
 
   const env = {
-    ...process.env,
-    HOME: tmpHome,
-    USERPROFILE: tmpHome,
-    XDG_CONFIG_HOME: path.join(tmpHome, ".config"),
-    XDG_DATA_HOME: path.join(tmpHome, ".local", "share"),
-    XDG_CACHE_HOME: path.join(tmpHome, ".cache"),
+    ...createBuildSmokeEnv(tmpHome),
     NODE_DISABLE_COMPILE_CACHE: "1",
     OPENCLAW_NO_RESPAWN: "1",
     TERM: process.env.TERM ?? "dumb",

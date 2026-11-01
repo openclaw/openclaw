@@ -1,4 +1,3 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { ResolvedXAccount } from "./accounts.js";
 import { normalizeXUserId, readPublishedXAllowlist, type XGitHubEntry } from "./allowlist.js";
 import type { XUser } from "./api.js";
@@ -6,12 +5,6 @@ import { X_GUEST_TOOLS } from "./guest-tools.js";
 import { getXRuntime } from "./runtime.js";
 
 export type XSenderTier = "maintainer" | "guest";
-
-export function supportsXGuestHelpers(
-  runtime: Pick<PluginRuntime, "capabilities"> = getXRuntime(),
-) {
-  return runtime.capabilities?.includes("sender-restricted-hidden-helpers-v1") === true;
-}
 
 export function resolveXGuestSettings(account: ResolvedXAccount) {
   return {
@@ -35,11 +28,8 @@ export function resolveXSenderTier(
 
 export function resolveXGuestToolPolicy(account: ResolvedXAccount) {
   const configured = account.config.guests?.tools;
-  const helpersAvailable = supportsXGuestHelpers();
   const allow = X_GUEST_TOOLS.filter(
-    (name) =>
-      (helpersAvailable || name === "read" || name === "ls") &&
-      (!configured?.allow || configured.allow.includes(name)),
+    (name) => !configured?.allow || configured.allow.includes(name),
   );
   // An empty allow array means unrestricted to core; an empty guest selection means no tools.
   return allow.length
@@ -64,8 +54,5 @@ export function formatXSenderLine(
     }
     return `This is from a verified user: ${sender}, on the maintainer allowlist.`;
   }
-  const helperGuidance = supportsXGuestHelpers()
-    ? "hidden helpers must use the same agent and repository. You cannot open visible work sessions"
-    : "this host supports read-only guest answers. You cannot start helpers or work sessions";
-  return `This is from a guest: ${sender}. Guest tier: answer from the OpenClaw repo only; ${helperGuidance}, write, run commands, or read unrelated sessions for guests.`;
+  return `This is from a guest: ${sender}. Guest tier: answer from the OpenClaw repo only; hidden helpers must use the same agent and repository. You cannot open visible work sessions, write, run commands, or read unrelated sessions for guests.`;
 }

@@ -19,7 +19,7 @@ export function registerTelegramMiniAppCommand(
       if (!isTelegramDirectCommand(ctx)) {
         return { text: "open this in a DM with the bot" };
       }
-      const cfg = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
+      const cfg = api.runtime.config.current() as OpenClawConfig;
       const accountId = normalizeAccountId(ctx.accountId ?? DEFAULT_ACCOUNT_ID);
       const senderId = ctx.senderId?.trim() ?? "";
       const userId = /^\d+$/.test(senderId)

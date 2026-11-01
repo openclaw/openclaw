@@ -3,7 +3,10 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
-import { withSandboxMediaTempHome } from "../../auto-reply/stage-sandbox-media.test-harness.js";
+import {
+  createSandboxWorkspacePreparation,
+  withSandboxMediaTempHome,
+} from "../../auto-reply/stage-sandbox-media.test-harness.js";
 import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
@@ -14,6 +17,7 @@ import { prepareWorkerTurnMedia } from "../../gateway/worker-environments/worker
 import { parseWorkerWorkspaceManifest } from "../../gateway/worker-environments/workspace-manifest.js";
 import { applyStagedWorkerWorkspace } from "../../gateway/worker-environments/workspace-reconcile.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../../gateway/worker-environments/workspace-sync-scripts.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { createStagedInputOwnershipFixture } from "../../media/staged-inputs.test-support.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import {
@@ -26,7 +30,12 @@ import { ManagedWorktreeService } from "./service.js";
 import { initializeManagedWorktreeTestRepository } from "./service.test-support.js";
 
 const sandbox = vi.hoisted(() => ({ ensureSandboxWorkspaceForSession: vi.fn() }));
-vi.mock("../sandbox.js", () => sandbox);
+// mock-isolation: Reconciliation uses the fixture checkout without provisioning a separate sandbox.
+vi.mock("../sandbox/context.js", () => ({
+  ...sandbox,
+  prepareSandboxWorkspaceForSession: async (...args: unknown[]) =>
+    createSandboxWorkspacePreparation(await sandbox.ensureSandboxWorkspaceForSession(...args)),
+}));
 
 afterEach(() => {
   resetConfigRuntimeState();
@@ -122,7 +131,9 @@ it.each(["writable sandbox", "cloud"])(
             quiesceWorkspace: unused,
             stop: unused,
             stageAttachments: async ({ localPath }) => {
-              for (const file of await fs.readdir(localPath, { recursive: true })) {
+              for (const file of (await listDirectoryTreeStrict(localPath)).map(
+                (walkEntry) => walkEntry.relativePath,
+              )) {
                 const source = path.join(localPath, file);
                 if ((await fs.stat(source)).isFile()) {
                   await fs.mkdir(path.dirname(path.join(remote, file)), { recursive: true });
@@ -132,7 +143,8 @@ it.each(["writable sandbox", "cloud"])(
             },
           },
         });
-        inputs = (await fs.readdir(path.join(remote, "media/inbound"), { recursive: true }))
+        inputs = (await listDirectoryTreeStrict(path.join(remote, "media/inbound")))
+          .map((walkEntry) => walkEntry.relativePath)
           .filter((file) => path.basename(file).startsWith("input-"))
           .map((file) => `media/inbound/${file.split(path.sep).join("/")}`);
         inputs.sort((a, b) => {

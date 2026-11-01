@@ -11,6 +11,8 @@ export interface SessionHeader {
   timestamp: string;
   cwd: string;
   parentSession?: string;
+  /** Copied events whose paths are already counted by the source transcript or its sources. */
+  inheritedThrough?: string[];
 }
 
 export interface NewSessionOptions {
@@ -32,7 +34,10 @@ type CoreSessionEntry<Type extends SessionTreeEntry["type"]> = Extract<
   { type: Type }
 >;
 
-export interface SessionMessageEntry extends CoreSessionEntry<"message"> {}
+export interface SessionMessageEntry extends CoreSessionEntry<"message"> {
+  /** Entry id this copy replaced when a branch rewrite re-appended it. */
+  supersedesEntryId?: string;
+}
 
 export interface ThinkingLevelChangeEntry extends CoreSessionEntry<"thinking_level_change"> {}
 

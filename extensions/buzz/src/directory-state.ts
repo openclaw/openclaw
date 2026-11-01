@@ -120,11 +120,7 @@ export class BuzzDirectoryState {
     this.#publicKey = params.publicKey.trim().toLowerCase();
     this.#fallbackProfileName = params.fallbackProfileName.trim() || "OpenClaw";
     this.#configuredRoomIds = new Set(params.channelIds.map(parseBuzzTarget));
-    const requestedProfileLimit = params.profileLimit ?? DEFAULT_BUZZ_DIRECTORY_PROFILE_LIMIT;
-    this.#profileLimit =
-      Number.isFinite(requestedProfileLimit) && requestedProfileLimit >= 0
-        ? Math.floor(requestedProfileLimit)
-        : DEFAULT_BUZZ_DIRECTORY_PROFILE_LIMIT;
+    this.#profileLimit = params.profileLimit ?? DEFAULT_BUZZ_DIRECTORY_PROFILE_LIMIT;
     if (this.#profileLimit > 0) {
       this.#profilePublicKeys.add(this.#publicKey);
     }

@@ -1,31 +1,10 @@
-import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProgramContext } from "./context.js";
-import { registerMessageCommands } from "./register.message.js";
+import { createMessageCliProgram, messageCliMocks } from "./message/command.test-support.js";
 
-const { runMessageAction } = vi.hoisted(() => ({ runMessageAction: vi.fn(async () => {}) }));
-
-vi.mock("./message/helpers.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("./message/helpers.js")>();
-  return {
-    ...original,
-    createMessageCliHelpers: (channelOptions: string) => ({
-      ...original.createMessageCliHelpers(channelOptions),
-      runMessageAction,
-    }),
-  };
-});
-
-const ctx: ProgramContext = {
-  programVersion: "9.9.9-test",
-  messageChannelOptions: "telegram|discord",
-  agentChannelOptions: "last|telegram|discord",
-};
+const runMessageAction = messageCliMocks.command;
 
 function createProgram() {
-  const program = new Command().exitOverride().configureOutput({ writeErr() {} });
-  registerMessageCommands(program, ctx);
-  return program;
+  return createMessageCliProgram("telegram|discord");
 }
 
 describe("registerMessageCommands", () => {
@@ -48,14 +27,20 @@ describe("registerMessageCommands", () => {
       ],
       { from: "user" },
     );
-    expect(runMessageAction).toHaveBeenCalledExactlyOnceWith("unpin", {
-      target: "conversation:123",
-      messageId: "message-1",
-      pinnedMessageId: "resource-2",
-      json: true,
-      dryRun: false,
-      verbose: false,
-    });
+    expect(runMessageAction).toHaveBeenCalledExactlyOnceWith(
+      {
+        target: "conversation:123",
+        messageId: "message-1",
+        pinnedMessageId: "resource-2",
+        json: true,
+        dryRun: false,
+        verbose: false,
+        accountId: undefined,
+        action: "unpin",
+      },
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   it.each([undefined, "thread", "emoji", "sticker", "role", "channel", "member", "voice", "event"])(

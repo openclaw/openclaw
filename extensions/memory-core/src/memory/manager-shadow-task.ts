@@ -4,13 +4,9 @@ import type { DatabaseSync } from "node:sqlite";
 export type MemoryShadowConnection = {
   fileIdentity: { device: string; inode: string };
   extensionPath?: string;
-  // Checkpoint cadence belongs to each connection's WAL maintenance owner, not to publication policy.
+  // Schema admission temporarily disables foreign keys and restores the opener's policy.
   pragmas: {
-    busy_timeout: number;
-    synchronous: number;
     foreign_keys: number;
-    journal_size_limit: number;
-    checkpoint_fullfsync: number;
   };
 };
 
@@ -40,19 +36,9 @@ export function assertMemoryShadowIdentity(
 }
 
 export function readMemoryConnectionPragmas(db: DatabaseSync, errorMessage: string) {
-  const read = (name: keyof MemoryShadowConnection["pragmas"]): number => {
-    const row = db.prepare(`PRAGMA ${name}`).get();
-    const value = row?.[name] ?? row?.timeout;
-    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
-      throw new Error(errorMessage);
-    }
-    return value;
-  };
-  return {
-    busy_timeout: read("busy_timeout"),
-    synchronous: read("synchronous"),
-    foreign_keys: read("foreign_keys"),
-    journal_size_limit: read("journal_size_limit"),
-    checkpoint_fullfsync: read("checkpoint_fullfsync"),
-  };
+  const value = db.prepare("PRAGMA foreign_keys").get()?.foreign_keys;
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+    throw new Error(errorMessage);
+  }
+  return { foreign_keys: value };
 }

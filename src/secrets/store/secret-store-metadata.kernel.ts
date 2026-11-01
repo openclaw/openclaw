@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isRedactedSecretValue } from "../../config/redact-sentinel.js";
 import {
   executeSqliteQuerySync,
@@ -6,6 +5,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
 import { classifyHiddenGitHubStoreName } from "./secret-store-github-names.js";
@@ -24,7 +24,7 @@ type SecretStoreDatabase = Pick<DB, "secret_store_entries">;
 const EXEC_ENVIRONMENT_MAX_BYTES = 512 * SECRET_STORE_VALUE_MAX_BYTES;
 
 function readExecEnvironmentRows(
-  sqlite: DatabaseSync,
+  sqlite: EngineConnection,
   input: SecretStoreReadOperations["secrets.execEnvironment"]["input"],
 ): SecretStoreReadOperations["secrets.execEnvironment"]["output"]["rows"] {
   const rows: SecretStoreReadOperations["secrets.execEnvironment"]["output"]["rows"] = [];
@@ -59,7 +59,7 @@ function readExecEnvironmentRows(
   }, []);
 }
 
-function readValueRow(sqlite: DatabaseSync, name: string) {
+function readValueRow(sqlite: EngineConnection, name: string) {
   assertSecretStoreEnvName(name);
   return withMissingSecretStoreFallback(() => {
     const row = executeSqliteQueryTakeFirstSync(
@@ -79,7 +79,48 @@ function readValueRow(sqlite: DatabaseSync, name: string) {
   }, undefined);
 }
 
-function listSecretStoreRows(sqlite: DatabaseSync, params: SecretStoreListInput): SecretStoreRow[] {
+function readSelectedSecretRows(sqlite: EngineConnection, names: readonly string[]) {
+  for (const name of names) {
+    assertSecretStoreEnvName(name);
+  }
+  if (names.length === 0) {
+    return [];
+  }
+  return withMissingSecretStoreFallback(() => {
+    // Values and destination policy come from the same statement's snapshot.
+    const query = getNodeSqliteKysely<SecretStoreDatabase>(sqlite)
+      .selectFrom("secret_store_entries")
+      .select(["name", "value", "allowed_hosts"])
+      .where("scope_kind", "=", "team")
+      .where("scope_id", "=", "")
+      .where("kind", "=", "secret")
+      .where("deleted_at_ms", "is", null)
+      .where("name", "in", [...new Set(names)])
+      .orderBy("name", "asc");
+    const rows: SecretStoreReadOperations["secrets.selected"]["output"]["rows"] = [];
+    let bytes = 0;
+    for (const row of iterateSqliteQuerySync(sqlite, query)) {
+      if (Buffer.byteLength(row.value) > SECRET_STORE_VALUE_MAX_BYTES) {
+        throw new Error("Secret store value exceeds its 64 KiB read limit.");
+      }
+      bytes +=
+        32 +
+        Buffer.byteLength(row.name) +
+        Buffer.byteLength(row.value) +
+        Buffer.byteLength(row.allowed_hosts ?? "");
+      if (bytes > EXEC_ENVIRONMENT_MAX_BYTES) {
+        throw new Error("Selected secret store entries exceed their 32 MiB read limit.");
+      }
+      rows.push(row);
+    }
+    return rows;
+  }, []);
+}
+
+function listSecretStoreRows(
+  sqlite: EngineConnection,
+  params: SecretStoreListInput,
+): SecretStoreRow[] {
   return withMissingSecretStoreFallback(() => {
     const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
     let query = db
@@ -100,6 +141,10 @@ function listSecretStoreRows(sqlite: DatabaseSync, params: SecretStoreListInput)
 }
 
 export const secretStoreReadOperations = {
+  "secrets.selected": (input: SecretStoreReadOperations["secrets.selected"]["input"], db) => ({
+    type: "secrets.selected" as const,
+    rows: readSelectedSecretRows(db, input.names),
+  }),
   "secrets.execEnvironment": (
     input: SecretStoreReadOperations["secrets.execEnvironment"]["input"],
     db,
@@ -115,4 +160,4 @@ export const secretStoreReadOperations = {
     type: "secrets.metadata" as const,
     rows: listSecretStoreRows(db, input),
   }),
-} satisfies WorkerOperationHandlers<DatabaseSync>;
+} satisfies WorkerOperationHandlers<EngineConnection>;

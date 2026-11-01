@@ -23,7 +23,6 @@ import {
   maybeControlDiscordVoiceAgentRun,
 } from "./agent-control.js";
 import type { DiscordVoiceIngressContext } from "./ingress.js";
-import { formatVoiceLogPreview } from "./log-preview.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import type { DiscordRealtimePlaybackPort } from "./realtime-playback.js";
 import type { DiscordRealtimeSpeakerContext, DiscordRealtimeTurns } from "./realtime-turns.js";
@@ -35,8 +34,6 @@ const logger = createSubsystemLogger("discord/voice");
 const DISCORD_REALTIME_TALKBACK_DEBOUNCE_MS = 350;
 const DISCORD_REALTIME_FALLBACK_TEXT = "I hit an error while checking that. Please try again.";
 const DISCORD_REALTIME_FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
-const DISCORD_REALTIME_FORCED_CONSULT_REASON =
-  "provider_final_transcript_without_openclaw_agent_consult";
 
 const CANCELLED_CONSULT_RESULT = {
   status: "cancelled",
@@ -86,7 +83,6 @@ export class DiscordRealtimeConsults {
       entry: VoiceSessionEntry;
       harness: RealtimeVoiceSessionHarness<AgentProxyConsultState>;
       isAgentProxy: () => boolean;
-      isWakeNameRequired: () => boolean;
       playback: DiscordRealtimePlaybackPort;
       providerEpoch: () => number;
       runAgentTurn: (params: VoiceRealtimeAgentTurnParams) => Promise<string>;
@@ -181,9 +177,6 @@ export class DiscordRealtimeConsults {
     });
     switch (outcome.kind) {
       case "exact-speech-echo":
-        logger.info(
-          `discord voice: realtime exact speech consult bypassed call=${callId} answerChars=${outcome.text.length}`,
-        );
         await session.submitToolResult(callId, { text: outcome.text });
         return;
       case "malformed":
@@ -196,9 +189,6 @@ export class DiscordRealtimeConsults {
         break;
     }
     const consultMessage = outcome.message;
-    logger.info(
-      `discord voice: realtime consult requested call=${callId} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} question=${formatVoiceLogPreview(consultMessage)}`,
-    );
     const nativeConsult = this.params.harness.forcedConsults.recordNativeConsult(
       event.args,
       callId,
@@ -268,12 +258,8 @@ export class DiscordRealtimeConsults {
       if (this.params.stopped() || providerEpoch !== this.params.providerEpoch()) {
         return;
       }
-      if ("text" in result) {
-        logger.info(
-          `discord voice: realtime consult answer (${result.text.length} chars) voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} speaker=${context.speakerLabel} owner=${context.senderIsOwner}: ${formatVoiceLogPreview(result.text)}`,
-        );
-      } else if ("error" in result) {
-        logger.warn(`discord voice: realtime consult failed call=${callId}: ${result.error}`);
+      if ("error" in result) {
+        logger.warn(`discord voice: realtime consult failed call=${callId}`);
       }
       delivery.submissionStarted = true;
       await this.submitAgentProxyConsultResult(callId, session, result);
@@ -432,9 +418,9 @@ export class DiscordRealtimeConsults {
     }
     const skipReason = classifySkippableRealtimeVoiceConsultTranscript(question);
     if (skipReason) {
-      const context = this.params.turns.consumePendingSpeakerContext();
+      this.params.turns.consumePendingSpeakerContext();
       logger.info(
-        `discord voice: realtime forced agent consult skipped reason=${skipReason} chars=${question.length} speaker=${context?.speakerLabel ?? "unknown"} transcript=${formatVoiceLogPreview(question)}`,
+        `discord voice: realtime forced agent consult skipped reason=${skipReason} chars=${question.length}`,
       );
       return undefined;
     }
@@ -473,17 +459,6 @@ export class DiscordRealtimeConsults {
       return;
     }
     const startedAt = Date.now();
-    logger.info(
-      `discord voice: realtime forced agent consult starting chars=${question.length} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} speaker=${context.speakerLabel} owner=${context.senderIsOwner}`,
-    );
-    logger.debug(
-      `discord voice: realtime forced agent consult reason=${DISCORD_REALTIME_FORCED_CONSULT_REASON} consultPolicy=${this.params.consultPolicy()} wakeNamePolicy=${this.params.wakeNamePolicy()} requireWakeName=${this.params.isWakeNameRequired()} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} speaker=${context.speakerLabel}`,
-    );
-    if (this.params.playback.hasInterruptibleOutputAudio()) {
-      logger.info(
-        `discord voice: realtime forced agent consult preserving active playback guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} outputAudioMs=${this.params.playback.outputAudioMs()} outputActive=${this.params.playback.isOutputAudioActive()} playbackChunks=${this.params.harness.outputActivity.snapshot().chunks}`,
-      );
-    }
     state.delivery = "forced-pending";
     const result = await this.trackAgentProxyConsult(
       pending,
@@ -494,13 +469,9 @@ export class DiscordRealtimeConsults {
     if (state.providerEpoch !== this.params.providerEpoch() || "status" in result) {
       return;
     }
-    if ("text" in result) {
-      logger.info(
-        `discord voice: realtime forced agent consult answer (${result.text.length} chars) elapsedMs=${Date.now() - startedAt} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId}: ${formatVoiceLogPreview(result.text)}`,
-      );
-    } else {
+    if ("error" in result) {
       logger.warn(
-        `discord voice: realtime forced agent consult failed elapsedMs=${Date.now() - startedAt}: ${result.error}`,
+        `discord voice: realtime forced agent consult failed elapsedMs=${Date.now() - startedAt}`,
       );
     }
     const text = "text" in result ? result.text : DISCORD_REALTIME_FALLBACK_TEXT;
@@ -570,9 +541,6 @@ export class DiscordRealtimeConsults {
         session.bridge.supportsToolResultSuppression === false)
         ? this.beginProviderDelivery(state)
         : undefined;
-    logger.info(
-      `discord voice: realtime consult ${state.result ? "reused recent" : "joined in-flight"} agent result call=${callId} speaker=${state.speaker.speakerLabel} owner=${state.speaker.senderIsOwner}`,
-    );
     try {
       const result = await pendingResult;
       if (

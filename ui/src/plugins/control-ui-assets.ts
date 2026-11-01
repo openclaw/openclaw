@@ -2,6 +2,26 @@ import type { PluginControlUiModule } from "../../../packages/gateway-protocol/s
 import { controlUiPluginAssetPrefix } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
 import type { ApplicationConfigCapability } from "../app/config.ts";
 import { uiDevGatewayResourceUrl } from "../dev-gateway.ts";
+import { controlUiPluginDistributions } from "./control-ui-distribution.ts";
+
+export function controlUiPluginDistribution(descriptor: PluginControlUiModule) {
+  const owner = descriptor.bundledDistribution;
+  return (
+    owner &&
+    controlUiPluginDistributions.find(
+      (distribution) =>
+        distribution.pluginId === descriptor.pluginId &&
+        distribution.revision === descriptor.revision &&
+        distribution.bundledDistribution?.packageName === owner.packageName &&
+        distribution.bundledDistribution?.packageVersion === owner.packageVersion,
+    )
+  );
+}
+
+export function controlUiPluginDeliveryIdentity(descriptor: PluginControlUiModule): string {
+  const distribution = controlUiPluginDistribution(descriptor);
+  return distribution ? `distribution:${distribution.entry}` : "gateway";
+}
 
 export function controlUiPluginAssetGrantError(
   descriptor: PluginControlUiModule,
@@ -11,6 +31,9 @@ export function controlUiPluginAssetGrantError(
   >,
   basePath: string,
 ): string | null {
+  if (controlUiPluginDistribution(descriptor)) {
+    return null;
+  }
   if (!config.pluginAssetsRequireAuth) {
     return null;
   }
@@ -29,6 +52,10 @@ export function controlUiPluginAssetGrantError(
 }
 
 export function controlUiPluginAssetUrls(descriptor: PluginControlUiModule, basePath: string) {
+  const distribution = controlUiPluginDistribution(descriptor);
+  if (distribution) {
+    return distribution;
+  }
   const prefix = `${controlUiPluginAssetPrefix(descriptor.pluginId, basePath)}${encodeURIComponent(descriptor.revision)}/`;
   const resolve = (path: string) => {
     const url = new URL(uiDevGatewayResourceUrl(path), window.location.href);

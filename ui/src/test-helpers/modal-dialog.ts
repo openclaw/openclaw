@@ -1,8 +1,6 @@
-import { expect, vi } from "vitest";
-import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
-
-type DialogMethodName = "showModal" | "close";
-type DialogDescriptorSnapshot = Record<DialogMethodName, PropertyDescriptor | undefined>;
+import { expectDefined } from "@openclaw/normalization-core";
+import { assert, expect, vi } from "vitest";
+import type { OpenClawModalDialog } from "../components/modal-dialog.tsx";
 
 export function nextFrame() {
   return new Promise<void>((resolve) => {
@@ -11,66 +9,52 @@ export function nextFrame() {
 }
 
 export function afterModalHidden(modal: OpenClawModalDialog): Promise<void> {
-  const dialog = modal.querySelector<HTMLDialogElement>("dialog.oc-modal-dialog");
-  if (!dialog) {
-    throw new Error("Expected a rendered native modal dialog");
-  }
+  const dialog = expectDefined(
+    modal.querySelector<HTMLDialogElement>("dialog.oc-modal-dialog"),
+    "rendered native modal dialog",
+  );
   if (dialog.dataset.phase === "hidden") {
     return Promise.resolve();
   }
   return new Promise((resolve) => {
     const onHidden = (event: Event) => {
-      if (event.target !== modal) {
-        return;
+      if (event.target === modal) {
+        modal.removeEventListener("overlay-after-hide", onHidden);
+        resolve();
       }
-      modal.removeEventListener("wa-after-hide", onHidden);
-      resolve();
     };
-    modal.addEventListener("wa-after-hide", onHidden);
+    modal.addEventListener("overlay-after-hide", onHidden);
   });
 }
 
-function restoreDescriptor(name: DialogMethodName, descriptor: PropertyDescriptor | undefined) {
-  if (descriptor) {
-    Object.defineProperty(HTMLDialogElement.prototype, name, descriptor);
-    return;
+function replaceMethod(prototype: object, name: string, value: unknown, onlyIfMissing = false) {
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+  if (onlyIfMissing && descriptor) {
+    return () => {};
   }
-  delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>)[name];
+  Object.defineProperty(prototype, name, { configurable: true, value });
+  return () => {
+    if (descriptor) {
+      Object.defineProperty(prototype, name, descriptor);
+    } else {
+      Reflect.deleteProperty(prototype, name);
+    }
+  };
 }
 
 export function installDialogPolyfill(): () => void {
-  const animations = Object.getOwnPropertyDescriptor(Element.prototype, "getAnimations");
-  if (!animations) {
-    Object.defineProperty(Element.prototype, "getAnimations", {
-      configurable: true,
-      value: () => [],
-    });
-  }
-  const snapshot: DialogDescriptorSnapshot = {
-    close: Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "close"),
-    showModal: Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "showModal"),
-  };
-  Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
-    configurable: true,
-    value(this: HTMLDialogElement) {
+  const restore = [
+    replaceMethod(HTMLDialogElement.prototype, "showModal", function (this: HTMLDialogElement) {
       // jsdom lacks the native dialog's intrinsic focusability.
       this.tabIndex = -1;
       this.setAttribute("open", "");
-    },
-  });
-  Object.defineProperty(HTMLDialogElement.prototype, "close", {
-    configurable: true,
-    value(this: HTMLDialogElement) {
+    }),
+    replaceMethod(HTMLDialogElement.prototype, "close", function (this: HTMLDialogElement) {
       this.removeAttribute("open");
-    },
-  });
-  return () => {
-    restoreDescriptor("showModal", snapshot.showModal);
-    restoreDescriptor("close", snapshot.close);
-    if (!animations) {
-      delete (Element.prototype as Partial<Element>).getAnimations;
-    }
-  };
+    }),
+    replaceMethod(Element.prototype, "getAnimations", () => [], true),
+  ];
+  return () => restore.forEach((reset) => reset());
 }
 
 async function waitForDialog<T>(read: () => T): Promise<T> {
@@ -88,11 +72,8 @@ export function createModalDialogTestFixture(
   const operations: Promise<unknown>[] = [];
   const requests: Promise<unknown>[] = [];
   const modals = new Set<HTMLElement>();
-  const captureModals = () => {
-    for (const modal of document.body.querySelectorAll("openclaw-modal-dialog")) {
-      modals.add(modal);
-    }
-  };
+  const captureModals = () =>
+    document.body.querySelectorAll("openclaw-modal-dialog").forEach((modal) => modals.add(modal));
   const observer = new MutationObserver(captureModals);
   observer.observe(document.body, { childList: true, subtree: true });
   let pendingCleanup: Promise<void> | undefined;
@@ -104,7 +85,7 @@ export function createModalDialogTestFixture(
   }
 
   async function cleanup() {
-    let joined = false;
+    let results: PromiseSettledResult<unknown>[];
     try {
       // An assertion can fail before the lazy dialog exists. Catalog completion
       // can repaint its host, so join those responses before cancelling the owner.
@@ -117,24 +98,20 @@ export function createModalDialogTestFixture(
           dismissModal(modal);
         }
       }
-      const results = await Promise.allSettled(operations);
+      results = await Promise.allSettled(operations);
       await vi.dynamicImportSettled();
-      joined = true;
-      const errors = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "Dialog operations failed during fixture cleanup");
-      }
     } finally {
       observer.disconnect();
-      if (joined) {
-        document.body.replaceChildren();
-        restoreDialogPolyfill();
-      }
+    }
+    document.body.replaceChildren();
+    restoreDialogPolyfill();
+    const errors = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length) {
+      throw errors.length === 1
+        ? errors[0]
+        : new AggregateError(errors, "Dialog operations failed during fixture cleanup");
     }
   }
 
@@ -147,37 +124,32 @@ export function createModalDialogTestFixture(
   };
 }
 
-/**
- * Wait for the confirm dialog `showConfirmDialog` renders into `document.body`.
- * Returned separately from answering it so tests can mutate owner state (a
- * reconnect, an agent switch) while the decision is still pending.
- */
+// Separate from answering so tests can change owner state while a decision is pending.
 export function waitForConfirmDialogActions(): Promise<HTMLElement> {
-  return waitForDialog(() => {
-    const actions = document.body.querySelector<HTMLElement>(
-      "openclaw-modal-dialog .exec-approval-actions",
-    );
-    if (!actions) {
-      throw new Error("Expected an open confirm dialog");
-    }
-    return actions;
-  });
-}
-
-export function answerConfirmDialog(actions: HTMLElement, choice: "confirm" | "cancel") {
-  const button = actions.querySelector<HTMLButtonElement>(
-    choice === "confirm" ? ".btn.danger, .btn.primary" : ".btn[autofocus]",
+  return waitForDialog(() =>
+    expectDefined(
+      document.body.querySelector<HTMLElement>("openclaw-modal-dialog .exec-approval-actions"),
+      "open confirm dialog",
+    ),
   );
-  if (!button) {
-    throw new Error(`Expected the confirm dialog's ${choice} button`);
-  }
-  button.click();
 }
 
-/** Await a dialog whose owner loads it behind a lazy import, then read it. */
-export function waitForRenderedModalDialog(container: HTMLElement) {
-  return getRenderedModalDialog(container);
+export function answerConfirmDialog(
+  actions: HTMLElement,
+  choice: "confirm" | "alternative" | "cancel",
+) {
+  const selectors = {
+    confirm: ".btn.danger, .btn.primary",
+    alternative: ".btn:not(.danger):not(.primary):not([autofocus])",
+    cancel: ".btn[autofocus]",
+  };
+  expectDefined(
+    actions.querySelector<HTMLButtonElement>(selectors[choice]),
+    "confirm dialog button",
+  ).click();
 }
+
+export const waitForRenderedModalDialog = getRenderedModalDialog;
 
 export async function waitForInputDialog(): Promise<HTMLInputElement> {
   await vi.dynamicImportSettled();
@@ -200,20 +172,16 @@ export async function submitInputDialog(value: string): Promise<void> {
 }
 
 export async function getRenderedModalDialog(container: ParentNode) {
-  const modal = await waitForDialog(() => {
-    const element = container.querySelector<OpenClawModalDialog>("openclaw-modal-dialog");
-    if (!element) {
-      throw new Error("Expected openclaw-modal-dialog");
-    }
-    return element;
-  });
+  const modal = await waitForDialog(() =>
+    expectDefined(
+      container.querySelector<OpenClawModalDialog>("openclaw-modal-dialog"),
+      "openclaw-modal-dialog",
+    ),
+  );
   await modal.updateComplete;
   await nextFrame();
   const dialog = modal.querySelector<HTMLDialogElement>("dialog.oc-modal-dialog");
-  expect(dialog).toBeInstanceOf(HTMLDialogElement);
-  if (!(dialog instanceof HTMLDialogElement)) {
-    throw new Error("Expected rendered dialog");
-  }
+  assert(dialog instanceof HTMLDialogElement, "Expected rendered dialog");
   expect(dialog.parentElement).toBe(modal);
   await nextFrame();
   return { modal, dialog };

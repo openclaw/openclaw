@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import type { SelectQueryBuilder } from "kysely";
 import {
   SKILL_LIBRARY_MAX_SELECTIONS,
@@ -15,6 +14,11 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
+import { getAdmittedSqlSchemaFacts } from "../../infra/sqlite-schema-facts.js";
+import { ensureStatePostgresFragment } from "../../state/openclaw-state-db-engine.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
@@ -56,32 +60,54 @@ export type SkillLibraryDatabase = Pick<
   | "skill_library_events"
   | "skill_library_uploads"
 >;
-export const skillLibraryDb = (db: DatabaseSync) => getNodeSqliteKysely<SkillLibraryDatabase>(db);
-const ensured = new WeakSet<DatabaseSync>();
+export const skillLibraryDb = (db: EngineConnection) =>
+  getNodeSqliteKysely<SkillLibraryDatabase>(db);
+const ensured = new WeakMap<
+  EngineConnection,
+  NonNullable<ReturnType<typeof getAdmittedSqlSchemaFacts>>
+>();
+const ensureSkillLibrarySchemaInDatabase = createSqliteSchemaEnsurer(
+  () => getOpenClawStateFeatureSchemaSql("skill_library_entries"),
+  {
+    tables: [
+      "skill_library_entries",
+      "skill_library_revisions",
+      "skill_library_events",
+      "skill_library_uploads",
+    ],
+  },
+);
 
 export function ensureSkillLibrarySchema(
   options: OpenClawStateDatabaseOptions,
   admit: (stage: "transaction" | "commit") => void,
 ): void {
-  const { db } = openOpenClawStateDatabase(options);
-  if (ensured.has(db)) {
+  const database = openOpenClawStateDatabase(options);
+  const facts = getAdmittedSqlSchemaFacts(database.db);
+  if (facts && ensured.get(database.db) === facts) {
     return;
   }
-  const schema = getOpenClawStateFeatureSchemaSql("skill_library_entries");
   runOpenClawStateWriteTransaction(
     ({ db: transactionDb }) => {
       admit("transaction");
-      transactionDb.exec(schema); // sqlite-allow-raw -- canonical first-use additive DDL.
+      if (isPostgresSqlConnection(transactionDb)) {
+        ensureStatePostgresFragment(transactionDb, "skill_library_entries");
+      } else {
+        ensureSkillLibrarySchemaInDatabase(transactionDb);
+      }
       admit("commit");
     },
-    options,
+    { ...options, database },
     { operationLabel: "skills.library.schema" },
   );
-  ensured.add(db);
+  const initialized = getAdmittedSqlSchemaFacts(database.db);
+  if (initialized) {
+    ensured.set(database.db, initialized);
+  }
 }
 
 export function readSkillLibraryStore<T>(
-  read: (db: DatabaseSync) => T,
+  read: (db: EngineConnection) => T,
   options: OpenClawStateDatabaseOptions,
 ): T | undefined {
   if (options.database) {
@@ -95,7 +121,7 @@ export function readSkillLibraryStore<T>(
   );
 }
 
-export function resolveSkillLibraryActor(db: DatabaseSync, authority: SkillLibraryAuthority) {
+export function resolveSkillLibraryActor(db: EngineConnection, authority: SkillLibraryAuthority) {
   authority.assertCurrent();
   const config = authority.getConfig();
   if (authority.profileId) {
@@ -154,7 +180,7 @@ export function resolveSkillLibraryActorFromProfile(
 }
 
 export function requireSkillLibraryProfile(
-  db: DatabaseSync,
+  db: EngineConnection,
   authority: SkillLibraryAuthority,
 ): string {
   const actor = resolveSkillLibraryActor(db, authority);
@@ -173,7 +199,7 @@ export function requireSkillLibraryProfile(
 function requireSelectedSkillLibraryUpload<
   T extends Pick<SkillLibraryDatabase["skill_library_uploads"], "owner_profile_id" | "expires_at">,
 >(
-  db: DatabaseSync,
+  db: EngineConnection,
   uploadId: string,
   authority: SkillLibraryAuthority,
   query: SelectQueryBuilder<SkillLibraryDatabase, "skill_library_uploads", T>,
@@ -197,7 +223,7 @@ function requireSelectedSkillLibraryUpload<
 }
 
 export function requireSkillLibraryUpload(
-  db: DatabaseSync,
+  db: EngineConnection,
   uploadId: string,
   authority: SkillLibraryAuthority,
 ) {
@@ -210,7 +236,7 @@ export function requireSkillLibraryUpload(
 }
 
 export function requireSkillLibraryUploadMetadata(
-  db: DatabaseSync,
+  db: EngineConnection,
   uploadId: string,
   authority: SkillLibraryAuthority,
 ) {
@@ -224,7 +250,7 @@ export function requireSkillLibraryUploadMetadata(
   );
 }
 
-function skillLibraryRevisionQuery(db: DatabaseSync, skillId: string, revision: string) {
+function skillLibraryRevisionQuery(db: EngineConnection, skillId: string, revision: string) {
   return skillLibraryDb(db)
     .selectFrom("skill_library_revisions")
     .where("skill_id", "=", skillId)
@@ -232,7 +258,7 @@ function skillLibraryRevisionQuery(db: DatabaseSync, skillId: string, revision: 
 }
 
 export function selectSkillLibraryRevision(
-  db: DatabaseSync,
+  db: EngineConnection,
   skillId: string,
   revision: string,
 ): SkillLibraryRevisionRow | undefined {
@@ -243,7 +269,7 @@ export function selectSkillLibraryRevision(
 }
 
 export function selectSkillLibraryRevisionMetadata(
-  db: DatabaseSync,
+  db: EngineConnection,
   skillId: string,
   revision: string,
 ) {
@@ -253,7 +279,7 @@ export function selectSkillLibraryRevisionMetadata(
   );
 }
 
-export function selectSkillLibraryOwner(db: DatabaseSync, profileId: string) {
+export function selectSkillLibraryOwner(db: EngineConnection, profileId: string) {
   // Actor resolution stays separate because existing profile tables may omit its optional role.
   return selectResolvedUserProfile(
     db,
@@ -262,7 +288,7 @@ export function selectSkillLibraryOwner(db: DatabaseSync, profileId: string) {
   );
 }
 
-function canonicalOwner(db: DatabaseSync, owner: string | null): string | null {
+function canonicalOwner(db: EngineConnection, owner: string | null): string | null {
   return owner && tableExists(db, "user_profiles")
     ? (selectSkillLibraryOwner(db, owner)?.id ?? owner)
     : owner;
@@ -303,7 +329,7 @@ export function projectSkillLibraryList(
 
 /** Prepared facts live only for this synchronous read in the caller's snapshot. */
 export function selectSkillLibraryEntries(
-  db: DatabaseSync,
+  db: EngineConnection,
   authority: SkillLibraryAuthority,
   params: {
     skillId?: string;
@@ -398,7 +424,7 @@ export function selectSkillLibraryEntries(
 }
 
 export function requireSkillLibraryEntry(
-  db: DatabaseSync,
+  db: EngineConnection,
   skillId: string,
   authority: SkillLibraryAuthority,
   write = false,
@@ -437,7 +463,7 @@ export function assertSkillLibraryRevision(entry: SkillLibraryEntry, expected: s
 }
 
 export function assertSkillLibraryNameAvailable(
-  db: DatabaseSync,
+  db: EngineConnection,
   owner: string | null,
   slug: string,
   exceptId?: string,
@@ -463,7 +489,7 @@ export function assertSkillLibraryNameAvailable(
 }
 
 export function recordSkillLibraryEvent(
-  db: DatabaseSync,
+  db: EngineConnection,
   skillId: string,
   revision: string,
   action: string,

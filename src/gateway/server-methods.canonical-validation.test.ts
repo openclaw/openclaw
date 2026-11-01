@@ -13,7 +13,8 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createRequestGatewayMethodRegistry, handleGatewayRequest } from "./server-methods.js";
+import { dispatchAuthorizationRequest } from "./server-methods.authorization.test-support.js";
+import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import { authorizeGatewayRequestPreDispatch } from "./server-methods/request-authorization.js";
 import { sessionSubscriptionHandlers } from "./server-methods/sessions-subscriptions.js";
 import type { GatewayRequestContext, GatewayRequestHandler } from "./server-methods/types.js";
@@ -25,13 +26,26 @@ import { sharingPolicyClient } from "./session-sharing.test-utils.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+const cleanKey = "agent:main:clean";
+const dirtyKey = "agent:main:dirty-0";
+const dirtyKeys = Array.from({ length: 1000 }, (_, i) => `agent:main:dirty-${i}`);
+const reader = () => sharingPolicyClient({ user: "reader", scopes: ["operator.sessions.read"] });
+
+function seed(sessionId: string, visibility?: "shared") {
+  const sessionKey = `agent:main:${sessionId}`;
+  ensureSessionEntrySync({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1, visibility });
+  return sessionKey;
+}
+
+function setParent(database: ReturnType<typeof openOpenClawAgentDatabase>, parent: string | null) {
+  database.db
+    .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
+    .run(parent, dirtyKey);
+}
+
 it("keeps prepared authorization bound through a configured database alias", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const key = "agent:main:alias";
-    ensureSessionEntrySync(
-      { agentId: "main", sessionKey: key },
-      { sessionId: "alias", updatedAt: 1 },
-    );
+    const key = seed("alias");
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const alias = state.statePath("session-alias.sqlite");
     symlinkSync(database.path, alias);
@@ -50,8 +64,10 @@ it("keeps prepared authorization bound through a configured database alias", asy
         context,
         methodRegistry: createRequestGatewayMethodRegistry(),
       });
-      expect(result.error).toBeNull();
-      expect(result.sessionMutationAuthorization?.admittedTarget?.sessionId).toBe("alias");
+      expect(result).toMatchObject({
+        error: null,
+        sessionMutationAuthorization: { admittedTarget: { sessionId: "alias" } },
+      });
       expect(() => result.sessionMutationAuthorization?.assertCurrent()).not.toThrow();
     } finally {
       projection.dispose();
@@ -63,19 +79,8 @@ it.each(["sessions.patch", "talk.session.create"])(
   "authorizes %s without admitting an invalid unrelated row",
   async (method) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const sessionKey = "agent:main:canonical-readiness";
-      ensureSessionEntrySync(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "canonical-readiness",
-          updatedAt: 1,
-          visibility: "shared",
-        },
-      );
-      ensureSessionEntrySync(
-        { agentId: "main", sessionKey: "agent:main:unrelated-invalid" },
-        { sessionId: "unrelated-invalid", updatedAt: 1 },
-      );
+      const sessionKey = seed("canonical-readiness", "shared");
+      seed("unrelated-invalid");
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       database.db
         .prepare("UPDATE session_nodes SET entry_json = entry_json || ' ' WHERE session_key = ?")
@@ -90,23 +95,19 @@ it.each(["sessions.patch", "talk.session.create"])(
       const handler = vi.fn<GatewayRequestHandler>(({ respond }) =>
         respond(true, { allowed: true }),
       );
-      const respond = vi.fn();
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "canonical-target",
-          method,
-          params: method === "sessions.patch" ? { key: sessionKey } : { sessionKey },
+      const respond = await dispatchAuthorizationRequest(
+        method,
+        method === "sessions.patch" ? { key: sessionKey } : { sessionKey },
+        {
+          context: {
+            getRuntimeConfig: () => ({}),
+            logGateway: { warn: vi.fn() },
+          } as unknown as GatewayRequestContext,
+          client: sharingPolicyClient({ user: "member", scopes: ["operator.write"] }),
+          extraHandlers: { [method]: handler },
         },
-        respond,
-        client: sharingPolicyClient({ user: "member", scopes: ["operator.write"] }),
-        isWebchatConnect: () => false,
-        context: {
-          getRuntimeConfig: () => ({}),
-          logGateway: { warn: vi.fn() },
-        } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
-        extraHandlers: { [method]: handler },
-      });
+        "canonical-target",
+      );
       expect(handler).toHaveBeenCalledOnce();
       expect(respond).toHaveBeenCalledWith(true, { allowed: true });
     });
@@ -142,17 +143,15 @@ it("authorizes exact rows independently of bulk validation and fences corrupt su
     let resumeBulk: (() => void) | undefined;
     try {
       await projection.ensureMaterialized();
+      projection.describe({ agentId: "main", key: cleanKey });
       database.db.exec(`UPDATE session_nodes SET entry_json = entry_json || ' '
         WHERE session_key != 'agent:main:clean'; UPDATE session_nodes SET entry_valid = 1`);
-      markCanonicalSessionValidationPending(
-        database,
-        Array.from({ length: 1000 }, (_, i) => `agent:main:dirty-${i}`),
-      );
+      markCanonicalSessionValidationPending(database, dirtyKeys);
       // Reopening creates an unadmitted reader, as after startup or idle reader retirement.
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
       sessionChanges.emitBatch(
-        Array.from({ length: 1000 }, (_, i) => ({
-          sessionKey: `agent:main:dirty-${i}`,
+        dirtyKeys.map((sessionKey) => ({
+          sessionKey,
           agentId: "main",
           storePath: database.path,
           factsInvalidated: true as const,
@@ -198,8 +197,8 @@ it("authorizes exact rows independently of bulk validation and fences corrupt su
         } as unknown as GatewayRequestContext,
         () => projection,
       );
+      const client = reader();
       const methodRegistry = createRequestGatewayMethodRegistry();
-      const client = sharingPolicyClient({ user: "reader", scopes: ["operator.sessions.read"] });
       const authorize = (key?: string, requestClient = client, requestContext = context) => {
         const result = authorizeGatewayRequestPreDispatch({
           method: key ? "sessions.describe" : "sessions.list",
@@ -211,29 +210,27 @@ it("authorizes exact rows independently of bulk validation and fences corrupt su
         work.push(result);
         return result;
       };
-      const cleanReads = Promise.all([authorize("agent:main:clean"), authorize()]);
+      const cleanReads = Promise.all([authorize(cleanKey), authorize()]);
       expect(await Promise.race([cleanReads, joinedBulk.promise])).toEqual([
         expect.objectContaining({ error: null }),
         expect.objectContaining({ error: null }),
       ]);
       const parse = vi.spyOn(JSON, "parse");
-      const respond = vi.fn();
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "clean-subscribe",
-          method: "sessions.messages.subscribe",
-          params: { key: "agent:main:clean" },
-        },
-        client: { ...client, connId: "clean-subscribe" },
-        context,
-        respond,
-        isWebchatConnect: () => false,
-        extraHandlers: sessionSubscriptionHandlers,
-      });
+      const subscribe = (key: string, connId: string) =>
+        dispatchAuthorizationRequest(
+          "sessions.messages.subscribe",
+          { key },
+          {
+            context,
+            client: { ...client, connId },
+            extraHandlers: sessionSubscriptionHandlers,
+          },
+          connId,
+        );
+      const respond = await subscribe(cleanKey, "clean-subscribe");
       expect(respond).toHaveBeenCalledWith(
         true,
-        { subscribed: true, key: "agent:main:clean", agentId: "main" },
+        { subscribed: true, key: cleanKey, agentId: "main" },
         undefined,
       );
       expect(
@@ -241,18 +238,15 @@ it("authorizes exact rows independently of bulk validation and fences corrupt su
       ).toHaveLength(0);
       parse.mockRestore();
       let dirtySettled = false;
-      const dirty = authorize("agent:main:dirty-0").then((result) => {
+      const dirty = authorize(dirtyKey).then((result) => {
         dirtySettled = true;
         return result;
       });
-      const revokedClient = sharingPolicyClient({
-        user: "reader",
-        scopes: ["operator.sessions.read"],
-      });
-      const revoked = authorize("agent:main:dirty-0", revokedClient);
+      const revokedClient = reader();
+      const revoked = authorize(dirtyKey, revokedClient);
       const unavailableGatewayMethods = new Set<string>();
       const unavailable = authorize(
-        "agent:main:dirty-0",
+        dirtyKey,
         client,
         bindSessionRowProjection({ ...context, unavailableGatewayMethods }, () => projection),
       );
@@ -269,38 +263,28 @@ it("authorizes exact rows independently of bulk validation and fences corrupt su
       expect(resumeBulk).toBeDefined();
 
       const current = openOpenClawAgentDatabase({ agentId: "main" });
-      current.db.exec(
-        "UPDATE session_nodes SET parent_session_key = 'agent:main:mismatch' WHERE session_key = 'agent:main:dirty-0'",
-      );
+      setParent(current, "agent:main:mismatch");
       sessionChanges.emit({
-        sessionKey: "agent:main:dirty-0",
+        sessionKey: dirtyKey,
         agentId: "main",
         storePath: current.path,
         factsInvalidated: true,
       });
       subscribeSessionMessageEvents.mockClear();
-      await expect(
-        handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "corrupt-subscribe",
-            method: "sessions.messages.subscribe",
-            params: { key: "agent:main:dirty-0" },
-          },
-          client: { ...client, connId: "corrupt-subscribe" },
-          context,
-          respond: vi.fn(),
-          isWebchatConnect: () => false,
-          extraHandlers: sessionSubscriptionHandlers,
+      const corruptRespond = await subscribe(dirtyKey, "corrupt-subscribe");
+      expect(corruptRespond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining("invalid persisted session row"),
         }),
-      ).rejects.toThrow("invalid persisted session row");
+      );
       expect(subscribeSessionMessageEvents).not.toHaveBeenCalled();
     } finally {
       releaseRow.resolve();
       const current = openOpenClawAgentDatabase({ agentId: "main" });
-      current.db.exec(
-        "UPDATE session_nodes SET parent_session_key = NULL WHERE session_key = 'agent:main:dirty-0'",
-      );
+      setParent(current, null);
       resumeBulk?.();
       await Promise.allSettled(work);
       projection.dispose();

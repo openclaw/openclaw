@@ -342,6 +342,11 @@ ksp {
 }
 
 android {
+  sourceSets
+    .getByName("androidTest")
+    .kotlin.directories
+    .add(rootProject.file("release-validation/src/main/java").path)
+
   namespace = "ai.openclaw.app"
   // AndroidX Core 1.19 and Lifecycle 2.11 require API 37 compilation.
   // targetSdk stays separate so runtime behavior changes remain an explicit migration.
@@ -360,6 +365,9 @@ android {
   }
 
   sourceSets {
+    // The same public TLS fixtures exercise JVM and Android platform verification.
+    getByName("test").kotlin.directories.add("src/testShared/java")
+    getByName("androidTest").kotlin.directories.add("src/testShared/java")
     getByName("main") {
       assets.directories.add("../../shared/OpenClawKit/Sources/OpenClawKit/Resources")
       assets.directories.add(rootProject.file("../../ui/public/provider-icons").path)
@@ -614,6 +622,7 @@ dependencies {
   // The Android AAR has bionic dispatch; JVM vectors need the same-version host dispatch JAR.
   testRuntimeOnly("${libs.jna.get()}@jar")
 
+  androidTestImplementation(libs.mockwebserver)
   androidTestImplementation(libs.androidx.test.ext.junit)
   androidTestImplementation(libs.androidx.test.runner)
   androidTestImplementation(libs.androidx.uiautomator)

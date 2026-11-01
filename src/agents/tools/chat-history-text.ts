@@ -1,5 +1,10 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { NESTED_TOOL_ACTIVITY_CUSTOM_TYPE } from "../../sessions/nested-tool-activity.js";
-import { extractAssistantTextForPhase } from "../../shared/chat-message-content.js";
+import {
+  extractAssistantPhaseText,
+  prepareAssistantTranscriptText,
+  readAssistantTextBlocksForPhase,
+} from "../../shared/chat-message-content.js";
 import { sanitizeAssistantVisibleTextWithProfile } from "../../shared/text/assistant-visible-text.js";
 import { sanitizeUserFacingText } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "../embedded-agent-helpers/user-facing-text.js";
@@ -18,28 +23,26 @@ export function stripToolMessages(messages: unknown[]): unknown[] {
   });
 }
 
-function sanitizeTextContent(text: string): string {
-  return sanitizeAssistantVisibleTextWithProfile(text, "history");
-}
-
 export function extractStoredAssistantText(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
+  const entry = asOptionalObjectRecord(message);
+  if (entry?.role !== "assistant") {
     return undefined;
   }
-  if ((message as { role?: unknown }).role !== "assistant") {
-    return undefined;
+  const inlineText = typeof entry.text === "string" ? entry.text : entry.content;
+  let rawText: string | undefined;
+  if (typeof inlineText === "string") {
+    rawText = extractAssistantPhaseText(entry);
+  } else {
+    const finalBlocks = readAssistantTextBlocksForPhase(entry, "final_answer");
+    const blocks = finalBlocks.length ? finalBlocks : readAssistantTextBlocksForPhase(entry);
+    rawText = blocks.length ? blocks.map((block) => block.text).join("") : undefined;
   }
+  const preparedText = prepareAssistantTranscriptText(entry, rawText);
   const joined =
-    extractAssistantTextForPhase(message, {
-      phase: "final_answer",
-      sanitizeText: sanitizeTextContent,
-      joinWith: "",
-    }) ??
-    extractAssistantTextForPhase(message, {
-      sanitizeText: sanitizeTextContent,
-      joinWith: "",
-    });
-  const stopReason = (message as { stopReason?: unknown }).stopReason;
+    preparedText === undefined
+      ? undefined
+      : sanitizeAssistantVisibleTextWithProfile(preparedText, "history");
+  const stopReason = entry.stopReason;
   // Gate on stopReason only — a non-error response with a stale/background errorMessage
   // should not have its content rewritten with error templates (#13935).
   const errorContext = stopReason === "error";

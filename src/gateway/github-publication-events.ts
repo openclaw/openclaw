@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 
@@ -17,7 +17,7 @@ export function captureGitHubPublicationChanges<T>(operation: () => T): {
 
 /** The existing transaction owner discards these observers on rollback, including savepoints. */
 export function deferSharedGitHubPublicationChanged(
-  db: DatabaseSync,
+  db: EngineConnection,
   row: {
     session_key: string;
     agent_id: string;

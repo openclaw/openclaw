@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   conversationIdentityFromSessionEntry,
@@ -49,9 +50,22 @@ export function syncSessionActorMemoryConversations(
   shared: SessionActorMemoryConversationOwner,
   previousEntry?: SessionEntry,
   observedContext?: ConversationRouteContext | null,
+  observeConversation = false,
 ): void {
   const entry = state.hot.entry;
   if (!entry) {
+    return;
+  }
+  if (
+    !observeConversation &&
+    observedContext === undefined &&
+    previousEntry?.sessionId === entry.sessionId &&
+    previousEntry.lifecycleRevision === entry.lifecycleRevision &&
+    isDeepStrictEqual(
+      conversationIdentityFromSessionEntry(entry),
+      conversationIdentityFromSessionEntry(previousEntry),
+    )
+  ) {
     return;
   }
   const routeContext =
@@ -157,6 +171,10 @@ export function selectSessionActorMemoryConversations(
   for (const [conversationRef, address] of context.conversations.catalog) {
     if (
       (channel && address.identity.channel !== channel) ||
+      (query.deliveryAddress &&
+        (address.identity.accountId !== query.deliveryAddress.accountId ||
+          address.identity.deliveryTarget !== query.deliveryAddress.target ||
+          address.identity.threadId !== query.deliveryAddress.threadId)) ||
       (ref && conversationRef !== ref) ||
       (refs && !refs.has(conversationRef))
     ) {
@@ -175,6 +193,9 @@ export function selectSessionActorMemoryConversations(
         const associationIsCurrent = Boolean(
           entry && window.hot.entry?.sessionId === entry.sessionId,
         );
+        if (query.deliveryAddress && !associationIsCurrent) {
+          continue;
+        }
         if (
           query.currentSession &&
           (sessionKey !== query.currentSession.sessionKey ||
@@ -217,6 +238,7 @@ export function selectSessionActorMemoryConversations(
     }
     if (
       !associated &&
+      !query.deliveryAddress &&
       !query.primarySession &&
       !query.currentSession &&
       !query.currentBindingOnly
@@ -225,11 +247,13 @@ export function selectSessionActorMemoryConversations(
     }
   }
   records.sort((a, b) => b.record.lastSeenAt - a.record.lastSeenAt || b.updatedAt - a.updatedAt);
-  const selected = selectUniqueConversationRows(records, {
-    conversationRef: (row) => row.record.conversationRef,
-    map: (row) => row,
-    limit: query.limit,
-  });
+  const selected = query.deliveryAddress
+    ? records.map(({ record }) => record)
+    : selectUniqueConversationRows(records, {
+        conversationRef: (row) => row.record.conversationRef,
+        map: (row) => row,
+        limit: query.limit,
+      });
   for (const record of selected) {
     if (record.sessionKey) {
       context.get(record.sessionKey);
@@ -239,7 +263,7 @@ export function selectSessionActorMemoryConversations(
 }
 
 export function readSessionActorMemoryConversation(
-  context: SessionActorMemoryStorageContext,
+  context: ConversationReadContext,
   query: Exclude<
     SessionActorMemoryConversationQuery,
     { type: "session.conversation.delivery.read" }
@@ -263,7 +287,8 @@ export function readSessionActorMemoryConversation(
 }
 
 export function writeSessionActorMemoryConversation(
-  context: SessionActorMemoryStorageContext,
+  context: ConversationReadContext &
+    Pick<SessionActorMemoryStorageContext, "admit" | "editConversations">,
   command: Extract<
     SessionActorMemoryConversationCommand,
     { type: "session.conversation.register" }

@@ -97,7 +97,7 @@ function readPackageActivationContinuation(installKey: string, dryRun?: boolean)
   const released = readReleasedPackageActivationReceipt(installKey);
   if (released) {
     throw new Error(
-      `Package publication recovery is pending. With the recorded external runtime, run ${released.recoveryCommand}, then use that original helper to repair or retire; keep other package managers stopped.`,
+      `Package publication recovery is pending. Run openclaw update repair. With the recorded external runtime, run ${released.recoveryCommand}, then use that original helper to repair or retire; keep other package managers stopped.`,
     );
   }
   assertPackageActivationLayout(anchor);
@@ -113,8 +113,12 @@ function readPackageActivationContinuation(installKey: string, dryRun?: boolean)
     }
     return undefined;
   }
-  const record = openPackageActivationJournal(anchor).readForAdmission(installKey);
-  if (isPackageActivationComplete(anchor, record)) {
+  const journal = openPackageActivationSettlementJournal(anchor);
+  const record = journal.readForAdmission(installKey, dryRun);
+  if (
+    isPackageActivationComplete(anchor, record) ||
+    (dryRun && journal.isInstallationReplaced(record))
+  ) {
     return undefined;
   }
   if (
@@ -125,7 +129,13 @@ function readPackageActivationContinuation(installKey: string, dryRun?: boolean)
     [record.descriptor.previous.identity, record.descriptor.candidate.identity].includes(
       packageActivationIdentity(installKey, true),
     ) &&
-    inspectPackageActivationLease(record.descriptor.authority).changed
+    (inspectPackageActivationLease(record.descriptor.authority).changed ||
+      packageActivationIdentity(installKey, true) === record.descriptor.candidate.identity ||
+      (packageActivationIdentity(installKey, true) === record.descriptor.previous.identity &&
+        ((record.phase === "prepared" &&
+          record.intent === null &&
+          record.publications.length === 0) ||
+          record.phase === "aborted")))
   ) {
     return undefined;
   }
@@ -135,7 +145,7 @@ function readPackageActivationContinuation(installKey: string, dryRun?: boolean)
   }
   if (record.phase !== "publication-complete") {
     throw new Error(
-      `Package publication is incomplete; its original continuation cannot run. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
+      `Package publication is incomplete; its original continuation cannot run. Run openclaw update repair. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
     );
   }
   return record;
@@ -159,7 +169,7 @@ export function assertNoPendingPackageActivation(
     return;
   }
   throw new Error(
-    `Package publication recovery is pending. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
+    `Package publication recovery is pending. Run openclaw update repair. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
   );
 }
 
@@ -255,29 +265,40 @@ export async function settlePendingPackageActivation(
   installKey: string,
   onSettled?: (settlement: PackageActivationSettlement) => void,
   expectedCompleted?: PackageActivationRecord,
-  options?: { onlyStaleLease?: boolean; dryRun?: boolean; operationId?: string },
+  options?: {
+    automatic?: boolean;
+    dryRun?: boolean;
+    operationId?: string;
+    /** Asserts an exclusive installation claim the caller already holds. */
+    owner?: () => void;
+  },
 ) {
   const anchor = resolvePackageActivationAnchor(installKey);
   if (!expectedCompleted && !fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
     assertNoPendingPackageActivation(installKey);
     return undefined;
   }
+  const linkedCompleted = fs.lstatSync(resolvePackageActivationJournalPath(anchor)).nlink > 1;
   const journal = openPackageActivationSettlementJournal(anchor);
-  const admission = options?.dryRun ? undefined : await journal.readForRecovery();
+  const admission =
+    options?.dryRun || linkedCompleted ? undefined : await journal.readForRecovery();
   const initial = admission?.record ?? journal.read();
   if (options?.operationId) {
     assertPackageActivationOperation(initial, options.operationId);
   }
-  const identities = journal.inspectRemount(initial);
   const complete = isPackageActivationComplete(anchor, initial);
-  if (options?.operationId && !identities && !complete) {
+  const replacedInstallation = !complete && journal.isInstallationReplaced(initial);
+  const identities = journal.inspectRemount(initial);
+  if (options?.operationId && !identities && !complete && !replacedInstallation) {
     throw new Error("Separate-helper settlement requires a verified device remount.");
   }
   if (expectedCompleted && (!complete || !isDeepStrictEqual(initial, expectedCompleted))) {
     throw new Error("Completed package receipt changed; inspect recovery status before retrying.");
   }
-  if (initial.phase === "rollback-in-progress") {
-    throw new Error("Package restoration is unfinished; its rollback owner must finish recovery.");
+  if (initial.phase === "rollback-in-progress" && !replacedInstallation) {
+    throw new Error(
+      "Package restoration is unfinished; run openclaw update repair to finish recovery.",
+    );
   }
   const priorSettlement =
     initial.phase === "superseded" && initial.intent && "settled" in initial.intent
@@ -290,15 +311,23 @@ export async function settlePendingPackageActivation(
           reason: priorSettlement?.kind ?? "publication-retired",
           retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
           detail: priorSettlement?.detail,
+          ...(linkedCompleted
+            ? {
+                warning:
+                  "Archived multiply linked completed package recovery evidence; active recovery still requires nlink=1.",
+              }
+            : {}),
         }
       : undefined;
-  if (options?.onlyStaleLease && complete) {
+  if (options?.automatic && complete && (!linkedCompleted || options.dryRun)) {
     return options.dryRun ? receipt : undefined;
   }
   const originalAuthority = initial.descriptor.authority;
   const replacementIdentity = packageActivationIdentity(installKey, true);
   if (
-    options?.onlyStaleLease &&
+    options?.automatic &&
+    !complete &&
+    !replacedInstallation &&
     ![initial.descriptor.previous.identity, initial.descriptor.candidate.identity].includes(
       replacementIdentity,
     )
@@ -310,9 +339,6 @@ export async function settlePendingPackageActivation(
     !lease.current ||
     (initial.phase === "superseded" && initial.intent?.kind === "recovery-lease-missing");
   const leaseIdentityChanged = leaseWasMissing || lease.changed;
-  if (options?.onlyStaleLease && !leaseIdentityChanged) {
-    return undefined;
-  }
   const previousIdentity =
     identities?.currentIdentity(initial.descriptor.previous.identity) ??
     initial.descriptor.previous.identity;
@@ -320,14 +346,13 @@ export async function settlePendingPackageActivation(
     identities?.currentIdentity(initial.descriptor.candidate.identity) ??
     initial.descriptor.candidate.identity;
   const manualReplacement = ![previousIdentity, candidateIdentity].includes(replacementIdentity);
-  const reason =
-    identities && manualReplacement
-      ? "superseded-by-manual-install"
-      : leaseWasMissing
-        ? "recovery-lease-missing"
-        : leaseIdentityChanged
-          ? "recovery-lease-identity-changed"
-          : "superseded-by-manual-install";
+  const reason = manualReplacement
+    ? "superseded-by-manual-install"
+    : leaseWasMissing
+      ? "recovery-lease-missing"
+      : leaseIdentityChanged
+        ? "recovery-lease-identity-changed"
+        : "superseded-by-manual-install";
   const externalPublication =
     replacementIdentity === candidateIdentity &&
     (initial.phase === "prepared" ||
@@ -341,7 +366,19 @@ export async function settlePendingPackageActivation(
       initial.intent === null &&
       initial.publications.length === 0) ||
       initial.phase === "aborted");
-  const publicationNotStarted = !identities && !leaseIdentityChanged && unusedPreparation;
+  const publicationNotStarted = !leaseIdentityChanged && unusedPreparation;
+  // Repair can verify an installed candidate or untouched preparation without
+  // republishing files beneath a running Gateway, even when the lease is intact.
+  if (
+    options?.automatic &&
+    !complete &&
+    !replacedInstallation &&
+    !leaseIdentityChanged &&
+    !externalPublication &&
+    !unusedPreparation
+  ) {
+    return undefined;
+  }
   if (
     !complete &&
     !publicationNotStarted &&
@@ -349,19 +386,23 @@ export async function settlePendingPackageActivation(
     !(
       leaseIdentityChanged &&
       (unusedPreparation ||
-        (initial.phase === "publication-complete" &&
-          replacementIdentity === initial.descriptor.previous.identity) ||
+        (!identities &&
+          initial.phase === "publication-complete" &&
+          replacementIdentity === previousIdentity) ||
         initial.phase === "superseded")
     ) &&
-    [initial.descriptor.previous.identity, initial.descriptor.candidate.identity].includes(
-      replacementIdentity,
-    )
+    [previousIdentity, candidateIdentity].includes(replacementIdentity)
   ) {
+    if (identities) {
+      throw new Error(
+        "Remounted previous package has unfinished publication; use the original recovery owner.",
+      );
+    }
     assertNoPendingPackageActivation(installKey);
     return undefined;
   }
   if (options?.dryRun) {
-    if (externalPublication) {
+    if (externalPublication || (identities && unusedPreparation)) {
       await verifyPackagePublicationSettlement(
         initial,
         () => journal.assertCurrent(initial),
@@ -370,7 +411,11 @@ export async function settlePendingPackageActivation(
     }
     return {
       operationId: initial.descriptor.operationId,
-      reason,
+      reason: unusedPreparation
+        ? "publication-not-started"
+        : externalPublication
+          ? "publication-settled-external-change"
+          : reason,
       retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
       detail: undefined,
       warning: undefined,
@@ -383,18 +428,34 @@ export async function settlePendingPackageActivation(
         ? resolveManagedUpdateLeaseDatabasePath()
         : originalAuthority.databasePath,
     ));
-  return withUpdateCommandExecutor(
-    randomUUID(),
-    async (executor) => {
-      const fence = await executor.enter(installKey);
-      const assertCurrent = retainMutationAuthority(fence.assertCurrent);
+  // Repair's installation claim replaces cancelled custody, which refuses any
+  // fresh executor admission; settlement then runs under that claim instead.
+  const withSettlementOwner = <T>(
+    settle: (assertOwner: () => void) => Promise<T>,
+    executorOptions: Parameters<typeof withUpdateCommandExecutor>[2],
+  ) =>
+    options?.owner
+      ? settle(options.owner)
+      : withUpdateCommandExecutor(
+          randomUUID(),
+          async (executor) => await settle((await executor.enter(installKey)).assertCurrent),
+          executorOptions,
+        );
+  return withSettlementOwner(
+    async (assertOwner) => {
+      const assertCurrent = retainMutationAuthority(assertOwner);
       assertManagedUpdateLeaseDatabaseIdentity(currentDatabase);
-      admission!.admit(assertCurrent);
+      admission?.admit(assertCurrent);
       journal.assertCurrent(initial);
       let assertReplacement = () => {
         assertCurrent();
         if (packageActivationIdentity(installKey, true) !== replacementIdentity) {
           throw new Error("The installed package changed during recovery settlement.");
+        }
+        if (replacedInstallation && !journal.isInstallationReplaced(initial)) {
+          throw new Error(
+            "Recorded package publication is still installed; run openclaw update repair.",
+          );
         }
       };
       assertReplacement();
@@ -403,19 +464,16 @@ export async function settlePendingPackageActivation(
         // outcome. Archival then removes history from old readers' admission path.
         onSettled?.(settled);
         if (archive && settled.retained) {
-          settled.warning = archivePackageActivationCustody(
-            anchor,
-            journal,
-            journal.read(),
-            assertCurrent,
-          );
+          settled.warning =
+            archivePackageActivationCustody(anchor, journal, journal.read(), assertCurrent) ??
+            settled.warning;
         }
         return settled;
       };
       if (complete && receipt) {
         return finish(receipt);
       }
-      if (publicationNotStarted) {
+      if (publicationNotStarted && !identities) {
         const owner = createPublicationOwner(anchor, journal, assertReplacement, initial);
         if (initial.phase === "prepared") {
           try {
@@ -448,7 +506,7 @@ export async function settlePendingPackageActivation(
           replacementIdentity,
           settled: true,
         };
-      if (externalPublication) {
+      if (externalPublication || (identities && unusedPreparation)) {
         const verified = await verifyPackagePublicationSettlement(
           initial,
           assertCurrent,
@@ -462,7 +520,9 @@ export async function settlePendingPackageActivation(
         assertReplacement = verified.assertUnchanged;
         assertArchiveCurrent = verified.assertInstalledUnchanged;
         settlement = {
-          kind: "publication-settled-external-change",
+          kind: unusedPreparation
+            ? "publication-not-started"
+            : "publication-settled-external-change",
           replacementIdentity,
           settled: true,
           detail: receipt?.detail ?? verified.detail,
@@ -510,7 +570,12 @@ export async function settlePendingPackageActivation(
         assertArchiveCurrent,
         onSettled: () => onSettled?.(settled),
       });
-      return { ...settled, warning: result.archiveWarning };
+      return {
+        ...settled,
+        warning: replacedInstallation
+          ? `Stale package publication journal retired after an external installation replaced its package and launchers; recovery evidence retained at ${settled.retained}.${result.archiveWarning ? ` ${result.archiveWarning}` : ""}`
+          : result.archiveWarning,
+      };
     },
     { existingAuthority: { ...originalAuthority, ...currentDatabase } },
   );

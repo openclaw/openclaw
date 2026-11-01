@@ -3,6 +3,8 @@
  */
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
+import { markGatewayIngressTransport } from "../ingress-attribution.js";
+import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import { createExpectedBroadOperatorScopes } from "../scope-expectations.test-support.js";
 import { resolvePluginRouteRuntimeOperatorScopes } from "./plugin-route-runtime-scopes.js";
 
@@ -11,6 +13,25 @@ function createReq(headers: Record<string, string> = {}): IncomingMessage {
 }
 
 describe("resolvePluginRouteRuntimeOperatorScopes", () => {
+  it.each(["write-default", "trusted-operator"] as const)(
+    "keeps %s routes within a read-only ingress grant",
+    (surface) => {
+      const req = createReq({ "x-openclaw-scopes": "operator.admin" });
+      markGatewayIngressTransport(req, {
+        kind: "remote-forwarded",
+        context: createRemoteControlUiIngressTestContext({
+          operatorScopeCeiling: ["operator.read"],
+        }),
+      });
+      expect(
+        resolvePluginRouteRuntimeOperatorScopes(
+          req,
+          { authMethod: "remote-ingress", trustDeclaredOperatorScopes: true },
+          surface,
+        ),
+      ).toEqual(["operator.read"]);
+    },
+  );
   it("preserves declared trusted-proxy scopes when the header is present", () => {
     expect(
       resolvePluginRouteRuntimeOperatorScopes(createReq({ "x-openclaw-scopes": "operator.read" }), {

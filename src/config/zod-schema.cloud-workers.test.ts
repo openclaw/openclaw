@@ -27,6 +27,28 @@ describe("OpenClawSchema cloudWorkers config", () => {
     });
   });
 
+  it("accepts provider-owned secret maps without admitting plaintext", () => {
+    const setupSecrets = {
+      registry_token: { source: "store", provider: "default", id: "NPM_TOKEN" },
+    };
+    expect(
+      OpenClawSchema.safeParse(cloudProfile({ provider: "crabbox", settings: { setupSecrets } }))
+        .success,
+    ).toBe(true);
+    expect(OpenClawSchema.safeParse(cloudProfile({ settings: { setupSecrets: {} } })).success).toBe(
+      true,
+    );
+    for (const value of [
+      "inline",
+      { TOKEN: "inline" },
+      { TOKEN: { source: "store", provider: "default", id: "bad-id" } },
+    ]) {
+      expect(
+        OpenClawSchema.safeParse(cloudProfile({ settings: { setupSecrets: value } })).success,
+      ).toBe(false);
+    }
+  });
+
   it("rejects a malformed idle suspend duration", () => {
     expect(OpenClawSchema.safeParse(cloudProfile({ suspendAfter: "-1m" })).success).toBe(false);
   });

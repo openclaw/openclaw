@@ -1,6 +1,6 @@
 import { VERSION } from "../version.js";
 import { FIELD_HELP } from "./schema.help.js";
-import { buildBaseHints, mapSensitivePaths } from "./schema.hints.js";
+import { buildBaseHints, mapSensitivePaths, type ConfigUiHints } from "./schema.hints.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import {
   asSchemaObject,
@@ -94,6 +94,13 @@ function preparePublicSchema(schema: ConfigSchema): ConfigSchema {
 }
 
 let baseConfigSchemaStablePayload: BaseConfigSchemaStablePayload | null = null;
+let baseConfigUiHints: ConfigUiHints | undefined;
+
+/** Core redaction needs sensitivity facts without materializing the JSON schema. */
+export function computeBaseConfigUiHints(): ConfigUiHints {
+  baseConfigUiHints ??= mapSensitivePaths(OpenClawSchema, "", buildBaseHints());
+  return structuredClone(baseConfigUiHints);
+}
 
 function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
   if (baseConfigSchemaStablePayload) {
@@ -109,7 +116,7 @@ function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
   if (schemaRoot) {
     applyFieldDocumentation(schemaRoot);
   }
-  const baseHints = mapSensitivePaths(OpenClawSchema, "", buildBaseHints());
+  const baseHints = computeBaseConfigUiHints();
   const publicSchema = preparePublicSchema(schema);
   const stablePayload = {
     schema: publicSchema,

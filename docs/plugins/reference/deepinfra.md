@@ -15,7 +15,7 @@ Adds DeepInfra model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/deepinfra-provider`
-- Install route: npm or ClawHub: `clawhub:@openclaw/deepinfra-provider`
+- Install route: npm or ClawHub: `@openclaw/deepinfra-provider`
 
 ## Surface
 
