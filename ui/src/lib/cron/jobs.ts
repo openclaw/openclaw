@@ -11,6 +11,7 @@ import type { CronCompactJob, CronJob, CronJobsListResult } from "../../api/type
 import { formatUiError } from "../format-error.ts";
 import { usesCronInventoryEvents } from "./inventory-connection.ts";
 import { cronInventoryHasJob, readCronInventory } from "./inventory.ts";
+import type { DEFAULT_CRON_JOBS_FILTERS } from "./state.ts";
 import type { CronJobsState } from "./types.ts";
 
 function clearCronJobsSnapshot(state: CronJobsState<unknown>) {
@@ -196,6 +197,33 @@ export function loadCompactCronJobsPage(
   return loadCronJobsProjectionPage(state, compactCronJobsProjection, opts);
 }
 
+export function buildCronJobsListParams(
+  state: Pick<
+    CronJobsState,
+    keyof typeof DEFAULT_CRON_JOBS_FILTERS | "cronAgentId" | "cronSessionFilter"
+  >,
+  options: { offset?: number; tableFilters?: boolean } = {},
+): Omit<CronListParams, "compact"> {
+  return {
+    ...(state.cronSessionFilter ?? (state.cronAgentId ? { agentId: state.cronAgentId } : {})),
+    includeDisabled: state.cronJobsEnabledFilter === "all",
+    includeDeliveryPreviews: false,
+    limit: state.cronJobsLimit,
+    offset: options.offset ?? 0,
+    query: state.cronJobsQuery.trim() || undefined,
+    enabled: state.cronJobsEnabledFilter,
+    ...(options.tableFilters
+      ? {
+          scheduleKind: state.cronJobsScheduleKindFilter,
+          lastRunStatus: state.cronJobsLastStatusFilter,
+          trigger: state.cronJobsTriggerFilter,
+        }
+      : {}),
+    sortBy: state.cronJobsSortBy,
+    sortDir: state.cronJobsSortDir,
+  };
+}
+
 export async function loadCronJobsProjectionPage<Row extends CronInventoryJob>(
   state: CronJobsState<Row>,
   projection: CronJobsProjection<Row>,
@@ -206,24 +234,7 @@ export async function loadCronJobsProjectionPage<Row extends CronInventoryJob>(
   }
   const append = opts?.append === true;
   const offset = append ? Math.max(0, state.cronJobsNextOffset ?? state.cronJobs.length) : 0;
-  const params: Omit<CronListParams, "compact"> = {
-    ...(state.cronSessionFilter ?? (state.cronAgentId ? { agentId: state.cronAgentId } : {})),
-    includeDisabled: state.cronJobsEnabledFilter === "all",
-    includeDeliveryPreviews: false,
-    limit: state.cronJobsLimit,
-    offset,
-    query: state.cronJobsQuery.trim() || undefined,
-    enabled: state.cronJobsEnabledFilter,
-    ...(opts?.tableFilters
-      ? {
-          scheduleKind: state.cronJobsScheduleKindFilter,
-          lastRunStatus: state.cronJobsLastStatusFilter,
-          trigger: state.cronJobsTriggerFilter,
-        }
-      : {}),
-    sortBy: state.cronJobsSortBy,
-    sortDir: state.cronJobsSortDir,
-  };
+  const params = buildCronJobsListParams(state, { offset, tableFilters: opts?.tableFilters });
   if (opts?.event) {
     if (usesCronInventoryEvents(state.client)) {
       if (

@@ -799,6 +799,8 @@ export default function controlUiViteConfig(
   let composerSubviewChunk: string | undefined;
   const parallelStyleEntries = [
     "/ui/src/pages/config/config-page.tsx",
+    "/ui/src/pages/cron/cron-page.tsx",
+    "/ui/src/pages/sessions/sessions-page.tsx",
     "/ui/src/pages/usage/usage-page.tsx",
     "/ui/src/components/board/board-view.tsx",
     "/ui/src/pages/chat/components/chat-sidebar-region.runtime.tsx",
