@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { resumeThread } from "../command-handler-bindings.js";
@@ -3345,12 +3346,14 @@ describe("Codex app-server thread lifecycle bindings", () => {
           dynamicToolsFingerprint: "[]",
         });
         const originalBinding = await readCodexAppServerBinding(sessionFile);
+        using retryDelay = vi.spyOn(runtimeEnv, "sleepWithAbort").mockResolvedValue(undefined);
         await expect(wire.start(sessionFile, workspaceDir)).rejects.toMatchObject({
           name: "CodexAppServerRpcError",
           code: error.code,
           message: overload.message,
         });
 
+        expect(retryDelay).toHaveBeenCalledTimes(3);
         await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(originalBinding);
         expect(
           new Set(wire.writes.map((message) => (JSON.parse(message) as RpcRequest).method)),
