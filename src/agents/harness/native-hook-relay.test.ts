@@ -66,6 +66,45 @@ function invokeRelay(
   return invokeNativeHookRelay({ provider: "codex", relayId, event, rawPayload, ...options });
 }
 
+/** Array slot and toJSON tricks that serialize even though Object.values skips them. */
+function withHiddenArraySlot(first: number, hidden: number) {
+  return Object.defineProperty([first], "1", { value: hidden, enumerable: false });
+}
+
+function withHiddenToJson(serialized: unknown) {
+  return Object.defineProperty({}, "toJSON", { value: () => serialized, enumerable: false });
+}
+
+/** Sends Codex's exact hook stdin text through the real CLI into the real relay. */
+async function rewriteMcpThroughCli(
+  toolInputText: string,
+  { rewrite = { label: "new" }, outerFields = "" }: { rewrite?: object; outerFields?: string } = {},
+) {
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([
+      { hookName: "before_tool_call", handler: vi.fn(async () => ({ params: rewrite })) },
+    ]),
+  );
+  const relay = registerAgentRelay();
+  const stdout = new PassThrough();
+  await runNativeHookRelayCliFromArgvForTest(
+    `node openclaw hooks relay --provider codex --relay-id ${relay.relayId} --event pre_tool_use`.split(
+      " ",
+    ),
+    {
+      stdin: Readable.from([
+        `{"hook_event_name":"PreToolUse",${outerFields}"cwd":"/repo","tool_name":"mcp__notes__rec","tool_use_id":"native-mcp-numbers","tool_input":${toolInputText}}`,
+      ]),
+      stdout,
+      stderr: new PassThrough(),
+      invokeBridge: async ({ rawPayload }) =>
+        // oxlint-disable-next-line unicorn/prefer-structured-clone -- the real bridge carries JSON, which turns Infinity into null; a clone would keep it.
+        await invokeRelay(relay.relayId, "pre_tool_use", JSON.parse(JSON.stringify(rawPayload))),
+    },
+  );
+  return JSON.parse(String(stdout.read())).hookSpecificOutput;
+}
+
 function registerAgentRelay(
   overrides: Partial<Parameters<typeof registerNativeHookRelay>[0]> = {},
 ) {
@@ -1706,7 +1745,7 @@ describe("native hook relay registry", () => {
     },
   );
 
-  it.each(["report rewrite", "in-place mutation"] as const)(
+  it.each(["report rewrite", "report in-place mutation"] as const)(
     "blocks Codex native pre-tool execution after a policy %s",
     async (mode) => {
       const beforeToolCall = vi.fn(async (event: unknown) => {
@@ -1726,7 +1765,7 @@ describe("native hook relay registry", () => {
       const relay = registerAgentRelay();
       const response = await invokeRelay(relay.relayId, "pre_tool_use", {
         hook_event_name: "PreToolUse",
-        ...(mode === "report rewrite" ? { openclaw_approval_mode: "report" } : {}),
+        openclaw_approval_mode: "report",
         cwd: "/repo",
         tool_name: "exec_command",
         tool_use_id: "native-policy-rewrite",
@@ -1743,6 +1782,320 @@ describe("native hook relay registry", () => {
       expect(beforeToolCall).toHaveBeenCalledTimes(1);
     },
   );
+
+  it.each([
+    {
+      name: "Bash command",
+      toolName: "Bash",
+      toolInput: { command: "cat /tmp/private_key" },
+      rewrite: { command: "echo rewritten" },
+      updatedInput: { command: "echo rewritten" },
+    },
+    {
+      name: "apply_patch command",
+      toolName: "apply_patch",
+      toolInput: { command: "*** Begin Patch\n*** End Patch\n" },
+      rewrite: { command: "*** Begin Patch\n*** Add File: a\n+a\n*** End Patch\n" },
+      updatedInput: { command: "*** Begin Patch\n*** Add File: a\n+a\n*** End Patch\n" },
+    },
+    {
+      name: "MCP arguments",
+      toolName: "mcp__notes__search",
+      toolInput: { query: "original", limit: 5 },
+      rewrite: { query: "rewritten" },
+      updatedInput: { query: "rewritten", limit: 5 },
+    },
+  ])(
+    "applies a validated $name rewrite",
+    async ({ toolName, toolInput, rewrite, updatedInput }) => {
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          { hookName: "before_tool_call", handler: vi.fn(async () => ({ params: rewrite })) },
+        ]),
+      );
+      const relay = registerAgentRelay();
+      const response = await invokeRelay(relay.relayId, "pre_tool_use", {
+        hook_event_name: "PreToolUse",
+        cwd: "/repo",
+        tool_name: toolName,
+        tool_use_id: "native-valid-rewrite",
+        tool_input: toolInput,
+        openclaw_inexact_number_paths: "[]",
+      });
+      expect(JSON.parse(response.stdout)).toEqual({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "allow",
+          updatedInput,
+        },
+      });
+    },
+  );
+
+  it.each([
+    { name: "a rounded integer", toolInput: '{"recordId":9007199254740993,"label":"old"}' },
+    { name: "a long decimal", toolInput: '{"ratio":0.12345678901234567890123,"label":"old"}' },
+    { name: "a float-typed whole number", toolInput: '{"ratio":1.0,"label":"old"}' },
+    { name: "negative zero", toolInput: '{"offset":-0.0,"label":"old"}' },
+    { name: "an exponent form", toolInput: '{"count":1e3,"label":"old"}' },
+    { name: "a nested number", toolInput: '{"items":[{"ratio":1.0}],"label":"old"}' },
+    {
+      name: "a rounded integer moved by an array prepend",
+      toolInput: '{"items":[9007199254740993],"label":"old"}',
+      rewrite: { items: [0, 9007199254740992], label: "new" },
+    },
+    {
+      name: "a rounded integer moved to another key",
+      toolInput: '{"recordId":9007199254740993,"label":"old"}',
+      rewrite: { recordId: 1, previousId: 9007199254740992 },
+    },
+    {
+      name: "a rounded integer moved into a new object",
+      toolInput: '{"recordId":9007199254740993,"label":"old"}',
+      rewrite: { recordId: 1, history: [{ id: 9007199254740992 }] },
+    },
+    {
+      name: "a rounded integer copied into a non-enumerable array slot",
+      toolInput: '{"items":[9007199254740993],"label":"old"}',
+      rewrite: { items: withHiddenArraySlot(0, 9007199254740992), label: "new" },
+    },
+    {
+      name: "a rounded integer returned by a non-enumerable toJSON",
+      toolInput: '{"recordId":9007199254740993,"label":"old"}',
+      rewrite: { recordId: withHiddenToJson(9007199254740992) },
+    },
+    {
+      name: "an overflowing number moved by an array prepend",
+      toolInput: '{"items":[1e400],"label":"old"}',
+      rewrite: { items: [0, null] },
+    },
+    {
+      name: "an unrelated number equals a replaced one",
+      toolInput: '{"ratio":1.0,"limit":1,"label":"old"}',
+      rewrite: { ratio: 2 },
+    },
+  ])("denies an MCP rewrite through the CLI when $name would change", async (row) => {
+    const { toolInput, rewrite } = row as { toolInput: string; rewrite?: object };
+    expect(await rewriteMcpThroughCli(toolInput, { rewrite })).toEqual({
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: expect.stringContaining("JavaScript parsing altered"),
+    });
+  });
+
+  it("keeps exact MCP numbers in a rewrite through the CLI", async () => {
+    const toolInput = '{"recordId":9007199254740991,"ratio":0.5,"nested":[-3],"label":"old"}';
+    expect(await rewriteMcpThroughCli(toolInput)).toEqual({
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+      updatedInput: JSON.parse(toolInput.replace('"old"', '"new"')),
+    });
+  });
+
+  it.each([
+    {
+      name: "replaces the inexact field",
+      toolInput: '{"ratio":1.0,"label":"old"}',
+      rewrite: { ratio: 2 },
+      updatedInput: { ratio: 2, label: "old" },
+    },
+    {
+      name: "replaces the parent of an inexact field",
+      toolInput: '{"meta":{"recordId":9007199254740993,"note":"old"},"label":"old"}',
+      rewrite: { meta: { note: "new" } },
+      updatedInput: { meta: { note: "new" }, label: "old" },
+    },
+    {
+      name: "sends what serialization produces, not the live object",
+      toolInput: '{"items":[1.0],"meta":{"note":"old"},"label":"old"}',
+      rewrite: { items: withHiddenArraySlot(0, 5), meta: withHiddenToJson({ note: "new" }) },
+      updatedInput: { items: [0, 5], meta: { note: "new" }, label: "old" },
+    },
+    {
+      name: "replaces an array element holding an inexact number",
+      toolInput: '{"items":[1.0,2],"label":"old"}',
+      rewrite: { items: [3, 2] },
+      updatedInput: { items: [3, 2], label: "old" },
+    },
+  ])("allows an MCP rewrite that $name", async ({ toolInput, rewrite, updatedInput }) => {
+    expect(await rewriteMcpThroughCli(toolInput, { rewrite })).toEqual({
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+      updatedInput,
+    });
+  });
+
+  it("ignores inexact numbers outside the MCP tool arguments", async () => {
+    expect(
+      await rewriteMcpThroughCli('{"label":"old"}', { outerFields: '"retry_after":1.0,' }),
+    ).toEqual({
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+      updatedInput: { label: "new" },
+    });
+  });
+
+  it.each(['{"paths":[]}', "[[1]]"])("denies an MCP rewrite with path record %s", async (paths) => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          handler: vi.fn(async () => ({ params: { query: "new" } })),
+        },
+      ]),
+    );
+    const relay = registerAgentRelay();
+    const response = await invokeRelay(relay.relayId, "pre_tool_use", {
+      hook_event_name: "PreToolUse",
+      cwd: "/repo",
+      tool_name: "mcp__notes__search",
+      tool_use_id: "native-malformed-paths",
+      tool_input: { query: "old" },
+      openclaw_inexact_number_paths: paths,
+    });
+    expect(JSON.parse(response.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+
+  it("denies an MCP rewrite when inexact numbers exceed the tracked bound", async () => {
+    const values = Array.from({ length: 10_000 }, () => "1.0").join(",");
+    const { permissionDecision } = await rewriteMcpThroughCli(
+      `{"items":[${values}],"label":"old"}`,
+      {
+        rewrite: { items: [] },
+      },
+    );
+    expect(permissionDecision).toBe("deny");
+  });
+
+  it("returns a rewrite only after the policy owner approves it", async () => {
+    const approved = createDeferredCore<{ blocked: false; params: { command: string } }>();
+    const relay = registerAgentRelay({ runBeforeToolCall: () => approved.promise });
+    let settled = false;
+    const response = invokeRelay(relay.relayId, "pre_tool_use", {
+      hook_event_name: "PreToolUse",
+      cwd: "/repo",
+      tool_name: "Bash",
+      tool_use_id: "native-approved-rewrite",
+      tool_input: { command: "cat /tmp/private_key" },
+    }).finally(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    approved.resolve({ blocked: false, params: { command: "echo rewritten" } });
+    expect(JSON.parse((await response).stdout).hookSpecificOutput).toEqual({
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+      updatedInput: { command: "echo rewritten" },
+    });
+  });
+
+  it("denies a deferred approval that rewrites the fixed app-server command", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          handler: vi.fn(async () => ({
+            requireApproval: { title: "Needs approval", description: "native command" },
+          })),
+        },
+      ]),
+    );
+    const relay = registerAgentRelay();
+    const toolUseId = "native-deferred-rewrite";
+    await invokeRelay(relay.relayId, "pre_tool_use", {
+      hook_event_name: "PreToolUse",
+      openclaw_approval_mode: "report",
+      cwd: "/repo",
+      tool_name: "exec_command",
+      tool_use_id: toolUseId,
+      tool_input: { cmd: "pwd" },
+    });
+    testing.setNativeHookRelayDeferredToolApprovalRequesterForTests(async () => ({
+      blocked: false,
+      params: { cmd: "pwd", command: "echo rewritten" },
+    }));
+    await expect(
+      resolveNativeHookRelayDeferredToolApproval({ relayId: relay.relayId, toolUseId }),
+    ).resolves.toMatchObject({ handled: true, outcome: "denied" });
+  });
+
+  it.each([
+    {
+      name: "a Bash field Codex would drop",
+      toolName: "Bash",
+      toolInput: { command: "pwd" },
+      rewrite: { workdir: "/" },
+    },
+    {
+      name: "a Bash command plus a dropped field",
+      toolName: "Bash",
+      toolInput: { command: "pwd" },
+      rewrite: { command: "ls", timeout: 5 },
+    },
+    {
+      name: "a blank Bash command",
+      toolName: "Bash",
+      toolInput: { command: "pwd" },
+      rewrite: { command: "  " },
+    },
+    {
+      name: "a non-string apply_patch command",
+      toolName: "apply_patch",
+      toolInput: { command: "*** Begin Patch\n*** End Patch\n" },
+      rewrite: { command: ["patch"] },
+    },
+    {
+      name: "a tool with no reviewed inverse",
+      toolName: "spawn_agent",
+      toolInput: { message: "original" },
+      rewrite: { message: "rewritten" },
+    },
+    {
+      name: "an MCP call whose original input is not an object",
+      toolName: "mcp__notes__search",
+      toolInput: "not json",
+      rewrite: { value: "rewritten" },
+    },
+    {
+      name: "MCP arguments that are not JSON",
+      toolName: "mcp__notes__search",
+      toolInput: { query: "original" },
+      rewrite: { query: Number.POSITIVE_INFINITY },
+    },
+    {
+      name: "MCP input that did not arrive through the verifying CLI",
+      toolName: "mcp__notes__search",
+      toolInput: { query: "original" },
+      rewrite: { query: "rewritten" },
+      exactNumbers: false,
+    },
+  ])("rejects $name without emitting a replacement", async (rejection) => {
+    const { toolName, toolInput, rewrite } = rejection;
+    const exactNumbers = "exactNumbers" in rejection ? rejection.exactNumbers : true;
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_tool_call", handler: vi.fn(async () => ({ params: rewrite })) },
+      ]),
+    );
+    const relay = registerAgentRelay();
+    const response = await invokeRelay(relay.relayId, "pre_tool_use", {
+      hook_event_name: "PreToolUse",
+      cwd: "/repo",
+      tool_name: toolName,
+      tool_use_id: "native-invalid-rewrite",
+      tool_input: toolInput,
+      ...(exactNumbers ? { openclaw_inexact_number_paths: "[]" } : {}),
+    });
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason:
+          "OpenClaw tool policy rewrote Codex native tool input that Codex cannot apply; refusing original request. Only `command` can change for Bash and apply_patch. MCP arguments must be a JSON object within plugin hook limits, and the rewrite must not contain a number that JavaScript parsing altered.",
+      },
+    });
+  });
 
   it.each(["allow once", "cancelled"] as const)(
     "settles deferred native approval as %s",
