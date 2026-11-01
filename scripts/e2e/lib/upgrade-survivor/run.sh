@@ -991,9 +991,6 @@ migrate_baseline_cron_authority() {
   local bridge_install_log="$ARTIFACT_ROOT/cron-migration-bridge-install.log"
   local bridge_cli="openclaw"
   local bridge_version_expected="2026.9.7"
-  if [ "$(printf '%s\n' "2026.10.1" "$baseline_version" | sort -V | head -n 1)" = "2026.10.1" ]; then
-    bridge_version_expected="2026.10.1"
-  fi
   if [ "$baseline_version" != "$bridge_version_expected" ]; then
     rm_rf_retry "$bridge_prefix"
     mkdir -p "$bridge_prefix"

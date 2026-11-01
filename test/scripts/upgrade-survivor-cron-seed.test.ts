@@ -325,7 +325,7 @@ printf '%s\\t%s\\n' "$OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE" "$2" >> "$TRACE_PA
   ]);
 });
 
-it("bridges a schema-20 cron authority migration through 2026.10.1", () => {
+it("bridges stale cron authority through the last compatible Doctor", () => {
   const root = tempDirs.make("openclaw-survivor-cron-bridge-");
   const tracePath = path.join(root, "trace");
   const installTracePath = path.join(root, "install-trace");
@@ -344,7 +344,7 @@ openclaw_prepublish_plugin_registry_run_published() {
   cat > "$bridge_prefix/bin/openclaw" <<'EOF'
 #!/bin/sh
 printf '%s\\n' "$*" >> "$TRACE_PATH"
-if [ "$1" = "--version" ]; then printf '%s\\n' 'OpenClaw 2026.10.1'; fi
+if [ "$1" = "--version" ]; then printf '%s\\n' 'OpenClaw 2026.9.7'; fi
 EOF
   chmod +x "$bridge_prefix/bin/openclaw"
 }
@@ -368,7 +368,7 @@ migrate_baseline_cron_authority
     },
   );
   expect(result.status, result.stderr).toBe(0);
-  expect(readFileSync(installTracePath, "utf8")).toContain("openclaw@2026.10.1");
+  expect(readFileSync(installTracePath, "utf8")).toContain("openclaw@2026.9.7");
   expect(readFileSync(tracePath, "utf8").trim().split("\n")).toEqual([
     "--version",
     "doctor --fix --non-interactive",
