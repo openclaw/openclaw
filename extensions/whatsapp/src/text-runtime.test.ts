@@ -73,6 +73,7 @@ describe("WhatsApp text runtime", () => {
     expect(chunks.join("")).toContain("\\*");
     expect(chunks.join("")).not.toMatch(/\p{Co}/u);
   });
+
   it("applies the chunk limit to whitespace-only text", () => {
     expect(markdownToWhatsAppChunks(" ".repeat(12), 5)).toEqual(["    ", "    ", "  "]);
   });

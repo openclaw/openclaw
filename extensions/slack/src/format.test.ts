@@ -108,6 +108,7 @@ describe("normalizeSlackOutboundText", () => {
       "> *Check* &lt;@U123&gt; &lt;#C123&gt; &lt;!channel&gt; &lt;!date^0^{date}|today&gt; &lt;https://example.com&gt; &amp; `&lt;@U456&gt;`",
     );
   });
+
   it("leaves table parsing off for callers without an authored-text table mode", () => {
     const table = "| Name | Value |\n| --- | --- |\n| Beta | 2 |";
     expect(normalizeSlackOutboundText(table)).toBe(table);

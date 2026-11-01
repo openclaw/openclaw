@@ -206,7 +206,7 @@ export function renderMarkdownWithMarkers(
       if (quote.style !== "blockquote") {
         continue;
       }
-      for (let start = quote.start; start < quote.end; ) {
+      for (let start = quote.start; start < quote.end;) {
         if (
           text[start] !== "\n" &&
           !codeBlocks.some((code) => code.start < start && start < code.end)
