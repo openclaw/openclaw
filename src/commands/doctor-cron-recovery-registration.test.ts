@@ -90,7 +90,7 @@ it.each(["owner", "legacy"] as const)(
           }),
         );
         const completedAt = inventory().references.get(backups[0]!)![0]!.run.manifest.completedAt!;
-        using clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse(completedAt) + 1_000);
+        using _clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse(completedAt) + 1_000);
         const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
         finishUpdateRun(run.runId, { status: "succeeded" }, { env: state.env });
         expect(inventory().report.artifacts).toContainEqual(
