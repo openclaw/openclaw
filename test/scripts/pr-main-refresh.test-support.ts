@@ -95,6 +95,10 @@ function createMainRefreshTemplate(directory: string, perWorktreeConfig: boolean
   git(root, "init", "-b", "main", canonical);
   configureRepository(canonical, perWorktreeConfig);
   copyPrWrapperSources(canonical);
+  const provisionSource = process.env.OPENCLAW_PR_BOOTSTRAP_PROVISION_SOURCE;
+  if (process.env.OPENCLAW_PR_BOOTSTRAP_MEASURE && provisionSource) {
+    cpSync(provisionSource, join(canonical, "scripts/pr-lib/worktree-provision.mts"));
+  }
   cpSync(join(process.cwd(), ".github", "workflows"), join(canonical, ".github", "workflows"), {
     recursive: true,
   });
@@ -834,9 +838,19 @@ console.log(args.slice(2).join('\\n'));
         writeFileSync(trace, "");
       }
       const started = performance.now();
+      const profile = measure && process.env.OPENCLAW_PR_BOOTSTRAP_PROFILE;
       const result = spawnSync(bash, [join(from, "scripts", "pr"), ...args], {
         cwd: from,
-        env: trace ? { ...env, GIT_TRACE2_EVENT: trace } : env,
+        env:
+          trace || profile
+            ? {
+                ...env,
+                ...(trace ? { GIT_TRACE2_EVENT: trace } : {}),
+                ...(profile
+                  ? { NODE_OPTIONS: `--import=${pathToFileURL(profile).href} ${env.NODE_OPTIONS}` }
+                  : {}),
+              }
+            : env,
         encoding: "utf8",
       });
       const milliseconds = performance.now() - started;
