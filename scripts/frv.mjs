@@ -25,6 +25,7 @@ import {
 } from "./full-release-publication-contract.mjs";
 import {
   classifyReleaseGhTransportError,
+  composeReleaseAttemptJobs,
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
@@ -56,6 +57,7 @@ import {
   selectDeferredRunCandidates,
   selectLatestRunsPerLane,
 } from "./lib/release-priority.mjs";
+import { evaluateReleaseChildPolicy } from "./lib/release-validation-waivers.mjs";
 import { sleep } from "./lib/sleep.mjs";
 import { sameJobExecution } from "./npm-prepared-bundle.mjs";
 import {
@@ -1136,6 +1138,7 @@ async function inspectQualificationStatus(plan, runId, client) {
   } catch (error) {
     return {
       ...(status ?? continuationStatus([])),
+      blockers: [],
       collectionComplete: false,
       qualification: { state: "observation-unavailable", evidence: "unavailable" },
       drain: {
@@ -1155,6 +1158,10 @@ async function inspectQualificationStatus(plan, runId, client) {
     throw new Error("status parent identity differs from the immutable execution plan");
   }
   const currentJobs = jobs.filter((job) => Number(job.run_attempt) === Number(parent.run_attempt));
+  const blockers = [
+    ...parentJobBlockers(currentJobs, parent.run_attempt),
+    ...childJobBlockers(status.children, plan.targetVersion),
+  ];
   const drainJobs = currentJobs.filter((job) => job.name === "Diagnostic Drain");
   const drainJob = drainJobs.length === 1 ? drainJobs[0] : undefined;
   const drain = {
@@ -1213,7 +1220,10 @@ async function inspectQualificationStatus(plan, runId, client) {
           ? "observation-unavailable"
           : decision && !["qualifying", "passed"].includes(decision.state)
             ? "blocked"
-            : parent.status === "completed" || status.failed.length || status.missing.length
+            : parent.status === "completed" ||
+                status.failed.length ||
+                status.missing.length ||
+                blockers.length
               ? "blocked"
               : "running",
     evidence,
@@ -1233,6 +1243,7 @@ async function inspectQualificationStatus(plan, runId, client) {
   } --run ${runId}`;
   return {
     ...status,
+    blockers,
     collectionComplete: observationErrors.length === 0,
     qualification,
     drain,
@@ -2453,6 +2464,7 @@ export async function inspectUnsealedPlan(options, client) {
   if (JSON.stringify(current) !== JSON.stringify(before)) {
     throw new Error(`run ${options.runId} changed while inspecting plan availability`);
   }
+  const blockers = parentJobBlockers(jobs, before.runAttempt);
   const uploadSucceeded = upload?.status === "completed" && upload.conclusion === "success";
   const uploadCompletedAt = uploadSucceeded ? Date.parse(upload.completed_at) : Number.NaN;
   if (
@@ -2464,6 +2476,7 @@ export async function inspectUnsealedPlan(options, client) {
   ) {
     return {
       action: "waiting-for-plan",
+      blockers,
       planAvailability: {
         state: "artifact-propagating",
         runAttempt: before.runAttempt,
@@ -2478,12 +2491,15 @@ export async function inspectUnsealedPlan(options, client) {
   }
   if (seal?.status === "completed" || before.status === "completed") {
     throw new Error(
-      `run ${options.runId} attempt ${before.runAttempt} completed without an authenticated immutable FRV plan`,
+      `run ${options.runId} attempt ${before.runAttempt} completed without an authenticated immutable FRV plan${
+        blockers.length ? `; blockers: ${blockers.map(formatBlocker).join("; ")}` : ""
+      }`,
     );
   }
   const state = before.runAttempt > 1 ? "reseal-in-progress" : "not-yet-sealed";
   return {
     action: "waiting-for-plan",
+    blockers,
     planAvailability: {
       state,
       runAttempt: before.runAttempt,
@@ -3299,11 +3315,43 @@ function formatProgressEvent(command, event) {
   return `[frv ${command}] ${formatFrvTimestamp()} ${event.message}${event.url ? ` ${event.url}` : ""}`;
 }
 
-function failedJobEvent(owner, job, attempt, runId) {
+function parentJobBlockers(jobs, attempt) {
+  return jobs
+    .filter(
+      (job) => job.status === "completed" && FAILED_JOB_CONCLUSIONS.has(String(job.conclusion)),
+    )
+    .map((job) => ({
+      owner: "parent",
+      job: String(job.name),
+      conclusion: String(job.conclusion),
+      runAttempt: Number(attempt),
+      url: String(job.html_url ?? ""),
+    }));
+}
+
+function childJobBlockers(children, targetVersion) {
+  return children.flatMap((child) =>
+    child.jobs
+      ? evaluateReleaseChildPolicy({ child, targetVersion }).blockingJobs.map((job) => ({
+          owner: child.key,
+          job: job.name,
+          conclusion: job.conclusion,
+          runAttempt: job.acceptedRunAttempt,
+          url: job.url,
+        }))
+      : [],
+  );
+}
+
+function formatBlocker(blocker) {
+  return `${blocker.owner} job "${blocker.job}" ${blocker.conclusion} (attempt ${blocker.runAttempt})${blocker.url ? ` ${blocker.url}` : ""}`;
+}
+
+function failedJobEvent(owner, job, attempt, runId, sourceAttempt = job.run_attempt ?? attempt) {
   if (job.status !== "completed" || !FAILED_JOB_CONCLUSIONS.has(String(job.conclusion))) {
     return undefined;
   }
-  const reportedAttempt = Number(job.run_attempt ?? attempt);
+  const reportedAttempt = Number(sourceAttempt);
   const jobAttempt =
     Number.isSafeInteger(reportedAttempt) && reportedAttempt > 0 ? reportedAttempt : attempt;
   const attemptLabel =
@@ -3312,10 +3360,9 @@ function failedJobEvent(owner, job, attempt, runId) {
       : `attempt ${jobAttempt}`;
   const labels = Array.isArray(job.labels) && job.labels.length > 0 ? job.labels.join(",") : "none";
   const runner = job.runner_name ? ` / ${job.runner_name}` : "";
-  const blocker = owner.startsWith("artifact:") ? " blocker:" : "";
   return [
     `job:${runId ?? job.run_id ?? owner}:${jobAttempt}:${job.name}`,
-    `${owner}${blocker} job "${job.name}" ${job.conclusion} (${attemptLabel}; runner ${labels}${runner})`,
+    `${owner} job "${job.name}" ${job.conclusion} (${attemptLabel}; runner ${labels}${runner})`,
     job.html_url,
   ];
 }
@@ -3331,14 +3378,27 @@ async function mapBounded(values, limit, operation) {
 async function pollRelease(state, client, pending, observation, readOptions) {
   const events = [];
   const failedReads = [];
-  const report = (id, message, url, candidate) => {
+  const report = (id, message, url, extra = {}) => {
     if (!state.reported.has(id)) {
       state.reported.add(id);
       events.push({
         message,
         ...(url ? { url: String(url) } : {}),
-        ...(candidate ? { candidate } : {}),
+        ...extra,
       });
+    }
+  };
+  // An ordinary failure may become a settled blocker on a later poll.
+  const reportFailure = (failure, blockerId) => {
+    if (!failure) {
+      return;
+    }
+    const [id, message, url] = failure;
+    if (blockerId && !state.reported.has(blockerId)) {
+      state.reported.add(id);
+      report(blockerId, message, url, { blocker: true });
+    } else {
+      report(id, message, url);
     }
   };
   // Transient GitHub failures, including HTML 5xx bodies, never become job results.
@@ -3391,12 +3451,22 @@ async function pollRelease(state, client, pending, observation, readOptions) {
     !parentJobs?.some((job) => Number(job.run_attempt) === Number(parent.run_attempt)) ||
     parentJobs.some((job) => job.status !== "completed");
   for (const job of parentJobs ?? []) {
-    const failure = failedJobEvent("parent", job, parent.run_attempt, parentRunId);
-    if (failure) {
-      report(...failure);
-    }
+    const jobAttempt = Number(job.run_attempt ?? parent.run_attempt);
+    reportFailure(
+      failedJobEvent("parent", job, jobAttempt, parentRunId),
+      jobAttempt === Number(parent.run_attempt)
+        ? `blocker:job:${parentRunId}:${parent.run_attempt}:${job.name}`
+        : undefined,
+    );
     const key = dispatchKeys.get(job.name);
-    if (!key || job.conclusion === "skipped" || state.reported.has(`log:${job.id}`)) {
+    const needsProvenance = Object.values(state.children).some(
+      (child) => child.key === key && child.parentAttempt === undefined,
+    );
+    if (
+      !key ||
+      job.conclusion === "skipped" ||
+      (state.reported.has(`log:${job.id}`) && !needsProvenance)
+    ) {
       continue;
     }
     if (job.status !== "completed") {
@@ -3410,13 +3480,23 @@ async function pollRelease(state, client, pending, observation, readOptions) {
     for (const [, workflow, repository, runId, attempt] of stripVTControlCharacters(
       String(log),
     ).matchAll(DISPATCHED_CHILD_PATTERN)) {
-      if (repository === state.repository && !state.children[runId]) {
-        state.children[runId] = { key, workflow };
+      if (repository !== state.repository) {
+        continue;
+      }
+      const saved = state.children[runId];
+      if (!saved) {
+        state.children[runId] = { key, parentAttempt: jobAttempt, workflow };
         report(
           `dispatched:${runId}`,
           `${key} dispatched ${workflow} run ${runId} (attempt ${attempt})`,
           `https://github.com/${repository}/actions/runs/${runId}`,
         );
+      } else if (
+        saved.key === key &&
+        saved.workflow === workflow &&
+        saved.parentAttempt === undefined
+      ) {
+        saved.parentAttempt = jobAttempt;
       }
     }
     state.reported.add(`log:${job.id}`);
@@ -3437,6 +3517,73 @@ async function pollRelease(state, client, pending, observation, readOptions) {
         formatRunProgress(child.key, run),
         run.html_url,
       );
+      const listings = new Map();
+      const readJobs = (attempt) => {
+        if (!listings.has(attempt)) {
+          listings.set(
+            attempt,
+            read(`${child.key} attempt ${attempt} jobs`, () =>
+              client.getAttemptJobs(runId, attempt, readOptions),
+            ),
+          );
+        }
+        return listings.get(attempt);
+      };
+      const artifact = child.key.startsWith("artifact:");
+      const currentProducer =
+        artifact && Number(child.parentAttempt) === Number(parent.run_attempt);
+      // Reuse the evidence owner's partial-rerun view, including names omitted
+      // from the latest listing. A saved scan marker does not settle promotion.
+      if ((!artifact || currentProducer) && (currentProducer || current > 1)) {
+        const attempts = [];
+        for (let attempt = 1; attempt <= current; attempt += 1) {
+          const jobs = await readJobs(attempt);
+          if (
+            !jobs?.length ||
+            (attempt < current && jobs.some((job) => job.status !== "completed"))
+          ) {
+            return false;
+          }
+          attempts.push({ runAttempt: attempt, jobs });
+        }
+        let composite;
+        try {
+          composite = composeReleaseAttemptJobs(attempts, {
+            plannedRunAttempt: 1,
+            effectiveRunAttempt: current,
+            effectiveRunStatus: run.status,
+          });
+        } catch (error) {
+          if (error?.code !== "FRV_DUPLICATE_JOB_IDENTITY") {
+            throw error;
+          }
+        }
+        if (composite) {
+          for (const job of evaluateReleaseChildPolicy({
+            child: { key: child.key, jobs: composite.jobs },
+            targetVersion: observation.plan?.targetVersion,
+          }).blockingJobs) {
+            const raw = attempts[job.acceptedRunAttempt - 1].jobs.find(
+              (row) => row.name === job.name && row.conclusion !== "skipped",
+            );
+            let sourceAttempt = Number(raw.run_attempt ?? job.acceptedRunAttempt);
+            // GitHub also restamps retained executions with a new attempt and ID.
+            for (const previous of attempts.slice(0, job.acceptedRunAttempt - 1)) {
+              if (
+                previous.jobs.some((row) => row.name === job.name && sameJobExecution(row, raw))
+              ) {
+                sourceAttempt = Math.min(sourceAttempt, previous.runAttempt);
+              }
+            }
+            if (currentProducer || sourceAttempt < current) {
+              reportFailure(
+                failedJobEvent(child.key, raw, current, runId, sourceAttempt),
+                `blocker:job:${runId}:${current}:${job.name}`,
+              );
+            }
+          }
+        }
+      }
       // Earlier attempts are final; scan each once so a late start still reports them.
       let scansComplete = true;
       for (let attempt = 1; attempt <= current; attempt += 1) {
@@ -3444,9 +3591,7 @@ async function pollRelease(state, client, pending, observation, readOptions) {
         if (state.reported.has(scanned)) {
           continue;
         }
-        const jobs = await read(`${child.key} attempt ${attempt} jobs`, () =>
-          client.getAttemptJobs(runId, attempt, readOptions),
-        );
+        const jobs = await readJobs(attempt);
         if (!jobs) {
           return false;
         }
@@ -3457,7 +3602,13 @@ async function pollRelease(state, client, pending, observation, readOptions) {
           jobs.every((job) => job.status === "completed");
         scansComplete &&= final;
         for (const job of jobs) {
-          const failure = failedJobEvent(child.key, job, current, runId);
+          const failure = failedJobEvent(
+            child.key,
+            job,
+            attempt,
+            runId,
+            job.run_attempt ?? attempt,
+          );
           if (failure) {
             report(...failure);
           }
@@ -3533,7 +3684,7 @@ async function pollRelease(state, client, pending, observation, readOptions) {
         ? `candidate ${candidate.sha} is the current ${candidate.ref} tip; qualification remains separate`
         : `candidate ${candidate.sha ?? "identity"}: tip observation unknown; no current-tip qualification claim`,
     undefined,
-    candidate,
+    { candidate },
   );
   const complete =
     parentDone && !dispatchPending && childStates.every(Boolean) && failedReads.length === 0;
@@ -3581,6 +3732,10 @@ export async function watchRelease(parentRunId, client, options = {}) {
     writeWatchState(statePath, state);
     for (const event of events) {
       emit(event);
+    }
+    const blockers = events.filter((event) => event.blocker);
+    if (blockers.length) {
+      return { complete, blockers, statePath };
     }
     if (complete) {
       return { complete, statePath };
@@ -3658,6 +3813,9 @@ function print(value, json) {
       "Inspect the skipped runs and their latest PR checks, then preview with pnpm frv prioritize --restore <record> --dry-run using the same record and same --repo. Restore without --dry-run only if those checks still need recovery.",
     );
   }
+  for (const blocker of value.blockers ?? []) {
+    console.log(`blocker: ${formatBlocker(blocker)}`);
+  }
   for (const failure of value.failures ?? []) {
     console.log(`failure: ${failure}`);
   }
@@ -3705,17 +3863,30 @@ async function main() {
     return;
   }
   if (options.command === "watch") {
-    await watchRelease(options.runId, createClient(options.repository, { cachedReads: true }), {
-      emit: (event) =>
-        console.log(
-          options.json
-            ? JSON.stringify({ at: new Date().toISOString(), ...event })
-            : formatProgressEvent("watch", event),
-        ),
-      intervalMs: options.intervalMs,
-      once: options.once,
-      statePath: options.statePath,
-    });
+    const { blockers } = await watchRelease(
+      options.runId,
+      createClient(options.repository, { cachedReads: true }),
+      {
+        emit: (event) =>
+          console.log(
+            options.json
+              ? JSON.stringify({ at: new Date().toISOString(), ...event })
+              : formatProgressEvent("watch", event),
+          ),
+        intervalMs: options.intervalMs,
+        once: options.once,
+        statePath: options.statePath,
+      },
+    );
+    if (blockers?.length) {
+      console.error(
+        `[frv watch] stopped on blocker: ${blockers.map((event) => event.message).join("; ")}`,
+      );
+      console.error(
+        `[frv watch] next: inspect with pnpm frv status --run ${options.runId}, then plan recovery with pnpm frv continue --failed --dry-run --run ${options.runId}; rerun watch to keep following the tree`,
+      );
+      process.exitCode = 1;
+    }
     return;
   }
   const client = createClient(options.repository);
