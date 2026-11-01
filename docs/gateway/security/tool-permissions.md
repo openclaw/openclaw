@@ -36,14 +36,14 @@ Agents with message-tool access can send across conversations and channel provid
 
 `tools.message.crossContext.allowAcrossProviders` defaults to `true`. Upgrades adopt this default when the setting is omitted; an explicit `false` continues to block guarded message actions from crossing the bound source provider. Set it to `false` if your deployment relies on that restriction.
 
-`allowWithinProvider` also defaults to `true` and independently controls actions targeting another conversation on the same provider. To confine guarded message actions to the current bound conversation, set both options to `false`:
+`allowWithinProvider` defaults to `false`, so a bound turn can only send within its own conversation unless the operator explicitly opts in. Set it to `true` to allow cross-chat sends on the same provider; set `allowAcrossProviders` to `false` to block cross-provider messaging as well:
 
 ```json5
 {
   tools: {
     message: {
       crossContext: {
-        allowWithinProvider: false,
+        allowWithinProvider: true,
         allowAcrossProviders: false,
       },
     },
