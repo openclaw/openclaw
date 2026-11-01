@@ -33,7 +33,7 @@ const response = () => ({
 });
 
 it("keeps the production context-report retry backoff across a wall-clock jump while hidden", async () => {
-  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  vi.useFakeTimers();
   const request = createGatewayRequestMock();
   request
     .mockRejectedValueOnce(
@@ -51,19 +51,24 @@ it("keeps the production context-report retry backoff across a wall-clock jump w
     vi.restoreAllMocks();
   });
 
+  store.watch(owner, target, false);
   store.watch(owner, target);
   await store.refresh(target);
   expect(request).toHaveBeenCalledTimes(1);
+  expect(store.get(target).failed).toBe(true);
 
   const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
   document.dispatchEvent(new Event("visibilitychange"));
+  expect(vi.getTimerCount()).toBe(0);
+
   vi.setSystemTime(Date.now() + 3_600_000);
   visibility.mockReturnValue("visible");
   document.dispatchEvent(new Event("visibilitychange"));
+  expect(vi.getTimerCount()).toBe(1);
 
-  // Remaining backoff is ~30s minus a few real ms between schedule and resume.
   await vi.advanceTimersByTimeAsync(20_000);
   expect(request).toHaveBeenCalledTimes(1);
   await vi.advanceTimersByTimeAsync(20_000);
   expect(request).toHaveBeenCalledTimes(2);
+  expect(store.get(target).failed).toBe(false);
 });
