@@ -298,9 +298,15 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
       sentBeforeError: false,
     });
     resolveReply(async () => ({ text: "The answer the queue will resend" }));
-    await dispatchTurn(bot, { status, streamMode: "off" });
+    const result = await dispatchTurn(bot, {
+      status,
+      streamMode: "off",
+      retryDispatchErrors: true,
+    });
     await vi.advanceTimersByTimeAsync(5_000);
+    // No notice and no turn retry: the queue owns the resend.
     expect([...messages.values()]).toEqual([]);
+    expect(result).toEqual({ kind: "completed" });
   });
 
   it.each(["recording", "replacement", "second"] as const)(

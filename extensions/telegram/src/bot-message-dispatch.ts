@@ -355,6 +355,7 @@ export const dispatchTelegramMessage = async (
     !turn.previewLifecycle.finalDelivered &&
     (terminalFailure ||
       (!turn.progressContinuationAdopted &&
+        !turn.finalDeliveryQueuedForRetry &&
         (deliverySummary.failedNonSilent > 0 ||
           (deliverySummary.skippedNonSilent > 0 && !turn.suppressSilentReplyFallback))));
   if (shouldSendFailureFallback) {
@@ -378,6 +379,7 @@ export const dispatchTelegramMessage = async (
     !deliverySummary.delivered &&
     !turn.suppressSilentReplyFallback &&
     !turn.finalDispatchClaimed &&
+    !turn.finalDeliveryQueuedForRetry &&
     turn.noVisibleReplyFallbackEligible
   ) {
     sentFallback = (await deliverFallback(turn, [{ text: EMPTY_RESPONSE_FALLBACK }], false))
@@ -398,12 +400,15 @@ export const dispatchTelegramMessage = async (
     intentionalNoResponse ||
     turn.previewLifecycle.finalDelivered ||
     turn.progressContinuationAdopted ||
+    // The delivery queue owns a flood-refused final and resends it; do not re-run the turn.
+    turn.finalDeliveryQueuedForRetry === true ||
     sentFallback;
   const hasVisibleResponse = deliverySummary.delivered || sentFallback;
   const deliveryFailureWithoutFinalResponse =
     !intentionalNoResponse &&
     !turn.previewLifecycle.finalDelivered &&
     !turn.progressContinuationAdopted &&
+    !turn.finalDeliveryQueuedForRetry &&
     (turn.previewLifecycle.finalFailed ||
       deliverySummary.skippedNonSilent > 0 ||
       deliverySummary.failedNonSilent > 0);
