@@ -46,7 +46,7 @@ export function SessionsCard(props: {
   overview?: UsageProps["data"]["sessionPage"];
   loading?: boolean;
   totalSessions: number;
-  onRowSelected?: (key: string, row: HTMLElement) => void;
+  onRowSelected?: (key: string, row: HTMLElement, button: HTMLElement) => void;
 }) {
   const isTokenMode = createMemo(() => props.usage.display.chartMode === "tokens");
   // The page leads with the costliest sessions; the rest of the page stays one click away.
@@ -230,7 +230,7 @@ function SessionRows(props: {
   selectedSessions: string[];
   isTokenMode: boolean;
   onSelect: UsageProps["callbacks"]["details"]["onSelectSession"];
-  onRowSelected?: (key: string, row: HTMLElement) => void;
+  onRowSelected?: (key: string, row: HTMLElement, button: HTMLElement) => void;
 }) {
   const orderedKeys = createMemo(() => props.sessions.map((session) => session.key));
   return (
@@ -258,8 +258,9 @@ function SessionRows(props: {
           equals: (previous, next) => previous.label === next.label,
         });
         let row!: HTMLDivElement;
+        let selection!: HTMLButtonElement;
         const onSelect = (event: MouseEvent) => {
-          props.onRowSelected?.(session().key, row);
+          props.onRowSelected?.(session().key, row, selection);
           props.onSelect(session().key, event.shiftKey, orderedKeys());
         };
         return (
@@ -278,6 +279,7 @@ function SessionRows(props: {
             title={session().key}
           >
             <button
+              ref={(element) => (selection = element)}
               type="button"
               class="session-bar-selection"
               aria-label={label()}

@@ -30,7 +30,7 @@ it("reveals the detail panel on a phone row tap and returns to the row on close"
   const state = usageState({}, (base) => ({
     ...base,
     sessions,
-    totals: usageTotals(),
+    totals: usageTotals(120, 1),
     aggregates: buildAggregatesFromSessions(sessions),
   }));
   const { usage, setFilters } = state;

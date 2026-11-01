@@ -1,4 +1,4 @@
-import { Show, createEffect, onSettled } from "solid-js";
+import { Show, onSettled } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createSessionDetailReveal } from "./session-detail-reveal.ts";
 import type { UsageProps, UsageSessionEntry } from "./types.ts";
@@ -16,7 +16,6 @@ export function UsageSessionsGrid(props: {
   selected: UsageSessionEntry | null | undefined;
 }) {
   const reveal = createSessionDetailReveal();
-  createEffect(() => props.selected?.key, reveal.settle);
   onSettled(() => reveal.dispose);
   return (
     <div class="usage-grid">
@@ -52,6 +51,16 @@ export function UsageSessionsGrid(props: {
             />
           </aside>
         )}
+      </Show>
+      <Show when={props.selected?.key} keyed>
+        {(key) => {
+          // After the panel above renders this selection, and again once it's gone.
+          onSettled(() => {
+            reveal.settle(key);
+            return () => reveal.settle(undefined);
+          });
+          return null;
+        }}
       </Show>
     </div>
   );

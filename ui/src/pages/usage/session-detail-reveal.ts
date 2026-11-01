@@ -1,3 +1,4 @@
+import { listen } from "../../lib/reactive/listener.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 
 const isPhoneWidth = () => globalThis.matchMedia?.("(max-width: 640px)").matches ?? false;
@@ -11,6 +12,7 @@ const FOLLOW_MS = 4000;
 export function createSessionDetailReveal() {
   let detail: HTMLElement | undefined;
   let row: HTMLElement | undefined;
+  let rowButton: HTMLElement | undefined;
   let pendingKey: string | undefined;
   let returning = false;
   let stopFollowing: (() => void) | undefined;
@@ -29,23 +31,24 @@ export function createSessionDetailReveal() {
     const stop = () => {
       observer.disconnect();
       clearTimeout(timer);
-      for (const input of inputs) {
-        document.removeEventListener(input, stop, true);
+      for (const stopListening of listeners) {
+        stopListening();
       }
       stopFollowing = undefined;
     };
     const timer = setTimeout(stop, FOLLOW_MS);
-    for (const input of inputs) {
-      document.addEventListener(input, stop, { capture: true, passive: true });
-    }
+    const listeners = inputs.map((input) =>
+      listen(document, input, stop, { capture: true, passive: true }),
+    );
     stopFollowing = stop;
   };
   return {
     bindDetail: (element: HTMLElement) => {
       detail = element;
     },
-    rowSelected: (key: string, element: HTMLElement) => {
+    rowSelected: (key: string, element: HTMLElement, button: HTMLElement) => {
       row = element;
+      rowButton = button;
       pendingKey = isPhoneWidth() ? key : undefined;
     },
     closing: () => {
@@ -63,7 +66,7 @@ export function createSessionDetailReveal() {
       }
       if (returning && row?.isConnected) {
         // Closing removes the focused control, so focus follows the person back to the row.
-        row.querySelector("button")?.focus({ preventScroll: true });
+        rowButton?.focus({ preventScroll: true });
         bringIntoView(row, "center");
       }
       returning = false;
