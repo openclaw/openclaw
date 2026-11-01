@@ -6,6 +6,7 @@ import { format } from "oxfmt";
 import * as ts from "typescript/ast";
 import { inspectDatabaseWorkerBoundaries } from "./lib/database-worker-compat.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { normalizeRepoPath } from "./lib/guard-inventory-utils.mjs";
 import {
   createNativeTypeScriptParser,
   reportNativeTypeScriptPhase,
@@ -3944,6 +3945,7 @@ export function loadInventorySources(root = defaultRoot, ref = "", staged = fals
   }
   const sourceFiles = result.stdout
     .split("\0")
+    .map((file) => normalizeRepoPath(root, path.join(root, file)))
     .filter(
       (file) =>
         /\.(?:ts|tsx|js|mjs|mts|cts|cjs)$/.test(file) &&
