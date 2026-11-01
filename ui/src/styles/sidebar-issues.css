@@ -162,7 +162,7 @@
   padding-block: 8px 11px;
 }
 
-.sidebar-issues-panel__tabs .hub-tab .hub-tab__badge {
+.sidebar-issues-panel__tabs.hub-tabs .hub-tab .hub-tab__badge {
   min-height: 0;
   padding: 0;
   background: transparent;

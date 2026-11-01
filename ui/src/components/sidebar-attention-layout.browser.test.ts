@@ -380,6 +380,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
           const badgeBounds = bounds(tabBadge);
           expect(badgeBounds.left).toBeGreaterThanOrEqual(labelBounds.right - 1);
           expect(badgeBounds.right).toBeLessThanOrEqual(tabBounds.right + 1);
+          expect(getComputedStyle(tabBadge).backgroundColor).toBe("rgba(0, 0, 0, 0)");
         }
       }
       tabs[0]!.focus();
