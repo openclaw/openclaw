@@ -96,7 +96,7 @@ describe("session message cache", () => {
       color: "blue",
       hasVersions: true,
     };
-    write({ ...snapshot, sessionState: { ...sessionState, chrome } });
+    write({ ...snapshot, sessionState: { ...sessionState, archived: false, chrome } });
     expect(persisted).toHaveBeenCalledTimes(3);
     expect(read()?.sessionState?.chrome).toEqual(chrome);
   });

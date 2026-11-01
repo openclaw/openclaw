@@ -149,7 +149,13 @@ suite.define(() => {
         const frames = await page.evaluate(
           () => Reflect.get(window, "__paneChrome").read(0).frames,
         );
-        for (const region of ["headerTrailing", "headerIdentity", "identity", "ownFooter"]) {
+        for (const region of [
+          "headerTrailing",
+          "headerIdentity",
+          "identity",
+          "sessionTitle",
+          "ownFooter",
+        ]) {
           const boxes: number[][] = frames.flatMap(
             (frame: { boxes: Record<string, number[] | null> }) =>
               frame.boxes[region] ? [frame.boxes[region]] : [],
