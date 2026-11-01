@@ -154,6 +154,17 @@ describe("Telegram formatting", () => {
     },
   );
 
+  it.each([
+    ["1. Parent\n   - Child\n2. Next", "1. Parent\n  • Child\n2. Next"],
+    [
+      "1) Install\n   - run setup\n   - check version\n2) Configure\n   • edit config\n3) Start",
+      "1. Install\n  • run setup\n  • check version\n2. Configure\n• edit config\n3. Start",
+    ],
+  ])("keeps ordered lists with nested bullets tight: %j", (input, expected) => {
+    expect(markdownToTelegramHtml(input)).toBe(expected);
+    expect(chunkHtml(input)).toEqual([expected]);
+  });
+
   it("splits long multiline html text without breaking balanced tags", () => {
     const chunks = splitTelegramHtmlChunks(`<b>${"A\n".repeat(2500)}</b>`, 4000);
     expectBounded(chunks, 4000);

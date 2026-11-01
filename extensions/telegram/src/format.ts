@@ -102,18 +102,45 @@ function shouldPreserveTelegramListBoundarySpacing(previous: string, next: strin
   );
 }
 
+const TELEGRAM_ORDERED_ITEM_PATTERN = /^([ \t]*)\d+([.)])[ \t]+(?=\S)/;
+
+function continuesEnclosingOrderedList(lines: readonly string[], index: number): boolean {
+  const next = TELEGRAM_ORDERED_ITEM_PATTERN.exec(lines[index] ?? "");
+  if (!next) {
+    return false;
+  }
+  const bulletIndent = /^[ \t]*/.exec(lines[index - 1] ?? "")?.[0].length ?? 0;
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const line = lines[cursor] ?? "";
+    const indent = /^[ \t]*/.exec(line)?.[0].length ?? 0;
+    if (!line.trim() || indent > next[1].length) {
+      continue;
+    }
+    const parent = TELEGRAM_ORDERED_ITEM_PATTERN.exec(line);
+    return (
+      parent !== null &&
+      indent === next[1].length &&
+      parent[2] === next[2] &&
+      bulletIndent >= parent[0].length
+    );
+  }
+  return false;
+}
+
 function preserveTelegramListBoundarySpacing(markdown: string): string {
   // Preserve literal fence examples and indented code when separating prose lists.
   let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
   let previousLine = "";
   let previousOffset = 0;
   let offset = 0;
-  return markdown
-    .split("\n")
-    .map((line) => {
-      const normalizedLine = line.replace(/\r$/, "");
+  const lines = markdown.split("\n");
+  const normalizedLines = lines.map((line) => line.replace(/\r$/, ""));
+  return lines
+    .map((line, index) => {
+      const normalizedLine = normalizedLines[index] ?? "";
       const insertBoundary =
         shouldPreserveTelegramListBoundarySpacing(previousLine, normalizedLine) &&
+        !continuesEnclosingOrderedList(normalizedLines, index) &&
         !isInsideCode(previousOffset, (codeRegions ??= findCodeRegions(markdown))) &&
         !isInsideCode(offset, codeRegions);
       previousLine = normalizedLine;
