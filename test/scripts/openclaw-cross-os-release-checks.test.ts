@@ -41,7 +41,7 @@ import {
   isImmutableReleaseRef,
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   isRecoverableWindowsPackagedUpgradeTimeoutError,
-  managedGatewayRestartCommandTimeoutMs,
+  managedGatewayStartupCommandTimeoutMs,
   normalizeRequestedRef,
   parsePackagedUpgradeUpdateTimings,
   parsePositiveIntegerEnv,
@@ -95,6 +95,7 @@ import {
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureReadyBeforeSettlement as observeFixtureReadiness } from "./run-process.test-support.js";
 import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
 vi.mock("node:net", async (importOriginal) => {
@@ -132,27 +133,15 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-async function fixtureReadyBeforeSettlement(
-  pidPath: string,
-  operation: PromiseLike<unknown>,
-): Promise<void> {
-  // The child records its PID before reporting readiness; socket delivery can trail settlement.
-  const recorded = () => existsSync(pidPath) && Number(readFileSync(pidPath, "utf8")) > 1;
-  const settled = Promise.resolve(operation).then(
-    () => {
-      if (!recorded()) {
-        throw new Error(`timeout waiting for ${pidPath}`);
-      }
-    },
-    (error: unknown) => {
-      if (!recorded()) {
-        throw error;
-      }
-    },
+function fixtureReadyBeforeSettlement(pidPath: string, operation: PromiseLike<unknown>) {
+  // A marker alone can be partial; require the recorded child PID before proceeding.
+  return observeFixtureReadiness(
+    receipts,
+    pidPath,
+    operation,
+    () => existsSync(pidPath) && Number(readFileSync(pidPath, "utf8")) > 1,
   );
-  await Promise.race([receipts.waitFor(pidPath, "ready"), settled]);
 }
-
 // runCommand signals foreign descendants, but only joins the leader and its output streams.
 async function waitForDead(pid: number, signal: AbortSignal): Promise<void> {
   try {
@@ -415,7 +404,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   it("requires dashboard root markers and same-origin asset URLs", () => {
     const html = [
       "<title>OpenClaw Control</title>",
-      "<openclaw-app></openclaw-app>",
+      '<openclaw-app><main id="openclaw-boot-shell"></main></openclaw-app>',
       '<link rel="stylesheet" href="/assets/index.css">',
       '<script type="module" src="assets/index.js"></script>',
       '<script type="module" src="https://example.com/assets/ignored.js"></script>',
@@ -453,10 +442,10 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     );
     expect(CROSS_OS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(180_000);
     expect(CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(300_000);
-    expect(managedGatewayRestartCommandTimeoutMs("win32")).toBeGreaterThan(
+    expect(managedGatewayStartupCommandTimeoutMs("win32")).toBeGreaterThan(
       CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS,
     );
-    expect(managedGatewayRestartCommandTimeoutMs("linux")).toBeGreaterThan(
+    expect(managedGatewayStartupCommandTimeoutMs("linux")).toBeGreaterThan(
       CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
     );
   });
@@ -716,20 +705,17 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(markdown).not.toContain("npm install");
   });
 
-  it.each([
-    {
-      name: "ignores stale OK markers outside the recent tail",
-      lines: [
+  it("ignores stale OK markers outside the recent tail", () => {
+    const logPath = join(tempDirs.make("openclaw-cross-os-agent-output-"), "agent.log");
+    writeFileSync(
+      logPath,
+      [
         JSON.stringify({ payloads: [{ type: "text", text: "OK" }] }),
         "x".repeat(2_200_000),
         JSON.stringify({ payloads: [{ type: "text", text: "still working" }] }),
-      ],
-      expected: false,
-    },
-  ])("$name", ({ lines, expected }) => {
-    const logPath = join(tempDirs.make("openclaw-cross-os-agent-output-"), "agent.log");
-    writeFileSync(logPath, lines.join("\n"));
-    expect(agentOutputHasExpectedOkMarker("", { logPath })).toBe(expected);
+      ].join("\n"),
+    );
+    expect(agentOutputHasExpectedOkMarker("", { logPath })).toBe(false);
   });
 
   it("allows cross-OS provider smoke models to use faster CI overrides", () => {
@@ -764,29 +750,20 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ]);
   });
 
-  it.each([false])("admits only safe pnpm pack destinations: safe=%s", (safe) => {
+  it("rejects unsafe pnpm pack destinations", () => {
     const packDir = resolvePath("/tmp/openclaw-pack");
-    const filenames = safe
-      ? ["openclaw-2026.6.17.tgz", resolvePath(packDir, "openclaw-2026.6.17.tgz")]
-      : [
-          "../openclaw.tgz",
-          "nested/openclaw.tgz",
-          "nested\\openclaw.tgz",
-          resolvePath(dirname(packDir), "openclaw.tgz"),
-          resolvePath(packDir, "nested", "openclaw.tgz"),
-          "openclaw\u0000.tgz",
-          "openclaw.tar.gz",
-        ];
-    for (const filename of filenames) {
-      const resolve = () => resolvePackDestinationTarball(filename, packDir, "pnpm pack");
-      if (safe) {
-        expect(resolve()).toEqual({
-          fileName: "openclaw-2026.6.17.tgz",
-          path: resolvePath(packDir, "openclaw-2026.6.17.tgz"),
-        });
-      } else {
-        expect(resolve).toThrow("pnpm pack did not report a safe .tgz filename.");
-      }
+    for (const filename of [
+      "../openclaw.tgz",
+      "nested/openclaw.tgz",
+      "nested\\openclaw.tgz",
+      resolvePath(dirname(packDir), "openclaw.tgz"),
+      resolvePath(packDir, "nested", "openclaw.tgz"),
+      "openclaw\u0000.tgz",
+      "openclaw.tar.gz",
+    ]) {
+      expect(() => resolvePackDestinationTarball(filename, packDir, "pnpm pack")).toThrow(
+        "pnpm pack did not report a safe .tgz filename.",
+      );
     }
   });
 
@@ -941,16 +918,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ]);
     expect(shouldRunMainChannelDevUpdate("refs/heads/main")).toBe(true);
     expect(shouldRunMainChannelDevUpdate("refs/tags/main")).toBe(false);
-  });
-
-  it.each([
-    {
-      name: "keeps dev-update enabled for main validation refs",
-      input: "main",
-      expected: ["packaged-fresh", "installer-fresh", "packaged-upgrade", "dev-update"],
-    },
-  ])("$name", ({ input, expected }) => {
-    expect(resolveRequestedSuites("both", input)).toEqual(expected);
+    expect(resolveRequestedSuites("both", "main")).toEqual([
+      "packaged-fresh",
+      "installer-fresh",
+      "packaged-upgrade",
+      "dev-update",
+    ]);
   });
 
   it("preflights standalone source candidates before cross-OS dependency installation", async () => {
@@ -1017,25 +990,22 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(script).toContain("$npmPath = Resolve-CommandPath 'npm'");
   });
 
-  it.each([{ source: "legacy", primary: ["", " ", ""] }])(
-    "uses $source runner overrides",
-    ({ source, primary }) => {
-      expect(
-        readRunnerOverrideEnv({
-          VAR_UBUNTU_RUNNER: primary[0],
-          VAR_WINDOWS_RUNNER: primary[1],
-          VAR_MACOS_RUNNER: primary[2],
-          OPENCLAW_RELEASE_CHECKS_UBUNTU_RUNNER: "legacy-linux",
-          OPENCLAW_RELEASE_CHECKS_WINDOWS_RUNNER: "legacy-windows",
-          OPENCLAW_RELEASE_CHECKS_MACOS_RUNNER: "legacy-macos",
-        }),
-      ).toEqual({
-        varUbuntuRunner: `${source}-linux`,
-        varWindowsRunner: `${source}-windows`,
-        varMacosRunner: `${source}-macos`,
-      });
-    },
-  );
+  it("uses legacy runner overrides when primary values are blank", () => {
+    expect(
+      readRunnerOverrideEnv({
+        VAR_UBUNTU_RUNNER: "",
+        VAR_WINDOWS_RUNNER: " ",
+        VAR_MACOS_RUNNER: "",
+        OPENCLAW_RELEASE_CHECKS_UBUNTU_RUNNER: "legacy-linux",
+        OPENCLAW_RELEASE_CHECKS_WINDOWS_RUNNER: "legacy-windows",
+        OPENCLAW_RELEASE_CHECKS_MACOS_RUNNER: "legacy-macos",
+      }),
+    ).toEqual({
+      varUbuntuRunner: "legacy-linux",
+      varWindowsRunner: "legacy-windows",
+      varMacosRunner: "legacy-macos",
+    });
+  });
 
   it("serves installer scripts as UTF-8 text and package payloads as binary", () => {
     expect(resolveStaticFileContentType("scripts/install.sh")).toBe("text/plain; charset=utf-8");

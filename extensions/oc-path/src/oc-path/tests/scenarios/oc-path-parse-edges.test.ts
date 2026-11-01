@@ -14,15 +14,32 @@ describe("oc-path-parse-edges", () => {
       "oc://SOUL.md/Boundaries",
       "oc://SOUL.md/Boundaries/deny-rule-1",
       "oc://SOUL.md/Boundaries/deny-rule-1/risk",
-      "oc://SOUL.md?session=daily",
-      "oc://X.md/a/b/c?session=s",
+      "oc://e\u0301.md?session=e\u0301",
+      "oc://é.md/a/b/e\u0301?session=s",
       "oc://skills/email-drafter/[frontmatter]/name",
       "oc://config/plugins.entries.foo.token",
+      "oc://config.jsonc/items/$first",
+      "oc://config.jsonc/items/$last",
+      'oc://config.jsonc/items/"$first"',
+      'oc://config.jsonc/items/"$last"',
+      "oc://config.jsonc/items/*",
+      "oc://config.jsonc/items/**",
+      "oc://config.jsonc/items/+key",
+      "oc://config.jsonc/items/#0",
+      String.raw`oc://config.jsonc/items/"a\"b\\c/d.e?f"`,
+      String.raw`oc://"dir/a\"b\\c.jsonc"/"$first"`,
     ];
     for (const c of cases) {
       expect(formatOcPath(parseOcPath(c)), `round-trip failed for ${c}`).toBe(c);
     }
   });
+
+  it.each([String.raw`"bad\q"`, String.raw`"bad\n"`, '"bad"quote"'])(
+    "rejects invalid quoted escapes: %s",
+    (segment) => {
+      expect(() => parseOcPath(`oc://config.jsonc/${segment}`)).toThrow(OcPathError);
+    },
+  );
 
   it("file slot with `/` round-trips via quoting", () => {
     const constructed = formatOcPath({

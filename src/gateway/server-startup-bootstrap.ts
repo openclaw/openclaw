@@ -12,7 +12,7 @@ import {
   readConfigFileSnapshotWithPluginMetadata,
   setAppliedRuntimeConfigSnapshot,
 } from "../config/io.js";
-import { normalizeStateDirEnv } from "../config/paths.js";
+import { isNamedProfile, normalizeStateDirEnv, resolveStateDir } from "../config/paths.js";
 import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
 import { captureConfigOverrideApplier } from "../config/runtime-overrides.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions.js";
@@ -21,11 +21,12 @@ import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store/paths.js";
+import { resolveConfigDir } from "../infra/config-dir.js";
 import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
-import { isTruthyEnvValue, isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
+import { isTruthyEnvValue, isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import { prepareGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
@@ -44,7 +45,7 @@ import {
 import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership-preflight.js";
 import { mergeGatewayAuthConfig } from "./auth-resolve.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import { listCoreGatewayMethodNames } from "./methods/core-method-policy.js";
@@ -56,6 +57,7 @@ import {
   resumeGatewayRestartTraceFromEnv,
   resumeGatewayRestartTraceFromHandoff,
 } from "./restart-trace.js";
+import { installGatewayDatabaseEngine } from "./server-database-engine.js";
 import type { GatewayServerOptions } from "./server-public.js";
 import { resolveGatewayStartupSourceConfig } from "./server-startup-secret-surfaces.js";
 import { createGatewayStartupTrace } from "./server-startup-trace.js";
@@ -66,7 +68,18 @@ type WorkerEnvironmentStartupLoader = () => Promise<
   typeof import("./server-worker-environment-startup.js")
 >;
 
-export async function prepareGatewayServerBootstrap(input: {
+export async function prepareGatewayServerBootstrap(
+  input: Parameters<typeof prepareGatewayServerBootstrapSelected>[0],
+) {
+  process.env.OPENCLAW_GATEWAY_PORT = String(input.port);
+  await installGatewayDatabaseEngine(
+    input.opts.startupConfigSnapshotRead?.snapshot,
+    input.opts.startupConfigSnapshotRead?.databaseEngineSelection,
+  );
+  return prepareGatewayServerBootstrapSelected(input);
+}
+
+async function prepareGatewayServerBootstrapSelected(input: {
   port: number;
   opts: GatewayServerOptions;
   log: GatewayLogger;
@@ -126,6 +139,14 @@ export async function prepareGatewayServerBootstrap(input: {
   });
   const inspectStateOwnership = async (signal?: AbortSignal) => {
     normalizeStateDirEnv(process.env);
+    // Preserve split-config roots and named profiles whose dotenv/socket defaults
+    // distinguish an implicit state directory from an explicit override.
+    if (!process.env.OPENCLAW_STATE_DIR?.trim() && !isNamedProfile(process.env)) {
+      const stateDir = resolveStateDir(process.env);
+      if (resolveConfigDir(process.env) === stateDir) {
+        process.env.OPENCLAW_STATE_DIR = stateDir;
+      }
+    }
     await assertOpenClawStateWriteAllowedAtPath({
       databasePath: resolveOpenClawStateSqlitePath(process.env),
       env: process.env,
@@ -186,14 +207,14 @@ export async function prepareGatewayServerBootstrap(input: {
     isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
   const ambientEnvTriggers = opts.ambientEnvTriggers ?? "suppress";
 
-  logAcceptedEnvOption({
-    key: "OPENCLAW_RAW_STREAM",
-    description: "raw stream logging enabled",
-  });
-  logAcceptedEnvOption({
-    key: "OPENCLAW_RAW_STREAM_PATH",
-    description: "raw stream log path override",
-  });
+  if (!process.env.VITEST && process.env.NODE_ENV !== "test") {
+    if (process.env.OPENCLAW_RAW_STREAM?.trim()) {
+      log.info("raw stream logging flag configured via OPENCLAW_RAW_STREAM");
+    }
+    if (process.env.OPENCLAW_RAW_STREAM_PATH?.trim()) {
+      log.info("raw stream log path override configured via OPENCLAW_RAW_STREAM_PATH");
+    }
+  }
   if (!minimalTestGateway && !opts.updateCanary) {
     await startupTrace.measure("runtime.agent-cli", () => prepareGatewayAgentCliShim());
   }
@@ -451,6 +472,13 @@ export async function prepareGatewayServerBootstrap(input: {
     ),
     preserveExistingOwnership: true,
   });
+  if (!minimalTestGateway && !opts.updateCanary) {
+    const { recoverConfiguredMcpDockerServers } = await import("../agents/mcp-docker-recovery.js");
+    await recoverConfiguredMcpDockerServers(
+      cfgAtStart,
+      startupConfigLoad.pluginMetadataSnapshot?.manifestRegistry,
+    );
+  }
   const preparations = [
     minimalTestGateway || opts.updateCanary
       ? Promise.resolve(undefined)
@@ -571,9 +599,7 @@ export async function prepareGatewayServerBootstrap(input: {
     ambientEnvTriggers,
     startupTrace,
     configSnapshot,
-    startupConfigLoad,
     startupActivationSourceConfig,
-    startupRuntimeConfig,
     startupSessionDatabases,
     cronStorePath,
     cfgAtStart,

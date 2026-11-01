@@ -25,7 +25,7 @@ type NodeWorkerContainerExpectedOwner = {
   launchId: string;
 };
 
-const DEFAULT_NODE_WORKER_CONTAINER_IMAGE = "node:24.21.0-slim";
+const DEFAULT_NODE_WORKER_CONTAINER_IMAGE = "node:24.22.1-slim";
 // Burst launches can delay a healthy daemon's identity response; keep revalidation
 // fail-closed without treating temporary daemon contention as an unavailable engine.
 const CONTAINER_REVALIDATION_TIMEOUT_MS = 30_000;
@@ -216,7 +216,7 @@ async function resolveContainerEngineTarget(
 export async function resolveNodeWorkerContainerEngine(
   options: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<NodeWorkerContainerEngine> {
-  const env = options.env ? Object.freeze({ ...process.env, ...options.env }) : process.env;
+  const env = options.env ? { ...process.env, ...options.env } : process.env;
   const failures: string[] = [];
   for (const id of ["docker", "podman"] as const) {
     const command = resolveExecutableFromPathEnv(id, env.PATH ?? process.env.PATH ?? "", env);

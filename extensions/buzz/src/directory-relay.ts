@@ -13,14 +13,8 @@ const PROFILE_SUBSCRIPTION_REPLACED_REASON = "directory profile subscription rep
 const PROFILE_SUBSCRIPTION_FAILED_REASON = "directory profile subscription generation failed";
 const DIRECTORY_SHUTDOWN_REASON = "directory shutdown";
 const DIRECTORY_QUERY_COMPLETE_REASON = "directory query complete";
-const PROFILE_SUBSCRIPTION_READY_TIMEOUT_MS = 10_000;
 
 type BuzzSubscription = ReturnType<Relay["prepareSubscription"]>;
-type ProfileSubscriptionGeneration = {
-  subscriptions: BuzzSubscription[];
-  pendingReady: number;
-  readyTimeout?: ReturnType<typeof setTimeout>;
-};
 
 async function queryBuzzDirectoryBatch(params: {
   relay: Relay;
@@ -104,15 +98,14 @@ export function startBuzzDirectoryRelay(params: {
   relay: Relay;
   relayPublicKey: string;
   state: BuzzDirectoryState;
-  subscribedRoomIds?: ReadonlySet<string>;
+  subscribedRoomIds: ReadonlySet<string>;
   signal?: AbortSignal;
   onError?: (error: Error) => void;
   onFatalError?: (error: Error) => void;
   onRoomChanged?: () => void;
 }) {
   let closed = false;
-  let profileGeneration: ProfileSubscriptionGeneration | undefined;
-  let queuedProfilePublicKeys: string[] | undefined;
+  let profileSubscriptions: BuzzSubscription[] = [];
   const pendingRoomIds = new Set<string>();
   let refreshInFlight: Promise<void> | undefined;
   let fatalErrorReported = false;
@@ -134,63 +127,23 @@ export function startBuzzDirectoryRelay(params: {
     params.relay.close();
   };
 
-  const closeProfileGeneration = (reason: string, skip?: BuzzSubscription) => {
-    const current = profileGeneration;
-    profileGeneration = undefined;
-    if (!current) {
-      return;
-    }
-    if (current.readyTimeout) {
-      clearTimeout(current.readyTimeout);
-    }
-    for (const subscription of current.subscriptions) {
+  const closeProfileSubscriptions = (reason: string, skip?: BuzzSubscription) => {
+    const current = profileSubscriptions;
+    profileSubscriptions = [];
+    for (const subscription of current) {
       if (subscription !== skip && !subscription.closed) {
         subscription.close(reason);
       }
     }
   };
 
-  const applyQueuedProfilePublicKeys = () => {
-    if (
-      closed ||
-      params.signal?.aborted ||
-      queuedProfilePublicKeys === undefined ||
-      (profileGeneration?.pendingReady ?? 0) > 0
-    ) {
+  const replaceProfilePublicKeys = (publicKeys: string[]) => {
+    if (closed || params.signal?.aborted) {
       return;
     }
-    const publicKeys = queuedProfilePublicKeys;
-    queuedProfilePublicKeys = undefined;
-    closeProfileGeneration(PROFILE_SUBSCRIPTION_REPLACED_REASON);
-    const authorChunks = chunkItems(publicKeys, BUZZ_PROFILE_QUERY_CHUNK_SIZE);
-    if (authorChunks.length === 0) {
-      return;
-    }
-    const generation: ProfileSubscriptionGeneration = {
-      subscriptions: [],
-      pendingReady: authorChunks.length,
-    };
-    generation.readyTimeout = setTimeout(() => {
-      if (profileGeneration !== generation || generation.pendingReady === 0) {
-        return;
-      }
-      reportFatalError(new Error("Timed out loading Buzz profile subscriptions"));
-    }, PROFILE_SUBSCRIPTION_READY_TIMEOUT_MS);
-    profileGeneration = generation;
-    for (const authors of authorChunks) {
-      const markReady = () => {
-        if (profileGeneration !== generation) {
-          return;
-        }
-        generation.pendingReady -= 1;
-        if (generation.pendingReady === 0 && generation.readyTimeout) {
-          clearTimeout(generation.readyTimeout);
-          generation.readyTimeout = undefined;
-        }
-        if (generation.pendingReady === 0) {
-          applyQueuedProfilePublicKeys();
-        }
-      };
+    // Profile labels are best-effort; new keys replace unfinished profile reads.
+    closeProfileSubscriptions(PROFILE_SUBSCRIPTION_REPLACED_REASON);
+    for (const authors of chunkItems(publicKeys, BUZZ_PROFILE_QUERY_CHUNK_SIZE)) {
       const subscription = openBuzzRelaySubscription(
         params.relay,
         [
@@ -204,40 +157,21 @@ export function startBuzzDirectoryRelay(params: {
           onevent: (event) => {
             params.state.applyProfileEvent(event);
           },
-          oneose: markReady,
           onclose: (reason) => {
-            if (profileGeneration === generation) {
-              queuedProfilePublicKeys = undefined;
-              if (reason === "relay connection closed by us") {
-                if (generation.readyTimeout) {
-                  clearTimeout(generation.readyTimeout);
-                }
-                profileGeneration = undefined;
-              } else {
-                closeProfileGeneration(PROFILE_SUBSCRIPTION_FAILED_REASON, subscription);
-              }
-            }
             if (
               reason !== PROFILE_SUBSCRIPTION_REPLACED_REASON &&
               reason !== PROFILE_SUBSCRIPTION_FAILED_REASON &&
               reason !== DIRECTORY_SHUTDOWN_REASON &&
               reason !== "relay connection closed by us"
             ) {
+              closeProfileSubscriptions(PROFILE_SUBSCRIPTION_FAILED_REASON, subscription);
               reportError(new Error(`Buzz profile subscription closed: ${reason}`));
             }
           },
         },
       );
-      generation.subscriptions.push(subscription);
+      profileSubscriptions.push(subscription);
     }
-  };
-
-  const replaceProfilePublicKeys = (publicKeys: string[]) => {
-    if (closed || params.signal?.aborted) {
-      return;
-    }
-    queuedProfilePublicKeys = publicKeys.slice();
-    applyQueuedProfilePublicKeys();
   };
 
   const refreshRooms = (channelIds: string[]): Promise<void> => {
@@ -269,7 +203,7 @@ export function startBuzzDirectoryRelay(params: {
         });
         const changedRoomId = nextRoomIds.find(
           (channelId) =>
-            params.subscribedRoomIds?.has(channelId) === params.state.isRoomArchived(channelId),
+            params.subscribedRoomIds.has(channelId) === params.state.isRoomArchived(channelId),
         );
         if (changedRoomId) {
           reportFatalError(
@@ -291,8 +225,7 @@ export function startBuzzDirectoryRelay(params: {
     refreshRooms,
     close: () => {
       closed = true;
-      queuedProfilePublicKeys = undefined;
-      closeProfileGeneration(DIRECTORY_SHUTDOWN_REASON);
+      closeProfileSubscriptions(DIRECTORY_SHUTDOWN_REASON);
       pendingRoomIds.clear();
     },
   };

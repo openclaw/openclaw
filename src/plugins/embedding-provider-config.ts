@@ -4,8 +4,12 @@ import {
 } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
-const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
+/** Provider id for OpenAI-compatible remote embedding servers. */
+export const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
+export const OPENAI_COMPATIBLE_MODEL_APIS: ReadonlySet<string> = new Set([
+  "openai-completions",
+  "openai-responses",
+]);
 
 /** Reads a configured provider's backing API id when runtime lookup should follow an alias. */
 export function resolveConfiguredGenericEmbeddingProviderId(

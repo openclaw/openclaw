@@ -4,9 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isIndexedSessionEntry } from "../../agents/sessions/session-manager-codec.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { createPrivateSqliteTempDirectorySync } from "../../infra/sqlite-private-directory.js";
 import {
@@ -14,6 +12,7 @@ import {
   transcriptRepairUserKey,
 } from "./legacy-transcript-repair.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import { equivalentLegacySessionHeaders, isIndexedSessionEntry } from "./session-entry-codec.js";
 import { projectTranscriptNavigationFields } from "./transcript-navigation-fields.js";
 import {
   scanSessionTranscriptNavigation,
@@ -117,12 +116,18 @@ export class SqliteSessionImportStage {
     return !this.rejected;
   }
 
-  addSeen(eventJson: string): void {
-    this.insertSeen.run(hash("sha256", eventJson, "buffer"), eventJson);
+  addSeen(eventJson: string, repairLegacyTranscript = false): unknown {
+    const event: unknown = repairLegacyTranscript ? JSON.parse(eventJson) : undefined;
+    const normalizedJson =
+      isRecord(event) && normalizeLegacyOpenAICodexTranscriptMetadata([event]) > 0
+        ? JSON.stringify(event)
+        : eventJson;
+    this.insertSeen.run(hash("sha256", normalizedJson, "buffer"), normalizedJson);
+    return event;
   }
 
-  /** Plan repair on disk; headers-only verification preserves every other payload. */
-  repairLegacyTranscript(source: number, headersOnly = false) {
+  /** Plan the importer's persisted projection on disk. */
+  repairLegacyTranscript(source: number) {
     this.database.exec(
       "DELETE FROM tree; DELETE FROM tree_sets; DELETE FROM selected; DELETE FROM user_keys;",
     );
@@ -191,13 +196,7 @@ export class SqliteSessionImportStage {
           continue;
         }
         if (entry.type === "session") {
-          if (
-            header &&
-            isDeepStrictEqual(
-              { ...header, timestamp: undefined },
-              { ...entry, timestamp: undefined },
-            )
-          ) {
+          if (header && equivalentLegacySessionHeaders(header, entry)) {
             repeatedRows.add(String(row.seq));
             changed = true;
             continue;
@@ -207,9 +206,6 @@ export class SqliteSessionImportStage {
           }
           headerSeq ??= row.seq;
           header ??= entry;
-          continue;
-        }
-        if (headersOnly) {
           continue;
         }
         if (normalizeLegacyOpenAICodexTranscriptMetadata([entry]) > 0) {
@@ -396,6 +392,6 @@ export class SqliteSessionImportStage {
     const count = this.database
       .prepare("SELECT COUNT(*) AS count FROM rows WHERE source = ?")
       .get(source);
-    return { repaired: changed, events: Number(count!.count), recognized };
+    return { repaired: changed, branchRepaired: broken, events: Number(count!.count), recognized };
   }
 }

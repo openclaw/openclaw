@@ -5,6 +5,10 @@ import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/s
 import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import {
+  getRpcSourceForGateway,
+  getRpcSourceIdentity,
+} from "../sessions/session-controller.rpc-sources.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
 import type { operatorSessionCap } from "./operator-role-policy.js";
@@ -140,7 +144,7 @@ export function resolveProtectedSessionTargets(params: {
     !params.adminBypass &&
     directTargets.length > 0 &&
     Boolean(gatewayClientSessionCreator(params.client)) &&
-    params.sessionCap() === "none";
+    ["none", "invited"].includes(params.sessionCap() ?? "");
   const protectedTargets = hidesForeignSessions
     ? directTargets
     : (params.talkTargets?.filter((target) => isIncognitoSessionKey(target.sessionKey)) ??
@@ -232,7 +236,8 @@ export function resolveTalkSessionTargetInput(
     method !== "talk.session.create" &&
     method !== "talk.client.transcript" &&
     method !== "talk.client.close" &&
-    method !== "talk.client.steer"
+    method !== "talk.client.steer" &&
+    method !== "talk.client.say"
   ) {
     return undefined;
   }
@@ -329,9 +334,18 @@ export function resolveSessionMutationTargets(params: {
   if (params.method !== "sessions.abort") {
     return undefined;
   }
-  const runId = readSessionSharingStringParam(params.requestParams, "runId");
-  const run = runId ? params.context.chatAbortControllers.get(runId) : undefined;
-  return run
-    ? [{ sessionKey: run.sessionKey, ...(run.agentId ? { agentId: run.agentId } : {}) }]
+  const runId = asOptionalRecord(params.requestParams)?.runId;
+  const run =
+    typeof runId === "string"
+      ? getRpcSourceForGateway(runId, params.context.resolveGatewayContext)
+      : undefined;
+  const identity = run ? getRpcSourceIdentity(run) : undefined;
+  return identity
+    ? [
+        {
+          sessionKey: identity.sessionKey,
+          ...(identity.agentId ? { agentId: identity.agentId } : {}),
+        },
+      ]
     : undefined;
 }

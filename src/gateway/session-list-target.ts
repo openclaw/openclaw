@@ -49,6 +49,7 @@ export type SessionListTargetLookup = (key: string) =>
       entry: SessionEntry;
       selection: ReturnType<typeof readSessionListSelectionFacts>;
       storeKey?: string;
+      hasBoard?: boolean;
     }
   | undefined;
 

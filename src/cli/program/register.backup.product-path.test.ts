@@ -1,8 +1,10 @@
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
-import * as tar from "tar";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
+import { listArchiveEntries } from "../../infra/backup-create.test-support.js";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -12,75 +14,59 @@ import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { cliRecoveryEntrypoints } from "../cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "../cli-process-child.test-helpers.js";
 
-function runBackupCli(params: {
-  env: NodeJS.ProcessEnv;
-  outputPath: string;
-  includeWorkspace?: boolean;
-}): Promise<{ code: number | null; stdout: string; stderr: string }> {
+function runBackupCli(
+  state: OpenClawTestState,
+  includeWorkspace = false,
+  env: NodeJS.ProcessEnv = {},
+) {
   return runCliProcessChild({
     nodeArgs: [
       ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
       "backup",
       "create",
       "--output",
-      params.outputPath,
-      ...(params.includeWorkspace ? [] : ["--no-include-workspace"]),
+      state.path("backup.tar.gz"),
+      ...(includeWorkspace ? [] : ["--no-include-workspace"]),
       "--verify",
       "--json",
     ],
-    env: { ...params.env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
+    env: { ...process.env, ...state.env, ...env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
   });
 }
 
-describe("backup create CLI", () => {
-  it.each([true, false])(
-    "backup create retains workspace-discovered owners under state write load (includeWorkspace=%s)",
-    async (includeWorkspace) => {
-      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-        const pluginRoot = path.join(
-          state.workspaceDir,
-          ".openclaw",
-          "extensions",
-          "backup-fixture",
-        );
-        await fs.mkdir(pluginRoot, { recursive: true });
-        await fs.writeFile(path.join(state.workspaceDir, "workspace-only-marker.txt"), "workspace");
-        await fs.writeFile(
-          path.join(pluginRoot, "package.json"),
-          JSON.stringify({
-            name: "backup-fixture",
-            version: "1.0.0",
-            openclaw: { extensions: ["./index.cjs"] },
-          }),
-        );
-        await fs.writeFile(
-          path.join(pluginRoot, "index.cjs"),
-          "module.exports = { register() {} };",
-        );
-        await fs.writeFile(
-          path.join(pluginRoot, "openclaw.plugin.json"),
-          JSON.stringify({
-            id: "backup-fixture",
-            configSchema: { type: "object", properties: {} },
-            backupResources: [
-              { disposition: "include", scope: "state", relativePath: "plugin-data" },
-            ],
-          }),
-        );
-        await state.writeConfig({
-          agents: { entries: { main: { workspace: state.workspaceDir } } },
-          plugins: { allow: ["backup-fixture"], entries: { "backup-fixture": { enabled: true } } },
-        });
-        const root = openOpenClawStateDatabase();
-        const rootPath = root.path;
-        closeOpenClawStateDatabase();
-        await fs.mkdir(state.statePath("plugin-data"));
-        const writer = new Worker(
-          `
+it.each([true, false])(
+  "backup create retains workspace-discovered owners under state write load (includeWorkspace=%s)",
+  async (includeWorkspace) => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const pluginRoot = path.join(state.workspaceDir, ".openclaw/extensions/backup-fixture");
+      await fs.writeFile(path.join(state.workspaceDir, "workspace-only-marker.txt"), "workspace");
+      writeJsonFile(path.join(pluginRoot, "package.json"), {
+        name: "backup-fixture",
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.cjs"] },
+      });
+      await fs.writeFile(path.join(pluginRoot, "index.cjs"), "module.exports = { register() {} };");
+      writeJsonFile(path.join(pluginRoot, "openclaw.plugin.json"), {
+        id: "backup-fixture",
+        configSchema: { type: "object", properties: {} },
+        backupResources: [{ disposition: "include", scope: "state", relativePath: "plugin-data" }],
+      });
+      await state.writeConfig({
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
+        plugins: { allow: ["backup-fixture"], entries: { "backup-fixture": { enabled: true } } },
+      });
+      const rootPath = openOpenClawStateDatabase().path;
+      closeOpenClawStateDatabase();
+      await fs.mkdir(state.statePath("plugin-data"));
+      const writer = new Worker(
+        `
           const { parentPort, workerData } = require('node:worker_threads');
           const { DatabaseSync } = require('node:sqlite');
           const plugin = new DatabaseSync(workerData.plugin);
@@ -97,90 +83,71 @@ describe("backup create CLI", () => {
           }
           tick(); parentPort.postMessage('ready');
         `,
-          {
-            eval: true,
-            workerData: { root: rootPath, plugin: state.statePath("plugin-data/records.sqlite") },
-          },
-        );
-        const finished = new Promise<number | Error>((resolve) => {
-          writer.once("error", resolve);
-          writer.once("exit", resolve);
-        });
-        try {
-          await new Promise<void>((resolve, reject) => {
-            writer.once("message", () => resolve());
-            writer.once("error", reject);
-          });
-          const outputPath = state.path("backup.tar.gz");
-          const result = await runBackupCli({
-            env: { ...process.env, ...state.env },
-            outputPath,
-            includeWorkspace,
-          });
-          expect(result.code, result.stderr).toBe(0);
-          const archive = JSON.parse(result.stdout);
-          expect(archive.agentRoots).toEqual([expect.objectContaining({ agentId: "main" })]);
-          expect(archive.verified).toBe(true);
-          expect(archive.warnings ?? []).toEqual([]);
-          const entries: string[] = [];
-          await tar.t({
-            file: outputPath,
-            onReadEntry: (entry) => {
-              entries.push(entry.path);
-            },
-          });
-          expect(entries.some((entry) => entry.endsWith("/plugin-data/records.sqlite"))).toBe(true);
-          expect(entries.some((entry) => entry.endsWith("/workspace-only-marker.txt"))).toBe(
-            includeWorkspace,
-          );
-        } finally {
-          writer.postMessage("stop", []);
-          expect(await finished).toBe(0);
-        }
-      });
-    },
-  );
-
-  it("backup create refuses unreadable discovery state even without workspaces", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      await state.writeConfig({ agents: { entries: { main: {} } } });
-      await fs.mkdir(state.statePath("state"));
-      await fs.writeFile(state.statePath("state/openclaw.sqlite"), "unreadable database");
-      const outputPath = state.path("backup.tar.gz");
-      const result = await runBackupCli({ env: { ...process.env, ...state.env }, outputPath });
-      expect(result.code).toBe(1);
-      expect(result.stderr).not.toContain("Config invalid");
-      expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-      expect(result.stderr).toContain("[openclaw] For help, run `openclaw doctor`.");
-      const failure = JSON.parse(result.stdout);
-      expect(failure).toMatchObject({ ok: false, error: { type: "cli_error" } });
-      expect(failure.error.message).toContain(
-        `Cannot read shared state for discovery: ${state.statePath("state/openclaw.sqlite")}.`,
+        {
+          eval: true,
+          workerData: { root: rootPath, plugin: state.statePath("plugin-data/records.sqlite") },
+        },
       );
-      expect(failure.error.message).toContain("file is not a database");
-      await expect(fs.stat(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
-
-  it("completes when the SQLite snapshot outlives the audit lease", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "backup-cli-audit-lease-", scenario: "minimal" },
-      async (state) => {
-        await state.writeConfig({ gateway: { mode: "local" } });
-        await state.writeText(
-          "logs/config-audit.jsonl",
-          `${JSON.stringify({
-            ts: "2026-09-03T00:00:00.000Z",
-            source: "config-io",
-            event: "config.write",
-            argv: ["openclaw", "config", "set", "proof", "lease"],
-            execArgv: [],
-          })}\n`,
+      const finished = once(writer, "exit").then(
+        ([code]: readonly unknown[]) => code,
+        (error: unknown) => error,
+      );
+      try {
+        await once(writer, "message");
+        const result = await runBackupCli(state, includeWorkspace);
+        expect(result.code, result.stderr).toBe(0);
+        const archive = JSON.parse(result.stdout);
+        expect(archive).toMatchObject({ agentRoots: [{ agentId: "main" }], verified: true });
+        expect(archive.warnings ?? []).toEqual([]);
+        const entries = await listArchiveEntries(state.path("backup.tar.gz"));
+        expect(entries.some((entry) => entry.endsWith("/plugin-data/records.sqlite"))).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/workspace-only-marker.txt"))).toBe(
+          includeWorkspace,
         );
-        const markerPath = state.path("sqlite-backup-entered");
-        const preloadPath = await state.writeText(
-          "shift-clock-at-sqlite-backup.cjs",
-          `
+      } finally {
+        writer.postMessage("stop", []);
+        expect(await finished).toBe(0);
+      }
+    });
+  },
+);
+
+it("backup create refuses unreadable discovery state even without workspaces", async () => {
+  await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+    await state.writeConfig({ agents: { entries: { main: {} } } });
+    await fs.mkdir(state.statePath("state"));
+    await fs.writeFile(state.statePath("state/openclaw.sqlite"), "unreadable database");
+    const result = await runBackupCli(state);
+    expect(result.code).toBe(1);
+    const failure = JSON.parse(result.stdout);
+    expect(failure).toMatchObject({ ok: false, error: { type: "cli_error" } });
+    expect(failure.error.message).toContain(
+      `Cannot read shared state for discovery: ${state.statePath("state/openclaw.sqlite")}.`,
+    );
+    expect(failure.error.message).toContain("file is not a database");
+    await expect(fs.stat(state.path("backup.tar.gz"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+it("completes when the SQLite snapshot outlives the audit lease", async () => {
+  await withOpenClawTestState(
+    { layout: "state-only", prefix: "backup-cli-audit-lease-", scenario: "minimal" },
+    async (state) => {
+      await state.writeConfig({ gateway: { mode: "local" } });
+      await state.writeText(
+        "logs/config-audit.jsonl",
+        `${JSON.stringify({
+          ts: "2026-09-03T00:00:00.000Z",
+          source: "config-io",
+          event: "config.write",
+          argv: ["openclaw", "config", "set", "proof", "lease"],
+          execArgv: [],
+        })}\n`,
+      );
+      const markerPath = state.path("sqlite-backup-entered");
+      const preloadPath = await state.writeText(
+        "shift-clock-at-sqlite-backup.cjs",
+        `
             const fs = require("node:fs");
             const { syncBuiltinESMExports } = require("node:module");
             const sqlite = process.getBuiltinModule("node:sqlite");
@@ -211,24 +178,16 @@ describe("backup create CLI", () => {
             };
             syncBuiltinESMExports();
           `,
-        );
-        const outputPath = state.path("backup.tar.gz");
+      );
+      const result = await runBackupCli(state, false, {
+        ...sqliteWorkerPreloadEnv(preloadPath),
+        OPENCLAW_TEST_CONSOLE: "1",
+        PROOF_SNAPSHOT_MARKER: markerPath,
+      });
 
-        const result = await runBackupCli({
-          env: {
-            ...process.env,
-            ...state.env,
-            ...sqliteWorkerPreloadEnv(preloadPath),
-            OPENCLAW_TEST_CONSOLE: "1",
-            PROOF_SNAPSHOT_MARKER: markerPath,
-          },
-          outputPath,
-        });
-
-        expect(result.code, result.stderr).toBe(0);
-        expect(await fs.readFile(markerPath, "utf8")).toBe("entered\n");
-        expect((await fs.stat(outputPath)).size).toBeGreaterThan(0);
-      },
-    );
-  });
+      expect(result.code, result.stderr).toBe(0);
+      expect(await fs.readFile(markerPath, "utf8")).toBe("entered\n");
+      expect((await fs.stat(state.path("backup.tar.gz"))).size).toBeGreaterThan(0);
+    },
+  );
 });

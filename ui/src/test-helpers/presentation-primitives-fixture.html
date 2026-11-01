@@ -6,15 +6,6 @@
     <title>Presentation primitives proof</title>
   </head>
   <body>
-    <script type="module">
-      const renderer = new URLSearchParams(location.search).get("renderer");
-      const fixture =
-        renderer === "solid"
-          ? "presentation-primitives-solid.tsx"
-          : "presentation-primitives-lit.ts";
-      // Baseline archives intentionally contain only the Lit fixture.
-      const entry = new URL(`./${fixture}`, location.href).href;
-      await import(/* @vite-ignore */ entry);
-    </script>
+    <script type="module" src="./presentation-primitives-solid.tsx"></script>
   </body>
 </html>

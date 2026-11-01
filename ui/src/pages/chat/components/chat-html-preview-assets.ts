@@ -1,126 +1,16 @@
 import type { SessionsFilesAssetsResult } from "@openclaw/gateway-protocol";
-import { defaultTreeAdapter, html, parse, type DefaultTreeAdapterTypes } from "parse5";
-import { SESSIONS_FILES_ASSETS_MAX_REFS } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { DefaultTreeAdapterTypes } from "parse5";
+import { SESSIONS_FILES_ASSETS_MAX_REFS } from "../../../../../packages/gateway-protocol/src/session-limits.js";
+import {
+  collectHtmlPreviewAssets,
+  htmlPreviewCssReferences,
+  type HtmlPreviewReference as Reference,
+} from "../../../../../src/shared/html-preview-assets.js";
 import { base64ToBytes } from "../../../lib/bytes-base64.ts";
 import { applyHtmlPreviewEdits, type HtmlPreviewEdit } from "./chat-html-preview-source.ts";
 
 type Asset = SessionsFilesAssetsResult["assets"][number];
 type LoadedAsset = Extract<Asset, { content: string }>;
-type Reference = { start: number; end: number; ref: string };
-type TextAssets = {
-  start: number;
-  end: number;
-  source: string;
-  refs: Reference[];
-  attribute?: string;
-};
-type ExternalElement = { node: DefaultTreeAdapterTypes.Element; ref: string };
-
-const FONT_PATH = /\.(?:woff2?|ttf|otf|eot)(?:[?#]|$)/i;
-
-function relativeRef(value: string): string | undefined {
-  let start = 0;
-  let end = value.length;
-  while (start < end && value.charCodeAt(start) <= 0x20) {
-    start += 1;
-  }
-  while (end > start && value.charCodeAt(end - 1) <= 0x20) {
-    end -= 1;
-  }
-  const ref = value.slice(start, end);
-  return ref && !/^(?:[a-z][a-z\d+.-]*:|[/\\#])/i.test(ref) ? ref : undefined;
-}
-
-function escapeAttribute(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
-}
-
-function srcsetRefs(value: string): Reference[] {
-  const refs: Reference[] = [];
-  let cursor = 0;
-  while (cursor < value.length) {
-    while (/[ \t\n\f\r,]/.test(value[cursor] ?? "") && cursor < value.length) {
-      cursor += 1;
-    }
-    const start = cursor;
-    while (cursor < value.length && !/[ \t\n\f\r]/.test(value[cursor]!)) {
-      cursor += 1;
-    }
-    let end = cursor;
-    while (value[end - 1] === ",") {
-      end -= 1;
-    }
-    const ref = relativeRef(value.slice(start, end));
-    if (ref) {
-      refs.push({ start, end, ref });
-    }
-    if (end !== cursor) {
-      continue;
-    }
-    let parentheses = 0;
-    while (cursor < value.length) {
-      const char = value[cursor++];
-      if (char === "(") {
-        parentheses += 1;
-      }
-      if (char === ")") {
-        parentheses -= 1;
-      }
-      if (char === "," && parentheses === 0) {
-        break;
-      }
-    }
-  }
-  return refs;
-}
-
-function cssRefs(source: string, stylesheet = ""): Reference[] {
-  const refs: Reference[] = [];
-  const base = stylesheet.split(/[?#]/, 1)[0] ?? "";
-  const directory = base.slice(0, base.lastIndexOf("/") + 1);
-  // Tokenize strings/comments before url() so their lookalikes remain literal.
-  const tokens =
-    /\/\*[\s\S]*?\*\/|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|@import\b[^;{}]*;|@font-face\b|(?<![\w-])url\((?:\s*"(?:\\[\s\S]|[^"\\])*"\s*|\s*'(?:\\[\s\S]|[^'\\])*'\s*|(?:\\[\s\S]|[^)"'\\])*)\)|[{}]/gi;
-  let depth = 0;
-  let fontDepth: number | undefined;
-  let fontPending = false;
-  for (const match of source.matchAll(tokens)) {
-    const token = match[0];
-    if (token.toLowerCase() === "@font-face") {
-      fontPending = true;
-    } else if (token === "{") {
-      depth += 1;
-      if (fontPending) {
-        fontDepth = depth;
-      }
-      fontPending = false;
-    } else if (token === "}") {
-      if (fontDepth === depth) {
-        fontDepth = undefined;
-      }
-      depth -= 1;
-    } else if (fontDepth === undefined && /^url\(/i.test(token)) {
-      let value = token.slice(4, -1).trim();
-      if (value.startsWith('"') || value.startsWith("'")) {
-        value = value.slice(1, -1);
-      }
-      value = value.replace(
-        /\\(?:([a-f\d]{1,6})\s?|([^\r\n]))/gi,
-        (_escape, hex: string | undefined, char: string | undefined) => {
-          const code = hex ? Number.parseInt(hex, 16) : 0;
-          return hex
-            ? String.fromCodePoint(code > 0 && code <= 0x10ffff ? code : 0xfffd)
-            : (char ?? "");
-        },
-      );
-      const ref = relativeRef(value);
-      if (ref && !FONT_PATH.test(ref)) {
-        refs.push({ start: match.index, end: match.index + token.length, ref: directory + ref });
-      }
-    }
-  }
-  return refs;
-}
 
 function retainedAttributes(
   source: string,
@@ -150,100 +40,22 @@ function dataUrl(asset: LoadedAsset, ref: string): string | undefined {
   return `data:${asset.mimeType};base64,${asset.content}${fragment}`;
 }
 
-/** Inline only asset locations; all other authored bytes and link semantics stay intact. */
+export function inspectHtmlPreviewSource(source: string, allowScripts = true) {
+  const { policies, refs } = collectHtmlPreviewAssets(source, allowScripts);
+  return { hasAuthoredCsp: policies.length > 0, hasRelativeAssets: refs.size > 0 };
+}
+
+/** Authored CSP uses native resource admission; ordinary documents retain asset inlining. */
 export async function prepareHtmlPreviewAssets(
   source: string,
   allowScripts: boolean,
-  fetchAssets: (refs: string[]) => Promise<SessionsFilesAssetsResult>,
+  fetchAssets?: (refs: string[]) => Promise<SessionsFilesAssetsResult>,
 ): Promise<{ html: string; omitted: number }> {
-  const document = parse(source, { scriptingEnabled: allowScripts, sourceCodeLocationInfo: true });
-  const texts: TextAssets[] = [];
-  const stylesheets: ExternalElement[] = [];
-  const scripts: ExternalElement[] = [];
-  const requested = new Set<string>();
-  const pending: DefaultTreeAdapterTypes.Node[] = document.childNodes.toReversed();
-  const addText = (text: TextAssets) => {
-    if (text.refs.length === 0) {
-      return;
-    }
-    texts.push(text);
-    for (const { ref } of text.refs) {
-      requested.add(ref);
-    }
-  };
-  while (pending.length > 0) {
-    const node = pending.pop()!;
-    if (!defaultTreeAdapter.isElementNode(node)) {
-      continue;
-    }
-    pending.push(...node.childNodes.toReversed());
-    const htmlElement = node.namespaceURI === html.NS.HTML;
-    const attr = (name: string) => node.attrs.find((entry) => entry.name === name)?.value;
-    if (htmlElement && node.tagName === "base" && attr("href") !== undefined) {
-      return { html: source, omitted: 0 };
-    }
-    const location = node.sourceCodeLocation;
-    if (!location) {
-      continue;
-    }
-    for (const attribute of node.attrs) {
-      const loc = location.attrs?.[attribute.name];
-      if (!loc) {
-        continue;
-      }
-      let refs: Reference[] = [];
-      if (attribute.name === "style") {
-        refs = cssRefs(attribute.value);
-      } else if (
-        htmlElement &&
-        ((["img", "source"].includes(node.tagName) && ["src", "srcset"].includes(attribute.name)) ||
-          (node.tagName === "video" && ["src", "poster"].includes(attribute.name)) ||
-          (node.tagName === "audio" && attribute.name === "src") ||
-          (node.tagName === "input" &&
-            attr("type")?.toLowerCase() === "image" &&
-            attribute.name === "src"))
-      ) {
-        const ref = relativeRef(attribute.value);
-        refs =
-          attribute.name === "srcset"
-            ? srcsetRefs(attribute.value)
-            : ref
-              ? [{ start: 0, end: attribute.value.length, ref }]
-              : [];
-      }
-      addText({
-        start: loc.startOffset,
-        end: loc.endOffset,
-        source: attribute.value,
-        refs,
-        attribute: attribute.name,
-      });
-    }
-    if (node.tagName === "style" && location.startTag && location.endTag) {
-      const css = source.slice(location.startTag.endOffset, location.endTag.startOffset);
-      addText({
-        start: location.startTag.endOffset,
-        end: location.endTag.startOffset,
-        source: css,
-        refs: cssRefs(css),
-      });
-    }
-    if (!htmlElement) {
-      continue;
-    }
-    const externalRef = relativeRef(attr(node.tagName === "link" ? "href" : "src") ?? "");
-    if (
-      externalRef &&
-      node.tagName === "link" &&
-      attr("rel")?.toLowerCase().split(/\s+/).includes("stylesheet")
-    ) {
-      stylesheets.push({ node, ref: externalRef });
-      requested.add(externalRef);
-    } else if (externalRef && node.tagName === "script" && location.endTag) {
-      scripts.push({ node, ref: externalRef });
-      requested.add(externalRef);
-    }
+  const selection = collectHtmlPreviewAssets(source, allowScripts);
+  if (selection.policies.length || selection.hasBaseHref || !fetchAssets) {
+    return { html: source, omitted: 0 };
   }
+  const { texts, stylesheets, scripts, refs: requested } = selection;
   const loaded = new Map<string, LoadedAsset>();
   const omitted = new Set<string>();
   const fetch = async (refs: Set<string>) => {
@@ -280,7 +92,7 @@ export async function prepareHtmlPreviewAssets(
       continue;
     }
     const css = decodeText(asset);
-    const refs = cssRefs(css, ref);
+    const refs = htmlPreviewCssReferences(css, ref);
     cssByRef.set(ref, { source: css, refs });
     for (const nestedRef of refs) {
       nested.add(nestedRef.ref);
@@ -306,7 +118,9 @@ export async function prepareHtmlPreviewAssets(
           {
             start: text.start,
             end: text.end,
-            text: text.attribute ? `${text.attribute}="${escapeAttribute(content)}"` : content,
+            text: text.attribute
+              ? `${text.attribute}="${content.replaceAll("&", "&amp;").replaceAll('"', "&quot;")}"`
+              : content,
           },
         ];
   });

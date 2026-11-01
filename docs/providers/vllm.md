@@ -86,6 +86,22 @@ Discovery recognizes DeepSeek V4 and Nemotron 3 Nano, Super, and Ultra reasoning
 If you set `models.providers.vllm` explicitly, OpenClaw uses only your declared models. Add `"vllm/*": {}` to `agents.defaults.models` to make OpenClaw also query that configured provider's `/models` endpoint and include all advertised vLLM models.
 </Note>
 
+### Serving context limits
+
+When discovery returns a positive integer `max_model_len`, OpenClaw keeps it as
+the observed context ceiling for that server and model. Inference budgets cannot
+exceed that ceiling, even when an explicit model `contextWindow` or `contextTokens`
+is larger. Smaller configured limits still apply. Static model defaults and
+missing or invalid server metadata do not become observed ceilings.
+
+The observation belongs to the discovered API and base URL. A model-level endpoint
+override does not inherit another route's ceiling. Explicit provider configuration
+without `"vllm/*"` remains manual and does not probe the server.
+
+After changing vLLM's serving limit, explicitly refresh the model catalog. New
+turns use the refreshed observation; an already prepared turn keeps its current
+budget. OpenClaw does not poll the server for every inference request.
+
 ## Explicit configuration
 
 Configure explicitly when vLLM runs on a different host or port, you want to pin `contextWindow`/`maxTokens`, your server requires a real API key, or you connect to a trusted loopback, LAN, or Tailscale endpoint:

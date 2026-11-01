@@ -1,8 +1,5 @@
-import { isDeepStrictEqual } from "node:util";
-import { getRuntimeConfig } from "../../../config/io.js";
 import { resolveHostAccountName } from "../../../infra/host-account-name.js";
 import { prepareUserProfileRoleAuthority } from "../../../state/user-channel-identity-operations.js";
-import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import {
   ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
@@ -98,22 +95,21 @@ export function createGatewayConnectProfileLifecycle(
 ) {
   const { handler } = context;
   let client: GatewayWsClient | undefined;
-  const rolesCurrent = () =>
-    isDeepStrictEqual(context.configSnapshot.gateway?.roles, getRuntimeConfig().gateway?.roles);
   const clientCurrent = () =>
     !handler.isClosed() &&
     handler.socket.readyState === WEBSOCKET_OPEN_READY_STATE &&
     (!client || (handler.getClient() === client && !client.invalidated));
   const assertCurrent = () => {
     handler.connectionWork.signal.throwIfAborted();
-    if (!clientCurrent() || resolveGatewayConnectPolicyFailure(context, state) || !rolesCurrent()) {
+    if (!clientCurrent() || resolveGatewayConnectPolicyFailure(context, state)) {
       throw new Error("Gateway profile acquisition authority expired");
     }
   };
   return {
     assertCurrent,
     isCurrent: (prepared: PreparedConnectProfile | undefined) =>
-      (!prepared || prepared.authority.isCurrent()) && rolesCurrent(),
+      (!prepared || prepared.authority.isCurrent()) &&
+      !resolveGatewayConnectPolicyFailure(context, state),
     bind: (registered: GatewayWsClient) => {
       client = registered;
     },
@@ -160,19 +156,19 @@ async function resolveAuthenticatedProfile(
   profileId: string,
   updatedAt: number,
   assertCurrent?: () => void,
+  recordTiming?: GatewayConnectPhaseContext["recordAttachTiming"],
 ) {
   assertCurrent?.();
-  if (hasGatewayOperatorAccessPolicies(getRuntimeConfig())) {
-    (await prepareUserProfileCatalog()).release();
-    assertCurrent?.();
-  }
+  const authorityStartedAt = performance.now();
   const authority = await prepareUserProfileRoleAuthority(profileId);
+  recordTiming?.("profileAuthorityMs", authorityStartedAt);
   assertCurrent?.();
   if (!authority?.isCurrent()) {
     throw new Error("Gateway profile changed during acquisition");
   }
+  const projectionStartedAt = performance.now();
   const { id, displayName, avatarRevision, hasAvatar } = authority.display;
-  return {
+  const prepared = {
     profile: { profileId: id, displayName, avatarRevision, hasAvatar, updatedAt },
     authority,
     recipient: {
@@ -182,11 +178,16 @@ async function resolveAuthenticatedProfile(
       aliases: new Set(authority.aliases),
     },
   };
+  recordTiming?.("profileProjectionMs", projectionStartedAt);
+  return prepared;
 }
 
 /** Role and access policies need verified identity before admission; attribution alone may defer it. */
 export async function resolveGatewayConnectProfileAdmission(params: {
-  context: Pick<GatewayConnectPhaseContext, "configSnapshot"> &
+  context: Pick<
+    GatewayConnectPhaseContext,
+    "configSnapshot" | "recordAttachTiming" | "setConnectPhase"
+  > &
     Parameters<typeof rejectUnavailableProfileConnect>[0] & {
       handler: Pick<GatewayConnectPhaseContext["handler"], "connId" | "logWsControl">;
     };
@@ -209,6 +210,8 @@ export async function resolveGatewayConnectProfileAdmission(params: {
   try {
     params.assertCurrent?.();
     const options = { assertCurrent: params.assertCurrent };
+    const ensureStartedAt = performance.now();
+    context.setConnectPhase?.("profile-ensure");
     const profile = ownerProfileExpected
       ? await ensureCanonicalGatewayOwnerProfile(resolveHostAccountName, options)
       : params.resolveAuthenticatedGitHubIdentity
@@ -220,10 +223,13 @@ export async function resolveGatewayConnectProfileAdmission(params: {
             )
           : await ensureCanonicalUserProfileForEmail(authenticatedUserId!, options);
     params.assertCurrent?.();
+    params.context.recordAttachTiming?.("profileEnsureMs", ensureStartedAt);
+    context.setConnectPhase?.("profile-authority");
     const prepared = await resolveAuthenticatedProfile(
       "profileId" in profile ? profile.profileId : profile.id,
       profile.updatedAt,
       params.assertCurrent,
+      context.recordAttachTiming,
     );
     params.assertCurrent?.();
     if (!prepared.authority.isCurrent()) {

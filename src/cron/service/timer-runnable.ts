@@ -6,13 +6,16 @@ import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   hasActiveCronRun,
   hasScheduledNextRunAtMs,
-  HEARTBEAT_SKIP_DISABLED,
   isJobEnabled,
   isTimeScheduledJob,
   resolveJobErrorBackoffUntilMs,
+  resolveJobLastRunEndedAtMs,
   resolveJobLastRunStatus,
 } from "./jobs-scheduling.js";
-import { resolveForcePreservedOneShotAtMs } from "./one-shot-schedule.js";
+import {
+  isCronOneShotContinuationJob,
+  resolveForcePreservedOneShotAtMs,
+} from "./one-shot-schedule.js";
 import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
 
 /**
@@ -22,10 +25,17 @@ import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
  */
 export function hasMissedCronSlotSinceLastRun(job: CronJob, nowMs: number): boolean {
   const lastTriggerEvalAtMs = job.trigger ? job.state.lastTriggerEvalAtMs : undefined;
+  const lastRunStatus = resolveJobLastRunStatus(job);
+  // Successful and skipped runs already advance from their end. Slots covered
+  // by that execution must not become new misses when the scheduler restarts.
+  const coveredThroughMs =
+    lastRunStatus === "ok" || lastRunStatus === "skipped"
+      ? resolveJobLastRunEndedAtMs(job)
+      : job.state.lastRunAtMs;
   const lastRunAtMs =
     lastTriggerEvalAtMs === undefined
-      ? job.state.lastRunAtMs
-      : Math.max(job.state.lastRunAtMs ?? lastTriggerEvalAtMs, lastTriggerEvalAtMs);
+      ? coveredThroughMs
+      : Math.max(coveredThroughMs ?? lastTriggerEvalAtMs, lastTriggerEvalAtMs);
   const nextRunAtMs = job.state.nextRunAtMs;
   // Pacing supersedes intervening natural slots. Both startup admission and
   // backoff repair must retain that occurrence instead of inventing a miss.
@@ -45,11 +55,7 @@ export function hasMissedCronSlotSinceLastRun(job: CronJob, nowMs: number): bool
   } catch {
     return false;
   }
-  if (
-    typeof previousRunAtMs !== "number" ||
-    !Number.isFinite(previousRunAtMs) ||
-    previousRunAtMs <= lastRunAtMs
-  ) {
+  if (previousRunAtMs === undefined || previousRunAtMs <= lastRunAtMs) {
     return false;
   }
   // Slots computed from freshly edited scheduling inputs never existed before
@@ -114,12 +120,13 @@ export function isRunnableJob(params: {
       typeof lastRun === "number" &&
       typeof nextRun === "number" &&
       nextRun > lastRun &&
-      parseAbsoluteTimeMs(job.schedule.at) === nextRun
+      (parseAbsoluteTimeMs(job.schedule.at) === nextRun ||
+        (isCronOneShotContinuationJob(job) && job.state.pacedNextRunAtMs === nextRun))
     ) {
       return nowMs >= nextRun;
     }
     // Other terminal one-shots stay consumed unless their owner explicitly
-    // scheduled a failed/skipped retry (#24355, #91775).
+    // scheduled a failed retry (#24355).
     if (isScheduledTerminalOneShotRetry(job, lastRunStatus, lastRun, nextRun)) {
       return typeof nextRun === "number" && nowMs >= nextRun;
     }
@@ -134,9 +141,11 @@ export function isRunnableJob(params: {
     const lastRunAtMs = job.state.lastRunAtMs;
     // Startup loads persisted state before maintenance recompute. Suppress a
     // completed stale slot, but still replay a newer slot due by restart time.
+    // A force run explicitly leaves its scheduled occurrence unconsumed.
     const alreadyCompletedDueCronSlot =
       params.allowCronMissedRunByLastRun &&
       job.schedule.kind === "cron" &&
+      job.state.forcePreservedNextRunAtMs !== next &&
       (lastRunStatus === "ok" || lastRunStatus === "skipped") &&
       typeof lastRunAtMs === "number" &&
       Number.isFinite(lastRunAtMs) &&
@@ -150,7 +159,8 @@ export function isRunnableJob(params: {
     } catch {
       return false;
     }
-    return typeof latestRunAtMs === "number" && latestRunAtMs > lastRunAtMs;
+    const lastEndedAtMs = resolveJobLastRunEndedAtMs(job) ?? lastRunAtMs;
+    return latestRunAtMs !== undefined && latestRunAtMs > lastEndedAtMs;
   }
   if (!params.allowCronMissedRunByLastRun || job.schedule.kind !== "cron") {
     return false;
@@ -172,15 +182,7 @@ function isScheduledTerminalOneShotRetry(
   ) {
     return false;
   }
-  if (lastRunStatus === "error") {
-    return true;
-  }
-  return (
-    lastRunStatus === "skipped" &&
-    job.sessionTarget === "main" &&
-    job.wakeMode === "now" &&
-    job.state.lastError === HEARTBEAT_SKIP_DISABLED
-  );
+  return lastRunStatus === "error";
 }
 
 function isErrorBackoffPending(

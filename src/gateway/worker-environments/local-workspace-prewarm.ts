@@ -10,7 +10,6 @@ import { withWorktreeSources } from "../../agents/worktrees/service-preparation.
 import { resolveStateDir } from "../../config/state-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { prepareLocalWorkspaceTemplate } from "./local-workspace-template.js";
 
 const log = createSubsystemLogger("agents/worktrees");
@@ -23,69 +22,59 @@ export async function prewarmLocalWorkspaceTemplates(params: {
   if (config.worktreeAcceleration === false) {
     return;
   }
-  const controller = new AbortController();
-  const signal = AbortSignal.any([params.signal, controller.signal]);
-  const unsubscribe = sessionChanges.subscribe((change) => {
-    if ("all" in change && typeof change.scope === "string" && change.scope.startsWith("config")) {
-      controller.abort();
-    }
-  });
+  const { signal } = params;
   const commitGuard = () => {
-    if (params.getConfig() !== config) {
-      controller.abort();
-    }
     signal.throwIfAborted();
+    if (params.getConfig() !== config) {
+      throw new Error("Sandbox dependency prewarm configuration was replaced");
+    }
   };
   const env = process.env;
-  try {
-    for (const agentId of listAgentIds(config)) {
-      const sandbox = resolveSandboxConfigForAgent(config, agentId);
-      if (sandbox.backend !== "docker" && sandbox.backend !== "podman") {
-        continue;
-      }
-      try {
-        commitGuard();
-        const repository = await resolveRepository(resolveAgentWorkspaceDir(config, agentId));
-        await withWorktreeRunEnd(env, () =>
-          withWorktreeMutationLease(
-            { env, signal, commitGuard, id: `template-prewarm:${agentId}` },
-            (guard) =>
-              withWorktreeSources(env, async (retainRepository) => {
-                await retainRepository({ ...guard, repository });
-                const base = await resolveWorktreeBase(
-                  repository.repoRoot,
-                  undefined,
-                  signal,
-                  guard.commitGuard,
-                );
-                const templateRoot = path.join(
-                  await fs.realpath(resolveStateDir(env)),
-                  "worktree-projections",
-                );
-                guard.commitGuard();
-                await fs.mkdir(templateRoot, { recursive: true, mode: 0o700 });
-                const prepared = await prepareLocalWorkspaceTemplate({
-                  source: repository.repoRoot,
-                  repoRoot: repository.repoRoot,
-                  baseCommit: base.commit,
-                  temporaryRoot: templateRoot,
-                  templateRoot,
-                  env,
-                  sandbox,
-                  guard: { ...guard, signal: guard.signal ?? signal },
-                });
-                await prepared?.record.release();
-              }),
-          ),
-        );
-      } catch {
-        if (signal.aborted) {
-          return;
-        }
-        log.debug(`sandbox dependency template prewarm unavailable for agent ${agentId}`);
-      }
+  for (const agentId of listAgentIds(config)) {
+    const sandbox = resolveSandboxConfigForAgent(config, agentId);
+    if (sandbox.mode === "off" || (sandbox.backend !== "docker" && sandbox.backend !== "podman")) {
+      continue;
     }
-  } finally {
-    unsubscribe();
+    try {
+      commitGuard();
+      const repository = await resolveRepository(resolveAgentWorkspaceDir(config, agentId));
+      await withWorktreeRunEnd(env, () =>
+        withWorktreeMutationLease(
+          { env, signal, commitGuard, id: `template-prewarm:${agentId}` },
+          (guard) =>
+            withWorktreeSources(env, async (retainRepository) => {
+              await retainRepository({ ...guard, repository });
+              const base = await resolveWorktreeBase(
+                repository.repoRoot,
+                undefined,
+                signal,
+                guard.commitGuard,
+              );
+              const templateRoot = path.join(
+                await fs.realpath(resolveStateDir(env)),
+                "worktree-projections",
+              );
+              guard.commitGuard();
+              await fs.mkdir(templateRoot, { recursive: true, mode: 0o700 });
+              const prepared = await prepareLocalWorkspaceTemplate({
+                source: repository.repoRoot,
+                repoRoot: repository.repoRoot,
+                baseCommit: base.commit,
+                temporaryRoot: templateRoot,
+                templateRoot,
+                env,
+                sandbox,
+                guard: { ...guard, signal: guard.signal ?? signal },
+              });
+              await prepared?.record.release();
+            }),
+        ),
+      );
+    } catch {
+      if (signal.aborted || params.getConfig() !== config) {
+        return;
+      }
+      log.debug(`sandbox dependency template prewarm unavailable for agent ${agentId}`);
+    }
   }
 }

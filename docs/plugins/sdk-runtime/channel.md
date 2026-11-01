@@ -9,6 +9,20 @@ sidebarTitle: "Channel helpers"
 
 Channel-specific runtime helpers, available when a channel plugin is loaded. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference; [Channel plugins](/plugins/sdk-channel-plugins) is the step-by-step guide.
 
+## Queued source replies
+
+A channel with a task-correlated reply destination can pass
+`replyOptions.onQueuedFollowupReplyBatch` to inbound dispatch. The callback remains
+attached to that input when it queues behind an active turn. Batches distinguish
+progress from completed, failed, and aborted execution; only terminal batches
+should settle the source task, including successful completion with no payloads.
+
+Set the callback's `ownsCompletion(channel)` predicate for the channel whose
+completion it owns. Matching replies stay with this source callback instead of
+being routed as a new outbound message. Leave it unset for ordinary origin-routed
+channel replies. The channel must retain its task identity and make settlement
+idempotent; progress does not establish completion.
+
 ## Channel namespaces
 
 <AccordionGroup>
@@ -56,6 +70,8 @@ Channel-specific runtime helpers, available when a channel plugin is loaded. Par
     Guarded fetch also accepts a synchronous `resolveDispatcherPolicy(url)` override, reevaluated for each redirect. An undefined result uses `dispatcherPolicy`, or direct routing when no default policy is supplied. Providers preserving operator-configured proxy routing can use `resolveEnvHttpProxyAgentOptions` and `matchesNoProxy` from `openclaw/plugin-sdk/fetch-runtime` to select each hop. The `trusted_explicit_proxy` mode permits HTTP, HTTPS, `socks:` and `socks5:` proxy URLs and delegates target DNS to the explicitly trusted proxy; proxy-host validation and target-host policy still apply. Direct hops keep DNS pinning. Strict mode rejects SOCKS proxies, and the separate trusted-env-proxy gate remains HTTP(S)-only.
 
     When returning a guarded response for streaming, use `responseWithRelease(response, release)` from `openclaw/plugin-sdk/fetch-runtime` to retain request ownership until its body completes, fails, or is cancelled. Consume or cancel bodies explicitly for prompt release; garbage collection of abandoned wrappers provides only best-effort cleanup.
+
+    Guarded fetch accepts `streamTimeoutMs` for header/body inactivity independently of the whole-request `timeoutMs`; when both are supplied, `timeoutMs` takes precedence. The existing `createPinnedDispatcher` helper also accepts `streamTimeoutMs` as its fifth argument. These stream settings retain TCP/TLS connection deadlines and default to the existing transport policy when omitted.
 
     `api.runtime.channel.mentions` is the shared inbound mention-policy surface for bundled channel plugins that use runtime injection:
 

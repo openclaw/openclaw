@@ -22,6 +22,8 @@ const CRABBOX_COORDINATOR_READ_BUDGET_MS = 60_000;
 const CRABBOX_LIFECYCLE_MARGIN_MS = 60_000;
 export const CRABBOX_LIFECYCLE_TIMEOUT_MS =
   CRABBOX_COORDINATOR_READ_BUDGET_MS + CRABBOX_LIFECYCLE_MARGIN_MS;
+// Released Azure Sandbox retentionLifecycle owns a three-minute mutation window.
+export const CRABBOX_RETENTION_MUTATION_TIMEOUT_MS = 3 * 60_000 + CRABBOX_LIFECYCLE_MARGIN_MS;
 // `config show` reads local configuration without contacting the coordinator.
 export const CRABBOX_CONFIG_TIMEOUT_MS = 60_000;
 // Crabbox stop resolves twice (10s each), cleans the guest (35s), retries release
@@ -58,6 +60,11 @@ export function resolveCrabboxWarmImageCaptureTimeoutMs(provider: string): numbe
   // Include collection, verification, missing-image deletion, capacity reclamation,
   // and predecessor retirement as well as scrub/create; core must await the owner.
   return (
+    // Lifetime admission: inspect/heartbeat/inspect/list, up to two identical
+    // extension attempts, then inspect/list readback. Runtime preparation can
+    // also precede scrub for a required project capture.
+    8 * resolveCrabboxLifecycleTimeoutMs(provider) +
+    CRABBOX_SETUP_TIMEOUT_MS +
     5 * WARM_IMAGE_COMMAND_TIMEOUT_MS +
     WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS +
     resolveCrabboxCheckpointCaptureTimeoutMs(provider) +

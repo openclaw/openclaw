@@ -1,7 +1,13 @@
 import path from "node:path";
 
 /** Public failure facts must never copy command arguments, app text or raw logs. */
-export function androidReleaseCommandFacts(bin: string, args: string[], stderr: string) {
+export function androidReleaseCommandFacts(
+  bin: string,
+  args: string[],
+  stdout: string,
+  stderr: string,
+) {
+  const output = `${stdout}\n${stderr}`;
   const basename = path.basename(bin);
   const tool = ["adb", "avdmanager", "emulator", "aapt2", "apksigner", "node", "git"].includes(
     basename,
@@ -19,12 +25,22 @@ export function androidReleaseCommandFacts(bin: string, args: string[], stderr: 
   return {
     tool,
     operation,
-    permissionDenied: /permission denied/iu.test(stderr),
-    missingFile: /no such file or directory/iu.test(stderr),
-    deviceOffline: /device offline/iu.test(stderr),
-    connectionReset: /connection reset/iu.test(stderr),
-    failedToCopy: /failed to copy/iu.test(stderr),
-    timeout: /timed out|timeout/iu.test(stderr),
+    permissionDenied: /permission denied/iu.test(output),
+    missingFile: /no such file or directory/iu.test(output),
+    deviceOffline: /device offline/iu.test(output),
+    connectionReset: /connection reset/iu.test(output),
+    failedToCopy: /failed to copy/iu.test(output),
+    timeout: /timed out|timeout/iu.test(output),
+    transportClosed:
+      tool === "adb" && /\b(?:error:[^\r\n]*\bclosed|connection closed)\b/iu.test(output),
+    deviceMissing:
+      tool === "adb" &&
+      /\bdevice\b[^\r\n]*\bnot found\b|no devices\/emulators found/iu.test(output),
+    remoteStatFailure:
+      tool === "adb" &&
+      /failed to stat remote object|remote object[^\r\n]*does not exist/iu.test(output),
+    protocolFault: tool === "adb" && /protocol fault/iu.test(output),
+    noSpace: tool === "adb" && /no space left on device/iu.test(output),
   };
 }
 
@@ -50,6 +66,16 @@ export function androidReleaseNativeFacts(text: string) {
     "StaleObjectException",
   ];
   return {
+    processCrashed: /INSTRUMENTATION_RESULT: shortMsg=Process crashed(?:\.|\r?\n|$)/u.test(text),
+    instrumentationFailed: /INSTRUMENTATION_FAILED/u.test(text),
+    OKsingle: /OK \(1 test\)/u.test(text),
+    phaseReady: {
+      initial: /OPENCLAW_ANDROID_PHASE_READY initial(?:\r?\n|$)/u.test(text),
+      relaunch: /OPENCLAW_ANDROID_PHASE_READY relaunch(?:\r?\n|$)/u.test(text),
+      "phone-restart": /OPENCLAW_ANDROID_PHASE_READY phone-restart(?:\r?\n|$)/u.test(text),
+      "long-reply": /OPENCLAW_ANDROID_PHASE_READY long-reply(?:\r?\n|$)/u.test(text),
+      reader: /OPENCLAW_ANDROID_PHASE_READY reader(?:\r?\n|$)/u.test(text),
+    },
     class:
       classes.find((name) => new RegExp(`\\.${name}(?=[:\\s]|$)`, "u").test(text)) ?? "unknown",
     frames: [

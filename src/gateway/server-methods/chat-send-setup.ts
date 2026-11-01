@@ -1,12 +1,10 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
 import type { ProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
+import { respondChatSendAdmissionError } from "./chat-send-admission-errors.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import type { ChatSendDiagnostics } from "./chat-send-diagnostics.js";
-import {
-  respondChatSendAdmissionError,
-  runChatSendPreAdmission,
-} from "./chat-send-pre-admission.js";
+import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import {
   prepareChatSendNativeRuntimeRestriction,
@@ -91,7 +89,6 @@ export async function prepareAndAdmitChatSend(
     request: normalizedRequest.value,
     context,
     client,
-    isDirectExternalUser: options?.isDirectExternalUser,
     assertCurrent,
   });
   if (!loadedSession.ok) {

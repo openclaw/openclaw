@@ -1,3 +1,4 @@
+import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import type {
@@ -23,7 +24,10 @@ export type SessionsSpawnToolOptions = {
   currentMessagingTarget?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
+  /** Host-minted provenance of the ambient current conversation for thread binding. */
+  currentConversationOrigin?: import("../../gateway/mcp-grant-store.js").McpCurrentConversationOrigin;
   currentMessageId?: string | number;
+  replyToMode?: ReplyToMode;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */

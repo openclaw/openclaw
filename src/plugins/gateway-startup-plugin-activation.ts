@@ -37,6 +37,7 @@ type GatewayStartupActivationParams = PluginStartupActivationParams & {
   configuredStorageProviderIds: ReadonlySet<string>;
   configuredSpeechProviderIds: ReadonlySet<string>;
   configuredWebSearchProviderIds: ReadonlySet<string>;
+  autoSelectWebSearchProvider: boolean;
   configuredModelProviderIds: ReadonlySet<string>;
   configuredGenerationProviderIds: ConfiguredGenerationProviderIds;
   configuredVoiceProviderIds: ConfiguredVoiceProviderIds;
@@ -54,7 +55,8 @@ type StartupActivationPolicy =
   | "root"
   | "harness"
   | "hook"
-  | "tool";
+  | "tool"
+  | "web-search-auto";
 type StartupContractKey =
   | keyof ConfiguredGenerationProviderIds
   | keyof ConfiguredVoiceProviderIds
@@ -203,6 +205,11 @@ function passesPluginStartupPolicy(
   if (policy === "harness" || policy === "implicit-external" || policy === "decision") {
     return true;
   }
+  // Auto-detection may pick any enabled search owner, but only authored enablement justifies a
+  // startup load; default-enabled bundled owners stay lazy.
+  if (policy === "web-search-auto") {
+    return activationState.explicitlyEnabled;
+  }
   if (policy === "hook") {
     return (
       activationState.explicitlyEnabled ||
@@ -267,6 +274,11 @@ export function canStartGatewayStartupPlugin(params: GatewayStartupActivationPar
       params.configuredWebSearchProviderIds,
     ) &&
       passesPluginStartupPolicy(params, "implicit-external")) ||
+    // Prepared generations answer web_search provider lookups, so an unpinned search must see
+    // search-only owners that would otherwise wait for an explicit provider selection.
+    (params.autoSelectWebSearchProvider &&
+      (manifest?.contracts?.webSearchProviders?.length ?? 0) > 0 &&
+      passesPluginStartupPolicy(params, "web-search-auto")) ||
     (manifestOwnsConfiguredModelProvider({
       manifest,
       configuredModelProviderIds: params.configuredModelProviderIds,

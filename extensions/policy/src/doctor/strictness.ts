@@ -1,4 +1,3 @@
-// Policy doctor strictness comparisons for scoped policy overlays.
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeAccountId, normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
@@ -50,7 +49,7 @@ function routingProbesAtLeastAsStrict(candidate: unknown, baseline: unknown): bo
       return false;
     }
     const candidateEntry = candidateById.get(baselineEntry.id);
-    if (!isRecord(candidateEntry)) {
+    if (candidateEntry === undefined) {
       return false;
     }
     const candidateRoute = canonicalRoutingRoute(candidateEntry.route);

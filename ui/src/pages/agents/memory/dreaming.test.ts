@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { i18n } from "../../../i18n/index.ts";
-import type { TranslationMap } from "../../../i18n/lib/types.ts";
+import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { en } from "../../../i18n/locales/en.ts";
 import type { RuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
@@ -14,6 +14,7 @@ import {
   resolveConfiguredDreaming,
   updateDreamingEnabled,
   type DreamingState,
+  type DreamDiaryActionMethod,
 } from "./dreaming.ts";
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
@@ -22,52 +23,11 @@ type DreamingConfigCapability = Pick<
   "lookupSchemaPath" | "patch" | "state"
 >;
 
-let restoreTranslations = () => {};
-
-function asTranslationMap(value: string | TranslationMap | undefined): TranslationMap {
-  return value && typeof value === "object" ? value : {};
-}
-
 beforeAll(() => {
-  const dreaming = asTranslationMap(en.dreaming);
-  i18n.registerTranslation("en", {
-    ...en,
-    dreaming: {
-      ...dreaming,
-      actions: {
-        dedupeRemovedOneAndKept: "Removed {removed} duplicate dream entry and kept {kept}.",
-        dedupeRemovedManyAndKept: "Removed {removed} duplicate dream entries and kept {kept}.",
-        dedupeRemovedOne: "Removed {removed} duplicate dream entry.",
-        dedupeRemovedMany: "Removed {removed} duplicate dream entries.",
-        repairArchivedThreadCorpus: "archived session corpus",
-        repairArchivedIngestionState: "archived ingestion state",
-        repairArchivedDreamDiary: "archived dream diary",
-        repairNoChanges: "Dream cache repair finished with no changes.",
-        repairCompleteWithArchive: "Dream cache repair complete: {actions}. Archive: {archiveDir}",
-        repairComplete: "Dream cache repair complete: {actions}.",
-        backfillComplete: "Backfilled {count} dream diary entries.",
-        resetDiaryComplete: "Removed {count} backfilled dream diary entries.",
-        clearReplayedComplete: "Cleared {count} replayed short-term entries.",
-        complete: "Dream diary action complete.",
-        confirmRepairDescription:
-          "This archives derived dream cache files and rebuilds them from clean inputs. Your dream diary stays untouched.",
-        confirmDedupeDescription:
-          "This rewrites DREAMS.md and removes only exact duplicate diary entries.",
-        archivePathCopied: "Archive path copied.",
-        archivePathCopyFailed: "Could not copy archive path.",
-        updateFailed: "Could not update dreaming settings.",
-        unsupportedPlugin:
-          'Selected memory plugin "{pluginId}" does not support dreaming settings.',
-        configHashMissing: "Config hash missing; refresh and retry.",
-      },
-    },
-  });
-  restoreTranslations = () => i18n.registerTranslation("en", en);
+  registerDreamingEnglish();
+  i18n.registerTranslation("en", en);
 });
-
-afterAll(() => {
-  restoreTranslations();
-});
+afterAll(() => i18n.registerTranslation("en", en));
 
 function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn<TestRequest>> } {
   const request = vi.fn<TestRequest>();
@@ -82,19 +42,50 @@ function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn
   return { state, request };
 }
 
-function createMemoryWikiConfigSnapshot() {
-  return {
-    hash: "hash-1",
-    config: {
-      plugins: {
-        entries: {
-          "memory-wiki": {
-            enabled: true,
-          },
-        },
-      },
-    },
-  };
+function pluginConfig(pluginId: string, entry: Record<string, unknown>, memory = pluginId) {
+  return { plugins: { slots: { memory }, entries: { [pluginId]: entry } } };
+}
+
+function createActionState(
+  method: DreamDiaryActionMethod,
+  payload: unknown,
+  diary?: { found: boolean; path: string; content?: string },
+) {
+  const result = createState();
+  result.state.hello = gatewayHelloForMethods([method], ["operator.write"]);
+  result.request.mockImplementation(async (calledMethod) => {
+    if (calledMethod === method) {
+      return payload;
+    }
+    if (calledMethod === "doctor.memory.dreamDiary" && diary) {
+      return diary;
+    }
+    if (calledMethod === "doctor.memory.status") {
+      return { dreaming: null };
+    }
+    return {};
+  });
+  return result;
+}
+
+async function expectActionReload(
+  state: DreamingState,
+  request: ReturnType<typeof vi.fn<TestRequest>>,
+  method: DreamDiaryActionMethod,
+  content: string | null,
+  reloadDiary = true,
+) {
+  const args = { agentId: state.selectedAgentId };
+  await expect(runDreamDiaryAction(state, method)).resolves.toBe(true);
+  expect(request).toHaveBeenCalledWith(method, args);
+  expect(request).toHaveBeenCalledWith("doctor.memory.status", args);
+  const diaryRequest = expect(request);
+  if (reloadDiary) {
+    diaryRequest.toHaveBeenCalledWith("doctor.memory.dreamDiary", args);
+  } else {
+    diaryRequest.not.toHaveBeenCalledWith("doctor.memory.dreamDiary", args);
+  }
+  expect(state).toMatchObject({ dreamDiaryContent: content, dreamDiaryActionLoading: false });
 }
 
 function createConfig(state: DreamingState): DreamingConfigCapability {
@@ -110,42 +101,6 @@ function createConfig(state: DreamingState): DreamingConfigCapability {
   };
 }
 
-function getConfigPatchRawPayload(config: DreamingConfigCapability): Record<string, unknown> {
-  const patch = vi.mocked(config.patch).mock.calls[0]?.[0]?.raw;
-  if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
-    throw new Error("Expected config patch object");
-  }
-  return patch;
-}
-
-const wikiResources = [
-  {
-    label: "import insights",
-    key: "wikiImportInsights",
-    method: "wiki.importInsights",
-    payload: () => ({
-      sourceType: "chatgpt" as const,
-      totalItems: 0,
-      totalClusters: 0,
-      clusters: [],
-    }),
-  },
-  {
-    label: "overview",
-    key: "wikiOverview",
-    method: "wiki.overview",
-    payload: () => ({
-      totalItems: 0,
-      totalPages: 0,
-      pageCounts: { source: 0, synthesis: 0, report: 0, entity: 0, concept: 0 },
-      totalClaims: 0,
-      totalQuestions: 0,
-      totalContradictions: 0,
-      clusters: [],
-    }),
-  },
-] as const;
-
 describe("dreaming controller", () => {
   it("retains the authoritative dreaming status from doctor.memory.status", async () => {
     const { state, request } = createState();
@@ -156,7 +111,7 @@ describe("dreaming controller", () => {
 
     expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" });
     expect(state.dreamingStatus).toBe(payload.dreaming);
-    expect(state.dreamingStatusLoading).toBe(false);
+    expect(state.resourceReads.dreamingStatus?.pending ?? false).toBe(false);
     expect(state.dreamingStatusError).toBeNull();
   });
 
@@ -181,105 +136,28 @@ describe("dreaming controller", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("ignores older same-agent status completions after switching back", async () => {
+  it("deduplicates status loads while the selected agent request is pending", async () => {
     const { state, request } = createState();
-    const firstAgentA = createDeferred<unknown>();
-    const agentB = createDeferred<unknown>();
-    const secondAgentA = createDeferred<unknown>();
-    request
-      .mockImplementationOnce(async () => firstAgentA.promise)
-      .mockImplementationOnce(async () => agentB.promise)
-      .mockImplementationOnce(async () => secondAgentA.promise);
-
-    state.selectedAgentId = "agent-a";
+    const pending = createDeferred<unknown>();
+    request.mockReturnValue(pending.promise);
     const firstLoad = loadDreamingResource(state, "dreamingStatus");
-    state.selectedAgentId = "agent-b";
-    const secondLoad = loadDreamingResource(state, "dreamingStatus");
-    state.selectedAgentId = "agent-a";
-    const thirdLoad = loadDreamingResource(state, "dreamingStatus");
+    await loadDreamingResource(state, "dreamingStatus");
+    expect(request).toHaveBeenCalledExactlyOnceWith("doctor.memory.status", { agentId: "main" });
+    expect(state.resourceReads.dreamingStatus?.pending ?? false).toBe(true);
 
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "agent-a" });
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "agent-b" });
-    expect(request).toHaveBeenCalledTimes(3);
-
-    secondAgentA.resolve({ dreaming: { enabled: true, shortTermCount: 3 } });
-    await thirdLoad;
-
-    expect(state.dreamingStatus?.shortTermCount).toBe(3);
-    expect(state.dreamingStatusLoading).toBe(false);
-
-    firstAgentA.resolve({ dreaming: { enabled: true, shortTermCount: 1 } });
-    agentB.resolve({ dreaming: { enabled: true, shortTermCount: 2 } });
+    pending.resolve({ dreaming: { enabled: true, shortTermCount: 3 } });
     await firstLoad;
-    await secondLoad;
-
     expect(state.dreamingStatus?.shortTermCount).toBe(3);
-    expect(state.dreamingStatusLoading).toBe(false);
+    expect(state.resourceReads.dreamingStatus?.pending ?? false).toBe(false);
     expect(state.dreamingStatusError).toBeNull();
   });
 
-  it.each(wikiResources)(
-    "keeps the newest $label response across an A-to-B-to-A agent switch",
-    async ({ key, method, payload }) => {
-      const { state, request } = createState();
-      const firstAgentA = createDeferred<unknown>();
-      const agentB = createDeferred<unknown>();
-      const secondAgentA = createDeferred<unknown>();
-      state.hello = gatewayHelloForMethods([method], []);
-      request
-        .mockImplementationOnce(async () => firstAgentA.promise)
-        .mockImplementationOnce(async () => agentB.promise)
-        .mockImplementationOnce(async () => secondAgentA.promise);
-
-      state.selectedAgentId = "agent-a";
-      const staleA = loadDreamingResource(state, key);
-      state.selectedAgentId = "agent-b";
-      const staleB = loadDreamingResource(state, key);
-      state.selectedAgentId = "agent-a";
-      const latest = loadDreamingResource(state, key);
-      const latestPayload = payload();
-
-      secondAgentA.resolve(latestPayload);
-      await latest;
-      expect(state[key]).toBe(latestPayload);
-
-      firstAgentA.resolve(payload());
-      agentB.resolve(payload());
-      await Promise.all([staleA, staleB]);
-
-      expect(request).toHaveBeenCalledWith(method, { agentId: "agent-a" });
-      expect(request).toHaveBeenCalledWith(method, { agentId: "agent-b" });
-      expect(state[key]).toBe(latestPayload);
-      expect(state.resourceRequests[key]).toBeUndefined();
-      expect(request).toHaveBeenCalledTimes(3);
-    },
-  );
-
-  it.each(wikiResources)(
-    "invalidates an in-flight $label request when its gateway capability disappears",
-    async ({ key, method, payload }) => {
-      const { state, request } = createState();
-      const deferred = createDeferred<unknown>();
-      state.hello = gatewayHelloForMethods([method], []);
-      request.mockImplementationOnce(async () => deferred.promise);
-
-      const stale = loadDreamingResource(state, key);
-      state.hello = { ...state.hello, features: { methods: [] } };
-      await loadDreamingResource(state, key);
-      expect(state[key]).toBeNull();
-
-      deferred.resolve(payload());
-      await stale;
-
-      expect(state[key]).toBeNull();
-      expect(state.resourceRequests[key]).toBeUndefined();
-      expect(request).toHaveBeenCalledTimes(1);
-    },
-  );
-
   it("falls back to config gating for wiki import insights when methods are not advertised", async () => {
     const { state, request } = createState();
-    state.configSnapshot = createMemoryWikiConfigSnapshot();
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: { plugins: { entries: { "memory-wiki": { enabled: true } } } },
+    };
     request.mockResolvedValue({
       sourceType: "chatgpt",
       totalItems: 1,
@@ -290,19 +168,16 @@ describe("dreaming controller", () => {
     await loadDreamingResource(state, "wikiImportInsights");
 
     expect(request).toHaveBeenCalledWith("wiki.importInsights", { agentId: "main" });
-    expect(state.wikiImportInsights?.totalItems).toBe(1);
-    expect(state.wikiImportInsights?.totalClusters).toBe(1);
-    expect(state.wikiImportInsightsError).toBeNull();
-    expect(state.wikiImportInsightsLoading).toBe(false);
+    expect(state).toMatchObject({
+      wikiImportInsights: { totalItems: 1, totalClusters: 1 },
+    });
   });
 
   it("skips wiki import insights when memory-wiki is not enabled", async () => {
     const { state, request } = createState();
     state.configSnapshot = {
       hash: "hash-1",
-      config: {
-        plugins: {},
-      },
+      config: { plugins: {} },
     };
     state.wikiImportInsights = {
       sourceType: "chatgpt",
@@ -311,20 +186,23 @@ describe("dreaming controller", () => {
       truncated: false,
       clusters: [],
     };
-    state.wikiImportInsightsError = "unknown method: wiki.importInsights";
+    state.resourceReads.wikiImportInsights = { promise: Promise.resolve(), pending: false };
 
     await loadDreamingResource(state, "wikiImportInsights");
 
     expect(request).not.toHaveBeenCalled();
-    expect(state.wikiImportInsights).toBeNull();
-    expect(state.wikiImportInsightsError).toBeNull();
-    expect(state.wikiImportInsightsLoading).toBe(false);
+    expect(state).toMatchObject({
+      wikiImportInsights: null,
+    });
   });
 
   it("skips wiki import insights when the gateway does not advertise the method", async () => {
     const { state, request } = createState();
     state.hello = gatewayHelloForMethods(["doctor.memory.status"], []);
-    state.configSnapshot = createMemoryWikiConfigSnapshot();
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: { plugins: { entries: { "memory-wiki": { enabled: true } } } },
+    };
     state.wikiImportInsights = {
       sourceType: "chatgpt",
       totalItems: 1,
@@ -332,60 +210,36 @@ describe("dreaming controller", () => {
       truncated: false,
       clusters: [],
     };
-    state.wikiImportInsightsError = "unknown method: wiki.importInsights";
+    state.resourceReads.wikiImportInsights = { promise: Promise.resolve(), pending: false };
 
     await loadDreamingResource(state, "wikiImportInsights");
 
     expect(request).not.toHaveBeenCalled();
     expect(state.wikiImportInsights).toBeNull();
-    expect(state.wikiImportInsightsError).toBeNull();
-    expect(state.wikiImportInsightsLoading).toBe(false);
+    expect(state.resourceReads.wikiImportInsights).toBeUndefined();
+    expect(state.resourceReads.wikiImportInsights?.pending ?? false).toBe(false);
   });
 
   it("patches config to update global dreaming enablement", async () => {
-    const { state, request } = createState();
+    const { state } = createState();
     state.hello = gatewayHelloForMethods(["config.patch"]);
     state.configSnapshot = {
       hash: "hash-1",
-      config: {
-        plugins: {
-          slots: {
-            memory: "memos-local-openclaw-plugin",
-          },
-          entries: {
-            "memos-local-openclaw-plugin": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-      },
+      config: pluginConfig("memos-local-openclaw-plugin", {
+        config: { dreaming: { enabled: true } },
+      }),
     };
-    request.mockResolvedValue({ ok: true });
     const config = createConfig(state);
 
-    const ok = await updateDreamingEnabled(state, config, false);
-
-    expect(ok).toBe(true);
+    await expect(updateDreamingEnabled(state, config, false)).resolves.toBe(true);
     expect(config.patch).toHaveBeenCalledWith({
       note: "Dreaming settings updated from the Dreaming tab.",
       raw: expect.any(Object),
       canDispatch: expect.any(Function),
     });
-    expect(getConfigPatchRawPayload(config)).toEqual({
+    expect(vi.mocked(config.patch).mock.calls[0]?.[0]?.raw).toEqual({
       plugins: {
-        entries: {
-          "memos-local-openclaw-plugin": {
-            config: {
-              dreaming: {
-                enabled: false,
-              },
-            },
-          },
-        },
+        entries: { "memos-local-openclaw-plugin": { config: { dreaming: { enabled: false } } } },
       },
     });
     expect(state.dreamingModeSaving).toBe(false);
@@ -430,7 +284,7 @@ describe("dreaming controller", () => {
     const ok = await updateDreamingEnabled(state, config, true);
 
     expect(ok).toBe(true);
-    expect(getConfigPatchRawPayload(config)).toEqual({
+    expect(vi.mocked(config.patch).mock.calls[0]?.[0]?.raw).toEqual({
       plugins: {
         entries: {
           "memory-core": {
@@ -449,29 +303,18 @@ describe("dreaming controller", () => {
     const { state } = createState();
     state.configSnapshot = {
       hash: "hash-1",
-      config: {
-        plugins: {
-          slots: {
-            memory: "memory-lancedb",
-          },
-        },
-      },
+      config: { plugins: { slots: { memory: "memory-lancedb" } } },
     };
     const config = createConfig(state);
     vi.mocked(config.lookupSchemaPath).mockResolvedValue({
       path: "plugins.entries.memory-lancedb.config",
-      schema: {
-        type: "object",
-        additionalProperties: false,
-      },
+      schema: { type: "object", additionalProperties: false },
       children: [
         { key: "retentionDays", path: "plugins.entries.memory-lancedb.config.retentionDays" },
       ],
     });
 
-    const ok = await updateDreamingEnabled(state, config, true);
-
-    expect(ok).toBe(false);
+    await expect(updateDreamingEnabled(state, config, true)).resolves.toBe(false);
     expect(config.lookupSchemaPath).toHaveBeenCalledWith("plugins.entries.memory-lancedb.config");
     expect(config.patch).not.toHaveBeenCalled();
     expect(state.dreamingStatusError).toBe(
@@ -514,22 +357,9 @@ describe("dreaming controller", () => {
 
   it('falls back to memory-core config but stays operationally off when the slot is "none"', () => {
     expect(
-      resolveConfiguredDreaming({
-        plugins: {
-          slots: {
-            memory: "none",
-          },
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-      }),
+      resolveConfiguredDreaming(
+        pluginConfig("memory-core", { config: { dreaming: { enabled: true } } }, "none"),
+      ),
     ).toEqual({
       pluginId: "memory-core",
       enabled: false,
@@ -561,80 +391,24 @@ describe("dreaming controller", () => {
     state.configSnapshot = {};
     const config = createConfig(state);
 
-    const ok = await updateDreamingEnabled(state, config, true);
-
-    expect(ok).toBe(false);
+    await expect(updateDreamingEnabled(state, config, true)).resolves.toBe(false);
     expect(config.patch).not.toHaveBeenCalled();
     expect(config.lookupSchemaPath).not.toHaveBeenCalled();
     expect(state.dreamingStatusError).toBe("Config hash missing; refresh and retry.");
   });
 
-  it("loads dream diary content", async () => {
-    const { state, request } = createState();
-    request.mockResolvedValue({
-      found: true,
-      path: "DREAMS.md",
-      content: "## Dream Diary\n- recurring glacier thoughts",
-    });
-
-    await loadDreamingResource(state, "dreamDiary");
-
-    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "main" });
-    expect(state.dreamDiaryPath).toBe("DREAMS.md");
-    expect(state.dreamDiaryContent).toBe("## Dream Diary\n- recurring glacier thoughts");
-    expect(state.dreamDiaryError).toBeNull();
-  });
-
-  it("ignores older same-agent diary completions after switching back", async () => {
-    const { state, request } = createState();
-    const firstAgentA = createDeferred<unknown>();
-    const agentB = createDeferred<unknown>();
-    const secondAgentA = createDeferred<unknown>();
-    request
-      .mockImplementationOnce(async () => firstAgentA.promise)
-      .mockImplementationOnce(async () => agentB.promise)
-      .mockImplementationOnce(async () => secondAgentA.promise);
-
-    state.selectedAgentId = "agent-a";
-    const firstLoad = loadDreamingResource(state, "dreamDiary");
-    state.selectedAgentId = "agent-b";
-    const secondLoad = loadDreamingResource(state, "dreamDiary");
-    state.selectedAgentId = "agent-a";
-    const thirdLoad = loadDreamingResource(state, "dreamDiary");
-
-    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "agent-a" });
-    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "agent-b" });
-    expect(request).toHaveBeenCalledTimes(3);
-
-    secondAgentA.resolve({ found: true, path: "DREAMS.md", content: "new agent-a diary" });
-    await thirdLoad;
-
-    expect(state.dreamDiaryContent).toBe("new agent-a diary");
-    expect(state.dreamDiaryLoading).toBe(false);
-
-    firstAgentA.resolve({ found: true, path: "DREAMS.md", content: "old agent-a diary" });
-    agentB.resolve({ found: true, path: "DREAMS.md", content: "agent-b diary" });
-    await firstLoad;
-    await secondLoad;
-
-    expect(state.dreamDiaryContent).toBe("new agent-a diary");
-    expect(state.dreamDiaryLoading).toBe(false);
-    expect(state.dreamDiaryError).toBeNull();
-  });
-
-  it("handles missing dream diary without error", async () => {
-    const { state, request } = createState();
-    request.mockResolvedValue({
-      found: false,
-      path: "DREAMS.md",
-    });
-
-    await loadDreamingResource(state, "dreamDiary");
-
-    expect(state.dreamDiaryPath).toBe("DREAMS.md");
-    expect(state.dreamDiaryContent).toBeNull();
-    expect(state.dreamDiaryError).toBeNull();
-  });
+  it.each(["## Dream Diary\n- recurring glacier thoughts", null])(
+    "loads dream diary content %s",
+    async (content) => {
+      const { state, request } = createState();
+      request.mockResolvedValue({ found: content !== null, path: "DREAMS.md", content });
+      await loadDreamingResource(state, "dreamDiary");
+      expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "main" });
+      expect(state.dreamDiaryPath).toBe("DREAMS.md");
+      expect(state.dreamDiaryContent).toBe(content);
+      await expect(state.resourceReads.dreamDiary?.promise).resolves.toBeUndefined();
+    },
+  );
 
   it("records dream diary request errors", async () => {
     const { state, request } = createState();
@@ -642,8 +416,10 @@ describe("dreaming controller", () => {
 
     await loadDreamingResource(state, "dreamDiary");
 
-    expect(state.dreamDiaryError).toBe("dream diary read failed");
-    expect(state.dreamDiaryLoading).toBe(false);
+    await expect(state.resourceReads.dreamDiary?.promise).rejects.toThrow(
+      "dream diary read failed",
+    );
+    expect(state.resourceReads.dreamDiary?.pending ?? false).toBe(false);
   });
 
   it("does not run a write action with read-only operator access", async () => {
@@ -657,125 +433,65 @@ describe("dreaming controller", () => {
   });
 
   it("runs dream diary actions and reloads state for the selected agent", async () => {
-    const { state, request } = createState();
-    state.hello = gatewayHelloForMethods(["doctor.memory.backfillDreamDiary"], ["operator.write"]);
+    const { state, request } = createActionState(
+      "doctor.memory.backfillDreamDiary",
+      { action: "backfill", written: 1 },
+      { found: true, path: "DREAMS.md", content: "fish dreams" },
+    );
     state.selectedAgentId = "fishing-bot";
-    request.mockImplementation(async (method: string) => {
-      if (method === "doctor.memory.backfillDreamDiary") {
-        return { action: "backfill", written: 1 };
-      }
-      if (method === "doctor.memory.dreamDiary") {
-        return { found: true, path: "DREAMS.md", content: "fish dreams" };
-      }
-      if (method === "doctor.memory.status") {
-        return { dreaming: null };
-      }
-      return {};
-    });
 
-    const ok = await runDreamDiaryAction(state, "doctor.memory.backfillDreamDiary");
-
-    expect(ok).toBe(true);
-    expect(request).toHaveBeenCalledWith("doctor.memory.backfillDreamDiary", {
-      agentId: "fishing-bot",
-    });
-    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {
-      agentId: "fishing-bot",
-    });
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", {
-      agentId: "fishing-bot",
-    });
-    expect(state.dreamDiaryContent).toBe("fish dreams");
-    expect(state.dreamDiaryActionLoading).toBe(false);
+    await expectActionReload(state, request, "doctor.memory.backfillDreamDiary", "fish dreams");
   });
 
   it("resets and reloads dream diary state", async () => {
-    const { state, request } = createState();
-    state.hello = gatewayHelloForMethods(["doctor.memory.resetDreamDiary"], ["operator.write"]);
-    request.mockImplementation(async (method: string) => {
-      if (method === "doctor.memory.resetDreamDiary") {
-        return { action: "reset", removedEntries: 79 };
-      }
-      if (method === "doctor.memory.dreamDiary") {
-        return { found: false, path: "DREAMS.md" };
-      }
-      if (method === "doctor.memory.status") {
-        return { dreaming: null };
-      }
-      return {};
-    });
+    const { state, request } = createActionState(
+      "doctor.memory.resetDreamDiary",
+      { action: "reset", removedEntries: 79 },
+      { found: false, path: "DREAMS.md" },
+    );
+    const previous = createDeferred<unknown>();
+    request.mockImplementationOnce(() => previous.promise);
+    const loading = loadDreamingResource(state, "dreamDiary");
 
-    const ok = await runDreamDiaryAction(state, "doctor.memory.resetDreamDiary");
-
-    expect(ok).toBe(true);
-    expect(request).toHaveBeenCalledWith("doctor.memory.resetDreamDiary", { agentId: "main" });
-    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "main" });
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" });
+    await expectActionReload(state, request, "doctor.memory.resetDreamDiary", null);
+    previous.resolve({ found: true, path: "DREAMS.md", content: "removed entry" });
+    await loading;
     expect(state.dreamDiaryContent).toBeNull();
-    expect(state.dreamDiaryActionLoading).toBe(false);
   });
 
   it("clears grounded staged entries and reloads only dreaming status", async () => {
-    const { state, request } = createState();
-    state.hello = gatewayHelloForMethods(
-      ["doctor.memory.resetGroundedShortTerm"],
-      ["operator.write"],
-    );
+    const { state, request } = createActionState("doctor.memory.resetGroundedShortTerm", {
+      action: "resetGroundedShortTerm",
+      removedShortTermEntries: 2,
+    });
     state.dreamDiaryContent = "keep existing diary";
-    request.mockImplementation(async (method: string) => {
-      if (method === "doctor.memory.resetGroundedShortTerm") {
-        return { action: "resetGroundedShortTerm", removedShortTermEntries: 2 };
-      }
-      if (method === "doctor.memory.status") {
-        return { dreaming: null };
-      }
-      return {};
-    });
 
-    const ok = await runDreamDiaryAction(state, "doctor.memory.resetGroundedShortTerm");
-
-    expect(ok).toBe(true);
-    expect(request).toHaveBeenCalledWith("doctor.memory.resetGroundedShortTerm", {
-      agentId: "main",
-    });
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" });
-    expect(request).not.toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "main" });
-    expect(state.dreamDiaryContent).toBe("keep existing diary");
-    expect(state.dreamDiaryActionLoading).toBe(false);
+    await expectActionReload(
+      state,
+      request,
+      "doctor.memory.resetGroundedShortTerm",
+      "keep existing diary",
+      false,
+    );
   });
 
   it("repairs dreaming artifacts and reloads only dreaming status", async () => {
-    const { state, request } = createState();
-    state.hello = gatewayHelloForMethods(
-      ["doctor.memory.repairDreamingArtifacts"],
-      ["operator.write"],
-    );
+    const { state, request } = createActionState("doctor.memory.repairDreamingArtifacts", {
+      action: "repairDreamingArtifacts",
+      changed: true,
+      archiveDir: "/tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
+      archivedSessionCorpus: true,
+      archivedSessionIngestion: true,
+    });
     state.dreamDiaryContent = "keep existing diary";
-    request.mockImplementation(async (method: string) => {
-      if (method === "doctor.memory.repairDreamingArtifacts") {
-        return {
-          action: "repairDreamingArtifacts",
-          changed: true,
-          archiveDir: "/tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
-          archivedSessionCorpus: true,
-          archivedSessionIngestion: true,
-        };
-      }
-      if (method === "doctor.memory.status") {
-        return { dreaming: null };
-      }
-      return {};
-    });
 
-    const ok = await runDreamDiaryAction(state, "doctor.memory.repairDreamingArtifacts");
-
-    expect(ok).toBe(true);
-    expect(request).toHaveBeenCalledWith("doctor.memory.repairDreamingArtifacts", {
-      agentId: "main",
-    });
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" });
-    expect(request).not.toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "main" });
-    expect(state.dreamDiaryContent).toBe("keep existing diary");
+    await expectActionReload(
+      state,
+      request,
+      "doctor.memory.repairDreamingArtifacts",
+      "keep existing diary",
+      false,
+    );
     expect(state.dreamDiaryActionMessage).toEqual({
       kind: "success",
       text: "Dream cache repair complete: archived session corpus, archived ingestion state. Archive: /tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
@@ -783,76 +499,40 @@ describe("dreaming controller", () => {
     expect(state.dreamDiaryActionArchivePath).toBe(
       "/tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
     );
-    expect(state.dreamDiaryActionLoading).toBe(false);
   });
 
   it("dedupes dream diary entries and reloads diary plus status", async () => {
-    const { state, request } = createState();
-    state.hello = gatewayHelloForMethods(["doctor.memory.dedupeDreamDiary"], ["operator.write"]);
-    request.mockImplementation(async (method: string) => {
-      if (method === "doctor.memory.dedupeDreamDiary") {
-        return {
-          action: "dedupeDreamDiary",
-          removedEntries: 2,
-          keptEntries: 5,
-        };
-      }
-      if (method === "doctor.memory.dreamDiary") {
-        return { found: true, path: "DREAMS.md", content: "deduped diary" };
-      }
-      if (method === "doctor.memory.status") {
-        return { dreaming: null };
-      }
-      return {};
-    });
+    const { state, request } = createActionState(
+      "doctor.memory.dedupeDreamDiary",
+      {
+        action: "dedupeDreamDiary",
+        removedEntries: 2,
+        keptEntries: 5,
+      },
+      { found: true, path: "DREAMS.md", content: "deduped diary" },
+    );
 
-    const ok = await runDreamDiaryAction(state, "doctor.memory.dedupeDreamDiary");
-
-    expect(ok).toBe(true);
-    expect(request).toHaveBeenCalledWith("doctor.memory.dedupeDreamDiary", { agentId: "main" });
-    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "main" });
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" });
-    expect(state.dreamDiaryContent).toBe("deduped diary");
+    await expectActionReload(state, request, "doctor.memory.dedupeDreamDiary", "deduped diary");
     expect(state.dreamDiaryActionMessage).toEqual({
       kind: "success",
       text: "Removed 2 duplicate dream entries and kept 5.",
     });
     expect(state.dreamDiaryActionArchivePath).toBeNull();
-    expect(state.dreamDiaryActionLoading).toBe(false);
   });
 
-  it("copies the dreaming repair archive path", async () => {
-    const { state } = createState();
-    state.dreamDiaryActionArchivePath =
-      "/tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z";
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("navigator", { clipboard: { writeText } } as unknown as Navigator);
-
-    const ok = await copyDreamingArchivePath(state);
-
-    expect(ok).toBe(true);
-    expect(writeText).toHaveBeenCalledWith(
-      "/tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
-    );
-    expect(state.dreamDiaryActionMessage).toEqual({
-      kind: "success",
-      text: "Archive path copied.",
-    });
-  });
-
-  it("reports when the dreaming repair archive path cannot be copied", async () => {
+  it.each([
+    { copied: true, kind: "success", text: "Archive path copied." },
+    { copied: false, kind: "error", text: "Could not copy archive path." },
+  ])("reports clipboard result: $kind", async ({ copied, kind, text }) => {
     const { state } = createState();
     state.dreamDiaryActionArchivePath = "/tmp/openclaw/archive";
-    vi.stubGlobal("navigator", {
-      clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
-    } as unknown as Navigator);
+    const writeText = copied
+      ? vi.fn().mockResolvedValue(undefined)
+      : vi.fn().mockRejectedValue(new Error("denied"));
+    vi.stubGlobal("navigator", { clipboard: { writeText } } as unknown as Navigator);
 
-    const ok = await copyDreamingArchivePath(state);
-
-    expect(ok).toBe(false);
-    expect(state.dreamDiaryActionMessage).toEqual({
-      kind: "error",
-      text: "Could not copy archive path.",
-    });
+    await expect(copyDreamingArchivePath(state)).resolves.toBe(copied);
+    expect(writeText).toHaveBeenCalledWith("/tmp/openclaw/archive");
+    expect(state.dreamDiaryActionMessage).toEqual({ kind, text });
   });
 });

@@ -3,21 +3,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { inspect } from "node:util";
+import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
 import { runNodeScript } from "../helpers/run-node-script.js";
 
 type NodeResult = Awaited<ReturnType<typeof runNodeScript>>;
 
 export function formatShimResult(result: NodeResult) {
   return `status: ${result.status}\nerror: ${inspect(result.error)}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
-}
-
-function hasUnjoinedTree(error: unknown) {
-  return (
-    error &&
-    typeof error === "object" &&
-    "processTreeState" in error &&
-    error.processTreeState !== "terminated"
-  );
 }
 
 export const TSX_SHIM_WRAPPERS = [
@@ -27,26 +19,25 @@ export const TSX_SHIM_WRAPPERS = [
 
 export function writeEsmPluginFixture(fixtureRoot: string) {
   const pluginRoot = path.join(fixtureRoot, "compiled-plugin");
-  const dependencyRoot = path.join(pluginRoot, "node_modules", "import-only");
-  mkdirSync(dependencyRoot, { recursive: true });
-  writeFileSync(path.join(pluginRoot, "package.json"), JSON.stringify({ type: "module" }));
-  writeFileSync(
-    path.join(dependencyRoot, "package.json"),
-    JSON.stringify({ type: "module", exports: { import: "./index.js" } }),
-  );
-  writeFileSync(path.join(dependencyRoot, "index.js"), 'export const value = "import-only";');
-  const pluginPath = path.join(pluginRoot, "index.js");
-  writeFileSync(
-    pluginPath,
-    `export { value } from "import-only";
+  const files = {
+    "package.json": JSON.stringify({ type: "module" }),
+    "node_modules/import-only/package.json": JSON.stringify({
+      type: "module",
+      exports: { import: "./index.js" },
+    }),
+    "node_modules/import-only/index.js": 'export const value = "import-only";',
+    "loader.cjs": 'module.exports = { load: () => require("./index.js") };',
+    "index.js": `export { value } from "import-only";
 globalThis.pluginEvaluations = (globalThis.pluginEvaluations ?? 0) + 1;
 export const instance = {};
 `,
-  );
-  writeFileSync(
-    path.join(pluginRoot, "loader.cjs"),
-    'module.exports = { load: () => require("./index.js") };',
-  );
+  };
+  for (const [name, content] of Object.entries(files)) {
+    const file = path.join(pluginRoot, name);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, content);
+  }
+  const pluginPath = path.join(pluginRoot, "index.js");
   return `
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
@@ -85,12 +76,15 @@ export async function withShimFixture<T>(
     fixtureRoot: string;
     implementationPath: string;
     wrapperPath: string;
-    runNode: (args: string[], env: NodeJS.ProcessEnv, cwd: string) => Promise<NodeResult>;
+    runNode: (
+      args: string[],
+      env: NodeJS.ProcessEnv,
+      cwd: string,
+      onReady?: NonNullable<Parameters<typeof runNodeScript>[3]>["onReady"],
+    ) => Promise<NodeResult>;
   }) => T,
 ) {
-  // spawnOwnedVitestProcess gives POSIX Vitest a disposable temp namespace.
-  // Own a sibling so unverified writers survive its cleanup, outside repo module resolution.
-  // Windows has no enclosing namespace and keeps the ordinary temporary root.
+  // Own a sibling of Vitest's POSIX temp namespace so unjoined writers survive its cleanup.
   const fixtureParent = process.platform === "win32" ? tmpdir() : path.dirname(tmpdir());
   const fixtureRoot = realpathSync(mkdtempSync(path.join(fixtureParent, "openclaw-tsx-cli-shim-")));
   const checkoutRoot = path.join(fixtureRoot, "checkout");
@@ -100,12 +94,9 @@ export async function withShimFixture<T>(
     wrapper === "scripts/run-vitest.mjs" ? "-child.mts" : ".mts",
   );
   const commands: Array<Promise<NodeResult>> = [];
-  let outcome: { value: Awaited<T> } | { error: unknown };
-  try {
-    mkdirSync(path.dirname(wrapperPath), { recursive: true });
-    mkdirSync(path.join(checkoutRoot, "scripts", "lib"), { recursive: true });
-    copyFileSync(wrapper, wrapperPath);
+  const outcome = (async () => {
     for (const source of [
+      wrapper,
       "scripts/tsx.mjs",
       "scripts/windows-cmd-helpers.mjs",
       "scripts/lib/tsx-cli-shim.mjs",
@@ -117,29 +108,31 @@ export async function withShimFixture<T>(
       "scripts/lib/vitest-worker-descriptor.mts",
       "scripts/lib/windows-taskkill.mjs",
     ]) {
-      copyFileSync(source, path.join(checkoutRoot, source));
+      const target = path.join(checkoutRoot, source);
+      mkdirSync(path.dirname(target), { recursive: true });
+      copyFileSync(source, target);
     }
     writeFileSync(path.join(checkoutRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
-    outcome = {
-      value: await run({
-        checkoutRoot,
-        fixtureRoot,
-        implementationPath,
-        wrapperPath,
-        runNode(args, env, cwd) {
-          const command = runNodeScript(args, env, 10_000, { cwd });
-          commands.push(command);
-          return command;
-        },
-      }),
-    };
-  } catch (error) {
-    outcome = { error };
-  }
-  const callbackError = "error" in outcome ? outcome.error : undefined;
-  // Callback rejection must not release files still owned by an in-flight command.
+    return run({
+      checkoutRoot,
+      fixtureRoot,
+      implementationPath,
+      wrapperPath,
+      runNode(args, env, cwd, onReady) {
+        const command = runNodeScript(args, env, 10_000, { cwd, onReady });
+        commands.push(command);
+        return command;
+      },
+    });
+  })();
+  const callbackError = await outcome.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  // Callback rejection can nest cleanup markers in aggregate/cause errors.
+  // Join commands, then retain inputs until every nested owner is verified.
   const results = await Promise.all(commands);
-  const unjoined = [callbackError, ...results.map((result) => result.error)].find(hasUnjoinedTree);
+  const unjoined = [callbackError, ...results.map((result) => result.error)].find(hasUnjoinedWork);
   if (unjoined) {
     const outputPath = path.join(fixtureRoot, "command-output.log");
     writeFileSync(outputPath, results.map(formatShimResult).join("\n\n"));
@@ -154,8 +147,5 @@ export async function withShimFixture<T>(
     );
   }
   rmSync(fixtureRoot, { recursive: true, force: true });
-  if ("error" in outcome) {
-    throw outcome.error;
-  }
-  return outcome.value;
+  return await outcome;
 }

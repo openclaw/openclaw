@@ -8,7 +8,6 @@ import {
 } from "../../state/openclaw-agent-db-lease.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import { closeOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   runWithSqliteMutationWorkerCoordination,
   type SqliteMutationWorkerCoordination,
@@ -264,17 +263,11 @@ async function run(
     };
   }
 
-  // The original read handle and lease remain pinned through the final native phase.
-  if (!coordination?.reconciliation) {
-    closeDatabase?.();
-  }
   port.postMessage(terminalMessage);
   // The final parent write must finish before this independent deletion fence is released.
   await waitForMessage(port);
   // Cleanup uses the handles and lease opened by this task, even after retirement.
-  if (coordination?.reconciliation) {
-    closeDatabase?.();
-  }
+  closeDatabase?.();
   releaseLease(reconcileInput, port, closeDatabase !== undefined);
 }
 
@@ -290,12 +283,8 @@ serveWorkerTasks(
       // SAFETY: The typed pool owns this private payload; phase admission is checked below.
       value as SessionTranscriptReconcileWorkerTask;
     try {
-      if (
-        !coordination?.reconciliation ||
-        coordination.actorId !== `transcript:${input.mode}:${input.leaseId}` ||
-        coordination.databasePath !== resolveOpenClawStateSqlitePath(resolveLeaseEnvironment(input))
-      ) {
-        throw new Error("Transcript worker shared-state owner changed");
+      if (!coordination?.reconciliation) {
+        throw new Error("Transcript worker requires lifecycle coordination");
       }
       await runWithSqliteMutationWorkerCoordination(
         coordination,

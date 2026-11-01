@@ -5,7 +5,17 @@ import {
   type ModelsProbeResult,
   validateModelsProbeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveNativeModelPrimary } from "../../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { modelKey } from "../../agents/model-ref-shared.js";
+import {
+  buildModelAliasIndex,
+  resolveConfiguredModelFallbacks,
+  resolveConfiguredModelRef,
+  resolveModelRefFromString,
+} from "../../agents/model-selection-resolve.js";
+import { readUtilityModelSetting } from "../../agents/utility-model-setting.js";
 import {
   type AuthProbeResult,
   type AuthProbeReasonCode,
@@ -85,14 +95,27 @@ function safeProbeTargetError(result: AuthProbeResult): string | undefined {
   );
 }
 
-function modelCandidatesFromConfig(cfg: OpenClawConfig): string[] {
-  const configured = cfg.agents?.defaults?.model;
-  const primary = typeof configured === "string" ? configured : configured?.primary;
-  const fallbacks = typeof configured === "string" ? [] : (configured?.fallbacks ?? []);
-  return [primary, ...fallbacks, cfg.agents?.defaults?.utilityModel]
-    .filter((value): value is string => typeof value === "string")
-    .map((value) => value.trim())
-    .filter(Boolean);
+function modelCandidatesFromConfig(cfg: OpenClawConfig, agentId: string): string[] {
+  const selection = {
+    cfg,
+    agentId,
+    defaultProvider: DEFAULT_PROVIDER,
+    allowPluginNormalization: false,
+  };
+  const aliasIndex = buildModelAliasIndex(selection);
+  const primary = resolveNativeModelPrimary(cfg, agentId)
+    ? resolveConfiguredModelRef({ ...selection, defaultModel: DEFAULT_MODEL })
+    : undefined;
+  const utility = readUtilityModelSetting(cfg, agentId);
+  const candidates = [
+    ...resolveConfiguredModelFallbacks(selection),
+    ...(utility.kind === "explicit" ? [utility.modelRef] : []),
+    ...(utility.kind !== "disabled" ? utility.fallbacks : []),
+  ].flatMap((raw) => {
+    const resolved = resolveModelRefFromString({ ...selection, raw, aliasIndex });
+    return resolved ? [modelKey(resolved.ref.provider, resolved.ref.model)] : [];
+  });
+  return primary ? [modelKey(primary.provider, primary.model), ...candidates] : candidates;
 }
 
 function selectRollupStatus(results: AuthProbeResult[]): AuthProbeStatus {
@@ -168,7 +191,7 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
         agentDir: scope.agentDir,
         workspaceDir,
         providers: [provider],
-        modelCandidates: modelCandidatesFromConfig(cfg),
+        modelCandidates: modelCandidatesFromConfig(cfg, scope.agentId),
         options: {
           provider,
           ...(profileId ? { profileIds: [profileId] } : {}),

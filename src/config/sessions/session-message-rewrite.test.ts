@@ -9,30 +9,33 @@ import {
   enrichAssistantTranscriptMediaForRun,
   publishAssistantTranscriptRewrite,
 } from "../../gateway/server-methods/chat-transcript-persistence.js";
+import { runWithSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js";
-import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
+import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-admitted-read.js";
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
-import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import {
   rewriteAssistantTranscriptMessageForRun,
   rewriteTranscriptMessageAtAnchor,
 } from "./session-accessor.transcript.js";
-import { createSessionWorkerOperationContext } from "./session-entry-patch.worker.js";
+import { bindSessionWorkerBackend } from "./session-entry-patch.worker.js";
 import { rewritePreparedTranscriptMessageAtAnchor } from "./session-message-rewrite.js";
 import {
   applySessionMessageRewrite,
   prepareSessionMessageRewrite,
 } from "./session-message-rewrite.worker.js";
+import type { SessionMessageRewriteCommitted } from "./session-transcript-mutation.types.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
@@ -82,7 +85,7 @@ function fixture(agentId = "main", storePath?: string) {
 }
 
 it("commits the exact prepared rewrite without rereading its payload or generation", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const f = fixture();
     const selection = {
       scope: resolveSqliteTranscriptScope(f.scope),
@@ -90,30 +93,43 @@ it("commits the exact prepared rewrite without rereading its payload or generati
     };
     const expected = prepareSessionMessageRewrite(selection, { open: () => f.database });
     assert(expected);
-    const sql = trackSqliteStatementExecutions(f.database.db, ["generation", "payload"], (query) =>
-      query.startsWith('select "generation" from "transcript_rewrite_watermarks"')
-        ? "generation"
-        : query.startsWith("select ") && query.includes('as "event_json" from "transcript_events"')
-          ? "payload"
-          : null,
+    const backend = runWithSqliteWorkerStateContext(
+      { environment: { ...state.env, OPENCLAW_STATE_DIR: state.stateDir } },
+      () =>
+        bindSessionWorkerBackend<{
+          rewrite: { input: null; output: SessionMessageRewriteCommitted };
+        }>(
+          { agentId: "main" },
+          { database: f.database.db, databasePath: f.database.path, admit() {} },
+          "Rewrite fixture",
+          (context) => () =>
+            applySessionMessageRewrite(
+              { ...selection, expected, message: { role: "user", content: "rewritten" } },
+              context,
+              (_database, candidate) => candidate,
+            ),
+        ),
+    );
+    const sql = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(f.database.db),
+      ["generation", "payload"],
+      (query) =>
+        query.startsWith('select "generation" from "transcript_rewrite_watermarks"')
+          ? "generation"
+          : query.startsWith("select ") &&
+              query.includes('as "event_json" from "transcript_events"')
+            ? "payload"
+            : null,
     );
     let committedGeneration: string | undefined;
     try {
-      const result = applySessionMessageRewrite(
-        { ...selection, expected, message: { role: "user", content: "rewritten" } },
-        createSessionWorkerOperationContext(
-          f.database,
-          { agentId: "main", path: f.database.path },
-          { admit() {} },
-          "Rewrite fixture",
-        ),
-        (_database, candidate) => candidate,
-      );
+      const result = backend.execute({ type: "rewrite", input: null });
       committedGeneration = result.result?.generation;
       expect(committedGeneration).toEqual(expect.any(String));
       expect(sql.counts).toEqual({ generation: 0, payload: 0 });
     } finally {
       sql.restore();
+      await backend.close();
     }
     expect(
       f.database.db

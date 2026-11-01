@@ -3,7 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { MediaAttachmentCache } from "./attachments.js";
+import { MediaAttachmentCache } from "./attachments.cache.js";
 import { normalizeAttachmentPath } from "./attachments.normalize.js";
 
 describe.runIf(process.platform === "win32")("media attachment Windows file URLs", () => {

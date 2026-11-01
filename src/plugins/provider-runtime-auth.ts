@@ -1,36 +1,75 @@
 import type { OAuthCredential } from "../agents/auth-profiles/types.js";
 import { unwrapSecretSentinelsForProviderEgress } from "../agents/provider-secret-egress.js";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
+import {
+  assertProviderAuthAuthority,
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "./provider-auth-authority.js";
 import { resolveProviderRuntimePlugin } from "./provider-hook-runtime.js";
 import { resolveProviderRefOwnership } from "./providers.js";
-import type { ProviderPlugin, ProviderPrepareRuntimeAuthContext } from "./types.js";
+import type {
+  ProviderPlugin,
+  ProviderPrepareRuntimeAuthContext,
+  ProviderPrepareRuntimeAuthContextV2,
+} from "./types.js";
 
 type ProviderAuthRuntimeLookup = Pick<
   Parameters<typeof resolveProviderRuntimePlugin>[0],
   "provider" | "config" | "workspaceDir" | "env"
 >;
 
+export class UnsupportedProviderRuntimeAuthCapabilityError extends Error {
+  constructor() {
+    super("Provider credential exchange requires a full chat model; use prepareRuntimeAuthV2.");
+    this.name = "UnsupportedProviderRuntimeAuthCapabilityError";
+  }
+}
+
 export async function prepareProviderRuntimeAuth(
   params: ProviderAuthRuntimeLookup & {
     assertCurrent?: () => void;
-    context: ProviderPrepareRuntimeAuthContext;
+    context: ProviderPrepareRuntimeAuthContext | ProviderPrepareRuntimeAuthContextV2;
   },
 ) {
-  const prepareRuntimeAuth = resolveProviderRuntimePlugin(params)?.prepareRuntimeAuth;
-  if (!prepareRuntimeAuth) {
+  if (resolveMergedModelProviderConfig(params.config, params.provider)?.auth === "none") {
     return undefined;
+  }
+  const plugin = resolveProviderRuntimePlugin(params);
+  const prepareRuntimeAuth = plugin?.prepareRuntimeAuth;
+  const prepareRuntimeAuthV2 = plugin?.prepareRuntimeAuthV2;
+  if (!prepareRuntimeAuth && !prepareRuntimeAuthV2) {
+    return undefined;
+  }
+  const context = params.context;
+  // A legacy exchange may require costs or context limits. Never skip it or
+  // manufacture those fields when a capability provides only transport identity.
+  if (!prepareRuntimeAuthV2 && "capability" in context) {
+    throw new UnsupportedProviderRuntimeAuthCapabilityError();
   }
   // The lazy runtime import may outlive the caller's authority to exchange credentials.
   params.assertCurrent?.();
+  assertProviderAuthAuthority(params.context.model);
   // Secret material crosses into provider code only when that provider owns an
   // auth hook. Callers can safely pass sentinels without probing plugin state.
   const preparedInput = unwrapSecretSentinelsForProviderEgress(
     params.context.apiKey,
     "provider runtime auth exchange",
   );
-  return await prepareRuntimeAuth({
-    ...params.context,
-    apiKey: preparedInput,
-  });
+  const prepared = prepareRuntimeAuthV2
+    ? await prepareRuntimeAuthV2({
+        ...context,
+        capability: "capability" in context ? context.capability : "chat",
+        apiKey: preparedInput,
+      })
+    : !("capability" in context)
+      ? await prepareRuntimeAuth!({ ...context, apiKey: preparedInput })
+      : undefined;
+  params.assertCurrent?.();
+  assertProviderAuthAuthority(params.context.model);
+  return prepared
+    ? attachProviderAuthAuthority(prepared, getProviderAuthAuthority(params.context.model))
+    : prepared;
 }
 
 export async function loginProviderOAuthWithPlugin(

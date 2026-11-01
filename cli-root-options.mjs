@@ -76,7 +76,7 @@ export function getRootOptionAwareCommandPath(argv, depth) {
   return path;
 }
 
-function consumeKnownOptionToken(args, index, booleanFlags, valueFlags, mode) {
+export function consumeKnownOptionToken(args, index, booleanFlags, valueFlags, mode) {
   const arg = args[index];
   if (!arg || arg === FLAG_TERMINATOR || !arg.startsWith("-")) {
     return 0;

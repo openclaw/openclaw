@@ -4,8 +4,10 @@ import path from "node:path";
 import { readFileDescriptorBoundedSync, readFileWindowFullySync } from "@openclaw/fs-safe/advanced";
 import { safeStatSync } from "@openclaw/fs-safe/path";
 import { escapeRegExp } from "../shared/regexp.js";
+import { visitDirectoryTreeStrictSync } from "./directory-walk.js";
 import { isMissingPathError } from "./errors.js";
 import { unquoteGitPath } from "./git-path-quote.js";
+import { safeStat } from "./path-existence.js";
 
 function walkUpFrom<T>(
   startDir: string,
@@ -37,7 +39,23 @@ export function findGitRoot(startDir: string, opts: { maxDepth?: number } = {}):
   return walkUpFrom(startDir, opts, (repoRoot) => (hasGitMarker(repoRoot) ? repoRoot : null));
 }
 
-export function readGitMetadataFile(filePath: string, limit = 1024 * 1024): Buffer {
+/** Prompt preparation must not block the Gateway while discovering external checkouts. */
+export async function findGitRootAsync(startDir: string): Promise<string | null> {
+  let current = path.resolve(startDir);
+  for (;;) {
+    const stat = await safeStat(path.join(current, ".git"));
+    if (stat?.isDirectory() || stat?.isFile()) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
+}
+
+function readGitMetadataFile(filePath: string, limit = 1024 * 1024): Buffer {
   const fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
   try {
     const stat = fs.fstatSync(fd);
@@ -507,6 +525,40 @@ export function readGitRefs(refsBase: string, refs: readonly string[]): Map<stri
     }
   }
   return values;
+}
+
+/** Select matching tracking remotes without retaining unrelated loose or packed refs. */
+export function readGitBranchTrackingRemotes(refsBase: string, branch: string): string[] {
+  const remotes = new Set<string>();
+  const looseRoot = path.join(refsBase, "refs", "remotes");
+  const suffix = `${path.sep}${branch.split("/").join(path.sep)}`;
+  if (fs.lstatSync(looseRoot, { throwIfNoEntry: false })?.isDirectory()) {
+    visitDirectoryTreeStrictSync(looseRoot, ({ relativePath, dirent }) => {
+      if (!dirent.isDirectory() && relativePath.endsWith(suffix)) {
+        remotes.add(relativePath.slice(0, -suffix.length).split(path.sep).join("/"));
+      }
+    });
+  }
+  try {
+    const packedRefs = readGitMetadataFile(
+      path.join(refsBase, "packed-refs"),
+      Number.MAX_SAFE_INTEGER,
+    ).toString("utf8");
+    // Preserve readGitRefs' selective-record approach: retained snapshots must not
+    // allocate a line, substring, or inventory entry for every unrelated ref.
+    const records = new RegExp(
+      `^(?![#^])[^\\S\\r\\n]*\\S+[^\\S\\r\\n]+refs/remotes/(\\S+)/${escapeRegExp(branch)}(?=\\s|$)`,
+      "gm",
+    );
+    for (const [, remote] of packedRefs.matchAll(records)) {
+      remotes.add(remote!);
+    }
+  } catch (error) {
+    if (!isMissingPathError(error)) {
+      throw error;
+    }
+  }
+  return [...remotes].toSorted();
 }
 
 /** Safely resolve a Git ref path, rejecting traversal from a crafted HEAD file. */

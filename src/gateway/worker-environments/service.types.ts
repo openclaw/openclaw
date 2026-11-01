@@ -18,6 +18,8 @@ import type { WorkerTunnelManager } from "./tunnel.js";
 export type WorkerEnvironmentCreateRequest = {
   profileId: string;
   idempotencyKey: string;
+  /** Immutable admitted acquisition policy; unselected profiles and reserves stay fixed-lease. */
+  retainedPolicy?: import("../../plugins/worker-retention.types.js").WorkerRetentionPolicy;
   machineClass?: string;
   executionMode?: WorkerExecutionMode;
   projectPath?: string;
@@ -26,11 +28,14 @@ export type WorkerEnvironmentCreateRequest = {
   runSetupScript?: boolean;
   inheritedProfile?: { providerId: string; profileSnapshot: WorkerProfile };
   admittedIntent?: WorkerProviderPreparedIntent;
+  /** Revalidate caller authority after preparation, immediately before provider effects. */
+  beforeProvision?: () => void;
 };
 
 export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions &
   Pick<PreparedPoolPresenceOptions, "resolveHumanPresenceDemand" | "presenceDemandStore"> &
   WorkerEnvironmentSessionAttachmentOptions & {
+    resolveGatewayContext?: import("../server-methods/types.js").GatewayContextResolver;
     prepareComputer?: (
       claim: import("./placement-store.js").WorkerSessionTurnClaim,
     ) => Promise<import("./computer-transport.js").PreparedWorkerComputer | undefined>;
@@ -68,12 +73,3 @@ export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOption
       prepareTools?: (adapters: AnyAgentTool[]) => AnyAgentTool[] | Promise<AnyAgentTool[]>;
     }) => Promise<AnyAgentTool[]>;
   };
-
-export type WorkerEnvironmentReconcileCore = (
-  signal?: AbortSignal,
-  retainProviderSettlement?: (settled: Promise<void>) => void,
-) => Promise<void>;
-export type WorkerEnvironmentReconcileGuard = (
-  environmentId: string,
-  reconcileCore: WorkerEnvironmentReconcileCore,
-) => Promise<void>;

@@ -326,7 +326,14 @@ const ModelProviderSchema = z.strictObject({
   apiKey: SecretInputSchema.optional().register(sensitive),
   /** Authentication mode used when resolving credentials for this provider. */
   auth: z
-    .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
+    .union([
+      z.literal("api-key"),
+      z.literal("aws-sdk"),
+      z.literal("oauth"),
+      z.literal("token"),
+      z.literal("none"),
+      z.literal("native-command"),
+    ])
     .optional(),
   /** Default API adapter for models under this provider. */
   api: ModelApiSchema.optional(),
@@ -342,6 +349,8 @@ const ModelProviderSchema = z.strictObject({
   agentRuntime: AgentRuntimePolicySchema,
   /** Optional local service to start before calling this provider. */
   localService: ModelProviderLocalServiceSchema,
+  /** Override locality for watchdog timing only, including localService-managed relays. */
+  remote: z.boolean().optional(),
   /** Secret-bearing headers merged into provider requests. */
   headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
   /** Whether default Authorization header injection is enabled. */
@@ -408,6 +417,7 @@ export const ModelsConfigSchema = z
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: ModelProvidersSchema.optional(),
     catalogRefresh: ModelCatalogRefreshConfigSchema,
+    usage: z.strictObject({ cacheTtlMs: z.number().int().nonnegative().optional() }).optional(),
   })
   .optional();
 
@@ -618,7 +628,10 @@ const MediaUnderstandingAttachmentsSchema = z
   .optional();
 
 const ProviderOptionsSchema = z
-  .record(z.string(), z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])))
+  .record(
+    z.string(),
+    z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.string())])),
+  )
   .optional();
 
 const MediaUnderstandingRuntimeFields = {

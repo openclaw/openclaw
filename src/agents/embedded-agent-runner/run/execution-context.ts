@@ -11,7 +11,7 @@ import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js
 import type { createEmbeddedRunLaneController } from "./lane-controller.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { createEmbeddedRunProgressController } from "./progress-controller.js";
-import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import type { prepareEmbeddedRunRuntime } from "./runtime.js";
 import type { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import type { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
@@ -63,7 +63,5 @@ export type PreparedEmbeddedAttemptDispatchInput = {
   isTurnTainted: () => boolean;
   allocateToolOutcomeOrdinal: NonNullable<EmbeddedRunAttemptParams["allocateToolOutcomeOrdinal"]>;
   getPostCompactionAbortError: () => Error | undefined;
-  setPostCompactionAbortController: (controller: AbortController | undefined) => void;
-  clearPostCompactionAbortController: (controller: AbortController) => void;
   permissionChange?: EmbeddedRunAttemptParams["permissionChange"];
 };

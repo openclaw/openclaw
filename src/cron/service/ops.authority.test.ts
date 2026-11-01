@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { toPublicCronJob } from "../public-job.js";
 import { readCronJobScratchState } from "../scratch-store.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
@@ -30,6 +31,69 @@ function requireDeclarativeAddResult(result: CronAddResult) {
 }
 
 describe("scheduled tool policy provenance", () => {
+  it("retains a continuation source privately until an executable edit retires it", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createOkIsolatedCronState({ storePath, now: Date.now() });
+    const sessionKey = "agent:main:continuation";
+    const source = {
+      version: 1,
+      agentId: "main",
+      sessionKey,
+      sessionId: "source-session",
+      sourceRunId: "creator-run",
+      snapshot: {
+        profileId: "fixture-operator",
+        scopes: ["operator.write"],
+        assignedRole: null,
+        githubLogin: null,
+        grant: null,
+        aliasBindingIds: [],
+        authPolicy: {
+          generation: "",
+          grantGeneration: "fixture-generation",
+          role: "operator",
+          authMethod: "token",
+        },
+        controlUiAdmin: true,
+        localOperator: false,
+        sourceIngress: "control-ui",
+      },
+    } satisfies NonNullable<CronAddOptions["operatorSource"]>;
+    const created = await add(
+      state,
+      {
+        ...jobInput,
+        agentId: "main",
+        sessionTarget: `session:${sessionKey}`,
+        owner: { agentId: "main", sessionKey, accountId: "default" },
+        payload: { ...jobInput.payload, toolsAllow: ["*"] },
+      },
+      {
+        operatorSource: source,
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: sessionKey,
+          ownerAccountId: "default",
+        },
+      },
+    );
+    expect(created.operatorSource?.source).toEqual(source);
+    const stored = (await loadCronStore(storePath)).jobs[0];
+    expect(stored?.operatorSource).toEqual(created.operatorSource);
+    expect(toPublicCronJob(created)).not.toHaveProperty("operatorSource");
+    const display = await update(state, created.id, { description: "Readable description" });
+    expect(display.operatorSource).toEqual(created.operatorSource);
+    const edited = await update(state, created.id, {
+      payload: { kind: "agentTurn", message: "A different task" },
+    });
+    expect(edited.operatorSource).toBeUndefined();
+    const reverted = await update(state, created.id, {
+      payload: { kind: "agentTurn", message: jobInput.payload.message },
+    });
+    expect(reverted.operatorSource).toBeUndefined();
+    expect((await loadCronStore(storePath)).jobs[0]?.operatorSource).toBeUndefined();
+  });
   it("guards scratch and removal at their locked mutation owners", async () => {
     const { storePath } = await makeStorePath();
     const state = createOkIsolatedCronState({ storePath, now: Date.now() });

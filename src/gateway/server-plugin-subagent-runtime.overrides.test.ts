@@ -3,6 +3,7 @@ import {
   normalizeAgentCommandModelRef,
   parseAgentCommandModelRef,
 } from "../agents/command/model-ref.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -49,16 +50,7 @@ beforeEach(() => {
       providers: {
         fixture: {
           baseUrl: "https://fixture.invalid/v1",
-          models: [
-            {
-              id: "literal",
-              name: "Literal",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              maxTokens: 8192,
-            },
-          ],
+          models: [modelDefinition("literal", { name: "Literal", reasoning: false })],
         },
       },
     },

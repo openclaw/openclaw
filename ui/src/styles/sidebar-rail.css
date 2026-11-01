@@ -1,5 +1,44 @@
 .sidebar.sidebar--rail {
   flex-direction: row;
+  overflow: visible;
+}
+
+/* Account identity remains recognizable while a cold profile photo resolves. */
+:is(.sidebar-identity-card, .sidebar-identity-menu__avatar) .viewer-avatar.is-pending > img {
+  display: none;
+}
+
+:is(.sidebar-identity-card, .sidebar-identity-menu__avatar)
+  .viewer-avatar.is-pending
+  > .viewer-avatar__fallback {
+  display: grid;
+  visibility: visible;
+}
+
+.sidebar--rail .sidebar-shell__footer {
+  min-height: 0;
+}
+
+.sidebar--rail .sidebar-shell__content {
+  position: relative;
+}
+
+/* Reconnecting feedback floats over the list without reserving healthy-state space. */
+.sidebar--rail .sidebar-shell__connection {
+  position: absolute;
+  inset-inline: calc(-1 * var(--sidebar-pad-x));
+  bottom: 0;
+  padding: 4px var(--sidebar-pad-x);
+  border-block-start: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  background: var(--sidebar-bg);
+}
+
+.sidebar-shell__connection > .gateway-status-tooltip {
+  display: flex;
+}
+
+.sidebar--rail .sidebar-shell__connection .gateway-status--row {
+  height: 28px;
 }
 
 .sidebar--rail .sidebar-shell {
@@ -8,7 +47,33 @@
   --sidebar-pad-x: 8px;
 }
 
+/* Preserve title space beside the rail, row insets, and the 44px menu target. */
+.shell--mobile-nav .sidebar--rail .sidebar-shell {
+  --sidebar-pad-x: 6px;
+}
+
 .sidebar-rail {
+  --sidebar-rail-background: var(--sidebar-rail-surface, var(--sidebar-bg));
+  /* Badge cutouts need the opaque result, not a second translucent layer. */
+  --sidebar-rail-hover-surface: color-mix(
+    in srgb,
+    var(--text) var(--surface-hover-amount),
+    var(--sidebar-rail-background)
+  );
+  --sidebar-rail-selected-surface: color-mix(
+    in srgb,
+    var(--text) var(--surface-selected-amount),
+    var(--sidebar-rail-background)
+  );
+  --sidebar-rail-selected-hover-surface: color-mix(
+    in srgb,
+    var(--text) var(--surface-selected-hover-amount),
+    var(--sidebar-rail-background)
+  );
+  --sidebar-rail-control-size: 36px;
+  --sidebar-rail-action-size: 30px;
+  --sidebar-rail-glyph-size: 19px;
+  --sidebar-rail-item-gap: 8px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -16,8 +81,9 @@
   min-width: 0;
   min-height: 0;
   padding: 8px 4px;
-  gap: 12px;
-  border-inline-end: 1px solid var(--border);
+  gap: var(--sidebar-rail-item-gap);
+  border-inline-end: var(--shell-divider-size) solid var(--resize-handle-rest-color);
+  background: var(--sidebar-rail-surface, transparent);
 }
 
 .sidebar-rail__views,
@@ -26,13 +92,15 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: var(--sidebar-rail-item-gap);
 }
 
 .sidebar-rail__pins {
   flex: 1 1 0;
   align-self: stretch;
-  min-height: 32px;
+  min-height: var(--sidebar-rail-control-size);
+  padding: 2px;
+  margin: -2px;
   overflow: auto;
   scrollbar-width: none;
   border-radius: var(--radius-md);
@@ -59,83 +127,162 @@
   line-height: 1;
 }
 
-.sidebar-rail__button,
-.sidebar-rail .nav-item {
+.sidebar-rail
+  :is(
+    .sidebar-rail__button,
+    .nav-item,
+    .sidebar-brand__icon,
+    .sidebar-issues-button,
+    .sidebar-agent-card__main,
+    .sidebar-workspace-header__main,
+    .sidebar-identity-card
+  ) {
+  --sidebar-rail-control-surface: var(--sidebar-rail-background);
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
-  min-height: 36px;
-  padding: 8px;
+  flex: 0 0 var(--sidebar-rail-control-size);
+  width: var(--sidebar-rail-control-size);
+  min-width: var(--sidebar-rail-control-size);
+  height: var(--sidebar-rail-control-size);
+  min-height: var(--sidebar-rail-control-size);
+  padding: 0;
+  margin: 0;
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: 12.5px;
   background: transparent;
-  color: var(--muted);
+  color: var(--sidebar-rail-control-color);
   text-decoration: none;
-}
+  transition:
+    color 150ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease;
 
-.sidebar-rail__button:hover,
-.sidebar-rail__button[aria-pressed="true"],
-.sidebar-rail__button[aria-current="page"],
-.sidebar-rail .nav-item:hover,
-.sidebar-rail .nav-item--active {
-  background: var(--bg-hover);
-  color: var(--text);
-}
+  &:not(.sidebar-new-session, :disabled, [aria-disabled="true"]) {
+    &[aria-expanded="true"] {
+      --sidebar-rail-control-surface: color-mix(
+        in srgb,
+        var(--sidebar-rail-hover-surface) 60%,
+        var(--sidebar-rail-background)
+      );
+      background: var(--sidebar-rail-control-surface);
+      color: var(--text-strong);
+    }
 
-.sidebar-rail__button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+    &:is(:hover, [aria-current="page"], [aria-pressed="true"], .nav-item--active) {
+      --sidebar-rail-control-surface: var(--sidebar-rail-hover-surface);
+      background: var(--sidebar-rail-control-surface);
+      color: var(--text-strong);
+    }
+
+    &:is([aria-current="page"], [aria-pressed="true"], .nav-item--active) {
+      --sidebar-rail-control-surface: var(--sidebar-rail-selected-surface);
+    }
+
+    &:is([aria-current="page"], [aria-pressed="true"], .nav-item--active):hover {
+      --sidebar-rail-control-surface: var(--sidebar-rail-selected-hover-surface);
+    }
+
+    &:active {
+      --sidebar-rail-control-surface: var(--panel-hover);
+      background: var(--sidebar-rail-control-surface);
+      color: var(--text-strong);
+    }
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: -1px;
+    box-shadow: none;
+  }
+
+  &:is(:disabled, [aria-disabled="true"]) {
+    opacity: 0.4;
+  }
+
+  @supports (corner-shape: superellipse(1.5)) {
+    corner-shape: superellipse(1.5);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
 }
 
 .sidebar-rail__create {
   display: flex;
   flex: 0 0 auto;
   justify-content: center;
-  width: 36px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--border);
+  width: var(--sidebar-rail-control-size);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--sidebar-rail-divider-color, var(--border));
 }
 
 .sidebar-rail__create .sidebar-new-session {
-  background: var(--accent);
+  width: var(--sidebar-rail-action-size);
+  min-width: var(--sidebar-rail-action-size);
+  height: var(--sidebar-rail-action-size);
+  min-height: var(--sidebar-rail-action-size);
+  flex-basis: var(--sidebar-rail-action-size);
+  margin: calc((var(--sidebar-rail-control-size) - var(--sidebar-rail-action-size)) / 2);
+  background: var(--sidebar-rail-action-bg);
   color: var(--accent-foreground);
 }
 
 .sidebar-rail__create .sidebar-new-session:hover:not(:disabled, [aria-disabled="true"]) {
-  background: var(--accent-hover);
+  background: var(--sidebar-rail-action-hover-bg);
+}
+
+.sidebar-rail__create .sidebar-new-session:active:not(:disabled, [aria-disabled="true"]) {
+  background: var(--sidebar-rail-action-active-bg);
 }
 
 .sidebar-rail__create .sidebar-new-session:focus-visible {
   outline-color: var(--accent-foreground);
-  outline-offset: -4px;
 }
 
 .sidebar-rail__create .sidebar-new-session:is(:disabled, [aria-disabled="true"]) {
-  opacity: 0.45;
   cursor: not-allowed;
 }
 
-.sidebar-rail__button svg {
-  width: 20px;
-  height: 20px;
+.sidebar-rail
+  :is(
+    .sidebar-rail__button > svg,
+    .sidebar-brand__icon > svg,
+    .sidebar-issues-button__icon,
+    .sidebar-issues-button__icon > svg,
+    .nav-item__icon,
+    .nav-item__icon > svg,
+    .session-glyph__content,
+    .session-glyph__icon,
+    .session-glyph__icon > *
+  ) {
+  width: var(--sidebar-rail-glyph-size);
+  height: var(--sidebar-rail-glyph-size);
 }
 
-/* Pinned pages reuse list nav links; in the rail they match the view buttons. */
-.sidebar-rail .nav-item .nav-item__icon {
-  width: 20px;
-  height: 20px;
-  flex-basis: 20px;
+/* Include Home's wrapper so its inherited resting ink is not dimmed twice. */
+.sidebar-rail :is(.nav-item, .sidebar-footer-bar__home) .nav-item__icon {
+  width: var(--sidebar-rail-glyph-size);
+  height: var(--sidebar-rail-glyph-size);
+  flex: 0 0 var(--sidebar-rail-glyph-size);
   opacity: 1;
   color: inherit;
 }
 
-.sidebar-rail .nav-item .nav-item__icon svg {
-  width: 20px;
-  height: 20px;
+.sidebar-rail
+  :is(
+    .sidebar-rail__button > svg,
+    .sidebar-brand__icon > svg,
+    .sidebar-issues-button__icon > svg,
+    .nav-item__icon > svg,
+    .session-glyph__icon > svg
+  ) {
   stroke-width: 2px;
+}
+
+.sidebar-rail__create .sidebar-new-session > svg {
+  stroke-width: var(--sidebar-rail-action-stroke-width, 2px);
 }
 
 .sidebar-rail .nav-item__text,
@@ -151,8 +298,8 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  width: 36px;
-  gap: 6px;
+  width: var(--sidebar-rail-control-size);
+  gap: var(--sidebar-rail-item-gap);
   padding: 0;
   border: 0;
 }
@@ -164,26 +311,56 @@
   transform: none;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--sidebar-rail-item-gap);
 }
 
-.sidebar-rail .sidebar-identity-card {
-  flex: 0 0 36px;
-  justify-content: center;
-  width: 36px;
-  min-width: 36px;
-  height: 36px;
-  padding: 0;
+.sidebar-rail .sidebar-identity-anchor {
+  width: var(--sidebar-rail-control-size);
+  height: var(--sidebar-rail-control-size);
+  min-height: var(--sidebar-rail-control-size);
+  flex: 0 0 var(--sidebar-rail-control-size);
 }
 
-.sidebar-rail .sidebar-identity-card[data-connection-status] {
-  outline: 1px solid var(--warn);
-  outline-offset: -2px;
+.sidebar-rail :is(.sidebar-identity-card__avatar, .sidebar-identity-card .viewer-avatar--footer) {
+  width: 30px;
+  height: 30px;
 }
 
-.sidebar-rail .sidebar-brand__icon {
-  width: 36px;
-  height: 36px;
+.sidebar-rail .sidebar-identity-card .viewer-avatar--footer {
+  border: 0;
+}
+
+.sidebar-rail .sidebar-identity-card__status {
+  width: 12px;
+  height: 12px;
+  border-color: var(--sidebar-rail-control-surface);
+}
+
+.sidebar-rail .sidebar-issues-button__count {
+  /* Bound lightness and chroma for white counts, preserving the accent hue. */
+  background: oklch(from var(--accent) min(l, 0.5) min(c, 0.22) h / 1);
+  color: var(--inbox-attention-foreground);
+}
+
+.sidebar-rail .session-glyph__badge--unread {
+  width: 8px;
+  height: 8px;
+  top: -2px;
+  right: -2px;
+  box-shadow: 0 0 0 2px var(--sidebar-rail-control-surface);
+}
+
+.sidebar-rail .sidebar-agent-card__menu-unread {
+  width: 8px;
+  height: 8px;
+  top: 3px;
+  right: 3px;
+  left: auto;
+  box-shadow: 0 0 0 2px var(--sidebar-rail-control-surface);
+}
+
+.sidebar-rail .sidebar-footer-bar__home .session-glyph__ring {
+  inset: -4px;
 }
 
 .sidebar-footer-bar__home {
@@ -198,10 +375,11 @@
   gap: 2px;
   padding: 1px;
   border-radius: var(--radius-sm);
-  background: var(--bg);
+  align-items: center;
+  background: var(--sidebar-rail-control-surface);
 }
 
-.sidebar-footer-bar__home .session-row-badge svg {
+.sidebar-footer-bar__home .session-row-badge > i {
   width: 10px;
   height: 10px;
 }
@@ -214,16 +392,20 @@
 .sidebar-rail__pin {
   display: flex;
   position: relative;
-  width: 36px;
-  height: 36px;
-  flex: 0 0 auto;
+  width: var(--sidebar-rail-control-size);
+  height: var(--sidebar-rail-control-size);
+  min-height: var(--sidebar-rail-control-size);
+  flex: 0 0 var(--sidebar-rail-control-size);
   -webkit-touch-callout: none;
   user-select: none;
 }
 
-/* The entry, not its link, paints hover/current fills so the trailing pin sits
-   inside the same highlight. Inset shadows keep row heights unchanged. */
+/* Page entries paint around the link and pin. Session rows extend their own
+   surface across the pin slot so tags and multi-selection keep one owner. */
 .sidebar-pages__entry {
+  --sidebar-pages-pin-width: 28px;
+  --sidebar-session-row-min-height: 30px;
+
   display: flex;
   align-items: center;
   border-radius: var(--radius-md);
@@ -232,30 +414,50 @@
     box-shadow var(--duration-fast) ease;
 }
 
-.sidebar-pages__entry:hover {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 72%, transparent);
+/* Match the session lists' 2px rhythm so adjacent hover/current fills read as
+   separate rows instead of merging into one block. */
+.sidebar-pages__entry + .sidebar-pages__entry {
+  margin-block-start: 2px;
+}
+
+.sidebar-pages__entry:has(.nav-item):where(:hover) {
+  background: var(--surface-hover);
 }
 
 .sidebar-pages__entry:has(.nav-item--active) {
-  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+  background: var(--surface-selected);
 }
 
-.sidebar-pages__entry:has(.sidebar-recent-session--active) {
-  background: color-mix(in srgb, var(--text) 10%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+.sidebar-pages__entry:has(.nav-item--active):hover {
+  background: var(--surface-selected-hover);
 }
 
+/* Page links take the session rows' rhythm: 30px fill, 15px muted icon, 13px title. */
 .sidebar-pages__entry .nav-item {
+  min-height: var(--sidebar-session-row-floor, 30px);
   background: transparent;
   border-color: transparent;
+}
+
+.sidebar-pages__entry .nav-item__icon {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.sidebar-pages__entry .nav-item__icon svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.75px;
+}
+
+.sidebar-pages__entry .nav-item__text {
+  letter-spacing: -0.008em;
 }
 
 .sidebar-pages__entry:hover
   :is(
     .nav-item:not(.nav-item--active),
-    .sidebar-recent-session:not(.sidebar-recent-session--active)
+    .sidebar-recent-session:not(.sidebar-recent-session--active, .sidebar-recent-session--selected)
   ) {
   color: var(--text);
 }
@@ -264,29 +466,38 @@
   opacity: 1;
 }
 
-.sidebar-pages__entry
-  .sidebar-recent-session:is(:hover, .sidebar-recent-session--active):not(
-    .sidebar-recent-session--selected
-  ) {
-  --session-row-bg: var(--session-row-tint, transparent);
-  --session-row-border: transparent;
-}
-
 .sidebar-pages__entry > .sidebar-zone-entry {
   flex: 1;
   min-width: 0;
+}
+
+.sidebar-pages__entry .sidebar-recent-session::after {
+  inset-block: 0;
+  inset-inline-end: calc(-1 * var(--sidebar-pages-pin-width));
+}
+
+.sidebar-pages__entry:hover .sidebar-recent-session {
+  --session-row-bg: var(--session-row-hover-tint, var(--surface-hover));
+}
+
+.sidebar-pages__entry:hover .sidebar-recent-session--active {
+  --session-row-bg: var(--surface-selected-hover);
+}
+
+.sidebar-pages__entry:hover .sidebar-recent-session--selected {
+  --session-row-bg: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .sidebar-pages__pin {
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 28px;
+  flex: 0 0 var(--sidebar-pages-pin-width, 28px);
   height: 28px;
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--muted) 82%, var(--sidebar-bg, var(--bg)));
   opacity: 0;
 }
 
@@ -296,7 +507,6 @@
 }
 
 .sidebar-pages__entry:hover .sidebar-pages__pin,
-.sidebar-online__row:hover .sidebar-pages__pin,
 .sidebar-pages__pin:focus-visible,
 .sidebar-pages__pin--pinned {
   opacity: 1;
@@ -319,7 +529,7 @@
 
 /* Match the 44px session toolbar centerline without changing drawer or native clearance. */
 .shell:not(.shell--mobile-nav) .sidebar-rail {
-  padding-top: 4px;
+  padding-top: calc((44px - var(--sidebar-rail-control-size)) / 2);
 }
 
 html.openclaw-native-macos,
@@ -358,7 +568,7 @@ html.openclaw-native-desktop[data-native-platform="macos"] {
 html.openclaw-native-web-chrome:not(.openclaw-native-macos):not([data-native-platform="macos"])
   .shell:not(.shell--mobile-nav)
   .sidebar-rail {
-  padding-top: calc((var(--rail-header-height) - 36px) / 2);
+  padding-top: calc((var(--rail-header-height) - var(--sidebar-rail-control-size)) / 2);
 }
 
 /* Installed Mac apps inject !important padding; keep Settings' clearance, but
@@ -367,19 +577,64 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
   padding-top: 0 !important;
 }
 
+/* One 40px step for every control; blocks add a fixed 8px beyond the step. */
+.shell--mobile-nav .sidebar-rail {
+  --sidebar-rail-control-size: 36px;
+  --sidebar-rail-action-size: 30px;
+  --sidebar-rail-item-gap: 4px;
+  --sidebar-rail-block-gap: 8px;
+  flex-basis: calc(48px + var(--shell-divider-size));
+  align-items: flex-start;
+  padding-block: 12px;
+  padding-inline: 6px 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.shell--mobile-nav
+  .sidebar-rail
+  :is(
+    .sidebar-rail__button,
+    .nav-item,
+    .sidebar-brand__icon,
+    .sidebar-issues-button,
+    .sidebar-agent-card__main,
+    .sidebar-workspace-header__main,
+    .sidebar-identity-card
+  ) {
+  border-radius: calc(10px * var(--openclaw-corner-radius-scale, 1));
+}
+
+.shell--mobile-nav .sidebar-rail__create {
+  margin-block-end: calc(var(--sidebar-rail-block-gap) - var(--sidebar-rail-item-gap));
+  padding-bottom: calc(
+    var(--sidebar-rail-block-gap) -
+      (var(--sidebar-rail-control-size) - var(--sidebar-rail-action-size)) / 2
+  );
+  border-bottom: var(--shell-divider-size) solid
+    var(--sidebar-rail-divider-color, var(--resize-handle-rest-color));
+}
+
+.shell--mobile-nav .sidebar-rail__pins {
+  align-self: flex-start;
+  width: calc(var(--sidebar-rail-control-size) + 4px);
+  min-height: 0;
+  margin-block-start: calc(var(--sidebar-rail-block-gap) - var(--sidebar-rail-item-gap) - 2px);
+}
+
+.shell--mobile-nav .sidebar-rail__bottom {
+  margin-block-start: calc(var(--sidebar-rail-block-gap) - var(--sidebar-rail-item-gap));
+}
+
+.shell--mobile-nav .sidebar-rail .sidebar-footer-bar__home .session-glyph__ring {
+  inset: -5px;
+}
+
 @media (hover: none), (pointer: coarse) {
-  .sidebar-rail {
+  .shell:not(.shell--mobile-nav) .sidebar-rail {
+    --sidebar-rail-control-size: 44px;
+    --sidebar-rail-action-size: 44px;
     flex-basis: 52px;
-  }
-
-  .sidebar-rail__button {
-    width: 44px;
-    height: 44px;
-  }
-
-  .sidebar-rail__pin {
-    width: 44px;
-    height: 44px;
   }
 
   .sidebar-pages__pin {
@@ -388,10 +643,38 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
   }
 }
 
-.shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) {
-  --shell-controls-width: var(--shell-chrome-control-size);
-  --shell-nav-width: var(--shell-nav-rail-width);
-  grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
+/* Resize the content once; reveal the fixed-width navigation on the compositor. */
+.shell--navigation-rail:not(.shell--mobile-nav) {
+  transition-property: grid-template-rows;
+
+  .shell-nav {
+    width: var(--shell-nav-expanded-width);
+    clip-path: inset(0);
+  }
+
+  &.shell--nav-collapsed {
+    --shell-controls-width: var(--shell-chrome-control-size);
+    --shell-nav-width: var(--shell-nav-rail-width);
+    grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
+
+    .shell-nav {
+      clip-path: inset(0 calc(100% - var(--shell-nav-rail-width)) 0 0);
+
+      &:dir(rtl) {
+        clip-path: inset(0 0 0 calc(100% - var(--shell-nav-rail-width)));
+      }
+    }
+
+    .sidebar-shell {
+      display: none;
+    }
+  }
+
+  /* Connection controls may extend past the rail while it is collapsed. */
+  .shell-nav:has(.sidebar-connection-flag[data-open]) {
+    width: auto;
+    clip-path: none;
+  }
 }
 
 /* Legacy Mac hosts retain the expand + search cluster. */
@@ -400,30 +683,14 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   --shell-controls-width: 68px;
 }
 
-.shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) .shell-nav {
-  display: flex;
-}
-
-.shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) .sidebar-shell {
-  display: none;
-}
-
 /* Keep identity and command access in the persistent rail. */
 .sidebar-rail .sidebar-agent-card--rail,
 .sidebar-rail .sidebar-workspace-header--rail {
-  flex: 0 0 36px;
-  width: 36px;
-  height: 36px;
+  flex: 0 0 var(--sidebar-rail-control-size);
+  width: var(--sidebar-rail-control-size);
+  height: var(--sidebar-rail-control-size);
+  min-height: var(--sidebar-rail-control-size);
   padding: 0;
-}
-
-.sidebar-rail .sidebar-agent-card__main,
-.sidebar-rail .sidebar-workspace-header__main {
-  width: 36px;
-  min-width: 36px;
-  height: 36px;
-  padding: 0;
-  justify-content: center;
 }
 
 .sidebar-rail .sidebar-agent-card__text {
@@ -450,6 +717,10 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   margin-inline-start: auto;
 }
 
+.sidebar-session-toolbar .sidebar-session-toolbar__collapse {
+  margin-inline-start: 0;
+}
+
 /* A growing section toggle would cover the row's empty space, which must stay
    non-interactive so native hosts can drag the window from it. */
 .sidebar-panel-header > .sidebar-session-group-toggle {
@@ -468,20 +739,101 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   min-width: 0 !important;
 }
 
+.sidebar-session-owner-filter > div,
 .sidebar-session-owner-filter .picker-select__trigger {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.sidebar-session-owner-filter .picker-select__trigger {
+  justify-content: flex-start;
+  gap: 5px;
+  width: auto;
   min-height: 30px;
-  padding: 4px 6px;
+  padding: 4px 6px 4px 5px;
   border: 0;
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
   background: transparent;
   font-weight: 600;
 }
 
+.sidebar-session-owner-filter .picker-select__copy {
+  flex: 0 1 auto;
+}
+
+.sidebar-session-owner-filter .picker-select__label {
+  color: var(--text-strong);
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 550;
+  letter-spacing: -0.005em;
+}
+
 .sidebar-session-owner-filter .picker-select__chevron {
-  margin-inline-start: 0;
+  margin-inline-start: -2px;
+  color: var(--muted);
+}
+
+.sidebar-session-owner-filter .picker-select__chevron svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 1.75px;
+}
+
+.sidebar-session-owner-filter .picker-select__leading .viewer-avatar {
+  width: 18px;
+  height: 18px;
 }
 
 .sidebar-session-owner-filter.picker-select--sheet .picker-select__trigger .picker-select__chevron {
   transform: rotate(90deg);
+}
+
+/* In the phone drawer the choice page floats over the list as a card. */
+.sidebar-session-owner-filter.picker-select--sheet .picker-select__menu {
+  /* Short rosters hug their rows; long ones stop at the drawer's bottom inset. */
+  inset: var(--space-2) var(--space-2) auto;
+  max-height: calc(100% - var(--space-2) * 2);
+  padding: var(--space-3) var(--space-3) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--overlay-modal-radius);
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
+}
+
+/* The card covers its trigger, so the trigger's open ring must not show through. */
+.sidebar-session-owner-filter.picker-select--sheet .picker-select__trigger[aria-expanded="true"] {
+  box-shadow: none;
+}
+
+/* Names keep one line; the full-width label box fades its end instead of wrapping
+   or adding an ellipsis, so names that end before the fade zone stay untouched. */
+.sidebar-session-owner-filter.picker-select--sheet .picker-select__option .picker-select__copy {
+  flex: 1 1 auto;
+}
+
+.sidebar-session-owner-filter.picker-select--sheet .picker-select__option .picker-select__label {
+  white-space: nowrap;
+  text-overflow: clip;
+  mask-image: linear-gradient(
+    to right,
+    black calc(100% - 48px),
+    rgb(0 0 0 / 45%) calc(100% - 20px),
+    transparent
+  );
+}
+
+.sidebar-session-owner-filter.picker-select--sheet:dir(rtl)
+  .picker-select__option
+  .picker-select__label {
+  mask-image: linear-gradient(
+    to left,
+    black calc(100% - 48px),
+    rgb(0 0 0 / 45%) calc(100% - 20px),
+    transparent
+  );
 }
 
 .sidebar-session-owner-filter .picker-select__trigger:hover {

@@ -1,23 +1,19 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts";
-import { renderChatPullRequests } from "./chat-pull-requests.ts";
+import {
+  paintChatPullRequests,
+  clearChatPullRequests,
+  publication,
+  sessionBranch,
+} from "./chat-pull-requests.test-support.ts";
+import type { ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 
 describe("failed publication account discovery", () => {
   let container: HTMLDivElement;
 
-  function paint(props: Partial<Parameters<typeof renderChatPullRequests>[0]>) {
-    render(
-      renderChatPullRequests({
-        pullRequests: [],
-        status: "ready",
-        onDismiss: () => {},
-        ...props,
-      }),
-      container,
-    );
+  function paint(props: Partial<ChatPullRequestsProps>) {
+    paintChatPullRequests(props, container);
   }
 
   beforeEach(() => {
@@ -26,6 +22,7 @@ describe("failed publication account discovery", () => {
   });
 
   afterEach(() => {
+    clearChatPullRequests(container);
     container.remove();
   });
 

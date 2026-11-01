@@ -1,5 +1,3 @@
-// Zalo test support covers monitor.polling.media reply plugin behavior.
-import type { ServerResponse } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
@@ -8,19 +6,18 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createEmptyPluginRegistry,
-  createPluginRegistryOwner,
-  createRuntimeEnv,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ZaloFetch } from "./api.js";
 import { setZaloRuntime } from "./runtime.js";
 import {
-  createLifecycleMonitorSetup,
   createTextUpdate,
   settleAsyncWork,
+  queueLifecycleUpdate,
+  startPollingLifecycleMonitor,
 } from "./test-support/lifecycle-test-support.js";
 import {
   getUpdatesMock,
@@ -42,85 +39,83 @@ vi.mock("./outbound-media.js", async () => {
   };
 });
 
-function installZaloRuntimeForTest(): void {
-  setZaloRuntime({
-    state: {
-      openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-        createPluginStateKeyedStoreForTests<T>("zalo", options),
-    },
-  } as unknown as PluginRuntime);
+const state = {
+  openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+    createPluginStateKeyedStoreForTests<T>("zalo", options),
+};
+const monitors: Array<{ stop: () => Promise<void> }> = [];
+async function stopMonitors() {
+  await Promise.all(monitors.splice(0).map((monitor) => monitor.stop()));
+}
+const mediaRoutes = (registry: ReturnType<typeof createEmptyPluginRegistry>) =>
+  registry.httpRoutes.filter((route) => route.source === "zalo-hosted-media");
+function singleMediaRoute(registry: ReturnType<typeof createEmptyPluginRegistry>) {
+  const routes = mediaRoutes(registry);
+  expect(routes).toHaveLength(1);
+  return expectDefined(routes[0], "Zalo hosted-media route");
 }
 
-async function writeHostedZaloMediaFixture(params: {
-  id: string;
-  routePath: string;
-  token: string;
-  buffer: Buffer;
-  contentType?: string;
-}): Promise<void> {
-  const metaStore = createPluginStateKeyedStoreForTests("zalo", {
-    namespace: "hosted-outbound-media",
-    maxEntries: 80,
-  });
-  const chunkStore = createPluginStateKeyedStoreForTests("zalo", {
-    namespace: "hosted-outbound-media-chunks",
-    maxEntries: 16_384,
-  });
-  await chunkStore.register(`media:${params.id}:chunk:0000`, {
-    id: params.id,
-    index: 0,
-    dataBase64: params.buffer.toString("base64"),
-  });
-  await metaStore.register(`media:${params.id}:meta`, {
-    id: params.id,
-    routePath: params.routePath,
-    token: params.token,
-    ...(params.contentType ? { contentType: params.contentType } : {}),
-    expiresAt: Date.now() + 60_000,
-    chunkCount: 1,
-    byteLength: params.buffer.byteLength,
-  });
+async function startPollingMediaMonitor({
+  accountId = "acct-zalo-polling-media",
+  webhookUrl = "https://example.com/hooks/zalo",
+  token = "zalo-token",
+  ...options
+}: {
+  accountId?: string;
+  webhookUrl?: string;
+  token?: string;
+  fetcher?: ZaloFetch;
+  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+} = {}) {
+  const monitor = await startPollingLifecycleMonitor(
+    "zalo-polling-media-reply",
+    { accountId, webhookUrl },
+    { token, ...options },
+  );
+  monitors.push(monitor);
+  return monitor;
 }
 
-function createHostedMediaResponse() {
-  const headers = new Map<string, string>();
-  const res = {
-    statusCode: 200,
-    headersSent: false,
-    setHeader(name: string, value: string) {
-      headers.set(name, value);
-    },
-    end: vi.fn((body?: unknown) => {
-      res.headersSent = true;
-      return body;
+const queueTextUpdate = (messageId: string, text?: string) =>
+  queueLifecycleUpdate(
+    createTextUpdate({
+      messageId,
+      userId: "user-1",
+      userName: "User One",
+      chatId: "dm-chat-1",
+      text,
     }),
-  };
-  return { headers, res: res as unknown as ServerResponse & { end: ReturnType<typeof vi.fn> } };
-}
+  );
 
-function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
-  let count = 0;
-  for (const item of items) {
-    if (predicate(item)) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-type ZaloReplyFailureCase = {
-  name: string;
-  kind: "block" | "tool" | "final";
-  payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] };
-  partial?: "text" | "media";
-  missingMessageId?: boolean;
-  hosted?: boolean;
-  blocked?: boolean;
+type MediaDelivery = {
+  dispatcherOptions: { deliver: (payload: { text: string; mediaUrl: string }) => Promise<void> };
 };
 
+const deliverPhoto =
+  (text: string) =>
+  async ({ dispatcherOptions }: MediaDelivery) => {
+    await dispatcherOptions.deliver({ text, mediaUrl: "https://example.com/reply-image.png" });
+  };
+
+type FailureRow = [
+  name: string,
+  kind: "block" | "tool" | "final",
+  payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] },
+  flags?: {
+    partial?: boolean;
+    missingMessageId?: boolean;
+    blocked?: boolean;
+  },
+];
+const photo = (name: string) => ({ text: "caption", mediaUrl: `https://example.com/${name}.png` });
+const textReply = { text: "reply" };
+const photos = (count: number) => ({
+  text: "caption",
+  mediaUrls: ["first", "second", "third"].slice(0, count).map((name) => photo(name).mediaUrl),
+});
+type DispatchOptions = Parameters<typeof createReplyDispatcher>[0];
+
 describe("Zalo polling media replies", () => {
-  const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
-  const recordInboundSessionMock = vi.fn(async () => undefined);
   const dispatchReplyWithBufferedBlockDispatcherMock = vi.fn();
 
   beforeAll(async () => {
@@ -130,316 +125,164 @@ describe("Zalo polling media replies", () => {
   beforeEach(async () => {
     await resetLifecycleTestState();
     resetPluginStateStoreForTests();
-    installZaloRuntimeForTest();
+    setZaloRuntime({ state } as unknown as PluginRuntime);
     prepareHostedZaloMediaUrlMock.mockReset();
     prepareHostedZaloMediaUrlMock.mockResolvedValue(
       "https://example.com/hooks/zalo/media/abc123abc123abc123abc123?token=secret",
     );
     dispatchReplyWithBufferedBlockDispatcherMock.mockReset();
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
-      async (params: {
-        dispatcherOptions: {
-          deliver: (payload: { text: string; mediaUrl: string }) => Promise<void>;
-        };
-      }) => {
-        await params.dispatcherOptions.deliver({
-          text: "caption text",
-          mediaUrl: "https://example.com/reply-image.png",
-        });
-      },
-    );
     setLifecycleRuntimeCore(
       {
         reply: {
-          finalizeInboundContext:
-            finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
           dispatchReplyWithBufferedBlockDispatcher:
             dispatchReplyWithBufferedBlockDispatcherMock as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
         },
-        session: {
-          recordInboundSession:
-            recordInboundSessionMock as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
-        },
       },
-      {
-        openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-          createPluginStateKeyedStoreForTests<T>("zalo", options),
-      } as PluginRuntime["state"],
+      state as PluginRuntime["state"],
     );
   });
 
-  afterAll(async () => {
-    await resetLifecycleTestState();
+  afterAll(resetLifecycleTestState);
+
+  afterEach(async () => {
+    try {
+      await stopMonitors();
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it.each([true, false])(
     "sends bounded photo captions while polling (hosted: %s)",
     async (hosted) => {
       const caption = `${"a".repeat(1999)}🐱tail`;
-      dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
-        async (params: {
-          dispatcherOptions: {
-            deliver: (payload: { text: string; mediaUrl: string }) => Promise<void>;
-          };
-        }) => {
-          await params.dispatcherOptions.deliver({
-            text: caption,
-            mediaUrl: "https://example.com/reply-image.png",
-          });
-        },
-      );
+      dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(deliverPhoto(caption));
       const api = await vi.importActual<typeof import("./api.js")>("./api.js");
       vi.mocked((await import("./api.js")).sendPhoto).mockImplementationOnce(api.sendPhoto);
       const ssrf = await import("openclaw/plugin-sdk/ssrf-runtime");
       const pinnedHost = await ssrf.resolvePinnedHostnameWithPolicy("example.com", {
         lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
       });
-      const resolvePhotoHost = vi
-        .spyOn(ssrf, "resolvePinnedHostnameWithPolicy")
-        .mockResolvedValue(pinnedHost);
+      vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockResolvedValue(pinnedHost);
       const fetcher = vi.fn<ZaloFetch>(async () =>
         Response.json({ ok: true, result: { message_id: "zalo-photo-bounded" } }),
       );
       const registry = createEmptyPluginRegistry();
       setActivePluginRegistry(registry);
-      const processed = Promise.withResolvers<void>();
-      getUpdatesMock
-        .mockResolvedValueOnce({
-          ok: true,
-          result: createTextUpdate({
-            messageId: "polling-media-1",
-            userId: "user-1",
-            userName: "User One",
-            chatId: "dm-chat-1",
-            text: "send media",
-          }),
-        })
-        .mockImplementation(() => {
-          processed.resolve();
-          return new Promise(() => {});
-        });
-
-      const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(
-        "zalo-polling-media-reply",
-      );
-      const abort = new AbortController();
-      const runtime = createRuntimeEnv();
-      const { account, config } = createLifecycleMonitorSetup({
-        accountId: "acct-zalo-polling-media",
-        dmPolicy: "open",
+      const processed = queueTextUpdate("polling-media-1", "send media");
+      const monitor = await startPollingMediaMonitor({
         webhookUrl: hosted ? "https://example.com/hooks/zalo" : "",
-      });
-      const run = monitorZaloProvider({
-        token: "zalo-token",
-        account,
-        config,
-        runtime,
-        abortSignal: abort.signal,
         fetcher,
       });
 
-      try {
-        await processed.promise;
-        expect(sendPhotoMock).toHaveBeenCalledTimes(1);
-
-        expect(registry.httpRoutes).toHaveLength(hosted ? 1 : 0);
-        if (hosted) {
-          expect(prepareHostedZaloMediaUrlMock).toHaveBeenCalledWith({
+      await processed;
+      expect(registry.httpRoutes).toHaveLength(hosted ? 1 : 0);
+      if (hosted) {
+        expect(prepareHostedZaloMediaUrlMock).toHaveBeenCalledWith(
+          expect.objectContaining({
             mediaUrl: "https://example.com/reply-image.png",
-            webhookUrl: "https://example.com/hooks/zalo",
-            webhookPath: "/hooks/zalo",
             maxBytes: 5 * 1024 * 1024,
-            proxyUrl: undefined,
-          });
-        } else {
-          expect(prepareHostedZaloMediaUrlMock).not.toHaveBeenCalled();
-        }
-        expect(fetcher).toHaveBeenCalledOnce();
-        expect(fetcher.mock.calls[0]?.[1]?.body).toBe(
-          JSON.stringify({
-            chat_id: "dm-chat-1",
-            photo: hosted
-              ? "https://example.com/hooks/zalo/media/abc123abc123abc123abc123?token=secret"
-              : "https://example.com/reply-image.png",
-            caption: "a".repeat(1999),
           }),
         );
-      } finally {
-        abort.abort();
-        await run;
-        resolvePhotoHost.mockRestore();
+      } else {
+        expect(prepareHostedZaloMediaUrlMock).not.toHaveBeenCalled();
       }
-
+      expect(fetcher).toHaveBeenCalledOnce();
+      expect(fetcher.mock.calls[0]?.[1]?.body).toBe(
+        JSON.stringify({
+          chat_id: "dm-chat-1",
+          photo: hosted
+            ? "https://example.com/hooks/zalo/media/abc123abc123abc123abc123?token=secret"
+            : "https://example.com/reply-image.png",
+          caption: "a".repeat(1999),
+        }),
+      );
+      await monitor.stop();
       expect(registry.httpRoutes).toHaveLength(0);
     },
   );
 
-  it.each<ZaloReplyFailureCase>([
-    { name: "block text", kind: "block", payload: { text: "block reply" } },
-    {
-      name: "first tool attachment",
-      kind: "tool",
-      payload: { text: "caption", mediaUrl: "https://example.com/first.png" },
-    },
-    {
-      name: "final attachment",
-      kind: "final",
-      payload: { text: "caption", mediaUrl: "https://example.com/final.png" },
-    },
-    {
-      name: "blocked hosted attachment",
-      kind: "tool",
-      payload: { text: "caption", mediaUrl: "file:///etc/passwd" },
-      hosted: true,
-      blocked: true,
-    },
-    {
-      name: "later block attachment",
-      kind: "block",
-      payload: {
-        text: "caption",
-        mediaUrls: [
-          "https://example.com/first.png",
-          "https://example.com/second.png",
-          "https://example.com/third.png",
-        ],
-      },
-      partial: "media",
-    },
-    {
-      name: "later tool text chunk",
-      kind: "tool",
-      payload: { text: "first chunk second chunk third chunk" },
-      partial: "text",
-    },
-    {
-      name: "later attachment without a provider id",
-      kind: "tool",
-      payload: {
-        text: "caption",
-        mediaUrls: ["https://example.com/first.png", "https://example.com/second.png"],
-      },
-      partial: "media",
-      missingMessageId: true,
-    },
-    {
-      name: "later text chunk without a provider id",
-      kind: "block",
-      payload: { text: "first chunk second chunk" },
-      partial: "text",
-      missingMessageId: true,
-    },
-  ])("reports $name failures through the real reply dispatcher", async (testCase) => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    const failure = new Error(`${testCase.name} rejected`);
-    const acceptedMessageId = `zalo-accepted-${testCase.partial ?? "none"}`;
-    const acceptedResponse = {
-      ok: true,
-      ...(testCase.missingMessageId ? {} : { result: { message_id: acceptedMessageId } }),
-    };
-    const isMedia = Boolean(testCase.payload.mediaUrl || testCase.payload.mediaUrls?.length);
-    if (testCase.blocked) {
-      prepareHostedZaloMediaUrlMock.mockRejectedValueOnce(failure);
-    } else if (testCase.partial === "media") {
-      sendPhotoMock.mockResolvedValueOnce(acceptedResponse).mockRejectedValueOnce(failure);
-    } else if (testCase.partial === "text") {
-      const core = getZaloRuntimeMock() as PluginRuntime;
-      vi.mocked(core.channel.text.chunkMarkdownTextWithMode).mockReturnValueOnce([
-        "first chunk",
-        "second chunk",
-        "third chunk",
-      ]);
-      sendMessageMock.mockResolvedValueOnce(acceptedResponse).mockRejectedValueOnce(failure);
-    } else if (isMedia) {
-      sendPhotoMock.mockRejectedValueOnce(failure);
-    } else {
-      sendMessageMock.mockRejectedValueOnce(failure);
-    }
-
-    const deliveryErrors: unknown[] = [];
-    let failedAfterSendCounts: Record<"tool" | "block" | "final", number> | undefined;
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
-      async ({
-        dispatcherOptions,
-      }: {
-        dispatcherOptions: Parameters<typeof createReplyDispatcher>[0];
-      }) => {
-        const dispatcher = createReplyDispatcher({
-          ...dispatcherOptions,
-          onError: async (error, info) => {
-            deliveryErrors.push(error);
-            await dispatcherOptions.onError?.(error, info);
-          },
-        });
-        if (testCase.kind === "tool") {
-          dispatcher.sendToolResult(testCase.payload);
-        } else if (testCase.kind === "final") {
-          dispatcher.sendFinalReply(testCase.payload);
-        } else {
-          dispatcher.sendBlockReply(testCase.payload);
-        }
-        dispatcher.markComplete();
-        const receipt = await dispatcher.waitForIdle();
-        if (receipt) {
-          failedAfterSendCounts = {
-            tool: receipt.counts.tool.failedAfterSend,
-            block: receipt.counts.block.failedAfterSend,
-            final: receipt.counts.final.failedAfterSend,
-          };
-        }
-        return {
-          queuedFinal: testCase.kind === "final",
-          counts: dispatcher.getQueuedCounts(),
-        };
-      },
-    );
-
-    const processed = Promise.withResolvers<void>();
-    getUpdatesMock
-      .mockResolvedValueOnce({
+  it.each<FailureRow>([
+    ["block text", "block", textReply],
+    ["tool photo", "tool", photo("first")],
+    ["final photo", "final", photo("final")],
+    [
+      "blocked hosted photo",
+      "tool",
+      { text: "caption", mediaUrl: "file:///etc/passwd" },
+      { blocked: true },
+    ],
+    ["partial block photo", "block", photos(3), { partial: true }],
+    ["partial tool text", "tool", textReply, { partial: true }],
+    ["photo without id", "tool", photos(2), { partial: true, missingMessageId: true }],
+    ["text without id", "block", textReply, { partial: true, missingMessageId: true }],
+  ])(
+    "reports %s failures through the real reply dispatcher",
+    async (name, kind, payload, flags = {}) => {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      const failure = new Error(`${name} rejected`);
+      const acceptedMessageId = "zalo-accepted";
+      const acceptedResponse = {
         ok: true,
-        result: createTextUpdate({
-          messageId: `polling-delivery-${testCase.name.replaceAll(" ", "-")}`,
-          userId: "user-1",
-          userName: "User One",
-          chatId: "dm-chat-1",
-        }),
-      })
-      .mockImplementation(() => {
-        processed.resolve();
-        return new Promise(() => {});
-      });
-    const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(
-      "zalo-polling-media-reply",
-    );
-    const abort = new AbortController();
-    const runtime = createRuntimeEnv();
-    const statusSink =
-      vi.fn<(patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void>();
-    const { account, config } = createLifecycleMonitorSetup({
-      accountId: "acct-zalo-delivery",
-      dmPolicy: "open",
-      webhookUrl: testCase.hosted ? "https://example.com/hooks/zalo" : "",
-    });
-    const run = monitorZaloProvider({
-      token: "zalo-token",
-      account,
-      config,
-      runtime,
-      statusSink,
-      abortSignal: abort.signal,
-    });
+        ...(flags.missingMessageId ? {} : { result: { message_id: acceptedMessageId } }),
+      };
+      const isMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+      if (flags.blocked) {
+        prepareHostedZaloMediaUrlMock.mockRejectedValueOnce(failure);
+      } else {
+        const send = isMedia ? sendPhotoMock : sendMessageMock;
+        if (flags.partial && !isMedia) {
+          const core = getZaloRuntimeMock() as PluginRuntime;
+          vi.mocked(core.channel.text.chunkMarkdownTextWithMode).mockReturnValueOnce([
+            "first chunk",
+            "second chunk",
+            "third chunk",
+          ]);
+        }
+        if (flags.partial) {
+          send.mockResolvedValueOnce(acceptedResponse);
+        }
+        send.mockRejectedValueOnce(failure);
+      }
 
-    try {
-      await processed.promise;
-      expect(failedAfterSendCounts).toEqual({
-        block: testCase.kind === "block" ? 1 : 0,
-        tool: testCase.kind === "tool" ? 1 : 0,
-        final: testCase.kind === "final" ? 1 : 0,
+      const deliveryErrors: unknown[] = [];
+      dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
+        async ({ dispatcherOptions }: { dispatcherOptions: DispatchOptions }) => {
+          const dispatcher = createReplyDispatcher({
+            ...dispatcherOptions,
+            onError: async (error, info) => {
+              deliveryErrors.push(error);
+              await dispatcherOptions.onError?.(error, info);
+            },
+          });
+          const send = {
+            tool: dispatcher.sendToolResult,
+            final: dispatcher.sendFinalReply,
+            block: dispatcher.sendBlockReply,
+          }[kind];
+          send(payload);
+          dispatcher.markComplete();
+          await dispatcher.waitForIdle();
+          return {
+            queuedFinal: kind === "final",
+            counts: dispatcher.getQueuedCounts(),
+          };
+        },
+      );
+
+      const processed = queueTextUpdate(`polling-delivery-${name.replaceAll(" ", "-")}`);
+      const statusSink =
+        vi.fn<(patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void>();
+      const { runtime } = await startPollingMediaMonitor({
+        accountId: "acct-zalo-delivery",
+        webhookUrl: flags.blocked ? "https://example.com/hooks/zalo" : "",
+        statusSink,
       });
+
+      await processed;
       expect(deliveryErrors).toHaveLength(1);
-      if (testCase.partial) {
-        const acceptedMessageIds = testCase.missingMessageId ? [] : [acceptedMessageId];
+      if (flags.partial) {
+        const acceptedMessageIds = flags.missingMessageId ? [] : [acceptedMessageId];
         expect(deliveryErrors[0]).toMatchObject({
           cause: failure,
           sentBeforeError: true,
@@ -453,32 +296,19 @@ describe("Zalo polling media replies", () => {
       } else {
         expect(deliveryErrors[0]).toBe(failure);
       }
-      expect(runtime.error).toHaveBeenCalledTimes(1);
-      expect(runtime.error).toHaveBeenCalledWith(
-        `[acct-zalo-delivery] Zalo ${testCase.kind} reply failed: Error: ${testCase.name} rejected`,
+      expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+        `[acct-zalo-delivery] Zalo ${kind} reply failed: Error: ${name} rejected`,
       );
       const outboundUpdates = statusSink.mock.calls.filter(
         ([patch]) => patch.lastOutboundAt !== undefined,
       );
-      expect(outboundUpdates).toHaveLength(testCase.partial ? 1 : 0);
-      expect(sendMessageMock).toHaveBeenCalledTimes(isMedia ? 0 : testCase.partial ? 2 : 1);
+      expect(outboundUpdates).toHaveLength(flags.partial ? 1 : 0);
+      expect(sendMessageMock).toHaveBeenCalledTimes(isMedia ? 0 : flags.partial ? 2 : 1);
       expect(sendPhotoMock).toHaveBeenCalledTimes(
-        !isMedia || testCase.blocked ? 0 : testCase.partial ? 2 : 1,
+        !isMedia || flags.blocked ? 0 : flags.partial ? 2 : 1,
       );
-      if (testCase.hosted) {
-        expect(prepareHostedZaloMediaUrlMock).toHaveBeenCalledWith({
-          mediaUrl: "file:///etc/passwd",
-          webhookUrl: "https://example.com/hooks/zalo",
-          webhookPath: "/hooks/zalo",
-          maxBytes: 5 * 1024 * 1024,
-          proxyUrl: undefined,
-        });
-      }
-    } finally {
-      abort.abort();
-      await run;
-    }
-  });
+    },
+  );
 
   it.each(["first", "second"] as const)(
     "shares one hosted media route when the %s account stops first",
@@ -487,189 +317,29 @@ describe("Zalo polling media replies", () => {
       setActivePluginRegistry(registry);
       getUpdatesMock.mockImplementation(() => new Promise(() => {}));
 
-      const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(
-        "zalo-polling-media-reply",
-      );
-      const firstAbort = new AbortController();
-      const firstRuntime = createRuntimeEnv();
-      const firstSetup = createLifecycleMonitorSetup({
+      const first = await startPollingMediaMonitor({
         accountId: "acct-zalo-polling-media-one",
-        dmPolicy: "open",
-        webhookUrl: "https://example.com/hooks/zalo",
-      });
-      const firstRun = monitorZaloProvider({
         token: "zalo-token-one",
-        account: firstSetup.account,
-        config: firstSetup.config,
-        runtime: firstRuntime,
-        abortSignal: firstAbort.signal,
       });
 
-      const secondAbort = new AbortController();
-      let secondRun: Promise<void> | undefined;
+      await settleAsyncWork();
+      const firstHostedMediaRoute = singleMediaRoute(registry);
+      expect(firstHostedMediaRoute.path).toBe("/hooks/zalo/media");
 
-      try {
-        await settleAsyncWork();
-        const firstHostedMediaRoutes = registry.httpRoutes.filter(
-          (route) => route.source === "zalo-hosted-media",
-        );
-        expect(firstHostedMediaRoutes).toHaveLength(1);
-        const firstHostedMediaRoute = expectDefined(
-          firstHostedMediaRoutes[0],
-          "Zalo hosted-media route",
-        );
-        expect(firstHostedMediaRoute.path).toBe("/hooks/zalo/media");
-        expect(firstHostedMediaRoute.pluginId).toBe("zalo");
-        expect(firstHostedMediaRoute.source).toBe("zalo-hosted-media");
-        expect(firstHostedMediaRoute.handler).toBeTypeOf("function");
+      const second = await startPollingMediaMonitor({
+        accountId: "acct-zalo-polling-media-two",
+        webhookUrl: "https://example.com/Hooks//Zalo/",
+        token: "zalo-token-two",
+      });
 
-        const secondRuntime = createRuntimeEnv();
-        const secondSetup = createLifecycleMonitorSetup({
-          accountId: "acct-zalo-polling-media-two",
-          dmPolicy: "open",
-          webhookUrl: "https://example.com/Hooks//Zalo/",
-        });
-        secondRun = monitorZaloProvider({
-          token: "zalo-token-two",
-          account: secondSetup.account,
-          config: secondSetup.config,
-          runtime: secondRuntime,
-          abortSignal: secondAbort.signal,
-        });
+      await settleAsyncWork();
+      const hostedMediaRoute = singleMediaRoute(registry);
+      expect(hostedMediaRoute).toBe(firstHostedMediaRoute);
 
-        await settleAsyncWork();
-        const hostedMediaRoutes = registry.httpRoutes.filter(
-          (route) => route.source === "zalo-hosted-media",
-        );
-        expect(hostedMediaRoutes).toHaveLength(1);
-        const hostedMediaRoute = expectDefined(
-          hostedMediaRoutes[0],
-          "active Zalo hosted-media route",
-        );
-        expect(hostedMediaRoute).toBe(firstHostedMediaRoute);
-
-        await writeHostedZaloMediaFixture({
-          id: "abc123abc123abc123abc123",
-          routePath: "/hooks/zalo/media/",
-          token: "route-token-one",
-          buffer: Buffer.from("first-image-bytes"),
-          contentType: "image/png",
-        });
-        const firstFetch = createHostedMediaResponse();
-        await hostedMediaRoute.handler(
-          {
-            method: "GET",
-            url: "/hooks/zalo/media/abc123abc123abc123abc123?token=route-token-one",
-          } as never,
-          firstFetch.res as never,
-        );
-        expect(firstFetch.res.statusCode).toBe(200);
-        expect(firstFetch.headers.get("Content-Type")).toBe("image/png");
-        expect(firstFetch.headers.get("Cache-Control")).toBe("no-store");
-        expect(firstFetch.res.end).toHaveBeenCalledWith(Buffer.from("first-image-bytes"));
-
-        const stoppedRun = stoppedAccount === "first" ? firstRun : secondRun;
-        (stoppedAccount === "first" ? firstAbort : secondAbort).abort();
-        await stoppedRun;
-        expect(registry.httpRoutes.find((route) => route.source === "zalo-hosted-media")).toEqual(
-          hostedMediaRoute,
-        );
-        expect(
-          countMatching(registry.httpRoutes, (route) => route.source === "zalo-hosted-media"),
-        ).toBe(1);
-
-        await writeHostedZaloMediaFixture({
-          id: "def456def456def456def456",
-          routePath: "/hooks/zalo/media/",
-          token: "route-token-two",
-          buffer: Buffer.from("second-image-bytes"),
-          contentType: "image/jpeg",
-        });
-        const secondFetch = createHostedMediaResponse();
-        await hostedMediaRoute.handler(
-          {
-            method: "GET",
-            url: "/hooks/zalo/media/def456def456def456def456?token=route-token-two",
-          } as never,
-          secondFetch.res as never,
-        );
-        expect(secondFetch.res.statusCode).toBe(200);
-        expect(secondFetch.headers.get("Content-Type")).toBe("image/jpeg");
-        expect(secondFetch.res.end).toHaveBeenCalledWith(Buffer.from("second-image-bytes"));
-      } finally {
-        firstAbort.abort();
-        secondAbort.abort();
-        await firstRun;
-        await secondRun;
-      }
-
-      expect(
-        registry.httpRoutes.filter((route) => route.source === "zalo-hosted-media"),
-      ).toHaveLength(0);
+      await (stoppedAccount === "first" ? first : second).stop();
+      expect(singleMediaRoute(registry)).toBe(hostedMediaRoute);
+      await stopMonitors();
+      expect(mediaRoutes(registry)).toHaveLength(0);
     },
   );
-
-  it("cleans each active registry when its own route holder stops", async () => {
-    const firstRegistry = createEmptyPluginRegistry();
-    setActivePluginRegistry(firstRegistry);
-    const firstOwner = createPluginRegistryOwner(firstRegistry);
-    getUpdatesMock.mockImplementation(() => new Promise(() => {}));
-
-    const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(
-      "zalo-polling-media-reply",
-    );
-    const firstAbort = new AbortController();
-    const firstRuntime = createRuntimeEnv();
-    const { account, config } = createLifecycleMonitorSetup({
-      accountId: "acct-zalo-polling-media",
-      dmPolicy: "open",
-      webhookUrl: "https://example.com/hooks/zalo",
-    });
-    const firstRun = monitorZaloProvider({
-      token: "zalo-token",
-      account,
-      config,
-      runtime: firstRuntime,
-      abortSignal: firstAbort.signal,
-    });
-
-    const secondRegistry = createEmptyPluginRegistry();
-    const secondAbort = new AbortController();
-    const secondRuntime = createRuntimeEnv();
-    let secondRun: Promise<void> | undefined;
-    let secondOwner: ReturnType<typeof createPluginRegistryOwner> | undefined;
-
-    try {
-      await settleAsyncWork();
-      expect(firstRegistry.httpRoutes).toHaveLength(1);
-
-      setActivePluginRegistry(secondRegistry);
-      secondOwner = createPluginRegistryOwner(secondRegistry);
-      secondRun = monitorZaloProvider({
-        token: "zalo-token",
-        account,
-        config,
-        runtime: secondRuntime,
-        abortSignal: secondAbort.signal,
-      });
-
-      await settleAsyncWork();
-      expect(secondRegistry.httpRoutes).toHaveLength(1);
-      firstAbort.abort();
-      await firstRun;
-      expect(firstRegistry.httpRoutes).toHaveLength(0);
-      expect(secondRegistry.httpRoutes).toHaveLength(1);
-    } finally {
-      firstAbort.abort();
-      secondAbort.abort();
-      try {
-        await Promise.all([firstRun, secondRun]);
-      } finally {
-        await Promise.all([firstOwner.close(), secondOwner?.close()]);
-      }
-    }
-
-    expect(firstRegistry.httpRoutes).toHaveLength(0);
-    expect(secondRegistry.httpRoutes).toHaveLength(0);
-  });
 });

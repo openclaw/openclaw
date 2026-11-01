@@ -30,7 +30,11 @@ struct SessionDashboardScreen: View {
                     allowedMainFramePathPrefix: Self.dashboardPathPrefix(config: config),
                     onMainFrameNavigationOutsideScope: {
                         self.dismiss()
-                    })
+                    },
+                    nativeAuth: AuthenticatedControlUI.nativeAuthHandler(
+                        config: config,
+                        storedOperatorToken: storedOperatorToken,
+                        appModel: self.appModel))
                     .id(AuthenticatedControlUI.webContentIdentity(
                         config: config,
                         storedOperatorToken: storedOperatorToken))

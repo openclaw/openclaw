@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
+import { getPostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
   createSqliteQueryCache,
@@ -8,7 +8,11 @@ import {
   iterateSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
-import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
+import {
+  isPostgresSqlConnection,
+  sqlPublicationAnchor,
+  type EngineConnection,
+} from "../../infra/sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   readSqliteDatabaseWriteRevision,
@@ -26,7 +30,7 @@ import {
   getSqliteReadScopeRevision,
   type SqliteReadScopeRevision,
 } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
 import {
   normalizeAgentId,
@@ -34,6 +38,10 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import {
+  hasOpenClawAgentCanonicalValidationReceiptColumn,
+  loadOpenClawAgentCanonicalValidationReceipt,
+} from "../../state/openclaw-agent-canonical-validation-receipt.js";
 import { assertCanonicalSessionValidationSchema } from "../../state/openclaw-agent-canonical-validation-schema.js";
 import { CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import {
@@ -55,8 +63,9 @@ import {
 } from "./session-accessor.sqlite-owner-projection.js";
 import {
   canonicalSessionKeyMigrationRequiredError,
-  validateCanonicalSessionRow,
+  validateCanonicalSessionRowEntry,
 } from "./session-canonical-row.js";
+import { parseCanonicalSqliteSessionEntry } from "./session-entry-json.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
@@ -77,6 +86,16 @@ const mainKeyReader = createSqliteQueryCache((db) =>
       .selectFrom("session_key_contract")
       .select("main_key")
       .where("id", "=", 1),
+  ),
+);
+const startupContractReader = createSqliteQueryCache((db) =>
+  prepareSqliteQueryTakeFirstSync<void, { main_key: string; canonical_ready: string | null }>(
+    db,
+    () =>
+      getNodeSqliteKysely<CanonicalSessionDatabase>(db)
+        .selectFrom("session_key_contract")
+        .select(["main_key", "canonical_ready"])
+        .where("id", "=", 1),
   ),
 );
 const mainKeyAdmission = {
@@ -105,7 +124,7 @@ type ReaderAdmissionCell = {
 };
 const readerAdmissions = resolveGlobalSingleton(
   Symbol.for("openclaw.canonicalSessionReaderAdmissions"),
-  () => new WeakMap<DatabaseSync, ReaderAdmissionCell>(),
+  () => new WeakMap<EngineConnection, ReaderAdmissionCell>(),
 );
 export type CanonicalSessionReaderContinuation = {
   agentId: string;
@@ -117,7 +136,7 @@ export type CanonicalSessionReaderContinuation = {
   live: SharedArrayBuffer;
 };
 type CanonicalReadScope = {
-  database: DatabaseSync;
+  database: EngineConnection;
   snapshotRequired?: Error;
   continuation?: CanonicalSessionReaderContinuation;
   usedContinuation?: boolean;
@@ -134,7 +153,7 @@ function requireCanonicalReadSnapshot(scope: CanonicalReadScope): never {
 
 /** Only first admission needs a shared snapshot; warm materialized reads keep their existing cost. */
 export function readWithCanonicalSessionAdmission<T>(
-  database: { db: DatabaseSync },
+  database: { db: EngineConnection },
   read: () => T,
 ): T {
   if (database.db.isTransaction) {
@@ -155,17 +174,17 @@ export function readWithCanonicalSessionAdmission<T>(
   // The actual guard requested admission before validation or publication. Retry
   // the materialized read under one snapshot, including policy/receipt changes.
   return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
-    runSqliteDeferredTransactionSync(database.db, read),
+    runSqliteReadSnapshotSync(database.db, read),
   );
 }
 
-function getReaderAdmissionCell(database: DatabaseSync): ReaderAdmissionCell {
+function getReaderAdmissionCell(database: EngineConnection): ReaderAdmissionCell {
   let cell = readerAdmissions.get(database);
   if (!cell) {
     cell = { committed: false, continuations: new Set() };
     readerAdmissions.set(database, cell);
     const owned = cell;
-    const unregister = registerNodeSqliteDisposeCallback(database, () => {
+    const unregister = registerNodeSqliteDisposeCallback(sqlPublicationAnchor(database), () => {
       revokeReaderContinuations(owned);
       readerAdmissions.delete(database);
       unregister();
@@ -174,7 +193,7 @@ function getReaderAdmissionCell(database: DatabaseSync): ReaderAdmissionCell {
   return cell;
 }
 
-function rememberReaderAdmission(database: DatabaseSync, proof: ReaderAdmission): void {
+function rememberReaderAdmission(database: EngineConnection, proof: ReaderAdmission): void {
   const owned = getReaderAdmissionCell(database);
   const previous = owned.proof;
   const previouslyCommitted = owned.committed;
@@ -228,7 +247,7 @@ function isReaderContinuationLive(receipt: CanonicalSessionReaderContinuation): 
 }
 
 function matchesReaderContinuationDatabase(
-  database: { agentId: string; db: DatabaseSync; path?: string },
+  database: { agentId: string; db: EngineConnection; path?: string },
   receipt: CanonicalSessionReaderContinuation,
 ): boolean {
   const identity = findOpenClawAgentDatabaseIdentity(database);
@@ -250,7 +269,7 @@ function matchesReaderContinuationDatabase(
 /** Borrow only existing committed admission; capture never opens or queries SQLite. */
 export function captureCanonicalSessionReaderContinuation(database: {
   agentId: string;
-  db: DatabaseSync;
+  db: EngineConnection;
   path: string;
 }):
   | { receipt: CanonicalSessionReaderContinuation; assertCurrent: () => void; release: () => void }
@@ -307,7 +326,7 @@ export function captureCanonicalSessionReaderContinuation(database: {
 
 /** Continue one retained reader without admitting unrelated reads on a pooled handle. */
 export function readWithCanonicalSessionReaderContinuation<T>(
-  database: { agentId: string; db: DatabaseSync; path?: string },
+  database: { agentId: string; db: EngineConnection; path?: string },
   receipt: CanonicalSessionReaderContinuation | undefined,
   read: () => T,
 ): T {
@@ -331,7 +350,7 @@ export function readWithCanonicalSessionReaderContinuation<T>(
     }
   };
   const value = withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
-    runSqliteDeferredTransactionSync(database.db, () => {
+    runSqliteReadSnapshotSync(database.db, () => {
       const previous = canonicalReadScope.current;
       canonicalReadScope.current = scope;
       try {
@@ -384,11 +403,15 @@ export function assertCanonicalSessionKeyWrite(sessionKey: string, expectedAgent
   }
 }
 
-export function readCanonicalSessionMainKey(database: { db: DatabaseSync }): string {
+export function readCanonicalSessionMainKey(database: { db: EngineConnection }): string {
   return normalizeMainKey(readStoredCanonicalSessionMainKey(database) ?? undefined);
 }
 
-export function readStoredCanonicalSessionMainKey(database: { db: DatabaseSync }): string | null {
+/** Startup also loads canonical proof; historical readers keep the main-key projection. */
+export function readStoredCanonicalSessionMainKey(
+  database: { db: EngineConnection },
+  startupAgentId?: string,
+): string | null {
   const pending = readerAdmissions.get(database.db)?.pendingMainKey;
   if (database.db.isTransaction && pending !== undefined) {
     return pending.mainKey;
@@ -409,7 +432,20 @@ export function readStoredCanonicalSessionMainKey(database: { db: DatabaseSync }
   if (revision && policy?.revision === revision) {
     return policy.stored;
   }
-  const stored = mainKeyReader(database.db)()?.main_key ?? null;
+  let stored: string | null;
+  if (
+    startupAgentId !== undefined &&
+    hasOpenClawAgentCanonicalValidationReceiptColumn(database.db)
+  ) {
+    const contract = startupContractReader(database.db)();
+    loadOpenClawAgentCanonicalValidationReceipt(
+      { db: database.db, agentId: startupAgentId },
+      { canonicalReady: contract?.canonical_ready ?? null },
+    );
+    stored = contract?.main_key ?? null;
+  } else {
+    stored = mainKeyReader(database.db)()?.main_key ?? null;
+  }
   // Schema repair can seed a missing row; only existing policy survives unrelated DDL.
   if (stored !== null) {
     publishSqliteDatabaseAdmission(database.db, mainKeyAdmission, stored);
@@ -441,7 +477,7 @@ export function assertCanonicalSessionEntryLineageWrite(entry: SessionEntry): vo
 
 /** Query shape shared by complete inventories and bounded canonical validation. */
 export function canonicalSessionValidationQuery(
-  database: { db: DatabaseSync },
+  database: { db: EngineConnection },
   options: { metadata?: boolean } = {},
 ) {
   return getNodeSqliteKysely<CanonicalSessionDatabase>(database.db)
@@ -475,7 +511,15 @@ export function canonicalSessionValidationQuery(
 }
 
 /** Older supported maintenance readers keep their existing full-validation path. */
-export function hasCanonicalSessionValidationProjection(database: { db: DatabaseSync }): boolean {
+export function hasCanonicalSessionValidationProjection(database: {
+  db: EngineConnection;
+}): boolean {
+  if (isPostgresSqlConnection(database.db)) {
+    return (
+      (getPostgresPhysicalFacts(database.db)?.version ?? 0) >=
+      CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION
+    );
+  }
   const version =
     getAdmittedSqliteSchemaFacts(database.db)?.userVersion ?? readSqliteUserVersion(database.db);
   if (version < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION) {
@@ -486,7 +530,7 @@ export function hasCanonicalSessionValidationProjection(database: { db: Database
 }
 
 export function scanCanonicalSqliteSessionEntries(
-  database: { agentId: string; db: DatabaseSync; path?: string },
+  database: { agentId: string; db: EngineConnection; path?: string },
   visit?: (summary: { entry: SessionEntry; sessionKey: string }) => void,
   metadata?: CanonicalSessionMetadata,
 ): number {
@@ -500,7 +544,15 @@ export function scanCanonicalSqliteSessionEntries(
   )) {
     // Retained windows have no entry, but their keys remain part of a listing snapshot.
     metadata?.keys.push(row.session_key);
-    const entry = validateCanonicalSessionRow(row);
+    const entry = validateCanonicalSessionRowEntry(
+      row,
+      row.entry_valid === 1
+        ? parseCanonicalSqliteSessionEntry({
+            entry_json: row.entry_json,
+            current_session_id: row.current_session_id,
+          })
+        : null,
+    );
     if (!entry) {
       continue;
     }
@@ -524,7 +576,7 @@ export function scanCanonicalSqliteSessionEntries(
 
 /** Validate the root's database and key together within its synchronous writer transaction. */
 export function assertCanonicalSqliteSessionRootWrite(
-  database: { agentId: string; db: DatabaseSync },
+  database: { agentId: string; db: EngineConnection },
   sessionKey: string,
 ): void {
   assertCanonicalSqliteSessionKeysCurrent(database);
@@ -532,7 +584,7 @@ export function assertCanonicalSqliteSessionRootWrite(
 }
 
 export function assertCanonicalSqliteSessionKeysCurrent(
-  database: { agentId: string; db: DatabaseSync; path?: string },
+  database: { agentId: string; db: EngineConnection; path?: string },
   collectMetadata = false,
 ): ValidatedSessionMetadata | undefined {
   const readScope = canonicalReadScope.current;
@@ -604,7 +656,7 @@ export function assertCanonicalSqliteSessionKeysCurrent(
 
 /** Offline imports and repairs queue unvalidated rows before releasing their custody. */
 export function markCanonicalSessionValidationPending(
-  database: { agentId: string; db: DatabaseSync },
+  database: { agentId: string; db: EngineConnection },
   sessionKeys?: readonly string[],
 ): void {
   const db = getNodeSqliteKysely<CanonicalSessionDatabase>(database.db);
@@ -620,7 +672,7 @@ export function markCanonicalSessionValidationPending(
 }
 
 export function setCanonicalSqliteSessionMainKey(
-  database: { agentId: string; db: DatabaseSync },
+  database: { agentId: string; db: EngineConnection },
   mainKey: string | undefined,
 ): void {
   if (database.db.isTransaction && !hasSqlitePostCommitScope(sqlPublicationAnchor(database.db))) {
@@ -658,7 +710,7 @@ export function setCanonicalSqliteSessionMainKey(
     revokeReaderContinuations(admission);
     admission.proof = undefined;
     admission.committed = false;
-    revokeSqliteDatabaseAdmissions(database.db);
+    revokeSqliteDatabaseAdmissions(sqlPublicationAnchor(database.db));
   };
   if (
     !database.db.isTransaction ||

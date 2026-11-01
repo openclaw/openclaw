@@ -1,4 +1,3 @@
-// Public provider auth environment variable helpers for plugin runtimes.
 import { buildPluginMetadataProviderFacts } from "../plugins/plugin-metadata-provider-facts.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {

@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@openclaw/agent-core";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import type { ConversationRecord } from "./conversation-registry.types.js";
 import type {
   SessionTranscriptBoundedActiveContext,
   SessionTranscriptContextVersion,
@@ -11,6 +12,7 @@ import type {
 } from "./session-accessor.types.js";
 import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
 import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
+import type { InternalSessionEntry } from "./types.js";
 
 export type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
 
@@ -41,6 +43,11 @@ export type SessionModelContextLimits = {
   toolResultOverflow?: "omit";
 };
 
+/** Compaction keeps the complete semantic window, independent of replay byte limits. */
+export type SessionTranscriptContextSelection =
+  | { maxBytes: number; maxEvents: number }
+  | { compaction: true };
+
 export type SessionTranscriptModelContext = {
   events: TranscriptEvent[];
   version?: SessionTranscriptContextVersion;
@@ -59,14 +66,27 @@ export type SessionTranscriptContextSnapshot = {
   version?: SessionTranscriptContextVersion;
 };
 
+export type SessionCompactionPreparation = {
+  sessionTarget: SessionTranscriptRuntimeTarget;
+  /** Gateway lifecycle and accounting retain the originally selected key. */
+  entry: InternalSessionEntry | undefined;
+  runtimeEntry: InternalSessionEntry | undefined;
+  primaryConversation: ConversationRecord | undefined;
+};
+
 export type PreparedSessionTranscriptHydration =
-  | { kind: "full"; snapshot: SessionTranscriptReadSnapshot }
+  | {
+      kind: "full";
+      snapshot: SessionTranscriptReadSnapshot;
+    }
   | {
       kind: "bounded";
       snapshot: SessionTranscriptBoundedActiveContext;
       transcript?: SessionTranscriptAnchorFacts;
       /** Byte and sequence facts for the actor's bounded context residency. */
       residentRows?: Array<{ rawSeq: number; serializedBytes: number }>;
+      /** Compaction reads its session facts in the same snapshot as its bounded view. */
+      compaction?: SessionCompactionPreparation;
     };
 
 export type SessionPendingInputReceipt =
@@ -75,6 +95,7 @@ export type SessionPendingInputReceipt =
 
 export type SessionTranscriptEventMatch =
   | { kind: "latest" }
+  | { kind: "canvas-widget"; docId: string }
   | { kind: "visible-final"; runId: string }
   | {
       kind: "idempotency";
@@ -84,6 +105,25 @@ export type SessionTranscriptEventMatch =
       deliveryMirror?: boolean;
     }
   | { kind: "active-assistant"; runId: string };
+
+export type SessionTranscriptMatchCaller =
+  | "background-result"
+  | "internal-source-reply"
+  | "committed-source-reply"
+  | "subagent-final-answer"
+  | "canvas-widget"
+  | "public-session-widget";
+
+/** Fixed-size attribution emitted only with an existing slow transaction hold. */
+export type SessionTranscriptMatchDiagnostics = {
+  caller?: SessionTranscriptMatchCaller;
+  selector: SessionTranscriptEventMatch["kind"];
+  outcome: "incomplete" | "hit" | "miss";
+  rowsVisited: number;
+  projectedRows: number;
+  identityRows: number;
+  coldRows: number;
+};
 
 export type SessionContextMessagesWorkerInput = {
   kind: "context-messages";

@@ -175,9 +175,7 @@ export async function prepareNodeClaudeSkillRuntime(
         })
       : undefined;
   const combinedSignal = AbortSignal.any([signal, controller.signal]);
-  let closed = false;
   const close = () => {
-    closed = true;
     stop();
     stopClaim?.();
     controller.abort();
@@ -198,7 +196,6 @@ export async function prepareNodeClaudeSkillRuntime(
       const current = memory ? memory.readCurrent() : session;
       const currentPlacement = readPlacement();
       if (
-        closed ||
         !sourceActive ||
         (!memory && !retained?.isCurrent()) ||
         gateway.nodeRegistry.get(node.nodeId) !== node ||
@@ -287,12 +284,10 @@ export async function invokeNodeClaudeSkillRuntime(params: {
   const controller = new AbortController();
   const signal = AbortSignal.any([runtime.signal, controller.signal]);
   let invokeId: string | undefined;
-  let open = true;
   const assertCurrent = composeSessionSourceAssertion([runtime.assertCurrent], (assertSource) => {
     assertSource();
     signal.throwIfAborted();
     if (
-      !open ||
       !invokeId ||
       !registry.isInvokeCurrent(invokeId, runtime.node.nodeId, runtime.node.connId)
     ) {
@@ -401,7 +396,6 @@ export async function invokeNodeClaudeSkillRuntime(params: {
     });
   } finally {
     // Revoke synchronously before awaiting any callback or artifact cleanup.
-    open = false;
     controller.abort();
     signal.removeEventListener("abort", abort);
     endpoint.close();

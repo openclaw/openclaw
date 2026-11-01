@@ -7,6 +7,7 @@ import type { InboundImplicitMentionKind, InboundMentionFacts } from "../mention
 import type { IdentifierAuthentication } from "./identifier-authentication.js";
 
 export type ChannelIngressChannelId = ChatChannelId;
+export type ChannelIngressMatchContext = "dm" | "group" | "route" | "command";
 
 export type ChannelIngressIdentifierKind =
   | "stable-id"
@@ -65,13 +66,11 @@ export type RedactedIngressMatch = {
   matched: boolean;
   matchedEntryIds: string[];
   /** Exact redacted entry-to-subject edges retained for authentication policy. */
-  matchedPairs?: RedactedIngressMatchedPair[];
-};
-
-type RedactedIngressMatchedPair = {
-  opaqueEntryId: string;
-  opaqueSubjectId: string;
-  subjectAuthentication: IdentifierAuthentication;
+  matchedPairs?: {
+    opaqueEntryId: string;
+    opaqueSubjectId: string;
+    subjectAuthentication: IdentifierAuthentication;
+  }[];
 };
 
 type InternalChannelIngressNormalizeResult = {
@@ -84,14 +83,14 @@ type InternalChannelIngressNormalizeResult = {
 export type InternalChannelIngressAdapter = {
   normalizeEntries(params: {
     entries: readonly string[];
-    context: "dm" | "group" | "route" | "command";
+    context: ChannelIngressMatchContext;
     accountId: string;
   }): InternalChannelIngressNormalizeResult | Promise<InternalChannelIngressNormalizeResult>;
 
   matchSubject(params: {
     subject: NormalizedIngressSubject;
     entries: readonly NormalizedIngressEntry[];
-    context: "dm" | "group" | "route" | "command";
+    context: ChannelIngressMatchContext;
   }): RedactedIngressMatch | Promise<RedactedIngressMatch>;
 };
 
@@ -132,25 +131,18 @@ export type ResolvedIngressAllowlist = {
     failed: string[];
   };
   match: RedactedIngressMatch;
-  authentication?: RedactedIdentifierAuthenticationResult;
+  authentication?: {
+    evaluated: boolean;
+    threshold: IdentifierAuthentication;
+    affectedMatch: boolean;
+    rejectedEntryIds: string[];
+  };
 };
 
 export type NormalizedIngressAllowlist = Omit<ResolvedIngressAllowlist, "normalizedEntries"> & {
   normalizedEntries: Array<
     ChannelIngressNormalizedEntry & { authentication: IdentifierAuthentication }
   >;
-};
-
-type RedactedIdentifierAuthenticationResult = {
-  evaluated: boolean;
-  threshold: IdentifierAuthentication;
-  affectedMatch: boolean;
-  rejectedEntryIds: string[];
-};
-
-type RedactedIdentifierAuthenticationDecision = {
-  evaluated: boolean;
-  affectedMatch: boolean;
 };
 
 export type RedactedIngressAllowlistFacts = {
@@ -163,23 +155,17 @@ export type RedactedIngressAllowlistFacts = {
   accessGroups: ResolvedIngressAllowlist["accessGroups"];
 };
 
-type RouteGateState = "not-configured" | "matched" | "not-matched" | "disabled" | "lookup-failed";
-
-/** How a matched route affects sender allowlist evaluation. */
-type RouteSenderPolicy = "inherit" | "replace" | "deny-when-empty";
-
-/** Source list used when a route sender policy contributes sender entries. */
-type RouteSenderAllowlistSource = "effective-dm" | "effective-group";
-
 export type RouteGateFacts = {
   id: string;
   kind: "route" | "routeSender" | "membership" | "ownerAllowlist" | "nestedAllowlist";
-  gate: RouteGateState;
+  gate: "not-configured" | "matched" | "not-matched" | "disabled" | "lookup-failed";
   effect: "allow" | "block-dispatch" | "ignore";
   precedence: number;
-  senderPolicy: RouteSenderPolicy;
+  /** How a matched route affects sender allowlist evaluation. */
+  senderPolicy: "inherit" | "replace" | "deny-when-empty";
   senderAllowFrom?: Array<string | number>;
-  senderAllowFromSource?: RouteSenderAllowlistSource;
+  /** Source list used when a route sender policy contributes sender entries. */
+  senderAllowFromSource?: "effective-dm" | "effective-group";
   match?: RedactedIngressMatch;
 };
 
@@ -256,28 +242,6 @@ export type ChannelIngressPolicyInput = {
   };
 };
 
-type IngressGatePhase = "route" | "sender" | "command" | "event" | "activation";
-
-type IngressGateKind =
-  | "route"
-  | "routeSender"
-  | "dmSender"
-  | "groupSender"
-  | "membership"
-  | "ownerAllowlist"
-  | "nestedAllowlist"
-  | "command"
-  | "event"
-  | "mention";
-
-type IngressGateEffect =
-  | "allow"
-  | "block-dispatch"
-  | "block-command"
-  | "skip"
-  | "observe"
-  | "ignore";
-
 export type IngressReasonCode =
   | "allowed"
   | "route_blocked"
@@ -311,14 +275,27 @@ export type IngressReasonCode =
 
 export type AccessGraphGate = {
   id: string;
-  phase: IngressGatePhase;
-  kind: IngressGateKind;
-  effect: IngressGateEffect;
+  phase: "route" | "sender" | "command" | "event" | "activation";
+  kind:
+    | "route"
+    | "routeSender"
+    | "dmSender"
+    | "groupSender"
+    | "membership"
+    | "ownerAllowlist"
+    | "nestedAllowlist"
+    | "command"
+    | "event"
+    | "mention";
+  effect: "allow" | "block-dispatch" | "block-command" | "skip" | "observe" | "ignore";
   allowed: boolean;
   reasonCode: IngressReasonCode;
   match?: RedactedIngressMatch;
   allowlist?: RedactedIngressAllowlistFacts;
-  identifierAuthentication?: RedactedIdentifierAuthenticationDecision;
+  identifierAuthentication?: {
+    evaluated: boolean;
+    affectedMatch: boolean;
+  };
   sender?: {
     policy: ChannelIngressPolicyInput["dmPolicy"] | ChannelIngressPolicyInput["groupPolicy"];
   };

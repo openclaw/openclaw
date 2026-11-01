@@ -10,11 +10,14 @@ import { recordSessionParticipant } from "../../config/sessions/session-accessor
 import * as sessionHistoryWorkers from "../../config/sessions/session-history-worker-runtime.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
 import { rolePolicyConfig } from "../session-sharing.test-utils.js";
 import {
@@ -25,7 +28,6 @@ import {
 import {
   disposeSessionReadContexts,
   identifiedClient,
-  initializeSessionReadContext,
   listSessions,
   requestContext,
 } from "./sessions-read-cache.test-support.js";
@@ -34,8 +36,9 @@ setupGatewaySessionsHandlerTestHarness();
 afterEach(async () => {
   await disposeSessionReadContexts();
   vi.restoreAllMocks();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
 });
 
 test("projects recap eligibility from current sharing authority, including capped shared viewers", async () => {
@@ -120,7 +123,7 @@ test.each([
       { agentId: "research", sessionKey, storePath },
       {
         sessionId,
-        updatedAt: 42,
+        updatedAt: Date.now(),
         displayName: "Research transcript title",
         visibility: "draft",
         createdActor: { type: "human", source: "profile", id: ownerId },
@@ -143,7 +146,7 @@ test.each([
     };
     if (transcript) {
       const backfilled = observeSessionRowBackfill([sessionKey]);
-      await initializeSessionReadContext(context);
+      await listSessions({ client, context, request });
       await backfilled;
     }
     const result = await listSessions({ client, context, request });
@@ -214,7 +217,8 @@ test("a hidden-foreign role cannot discover sessions through search, batch previ
       { agentId: "main", sessionKey, storePath },
       {
         sessionId,
-        updatedAt: 42,
+        // Post-write age-retention maintenance archives expired rows out of default lists.
+        updatedAt: Date.now(),
         createdActor: { type: "human", source: "profile", id: actorId },
         visibility: "shared",
       },
@@ -290,7 +294,7 @@ test.each(["research", "ops"] as const)(
         { agentId, sessionKey: "global", storePath },
         {
           sessionId,
-          updatedAt: 42,
+          updatedAt: Date.now(),
           createdActor: { type: "human", source: "profile", id: profiles[agentId] },
           visibility: "shared",
         },
@@ -332,7 +336,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
     { agentId: "main", sessionKey, storePath },
     {
       sessionId,
-      updatedAt: 42,
+      updatedAt: Date.now(),
       createdActor: { type: "human", source: "profile", id: ownerId },
       visibility: "draft",
     },
@@ -526,7 +530,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
       { agentId: "main", sessionKey, storePath },
       {
         sessionId,
-        updatedAt: 42,
+        updatedAt: Date.now(),
         createdActor: { type: "human", source: "profile", id: ownerId },
         visibility: "shared",
       },

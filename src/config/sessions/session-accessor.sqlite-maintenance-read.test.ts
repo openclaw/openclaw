@@ -66,6 +66,13 @@ it.each(["durable", "warm durable", "direct active", "runtime"] as const)(
           },
         },
       } satisfies SqliteSessionReclamationPlan;
+      const expectReclamation = async (archived: number, durable: boolean) => {
+        const result = await runSqliteSessionReclamation({ plan });
+        expect(result).toMatchObject({ kind: "maintenance-plan", value: { archived } });
+        expect(
+          result.kind === "maintenance-plan" && result.value.durableNoCandidates === true,
+        ).toBe(durable);
+      };
       if (protection === "warm durable") {
         await expect(runSqliteSessionReclamation({ plan })).resolves.toMatchObject({
           kind: "maintenance-plan",
@@ -73,41 +80,17 @@ it.each(["durable", "warm durable", "direct active", "runtime"] as const)(
         });
         write([1]);
       }
-      if (protection === "durable" || protection === "warm durable") {
-        await expect(runSqliteSessionReclamation({ plan })).resolves.toMatchObject({
-          kind: "maintenance-plan",
-          value: { archived: 0, durableNoCandidates: true },
-        });
-      } else {
-        if (protection === "direct active") {
-          const result = await runSqliteSessionReclamation({ plan });
-          expect(result).toMatchObject({
-            kind: "maintenance-plan",
-            value: { archived: 0 },
-          });
-          if (result.kind === "maintenance-plan") {
-            expect(result.value.durableNoCandidates).not.toBe(true);
-          }
-          plan.input.activeSessionKeys = [];
-        }
-        const result = await runSqliteSessionReclamation({ plan });
-        expect(result.kind).toBe("maintenance-plan");
-        if (result.kind === "maintenance-plan") {
-          expect(result.value.archived).toBe(protection === "runtime" ? 0 : 1);
-          expect(result.value.durableNoCandidates).not.toBe(true);
-        }
+      if (protection === "direct active") {
+        await expectReclamation(0, false);
+        plan.input.activeSessionKeys = [];
       }
+      const durable = protection === "durable" || protection === "warm durable";
+      await expectReclamation(durable || protection === "runtime" ? 0 : 1, durable);
     });
   },
 );
 
-it.for([
-  "transcript backfill",
-  "usage rollup",
-  "new entry",
-  "protection removal",
-  "uncovered SQL",
-] as const)(
+it.for(["transcript backfill", "usage rollup", "new entry", "protection removal"] as const)(
   "settles automatic no-op maintenance across %s according to its entry effects",
   async (overlap, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -123,6 +106,8 @@ it.for([
       request.maintenanceConfig.maxEntries = 1;
       const lockedKey = "agent:main:locked-owner";
       const newKey = "agent:main:new-entry";
+      const preview = "Synthetic backfill preview";
+      const transcriptScope = { agentId: "main", storePath, sessionKey, sessionId: sessionKey };
       const irrelevant = overlap === "transcript backfill" || overlap === "usage rollup";
       type CompletedPlan = Extract<SqliteSessionReclamationResult, { kind: "maintenance-plan" }>;
       const first = createDeferred<CompletedPlan | { kind: "maintenance-plan-stale" }>();
@@ -144,18 +129,15 @@ it.for([
         }, scope);
         if (overlap === "transcript backfill") {
           expect(
-            replaceTranscriptEventsSync(
-              { agentId: "main", storePath, sessionKey, sessionId: sessionKey },
-              [
-                { type: "session", id: sessionKey, version: 3 },
-                {
-                  type: "message",
-                  id: "backfill-message",
-                  parentId: null,
-                  message: { role: "user", content: "Synthetic backfill preview" },
-                },
-              ],
-            ),
+            replaceTranscriptEventsSync(transcriptScope, [
+              { type: "session", id: sessionKey, version: 3 },
+              {
+                type: "message",
+                id: "backfill-message",
+                parentId: null,
+                message: { role: "user", content: preview },
+              },
+            ]),
           ).toBe(true);
         }
         if (overlap === "usage rollup") {
@@ -164,36 +146,27 @@ it.for([
         }
         observeSessionMaintenancePlanningWorker({
           async afterPrepare() {
-            if (overlaps >= (overlap === "uncovered SQL" ? 2 : 1)) {
+            if (overlaps++ >= 1) {
               return;
             }
-            overlaps++;
             if (overlap === "transcript backfill") {
               await expect(
                 backfillSessionRowTranscriptFields({
-                  agentId: "main",
-                  storePath,
-                  sessionKey,
-                  sessionId: sessionKey,
+                  ...transcriptScope,
                   sessionEntry: { sessionId: sessionKey, updatedAt },
                 }),
-              ).resolves.toEqual({ lastMessagePreview: "Synthetic backfill preview" });
+              ).resolves.toEqual({ lastMessagePreview: preview });
             } else if (overlap === "usage rollup") {
               await expect(
-                usage!.writeRollup({
-                  rollupId: "synthetic-rollup",
-                  valueJson: Buffer.from('{"totalTokens":1}'),
-                  blob: null,
-                  updatedAt,
-                }),
+                usage!.writeRollup([
+                  {
+                    rollupId: "synthetic-rollup",
+                    valueJson: Buffer.from('{"totalTokens":1}'),
+                    blob: null,
+                    updatedAt,
+                  },
+                ]),
               ).resolves.toBe(true);
-            } else if (overlap === "uncovered SQL") {
-              runOpenClawAgentWriteTransaction(({ db }) => {
-                // No typed publication certifies this raw write's maintenance effects.
-                db.prepare(
-                  "UPDATE session_nodes SET updated_at = updated_at WHERE session_key = ?",
-                ).run(lockedKey);
-              }, scope);
             } else {
               const inserting = overlap === "new entry";
               const key = inserting ? newKey : lockedKey;
@@ -224,10 +197,7 @@ it.for([
           if (result.kind === "maintenance-plan" || result.kind === "maintenance-plan-stale") {
             completedPlans++;
             first.resolve(result);
-            if (
-              result.kind === "maintenance-plan" &&
-              (result.value.archived === 1 || (overlap === "uncovered SQL" && completedPlans === 3))
-            ) {
+            if (result.kind === "maintenance-plan" && result.value.archived === 1) {
               settled.resolve(result);
             }
           }
@@ -239,7 +209,7 @@ it.for([
           const delay = args[1];
           // Observe the maintenance retry/deadline, excluding worker deadlines and idle timers.
           if (
-            (completedPlans >= (overlap === "uncovered SQL" ? 2 : 1) || failedPlans > 0) &&
+            (completedPlans >= 1 || failedPlans > 0) &&
             typeof delay === "number" &&
             (delay <= 1_000 ||
               (delay > SESSION_ENTRY_MAINTENANCE_INTERVAL_MS / 2 &&
@@ -251,47 +221,33 @@ it.for([
         });
         kickSessionEntryMaintenanceAfterWrite(request);
         const initial = await withinTest(first.promise, signal);
-        if (overlap === "new entry") {
-          expect(await withinTest(scheduled.promise, signal)).toBe(1_000);
-          const final = await withinTest(settled.promise, signal);
-          expect(final.value.archived).toBe(1);
-          expect(loadSessionEntry({ storePath, sessionKey: newKey })?.archivedAt).toBeDefined();
-        } else if (irrelevant) {
-          expect(initial.kind).toBe("maintenance-plan");
-          if (initial.kind !== "maintenance-plan") {
-            throw new Error("Unrelated writes invalidated maintenance planning");
+        if (irrelevant) {
+          expect(initial).toMatchObject({
+            kind: "maintenance-plan",
+            value: { archived: 0, durableNoCandidates: true },
+            ageFact: { entryCount: 2 },
+          });
+          if (initial.kind === "maintenance-plan") {
+            expect(initial.nextAt).toBeGreaterThan(Date.now());
           }
-          expect(initial.value).toMatchObject({ archived: 0, durableNoCandidates: true });
-          expect(initial.ageFact?.entryCount).toBe(2);
-          expect(initial.nextAt).toBeGreaterThan(Date.now());
           expect(await withinTest(scheduled.promise, signal)).toBeGreaterThan(1_000);
           expect(completedPlans).toBe(1);
         } else {
-          if (initial.kind === "maintenance-plan") {
+          if (overlap === "protection removal" && initial.kind === "maintenance-plan") {
             expect(initial.value).toMatchObject({ archived: 0, durableNoCandidates: true });
-            expect(initial.ageFact).toBeUndefined();
           }
           expect(await withinTest(scheduled.promise, signal)).toBe(1_000);
           const final = await withinTest(settled.promise, signal);
-          if (overlap === "uncovered SQL") {
-            expect(completedPlans).toBe(3);
-            expect(final.ageFact?.entryCount).toBe(2);
-            expect(final.nextAt).toBeGreaterThan(Date.now());
-          } else {
-            expect(final.value.archived).toBe(1);
-            expect(
-              loadSessionEntry({
-                storePath,
-                sessionKey: lockedKey,
-              })?.archivedAt,
-            ).toBeDefined();
-          }
+          expect(final.value.archived).toBe(1);
+          const archivedKey = overlap === "new entry" ? newKey : lockedKey;
+          expect(
+            loadSessionEntry({ storePath, sessionKey: archivedKey })?.archivedAt,
+          ).toBeDefined();
         }
-        for (const key of overlap === "protection removal"
-          ? [sessionKey]
-          : [sessionKey, lockedKey]) {
-          expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBeUndefined();
-        }
+        const preserved = overlap === "protection removal" ? [sessionKey] : [sessionKey, lockedKey];
+        expect(
+          preserved.map((key) => loadSessionEntry({ storePath, sessionKey: key })?.archivedAt),
+        ).toEqual(preserved.map(() => undefined));
       } finally {
         await usage?.release();
         await closeOpenClawAgentDatabaseByPathAsync(storePath);

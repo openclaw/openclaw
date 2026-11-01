@@ -41,6 +41,7 @@ import {
 import type { ChatAttachment } from "../chat-attachments.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
+import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { normalizeChatHumanMentions } from "./chat-human-mentions.js";
 import {
@@ -100,6 +101,10 @@ export function normalizeChatSendRequest(params: {
   const chatSendReceivedAtMs = performance.now();
   const reject = (error: string) => ({ ok: false as const, error });
   const client = params.client;
+  const recoveredInput =
+    typeof params.params.idempotencyKey === "string"
+      ? readQueuedChatInputAdmission(params.params.idempotencyKey)
+      : undefined;
   const clientInfo = client?.connect?.client;
   const supportsTaskSuggestions =
     isOperatorUiClient(clientInfo) &&
@@ -315,6 +320,14 @@ export function normalizeChatSendRequest(params: {
   };
   if (stopCommand) {
     return { ok: true, value };
+  }
+  if (recoveredInput) {
+    // Approved text may differ from the submitted bytes; retries keep their original identity.
+    const requestIdentity = recoveredInput.target.message["__openclaw"]?.chatRequestIdentity;
+    return {
+      ok: true,
+      value: { ...value, ...(typeof requestIdentity === "string" ? { requestIdentity } : {}) },
+    };
   }
   return loadChatRequestIdentityKeyAsync().then((key) => {
     // A keyed verifier survives redaction without storing an offline prompt digest.

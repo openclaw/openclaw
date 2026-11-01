@@ -1,93 +1,63 @@
 /* @vitest-environment jsdom */
 
 import { createSignal } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import {
+  expectAbsent,
+  expectContent,
+  profile as makeProfile,
+} from "../../test-helpers/model-providers.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ModelProviderCard } from "./data.ts";
-import { ProviderProfiles, type ProviderProfilesViewProps } from "./profiles-view.tsx";
-
-function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderCard {
-  return {
-    id: "openai",
-    displayName: "OpenAI",
-    profiles: [],
-    profileProviderIds: {},
-    profileOrders: {},
-    profileOrderStoredProviders: [],
-    profileOrderExplicitProviders: [],
-    profileOrderLocks: {},
-    credentialProviderIds: ["openai"],
-    logoutTargets: [],
-    hasConfigApiKey: false,
-    modelCount: 1,
-    availableModelCount: 1,
-    ...overrides,
-  };
+import {
+  ProviderAccountSummary,
+  ProviderProfiles,
+  type ProviderProfilesViewProps,
+} from "./profiles-view.tsx";
+import { card as viewCard, props } from "./view.test-support.tsx";
+function card(overrides: Partial<ModelProviderCard> = {}) {
+  return viewCard({ apiKey: undefined, ...overrides });
 }
-
-function props(overrides: Partial<ProviderProfilesViewProps> = {}): ProviderProfilesViewProps {
-  return {
-    busy: {},
-    canMutate: true,
-    mutationBlockedReason: null,
-    profileOrders: {},
-    onAddAccount: () => undefined,
-    addAccountDisabled: false,
-    onProfileOrderChange: () => undefined,
-    onRequestLogout: () => undefined,
-    ...overrides,
-  };
-}
-
-const mountedProfiles = new WeakMap<
-  HTMLElement,
-  (card: ModelProviderCard, props: ProviderProfilesViewProps) => void
->();
-
-function mount(
-  providerCard: ModelProviderCard,
-  viewProps: ProviderProfilesViewProps,
-  container?: HTMLElement,
-): HTMLElement {
-  const update = container && mountedProfiles.get(container);
-  if (container && update) {
-    update(providerCard, { ...viewProps });
-    flush();
-    return container;
-  }
-  const [current, setCurrent] = createSignal({ card: providerCard, props: viewProps });
-  const view = mountSolid(() => <ProviderProfiles {...current().props} card={current().card} />, {
-    container,
-  });
-  mountedProfiles.set(view.container, (nextCard, nextProps) =>
-    setCurrent({ card: nextCard, props: nextProps }),
-  );
-  flush();
-  return view.container;
-}
-
-function reorderCard(): ModelProviderCard {
+function orderedCard(
+  orders: ModelProviderCard["profileOrders"],
+  overrides: Partial<ModelProviderCard> = {},
+) {
+  const entries = Object.entries(orders).flatMap(([owner, ids]) => ids.map((id) => [id, owner]));
   return card({
-    id: "route-one",
-    profiles: ["one", "two", "three", "other"].map((name) => ({
-      profileId: `account:${name}`,
-      email: `${name}@example.com`,
-      type: "oauth",
-      status: "ok",
-    })),
-    profileProviderIds: {
-      "account:one": "credential-owner",
-      "account:two": "credential-owner",
-      "account:three": "credential-owner",
-      "account:other": "other-owner",
-    },
-    profileOrders: {
+    profiles: entries.map(([id]) => makeProfile(id!)),
+    profileProviderIds: Object.fromEntries(entries),
+    profileOrders: orders,
+    ...overrides,
+  });
+}
+const pair = { openai: ["openai:one", "openai:two"] };
+const gripSelector = ".model-providers__profile-grip";
+const rowSelector = ".model-providers__profile";
+function rowFor(container: ParentNode, id: string) {
+  return container.querySelector<HTMLElement>(`[data-profile-id="${id}"]`)!;
+}
+
+function mount(providerCard: ModelProviderCard, viewProps: ProviderProfilesViewProps = props()) {
+  const [current, setCurrent] = createSignal({ card: providerCard, props: viewProps });
+  const view = mountSolid(() => <ProviderProfiles {...current().props} card={current().card} />);
+  const update = (nextCard: ModelProviderCard, nextProps = viewProps) => {
+    setCurrent({ card: nextCard, props: nextProps });
+    flush();
+  };
+  flush();
+  return { container: view.container, update };
+}
+
+function reorderCard() {
+  return orderedCard(
+    {
       "credential-owner": ["account:one", "account:two", "account:three"],
       "other-owner": ["account:other"],
     },
-  });
+    { id: "route-one" },
+  );
 }
 
 function pointer(target: Element, type: string, coordinates = { x: 20, y: 75 }) {
@@ -102,14 +72,18 @@ function pointer(target: Element, type: string, coordinates = { x: 20, y: 75 }) 
   target.dispatchEvent(event);
 }
 
+function movePointer(grip: Element) {
+  pointer(grip, "pointerdown");
+  pointer(grip, "pointermove", { x: 40, y: 285 });
+}
+
 function pointerFixture(viewProps: ProviderProfilesViewProps) {
   const providerCard = reorderCard();
-  const container = mount(providerCard, viewProps);
-  const grip = container.querySelector<HTMLButtonElement>(".model-providers__profile-grip")!;
-  const target = container.querySelector<HTMLElement>('[data-profile-id="account:three"]')!;
-  // Different row heights occur when account metadata wraps on narrow screens.
+  const { container, update } = mount(providerCard, viewProps);
+  const grip = container.querySelector<HTMLButtonElement>(gripSelector)!;
+  const target = rowFor(container, "account:three");
   let top = 0;
-  const rows = [...container.querySelectorAll<HTMLElement>(".model-providers__profile")];
+  const rows = [...container.querySelectorAll<HTMLElement>(rowSelector)];
   for (const [index, row] of rows.entries()) {
     const height = [80, 120, 100, 100][index]!;
     const bounds = new DOMRect(0, top, 100, height);
@@ -121,324 +95,349 @@ function pointerFixture(viewProps: ProviderProfilesViewProps) {
   }
   const hitTest = vi.fn((): Element | null => target);
   Object.defineProperty(document, "elementFromPoint", { configurable: true, value: hitTest });
-  const row = grip.closest<HTMLElement>(".model-providers__profile")!;
-  return { container, grip, row, rows, target, hitTest, providerCard };
+  const row = grip.closest<HTMLElement>(rowSelector)!;
+  return { container, update, grip, row, rows, target, hitTest, providerCard };
 }
 
-describe("renderProviderProfiles", () => {
-  beforeEach(async () => {
-    await i18n.setLocale("en");
+beforeEach(() => i18n.setLocale("en"));
+
+afterEach(() => {
+  document.body.replaceChildren();
+  vi.restoreAllMocks();
+  Reflect.deleteProperty(document, "elementFromPoint");
+});
+
+it("retains account summary focus while refreshed snapshots update account data and recovery", () => {
+  const profileId = "account:shared";
+  const cards = ["one", "two"].map((name) =>
+    card({
+      id: `route-${name}`,
+      profiles: [makeProfile(profileId, { source: "saved", email: `${name}@example.invalid` })],
+      profileProviderIds: { [profileId]: `owner-${name}` },
+    }),
+  );
+  cards[0]!.apiKey = { source: "env", envVar: "EXAMPLE_API_KEY" };
+  const originalUse = vi.fn();
+  const [current, setCurrent] = createSignal({
+    cards,
+    recovery: { authProvider: "owner-one", disabled: false, onUse: originalUse },
   });
+  const { container } = mountSolid(() => <ProviderAccountSummary {...current()} />);
+  flush();
+  const rows = [...container.querySelectorAll(".model-provider-login__account")];
+  expect(rows).toHaveLength(2);
+  const button = rows[0]!.querySelector<HTMLButtonElement>("[data-models-use-account]")!;
+  expectAbsent(rows[1]!, "[data-models-use-account]");
+  button.focus();
 
-  afterEach(() => {
-    document.body.replaceChildren();
-    vi.restoreAllMocks();
-    Reflect.deleteProperty(document, "elementFromPoint");
+  const refreshed = structuredClone(cards);
+  refreshed[0]!.profiles[0]!.email = "updated-one@example.invalid";
+  refreshed[0]!.catalogStatus = "auth-rejected";
+  refreshed[0]!.apiKey = { source: "config" };
+  refreshed[1]!.profiles[0]!.email = "updated-two@example.invalid";
+  const latestUse = vi.fn();
+  setCurrent({
+    cards: refreshed,
+    recovery: { authProvider: "owner-one", disabled: false, onUse: latestUse },
   });
+  flush();
 
-  it("shows account provenance and removes drag handles for config-locked priority", () => {
-    const onProfileOrderChange = vi.fn();
-    const providerCard = card({
-      profiles: [
-        {
-          profileId: "openai:configured",
-          type: "oauth",
-          status: "ok",
-          source: "config",
-          email: "configured@example.com",
-        },
-        {
-          profileId: "openai:codex",
-          type: "oauth",
-          status: "ok",
-          source: "external",
-          displayName: "Codex import",
-          email: "codex@example.com",
-        },
-        {
-          profileId: "openai:saved",
-          type: "oauth",
-          status: "ok",
-          source: "saved",
-          email: "saved@example.com",
-        },
-        {
-          profileId: "openai:inherited",
-          type: "oauth",
-          status: "ok",
-          source: "inherited",
-          email: "inherited@example.com",
-        },
-      ],
-      profileProviderIds: {
-        "openai:configured": "openai-config",
-        "openai:codex": "openai-config",
-        "openai:saved": "openai",
-        "openai:inherited": "openai",
-      },
-      profileOrders: {
-        "openai-config": ["openai:configured"],
-        openai: ["openai:saved", "openai:inherited"],
-      },
-      profileOrderLocks: { "openai-config": "provider-config" },
-    });
+  const updatedRows = [...container.querySelectorAll(".model-provider-login__account")];
+  expect(updatedRows[0]).toBe(rows[0]);
+  expect(updatedRows[1]).toBe(rows[1]);
+  expectContent(rows[0]!, ["updated-one@example.invalid"]);
+  expectContent(rows[0]!, ["Credentials configured"]);
+  expectContent(rows[1]!, ["updated-two@example.invalid"]);
+  expect(container.querySelector("p.muted")?.textContent).toBe("API key set in config");
+  expectContent(container, [], ["EXAMPLE_API_KEY"]);
+  expect(rows[0]!.querySelector("[data-models-use-account]")).toBe(button);
+  expect(document.activeElement).toBe(button);
+  button.click();
+  expect(latestUse).toHaveBeenCalledExactlyOnceWith(profileId);
+  expect(originalUse).not.toHaveBeenCalled();
+});
 
-    mount(providerCard, props({ onProfileOrderChange }));
-
-    expect(document.querySelectorAll(".model-providers__profile-grip")).toHaveLength(2);
-    expect(
-      document.querySelector(
-        '[data-profile-id="openai:configured"] .model-providers__profile-grip',
-      ),
-    ).toBeNull();
-    expect(
-      document.querySelector('[data-profile-id="openai:codex"] .model-providers__profile-grip'),
-    ).toBeNull();
-    expect(document.querySelector(".model-providers__profile-logout")).toBeNull();
-    expect(document.body.textContent).toContain("Provider config");
-    expect(document.body.textContent).toContain("Codex import");
-    expect(document.body.textContent).not.toContain("Saved in OpenClaw");
-    expect(document.body.textContent).toContain("Shared credential");
-    expect(document.body.textContent).toContain("Priority is managed by provider configuration");
-    expect(
-      [...document.querySelectorAll("button")].map((button) => button.textContent),
-    ).not.toContain("Clear custom order");
-    expect(onProfileOrderChange).not.toHaveBeenCalled();
+it("shows account provenance and removes drag handles for config-locked priority", () => {
+  const providerCard = orderedCard(
+    {
+      "openai-config": ["openai:configured", "openai:codex"],
+      openai: ["openai:saved", "openai:inherited"],
+    },
+    { profileOrderLocks: { "openai-config": "provider-config" } },
+  );
+  const sources = ["config", "external", "saved", "inherited"] as const;
+  providerCard.profiles.forEach((profile, index) => {
+    profile.source = sources[index]!;
   });
+  providerCard.profiles[1]!.displayName = "Codex import";
+  providerCard.profileOrders["openai-config"] = ["openai:configured"];
 
-  it("points auth-config priority locks to auth.order", () => {
-    const container = mount(
-      card({
-        profiles: [
-          { profileId: "openai:one", type: "oauth", status: "ok" },
-          { profileId: "openai:two", type: "oauth", status: "ok" },
-        ],
-        profileProviderIds: {
-          "openai:one": "openai",
-          "openai:two": "openai",
-        },
-        profileOrders: { openai: ["openai:one", "openai:two"] },
-        profileOrderLocks: { openai: "auth-config" },
-      }),
-      props(),
-    );
+  mount(providerCard);
 
-    expect(container.textContent).toContain("Priority is managed by auth.order");
-    expect(container.textContent).not.toContain("provider configuration");
-    expect(container.querySelectorAll(".model-providers__profile-grip")).toHaveLength(0);
-  });
+  expect(document.querySelectorAll(gripSelector)).toHaveLength(2);
+  for (const id of ["openai:configured", "openai:codex"]) {
+    expectAbsent(rowFor(document, id), gripSelector);
+  }
+  expectAbsent(document, ".model-providers__profile-logout");
+  expectContent(document.body, [], ["Saved in OpenClaw"]);
+  expectContent(document.body, ["Provider config"]);
+  expectContent(document.body, ["Codex import"]);
+  expectContent(document.body, ["Shared credential"]);
+  expectContent(document.body, ["Priority is managed by provider configuration"]);
+  expect(
+    [...document.querySelectorAll("button")].map((button) => button.textContent),
+  ).not.toContain("Clear custom order");
+});
 
-  it("keeps an environment API-key source visible beside account profiles", () => {
-    const result = mount(
-      card({
-        apiKey: { source: "env", envVar: "OPENAI_API_KEY" },
-        profiles: [
-          {
-            profileId: "openai:oauth",
-            type: "oauth",
-            status: "ok",
-            source: "saved",
-          },
-        ],
-        profileOrders: { openai: ["openai:oauth"] },
-      }),
-      props(),
-    );
-
-    expect(result.textContent).toContain("API key from environment (OPENAI_API_KEY)");
-  });
-
-  it("disables reordering when a same-length stored order contains a stale profile", () => {
-    const onProfileOrderChange = vi.fn();
-    const providerCard = card({
-      profiles: [
-        { profileId: "openai:one", type: "oauth", status: "ok" },
-        { profileId: "openai:two", type: "oauth", status: "ok" },
-      ],
-      profileProviderIds: {
-        "openai:one": "openai",
-        "openai:two": "openai",
-      },
+it.each<[string, ModelProviderCard, string?, number?]>([
+  [
+    "Priority is managed by auth.order",
+    orderedCard(pair, {
+      profileOrderLocks: { openai: "auth-config" },
+    }),
+    "provider configuration",
+  ],
+  [
+    "Clear custom order",
+    orderedCard(pair, {
       profileOrders: { openai: ["openai:removed", "openai:one"] },
       profileOrderStoredProviders: ["openai"],
-    });
-
-    const container = mount(providerCard, props({ onProfileOrderChange }));
-    const grips = container.querySelectorAll<HTMLButtonElement>(".model-providers__profile-grip");
-    expect(grips).toHaveLength(2);
-    expect([...grips].every((grip) => grip.disabled)).toBe(true);
-    expect(container.textContent).toContain("Clear custom order");
+    }),
+    undefined,
+    2,
+  ],
+  [
+    "Priority is inherited or managed across provider routes",
+    orderedCard(
+      { "shared-owner": ["shared:one", "shared:two"] },
+      {
+        id: "route-one",
+        profileOrders: { "shared-owner": ["shared:one", "shared:two", "shared:three"] },
+      },
+    ),
+  ],
+  [
+    "API key from environment (OPENAI_API_KEY)",
+    card({
+      apiKey: { source: "env", envVar: "OPENAI_API_KEY" },
+      profiles: [{ ...makeProfile("openai:oauth"), source: "saved" }],
+      profileOrders: { openai: ["openai:oauth"] },
+    }),
+  ],
+])("shows %s and blocks reordering", (message, providerCard, excluded, count = 0) => {
+  const onProfileOrderChange = vi.fn();
+  const { container } = mount(providerCard, props({ onProfileOrderChange }));
+  const grips = [...container.querySelectorAll<HTMLButtonElement>(gripSelector)];
+  expect(grips).toHaveLength(count);
+  expectContent(container, [message]);
+  if (excluded) {
+    expectContent(container, [], [excluded]);
+  }
+  if (count) {
+    expect(grips.every((grip) => grip.disabled)).toBe(true);
     pointer(grips[0]!, "pointerdown");
     grips[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-    expect(onProfileOrderChange).not.toHaveBeenCalled();
-  });
+  }
+  expect(onProfileOrderChange).not.toHaveBeenCalled();
+});
 
-  it("identifies managed priority when a shared order spans provider routes", () => {
+it.each(["Escape", "pointercancel", "lostpointercapture", "outside-section", "other-owner"])(
+  "does not save a %s drag and allows the next drag",
+  (ending) => {
     const onProfileOrderChange = vi.fn();
-    const container = mount(
-      card({
-        id: "route-one",
-        profiles: [
-          { profileId: "shared:one", type: "oauth", status: "ok" },
-          { profileId: "shared:two", type: "oauth", status: "ok" },
-        ],
-        profileProviderIds: {
-          "shared:one": "shared-owner",
-          "shared:two": "shared-owner",
-        },
-        profileOrders: {
-          "shared-owner": ["shared:one", "shared:two", "shared:three"],
-        },
-      }),
+    const { container, grip, row, rows, target, hitTest } = pointerFixture(
       props({ onProfileOrderChange }),
     );
-
-    expect(container.querySelectorAll(".model-providers__profile-grip")).toHaveLength(0);
-    expect(container.textContent).toContain(
-      "Priority is inherited or managed across provider routes",
-    );
-    expect(onProfileOrderChange).not.toHaveBeenCalled();
-  });
-
-  it.each(["Escape", "pointercancel", "lostpointercapture", "outside-section", "other-owner"])(
-    "does not save a %s drag and allows the next drag",
-    (ending) => {
-      const onProfileOrderChange = vi.fn();
-      const { container, grip, row, rows, target, hitTest } = pointerFixture(
-        props({ onProfileOrderChange }),
+    const exitSettings = vi.fn();
+    const settingsShortcut = (event: KeyboardEvent) => event.defaultPrevented || exitSettings();
+    document.addEventListener("keydown", settingsShortcut);
+    movePointer(grip);
+    expect(row.style.translate).toBe("20px 210px");
+    if (ending === "Escape") {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
       );
-      const exitSettings = vi.fn();
-      const settingsShortcut = (event: KeyboardEvent) => {
-        if (!event.defaultPrevented) {
-          exitSettings();
-        }
-      };
-      document.addEventListener("keydown", settingsShortcut);
-      pointer(grip, "pointerdown");
-      pointer(grip, "pointermove", { x: 40, y: 285 });
-      expect(row.style.translate).toBe("20px 210px");
-      if (ending === "Escape") {
-        document.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-        );
-        expect(exitSettings).not.toHaveBeenCalled();
-      } else if (ending === "outside-section" || ending === "other-owner") {
-        const rejectedTarget =
-          ending === "other-owner"
-            ? container.querySelector('[data-profile-id="account:other"]')
-            : document.createElement("div");
-        if (ending === "outside-section" && rejectedTarget instanceof HTMLElement) {
-          rejectedTarget.className = "model-providers__profile";
-          rejectedTarget.dataset.profileId = "account:three";
-          rejectedTarget.dataset.profileProvider = "credential-owner";
-          document.body.append(rejectedTarget);
-        }
-        hitTest.mockReturnValue(rejectedTarget);
-      } else {
-        pointer(grip, ending);
+      expect(exitSettings).not.toHaveBeenCalled();
+    } else if (ending === "outside-section" || ending === "other-owner") {
+      const rejectedTarget =
+        ending === "other-owner"
+          ? rowFor(container, "account:other")
+          : document.createElement("div");
+      if (ending === "outside-section" && rejectedTarget instanceof HTMLElement) {
+        rejectedTarget.className = "model-providers__profile";
+        rejectedTarget.dataset.profileId = "account:three";
+        rejectedTarget.dataset.profileProvider = "credential-owner";
+        document.body.append(rejectedTarget);
       }
-      document.removeEventListener("keydown", settingsShortcut);
-      pointer(grip, "pointerup", { x: 40, y: 285 });
-      expect(onProfileOrderChange).not.toHaveBeenCalled();
-      expect(rows.every((candidate) => candidate.style.translate === "")).toBe(true);
+      hitTest.mockReturnValue(rejectedTarget);
+    } else {
+      pointer(grip, ending);
+    }
+    document.removeEventListener("keydown", settingsShortcut);
+    pointer(grip, "pointerup", { x: 40, y: 285 });
+    expect(onProfileOrderChange).not.toHaveBeenCalled();
+    expect(rows.every((candidate) => candidate.style.translate === "")).toBe(true);
 
-      hitTest.mockReturnValue(target);
-      pointer(grip, "pointerdown");
-      pointer(grip, "pointermove", { x: 40, y: 285 });
-      pointer(grip, "pointerup", { x: 40, y: 285 });
-      expect(onProfileOrderChange).toHaveBeenCalledExactlyOnceWith(
-        "route-one",
-        "credential-owner",
-        ["account:two", "account:three", "account:one"],
-      );
+    hitTest.mockReturnValue(target);
+    movePointer(grip);
+    pointer(grip, "pointerup", { x: 40, y: 285 });
+    expect(onProfileOrderChange).toHaveBeenCalledExactlyOnceWith("route-one", "credential-owner", [
+      "account:two",
+      "account:three",
+      "account:one",
+    ]);
+  },
+);
+
+it("names hidden identities by credential kind, numbering only repeated kinds", () => {
+  const { container } = mount(
+    card({
+      profiles: [
+        makeProfile("openai:token-a", { type: "token", status: "static" }),
+        makeProfile("openai:oauth"),
+        makeProfile("openai:token-b", { type: "token", status: "static" }),
+        makeProfile("openai:named", { type: "token", status: "static", email: "ops@example.com" }),
+      ],
+      profileOrders: {
+        openai: ["openai:token-a", "openai:oauth", "openai:token-b", "openai:named"],
+      },
+    }),
+  );
+  expect(
+    [...container.querySelectorAll(".model-providers__profile-copy strong")].map(
+      (identity) => identity.textContent,
+    ),
+  ).toEqual(["Access token 1", "Signed-in account", "Access token 2", "ops@example.com"]);
+});
+
+it("releases a removed row's drag without handling the next Escape", () => {
+  const onProfileOrderChange = vi.fn();
+  const { container, update, grip, row, rows, hitTest, providerCard } = pointerFixture(
+    props({ onProfileOrderChange }),
+  );
+  movePointer(grip);
+  expect(row.style.translate).toBe("20px 210px");
+
+  update({
+    ...providerCard,
+    profiles: providerCard.profiles.filter(({ profileId }) => profileId !== row.dataset.profileId),
+    profileOrders: {
+      ...providerCard.profileOrders,
+      "credential-owner": ["account:two", "account:three"],
+    },
+  });
+  expect(row.isConnected).toBe(false);
+  expect(rows.every((candidate) => candidate.style.translate === "")).toBe(true);
+  expectAbsent(container, ".model-providers__profiles--sorting");
+  hitTest.mockClear();
+  const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  const stopPropagation = vi.spyOn(escape, "stopPropagation");
+  document.dispatchEvent(escape);
+  pointer(grip, "pointerup", { x: 40, y: 285 });
+  expect(escape.defaultPrevented).toBe(false);
+  expect(stopPropagation).not.toHaveBeenCalled();
+  expect(hitTest).not.toHaveBeenCalled();
+  expect(onProfileOrderChange).not.toHaveBeenCalled();
+});
+
+it("prevents both pointer and keyboard reordering without write access", () => {
+  const onProfileOrderChange = vi.fn();
+  const { grip } = pointerFixture(props({ canMutate: false, onProfileOrderChange }));
+  expect(grip.disabled).toBe(true);
+  pointer(grip, "pointerdown");
+  pointer(grip, "pointerup");
+  grip.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+  expect(onProfileOrderChange).not.toHaveBeenCalled();
+});
+
+it("keeps focus on the drag handle through repeated keyboard moves", async () => {
+  const providerCard = reorderCard();
+  const onProfileOrderChange = vi.fn(
+    (_cardId: string, provider: string, order: string[] | null) => {
+      if (!order) {
+        throw new Error("Expected an account order");
+      }
+      viewProps = { ...viewProps, profileOrders: { [provider]: order } };
+      queueMicrotask(() => update(providerCard, viewProps));
     },
   );
+  let viewProps = props({ onProfileOrderChange });
+  const { container, update } = mount(providerCard, viewProps);
+  const grip = container.querySelector<HTMLButtonElement>(gripSelector)!;
+  grip.focus();
+  const movedRow = grip.closest(rowSelector)!;
+  expect(container.querySelectorAll(".model-providers__profile-position")).toHaveLength(0);
+  expect(grip.getAttribute("aria-keyshortcuts")).toBe("ArrowUp ArrowDown");
 
-  it("releases a removed row's drag without handling the next Escape", () => {
-    const onProfileOrderChange = vi.fn();
-    const viewProps = props({ onProfileOrderChange });
-    const { container, grip, row, rows, hitTest, providerCard } = pointerFixture(viewProps);
-    pointer(grip, "pointerdown");
-    pointer(grip, "pointermove", { x: 40, y: 285 });
-    expect(row.style.translate).toBe("20px 210px");
-
-    mount(
-      {
-        ...providerCard,
-        profiles: providerCard.profiles.filter(
-          (profile) => profile.profileId !== row.dataset.profileId,
+  for (const order of [
+    ["account:two", "account:one", "account:three", "account:other"],
+    ["account:two", "account:three", "account:one", "account:other"],
+  ]) {
+    grip.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    await waitForSolid(() => {
+      expect(
+        [...container.querySelectorAll<HTMLElement>(rowSelector)].map(
+          (row) => row.dataset.profileId,
         ),
-        profileOrders: {
-          ...providerCard.profileOrders,
-          "credential-owner": ["account:two", "account:three"],
-        },
-      },
-      viewProps,
-      container,
-    );
-    expect(row.isConnected).toBe(false);
-    expect(rows.every((candidate) => candidate.style.translate === "")).toBe(true);
-    expect(container.querySelector(".model-providers__profiles--sorting")).toBeNull();
-    hitTest.mockClear();
-    const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
-    const stopPropagation = vi.spyOn(escape, "stopPropagation");
-    document.dispatchEvent(escape);
-    pointer(grip, "pointerup", { x: 40, y: 285 });
-    expect(escape.defaultPrevented).toBe(false);
-    expect(stopPropagation).not.toHaveBeenCalled();
-    expect(hitTest).not.toHaveBeenCalled();
-    expect(onProfileOrderChange).not.toHaveBeenCalled();
-  });
-
-  it("prevents both pointer and keyboard reordering without write access", () => {
-    const onProfileOrderChange = vi.fn();
-    const { grip } = pointerFixture(props({ canMutate: false, onProfileOrderChange }));
-    expect(grip.disabled).toBe(true);
-    pointer(grip, "pointerdown");
-    pointer(grip, "pointerup");
-    grip.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-    expect(onProfileOrderChange).not.toHaveBeenCalled();
-  });
-
-  it("keeps focus on the drag handle through repeated keyboard moves", async () => {
-    const providerCard = reorderCard();
-    const onProfileOrderChange = vi.fn(
-      (_cardId: string, provider: string, order: string[] | null) => {
-        if (!order) {
-          throw new Error("Expected an account order");
-        }
-        viewProps = { ...viewProps, profileOrders: { [provider]: order } };
-        queueMicrotask(() => mount(providerCard, viewProps, container));
-      },
-    );
-    let viewProps = props({ onProfileOrderChange });
-    const container = mount(providerCard, viewProps);
-    const grip = container.querySelector<HTMLButtonElement>(".model-providers__profile-grip")!;
-    grip.focus();
-    const details = grip.closest(".model-providers__profile")!.querySelector("details")!;
-    details.open = true;
-    expect(container.querySelectorAll(".model-providers__profile-position")).toHaveLength(0);
-    expect(grip.getAttribute("aria-keyshortcuts")).toBe("ArrowUp ArrowDown");
-
-    for (const order of [
-      ["account:two", "account:one", "account:three", "account:other"],
-      ["account:two", "account:three", "account:one", "account:other"],
-    ]) {
-      grip.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-      await waitForSolid(() => {
-        expect(
-          [...container.querySelectorAll<HTMLElement>(".model-providers__profile")].map(
-            (row) => row.dataset.profileId,
-          ),
-        ).toEqual(order);
-        expect(document.activeElement).toBe(grip);
-        expect(grip.closest(".model-providers__profile")!.querySelector("details")).toBe(details);
-        expect(details.open).toBe(true);
-        expect(container.querySelectorAll(".model-providers__profile-position")).toHaveLength(3);
-      });
-    }
-    grip.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-    expect(onProfileOrderChange).toHaveBeenCalledTimes(2);
-    expect(document.activeElement).toBe(grip);
-  });
+      ).toEqual(order);
+      expect(document.activeElement).toBe(grip);
+      expect(grip.closest(rowSelector)).toBe(movedRow);
+      expect(container.querySelectorAll(".model-providers__profile-position")).toHaveLength(3);
+    });
+  }
+  grip.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+  expect(onProfileOrderChange).toHaveBeenCalledTimes(2);
+  expect(document.activeElement).toBe(grip);
 });
+
+it.each([undefined, "auth-rejected"] as const)(
+  "keeps account-level recovery independent of provider outcome %s in both account surfaces",
+  (catalogStatus) => {
+    const expiring = makeProfile("example:short", {
+      status: "expiring",
+      expiry: { at: 4_000_000, remainingMs: 3_600_000, label: "1h" },
+    });
+    const expired = makeProfile("example:elapsed", {
+      status: "expired",
+      expiry: { at: 1, remainingMs: -1, label: "0m" },
+    });
+    const fenced = makeProfile("example:reconnect", { status: "expired", reasonCode: "expired" });
+    const missing = makeProfile("example:missing", {
+      status: "missing",
+      reasonCode: "missing_credential",
+    });
+    const external = makeProfile("example:external", {
+      ...expired,
+      profileId: "example:external",
+      externallyManaged: true,
+    });
+    const staticToken = makeProfile("example:static", {
+      type: "token",
+      status: "expired",
+      reasonCode: "expired",
+    });
+    const providerCard = card({
+      id: "example",
+      catalogStatus,
+      profiles: [expiring, expired, fenced, missing, external, staticToken],
+    });
+    const { container } = mount(providerCard);
+    const summary = mountSolid(() => <ProviderAccountSummary cards={[providerCard]} />).container;
+    flush();
+    for (const root of [container, summary]) {
+      expectContent(rowFor(root, expiring.profileId), [
+        "Access token expires in 1h",
+        "Access-token expiry alone does not mean you need to sign in again.",
+      ]);
+      expectContent(rowFor(root, expired.profileId), ["Access token expired"], ["Sign in again"]);
+      expectContent(rowFor(root, fenced.profileId), ["Sign-in unavailable"], ["Sign in again"]);
+      expectContent(rowFor(root, missing.profileId), ["Sign in again"]);
+      expectContent(rowFor(root, external.profileId), ["Managed externally"], ["Signed in"]);
+      expectContent(
+        rowFor(root, staticToken.profileId),
+        ["Expired"],
+        ["Access-token expiry alone"],
+      );
+    }
+  },
+);

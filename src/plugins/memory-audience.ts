@@ -32,7 +32,8 @@ export type MemoryAudienceGrant = { audience: MemoryAudience; release: () => voi
  *   predates lineage receipts; only respawning or recreating the session restores access.
  * - `unverified`: storage could not verify the lineage now; a later turn resolves again.
  * - `ineligible`: the lineage carries no audience by design, for example a host-run,
- *   cross-agent, rowless-parent, or chat-less root session.
+ *   rowless-parent, or chat-less root session, or cross-agent lineage that is not
+ *   owner-private.
  */
 type MemoryAudienceDenialKind = "stale-lineage" | "unverified" | "ineligible";
 
@@ -170,6 +171,19 @@ function mintMemoryAudience(
   };
 }
 
+/**
+ * A scheduled run's exact parent incarnation and the owner bit its execution
+ * context resolved for this occurrence. Scheduled run rows record no spawn
+ * receipt, so this plays that role for the run's first lineage hop.
+ */
+export type ScheduledMemoryParent = Readonly<{
+  sessionKey: string;
+  sessionId: string;
+  /** Absent when the link recorded only the session id, which is all it can prove. */
+  lifecycleRevision?: string;
+  senderIsOwner: boolean;
+}>;
+
 type MemoryAudienceResolutionParams = {
   agentId: string;
   sessionKey: string;
@@ -177,6 +191,9 @@ type MemoryAudienceResolutionParams = {
   senderIsOwner: boolean | undefined;
   /** Store that admitted the turn; lineage hops for the same agent share it. */
   storePath: string;
+  /** Session store of another configured agent; without it, cross-agent lineage is denied. */
+  resolveAgentStorePath?: (agentId: string) => string;
+  scheduledParent?: ScheduledMemoryParent;
   assertCallerCurrent?: () => void;
 };
 
@@ -190,11 +207,17 @@ export async function resolveMemoryAudienceFromEntry(
   admittedEntry: SessionEntry,
 ): Promise<MemoryAudienceResolution> {
   let { sessionKey, sessionId, senderIsOwner } = params;
-  const { agentId, storePath } = params;
+  const { agentId } = params;
+  let hopAgentId = agentId;
+  let crossedAgents = false;
   const assertCallerCurrent = params.assertCallerCurrent ?? (() => {});
   const seen = new Set<string>();
   const record: AudienceRecord = { leases: [], state: "current", holders: 0 };
   let requiredLifecycleRevision: string | undefined;
+  let sessionIdOnly = false;
+  // A scheduled occurrence's requester check caps owner status for the whole
+  // lineage: no spawn receipt on any hop can restore what this run lost.
+  const scheduledOwnerCap = params.scheduledParent?.senderIsOwner;
   const deny = (kind: MemoryAudienceDenialKind, reason: string): MemoryAudienceResolution => {
     releaseRecordLeases(record);
     return { status: "denied", kind, reason };
@@ -202,29 +225,34 @@ export async function resolveMemoryAudienceFromEntry(
 
   try {
     for (let depth = 0; depth < MAX_LINEAGE_HOPS; depth += 1) {
-      // Every hop must remain within the configured agent and exact durable
-      // session incarnation. Session-key shape alone never grants authority.
+      // Every hop must name its agent and exact durable session incarnation.
+      // Session-key shape alone never grants authority; the receipt walk below
+      // decides whether a hop may leave the turn's agent.
       if (
-        !isAgentSessionKey(sessionKey, agentId) ||
+        !isAgentSessionKey(sessionKey, hopAgentId) ||
         !isSessionId(sessionId) ||
         seen.has(sessionKey)
       ) {
-        return deny(
-          "ineligible",
-          `session lineage at ${sessionKey} is malformed, cyclic, or cross-agent`,
-        );
+        return deny("ineligible", `session lineage at ${sessionKey} is malformed or cyclic`);
       }
       seen.add(sessionKey);
+      const storePath =
+        hopAgentId === agentId ? params.storePath : params.resolveAgentStorePath!(hopAgentId);
       // A turn admission already owns its current row. Reuse that prepared fact
       // at depth zero; only delegated parent hops need another canonical read.
       const entry =
         depth === 0
           ? admittedEntry
-          : await readEntryInWorker({ agentId, sessionKey, storePath, assertCallerCurrent });
+          : await readEntryInWorker({
+              agentId: hopAgentId,
+              sessionKey,
+              storePath,
+              assertCallerCurrent,
+            });
       if (
         !entry ||
         entry.sessionId !== sessionId ||
-        (depth > 0 && entry.lifecycleRevision !== requiredLifecycleRevision)
+        (depth > 0 && !sessionIdOnly && entry.lifecycleRevision !== requiredLifecycleRevision)
       ) {
         // The admitted row moving under this turn is transient. An ancestor reset or
         // removal after the spawn is permanent: the receipt names a lost incarnation.
@@ -238,7 +266,12 @@ export async function resolveMemoryAudienceFromEntry(
       }
       // The lease re-verifies this exact incarnation against current storage,
       // so a change between the read above and here denies the grant.
-      const lease = await leaseSessionGeneration({ agentId, sessionKey, storePath, entry });
+      const lease = await leaseSessionGeneration({
+        agentId: hopAgentId,
+        sessionKey,
+        storePath,
+        entry,
+      });
       if (!lease) {
         return deny(
           "unverified",
@@ -246,7 +279,31 @@ export async function resolveMemoryAudienceFromEntry(
         );
       }
       record.leases.push(lease);
+      sessionIdOnly = false;
 
+      const parent = depth === 0 ? params.scheduledParent : undefined;
+      if (parent?.sessionKey === sessionKey) {
+        // An in-session run executes on its parent's own row: that row must still be
+        // the linked incarnation, and this occurrence's owner bit replaces the sender's.
+        if (
+          entry.sessionId !== parent.sessionId ||
+          (parent.lifecycleRevision !== undefined &&
+            entry.lifecycleRevision !== parent.lifecycleRevision)
+        ) {
+          return deny(
+            "stale-lineage",
+            `scheduled run session ${sessionKey} was reset or replaced after its automation was linked to it`,
+          );
+        }
+        senderIsOwner = parent.senderIsOwner;
+      } else if (parent && entry.spawnedBy === undefined) {
+        sessionKey = parent.sessionKey;
+        sessionId = parent.sessionId;
+        requiredLifecycleRevision = parent.lifecycleRevision;
+        sessionIdOnly = parent.lifecycleRevision === undefined;
+        senderIsOwner = parent.senderIsOwner;
+        continue;
+      }
       if (entry.spawnedBy !== undefined) {
         // A child inherits only the owner bit and exact parent incarnation stamped
         // by the spawn owner. Its launch turn and copied chat metadata are not grants.
@@ -267,6 +324,20 @@ export async function resolveMemoryAudienceFromEntry(
         ) {
           return deny("ineligible", `spawned session ${sessionKey} has malformed lineage receipts`);
         }
+        // A spawn from another agent carries only the owner's private audience,
+        // so the crossing itself must be owner-attributed. Conversation
+        // partitions are keyed to one agent's session and never cross.
+        const parentAgentId = parseAgentSessionKey(entry.spawnedBy)?.agentId;
+        if (parentAgentId && parentAgentId !== hopAgentId) {
+          if (!params.resolveAgentStorePath || !entry.spawnedBySenderIsOwner) {
+            return deny(
+              "ineligible",
+              `session lineage at ${sessionKey} crosses agents without an owner spawn`,
+            );
+          }
+          crossedAgents = true;
+          hopAgentId = parentAgentId;
+        }
         sessionKey = entry.spawnedBy;
         sessionId = entry.spawnedBySessionId;
         requiredLifecycleRevision = entry.parentSessionLifecycleRevision;
@@ -279,11 +350,17 @@ export async function resolveMemoryAudienceFromEntry(
       assertRecordCurrent(record);
       // Only the durable root chat type selects the partition. Thread-shaped
       // keys intentionally receive no special interpretation here.
-      if (entry.chatType === "direct" && senderIsOwner === true) {
+      if (entry.chatType === "direct" && senderIsOwner === true && scheduledOwnerCap !== false) {
         return {
           status: "granted",
           ...mintMemoryAudience({ kind: "owner-private", agentId }, params.sessionKey, record),
         };
+      }
+      if (crossedAgents) {
+        return deny(
+          "ineligible",
+          `cross-agent lineage grants only owner-private memory; root session ${sessionKey} is not an owner direct chat`,
+        );
       }
       if (
         entry.chatType === "direct" ||

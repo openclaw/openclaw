@@ -9,14 +9,12 @@ import {
   type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { registerOpenClawAgentDatabaseReadCandidateResource } from "../../state/openclaw-agent-db-resources.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
 import {
-  captureExistingOpenClawAgentDatabaseExecution,
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { patchSessionEntryCore } from "./session-accessor.entry.js";
 import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
 import { createSessionEntryWithTranscriptInScope } from "./session-accessor.sqlite-creation.js";
@@ -26,8 +24,7 @@ import {
   captureLifecycleDatabaseScope,
   resolveSqliteScope,
   prepareSqliteScope,
-  resolveSqliteWriteAdmissionScope,
-  runExclusiveSqliteSessionWrite,
+  withPreparedSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type {
@@ -76,7 +73,7 @@ type SessionEntryDatabasePreparationSource = {
   selectedStore: { path: string; physicalPath: string };
 };
 
-/** Capture source custody before authority or physical-owner discovery yields. */
+/** Capture discovery inputs; the selected execution owns physical identity after resolution. */
 function captureSessionEntryDatabasePreparation(
   scope: SessionAccessScope,
   assertCurrent: () => void,
@@ -101,16 +98,12 @@ function captureSessionEntryDatabasePreparation(
     agentId: captured.agentId ?? resolveAgentIdFromSessionKey(captured.sessionKey),
     storePath: resolveSessionStorePathForScope(captured),
   };
-  const shared = memory ? undefined : captureOpenClawStateWorkerContext({ env: target.env });
   const candidates = (memory ? [] : [target, ...relatedScopes.map(captureScope)]).flatMap(
     (related) =>
-      captureSessionStoreReadCandidates(resolveSessionStorePathForScope(related)).map(
-        // Each capture returns fresh candidate objects, so attaching the identity in place is safe.
-        (candidate) =>
-          Object.assign(candidate, {
-            identity: readDatabasePathIdentitySync(candidate.path),
-            env: related.env,
-          }),
+      captureSessionStoreReadCandidates(resolveSessionStorePathForScope(related)).map((candidate) =>
+        Object.assign(candidate, {
+          identity: readDatabasePathIdentitySync(candidate.path),
+        }),
       ),
   );
   const expected = expectedSource && {
@@ -133,121 +126,21 @@ function captureSessionEntryDatabasePreparation(
     assertDatabasePathIdentity(selected.path, expected.identity);
     assertSessionStoreReadCandidate(selected.path, candidates);
     if (!candidates.some((candidate) => candidate.path === selected.path && !candidate.scope)) {
-      candidates.push({ ...selected, identity: expected.identity, env: target.env });
+      candidates.push({ ...selected, identity: expected.identity });
     }
   }
-  const releases: Array<() => void> = [];
-  const firstCreations = new Map<(typeof candidates)[number], OpenClawAgentDatabaseExecution>();
-  let active = true;
   let execution: OpenClawAgentDatabaseExecution | undefined;
-  let prepared: { path: string; identity: DatabasePathIdentity } | undefined;
-  let creatingPath: string | undefined;
-  const followsOriginalCreation = (candidate: (typeof candidates)[number]) => {
-    if (!candidate.identity.key.startsWith("path:")) {
-      return false;
-    }
-    let retained = firstCreations.get(candidate);
-    if (!retained) {
-      // A sibling may finish the original first creation while caller authority waits.
-      retained = captureExistingOpenClawAgentDatabaseExecution(
-        { path: candidate.path, env: candidate.env },
-        { expectedCreationIdentity: candidate.identity },
-      );
-      if (!retained) {
-        return false;
-      }
-      firstCreations.set(candidate, retained);
-    }
-    retained.assertCurrent();
-    return true;
-  };
   const assertSourceCurrent = () => {
-    if (!active) {
-      throw new Error("Session creation database preparation is closed");
-    }
     memory?.assertCurrent();
-    shared?.admission.assertCurrent();
     execution?.assertCurrent();
-    for (const retained of firstCreations.values()) {
-      retained.assertCurrent();
-    }
     if (expected && !isSessionStoreReadCandidateCurrent(expected.selectedStore)) {
       throw new Error("Session creation database alias changed during preparation");
-    }
-    for (const candidate of candidates) {
-      const isCreating = candidate.path === creatingPath || candidate.physicalPath === creatingPath;
-      const accepted =
-        prepared && (candidate.path === prepared.path || candidate.physicalPath === prepared.path)
-          ? prepared.identity
-          : candidate.identity;
-      if (!isSessionStoreReadCandidateCurrent(candidate)) {
-        throw new Error("Session creation database changed during preparation");
-      }
-      if (!(isCreating && candidate.identity.key.startsWith("path:"))) {
-        try {
-          assertDatabasePathIdentity(candidate.path, accepted);
-        } catch (error) {
-          if (!accepted.key.startsWith("path:") || !followsOriginalCreation(candidate)) {
-            throw error;
-          }
-        }
-      }
-    }
-    if (prepared) {
-      assertDatabasePathIdentity(prepared.path, prepared.identity);
     }
   };
   const assertHeld = () => {
     assertCurrent();
     assertSourceCurrent();
   };
-  const unregister = () => {
-    for (const release of releases.splice(0).toReversed()) {
-      release();
-    }
-  };
-  const release = async () => {
-    active = false;
-    try {
-      const released = await Promise.allSettled(
-        [...firstCreations.values(), ...(execution ? [execution] : [])].map((retained) =>
-          retained.release(),
-        ),
-      );
-      const errors = released.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (errors.length) {
-        throw createSqliteLifecycleAggregateError(
-          errors,
-          "Session creation source cleanup failed",
-          errors[0],
-        );
-      }
-    } finally {
-      unregister();
-    }
-  };
-  try {
-    for (const candidate of candidates) {
-      for (const path of new Set([candidate.path, candidate.physicalPath])) {
-        releases.push(
-          registerOpenClawAgentDatabaseReadCandidateResource({
-            path,
-            scope: candidate.scope,
-            revoke: () => {
-              active = false;
-            },
-            close: release,
-          }),
-        );
-      }
-    }
-  } catch (error) {
-    active = false;
-    unregister();
-    throw error;
-  }
   return {
     assertCurrent: assertSourceCurrent,
     env: target.env,
@@ -255,10 +148,12 @@ function captureSessionEntryDatabasePreparation(
       return execution;
     },
     assertHeld,
-    release,
+    release: async () => {
+      await execution?.release();
+    },
     async resolve() {
       assertHeld();
-      if (!shared) {
+      if (memory) {
         return undefined;
       }
       const resolved = captureLifecycleDatabaseScope(
@@ -297,7 +192,6 @@ function captureSessionEntryDatabasePreparation(
         original = {
           ...captureSessionStoreReadCandidate(resolved.path),
           identity,
-          env: target.env,
         };
         candidates.push(original);
       }
@@ -305,32 +199,15 @@ function captureSessionEntryDatabasePreparation(
         options,
         identity: original.identity,
         key: JSON.stringify([
-          shared.admission.databasePath,
-          shared.admission.identity.key,
           options.agentId,
+          target.env.OPENCLAW_STATE_DIR,
           original.identity.key,
           original.identity.birthtime,
         ]),
       };
     },
-    begin(path: string, retained: OpenClawAgentDatabaseExecution) {
+    begin(retained: OpenClawAgentDatabaseExecution) {
       execution = retained;
-      creatingPath = path;
-    },
-    finish(path: string, original: ReturnType<typeof readDatabasePathIdentitySync>) {
-      const accepted = execution?.fileIdentity;
-      if (!accepted || typeof accepted.birthtime !== "string") {
-        throw new Error("Session creation has no accepted native file identity");
-      }
-      prepared = {
-        path,
-        identity: {
-          key: `file:${accepted.physicalIdentity}`,
-          canonicalPath: original.canonicalPath,
-          birthtime: accepted.birthtime,
-        },
-      };
-      creatingPath = undefined;
     },
   };
 }
@@ -352,7 +229,7 @@ export function prepareSessionEntryMutationDatabases(
   type Prepared = Pick<Capture, "assertCurrent" | "execution" | "env">;
   type Group = {
     target: Resolved;
-    members: Array<{ index: number; capture: Capture; target: Resolved }>;
+    members: Array<{ index: number; capture: Capture }>;
   };
   const captured = targets.map((target): PromiseSettledResult<Capture> => {
     try {
@@ -377,7 +254,7 @@ export function prepareSessionEntryMutationDatabases(
         if (capture.status === "rejected") {
           throw capture.reason;
         }
-        return await capture.value.resolve();
+        return { source: capture.value, target: await capture.value.resolve() };
       }),
     );
     const outcomes: PromiseSettledResult<Prepared>[] = [];
@@ -387,25 +264,15 @@ export function prepareSessionEntryMutationDatabases(
         outcomes[index] = result;
         continue;
       }
-      const capture = captured[index]!;
-      if (capture.status !== "fulfilled") {
-        throw new Error("Session database resolution lost its captured source");
-      }
-      const source = capture.value;
+      const { source, target } = result.value;
       outcomes[index] = {
         status: "fulfilled",
-        value: {
-          assertCurrent: source.assertCurrent,
-          env: source.env,
-          get execution() {
-            return source.execution;
-          },
-        },
+        value: source,
       };
-      if (result.value) {
-        const group: Group = groups.get(result.value.key) ?? { target: result.value, members: [] };
-        group.members.push({ index, capture: source, target: result.value });
-        groups.set(result.value.key, group);
+      if (target) {
+        const group: Group = groups.get(target.key) ?? { target, members: [] };
+        group.members.push({ index, capture: source });
+        groups.set(target.key, group);
       }
     }
     await Promise.all(
@@ -420,20 +287,11 @@ export function prepareSessionEntryMutationDatabases(
           const identity = target.identity;
           const execution = captureOpenClawAgentDatabaseExecution(
             target.options,
-            identity.key.startsWith("file:")
-              ? {
-                  expectedIdentity: {
-                    kind: "file",
-                    physicalIdentity: identity.key.slice("file:".length),
-                    nativeLocation: identity.canonicalPath,
-                    birthtime: identity.birthtime,
-                  },
-                }
-              : { expectedCreationIdentity: identity },
+            toAgentExecutionConstraints(identity),
           );
-          // The physical cohort keeps one native lease; each caller retains its original alias.
+          // One physical execution serves the cohort; caller guards still authorize preparation.
           for (const member of members) {
-            member.capture.begin(member.target.options.path, execution);
+            member.capture.begin(execution);
           }
           await prepareSessionEntryReplacementDatabase(
             target.options,
@@ -445,9 +303,6 @@ export function prepareSessionEntryMutationDatabases(
               }
             },
           );
-          for (const member of members) {
-            member.capture.finish(member.target.options.path, member.target.identity);
-          }
           assertCurrent();
         } catch (reason) {
           for (const { index } of members) {
@@ -519,29 +374,12 @@ export async function createSessionEntryWithTranscript<TError = string>(
   const storePath = resolveSessionStorePathForScope(captured);
   const agentId = captured.agentId ?? resolveAgentIdFromSessionKey(captured.sessionKey);
   const target = { ...captured, agentId, storePath };
-  // Preserve earlier queued writes for existing-key adoption and protect shared-store
-  // discovery from sibling cold registration. Commit custody is acquired separately.
-  const admission = isMainThread ? resolveSqliteWriteAdmissionScope(target) : undefined;
-  const prepare = () => prepareSqliteScope(target);
-  const resolved = captureLifecycleDatabaseScope(
-    isMainThread
-      ? admission
-        ? await runExclusiveSqliteSessionWrite(
-            admission,
-            prepare,
-            "session.entry.create-with-transcript",
-          )
-        : await prepare()
-      : resolveSqliteScope(target),
-  );
-  return createSessionEntryWithTranscriptInScope(resolved, createEntry, options);
-}
-
-export function cloneSessionEntries(
-  store: Record<string, SessionEntry>,
-): Record<string, SessionEntry> {
-  return Object.fromEntries(
-    Object.entries(store).map(([sessionKey, entry]) => [sessionKey, { ...entry }]),
+  return withPreparedSqliteScope(target, (prepared) =>
+    createSessionEntryWithTranscriptInScope(
+      captureLifecycleDatabaseScope(prepared),
+      createEntry,
+      options,
+    ),
   );
 }
 

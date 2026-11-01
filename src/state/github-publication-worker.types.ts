@@ -15,6 +15,7 @@ export type SharedGitHubPublicationInsert = {
     idempotencyKey: string;
     title?: string;
     body?: string;
+    draft?: boolean;
   };
   requestId: string;
   requestDigest: string;
@@ -35,7 +36,13 @@ export type GitHubPublicationDeferral =
   | { kind: "claim"; claim: WorkerSessionTurnClaim }
   | { kind: "claimMissingSnapshot"; claim: WorkerSessionTurnClaim }
   | { kind: "request"; row: GitHubPublicationRow }
-  | { kind: "orphaned" };
+  | {
+      kind: "orphaned";
+      localClaims?: Pick<
+        WorkerSessionTurnClaim,
+        "sessionId" | "claimId" | "runId" | "placementGeneration"
+      >[];
+    };
 export type SharedGitHubPublicationWorkspaceSnapshot = {
   row: GitHubPublicationRow;
   sourceHeadCommit: string;

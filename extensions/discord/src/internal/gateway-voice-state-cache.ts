@@ -22,7 +22,7 @@ export class DiscordGatewayVoiceStateCache {
     const result: APIVoiceState[] = [];
     for (const state of states.values()) {
       if (state.channel_id === channelId) {
-        result.push({ ...state });
+        result.push(state);
       }
     }
     return result;
@@ -34,10 +34,7 @@ export class DiscordGatewayVoiceStateCache {
       return null;
     }
     this.transitionsByState.delete(state);
-    return {
-      current: { ...transition.current },
-      ...(transition.previous ? { previous: { ...transition.previous } } : {}),
-    };
+    return transition;
   }
 
   apply(payload: GatewayDispatchPayload): void {
@@ -87,7 +84,7 @@ export class DiscordGatewayVoiceStateCache {
       };
       this.transitionsByState.set(state, {
         current,
-        ...(previous ? { previous: { ...previous } } : {}),
+        ...(previous ? { previous } : {}),
       });
       if (state.channel_id) {
         states.set(state.user_id, current);

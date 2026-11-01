@@ -1,13 +1,17 @@
 import { EventEmitter, once } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import type { HelloOk } from "../../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_CLIENT_CAPS } from "../../../../packages/gateway-protocol/src/client-info.js";
+import type { ConnectParams, HelloOk } from "../../../../packages/gateway-protocol/src/index.js";
+import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as systemPresence from "../../../infra/system-presence.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveGatewayAuth } from "../../auth-resolve.js";
+import type { HealthSummary } from "../../health/types.js";
 import { startGatewayTailscaleExposure } from "../../server-tailscale.js";
 import { prepareTailscalePublishedOrigin } from "../../tailscale-published-origin.js";
+import { getHealthCache } from "../health-state.js";
 import type { GatewayWsClient } from "../ws-types.js";
 
 // Hello update-scope tests cover authenticated role/scope and recovery ownership projection.
@@ -92,6 +96,8 @@ vi.mock("./connect-auth-security.js", () => ({
 vi.mock("../../../version.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../version.js")>()),
   resolveRuntimeServiceBuildId: () => "build-a",
+  resolveRuntimeServiceCommit: () => "abcdef0",
+  resolveRuntimeServiceBuiltAt: () => "2026-10-21T11:55:00.000Z",
 }));
 
 const tailscaleClaim = vi.hoisted(() => vi.fn());
@@ -108,6 +114,13 @@ function makeContext(
   scopes: string[],
   client?: Pick<GatewayWsClient, "internal" | "preparedSessionProfile">,
 ) {
+  const connectParams: ConnectParams = {
+    minProtocol: PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
+    client: { id: "gateway-client", version: "dev", platform: "test", mode: "backend" },
+    role,
+    scopes,
+  };
   return {
     handler: {
       socket: new EventEmitter(),
@@ -126,11 +139,7 @@ function makeContext(
       logHealth: { error: vi.fn() },
     },
     frame: { id: `hello-${role}` },
-    connectParams: {
-      client: { id: "gateway-client", version: "dev", platform: "test", mode: "backend" },
-      role,
-      scopes,
-    },
+    connectParams,
     configSnapshot: {},
     sendFrame: vi.fn(async () => undefined),
     onHelloDelivered: vi.fn(),
@@ -187,6 +196,72 @@ describe("sendGatewayHello update detail scope", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getHealthCache).mockReturnValue(null);
+  });
+
+  it.each([
+    { origin: "https://gateway.example.test", local: false, expected: true },
+    { origin: "http://127.0.0.1:18789", local: true, expected: true },
+    { origin: "http://127.0.0.1:18789", local: false, expected: false },
+  ])(
+    "advertises browser sign-in only for a secure served return: %j",
+    async ({ origin, local, expected }) => {
+      const context = {
+        ...makeContext("operator", ["operator.read"]),
+        browserOrigin: { origin, requestHost: new URL(origin).host, isLocalClient: local },
+      };
+      const gatewayMethods = ["health", "mcp.authLogin"];
+      await sendGatewayHello(
+        { ...context, handler: { ...context.handler, gatewayMethods } } as never,
+        makeState("operator", ["operator.read"]) as never,
+        {},
+      );
+      expect(helloPayload(context)?.features.methods).toEqual(
+        expected ? gatewayMethods : ["health"],
+      );
+    },
+  );
+
+  it.each([
+    { caps: [], mode: "full" },
+    { caps: [GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY], mode: "summary" },
+    { caps: [GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND], mode: "empty" },
+    {
+      caps: [GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND, GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY],
+      mode: "empty",
+    },
+  ])("negotiates $mode cached health in hello", async ({ caps, mode }) => {
+    const summary = {
+      ok: true as const,
+      ts: 123,
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+    };
+    const health: HealthSummary = {
+      ...summary,
+      agents: [],
+      sessions: { path: "", count: 5000, recent: [] },
+    };
+    vi.mocked(getHealthCache).mockReturnValue(health);
+    const context = makeContext("operator", ["operator.read"]);
+    context.connectParams = {
+      ...context.connectParams,
+      caps,
+    };
+
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+
+    expect(helloSnapshot(context)).toMatchObject({
+      presence: [],
+      stateVersion: { presence: 1, health: 1 },
+      uptimeMs: 1,
+    });
+    expect(helloSnapshot(context)?.health).toEqual(
+      mode === "empty" ? {} : mode === "summary" ? summary : health,
+    );
   });
 
   it.each([undefined, []])(
@@ -375,11 +450,12 @@ describe("sendGatewayHello update detail scope", () => {
     async (withdrawal) => {
       const gatewayMethods = ["health", "config.get"];
       const exited = createDeferredCore();
-      tailscaleClaim.mockResolvedValue({
+      tailscaleClaim.mockResolvedValueOnce({
         exited: exited.promise,
         isActive: () => true,
         stop: vi.fn(),
       });
+      tailscaleClaim.mockRejectedValue(new Error("Tailscale daemon unavailable"));
       const cleanup = await startGatewayTailscaleExposure({
         tailscaleMode: "serve",
         port: 18789,
@@ -497,6 +573,11 @@ describe("sendGatewayHello update detail scope", () => {
   );
 
   it.each([
+    {
+      label: "member",
+      role: "operator" as const,
+      scopes: ["operator.sessions.read", "operator.sessions.write"],
+    },
     { label: "pairing-only operator", role: "operator" as const, scopes: ["operator.pairing"] },
     { label: "node", role: "node" as const, scopes: ["operator.read"] },
   ])("omits update details for a $label", async ({ role, scopes }) => {
@@ -509,6 +590,10 @@ describe("sendGatewayHello update detail scope", () => {
       includeUpdateDetails: false,
     });
     expectRedactedHelloSnapshot(context);
+    expect(helloPayload(context)?.server).toMatchObject({
+      commit: "abcdef0",
+      builtAt: "2026-10-21T11:55:00.000Z",
+    });
     expect(helloPayload(context)?.features.capabilities).toContain("node-permission-errors");
     expect(helloPayload(context)?.features.capabilities).toContain("agent-session-id-create-v1");
   });
@@ -570,6 +655,27 @@ describe("sendGatewayHello update detail scope", () => {
     }
   });
 
+  it.each([
+    [{ controlUi: { basePath: "/__openclaw__/" } }, "/__openclaw__"],
+    [{ controlUi: { basePath: "/" } }, undefined],
+    [{ controlUi: { enabled: false, basePath: "/__openclaw__" } }, undefined],
+  ])(
+    "advertises the Control UI mount path without a public origin: %j",
+    async (gateway, basePath) => {
+      const context = makeContext("operator", ["operator.read"]);
+      context.configSnapshot = { gateway };
+      await sendGatewayHello(
+        context as never,
+        makeState("operator", ["operator.read"]) as never,
+        {},
+      );
+      expect(helloPayload(context)?.controlUiBasePath).toBe(basePath);
+      if (basePath === undefined) {
+        expect(helloPayload(context)).not.toHaveProperty("controlUiBasePath");
+      }
+    },
+  );
+
   it("keeps hello projection and telemetry at effective scopes", async () => {
     const state = {
       ...makeState("operator", ["operator.pairing"]),
@@ -594,6 +700,7 @@ describe("sendGatewayHello update detail scope", () => {
       method: "none",
       role: "operator",
       scopes: ["operator.pairing"],
+      roleAllowsAdmin: true,
       recoveryMigrationAllowed: true,
       recoveryScope: expect.stringMatching(/^[A-Za-z0-9_-]+$/u),
       deviceToken: "paired-token",

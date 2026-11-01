@@ -86,12 +86,7 @@ export async function syncPluginsForUpdateChannel(params: {
 }): Promise<PluginChannelSyncResult> {
   return await withPluginLifecycleLease(
     { env: params.env, assertCurrent: params.beforePersistentEffect },
-    (lease) =>
-      withPluginInstallTransactions(
-        params,
-        () => lease.assertOwned(),
-        syncPluginsForUpdateChannelWithLease,
-      ),
+    (lease) => withPluginInstallTransactions(params, lease, syncPluginsForUpdateChannelWithLease),
   );
 }
 
@@ -165,6 +160,9 @@ async function syncPluginsForUpdateChannelWithLease(
         source: "path",
         sourcePath: bundledInfo.localPath,
         installPath: bundledInfo.localPath,
+        ...(bundledInfo.contextEngineIds
+          ? { contextEngineIdsByPlugin: { [pluginId]: [...bundledInfo.contextEngineIds] } }
+          : {}),
         spec: record.spec ?? bundledInfo.npmSpec,
         version: record.version,
       });
@@ -460,6 +458,9 @@ async function syncPluginsForUpdateChannelWithLease(
         source: "path",
         sourcePath: bundledInfo.localPath,
         installPath: bundledInfo.localPath,
+        ...(bundledInfo.contextEngineIds
+          ? { contextEngineIdsByPlugin: { [pluginId]: [...bundledInfo.contextEngineIds] } }
+          : {}),
         spec: record.spec ?? bundledInfo.npmSpec,
         version: record.version,
       });

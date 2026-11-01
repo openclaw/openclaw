@@ -2,10 +2,7 @@ import { listAgentIds } from "../agents/agent-scope-config.js";
 import { isUpdateDoctorLintPass } from "../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV } from "../infra/update-doctor-result.js";
-import {
-  resolveUpdateRehearsalRoot,
-  UPDATE_REHEARSAL_COMMAND_STARTED_AT_ENV,
-} from "../infra/update-rehearsal-paths.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import type { HealthFinding } from "./health-checks.js";
 
 export type DoctorUpdateWork =
@@ -51,9 +48,11 @@ const AGENT_INSPECTION_ALLOWANCE_MS = 2_000;
 const RUN_INSPECTION_ALLOWANCE_MS = 5_000;
 
 /** A worker inherits its CLI's anchor; the CLI itself started this command. */
-function resolveCommandStartedAt(env: NodeJS.ProcessEnv, validationStartedAt: number): number {
-  const inherited = Number(env[UPDATE_REHEARSAL_COMMAND_STARTED_AT_ENV]);
-  const started = Number.isSafeInteger(inherited) ? inherited : Math.floor(performance.timeOrigin);
+function resolveCommandStartedAt(
+  inherited: number | undefined,
+  validationStartedAt: number,
+): number {
+  const started = inherited ?? Math.floor(performance.timeOrigin);
   // A command cannot start before validation or after now.
   return Math.min(Math.max(started, validationStartedAt), Date.now());
 }
@@ -63,6 +62,8 @@ export async function resolveDoctorUpdateBudget(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   preparedAgentCount?: number;
+  /** Inherited by the lint worker from its CLI; other commands use their own process start. */
+  commandStartedAtMs?: number;
 }): Promise<DoctorUpdateBudget | undefined> {
   const rehearsal = resolveUpdateRehearsalRoot(params.env);
   const recordedUpdateDoctor =
@@ -113,7 +114,10 @@ export async function resolveDoctorUpdateBudget(params: {
     };
   }
   if (freshCommandBudget) {
-    const commandStartedAtMs = resolveCommandStartedAt(params.env, validationStartedAt);
+    const commandStartedAtMs = resolveCommandStartedAt(
+      params.commandStartedAtMs,
+      validationStartedAt,
+    );
     return {
       agentCount,
       phase: "validation",

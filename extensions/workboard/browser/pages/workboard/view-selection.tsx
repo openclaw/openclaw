@@ -255,7 +255,10 @@ function agentOptions(workboard: WorkboardProps) {
     }),
   );
 }
-export function SelectionActions(input: { workboard: WorkboardProps }) {
+export function SelectionActions(input: {
+  workboard: WorkboardProps;
+  focusSelectedCard: () => void;
+}) {
   const state = workboardViewState(() => input.workboard);
   const cardIds = createMemo(() =>
     state()
@@ -389,6 +392,7 @@ export function SelectionActions(input: { workboard: WorkboardProps }) {
         aria-label={t("workboard.clearSelection")}
         disabled={busy()}
         onClick={() => {
+          input.focusSelectedCard();
           state().selectedCardIds.clear();
           input.workboard.onRequestUpdate?.();
         }}
@@ -620,7 +624,7 @@ function SelectionDialogContent(props: { workboard: WorkboardProps; draft: Workb
             );
           }}
         </Show>
-        <div class="workboard-modal__actions">
+        <openclaw-modal-actions class="workboard-modal__actions">
           <button class="btn" type="button" autofocus disabled={state().bulkSaving} onClick={close}>
             {t("common.cancel")}
           </button>
@@ -638,7 +642,7 @@ function SelectionDialogContent(props: { workboard: WorkboardProps; draft: Workb
               ? t("workboard.bulkApplying")
               : t(draft().kind === "delete" ? "workboard.bulkDelete" : "workboard.bulkApply")}
           </button>
-        </div>
+        </openclaw-modal-actions>
       </form>
       <WorkboardErrorToast
         owner={state()}

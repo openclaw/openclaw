@@ -21,9 +21,39 @@ export type InputProvenance = {
   runId?: string;
 };
 
-export const MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL = "main_session_restart_recovery" as const;
+/** Native input attribution, not canonical chat visibility or execution authority. */
+export function isHostGeneratedInputProvenance(provenance: InputProvenance | undefined): boolean {
+  // Forwarded inputs retain their sender in the canonical transcript; their native
+  // copy must not invent another message authored by this session's operator.
+  return provenance?.kind === "internal_system" || provenance?.kind === "inter_session";
+}
 
 export const PROGRESS_CARD_REFRESH_SOURCE_TOOL = "progress_card_refresh" as const;
+
+/** A background fork of another session's conversation; `sourceSessionKey` names that session. */
+export const SESSION_FORK_SOURCE_TOOL = "session_fork" as const;
+
+/** The session a background fork reads, or undefined for every other input. */
+export function readSessionForkSource(provenance: InputProvenance | undefined): string | undefined {
+  return provenance?.kind === "internal_system" &&
+    provenance.sourceTool === SESSION_FORK_SOURCE_TOOL
+    ? provenance.sourceSessionKey
+    : undefined;
+}
+
+/** Execution input, never a delivered cron announcement or a user-authored prompt. */
+export const CRON_EXECUTION_SOURCE_TOOL = "cron_execution" as const;
+
+export function isCronExecutionInputProvenance(provenance: InputProvenance | undefined): boolean {
+  return (
+    provenance?.kind === "internal_system" && provenance.sourceTool === CRON_EXECUTION_SOURCE_TOOL
+  );
+}
+
+/** Background exec exit wake; its prompt invites NO_REPLY when nothing new needs reporting. */
+export function isExecCompletionInputProvenance(provenance: InputProvenance | undefined): boolean {
+  return provenance?.kind === "internal_system" && provenance.sourceTool === "exec";
+}
 
 /** The card is the only visible result of this Gateway-authored status request. */
 export function isProgressCardRefreshInputProvenance(
@@ -98,15 +128,21 @@ export function applyInputProvenanceToUserMessage<T extends AgentMessage>(
   message: T,
   inputProvenance: InputProvenance | undefined,
 ): T {
-  if (!inputProvenance || (message as { role?: unknown }).role !== "user") {
+  if ((message as { role?: unknown }).role !== "user") {
     return message;
   }
   const existing = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
-  if (existing) {
+  const provenance = existing ?? inputProvenance;
+  if (!provenance) {
+    return message;
+  }
+  const hideExecutionInput = isCronExecutionInputProvenance(provenance);
+  if (existing && (!hideExecutionInput || Reflect.get(message, "display") === false)) {
     return message;
   }
   return Object.assign({}, message, {
-    provenance: inputProvenance,
+    ...(existing ? {} : { provenance }),
+    ...(hideExecutionInput ? { display: false } : {}),
   });
 }
 
@@ -122,14 +158,6 @@ export function isSubagentCoordinationInputProvenance(
     provenance?.kind === "inter_session" &&
     normalizeOptionalString(provenance.sourceTool) === "sessions_send" &&
     provenance.sourceRole === "subagent"
-  );
-}
-
-export function isMainSessionRestartRecoveryInputProvenance(value: unknown): boolean {
-  const provenance = normalizeInputProvenance(value);
-  return (
-    provenance?.kind === "internal_system" &&
-    provenance.sourceTool?.toLowerCase() === MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL
   );
 }
 
@@ -160,12 +188,14 @@ const USER_FACING_SESSION_STATE_PRESERVING_SOURCE_TOOLS: ReadonlySet<string> = n
   "exec_approval_followup",
   "subagent_announce",
   "subagent_settle",
-  "subagent_interrupted_resume",
 ]);
 
 export function shouldPreserveUserFacingSessionStateForInputProvenance(value: unknown): boolean {
   const provenance = normalizeInputProvenance(value);
-  if (isProgressCardRefreshInputProvenance(provenance)) {
+  if (
+    isProgressCardRefreshInputProvenance(provenance) ||
+    isCronExecutionInputProvenance(provenance)
+  ) {
     return true;
   }
   if (provenance?.kind !== "inter_session") {

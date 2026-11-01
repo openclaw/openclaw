@@ -37,9 +37,7 @@ export function snapshotMeetingObservation<T extends { provenance?: MeetingObser
     ...value,
     ...(value.provenance !== undefined
       ? {
-          provenance: normalizeMeetingObservationProvenance(value.provenance, {
-            observer: "unknown",
-          }),
+          provenance: { ...value.provenance },
         }
       : {}),
   };

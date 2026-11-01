@@ -84,13 +84,13 @@ export async function resolveMatrixDiagnostic<T>(
 export async function resolveMatrixDiagnosticResult<T>(
   promise: Promise<T>,
   timeoutMs: number,
-): Promise<{ error: unknown; timedOut: boolean; value: T | null }> {
+): Promise<{ error: unknown; value: T | null }> {
   return await raceWithTimeout(
     promise
-      .then((value) => ({ error: null, timedOut: false, value }))
-      .catch((error: unknown) => ({ error, timedOut: false, value: null })),
+      .then((value) => ({ error: null, value }))
+      .catch((error: unknown) => ({ error, value: null })),
     timeoutMs,
-    () => ({ error: null, timedOut: true, value: null }),
+    () => ({ error: null, value: null }),
     { ref: false },
   );
 }

@@ -1,30 +1,26 @@
-import { createMemo } from "solid-js";
 import {
   hasProviderBrandIcon,
   providerIdFromModelRef,
 } from "../../components/provider-icon-data.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ModelSetupActivationState } from "./state.ts";
+import type { ModelSetupViewProps } from "./view-types.ts";
 
 registerModelSetupEnglish();
 
 type SuccessActivation = Extract<ModelSetupActivationState, { phase: "success" }>;
 
-export function ModelSetupSuccessDialog(props: {
-  activation: SuccessActivation;
-  onOpenChat: () => void;
-  onClose: () => void;
-  firstRun: boolean;
-  returnToModels?: boolean;
-}) {
-  const providerId = createMemo(() => providerIdFromModelRef(props.activation.modelRef));
-  const providerIconId = createMemo(() =>
-    providerId() && hasProviderBrandIcon(providerId()!) ? providerId() : null,
-  );
+export function ModelSetupSuccessDialog(
+  props: ModelSetupViewProps & { activation: SuccessActivation },
+) {
+  let openChatButton!: HTMLButtonElement;
+  const providerId = () => providerIdFromModelRef(props.activation.modelRef);
+  const providerIconId = () =>
+    providerId() && hasProviderBrandIcon(providerId()!) ? providerId() : null;
   const utility = () => props.activation.modelTarget === "utility";
   const title = () => t(utility() ? "modelSetup.utility.ready" : "modelSetup.success.title");
   const description = () =>
@@ -35,7 +31,7 @@ export function ModelSetupSuccessDialog(props: {
   const actionLabel = () =>
     utility()
       ? t("modelSetup.utility.openAssistant")
-      : props.returnToModels
+      : props.embedded
         ? t("modelSetup.discovery.returnToModels")
         : props.firstRun
           ? t("modelSetup.success.continueSetup")
@@ -45,9 +41,10 @@ export function ModelSetupSuccessDialog(props: {
   return (
     <>
       <openclaw-modal-dialog
+        prop:initialFocus={() => openChatButton}
         label={title()}
         description={description()}
-        onModal-cancel={() => props.onClose()}
+        onModal-cancel={() => props.onSuccessClose()}
       >
         <section class="model-setup-success" role="status">
           <div
@@ -99,20 +96,30 @@ export function ModelSetupSuccessDialog(props: {
               </>
             )}
           </div>
-          <footer class="model-setup-success__actions">
-            {props.returnToModels && !utility() ? undefined : (
+          <openclaw-modal-actions class="model-setup-success__actions">
+            {props.embedded && !utility() ? undefined : (
               <>
                 {" "}
-                <button type="button" class="btn" onClick={() => props.onClose()}>
+                <button type="button" class="btn" onClick={() => props.onSuccessClose()}>
                   {t("modelSetup.success.stayHere")}
                 </button>{" "}
               </>
             )}
-            <button type="button" class="btn primary" autofocus onClick={() => props.onOpenChat()}>
-              {props.returnToModels && !utility() ? undefined : <Icon name="messageSquare" />}{" "}
+            <button
+              ref={(element) => {
+                openChatButton = element;
+              }}
+              type="button"
+              class="btn primary"
+              autofocus
+              onClick={() =>
+                (utility() ? (props.onOpenSetupAssistant ?? props.onOpenChat) : props.onOpenChat)()
+              }
+            >
+              {props.embedded && !utility() ? undefined : <Icon name="messageSquare" />}{" "}
               {actionLabel()}
             </button>
-          </footer>
+          </openclaw-modal-actions>
         </section>
       </openclaw-modal-dialog>
     </>

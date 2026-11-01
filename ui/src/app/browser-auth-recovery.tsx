@@ -1,16 +1,19 @@
-import { createSignal, Show } from "solid-js";
+import { createStore, Errored, lazy, Loading } from "solid-js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { withPromiseModalHost } from "../components/promise-modal-host.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { notifyBrowserAuthRestored, subscribeBrowserHttpFailures } from "./browser-http.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import { notifyBrowserAuthRestored, bindBrowserHttpFailures } from "./browser-http.ts";
 import {
   fetchWithControlUiAuth,
   resolveControlUiAuthCandidates,
   type ControlUiAuthSource,
 } from "./control-ui-auth.ts";
 import { webKitHostWindow } from "./native-webkit-bridge.ts";
+
+const RecoveryDialog = lazy(() => import("./browser-auth-recovery-dialog.tsx"));
 
 function renewBrowserSession(url: URL, signal: AbortSignal): Promise<void> {
   if (signal.aborted) {
@@ -26,14 +29,16 @@ function renewBrowserSession(url: URL, signal: AbortSignal): Promise<void> {
     frame.src = url.href;
     const finish = () => {
       window.clearTimeout(timeout);
-      signal.removeEventListener("abort", finish);
+      stops.forEach((stop) => stop());
       frame.remove();
       resolve();
     };
     const timeout = window.setTimeout(finish, 10_000);
-    frame.addEventListener("load", finish, { once: true });
-    frame.addEventListener("error", finish, { once: true });
-    signal.addEventListener("abort", finish, { once: true });
+    const stops = [
+      listen(frame, "load", finish, { once: true }),
+      listen(frame, "error", finish, { once: true }),
+      listen(signal, "abort", finish, { once: true }),
+    ];
     document.body.append(frame);
   });
 }
@@ -84,51 +89,52 @@ export function startBrowserAuthRecovery(
         update?.();
       }
       const content = () => {
-        const readView = () => ({ openedSignIn, pending: Boolean(pending), probeResult });
-        const [view, setView] = createSignal(readView());
-        update = () => setView(readView());
+        const [view, setView] = createStore(
+          { openedSignIn, probe: pending, probeResult },
+          { shallow: true },
+        );
+        update = () =>
+          setView((draft) => {
+            draft.openedSignIn = openedSignIn;
+            draft.probe = pending;
+            draft.probeResult = probeResult;
+          });
         return (
-          <openclaw-modal-dialog
-            label={t("connection.browserSignIn.title")}
-            description={t("connection.browserSignIn.description")}
-            onModal-cancel={dismiss}
-          >
-            <div class="exec-approval-card">
-              <div class="exec-approval-header">
-                <div style={{ "min-width": "0" }}>
+          <Errored
+            fallback={(_error, reset) => (
+              <openclaw-modal-dialog
+                label={t("connection.browserSignIn.title")}
+                description={t("connection.browserSignIn.description")}
+                onModal-cancel={dismiss}
+              >
+                <div class="exec-approval-card">
                   <div class="exec-approval-title">{t("connection.browserSignIn.title")}</div>
-                  <div class="exec-approval-sub" style={{ "white-space": "normal" }}>
-                    {t("connection.browserSignIn.description")}
-                  </div>
+                  <p role="alert">{t("lazyView.errorTitle")}</p>
+                  <openclaw-modal-actions class="exec-approval-actions">
+                    <button class="btn" onClick={dismiss}>
+                      {t("connection.browserSignIn.dismiss")}
+                    </button>
+                    <button class="btn" onClick={() => reset()}>
+                      {t("common.retry")}
+                    </button>
+                    <button class="btn primary" onClick={() => void signIn()}>
+                      {t("connection.browserSignIn.action")}
+                    </button>
+                  </openclaw-modal-actions>
                 </div>
-              </div>
-              <Show when={view().openedSignIn}>
-                <p>{t("connection.browserSignIn.returnHint")}</p>
-              </Show>
-              <p role="status" aria-live="polite">
-                {view().pending
-                  ? t("connection.browserSignIn.checking")
-                  : view().probeResult === "unavailable"
-                    ? t("connection.browserSignIn.unavailable")
-                    : view().probeResult === "sign-in"
-                      ? t("connection.browserSignIn.stillRequired")
-                      : null}
-              </p>
-              <div class="exec-approval-actions">
-                <button class="btn primary" onClick={() => void signIn()}>
-                  {t("connection.browserSignIn.action")}
-                </button>
-                <Show when={view().openedSignIn}>
-                  <button class="btn" disabled={view().pending} onClick={() => void check(true)}>
-                    {t("connection.browserSignIn.checkAgain")}
-                  </button>
-                </Show>
-                <button class="btn" onClick={dismiss}>
-                  {t("connection.browserSignIn.dismiss")}
-                </button>
-              </div>
-            </div>
-          </openclaw-modal-dialog>
+              </openclaw-modal-dialog>
+            )}
+          >
+            <Loading>
+              <RecoveryDialog
+                view={view}
+                readProbeResult={() => probeResult}
+                onSignIn={() => void signIn()}
+                onCheck={() => void check(true)}
+                onDismiss={dismiss}
+              />
+            </Loading>
+          </Errored>
         );
       };
       dialog = { close: () => modal.finish(undefined), update: () => update?.() };
@@ -218,7 +224,7 @@ export function startBrowserAuthRecovery(
     return pending;
   }
 
-  const stopFailures = subscribeBrowserHttpFailures((url) => {
+  const stopFailures = bindBrowserHttpFailures((url) => {
     const request = URL.parse(url, window.location.href);
     if (request?.origin === root.origin && request.pathname.startsWith(root.pathname)) {
       void check();
@@ -244,9 +250,13 @@ export function startBrowserAuthRecovery(
       onFocus();
     }
   };
-  serviceWorker?.addEventListener("message", onWorkerMessage, { signal: lifetime.signal });
-  window.addEventListener("focus", onFocus, { signal: lifetime.signal });
-  document.addEventListener("visibilitychange", onVisibilityChange, { signal: lifetime.signal });
+  // The recovery lifetime owns both pending HTTP work and its document listeners.
+  const options = { signal: lifetime.signal };
+  if (serviceWorker) {
+    listen(serviceWorker, "message", onWorkerMessage, options);
+  }
+  listen(window, "focus", onFocus, options);
+  listen(document, "visibilitychange", onVisibilityChange, options);
   return () => {
     lifetime.abort();
     stopFailures();

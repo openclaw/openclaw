@@ -1,7 +1,10 @@
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
-import { resolveImageCapableConfigProviderIds } from "./config-provider-models.js";
+import {
+  listImageCapableConfiguredProviders,
+  resolveConfiguredMediaProviderCapabilities,
+} from "./config-provider-models.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
 function mergeProviderIntoRegistry(
@@ -43,10 +46,16 @@ export function buildMediaUnderstandingRegistry(
       cfg,
     });
   for (const provider of providers) {
-    mergeProviderIntoRegistry(registry, provider);
+    mergeProviderIntoRegistry(
+      registry,
+      provider.inheritConfiguredImageCapability
+        ? { ...provider, capabilities: resolveConfiguredMediaProviderCapabilities(provider, cfg) }
+        : provider,
+    );
   }
   // Auto-register media-understanding for config providers with image-capable models (#51392)
-  for (const normalizedKey of resolveImageCapableConfigProviderIds(cfg)) {
+  for (const providerId of listImageCapableConfiguredProviders(cfg)) {
+    const normalizedKey = normalizeMediaProviderId(providerId);
     if (!registry.has(normalizedKey)) {
       mergeProviderIntoRegistry(registry, {
         id: normalizedKey,

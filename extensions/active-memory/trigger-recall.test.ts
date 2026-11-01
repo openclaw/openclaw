@@ -1,9 +1,9 @@
 import type { MemoryCallerContext, MemorySearchHit } from "openclaw/plugin-sdk/memory-host-search";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTriggerRecallContext,
   MAX_TRIGGER_CONTEXT_CHARS,
-  resetTriggerRecallRunsForTests,
+  forgetTriggerRecallRun,
   resolveTriggerRecall,
   selectStrongTriggerMatches,
 } from "./trigger-recall.js";
@@ -47,9 +47,12 @@ function request() {
     source: { kind: "native" as const, context: callerContext },
   };
 }
+afterEach(() => {
+  forgetTriggerRecallRun("run");
+});
+
 describe("active-memory provider-neutral trigger recall", () => {
   beforeEach(() => {
-    resetTriggerRecallRunsForTests();
     hoisted.search.mockReset().mockResolvedValue({ hits: [] });
     hoisted.candidates.mockReset().mockResolvedValue({ hits: [result()] });
     hoisted.close.mockReset();
@@ -483,7 +486,6 @@ describe("active-memory legacy trigger recall", () => {
     });
 
   beforeEach(() => {
-    resetTriggerRecallRunsForTests();
     hoisted.open.mockReset();
     hoisted.managerSearch.mockReset().mockResolvedValue([]);
     hoisted.listTriggerCandidates.mockReset().mockResolvedValue([]);

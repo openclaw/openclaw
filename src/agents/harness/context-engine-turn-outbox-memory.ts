@@ -4,6 +4,10 @@ import {
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../../config/sessions/session-actor-storage-binding.js";
+import type {
+  SessionActorStorageReads,
+  SessionActorStorageWrites,
+} from "../../config/sessions/session-actor-storage-contract.js";
 import { readSessionActorStorageResult } from "../../config/sessions/session-actor-storage-result.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
 import type { ContextEngineTurnOutboxWorkerStore } from "./context-engine-turn-outbox.js";
@@ -55,6 +59,17 @@ export function openMemoryContextEngineTurnOutboxStore(
       await actor.release();
     }
   };
+  const mutate = <Key extends keyof SessionActorStorageWrites>(
+    type: Key,
+    input: SessionActorStorageWrites[Key]["input"],
+  ) =>
+    run(async ({ actor }) =>
+      readSessionActorStorageResult(await actor.storage!.mutate({ type, input }, authority)),
+    );
+  const read = <Key extends keyof SessionActorStorageReads>(
+    type: Key,
+    input: SessionActorStorageReads[Key]["input"],
+  ) => run(({ actor }) => actor.storage!.read({ type, input }, authority));
   return {
     retain: (operation) =>
       run(({ actor }) =>
@@ -75,73 +90,19 @@ export function openMemoryContextEngineTurnOutboxStore(
         throw new IncognitoSessionMissingError();
       }
     },
-    prepareRun: async (input) =>
-      run(async ({ actor }) =>
-        readSessionActorStorageResult(
-          await actor.storage!.mutate({ type: "session.outbox.prepareRun", input }, authority),
-        ),
-      ),
-    enqueueIntent: async (input) =>
-      run(async ({ actor }) =>
-        readSessionActorStorageResult(
-          await actor.storage!.mutate({ type: "session.outbox.enqueueIntent", input }, authority),
-        ),
-      ),
-    acceptIntent: async (input) =>
-      run(async ({ actor }) =>
-        readSessionActorStorageResult(
-          await actor.storage!.mutate({ type: "session.outbox.acceptIntent", input }, authority),
-        ),
-      ),
-    publishClosedTurn: async (input) =>
-      run(async ({ actor }) =>
-        readSessionActorStorageResult(
-          await actor.storage!.mutate(
-            { type: "session.outbox.publishClosedTurn", input },
-            authority,
-          ),
-        ),
-      ),
-    discardIntent: async (input) =>
-      run(async ({ actor }) =>
-        readSessionActorStorageResult(
-          await actor.storage!.mutate({ type: "session.outbox.discardIntent", input }, authority),
-        ),
-      ),
-    listPendingSessions: (input) =>
-      run(({ actor }) =>
-        actor.storage!.read({ type: "session.outbox.listPendingSessions", input }, authority),
-      ),
-    readNextPending: (input) =>
-      run(({ actor }) =>
-        actor.storage!.read({ type: "session.outbox.readNextPending", input }, authority),
-      ),
-    hasPending: (input) =>
-      run(({ actor }) =>
-        actor.storage!.read({ type: "session.outbox.hasPending", input }, authority),
-      ),
+    prepareRun: (input) => mutate("session.outbox.prepareRun", input),
+    enqueueIntent: (input) => mutate("session.outbox.enqueueIntent", input),
+    acceptIntent: (input) => mutate("session.outbox.acceptIntent", input),
+    publishClosedTurn: (input) => mutate("session.outbox.publishClosedTurn", input),
+    discardIntent: (input) => mutate("session.outbox.discardIntent", input),
+    listPendingSessions: (input) => read("session.outbox.listPendingSessions", input),
+    readNextPending: (input) => read("session.outbox.readNextPending", input),
+    hasPending: (input) => read("session.outbox.hasPending", input),
     complete: async (advancementKey) => {
-      await run(async ({ actor }) =>
-        readSessionActorStorageResult(
-          await actor.storage!.mutate(
-            { type: "session.outbox.complete", input: { advancementKey } },
-            authority,
-          ),
-        ),
-      );
+      await mutate("session.outbox.complete", { advancementKey });
     },
     recordFailure: async (advancementKey, message, attemptedAt) => {
-      await run(async ({ actor }) =>
-        readSessionActorStorageResult(
-          await actor.storage!.mutate(
-            {
-              type: "session.outbox.recordFailure",
-              input: { advancementKey, message, attemptedAt },
-            },
-            authority,
-          ),
-        ),
-      );
+      await mutate("session.outbox.recordFailure", { advancementKey, message, attemptedAt });
     },
   };
 }

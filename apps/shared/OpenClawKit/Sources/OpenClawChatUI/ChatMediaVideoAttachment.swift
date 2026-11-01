@@ -105,24 +105,13 @@ struct ChatMediaVideoAttachment: View {
     }
 
     private var unavailableCard: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "video.badge.exclamationmark")
-            Text(String(localized: "Video unavailable"))
-                .font(OpenClawChatTypography.footnote)
-            Spacer()
-            Button {
-                self.retryGeneration &+= 1
-            } label: {
-                Text(String(localized: "Retry"))
-                    .font(OpenClawChatTypography.footnote)
-            }
-            .buttonStyle(.plain)
+        ChatMediaUnavailableRow(
+            systemImage: "video.badge.exclamationmark",
+            message: String(localized: "Video unavailable"),
+            minimumHeight: self.reservedHeight)
+        {
+            self.retryGeneration &+= 1
         }
-        .foregroundStyle(.secondary)
-        .padding(10)
-        .frame(minHeight: self.reservedHeight)
-        .background(Color.black.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private var aspectRatio: CGFloat {

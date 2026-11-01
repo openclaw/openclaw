@@ -1,3 +1,4 @@
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { GatewayClient } from "./client-types.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -9,6 +10,20 @@ export function isSyntheticGatewayCaller(client: GatewayClient | null): boolean 
     client?.internal?.agentRuntimeIdentity ||
     getGatewayToolCallerIdentity(),
   );
+}
+
+/** Handshake-attested person identity; callers still own current request and target authority. */
+export function resolveAuthenticatedPersonalGatewayProfileId(
+  client: GatewayClient | null,
+): string | undefined {
+  const profileId = client?.authenticatedUserProfile?.profileId;
+  return client?.internal?.authenticatedOperator === true &&
+    client.connect.role === "operator" &&
+    !isSyntheticGatewayCaller(client) &&
+    profileId &&
+    profileId !== GATEWAY_OWNER_PROFILE_ID
+    ? profileId
+    : undefined;
 }
 
 export function isIneligiblePersonalGatewayCaller(client: GatewayClient): boolean {

@@ -27,6 +27,7 @@ import {
   handlePendingApprovalRequest,
 } from "./approval-shared.js";
 import type { GatewaySystemAgentSession } from "./shared-types.js";
+import { persistSystemAgentEngineHistory } from "./system-agent-chat-turn.js";
 import { runSystemAgentGatewayTask } from "./system-agent-execution.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -400,10 +401,11 @@ export async function prepareDelegatedSystemAgentApproval(params: {
                     params.session.engine.noteAssistantMessage(failedReply.text);
                     return { reply: failedReply, correction: undefined };
                   } finally {
-                    const at = Date.now();
-                    for (const turn of params.session.engine.historySince(historyStart)) {
-                      await transcript.appendTurn({ ...turn, at });
-                    }
+                    await persistSystemAgentEngineHistory(
+                      params.session.engine,
+                      historyStart,
+                      transcript,
+                    );
                   }
                 }),
               "system-agent:task",

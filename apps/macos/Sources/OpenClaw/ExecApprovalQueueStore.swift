@@ -128,7 +128,11 @@ final class ExecApprovalQueueStore {
         GatewayConnection.shared.approvalQueue
     }
 
-    private(set) var requests: [ExecApprovalQueueItem] = []
+    private let approvalSource = UUID()
+    private(set) var requests: [ExecApprovalQueueItem] = [] {
+        didSet { ApprovalPromptState.shared.setPending(!self.requests.isEmpty, source: self.approvalSource) }
+    }
+
     private var attentionOwnerID = UUID()
 
     var attentionRequests: [OpenClawChatAttentionRequest] {

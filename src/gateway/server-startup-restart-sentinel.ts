@@ -4,6 +4,7 @@ import {
   type DeliveryQueueStateContext,
 } from "../infra/delivery-queue-state-context.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import {
   scheduleGatewayGenerationTimer,
   type GatewayPostReadySidecarHandle,
@@ -20,6 +21,7 @@ export function scheduleRestartSentinelWakeAfterReady(params: {
   const controller = new AbortController();
   const signal = AbortSignal.any([controller.signal, params.scheduler.signal]);
   const pending = new Set<Promise<unknown>>();
+  const track = createPendingPromiseTracker(pending);
   const timer = scheduleGatewayGenerationTimer({
     scheduler: params.scheduler,
     delayMs: 750,
@@ -37,11 +39,7 @@ export function scheduleRestartSentinelWakeAfterReady(params: {
         context,
         shouldRun: () => !signal.aborted && !isStopped(),
         trackWork: (work) => {
-          pending.add(work);
-          void work.then(
-            () => pending.delete(work),
-            () => pending.delete(work),
-          );
+          void track(work);
         },
       });
     },

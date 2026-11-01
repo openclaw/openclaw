@@ -94,6 +94,9 @@ function fixturePolicy(): { policy: AuthorizedBetaFocusedPolicy; root: string } 
 
 function buildFixturePolicy(root: string): { policy: AuthorizedBetaFocusedPolicy; root: string } {
   execFileSync("git", ["init", "-q"], { cwd: root });
+  // Detached maintenance can outlive a commit and race the next copy of the seed.
+  git(root, ["config", "maintenance.auto", "false"]);
+  git(root, ["config", "gc.auto", "0"]);
   execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: root });
   execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
   writeFileSync(join(root, "published.txt"), "published\n");

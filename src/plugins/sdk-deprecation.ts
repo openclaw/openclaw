@@ -31,6 +31,7 @@ const sqliteRemovalFamilies = new Set([
   "github-publication",
   "memory-session",
   "memory-session-sync-inventory",
+  "memory-status",
   "model-account-connect",
   "model-registry-native-read",
   "native-command-menu",
@@ -94,8 +95,12 @@ export function warnPluginSdkDeprecation(params: {
     /^(?:@[a-z0-9._-]+\/)?[a-z0-9][a-z0-9._-]*$/iu.test(candidate)
       ? candidate
       : undefined;
-  const key = JSON.stringify([pluginId ?? null, params.family]);
   const removeAfter = sqliteRemovalFamilies.has(params.family) ? "2026-12-31" : undefined;
+  const key = JSON.stringify([
+    pluginId ?? null,
+    params.family,
+    ...(removeAfter ? [params.method] : []),
+  ]);
   if (pluginId) {
     recordPluginSdkDeprecationUsage(
       pluginId,

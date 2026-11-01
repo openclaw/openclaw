@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCoreHealthChecks } from "./doctor-core-checks.js";
-import type { HealthCheck } from "./health-checks.js";
 
 const runtime = { log() {}, error() {}, exit() {} };
 
@@ -14,91 +13,58 @@ vi.mock("../commands/doctor-workspace-suggestions.js", () => ({
   },
 }));
 
-function createWorkspaceSuggestionsCheck(
-  collectWorkspaceSuggestionNotes: (workspaceDir: string) => Promise<readonly string[]>,
-): HealthCheck {
-  collectNotes.mockImplementation(collectWorkspaceSuggestionNotes);
+function detect(
+  workspaces: Record<string, string>,
+  notes: (dir: string) => Promise<readonly string[]>,
+) {
+  collectNotes.mockImplementation(notes);
   const check = createCoreHealthChecks().find(
     (candidate) => candidate.id === "core/doctor/workspace-suggestions",
   );
   if (!check || !("detect" in check)) {
     throw new Error("workspace suggestions check not found");
   }
-  return check;
+  const entries = Object.fromEntries(
+    Object.entries(workspaces).map(([id, workspace]) => [id, { workspace }]),
+  );
+  return check.detect({
+    mode: "lint",
+    runtime,
+    cfg: { agents: { entries } },
+  });
 }
+
+const finding = (target: string, message: string) =>
+  expect.objectContaining({ target, message: `Agent "${target}": ${message}` });
 
 describe("core/doctor/workspace-suggestions", () => {
   it("labels secondary-agent findings with structured targets", async () => {
-    const check = createWorkspaceSuggestionsCheck(async (workspaceDir) =>
-      workspaceDir === "/tmp/secondary"
-        ? ["- Back up this workspace.", "Memory system not found in workspace."]
-        : [],
+    const findings = await detect(
+      { main: "/tmp/main", secondary: "/tmp/secondary" },
+      async (workspaceDir) =>
+        workspaceDir === "/tmp/secondary"
+          ? ["- Back up this workspace.", "Memory system not found in workspace."]
+          : [],
     );
 
-    const findings = await check.detect({
-      mode: "lint",
-      runtime,
-      cfg: {
-        agents: {
-          entries: {
-            main: { workspace: "/tmp/main" },
-            secondary: { workspace: "/tmp/secondary" },
-          },
-        },
-      },
-    });
-
     expect(findings).toEqual([
-      expect.objectContaining({
-        message: 'Agent "secondary": - Back up this workspace.',
-        target: "secondary",
-      }),
-      expect.objectContaining({
-        message: 'Agent "secondary": Memory system not found in workspace.',
-        target: "secondary",
-      }),
+      finding("secondary", "- Back up this workspace."),
+      finding("secondary", "Memory system not found in workspace."),
     ]);
   });
 
   it("keeps shared workspace suggestions agent-scoped", async () => {
-    const check = createWorkspaceSuggestionsCheck(async () => [
+    const findings = await detect({ main: "/tmp/shared", secondary: "/tmp/shared" }, async () => [
       "Memory system not found in workspace.",
     ]);
 
-    const findings = await check.detect({
-      mode: "lint",
-      runtime,
-      cfg: {
-        agents: {
-          entries: {
-            main: { workspace: "/tmp/shared" },
-            secondary: { workspace: "/tmp/shared" },
-          },
-        },
-      },
-    });
-
     expect(findings).toEqual([
-      expect.objectContaining({
-        message: 'Agent "main": Memory system not found in workspace.',
-        target: "main",
-      }),
-      expect.objectContaining({
-        message: 'Agent "secondary": Memory system not found in workspace.',
-        target: "secondary",
-      }),
+      finding("main", "Memory system not found in workspace."),
+      finding("secondary", "Memory system not found in workspace."),
     ]);
   });
 
-  it("preserves the explicit empty-roster failure", async () => {
-    const check = createWorkspaceSuggestionsCheck(async () => []);
-
-    await expect(
-      check.detect({
-        mode: "lint",
-        runtime,
-        cfg: { agents: { entries: {} } },
-      }),
-    ).rejects.toThrow("No agents configured");
+  it("returns no workspace suggestions for an explicitly empty roster", async () => {
+    await expect(detect({}, async () => [])).resolves.toEqual([]);
   });
 });

@@ -1,34 +1,31 @@
-// Completion write-state tests cover shell completion state file writes.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createInvalidConfigError } from "../config/io.invalid-config.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { expectInstalledCompletionProfile } from "./completion-profile.test-support.js";
 import {
   COMPLETION_SHELLS,
   formatCompletionReloadCommand,
+  isCompletionInstalled,
   resolveCompletionCachePath,
   resolveCompletionProfileHint,
   resolveCompletionProfilePath,
   type CompletionShell,
+  usesSlowDynamicCompletion,
 } from "./completion-runtime.js";
+import { formatCliFailureLines, isExpectedCliError } from "./failure-output.js";
 
-type PublishOutputFileAtomically =
-  typeof import("./output-file.runtime.js").publishOutputFileAtomically;
-type GetSubCliCompletionGroups =
-  typeof import("./program/register.subclis.js").getSubCliCompletionGroups;
+type PublishOutput = typeof import("./output-file.runtime.js").publishOutputFileAtomically;
+type SubcliGroups = typeof import("./program/register.subclis.js").getSubCliCompletionGroups;
 
-const outputFileMocks = vi.hoisted(() => ({
-  publishOutputFileAtomically: vi.fn<PublishOutputFileAtomically>(),
-}));
+const publish = vi.hoisted(() => vi.fn<PublishOutput>());
 const stderrWrites = vi.hoisted(() => vi.fn());
-const getCoreCliCompletionGroupsMock = vi.hoisted(() => vi.fn(() => []));
-const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
-const { getSubCliCompletionGroupsMock, qaCompletionGroup } = vi.hoisted(() => {
+const coreGroups = vi.hoisted(() => vi.fn(() => []));
+const programContext = vi.hoisted(() => vi.fn(() => null));
+const { subcliGroups, qaGroup } = vi.hoisted(() => {
   const group = {
     name: "qa",
     entry: {
@@ -39,496 +36,388 @@ const { getSubCliCompletionGroupsMock, qaCompletionGroup } = vi.hoisted(() => {
     },
   };
   return {
-    qaCompletionGroup: group,
-    getSubCliCompletionGroupsMock: vi.fn<GetSubCliCompletionGroups>(() => [group]),
+    qaGroup: group,
+    subcliGroups: vi.fn<SubcliGroups>(() => [group]),
   };
 });
-const registerPluginCliCommandsFromValidatedConfigMock = vi.hoisted(() =>
-  vi.fn(async (_program: Command) => ({})),
-);
+const registerPlugins = vi.hoisted(() => vi.fn(async (_program: Command) => ({})));
 
 vi.mock("./output-file.runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./output-file.runtime.js")>(
     "./output-file.runtime.js",
   );
-  outputFileMocks.publishOutputFileAtomically.mockImplementation(
-    actual.publishOutputFileAtomically,
-  );
-  return {
-    ...actual,
-    publishOutputFileAtomically: outputFileMocks.publishOutputFileAtomically,
-  };
+  publish.mockImplementation(actual.publishOutputFileAtomically);
+  return { ...actual, publishOutputFileAtomically: publish };
 });
 
+// mock-isolation: Generate completions from the bounded fixture command registry.
 vi.mock("./program/command-registry-core.js", () => ({
-  getCoreCliCompletionGroups: getCoreCliCompletionGroupsMock,
+  getCoreCliCompletionGroups: coreGroups,
 }));
 
+// mock-isolation: Supply fixture program context without bootstrapping a real CLI session.
 vi.mock("./program/program-context.js", () => ({
-  getProgramContext: getProgramContextMock,
+  getProgramContext: programContext,
 }));
 
+// mock-isolation: Keep completion fixtures independent of the installed subcommand registry.
 vi.mock("./program/register.subclis.js", () => ({
-  getSubCliCompletionGroups: getSubCliCompletionGroupsMock,
+  getSubCliCompletionGroups: subcliGroups,
 }));
 
+// mock-isolation: Register only fixture plugins without reading operator plugin state.
 vi.mock("../plugins/cli.js", () => ({
-  registerPluginCliCommandsFromValidatedConfig: registerPluginCliCommandsFromValidatedConfigMock,
+  registerPluginCliCommandsFromValidatedConfig: registerPlugins,
 }));
 
-async function withIsolatedCompletionState(
-  run: () => Promise<void>,
-  env: Record<string, string | undefined> = {},
-): Promise<void> {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-state-"));
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-home-"));
-
-  try {
-    await withEnvAsync(
-      {
-        HOME: homeDir,
-        USERPROFILE: homeDir,
-        OPENCLAW_STATE_DIR: stateDir,
-        XDG_CONFIG_HOME: undefined,
-        ZDOTDIR: undefined,
-        ...env,
-      },
-      run,
-    );
-  } finally {
-    await fs.rm(stateDir, { recursive: true, force: true });
-    await fs.rm(homeDir, { recursive: true, force: true });
-  }
-}
-
-async function writeCompletionCacheForShell(shell: CompletionShell): Promise<string> {
-  const { getCompletionScript, registerCompletionCli } = await import("./completion-cli.js");
+async function runCompletion(args: string[]): Promise<Command> {
+  const { registerCompletionCli } = await import("./completion-cli.js");
   const program = new Command().name("openclaw");
   registerCompletionCli(program);
-  await program.parseAsync(["completion", "--shell", shell, "--write-state"], {
-    from: "user",
-  });
+  await program.parseAsync(["completion", ...args], { from: "user" });
+  return program;
+}
+
+async function writeCache(shell: CompletionShell): Promise<string> {
+  const { getCompletionScript } = await import("./completion-cli.js");
+  const program = await runCompletion(["--shell", shell, "--write-state"]);
   return getCompletionScript(shell, program);
 }
 
-function expectCompletionInstallationToSkipRegistration(): void {
-  expect(getProgramContextMock).not.toHaveBeenCalled();
-  expect(getCoreCliCompletionGroupsMock).not.toHaveBeenCalled();
-  expect(getSubCliCompletionGroupsMock).not.toHaveBeenCalled();
-  expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+async function seedCache(shell: CompletionShell = "zsh", contents = "# previous completion\n") {
+  const cachePath = resolveCompletionCachePath(shell, "openclaw");
+  const cacheDir = path.dirname(cachePath);
+  await fs.mkdir(cacheDir, { recursive: true });
+  await fs.writeFile(cachePath, contents, "utf8");
+  if (process.platform !== "win32") {
+    await fs.chmod(cacheDir, 0o750);
+    await fs.chmod(cachePath, 0o640);
+  }
+  return { cachePath, cacheDir };
+}
+
+async function expectCacheModes(cachePath: string, cacheDir: string) {
+  expect(await fs.readdir(cacheDir)).toEqual([path.basename(cachePath)]);
+  if (process.platform !== "win32") {
+    expect((await fs.stat(cachePath)).mode & 0o777).toBe(0o640);
+    expect((await fs.stat(cacheDir)).mode & 0o777).toBe(0o750);
+  }
+}
+
+function expectNoRegistration(): void {
+  expect(programContext).not.toHaveBeenCalled();
+  expect(coreGroups).not.toHaveBeenCalled();
+  expect(subcliGroups).not.toHaveBeenCalled();
+  expect(registerPlugins).not.toHaveBeenCalled();
   expect(stderrWrites).not.toHaveBeenCalled();
 }
 
+function expectRegistrationWarning() {
+  expect(subcliGroups).toHaveBeenCalledTimes(1);
+  expect(registerPlugins).toHaveBeenCalledTimes(1);
+  expect(stderrWrites.mock.calls).toEqual([
+    [
+      "[completion] skipping subcommand `qa` while building completion cache: qa scenario pack not found: qa/scenarios/index.yaml\n",
+    ],
+  ]);
+}
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("completion-cli write-state", () => {
-  let restoreStderrWriteSpy: (() => void) | null = null;
+  let publishAtomically: PublishOutput;
 
   beforeEach(async () => {
+    const stateDir = tempDirs.make("openclaw-completion-state-");
+    const homeDir = tempDirs.make("openclaw-completion-home-");
+    for (const [name, value] of Object.entries({
+      HOME: homeDir,
+      USERPROFILE: homeDir,
+      OPENCLAW_STATE_DIR: stateDir,
+      XDG_CONFIG_HOME: undefined,
+      ZDOTDIR: undefined,
+    })) {
+      vi.stubEnv(name, value);
+    }
     const actual = await vi.importActual<typeof import("./output-file.runtime.js")>(
       "./output-file.runtime.js",
     );
-    outputFileMocks.publishOutputFileAtomically.mockReset();
-    outputFileMocks.publishOutputFileAtomically.mockImplementation(
-      actual.publishOutputFileAtomically,
-    );
+    publishAtomically = actual.publishOutputFileAtomically;
+    publish.mockReset().mockImplementation(publishAtomically);
     stderrWrites.mockReset();
-    getCoreCliCompletionGroupsMock.mockClear();
-    getProgramContextMock.mockClear();
-    getSubCliCompletionGroupsMock.mockClear();
-    registerPluginCliCommandsFromValidatedConfigMock.mockReset().mockResolvedValue({});
-    const stderrWriteSpy = vi.spyOn(process.stderr, "write").mockImplementation(((
-      chunk: string | Uint8Array,
-    ) => {
+    coreGroups.mockClear();
+    programContext.mockClear();
+    subcliGroups.mockClear();
+    registerPlugins.mockReset().mockResolvedValue({});
+    vi.spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
       stderrWrites(chunk.toString());
       return true;
     }) as typeof process.stderr.write);
-    restoreStderrWriteSpy = () => stderrWriteSpy.mockRestore();
   });
 
-  afterEach(async () => {
-    restoreStderrWriteSpy?.();
+  afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
-  it.each(["zsh"] as const)(
-    "publishes %s completion atomically without changing existing file or directory modes",
-    async (shell) => {
-      await withIsolatedCompletionState(async () => {
-        const cachePath = resolveCompletionCachePath(shell, "openclaw");
-        const cacheDir = path.dirname(cachePath);
-        await fs.mkdir(cacheDir, { recursive: true });
-        await fs.writeFile(cachePath, "# previous completion\n", "utf8");
-        if (process.platform !== "win32") {
-          await fs.chmod(cacheDir, 0o750);
-          await fs.chmod(cachePath, 0o640);
-        }
-
-        const expectedScript = await writeCompletionCacheForShell(shell);
-
-        await expect(fs.readFile(cachePath, "utf8")).resolves.toBe(expectedScript);
-        expect(outputFileMocks.publishOutputFileAtomically).toHaveBeenCalledWith(
-          expect.objectContaining({
-            filePath: cachePath,
-            tempPrefix: ".openclaw-completion-cache",
-          }),
-        );
-        expect(await fs.readdir(cacheDir)).toEqual([path.basename(cachePath)]);
-        if (process.platform !== "win32") {
-          expect((await fs.stat(cachePath)).mode & 0o777).toBe(0o640);
-          expect((await fs.stat(cacheDir)).mode & 0o777).toBe(0o750);
-        }
-      });
-    },
-  );
-
-  it.each(["zsh"] as const)(
-    "preserves the existing %s completion when staged publication fails",
-    async (shell) => {
-      const actual = await vi.importActual<typeof import("./output-file.runtime.js")>(
-        "./output-file.runtime.js",
+  it.each([
+    ["bash", false],
+    ["zsh", false],
+    ["bash", true],
+  ] as const)(
+    "prints recovery and preserves the %s profile (malformed UTF-8=%s)",
+    async (shell, malformed) => {
+      const profilePath = resolveCompletionProfilePath(shell);
+      if (malformed) {
+        await seedCache(shell);
+      }
+      const hook = `[ -f '${resolveCompletionCachePath(shell, "openclaw")}' ] && source '${resolveCompletionCachePath(shell, "openclaw")}'`;
+      const original = Buffer.from(
+        malformed ? `# caf\xe9\n# OpenClaw Completion\n${hook}\n` : "# existing shell settings\n",
+        "latin1",
       );
-      await withIsolatedCompletionState(async () => {
-        const cachePath = resolveCompletionCachePath(shell, "openclaw");
-        const cacheDir = path.dirname(cachePath);
-        await fs.mkdir(cacheDir, { recursive: true });
-        await fs.writeFile(cachePath, "# previous completion\n", "utf8");
-        if (process.platform !== "win32") {
-          await fs.chmod(cacheDir, 0o750);
-          await fs.chmod(cachePath, 0o640);
-        }
-        outputFileMocks.publishOutputFileAtomically.mockImplementationOnce(async (params) => {
-          return await actual.publishOutputFileAtomically({
-            ...params,
-            writeTemp: async (tempPath) => {
-              await params.writeTemp(tempPath);
-              await fs.truncate(tempPath, 1);
-              throw new Error("injected completion cache write failure");
-            },
-          });
-        });
+      await fs.writeFile(profilePath, original);
+      await expect(isCompletionInstalled(shell)).resolves.toBe(malformed);
+      await expect(usesSlowDynamicCompletion(shell)).resolves.toBe(false);
 
-        await expect(writeCompletionCacheForShell(shell)).rejects.toThrow(
-          "injected completion cache write failure",
-        );
+      let caught: unknown;
+      try {
+        await runCompletion(["--shell", shell, "--install", "--yes"]);
+      } catch (error) {
+        caught = error;
+      }
 
-        await expect(fs.readFile(cachePath, "utf8")).resolves.toBe("# previous completion\n");
-        expect(await fs.readdir(cacheDir)).toEqual([path.basename(cachePath)]);
-        if (process.platform !== "win32") {
-          expect((await fs.stat(cachePath)).mode & 0o777).toBe(0o640);
-          expect((await fs.stat(cacheDir)).mode & 0o777).toBe(0o750);
-        }
+      expect(isExpectedCliError(caught)).toBe(true);
+      const lines = formatCliFailureLines({
+        title: "The CLI command failed.",
+        error: caught,
+        argv: ["node", "openclaw", "completion", "--shell", shell, "--install", "--yes"],
       });
+      expect(lines.join("\n")).toMatch(
+        malformed
+          ? /left untouched[\s\S]*load the prepared cache/
+          : /openclaw completion --write-state/,
+      );
+      expect(lines.join("\n")).not.toContain("doctor");
+      await expect(fs.readFile(profilePath)).resolves.toEqual(original);
+      expectNoRegistration();
     },
   );
 
-  it.skipIf(process.platform === "win32")(
-    "replaces a completion cache symlink without overwriting its target",
-    async () => {
-      await withIsolatedCompletionState(async () => {
-        const cachePath = resolveCompletionCachePath("zsh", "openclaw");
-        const cacheDir = path.dirname(cachePath);
-        const protectedPath = path.join(path.dirname(cacheDir), "protected-script");
-        await fs.mkdir(cacheDir, { recursive: true });
-        await fs.writeFile(protectedPath, "# protected script\n", "utf8");
+  it("preserves zsh completion when staged publication fails", async () => {
+    const { cachePath, cacheDir } = await seedCache();
+    publish.mockImplementationOnce(async (params) => {
+      return await publishAtomically({
+        ...params,
+        writeTemp: async (tempPath) => {
+          await params.writeTemp(tempPath);
+          await fs.truncate(tempPath, 1);
+          throw new Error("injected completion cache write failure");
+        },
+      });
+    });
+
+    await expect(writeCache("zsh")).rejects.toThrow("injected completion cache write failure");
+
+    await expect(fs.readFile(cachePath, "utf8")).resolves.toBe("# previous completion\n");
+    await expectCacheModes(cachePath, cacheDir);
+  });
+
+  it.skipIf(process.platform === "win32").each(["cache", "temporary"] as const)(
+    "protects symlink targets at the %s publication path",
+    async (location) => {
+      const { cachePath, cacheDir } = await seedCache();
+      const protectedPath = path.join(path.dirname(cacheDir), "protected-script");
+      await fs.writeFile(protectedPath, "# protected script\n", "utf8");
+      let expectedScript = "# previous completion\n";
+      if (location === "cache") {
+        await fs.unlink(cachePath);
         await fs.symlink(protectedPath, cachePath);
-
-        const expectedScript = await writeCompletionCacheForShell("zsh");
-
+        expectedScript = await writeCache("zsh");
         expect((await fs.lstat(cachePath)).isSymbolicLink()).toBe(false);
-        await expect(fs.readFile(cachePath, "utf8")).resolves.toBe(expectedScript);
-        await expect(fs.readFile(protectedPath, "utf8")).resolves.toBe("# protected script\n");
-        expect(await fs.readdir(cacheDir)).toEqual([path.basename(cachePath)]);
-      });
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "rejects a planted temporary symlink without overwriting its target",
-    async () => {
-      const actual = await vi.importActual<typeof import("./output-file.runtime.js")>(
-        "./output-file.runtime.js",
-      );
-      await withIsolatedCompletionState(async () => {
-        const cachePath = resolveCompletionCachePath("zsh", "openclaw");
-        const cacheDir = path.dirname(cachePath);
-        const protectedPath = path.join(path.dirname(cacheDir), "protected-script");
-        await fs.mkdir(cacheDir, { recursive: true });
-        await fs.writeFile(cachePath, "# previous completion\n", "utf8");
-        await fs.writeFile(protectedPath, "# protected script\n", "utf8");
-        outputFileMocks.publishOutputFileAtomically.mockImplementationOnce(async (params) => {
-          return await actual.publishOutputFileAtomically({
+      } else {
+        publish.mockImplementationOnce((params) =>
+          publishAtomically({
             ...params,
             writeTemp: async (tempPath) => {
               await fs.symlink(protectedPath, tempPath);
-              return await params.writeTemp(tempPath);
+              return params.writeTemp(tempPath);
             },
-          });
-        });
-
-        await expect(writeCompletionCacheForShell("zsh")).rejects.toThrow(/EEXIST/u);
-
-        await expect(fs.readFile(cachePath, "utf8")).resolves.toBe("# previous completion\n");
-        await expect(fs.readFile(protectedPath, "utf8")).resolves.toBe("# protected script\n");
-        expect(await fs.readdir(cacheDir)).toEqual([path.basename(cachePath)]);
-      });
+          }),
+        );
+        await expect(writeCache("zsh")).rejects.toThrow(/EEXIST/u);
+      }
+      await expect(fs.readFile(cachePath, "utf8")).resolves.toBe(expectedScript);
+      await expect(fs.readFile(protectedPath, "utf8")).resolves.toBe("# protected script\n");
+      expect(await fs.readdir(cacheDir)).toEqual([path.basename(cachePath)]);
     },
   );
 
   it.skipIf(process.platform === "win32")(
     "rejects a symlinked completion cache directory without writing into its target",
     async () => {
-      await withIsolatedCompletionState(async () => {
-        const cachePath = resolveCompletionCachePath("zsh", "openclaw");
-        const cacheDir = path.dirname(cachePath);
-        const protectedDir = path.join(path.dirname(cacheDir), "protected-directory");
-        await fs.mkdir(protectedDir, { recursive: true });
-        await fs.symlink(protectedDir, cacheDir, "dir");
+      const cachePath = resolveCompletionCachePath("zsh", "openclaw");
+      const cacheDir = path.dirname(cachePath);
+      const protectedDir = path.join(path.dirname(cacheDir), "protected-directory");
+      await fs.mkdir(protectedDir, { recursive: true });
+      await fs.symlink(protectedDir, cacheDir, "dir");
 
-        await expect(writeCompletionCacheForShell("zsh")).rejects.toThrow(
-          "directory component must be a directory",
-        );
+      await expect(writeCache("zsh")).rejects.toThrow("directory component must be a directory");
 
-        expect((await fs.lstat(cacheDir)).isSymbolicLink()).toBe(true);
-        expect(await fs.readdir(protectedDir)).toEqual([]);
-      });
+      expect((await fs.lstat(cacheDir)).isSymbolicLink()).toBe(true);
+      expect(await fs.readdir(protectedDir)).toEqual([]);
     },
   );
 
   it.each(["bash", "powershell"] as const)(
     "installs cached %s completion visibly and idempotently without registering commands or plugins",
     async (shell) => {
-      const { registerCompletionCli } = await import("./completion-cli.js");
+      const { cachePath } = await seedCache(shell, "# cached completion\n");
+      const profilePath = resolveCompletionProfilePath(shell);
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const args = ["completion", "--shell", shell, "--install", "--yes"];
+      const program = await runCompletion(args.slice(1));
 
-      await withIsolatedCompletionState(async () => {
-        const cachePath = resolveCompletionCachePath(shell, "openclaw");
-        const profilePath = resolveCompletionProfilePath(shell);
-        const log = vi.spyOn(console, "log").mockImplementation(() => {});
-        vi.spyOn(console, "warn").mockImplementation(() => {});
-        await fs.mkdir(path.dirname(cachePath), { recursive: true });
-        await fs.writeFile(cachePath, "# cached completion\n", "utf8");
+      const installedProfile = await fs.readFile(profilePath, "utf8");
+      expectInstalledCompletionProfile(installedProfile, shell, cachePath);
+      expect(log).toHaveBeenCalledWith(
+        `Completion installed. Restart your shell or run: ${formatCompletionReloadCommand(shell, resolveCompletionProfileHint(shell))}`,
+      );
+      await expect(fs.readFile(cachePath, "utf8")).resolves.toBe("# cached completion\n");
 
-        const program = new Command().name("openclaw");
-        registerCompletionCli(program);
-        const args = ["completion", "--shell", shell, "--install", "--yes"];
-        await program.parseAsync(args, { from: "user" });
+      log.mockClear();
+      await program.parseAsync(args, { from: "user" });
 
-        const installedProfile = await fs.readFile(profilePath, "utf8");
-        expectInstalledCompletionProfile(installedProfile, shell, cachePath);
-        expect(log).toHaveBeenCalledWith(
-          `Completion installed. Restart your shell or run: ${formatCompletionReloadCommand(shell, resolveCompletionProfileHint(shell))}`,
-        );
-        await expect(fs.readFile(cachePath, "utf8")).resolves.toBe("# cached completion\n");
-
-        log.mockClear();
-        await program.parseAsync(args, { from: "user" });
-
-        expect(log).toHaveBeenCalledWith(`Completion already installed in ${profilePath}`);
-        await expect(fs.readFile(profilePath, "utf8")).resolves.toBe(installedProfile);
-        expectCompletionInstallationToSkipRegistration();
-      });
-    },
-  );
-
-  it.each(["zsh"] as const)(
-    "reports missing %s completion cache without registering commands or plugins",
-    async (shell) => {
-      const { registerCompletionCli } = await import("./completion-cli.js");
-
-      await withIsolatedCompletionState(async () => {
-        const cachePath = resolveCompletionCachePath(shell, "openclaw");
-        const profilePath = resolveCompletionProfilePath(shell);
-        const program = new Command().name("openclaw");
-        registerCompletionCli(program);
-
-        await expect(
-          program.parseAsync(["completion", "--shell", shell, "--install", "--yes"], {
-            from: "user",
-          }),
-        ).rejects.toThrow(
-          `Completion cache not found at ${cachePath}. Run \`openclaw completion --write-state\` first.`,
-        );
-
-        await expect(fs.access(profilePath)).rejects.toThrow();
-        expectCompletionInstallationToSkipRegistration();
-      });
+      expect(log).toHaveBeenCalledWith(`Completion already installed in ${profilePath}`);
+      await expect(fs.readFile(profilePath, "utf8")).resolves.toBe(installedProfile);
+      expectNoRegistration();
     },
   );
 
   it("detects the active shell for cached installation without registering commands", async () => {
-    const { registerCompletionCli } = await import("./completion-cli.js");
+    vi.stubEnv("SHELL", "/usr/bin/fish");
 
-    await withIsolatedCompletionState(
-      async () => {
-        const cachePath = resolveCompletionCachePath("fish", "openclaw");
-        await fs.mkdir(path.dirname(cachePath), { recursive: true });
-        await fs.writeFile(cachePath, "# fish completion\n", "utf8");
+    const { cachePath } = await seedCache("fish", "# fish completion\n");
+    await runCompletion(["--install", "--yes"]);
 
-        const program = new Command().name("openclaw");
-        registerCompletionCli(program);
-        await program.parseAsync(["completion", "--install", "--yes"], { from: "user" });
-
-        expectInstalledCompletionProfile(
-          await fs.readFile(resolveCompletionProfilePath("fish"), "utf8"),
-          "fish",
-          cachePath,
-        );
-        expectCompletionInstallationToSkipRegistration();
-      },
-      { SHELL: "/usr/bin/fish" },
+    expectInstalledCompletionProfile(
+      await fs.readFile(resolveCompletionProfilePath("fish"), "utf8"),
+      "fish",
+      cachePath,
     );
+    expectNoRegistration();
   });
 
   it("generates and installs completion after registering commands and plugins", async () => {
-    const { registerCompletionCli } = await import("./completion-cli.js");
+    const { cachePath, cacheDir } = await seedCache();
+    const profilePath = resolveCompletionProfilePath("zsh");
+    await fs.writeFile(profilePath, "", { mode: 0o640 });
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const program = await runCompletion(["--shell", "zsh", "--write-state", "--install", "--yes"]);
 
-    await withIsolatedCompletionState(async () => {
-      const log = vi.spyOn(console, "log").mockImplementation(() => {});
-      vi.spyOn(console, "warn").mockImplementation(() => {});
-      const program = new Command().name("openclaw");
-      registerCompletionCli(program);
-      await program.parseAsync(
-        ["completion", "--shell", "zsh", "--write-state", "--install", "--yes"],
-        { from: "user" },
-      );
-
-      const cachePath = resolveCompletionCachePath("zsh", "openclaw");
-      await expect(fs.readFile(cachePath, "utf8")).resolves.toContain("#compdef openclaw");
-      await expect(fs.readFile(resolveCompletionProfilePath("zsh"), "utf8")).resolves.toContain(
-        cachePath,
-      );
-      expect(log).toHaveBeenCalledWith(
-        "Completion installed. Restart your shell or run: source ~/.zshrc",
-      );
-      expect(getSubCliCompletionGroupsMock).toHaveBeenCalledTimes(1);
-      expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledTimes(1);
-      expect(stderrWrites.mock.calls).toEqual([
-        [
-          "[completion] skipping subcommand `qa` while building completion cache: qa scenario pack not found: qa/scenarios/index.yaml\n",
-        ],
-      ]);
-    });
+    const { getCompletionScript } = await import("./completion-cli.js");
+    await expect(fs.readFile(cachePath, "utf8")).resolves.toBe(getCompletionScript("zsh", program));
+    await expectCacheModes(cachePath, cacheDir);
+    await expect(fs.readFile(profilePath, "utf8")).resolves.toContain(cachePath);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(profilePath)).mode & 0o777).toBe(0o640);
+    }
+    expect(log).toHaveBeenCalledWith(
+      "Completion installed. Restart your shell or run: source ~/.zshrc",
+    );
+    expectRegistrationWarning();
   });
 
   it("keeps completion cache generation alive when a subcli fails to register", async () => {
-    const { registerCompletionCli } = await import("./completion-cli.js");
-
-    await withIsolatedCompletionState(async () => {
-      getSubCliCompletionGroupsMock.mockReturnValueOnce([
-        qaCompletionGroup,
-        {
-          name: "after-qa",
-          entry: {
-            placeholders: [{ name: "after-qa", description: "Commands registered after QA" }],
-            register: async (program) => {
-              await setImmediate();
-              program.command("after-qa").option("--subcli-ready", "Async subcli option");
-            },
+    subcliGroups.mockReturnValueOnce([
+      qaGroup,
+      {
+        name: "after-qa",
+        entry: {
+          placeholders: [{ name: "after-qa", description: "Commands registered after QA" }],
+          register: async (program) => {
+            await setImmediate();
+            program.command("after-qa").option("--subcli-ready", "Async subcli option");
           },
         },
-      ]);
-      registerPluginCliCommandsFromValidatedConfigMock.mockImplementationOnce(async (program) => {
-        await Promise.resolve();
-        program.command("async-plugin").option("--plugin-ready", "Async plugin option");
-        return {};
-      });
-      const program = new Command().name("openclaw");
-      registerCompletionCli(program);
-
-      await program.parseAsync(["completion", "--write-state"], { from: "user" });
-
-      const cacheDir = path.dirname(resolveCompletionCachePath("zsh", "openclaw"));
-      expect((await fs.readdir(cacheDir)).toSorted()).toEqual([
-        "openclaw.bash",
-        "openclaw.fish",
-        "openclaw.ps1",
-        "openclaw.zsh",
-      ]);
-      for (const shell of COMPLETION_SHELLS) {
-        const script = await fs.readFile(resolveCompletionCachePath(shell, "openclaw"), "utf8");
-        expect(script, shell).toContain("subcli-ready");
-        expect(script, shell).toContain("plugin-ready");
-      }
-      expect(getSubCliCompletionGroupsMock).toHaveBeenCalledTimes(1);
-      expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledTimes(1);
-      expect(stderrWrites.mock.calls).toEqual([
-        [
-          "[completion] skipping subcommand `qa` while building completion cache: qa scenario pack not found: qa/scenarios/index.yaml\n",
-        ],
-      ]);
+      },
+    ]);
+    registerPlugins.mockImplementationOnce(async (program) => {
+      await Promise.resolve();
+      program.command("async-plugin").option("--plugin-ready", "Async plugin option");
+      return {};
     });
+    await runCompletion(["--write-state"]);
+
+    const cacheDir = path.dirname(resolveCompletionCachePath("zsh", "openclaw"));
+    expect((await fs.readdir(cacheDir)).toSorted()).toEqual([
+      "openclaw.bash",
+      "openclaw.fish",
+      "openclaw.ps1",
+      "openclaw.zsh",
+    ]);
+    for (const shell of COMPLETION_SHELLS) {
+      const script = await fs.readFile(resolveCompletionCachePath(shell, "openclaw"), "utf8");
+      expect(script, shell).toContain("subcli-ready");
+      expect(script, shell).toContain("plugin-ready");
+    }
+    expectRegistrationWarning();
   });
 
   it("writes core completion with a warning when invalid config prevents plugin discovery", async () => {
-    await withIsolatedCompletionState(async () => {
-      registerPluginCliCommandsFromValidatedConfigMock.mockRejectedValueOnce(
-        createInvalidConfigError("/tmp/openclaw.json", "- gateway.port: Expected a number"),
-      );
+    registerPlugins.mockRejectedValueOnce(
+      createInvalidConfigError("/tmp/openclaw.json", "- gateway.port: Expected a number"),
+    );
 
-      await writeCompletionCacheForShell("zsh");
+    await writeCache("zsh");
 
-      await expect(
-        fs.readFile(resolveCompletionCachePath("zsh", "openclaw"), "utf8"),
-      ).resolves.toContain("#compdef openclaw");
-      expect(stderrWrites).toHaveBeenCalledWith(
-        expect.stringContaining("skipping plugin commands: Invalid config"),
-      );
-    });
+    await expect(
+      fs.readFile(resolveCompletionCachePath("zsh", "openclaw"), "utf8"),
+    ).resolves.toContain("#compdef openclaw");
+    expect(stderrWrites).toHaveBeenCalledWith(
+      expect.stringContaining("skipping plugin commands: Invalid config"),
+    );
   });
 
   it("does not publish completion after an unrelated plugin registration failure", async () => {
-    await withIsolatedCompletionState(async () => {
-      const error = new Error("plugin registrar failed");
-      registerPluginCliCommandsFromValidatedConfigMock.mockRejectedValueOnce(error);
+    const error = new Error("plugin registrar failed");
+    registerPlugins.mockRejectedValueOnce(error);
 
-      await expect(writeCompletionCacheForShell("zsh")).rejects.toBe(error);
+    await expect(writeCache("zsh")).rejects.toBe(error);
 
-      expect(outputFileMocks.publishOutputFileAtomically).not.toHaveBeenCalled();
-    });
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("structures completion registration warnings for JSON console output", async () => {
-    const [{ registerCompletionCli }, logging] = await Promise.all([
-      import("./completion-cli.js"),
-      import("../logging.js"),
-    ]);
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-state-json-"));
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-home-json-"));
-
+    const logging = await import("../logging.js");
     try {
       logging.setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
-      await withEnvAsync({ HOME: homeDir, OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const program = new Command();
-        program.name("openclaw");
-        registerCompletionCli(program);
 
-        await program.parseAsync(["completion", "--write-state"], { from: "user" });
+      await runCompletion(["--write-state"]);
 
-        expect(stderrWrites).toHaveBeenCalledTimes(1);
-        expect(JSON.parse(String(stderrWrites.mock.calls[0]?.[0]))).toMatchObject({
-          level: "warn",
-          message: expect.stringContaining("skipping subcommand `qa`"),
-        });
+      expect(stderrWrites).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(stderrWrites.mock.calls[0]?.[0]))).toMatchObject({
+        level: "warn",
+        message: expect.stringContaining("skipping subcommand `qa`"),
       });
     } finally {
       logging.resetLogger();
-      await fs.rm(stateDir, { recursive: true, force: true });
-      await fs.rm(homeDir, { recursive: true, force: true });
     }
   });
 
   it("skips plugin registration during cache writes through the nodes registrar", async () => {
-    const [{ COMPLETION_SKIP_PLUGIN_COMMANDS_ENV }, { registerCompletionCli }] = await Promise.all([
-      import("./completion-runtime.js"),
-      import("./completion-cli.js"),
-    ]);
+    const { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } = await import("./completion-runtime.js");
     const { getSubCliCompletionGroups } = await vi.importActual<
       typeof import("./program/register.subclis.js")
     >("./program/register.subclis.js");
-    getSubCliCompletionGroupsMock.mockReturnValueOnce(
+    subcliGroups.mockReturnValueOnce(
       getSubCliCompletionGroups(["node", "openclaw", "completion", "--write-state"]).filter(
         ({ name }) => name === "nodes",
       ),
     );
-    registerPluginCliCommandsFromValidatedConfigMock.mockImplementation((program) => {
+    registerPlugins.mockImplementation((program) => {
       const nodes = program.commands.find((command) => command.name() === "nodes");
       if (nodes && !nodes.commands.some((command) => command.name() === "plugin-fixture")) {
         nodes.command("plugin-fixture");
@@ -536,22 +425,16 @@ describe("completion-cli write-state", () => {
       return Promise.resolve({});
     });
 
-    await withIsolatedCompletionState(
-      async () => {
-        const program = new Command().name("openclaw");
-        registerCompletionCli(program);
+    vi.stubEnv(COMPLETION_SKIP_PLUGIN_COMMANDS_ENV, "1");
 
-        await program.parseAsync(["completion", "--write-state"], { from: "user" });
+    await runCompletion(["--write-state"]);
 
-        expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
-        for (const shell of COMPLETION_SHELLS) {
-          const script = await fs.readFile(resolveCompletionCachePath(shell, "openclaw"), "utf8");
-          expect(script).toContain("nodes");
-          expect(script).toContain("invoke");
-          expect(script).not.toContain("plugin-fixture");
-        }
-      },
-      { [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1" },
-    );
+    expect(registerPlugins).not.toHaveBeenCalled();
+    for (const shell of COMPLETION_SHELLS) {
+      const script = await fs.readFile(resolveCompletionCachePath(shell, "openclaw"), "utf8");
+      expect(script).toContain("nodes");
+      expect(script).toContain("invoke");
+      expect(script).not.toContain("plugin-fixture");
+    }
   });
 });

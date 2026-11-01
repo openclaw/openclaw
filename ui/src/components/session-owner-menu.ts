@@ -1,53 +1,37 @@
+import { createProjection, createSignal } from "solid-js";
 import { normalizeAgentTargetLabel } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { profileAvatarUrl, profileDirectory } from "../lib/profile-directory.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../lib/reactive/gateway-page.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
+import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { sessionSelfOwner, type SessionOwnerOption } from "../lib/session-owner.ts";
 
 /** Assignment uses the Gateway directory, independently of session filters and presence. */
-export class SessionOwnerMenu {
-  private readonly context = useOptionalApplication();
-  private readonly agents = this.context ? projectAgents(this.context.agents) : undefined;
-  private readonly profiles = this.context
-    ? projectSource(profileDirectory(this.context.gateway), {
-        read: (directory) => directory,
-        subscribe: (directory, notify) => directory.subscribe(notify),
-        equality: "revision",
-      })
+export function createSessionOwnerMenu(presented: () => boolean = () => true) {
+  const context = useOptionalApplication();
+  const agents = context ? projectAgents(context.agents) : undefined;
+  const identities = context ? projectOwner(context.agentIdentity, (owner) => owner) : undefined;
+  const profiles = context
+    ? projectOwner(profileDirectory(context.gateway), (directory) => directory)
     : undefined;
-  private readonly connection = useGatewayPage({
-    getGateway: () => this.context?.gateway,
-    invalidateRequests: () => {
-      this.searchGeneration += 1;
-    },
-  });
-  private searchGeneration = 0;
-  private opened = false;
-
-  constructor(private readonly host: { requestUpdate(): void }) {}
-
-  private get directory() {
-    return this.profiles?.read();
-  }
-
-  readonly load = () => {
-    if (this.opened) {
-      this.searchGeneration += 1;
+  const connection = useGatewayPage({ getGateway: () => context?.gateway });
+  const [searchGeneration, setSearchGeneration] = createSignal(0);
+  let opened = false;
+  const load = () => {
+    if (opened) {
+      setSearchGeneration((value) => value + 1);
     }
-    this.opened = true;
-    void this.directory?.load(true);
-    this.host.requestUpdate();
+    opened = true;
+    void profiles?.read().load(true);
   };
-
-  private ownerOptions() {
-    const context = this.context;
-    const self = sessionSelfOwner(context?.gateway.snapshot.selfUser);
+  const readSnapshot = () => {
+    const self = sessionSelfOwner(connection.snapshot?.selfUser);
     // Keep a same-connection directory during refresh, never a previous Gateway's result.
-    const directory = this.directory?.result;
-    const owners: SessionOwnerOption[] = (directory?.profiles ?? [])
+    const directory = profiles?.read();
+    const owners: SessionOwnerOption[] = (directory?.result?.profiles ?? [])
       .filter((profile) => !profile.mergedInto && profile.id !== self?.id)
       .map((profile) => ({
         type: "human",
@@ -60,8 +44,9 @@ export class SessionOwnerMenu {
           profile.id,
         avatarUrl: profileAvatarUrl(profile),
       }));
-    for (const agent of this.agents?.read().agentsList?.agents ?? []) {
-      const identity = context?.agentIdentity.get(agent.id);
+    const identityOwner = identities?.read();
+    for (const agent of agents?.read().agentsList?.agents ?? []) {
+      const identity = identityOwner?.get(agent.id);
       owners.push({
         type: "agent",
         id: agent.id,
@@ -82,22 +67,16 @@ export class SessionOwnerMenu {
     return {
       self,
       owners: [...new Map(owners.map((owner) => [owner.type + ":" + owner.id, owner])).values()],
-      directory,
-    };
-  }
-
-  get snapshot() {
-    const directory = this.directory;
-    return {
-      ...this.ownerOptions(),
-      searchGeneration: this.searchGeneration,
-      connected: Boolean(this.connection.snapshot && this.connection.capture()),
+      directory: directory?.result,
+      searchGeneration: connection.epoch + searchGeneration(),
+      connected: Boolean(connection.snapshot && connection.capture()),
       loading: Boolean(directory?.loading),
       error: directory?.error,
     };
-  }
-
-  get multipleOwners(): boolean {
-    return this.ownerOptions().owners.length > 1;
-  }
+  };
+  const snapshot = createParkedProjection(readSnapshot, presented);
+  const rows = createProjection(snapshot, null, {
+    key: (row: { type?: string; id?: string }) => `${row.type}:${row.id}`,
+  });
+  return { load, snapshot: () => rows, multipleOwners: () => rows.owners.length > 1 };
 }

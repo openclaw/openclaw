@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { waitForSlackReaction } from "./slack-live.codex-approval.js";
 import {
-  SLACK_QA_REACTION_VERIFY_TIMEOUT_MS,
   SLACK_QA_NATIVE_DATA_VERIFY_TIMEOUT_MS,
   SLACK_QA_LOG_TAIL_TIMEOUT_MS,
   type SlackQaApprovalScenarioRun,
@@ -178,7 +177,6 @@ export const slackQaMpimAppMentionDedupeScenario: SlackQaScenarioImplementation 
           matchText: expectedRecallMarker,
           observedMessages: [],
           observationScenarioId: "slack-mpim-app-mention-dedupe",
-          observationScenarioTitle: "Slack MPIM app mention dispatches once with thread context",
           sentTs: sent.ts,
           sutIdentity: context.sutIdentity,
           threadTs: context.sentTs,
@@ -382,10 +380,8 @@ export const slackQaReactionGlyphNativeScenario: SlackQaScenarioImplementation =
         await waitForSlackReaction({
           channelId: context.channelId,
           client: context.sutReadClient,
-          expectedReactionName: "white_check_mark",
           messageId: context.sentTs,
           sutUserId: context.sutIdentity.userId,
-          timeoutMs: SLACK_QA_REACTION_VERIFY_TIMEOUT_MS,
         });
         return "verified SUT white_check_mark reaction from exact glyph instruction";
       },

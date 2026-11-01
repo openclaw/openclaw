@@ -14,16 +14,24 @@ type BlockingField = {
 };
 const CRON_FIELD_LABEL_KEYS: Record<CronFieldKey, string> = {
   name: "cron.form.fieldName",
+  eventServer: "cron.events.server",
+  eventName: "cron.events.name",
+  eventArguments: "cron.events.arguments",
   scheduleAt: "cron.form.runAt",
   everyAmount: "cron.form.every",
   cronExpr: "cron.form.expression",
+  cronTz: "cron.form.timezoneOptional",
   staggerAmount: "cron.form.staggerWindow",
+  activeHoursStart: "cron.form.activeHoursStart",
+  activeHoursEnd: "cron.form.activeHoursEnd",
+  activeHoursTimezone: "cron.form.timezoneOptional",
   triggerScript: "cron.form.triggerScript",
   payloadText: "cron.form.assistantTaskPrompt",
   payloadModel: "cron.form.model",
   payloadThinking: "cron.form.thinking",
   timeoutSeconds: "cron.form.timeoutSeconds",
   deliveryMode: "cron.form.deliveryModeLabel",
+  deliveryDirectPolicy: "cron.form.directPolicy",
   deliveryTo: "cron.form.to",
   failureAlertAfter: "cron.form.failureAlertAfter",
   failureAlertCooldownSeconds: "cron.form.failureAlertCooldown",
@@ -63,6 +71,11 @@ export function focusFormField(props: string) {
   const el = document.getElementById(props);
   if (!(el instanceof HTMLElement)) {
     return;
+  }
+  // Advanced fields cannot be scrolled to or focused while their disclosure is closed.
+  const details = el.closest("details");
+  if (details) {
+    details.open = true;
   }
   el.scrollIntoView?.({ block: "center", behavior: resolveScrollBehavior() });
   el.focus();
@@ -105,7 +118,7 @@ export function FieldRow(props: {
             <div class={["cron-control", { "cron-control--wide": props.wide }]}>
               {props.control}
               {props.error ? (
-                <div id={props.errorId} class="cron-help cron-error">
+                <div id={props.errorId} class="cron-help cron-error" role="alert">
                   {t(props.error)}
                 </div>
               ) : undefined}
@@ -146,7 +159,7 @@ export function CronInput(props: FormProps & CronInputOptions) {
   const control = (
     <input
       id={inputIdForField(props.field)}
-      class={props.mono ? "settings-input mono" : "settings-input"}
+      class={["settings-input", { mono: props.mono }]}
       type={props.type}
       aria-required={props.required ? "true" : undefined}
       value={props.form[props.field]}
@@ -176,6 +189,7 @@ export function CronInput(props: FormProps & CronInputOptions) {
   );
 }
 type CronSelectOptions = {
+  required?: boolean;
   field: CronStringFormField;
   label: string;
   options: readonly PickerOption[];
@@ -208,6 +222,7 @@ export function CronSelect(props: FormProps & CronSelectOptions) {
       label={props.label}
       controlId={inputIdForField(props.field)}
       help={props.help}
+      required={props.required}
       error={error()}
       errorId={props.errorKey ? errorIdForField(props.errorKey) : undefined}
       control={control}

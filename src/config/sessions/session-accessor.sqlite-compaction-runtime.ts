@@ -1,4 +1,4 @@
-import type { CommittedCompactionAppend } from "../../agents/sessions/session-compaction-persistence.js";
+import type { CommittedCompactionBoundary } from "../../agents/sessions/session-compaction-persistence.js";
 import {
   captureSessionManagerIncognitoBinding,
   withSessionManagerMemoryActor,
@@ -11,16 +11,18 @@ import {
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import type { persistCompactionBoundaryWithSessionEntrySync } from "./session-accessor.sqlite-compaction.js";
+import type { persistCompactionBoundaryWithSessionEntryInWorker } from "./session-accessor.sqlite-compaction.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionManagerIncognitoDatabase } from "./session-manager-write-contract.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import { sameSessionTranscriptStorePath } from "./transcript-store-identity.js";
 import {
   captureSessionTranscriptTargetBinding,
   sameSessionTranscriptStorageEnvironment,
@@ -34,10 +36,13 @@ import {
 
 /** Commit transcript and accounting together through the existing SessionManager writer. */
 export async function persistCompactionBoundaryWithSessionEntryAsync(
-  scope: Parameters<typeof persistCompactionBoundaryWithSessionEntrySync>[0],
-  params: Parameters<typeof persistCompactionBoundaryWithSessionEntrySync>[1],
+  scope: Parameters<typeof persistCompactionBoundaryWithSessionEntryInWorker>[0],
+  params: Omit<
+    Parameters<typeof persistCompactionBoundaryWithSessionEntryInWorker>[1],
+    "initialWriterRunId"
+  >,
   assertActive?: () => void,
-): Promise<CommittedCompactionAppend> {
+): Promise<CommittedCompactionBoundary> {
   assertActive?.();
   const captured = withOwnedSessionTranscriptWriterFence({
     ...captureSessionTranscriptTargetBinding(scope),
@@ -69,7 +74,9 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
   };
   const memory = captureSessionManagerIncognitoBinding(captured);
   const options = memory?.database ?? toDatabaseOptions(resolveSqliteTranscriptScope(captured));
-  const transcriptByteCompactionLatch = { ...params.transcriptByteCompactionLatch };
+  const transcriptByteCompactionLatch = params.transcriptByteCompactionLatch
+    ? { ...params.transcriptByteCompactionLatch }
+    : params.transcriptByteCompactionLatch;
   const persist = async (
     database: OpenClawAgentDatabaseExecution | SessionManagerIncognitoDatabase,
   ) => {
@@ -84,6 +91,20 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
       async (worker) => {
         const { env: _env, ...target } = captured;
         const { env: _preparedEnv, ...preparedTarget } = prepared.scope;
+        // The worker receives canonical admission locations, not the host's alias map.
+        const admittedPath =
+          "withMetadata" in database ? database.path : database.fileIdentity?.nativeLocation;
+        const preparedStorePath = memory
+          ? database.path
+          : admittedPath &&
+              sameSessionTranscriptStorePath(
+                resolveOpenClawAgentSqlitePath(
+                  toDatabaseOptions(resolveSqliteTranscriptScope(prepared.scope)),
+                ),
+                admittedPath,
+              )
+            ? admittedPath
+            : preparedTarget.storePath;
         const acknowledged = await receiveSessionManagerCommit(
           "session.transcript.compactionBoundary",
           () =>
@@ -93,9 +114,10 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
                 scope: memory ? { ...target, storePath: database.path } : target,
                 prepared: {
                   ...prepared,
-                  scope: memory ? { ...preparedTarget, storePath: database.path } : preparedTarget,
+                  scope: { ...preparedTarget, storePath: preparedStorePath },
                 },
                 transcriptByteCompactionLatch,
+                tokensAfter: params.tokensAfter,
                 ...(initialWriter && !initialWriter.committedFence
                   ? { initialWriterRunId: initialWriter.writerRunId }
                   : {}),

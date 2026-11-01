@@ -10,13 +10,15 @@ import {
   withSqliteSessionContextReset,
 } from "./session-accessor.sqlite-deletion.js";
 import type { retainPreparedSessionSharingFacts } from "./session-accessor.sqlite-entry-cache-publication-state.js";
-import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
+import { createSessionIdentityResultPublisher } from "./session-accessor.sqlite-identity.js";
 import { toDatabaseOptions, type ResolvedSqliteScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionMessageCutMutationParams } from "./session-accessor.types.js";
 import { restoreSessionColdTranscript } from "./session-cold-storage.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
-import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
+import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import { executeSessionForkOperation } from "./session-fork-domain.js";
+import { prepareMessageCutLocalWorkspace } from "./session-message-cut-local-workspace.js";
+import { selectSessionMessageCut } from "./session-message-cut-plan.js";
 import type {
   SessionMessageCutCandidate,
   SessionMessageCutIntent,
@@ -24,6 +26,7 @@ import type {
   SessionMessageCutPreconditions,
 } from "./session-message-cut.types.js";
 import { runSessionNativeBindingWorkerOperation } from "./session-native-binding.js";
+import { loadSessionTranscriptEvents } from "./session-transcript-events.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 
 export async function mutateSessionHistoryInWorker(
@@ -47,7 +50,7 @@ export async function mutateSessionHistoryInWorker(
     assertExistingDatabaseIdentity(resolved.path ?? database.path, source.key, source.birthtime);
     params.commitGuard?.();
   };
-  const preparedEntry = await withSessionEntryReadOnlyInWorker(
+  const preparedEntry = await readSessionEntryReadOnlyInWorker(
     {
       agentId: resolved.agentId,
       env: database.env,
@@ -55,12 +58,6 @@ export async function mutateSessionHistoryInWorker(
       storePath: database.path,
     },
     assertCurrent,
-    async (read) => {
-      if (!read.ok) {
-        throw read.error;
-      }
-      return read.value;
-    },
   );
   if (!preparedEntry?.sessionId) {
     return { status: "missing-session" };
@@ -101,6 +98,37 @@ export async function mutateSessionHistoryInWorker(
     assertCurrent,
   );
   assertCurrent();
+  if (intent.mode !== "fork") {
+    if (preparedEntry.worktree) {
+      const events = await loadSessionTranscriptEvents({
+        agentId: resolved.agentId,
+        env: database.env,
+        storePath: database.path,
+        sessionKey: intent.sourceKey,
+        sessionId: preparedEntry.sessionId,
+      });
+      assertCurrent();
+      const selected = selectSessionMessageCut(
+        preparedEntry,
+        events,
+        preparedIntent,
+        preconditions?.sourceRepositoryWorkspaceId,
+      );
+      if (selected.status !== "selected") {
+        return selected;
+      }
+    }
+    preparedIntent.settledLocalWorkspace = await prepareMessageCutLocalWorkspace(
+      {
+        agentId: resolved.agentId,
+        env: database.env,
+        sessionKey: intent.sourceKey,
+        storePath: database.path,
+      },
+      preparedEntry,
+      assertCurrent,
+    );
+  }
   const prepareContext = (run: (assertCurrent: () => void) => Promise<SessionMessageCutResult>) =>
     intent.mode === "fork"
       ? run(() => {})
@@ -143,7 +171,12 @@ export async function mutateSessionHistoryInWorker(
         }
         return false;
       },
-      assertCandidate: () => preconditions?.assertUpstreamCurrent?.(),
+      assertCandidate: (candidate) => {
+        preconditions?.assertUpstreamCurrent?.();
+        if (intent.mode === "fork" && candidate.result.status === "created") {
+          preconditions?.assertForkVisibilityAllowed?.(candidate.result.entry.visibility);
+        }
+      },
       candidateKind: "session-message-cut" as const,
       onAcknowledged(candidate: SessionMessageCutCandidate) {
         if (candidate.result.status === "created") {
@@ -159,18 +192,7 @@ export async function mutateSessionHistoryInWorker(
           ]);
         }
       },
-      onCommitted(candidate, published, identity) {
-        if (published) {
-          publishCommittedSessionIdentity(
-            resolved.agentId,
-            identity,
-            published.previous,
-            published.current,
-            published.prepared,
-          );
-        }
-        return candidate.result;
-      },
+      onCommitted: createSessionIdentityResultPublisher(resolved),
     };
     if (intent.mode === "fork") {
       return runSessionEntryWorkerOperation<SessionMessageCutCandidate, SessionMessageCutResult>({

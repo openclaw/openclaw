@@ -90,7 +90,7 @@ Source: https://github.com/tokio-rs/bytes
 Declared license: MIT
 LICENSE: L016
 
-cc 1.5.1
+cc 1.6.0
 Source: https://github.com/rust-lang/cc-rs
 Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L005
@@ -225,7 +225,7 @@ Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L001
 LICENSE-MIT: L036
 
-dimpl 0.7.4
+dimpl 0.7.5
 Source: https://github.com/algesten/dimpl
 Declared license: MIT OR Apache-2.0
 LICENSE-APACHE.txt: L037
@@ -478,7 +478,7 @@ Declared license: Apache-2.0 OR MIT
 LICENSE-APACHE: L001
 LICENSE-MIT: L068
 
-powerfmt 0.2.0
+powerfmt 0.2.1
 Source: https://github.com/jhpratt/powerfmt
 Declared license: MIT OR Apache-2.0
 LICENSE-Apache: L069
@@ -642,7 +642,7 @@ Declared license: Apache-2.0 OR MIT
 LICENSE-APACHE: L001
 LICENSE-MIT: L089
 
-str0m 0.24.0
+str0m 0.24.1
 Source: https://github.com/algesten/str0m
 Declared license: MIT OR Apache-2.0
 LICENSE-MIT.txt: L038
@@ -778,14 +778,14 @@ Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L005
 LICENSE-MIT: L102
 
-zerocopy 0.8.59
+zerocopy 0.8.61
 Source: https://github.com/google/zerocopy
 Declared license: BSD-2-Clause OR Apache-2.0 OR MIT
 LICENSE-APACHE: L103
 LICENSE-BSD: L104
 LICENSE-MIT: L105
 
-zeroize 1.9.0
+zeroize 1.9.1
 Source: https://github.com/RustCrypto/utils
 Declared license: Apache-2.0 OR MIT
 LICENSE-APACHE: L037

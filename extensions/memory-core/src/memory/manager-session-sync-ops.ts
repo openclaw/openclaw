@@ -7,7 +7,7 @@ import {
   observeAgentRunActivity,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
-  buildSessionEntry,
+  buildSessionEntries,
   listSessionTranscriptCorpusEntriesForAgent,
   sessionPathForFile,
   sessionPathForSessionIdentity,
@@ -39,6 +39,7 @@ import { MemoryManagerWatchOps } from "./manager-watch-ops.js";
 const SESSION_QUIET_PERIOD_MS = 30_000;
 const SESSION_MAX_DEFERRAL_MS = 5 * 60_000;
 const SESSION_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
+const SESSION_INSPECTION_BATCH_SIZE = 32;
 const log = createSubsystemLogger("memory");
 
 type MemorySessionTranscriptUpdate = Parameters<
@@ -155,7 +156,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
         this.scheduleSessionIndexPass();
       });
     });
-    const unsubscribeTranscripts = this.subscribeSessionTranscriptUpdates((update) => {
+    const unsubscribeTranscripts = onInternalSessionTranscriptUpdate((update) => {
       this.runInBackgroundContext(() => {
         if (this.closing || this.closed) {
           return;
@@ -181,18 +182,17 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     };
   }
 
-  protected subscribeSessionTranscriptUpdates(
-    listener: (update: MemorySessionTranscriptUpdate) => void,
-  ): () => void {
-    return onInternalSessionTranscriptUpdate(listener);
-  }
-
   private async scheduleCorpusSessionFileDirty(sessionFile: string): Promise<void> {
     const resolvedSessionFile = path.resolve(sessionFile);
     const corpusEntries = await this.listSessionCorpusEntries({
       archiveFiles: [resolvedSessionFile],
     });
-    if (corpusEntries.length > 0) {
+    if (
+      corpusEntries.length > 0 ||
+      this.reindexProgress?.corpusEntries?.some(
+        (entry) => entry.sessionFile === resolvedSessionFile,
+      )
+    ) {
       this.scheduleSessionDirty(resolvedSessionFile);
     }
   }
@@ -220,7 +220,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     const existingRows = await this.database.readSourceState({
       source: "sessions",
     });
-    const indexedPaths = new Set(existingRows.map((row) => row.path));
+    const indexedPaths = inspectSources ? new Set(existingRows.map((row) => row.path)) : undefined;
     const sqliteCorpusEntries = corpusEntries.filter(
       (entry) => entry.transcriptSource === "sqlite",
     );
@@ -238,6 +238,30 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     const statsByEntry = new Map(
       sqliteCorpusEntries.map((entry, index) => [entry, transcriptStats[index]] as const),
     );
+    const excludedEntries = new Set<SessionTranscriptCorpusEntry>();
+    if (indexedPaths) {
+      const unindexed = corpusEntries.filter(
+        (entry) => !indexedPaths.has(this.sessionPathForCorpusEntry(entry)),
+      );
+      // Eligibility depends on rendered provenance; retain content for only one bounded group.
+      for (let start = 0; start < unindexed.length; start += SESSION_INSPECTION_BATCH_SIZE) {
+        if (stopped()) {
+          return [];
+        }
+        const batch = unindexed.slice(start, start + SESSION_INSPECTION_BATCH_SIZE);
+        const entries = await buildSessionEntries(
+          batch.map((entry) => ({
+            absPath: entry.sessionFile,
+            options: this.buildSessionEntryOptions(entry),
+          })),
+        );
+        entries.forEach((entry, index) => {
+          if (entry && !isMemorySessionIndexable(entry)) {
+            excludedEntries.add(batch[index]!);
+          }
+        });
+      }
+    }
     const fileStates = (
       await runWithConcurrency(
         corpusEntries.map(
@@ -245,17 +269,8 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
             if (stopped()) {
               return null;
             }
-            // Missing rows can be intentional: parsing applies provenance admission
-            // that corpus metadata cannot express. Recheck on every catch-up so a
-            // later user turn can make a previously excluded session eligible.
-            if (!indexedPaths.has(this.sessionPathForCorpusEntry(corpusEntry))) {
-              const entry = await buildSessionEntry(
-                corpusEntry.sessionFile,
-                this.buildSessionEntryOptions(corpusEntry),
-              );
-              if (entry && !isMemorySessionIndexable(entry)) {
-                return null;
-              }
+            if (excludedEntries.has(corpusEntry)) {
+              return null;
             }
             if (corpusEntry.transcriptSource === "sqlite") {
               const stats = statsByEntry.get(corpusEntry);
@@ -332,16 +347,18 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     }
     if (typeof target === "string") {
       this.sessionPendingFiles.add(target);
+      this.reindexProgress?.changedSessionFiles.add(target);
     } else {
       this.sessionPendingTargets.set(memorySessionSyncTargetKey(target), target);
+      this.reindexProgress?.changedSessionTargets.set(memorySessionSyncTargetKey(target), target);
     }
-    this.sessionPendingSince ??= Date.now();
+    this.sessionPendingSince ??= performance.now();
     this.noteSessionIndexActivity();
     this.scheduleSessionIndexPass();
   }
 
   private noteSessionIndexActivity(): void {
-    this.sessionLastActivity = Date.now();
+    this.sessionLastActivity = performance.now();
     if (this.sessionRetryAt === Infinity) {
       this.sessionRetryAttempt = 0;
       this.sessionRetryAt = 0;
@@ -363,6 +380,12 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     files: string[],
     corpusEntries: readonly SessionTranscriptCorpusEntry[] = [],
   ): void {
+    if (this.reindexProgress?.yielded) {
+      // The shadow owns unfinished groups; only new source facts need queue entries.
+      this.sessionFullSyncPending = true;
+      this.sessionPendingSince ??= performance.now();
+      return;
+    }
     const entriesByFile = new Map(corpusEntries.map((entry) => [entry.sessionFile, entry]));
     for (const file of files) {
       const entry = entriesByFile.get(file);
@@ -377,8 +400,8 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
         this.sessionPendingFiles.add(file);
       }
     }
-    this.sessionPendingSince ??= Date.now();
-    this.sessionLastActivity = Date.now();
+    this.sessionPendingSince ??= performance.now();
+    this.sessionLastActivity = performance.now();
     this.scheduleSessionIndexPass();
   }
 
@@ -421,7 +444,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
           failed(err);
         }
       },
-      Math.max(0, deadline - Date.now()),
+      Math.max(0, deadline - performance.now()),
     );
     this.sessionWatchTimer.unref();
   }
@@ -457,7 +480,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       let completed = false;
       let interrupted = false;
       try {
-        await this.sync(
+        await this.syncBackground(
           fullSync
             ? { reason: "session-startup-catchup" }
             : { reason: "session-delta", sessions: pendingTargets, archiveFiles: pending },
@@ -482,11 +505,11 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
             ),
             ...this.sessionPendingTargets,
           ]);
-          this.sessionPendingSince = pendingSince ?? this.sessionPendingSince ?? Date.now();
+          this.sessionPendingSince = pendingSince ?? this.sessionPendingSince ?? performance.now();
           if (!interrupted) {
             const delay = SESSION_RETRY_DELAYS_MS[this.sessionRetryAttempt++];
             // After three automatic retries, fresh activity can start another bounded series.
-            this.sessionRetryAt = delay === undefined ? Infinity : Date.now() + delay;
+            this.sessionRetryAt = delay === undefined ? Infinity : performance.now() + delay;
             if (this.sessionRetryAttempt === SESSION_RETRY_DELAYS_MS.length) {
               // Keep the last retry until a full rebuild is allowed to run.
               this.sessionRetryAt = Math.max(
@@ -551,7 +574,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     return normalized.size > 0 ? normalized : null;
   }
 
-  private resolveArchiveFilesForSyncTargets(
+  protected resolveArchiveFilesForSyncTargets(
     sessions: Iterable<MemorySessionSyncTarget> | undefined,
     corpusEntries: readonly SessionTranscriptCorpusEntry[],
   ): Set<string> {

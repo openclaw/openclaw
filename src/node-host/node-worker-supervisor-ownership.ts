@@ -5,9 +5,15 @@ import type {
   NodeWorkerLaunchInput,
   NodeWorkerSupervisorIdentity,
 } from "../worker/node-supervisor-protocol.js";
+import type { NodeWorkerProcessesChanged } from "../worker/worker-process-observation.js";
 import type { NodeWorkerCapacity } from "./node-worker-capacity.js";
 import type { NodeWorkerContainerEngine } from "./node-worker-container-engine.js";
 import type { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
+import {
+  snapshotNodeWorkerExecutionEnv,
+  type NodeWorkerManagedIdentityTransport,
+  type NodeWorkerPlatformTrust,
+} from "./node-worker-environment.js";
 import type { NodeWorkerTerminalOutcome } from "./node-worker-launch-observation.js";
 import type {
   NodeWorkerContainerIdentity,
@@ -162,14 +168,45 @@ export type NodeWorkerSupervisorOptions = {
   bundleRoot?: string;
   env?: NodeJS.ProcessEnv;
   capacity?: number;
-  capacityWaitMs?: number;
   onCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
+  onProcessesChanged?: (binding: NodeWorkerProcessesChanged) => void;
   workspace?: NodeWorkerWorkspaceRuntime;
   containerEngine?: NodeWorkerContainerEngine;
   containerImage?: string;
   /** Node-local canonical models captured before the runtime yields. */
   nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
+  /** Captured by the dedicated ephemeral node owner, never a launch descriptor. */
+  managedIdentityTransport?: NodeWorkerManagedIdentityTransport;
+  /** Platform trust captured by that same dedicated node owner. */
+  platformTrust?: NodeWorkerPlatformTrust;
 };
+
+/** Capture the dedicated node environment once; HOME projections retain the same custody. */
+export function prepareNodeWorkerSupervisorEnvironment(
+  env: NodeJS.ProcessEnv,
+  options: NodeWorkerSupervisorOptions,
+) {
+  const managedIdentityTransport = options.containerEngine
+    ? undefined
+    : options.managedIdentityTransport;
+  const platformTrust = options.containerEngine ? undefined : options.platformTrust;
+  const workerEnv = snapshotNodeWorkerExecutionEnv(env, managedIdentityTransport, platformTrust);
+  return {
+    nativeInferenceSnapshot: options.nativeInferenceSnapshot,
+    workerEnv,
+    managedIdentityTransport,
+    engineEnv: { ...process.env, ...env },
+    projectWorkerEnv: (homeDir?: string) =>
+      homeDir
+        ? snapshotNodeWorkerExecutionEnv(
+            workerEnv,
+            managedIdentityTransport,
+            platformTrust,
+            homeDir,
+          )
+        : workerEnv,
+  };
+}
 
 /** Match both process bookkeeping and exact authoritative container identity. */
 export function nodeWorkerReceiptMatchesOwner(
@@ -195,8 +232,11 @@ export function nodeWorkerReceiptMatchesOwner(
 }
 
 export type NodeWorkerChildLifecycleOptions = {
+  onProcessesChanged?: NodeWorkerSupervisorOptions["onProcessesChanged"];
   bundleRoot: string;
   nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
+  /** Captured by the dedicated ephemeral node owner, never a launch descriptor. */
+  managedIdentityTransport?: NodeWorkerManagedIdentityTransport;
   engineEnv: NodeJS.ProcessEnv;
   store: NodeWorkerLaunchStore;
   turns: NodeWorkerTurnStore;

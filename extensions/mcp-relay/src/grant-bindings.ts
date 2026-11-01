@@ -13,18 +13,6 @@ export function isRetiredBindingError(error: unknown): error is GatewayControlUi
   );
 }
 
-export function principalFactory(
-  factory: GatewayControlUiIngressFactoryV2 | undefined,
-): GatewayControlUiIngressFactoryV2 {
-  if (!factory || factory.capabilityVersion !== 2) {
-    throw new RelayError(
-      "unavailable",
-      "Update OpenClaw to enable principal-bound MCP and Control UI access.",
-    );
-  }
-  return factory;
-}
-
 /** The relay connection owns one principal resolution shared by each grant's UI and RPC. */
 export class GrantBindings {
   readonly #bindings = new Map<string, Promise<GatewayIngressPrincipalBindingV1>>();

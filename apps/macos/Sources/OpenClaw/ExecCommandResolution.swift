@@ -18,6 +18,13 @@ struct ExecApprovalCwdSnapshot: Sendable, Equatable {
     let inode: UInt64
 }
 
+struct ExecApprovalExecutableSnapshot: Sendable, Equatable {
+    let rawExecutable: String
+    let path: String
+    let device: UInt64
+    let inode: UInt64
+}
+
 struct ExecCommandResolution {
     static let approvalCwdDriftDeniedMessage =
         "SYSTEM_RUN_DENIED: approval cwd changed before execution"
@@ -51,6 +58,36 @@ struct ExecCommandResolution {
 
     static func revalidateApprovalCwdSnapshot(_ snapshot: ExecApprovalCwdSnapshot) -> Bool {
         self.captureApprovalCwdSnapshot(snapshot.path) == snapshot
+    }
+
+    static func captureApprovalExecutables(_ resolutions: [ExecCommandResolution]) -> [ExecApprovalExecutableSnapshot] {
+        var executables = Set<String>()
+        return resolutions.compactMap { resolution in
+            guard executables.insert(resolution.rawExecutable).inserted else { return nil }
+            return self.approvalExecutable(resolution)
+        }
+    }
+
+    private static func approvalExecutable(_ resolution: ExecCommandResolution) -> ExecApprovalExecutableSnapshot? {
+        guard let path = resolution.resolvedRealPath,
+              FileManager.default.isExecutableFile(atPath: path),
+              let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let device = attributes[.systemNumber] as? NSNumber,
+              let inode = attributes[.systemFileNumber] as? NSNumber
+        else { return nil }
+        return ExecApprovalExecutableSnapshot(
+            rawExecutable: resolution.rawExecutable, path: path, device: device.uint64Value, inode: inode.uint64Value)
+    }
+
+    static func revalidateApprovalExecutable(
+        _ snapshot: ExecApprovalExecutableSnapshot,
+        cwd: String,
+        env: [String: String]) -> Bool
+    {
+        // Resolve the original dispatch again: an unchanged old target does not
+        // protect against a retargeted symlink or an earlier executable on PATH.
+        guard let resolution = self.resolve(command: [snapshot.rawExecutable], cwd: cwd, env: env) else { return false }
+        return self.approvalExecutable(resolution) == snapshot
     }
 
     let rawExecutable: String

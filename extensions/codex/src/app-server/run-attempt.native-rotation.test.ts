@@ -120,6 +120,9 @@ it.each(["startup", "projected input", "failed start", "no pressure"] as const)(
         rootTurnId: "turn-1",
       });
     const attemptRuns: ReturnType<typeof runCodexAppServerAttempt>[] = [];
+    let successorFixture:
+      | Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>
+      | undefined;
     const runRotationScenario = async () => {
       const initialAttempt = runCodexAppServerAttempt(attemptParams);
       attemptRuns.push(initialAttempt);
@@ -191,11 +194,17 @@ it.each(["startup", "projected input", "failed start", "no pressure"] as const)(
           },
         })}\n`,
       );
-      const successorAttempt = runCodexAppServerAttempt({
+      // Each parent attempt owns its admission; the successor cannot reuse the first run's.
+      const successorParams = {
         ...attemptParams,
         runId: "rotation-successor",
         prompt: scenario === "projected input" ? "next input ".repeat(5_000) : "continue",
+      };
+      successorFixture = await createAdmittedHostCapabilityTestFixture(successorParams, {
+        nativeModelPolicySupport: "exact",
       });
+      successorParams.hostCapabilities = successorFixture.hostCapabilities;
+      const successorAttempt = runCodexAppServerAttempt(successorParams);
       attemptRuns.push(successorAttempt);
       if (scenario === "failed start") {
         await expect(successorAttempt).rejects.toThrow("synthetic successor start failed");
@@ -289,6 +298,8 @@ it.each(["startup", "projected input", "failed start", "no pressure"] as const)(
       attemptAbortController.abort("test_cleanup");
       appServerHarness.close();
       await Promise.allSettled([...attemptRuns, ...completionSettlements]);
+      successorFixture?.closeHost();
+      successorFixture?.closeAdmission();
       admittedHostFixture.closeHost();
       admittedHostFixture.closeAdmission();
       admittedHostFixture.closeGateway();

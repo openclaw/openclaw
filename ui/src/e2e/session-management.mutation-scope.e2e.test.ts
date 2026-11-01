@@ -1,15 +1,9 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import { expect, it } from "vitest";
+import { it, expect } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
-import {
-  installMutationScopeDiagnostics,
-  logMutationScopeRequests,
-} from "./session-management.mutation-scope.test-support.ts";
+import * as ui from "./session-management.compact.test-support.ts";
 import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
@@ -29,139 +23,117 @@ suite.define(() => {
     { operation: "batch archive", filter: "All" },
   ] as const)(
     "keeps $filter rows, pagination, and updates after another agent's $operation settles",
-    async ({ operation, filter }) => {
-      const artifactDir = createControlUiE2eArtifactDir("session-mutation-scope");
-      const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-      const page = await context.newPage();
-      await page.clock.install();
-      const original = sessionRow("agent:main:rename-cross-agent", "Original name", 3);
-      const batch = [original, sessionRow("agent:main:batch-sibling", "Batch sibling", 2)];
-      const mainRows = [sessionRow("agent:main:main", "Main", 1), ...batch];
-      const pageSize = SIDEBAR_SESSION_ROSTER_LIMIT;
-      const researchRows = [
-        sessionRow("agent:research:main", "Research", pageSize + 4),
-        sessionRow("agent:research:first", "Research first", pageSize + 3),
-        sessionRow("agent:research:second", "Research second", 2),
-      ];
-      // Scheduled sessions occupy the server page while normal sidebar filters hide them.
-      const scheduledRows = Array.from({ length: pageSize - 2 }, (_, index) =>
-        sessionRow(
-          `agent:research:cron:history-${index}`,
-          `Scheduled session ${index}`,
-          pageSize + 2 - index,
-        ),
-      );
-      const researchInventory = [
-        researchRows[0]!,
-        researchRows[1]!,
-        ...scheduledRows,
-        researchRows[2]!,
-      ];
-      const retainedLimit = researchInventory.length + 1;
-      const pageResponse = (rows: typeof researchRows, offset: number, limit: number) => {
-        const pageRows = rows.slice(offset, offset + limit);
-        const nextOffset = offset + pageRows.length;
-        const hasMore = nextOffset < rows.length;
-        return {
-          ...sessionsListResponse(pageRows, {
-            offset,
-            totalCount: rows.length,
-            hasMore,
-            nextOffset: hasMore ? nextOffset : null,
-          }),
-          limitApplied: limit,
+    ({ operation, filter }) =>
+      suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        await page.clock.install();
+        const original = sessionRow("agent:main:rename-cross-agent", "Original name", 3);
+        const batch = [original, sessionRow("agent:main:batch-sibling", "Batch sibling", 2)];
+        const mainRows = [sessionRow("agent:main:main", "Main", 1), ...batch];
+        const pageSize = SIDEBAR_SESSION_ROSTER_LIMIT;
+        const researchRows = [
+          sessionRow("agent:research:main", "Research", pageSize + 4),
+          sessionRow("agent:research:first", "Research first", pageSize + 3),
+          sessionRow("agent:research:second", "Research second", 2),
+        ];
+        // Scheduled sessions occupy the server page while normal sidebar filters hide them.
+        const scheduledRows = Array.from({ length: pageSize - 2 }, (_, index) =>
+          sessionRow(
+            `agent:research:cron:history-${index}`,
+            `Scheduled session ${index}`,
+            pageSize + 2 - index,
+          ),
+        );
+        const researchInventory = [
+          researchRows[0]!,
+          researchRows[1]!,
+          ...scheduledRows,
+          researchRows[2]!,
+        ];
+        const retainedLimit = researchInventory.length + 1;
+        const responseFor = (rows: typeof researchRows) => ({
+          cases: [
+            ...[pageSize, retainedLimit].map((offset) => ({
+              match: { agentId: "research", offset },
+              response: ui.sessionPage(rows, offset, pageSize),
+            })),
+            ...[retainedLimit, retainedLimit + 1].map((limit) => ({
+              match: { agentId: "research", limit },
+              response: ui.sessionPage(rows, 0, limit),
+            })),
+            {
+              match: { agentId: "research" },
+              response: ui.sessionPage(rows, 0, pageSize),
+            },
+            { response: sessionsListResponse(mainRows) },
+          ],
+        });
+        const gateway = await installMockGateway(page, {
+          sessions: [...mainRows, ...researchInventory],
+          sessionKey: original.key,
+          sessionArchiveFiltering: true,
+          methodResponses: {
+            "agents.list": ui.mainAndResearchAgents,
+            "sessions.list": responseFor(researchInventory),
+          },
+        });
+        const sidebar = page.locator("openclaw-app-sidebar");
+        const rowFor = ui.sessionRows(sidebar);
+        const waitForList = (match: Record<string, unknown>, after?: number) =>
+          gateway.waitForRequest("sessions.list", { match, after });
+        const countLists = (match: Record<string, unknown>) =>
+          ui.requestCount(gateway, "sessions.list", match);
+        const emitAndCollect = async (sessionKey: string, reason: "create" | "update") => {
+          await pauseVirtualClock(page);
+          await gateway.emitGatewayEvent("sessions.changed", {
+            sessionKey,
+            agentId: "research",
+            reason,
+          });
+          await page.clock.fastForward(5_001);
+          await page.clock.resume();
         };
-      };
-      const responseFor = (rows: typeof researchRows) => ({
-        cases: [
-          ...[pageSize, retainedLimit].map((offset) => ({
-            match: { agentId: "research", offset },
-            response: pageResponse(rows, offset, pageSize),
-          })),
-          ...[retainedLimit, retainedLimit + 1].map((limit) => ({
-            match: { agentId: "research", limit },
-            response: pageResponse(rows, 0, limit),
-          })),
-          {
-            match: { agentId: "research" },
-            response: pageResponse(rows, 0, pageSize),
-          },
-          { response: sessionsListResponse(mainRows) },
-        ],
-      });
-      const gateway = await installMockGateway(page, {
-        sessions: [...mainRows, ...researchInventory],
-        sessionKey: original.key,
-        sessionArchiveFiltering: true,
-        methodResponses: {
-          "agents.list": {
-            agents: [
-              { id: "main", name: "Main" },
-              { id: "research", name: "Research" },
-            ],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
-          "sessions.list": responseFor(researchInventory),
-        },
-      });
-      const sidebar = page.locator("openclaw-app-sidebar");
-      const rowFor = (key: string) =>
-        sidebar.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
-      const capture = (stage: string) =>
-        page.screenshot({ path: path.join(artifactDir, `${stage}.png`) });
-      const selectResearchAgent = async () => {
-        await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-        await sidebar
-          .locator(".sidebar-agent-menu")
-          .getByRole("menuitem", { name: "Research", exact: true })
-          .click();
-      };
-      let researchHistory: { url: string; connections: number } | null = null;
-      try {
+
+        const selectResearchAgent = () => ui.switchAgent(sidebar, "Research");
+        let researchHistory: { url: string; connections: number } | null = null;
+
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, original.key));
-        await rowFor(original.key).waitFor({ state: "visible" });
-        await installMutationScopeDiagnostics(page, { operation, filter });
+        await ui.visible(rowFor(original.key));
+
         if (operation === "rename" && filter === "All") {
-          // A submitted sidebar rename owns its modal until the response settles.
-          // Prepare real same-document history so browser navigation can change
-          // agents during that request without clicking through the modal.
+          // Navigate around the pending modal through same-document browser history.
           const originalUrl = page.url();
-          const connections = (await gateway.getRequests("connect")).length;
+          const connections = await ui.requestCount(gateway, "connect");
           await selectResearchAgent();
           const researchPath = new URL(
             controlUiSessionUrl(suite.server.baseUrl, researchRows[0]!.key),
           ).pathname;
-          // Save the settled route after its loader consumes the navigation hints.
           await page.waitForURL(
             (url) =>
               (url.pathname === researchPath || url.pathname.startsWith(`${researchPath}/`)) &&
               url.search === "",
           );
-          await rowFor(researchRows[1]!.key).waitFor({ state: "visible" });
+          await ui.visible(rowFor(researchRows[1]!.key));
           researchHistory = { url: page.url(), connections };
           await page.goBack();
           await page.waitForURL(originalUrl);
-          await rowFor(original.key).waitFor({ state: "visible" });
+          await ui.visible(rowFor(original.key));
         }
         if (filter === "All") {
+          if (operation === "rename") {
+            await gateway.deferNext("sessions.list", { agentId: "main", archived: "all" });
+          }
           await chooseSidebarMenuOption(page, "Status", filter);
           await closeSidebarMenu(page);
-          await gateway.waitForRequest("sessions.list", {
-            match: { agentId: "main", archived: "all" },
-          });
+          await waitForList({ agentId: "main", archived: "all" });
         }
         const method = operation === "rename" ? "sessions.patch" : "sessions.patchMany";
         await gateway.deferNext(method);
         if (operation === "rename") {
           if (filter === "All") {
             await rowFor(original.key).click({ button: "right" });
-            await page.getByRole("menuitem", { name: "Rename…", exact: true }).click();
+            await ui.menuItem(page, "Rename…").click();
           } else {
-            await page
-              .getByRole("button", { name: "Rename session Original name", exact: true })
-              .click();
+            await ui.button(page, "Rename session Original name").click();
           }
           const input = page.locator(
             filter === "All"
@@ -178,15 +150,15 @@ suite.define(() => {
             key: original.key,
             expectedSessionId: original.sessionId,
           });
+          if (filter === "All") {
+            await gateway.resolveDeferred("sessions.list");
+          }
         } else {
           for (const row of batch) {
             await rowFor(row.key).click({ modifiers: ["Alt"] });
           }
           await rowFor(original.key).click({ button: "right" });
-          await page
-            .locator("openclaw-session-menu")
-            .getByRole("menuitem", { name: "Archive 2", exact: true })
-            .waitFor({ state: "visible" });
+          await ui.visible(ui.menuItem(page.locator("openclaw-session-menu"), "Archive 2"));
           await page.keyboard.press("A");
           const request = await gateway.waitForRequest(method);
           expect(request.params).toMatchObject({
@@ -205,14 +177,14 @@ suite.define(() => {
         } else {
           await selectResearchAgent();
         }
-        await rowFor(researchRows[1]!.key).waitFor({ state: "visible" });
-        await sidebar
-          .getByRole("button", { name: "Load more sessions", exact: true })
-          .waitFor({ state: "visible" });
-        await capture("before-mutation-response");
-        const listsBefore = (
-          await gateway.getRequests("sessions.list", { agentId: "main", includeGlobal: true })
-        ).length;
+        await ui.visible(rowFor(researchRows[1]!.key));
+        const loadMore = ui.button(sidebar, "Load more sessions");
+        await ui.visible(loadMore);
+
+        const listsBefore = await countLists({
+          agentId: "main",
+          includeGlobal: true,
+        });
         await gateway.deferNext("sessions.list", { agentId: "main", includeGlobal: true });
         const filteredMatch = { agentId: "research", archived: "all" };
         const refreshMatch = {
@@ -220,13 +192,9 @@ suite.define(() => {
           includeDerivedTitles: true,
           includeLastMessage: true,
         };
-        const filteredReadsBefore = (await gateway.getRequests("sessions.list", filteredMatch))
-          .length;
+        const filteredReadsBefore = await countLists(filteredMatch);
         await gateway.resolveDeferred(method);
-        await gateway.waitForRequest("sessions.list", {
-          after: listsBefore,
-          match: { agentId: "main", includeGlobal: true },
-        });
+        await waitForList({ agentId: "main", includeGlobal: true }, listsBefore);
         await gateway.resolveDeferred("sessions.list");
         if (researchHistory) {
           await page
@@ -235,17 +203,15 @@ suite.define(() => {
           expect(await gateway.getRequests("connect")).toHaveLength(researchHistory.connections);
         }
         if (operation === "batch archive") {
-          await expect
-            .poll(() => page.locator(".app-toast").textContent())
-            .toContain("Archived 2 sessions");
+          await ui.expectText(page.locator(".app-toast"), "Archived 2 sessions");
         }
-        await capture("after-mutation-response");
+
         if (filter === "All") {
           expect(await gateway.getRequests("sessions.list", filteredMatch)).toHaveLength(
             filteredReadsBefore,
           );
         }
-        await rowFor(researchRows[1]!.key).waitFor({ state: "visible" });
+        await ui.visible(rowFor(researchRows[1]!.key));
         const newRow = sessionRow(
           "agent:research:new-after-completion",
           "Research new after completion",
@@ -259,38 +225,22 @@ suite.define(() => {
           agentId: "research",
           ...(filter === "All" ? { archived: "all" } : {}),
         };
-        const readsBeforeEvent = (await gateway.getRequests("sessions.list", researchMatch)).length;
-        await pauseVirtualClock(page);
-        await gateway.emitGatewayEvent("sessions.changed", {
-          sessionKey: newRow.key,
-          agentId: "research",
-          reason: "create",
-        });
-        await page.clock.fastForward(5_001);
-        await page.clock.resume();
-        await gateway.waitForRequest("sessions.list", {
-          match: researchMatch,
-          after: readsBeforeEvent,
-        });
-        await rowFor(newRow.key).waitFor({ state: "visible" });
-        await capture("after-selected-agent-update");
-        await sidebar.getByRole("button", { name: "Load more sessions", exact: true }).click();
-        await gateway.waitForRequest("sessions.list", {
-          match: { agentId: "research", offset: pageSize },
-        });
-        await rowFor(researchRows[2]!.key).waitFor({ state: "visible" });
-        await capture("after-pagination");
-        await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-        await sidebar
-          .locator(".sidebar-agent-menu")
-          .getByRole("menuitem", { name: "Main", exact: true })
-          .click();
+        const readsBeforeEvent = await countLists(researchMatch);
+        await emitAndCollect(newRow.key, "create");
+        await waitForList(researchMatch, readsBeforeEvent);
+        await ui.visible(rowFor(newRow.key));
+
+        await loadMore.click();
+        await waitForList({ agentId: "research", offset: pageSize });
+        await ui.visible(rowFor(researchRows[2]!.key));
+
+        await ui.switchAgent(sidebar, "Main");
         if (operation === "rename") {
-          await expect.poll(() => rowFor(original.key).textContent()).toContain("Renamed original");
+          await ui.expectText(rowFor(original.key), "Renamed original");
         } else if (filter === "Active") {
-          await expect.poll(() => rowFor(original.key).count()).toBe(0);
+          await ui.expectCount(rowFor(original.key), 0);
         } else {
-          await rowFor(original.key).waitFor({ state: "visible" });
+          await ui.visible(rowFor(original.key));
         }
         // An older conversation discovered while away must extend even a retained page window.
         const olderRow = sessionRow("agent:research:older", "Research older conversation", 1);
@@ -301,104 +251,45 @@ suite.define(() => {
           agentId: "research",
           reason: "create",
         });
-        const readsBeforeReturn = (await gateway.getRequests("sessions.list", researchMatch))
-          .length;
-        await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-        await sidebar
-          .locator(".sidebar-agent-menu")
-          .getByRole("menuitem", { name: "Research", exact: true })
-          .click();
-        const returnedList = await gateway.waitForRequest("sessions.list", {
-          match: researchMatch,
-          after: readsBeforeReturn,
-        });
+        const readsBeforeReturn = await countLists(researchMatch);
+        await selectResearchAgent();
+        const returnedList = await waitForList(researchMatch, readsBeforeReturn);
         expect(returnedList.params).toMatchObject({
           limit: filter === "All" ? pageSize : retainedLimit,
         });
-        await rowFor(newRow.key).waitFor({ state: "visible" });
-        await expect.poll(() => rowFor(olderRow.key).count()).toBe(0);
-        await sidebar.getByRole("button", { name: "Load more sessions", exact: true }).click();
+        await ui.visible(rowFor(newRow.key));
+        await ui.expectCount(rowFor(olderRow.key), 0);
+        await loadMore.click();
         if (filter === "All" && operation === "rename") {
-          await rowFor(researchRows[2]!.key).waitFor({ state: "visible" });
-          await rowFor(olderRow.key).waitFor({ state: "visible" });
-          await capture("retained-before-invalidation");
-          const readsBeforeInvalidation = (await gateway.getRequests("sessions.list", refreshMatch))
-            .length;
-          await pauseVirtualClock(page);
-          await gateway.emitGatewayEvent("sessions.changed", {
-            sessionKey: newRow.key,
-            agentId: "research",
-            reason: "update",
-          });
-          await page.clock.fastForward(5_001);
-          await page.clock.resume();
-          const refresh = await gateway.waitForRequest("sessions.list", {
-            match: refreshMatch,
-            after: readsBeforeInvalidation,
-          });
+          await ui.visible(rowFor(researchRows[2]!.key));
+          await ui.visible(rowFor(olderRow.key));
+
+          const readsBeforeInvalidation = await countLists(refreshMatch);
+          await emitAndCollect(newRow.key, "update");
+          const refresh = await waitForList(refreshMatch, readsBeforeInvalidation);
           expect(refresh.params).not.toHaveProperty("offset");
           expect(refresh.params).toMatchObject({ limit: retainedLimit + 1 });
-          await expect
-            .poll(() =>
-              sidebar
-                .locator('.sidebar-session-pagination--roster > button[aria-busy="true"]')
-                .count(),
-            )
-            .toBe(0);
-          await capture("retained-after-invalidation");
+          await ui.expectCount(
+            sidebar.locator('.sidebar-session-pagination--roster > button[aria-busy="true"]'),
+            0,
+          );
         }
-        await rowFor(researchRows[2]!.key).waitFor({ state: "visible" });
-        await rowFor(olderRow.key).waitFor({ state: "visible" });
+        await ui.visible(rowFor(researchRows[2]!.key));
+        await ui.visible(rowFor(olderRow.key));
         if (filter === "All" && operation === "rename") {
-          await rowFor(researchRows[1]!.key).waitFor({ state: "visible" });
-          const readsBeforeRemoval = (await gateway.getRequests("sessions.list", refreshMatch))
-            .length;
+          await ui.visible(rowFor(researchRows[1]!.key));
+          const readsBeforeRemoval = await countLists(refreshMatch);
           await gateway.setMethodResponse(
             "sessions.list",
             responseFor(returnedResearchRows.filter((row) => row.key !== researchRows[1]!.key)),
           );
-          await pauseVirtualClock(page);
-          await gateway.emitGatewayEvent("sessions.changed", {
-            sessionKey: newRow.key,
-            agentId: "research",
-            reason: "update",
-          });
-          await page.clock.fastForward(5_001);
-          await page.clock.resume();
-          const refresh = await gateway.waitForRequest("sessions.list", {
-            match: refreshMatch,
-            after: readsBeforeRemoval,
-          });
+          await emitAndCollect(newRow.key, "update");
+          const refresh = await waitForList(refreshMatch, readsBeforeRemoval);
           expect(refresh.params).toMatchObject({ limit: retainedLimit + 1 });
           await rowFor(researchRows[1]!.key).waitFor({ state: "hidden" });
-          await rowFor(researchRows[2]!.key).waitFor({ state: "visible" });
-          await rowFor(olderRow.key).waitFor({ state: "visible" });
-          await capture("retained-after-membership-removal");
+          await ui.visible(rowFor(researchRows[2]!.key));
+          await ui.visible(rowFor(olderRow.key));
         }
-      } finally {
-        await capture("final-state");
-        const listRequests = await gateway.getRequests("sessions.list");
-        logMutationScopeRequests(listRequests, { operation, filter });
-        await writeFile(
-          path.join(artifactDir, "observations.json"),
-          JSON.stringify(
-            {
-              url: page.url(),
-              rows: await sidebar.locator(".sidebar-recent-session").allTextContents(),
-              listRequests: listRequests.map(({ params }) => params),
-              patchRequests: (await gateway.getRequests("sessions.patch")).map(
-                ({ params }) => params,
-              ),
-              batchRequests: (await gateway.getRequests("sessions.patchMany")).map(
-                ({ params }) => params,
-              ),
-            },
-            null,
-            2,
-          ),
-        );
-        await context.close();
-      }
-    },
+      }),
   );
 });

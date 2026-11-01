@@ -105,6 +105,7 @@ export function collectPluginSafetyInspectedFiles(
           ...Object.values(theme.icons ?? {}),
           ...Object.values(theme.hats ?? {}),
           ...Object.values(theme.critters ?? {}).map((critter) => critter.source),
+          ...Object.values(theme.backgrounds ?? {}),
         ].forEach(add);
       }
       const activity = path.join(rootDir, PLUGIN_TOOL_ACTIVITY_ICON_DIR);

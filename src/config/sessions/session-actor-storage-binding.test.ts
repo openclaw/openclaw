@@ -1,153 +1,113 @@
-import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import type { SessionActor } from "./session-actor-contract.js";
+import { memorySessionActorRegistry } from "./session-actor-memory-registry.js";
 import {
-  getSessionActorStorageBinding,
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
   runWithSessionActorStorage,
 } from "./session-actor-storage-binding.js";
 
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
-const owned: Array<{ agentId: string; path: string }> = [];
-afterEach(() => {
-  for (const options of owned.splice(0)) {
-    memorySessionActorOwners.closeDatabase(options);
-  }
-});
 
-async function fixture(name: string) {
-  const env = { OPENCLAW_STATE_DIR: `/synthetic/actor-storage-binding/${name}` };
-  const options = {
+async function seed(actor: SessionActor, sessionId: string) {
+  expect(
+    await actor.storage!.mutate(
+      {
+        type: "session.entry.create",
+        input: { entry: { sessionId, updatedAt: 1 }, cwd: "/synthetic" },
+      },
+      authority,
+    ),
+  ).toMatchObject({ kind: "committed", value: { sessionId } });
+}
+
+it("reads later registrations while preserving selected owners across same-path replacement", async () => {
+  const env = { OPENCLAW_STATE_DIR: "/synthetic/session-owner-import-order" };
+  const target = {
     agentId: "main",
     path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
   };
-  owned.push(options);
-  const owner = memorySessionActorOwners.get(options);
-  const sessionKey = `agent:main:dashboard:incognito-${name}`;
-  const actor = await owner.acquire({ database: owner.identity, sessionKey }, lifetime);
-  const storage = actor.storage!;
-  const created = await storage.mutate(
-    {
-      type: "session.entry.create",
-      input: { entry: { sessionId: name, updatedAt: 1 } },
-    },
-    authority,
-  );
-  expect(created.kind).toBe("committed");
-  return { env, owner, sessionKey, actor, storage, binding: { ...options, actor, authority } };
-}
+  const scope = {
+    agentId: target.agentId,
+    storePath: target.path,
+    sessionKey: "agent:main:dashboard:incognito-import-order",
+  };
+  const capture = () => captureSessionActorStorageOwner(scope, authority)!;
+  expect(capture().owner).toBeUndefined();
+  expect(memorySessionActorRegistry.read(target)).toBeUndefined();
 
-describe("selected actor storage binding", () => {
-  it("refuses another incognito session or owner while accepting its logical store locator", async () => {
-    const { env, sessionKey, binding } = await fixture("scope");
-    runWithSessionActorStorage(binding, () => {
-      expect(getSessionActorStorageBinding({ sessionKey })?.actor).toBe(binding.actor);
-      expect(() =>
-        getSessionActorStorageBinding({ sessionKey: "agent:main:dashboard:incognito-other" }),
-      ).toThrow("another session");
-      expect(getSessionActorStorageBinding({ sessionKey: "agent:main:durable" })).toBeUndefined();
-      expect(() =>
-        getSessionActorStorageBinding({ sessionKey: "agent:main:durable", sessionActor: binding }),
-      ).toThrow("another session");
-      expect(
-        getSessionActorStorageBinding({
-          sessionKey,
-          storePath: path.join(env.OPENCLAW_STATE_DIR, "agents/main/sessions/sessions.json"),
-        })?.actor,
-      ).toBe(binding.actor);
-      const foreign = resolveIncognitoOpenClawAgentSqlitePath({
-        agentId: "main",
-        env: { OPENCLAW_STATE_DIR: "/synthetic/actor-storage-binding/foreign" },
-      });
-      expect(() => getSessionActorStorageBinding({ sessionKey, storePath: foreign })).toThrow(
-        "another owner",
-      );
-    });
-  });
+  // Read ownership before loading creation: both module orders must use the same registry.
+  const { acquireSessionActorStorage } = await import("./session-actor-storage-acquisition.js");
+  const { createMemorySessionActorOwner } = await import("./session-actor-memory.js");
+  const actors: SessionActor[] = [];
+  const directOwner = createMemorySessionActorOwner(target);
+  try {
+    await expect(
+      acquireSessionActorStorage(scope, { authority, lifetime }),
+    ).resolves.toBeUndefined();
+    expect(capture().owner).toBeUndefined();
+    const pending = acquireSessionActorStorage(scope, { authority, lifetime, create: true });
+    const registeredBeforeYield = capture().owner;
+    const registered = (await pending)!;
+    actors.push(registered.actor);
+    expect(registeredBeforeYield).toBeDefined();
+    await seed(registered.actor, "registered-session");
+    expect(readCapturedSessionActorEntry(capture(), scope.sessionKey)?.sessionId).toBe(
+      "registered-session",
+    );
 
-  it("reads committed sibling state without acquisition and closes public handles with their session", async () => {
-    const { actor, storage, owner, sessionKey } = await fixture("siblings");
-    const siblingKey = "agent:main:dashboard:incognito-sibling";
-    const sibling = await owner.acquire(
-      { database: owner.identity, sessionKey: siblingKey },
+    const directActor = await directOwner.acquire(
+      { database: directOwner.identity, sessionKey: scope.sessionKey },
       lifetime,
     );
-    expect(
-      (
-        await sibling.storage!.mutate(
-          {
-            type: "session.entry.create",
-            input: { entry: { sessionId: "sibling", updatedAt: 2 } },
-          },
-          authority,
-        )
-      ).kind,
-    ).toBe("committed");
-    expect(
-      storage.readCurrent(
-        { type: "session.entry.read", input: { sessionKey: siblingKey } },
-        authority,
-      ),
-    ).toMatchObject({ sessionId: "sibling", updatedAt: 2 });
-    expect(
-      (
-        await sibling.storage!.mutate(
-          {
-            type: "session.entry.patch",
-            input: { operation: { kind: "fields", patch: { label: "changed" } } },
-          },
-          authority,
-        )
-      ).kind,
-    ).toBe("committed");
-    expect(
-      storage.readCurrent(
-        { type: "session.entry.read", input: { sessionKey: siblingKey } },
-        authority,
-      ),
-    ).toMatchObject({ label: "changed" });
-    owner.closeSession(sessionKey);
-    expect(() => actor.assertCurrent()).toThrow(/closed/);
-    expect(() => actor.assertReadable()).toThrow(/closed/);
-    expect(() =>
-      storage.readCurrent(
-        { type: "session.entry.read", input: { sessionKey: siblingKey } },
-        authority,
-      ),
-    ).toThrow(/closed/);
-    expect(() => sibling.assertReadable()).not.toThrow();
-    await Promise.all([actor.release(), sibling.release()]);
-  });
+    actors.push(directActor);
+    await seed(directActor, "direct-session");
+    const direct = { actor: directActor, authority, agentId: target.agentId, path: target.path };
+    await runWithSessionActorStorage(registered, async () => {
+      await Promise.resolve();
+      expect(readCapturedSessionActorEntry(capture(), scope.sessionKey)?.sessionId).toBe(
+        "registered-session",
+      );
+      const explicit = captureSessionActorStorageOwner({ ...scope, sessionActor: direct })!;
+      expect(readCapturedSessionActorEntry(explicit, scope.sessionKey)?.sessionId).toBe(
+        "direct-session",
+      );
+      await runWithSessionActorStorage(direct, async () => {
+        await Promise.resolve();
+        expect(readCapturedSessionActorEntry(capture(), scope.sessionKey)?.sessionId).toBe(
+          "direct-session",
+        );
+      });
+      expect(readCapturedSessionActorEntry(capture(), scope.sessionKey)?.sessionId).toBe(
+        "registered-session",
+      );
+    });
 
-  it("acquires separate handles from the captured owner after rotation and release", async () => {
-    const { actor, storage, sessionKey } = await fixture("rotate");
-    const before = storage.readCurrent({ type: "session.entry.read", input: {} }, authority)!;
-    expect(
-      (
-        await storage.mutate(
-          {
-            type: "session.lifecycle.reset",
-            input: { expected: before, nextEntry: { ...before, sessionId: "rotated" } },
-          },
-          authority,
-        )
-      ).kind,
-    ).toBe("committed");
-    expect(() => actor.assertCurrent()).toThrow(/closed/);
-    const replacement = await storage.acquire(sessionKey);
-    expect(replacement).not.toBe(actor);
-    expect(
-      replacement.storage!.readCurrent({ type: "session.entry.read", input: {} }, authority),
-    ).toMatchObject({ sessionId: "rotated" });
-    await actor.release();
-    const separate = await storage.acquire(sessionKey);
-    await replacement.release();
-    expect(() => replacement.assertReadable()).toThrow(/released/);
-    expect(() => separate.assertReadable()).not.toThrow();
-    expect(
-      separate.storage!.readCurrent({ type: "session.entry.read", input: {} }, authority),
-    ).toMatchObject({ sessionId: "rotated" });
-    await separate.release();
-  });
+    memorySessionActorRegistry.closeDatabase(target);
+    const replacement = (await acquireSessionActorStorage(scope, {
+      authority,
+      lifetime,
+      create: true,
+    }))!;
+    actors.push(replacement.actor);
+    await seed(replacement.actor, "replacement-session");
+    expect(readCapturedSessionActorEntry(capture(), scope.sessionKey)?.sessionId).toBe(
+      "replacement-session",
+    );
+    const stale = captureSessionActorStorageOwner({ ...scope, sessionActor: registered })!;
+    expect(() => readCapturedSessionActorEntry(stale, scope.sessionKey)).toThrow("closed");
+    const selected = captureSessionActorStorageOwner({ ...scope, sessionActor: direct })!;
+    expect(readCapturedSessionActorEntry(selected, scope.sessionKey)?.sessionId).toBe(
+      "direct-session",
+    );
+    directOwner.close();
+    const closed = captureSessionActorStorageOwner({ ...scope, sessionActor: direct })!;
+    expect(() => readCapturedSessionActorEntry(closed, scope.sessionKey)).toThrow("closed");
+  } finally {
+    await Promise.all(actors.map((actor) => actor.release()));
+    directOwner.close();
+    memorySessionActorRegistry.closeDatabase(target);
+  }
 });

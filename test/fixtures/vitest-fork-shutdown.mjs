@@ -308,10 +308,19 @@ it("completes the test before worker shutdown", () => {
   const parent = getVitestWorkerDescriptor();
   const workers = parent ? createVitestWorkerRun(env, parent) : undefined;
   let result;
+  let interrupted = false;
   try {
-    result = await runVitestShutdownCommand({ args, cwd: root, env, workerRun: workers });
+    result = await runVitestShutdownCommand({
+      args,
+      cwd: root,
+      env,
+      workerRun: workers,
+      onSignal() {
+        interrupted = true;
+      },
+    });
   } finally {
-    await workers?.dispose();
+    await workers?.dispose({ interrupted });
   }
   const { code, stdout, stderr } = result;
   const output = stdout + stderr;

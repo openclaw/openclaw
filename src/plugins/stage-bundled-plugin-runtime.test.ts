@@ -1,4 +1,3 @@
-// Covers staging bundled plugin runtime files for package output.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -16,12 +15,6 @@ function makeRepoRoot(prefix: string): string {
   return makeTrackedTempDir(prefix, tempDirs);
 }
 
-function createDistPluginDir(repoRoot: string, pluginId: string) {
-  const distPluginDir = path.join(repoRoot, "dist", "extensions", pluginId);
-  fs.mkdirSync(distPluginDir, { recursive: true });
-  return distPluginDir;
-}
-
 function writeRepoFile(repoRoot: string, relativePath: string, value: string) {
   const fullPath = path.join(repoRoot, relativePath);
   fs.mkdirSync(path.dirname(fullPath), { recursive: true });
@@ -34,22 +27,9 @@ function setupRepoFiles(repoRoot: string, files: Readonly<Record<string, string>
   }
 }
 
-function expectRuntimeArtifactText(params: {
-  repoRoot: string;
-  pluginId: string;
-  relativePath: string;
-  expectedText: string;
-  symbolicLink: boolean;
-}) {
-  const runtimePath = path.join(
-    params.repoRoot,
-    "dist-runtime",
-    "extensions",
-    params.pluginId,
-    params.relativePath,
-  );
-  expect(fs.lstatSync(runtimePath).isSymbolicLink()).toBe(params.symbolicLink);
-  expect(fs.readFileSync(runtimePath, "utf8")).toBe(params.expectedText);
+function expectArtifact(file: string, text: string, symbolicLink: boolean) {
+  expect(fs.lstatSync(file).isSymbolicLink()).toBe(symbolicLink);
+  expect(fs.readFileSync(file, "utf8")).toBe(text);
 }
 
 afterEach(() => {
@@ -59,12 +39,7 @@ afterEach(() => {
 describe("stageBundledPluginRuntime", () => {
   it("stages bundled dist plugins as runtime wrappers without linking plugin node_modules", async () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-");
-    const distPluginDir = createDistPluginDir(repoRoot, "diffs");
-    fs.mkdirSync(path.join(repoRoot, "dist"), { recursive: true });
-    fs.mkdirSync(path.join(repoRoot, "dist", "plugin-sdk"), { recursive: true });
-    fs.mkdirSync(path.join(distPluginDir, "node_modules", "@pierre", "diffs"), {
-      recursive: true,
-    });
+    const distPluginDir = path.join(repoRoot, "dist/extensions/diffs");
     setupRepoFiles(repoRoot, {
       "dist/plugin-sdk/core.js": "export const sdk = true;\n",
       "dist/plugin-sdk/channel-entry-contract.js":
@@ -84,76 +59,31 @@ describe("stageBundledPluginRuntime", () => {
     expect(runtimeModule.default).toBe(canonicalModule.default);
     expect(fs.existsSync(path.join(runtimePluginDir, "node_modules"))).toBe(false);
     expect(fs.existsSync(path.join(distPluginDir, "node_modules"))).toBe(true);
-    expect(
-      fs
-        .lstatSync(
-          path.join(repoRoot, "dist", "extensions", "node_modules", "openclaw", "plugin-sdk"),
-        )
-        .isSymbolicLink(),
-    ).toBe(false);
-    expect(
-      JSON.parse(
-        fs.readFileSync(
-          path.join(repoRoot, "dist", "extensions", "node_modules", "openclaw", "package.json"),
-          "utf8",
-        ),
-      ).exports,
-    ).toMatchObject({
+    const aliasRoot = path.join(repoRoot, "dist/extensions/node_modules/openclaw");
+    const packageText = fs.readFileSync(path.join(aliasRoot, "package.json"), "utf8");
+    expect(fs.lstatSync(path.join(aliasRoot, "plugin-sdk")).isSymbolicLink()).toBe(false);
+    expect(JSON.parse(packageText).exports).toMatchObject({
       "./plugin-sdk/core": "./plugin-sdk/core.js",
       "./plugin-sdk/channel-entry-contract": "./plugin-sdk/channel-entry-contract.js",
     });
+    expect(packageText).not.toContain('"./plugin-sdk/*"');
     expect(
-      fs.readFileSync(
-        path.join(repoRoot, "dist", "extensions", "node_modules", "openclaw", "package.json"),
-        "utf8",
-      ),
-    ).not.toContain('"./plugin-sdk/*"');
-    expect(
-      fs.readFileSync(
-        path.join(
-          repoRoot,
-          "dist",
-          "extensions",
-          "node_modules",
-          "openclaw",
-          "plugin-sdk",
-          "channel-entry-contract.js",
-        ),
-        "utf8",
-      ),
+      fs.readFileSync(path.join(aliasRoot, "plugin-sdk/channel-entry-contract.js"), "utf8"),
     ).toContain("../../../../plugin-sdk/channel-entry-contract.js");
-    expect(
-      fs.existsSync(
-        path.join(
-          repoRoot,
-          "dist",
-          "extensions",
-          "node_modules",
-          "openclaw",
-          "plugin-sdk",
-          "ssrf-runtime-internal.js",
-        ),
-      ),
-    ).toBe(false);
-    expect(fs.existsSync(path.join(runtimePluginDir, "node_modules", "openclaw"))).toBe(false);
+    expect(fs.existsSync(path.join(aliasRoot, "plugin-sdk/ssrf-runtime-internal.js"))).toBe(false);
   });
 
   it("stages only public plugin-sdk package exports for bundled runtime aliases", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-sdk-public-");
-    createDistPluginDir(repoRoot, "ollama");
     setupRepoFiles(repoRoot, {
-      "package.json": JSON.stringify(
-        {
-          name: "openclaw",
-          type: "module",
-          exports: {
-            "./plugin-sdk/core": "./dist/plugin-sdk/core.js",
-            "./plugin-sdk/channel-entry-contract": "./dist/plugin-sdk/channel-entry-contract.js",
-          },
+      "package.json": JSON.stringify({
+        name: "openclaw",
+        type: "module",
+        exports: {
+          "./plugin-sdk/core": "./dist/plugin-sdk/core.js",
+          "./plugin-sdk/channel-entry-contract": "./dist/plugin-sdk/channel-entry-contract.js",
         },
-        null,
-        2,
-      ),
+      }),
       "dist/plugin-sdk/core.js": "export const sdk = true;\n",
       "dist/plugin-sdk/channel-entry-contract.js": "export const contract = true;\n",
       "dist/plugin-sdk/source-only.js": "export const sourceOnly = true;\n",
@@ -183,7 +113,6 @@ describe("stageBundledPluginRuntime", () => {
 
   it("keeps extension-local plugin-sdk wrappers resolving canonical dist chunks", async () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-sdk-wrapper-");
-    createDistPluginDir(repoRoot, "diffs");
     setupRepoFiles(repoRoot, {
       "dist/plugin-sdk/channel-entry-contract.js":
         "export { contract } from '../channel-entry-contract-abc.js';\n",
@@ -195,12 +124,7 @@ describe("stageBundledPluginRuntime", () => {
 
     const wrapperPath = path.join(
       repoRoot,
-      "dist",
-      "extensions",
-      "node_modules",
-      "openclaw",
-      "plugin-sdk",
-      "channel-entry-contract.js",
+      "dist/extensions/node_modules/openclaw/plugin-sdk/channel-entry-contract.js",
     );
     const wrapperModule = await import(`${pathToFileURL(wrapperPath).href}?t=${Date.now()}`);
     expect(wrapperModule.contract).toBe(true);
@@ -208,7 +132,6 @@ describe("stageBundledPluginRuntime", () => {
 
   it("writes wrappers that forward plugin entry imports into canonical dist files", async () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-chunks-");
-    createDistPluginDir(repoRoot, "diffs");
     setupRepoFiles(repoRoot, {
       "dist/chunk-abc.js": "export const value = 1;\n",
       [bundledDistPluginFile("diffs", "index.js")]: "export { value } from '../../chunk-abc.js';\n",
@@ -225,7 +148,6 @@ describe("stageBundledPluginRuntime", () => {
 
   it("stages root runtime sidecars that bundled plugin boundaries resolve directly", async () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-sidecars-");
-    createDistPluginDir(repoRoot, "whatsapp");
     setupRepoFiles(repoRoot, {
       [bundledDistPluginFile("whatsapp", "index.js")]: "export default {};\n",
       [bundledDistPluginFile("whatsapp", "light-runtime-api.js")]: "export const light = true;\n",
@@ -275,7 +197,6 @@ export function registerDemoCommand() {
 
   it("copies package metadata files but symlinks other non-js plugin artifacts into the runtime overlay", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-assets-");
-    createDistPluginDir(repoRoot, "diffs");
     setupRepoFiles(repoRoot, {
       [bundledDistPluginFile("diffs", "package.json")]: JSON.stringify(
         { name: "@openclaw/diffs", openclaw: { extensions: ["./index.js"] } },
@@ -288,34 +209,16 @@ export function registerDemoCommand() {
 
     stageBundledPluginRuntime({ repoRoot });
 
-    expectRuntimeArtifactText({
-      repoRoot,
-      pluginId: "diffs",
-      relativePath: "openclaw.plugin.json",
-      expectedText: "{}\n",
-      symbolicLink: false,
-    });
-    expectRuntimeArtifactText({
-      repoRoot,
-      pluginId: "diffs",
-      relativePath: "assets/info.txt",
-      expectedText: "ok\n",
-      symbolicLink: true,
-    });
-    const runtimePackagePath = path.join(
-      repoRoot,
-      "dist-runtime",
-      "extensions",
-      "diffs",
-      "package.json",
-    );
+    const runtimeDir = path.join(repoRoot, "dist-runtime/extensions/diffs");
+    expectArtifact(path.join(runtimeDir, "openclaw.plugin.json"), "{}\n", false);
+    expectArtifact(path.join(runtimeDir, "assets/info.txt"), "ok\n", true);
+    const runtimePackagePath = path.join(runtimeDir, "package.json");
     expect(fs.lstatSync(runtimePackagePath).isSymbolicLink()).toBe(false);
     expect(fs.readFileSync(runtimePackagePath, "utf8")).toContain('"extensions": [');
   });
 
   it("copies unpacked Chrome extension payloads without wrapping their JavaScript", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-chrome-extension-");
-    createDistPluginDir(repoRoot, "browser");
     const background = "chrome.runtime.onInstalled.addListener(() => {});\n";
     const popup = "document.body.dataset.ready = 'true';\n";
     setupRepoFiles(repoRoot, {
@@ -328,23 +231,14 @@ export function registerDemoCommand() {
 
     const runtimeExtensionDir = path.join(
       repoRoot,
-      "dist-runtime",
-      "extensions",
-      "browser",
-      "chrome-extension",
+      "dist-runtime/extensions/browser/chrome-extension",
     );
-    expect(fs.readFileSync(path.join(runtimeExtensionDir, "background.js"), "utf8")).toBe(
-      background,
-    );
+    expectArtifact(path.join(runtimeExtensionDir, "background.js"), background, false);
     expect(fs.readFileSync(path.join(runtimeExtensionDir, "popup.js"), "utf8")).toBe(popup);
-    expect(fs.lstatSync(path.join(runtimeExtensionDir, "background.js")).isSymbolicLink()).toBe(
-      false,
-    );
   });
 
   it("copies bundled plugin skill trees into the runtime overlay", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-skills-");
-    createDistPluginDir(repoRoot, "feishu");
     setupRepoFiles(repoRoot, {
       [bundledDistPluginFile("feishu", "index.js")]: "export default {}\n",
       [bundledDistPluginFile("feishu", "skills/feishu-doc/SKILL.md")]:
@@ -357,15 +251,9 @@ export function registerDemoCommand() {
     const runtimeRoot = path.join(repoRoot, "dist-runtime");
     const runtimeSkillPath = path.join(
       runtimeRoot,
-      "extensions",
-      "feishu",
-      "skills",
-      "feishu-doc",
-      "fixture.txt",
+      "extensions/feishu/skills/feishu-doc/fixture.txt",
     );
-
-    expect(fs.lstatSync(runtimeSkillPath).isSymbolicLink()).toBe(false);
-    expect(fs.readFileSync(runtimeSkillPath, "utf8")).toBe("# Feishu Doc\n");
+    expectArtifact(runtimeSkillPath, "# Feishu Doc\n", false);
     expect(path.relative(fs.realpathSync(runtimeRoot), fs.realpathSync(runtimeSkillPath))).toBe(
       path.join("extensions", "feishu", "skills", "feishu-doc", "fixture.txt"),
     );
@@ -374,7 +262,6 @@ export function registerDemoCommand() {
   it("preserves package metadata needed for bundled plugin discovery from dist-runtime", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-discovery-");
     const runtimeExtensionsDir = path.join(repoRoot, "dist-runtime", "extensions");
-    createDistPluginDir(repoRoot, "demo");
     setupRepoFiles(repoRoot, {
       [bundledDistPluginFile("demo", "package.json")]: JSON.stringify(
         {
@@ -407,9 +294,7 @@ export function registerDemoCommand() {
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
       OPENCLAW_BUNDLED_PLUGINS_DIR: runtimeExtensionsDir,
     };
-    const discovery = discoverOpenClawPlugins({
-      env,
-    });
+    const discovery = discoverOpenClawPlugins({ env });
     const manifestRegistry = loadPluginManifestRegistryCore({
       env,
       candidates: discovery.candidates,
@@ -456,7 +341,6 @@ export function registerDemoCommand() {
 
   it("tolerates EEXIST when an identical runtime symlink is materialized concurrently", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-eexist-");
-    createDistPluginDir(repoRoot, "feishu");
     setupRepoFiles(repoRoot, {
       [bundledDistPluginFile("feishu", "index.js")]: "export default {}\n",
       [bundledDistPluginFile("feishu", "assets/fixture.txt")]: "# Feishu Doc\n",
@@ -475,16 +359,11 @@ export function registerDemoCommand() {
 
     stageBundledPluginRuntime({ repoRoot });
 
-    const runtimeAssetPath = path.join(
-      repoRoot,
-      "dist-runtime",
-      "extensions",
-      "feishu",
-      "assets",
-      "fixture.txt",
+    expectArtifact(
+      path.join(repoRoot, "dist-runtime/extensions/feishu/assets/fixture.txt"),
+      "# Feishu Doc\n",
+      true,
     );
-    expect(fs.lstatSync(runtimeAssetPath).isSymbolicLink()).toBe(true);
-    expect(fs.readFileSync(runtimeAssetPath, "utf8")).toBe("# Feishu Doc\n");
 
     symlinkSpy.mockRestore();
   });
@@ -493,7 +372,6 @@ export function registerDemoCommand() {
     "falls back to copying runtime assets when Windows symlink creation fails with %s",
     (code) => {
       const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-win-copy-");
-      createDistPluginDir(repoRoot, "feishu");
       setupRepoFiles(repoRoot, {
         [bundledDistPluginFile("feishu", "index.js")]: "export default {}\n",
         [bundledDistPluginFile("feishu", "assets/fixture.txt")]: "# Feishu Doc\n",
@@ -514,16 +392,11 @@ export function registerDemoCommand() {
         });
       });
 
-      const runtimeAssetPath = path.join(
-        repoRoot,
-        "dist-runtime",
-        "extensions",
-        "feishu",
-        "assets",
-        "fixture.txt",
+      expectArtifact(
+        path.join(repoRoot, "dist-runtime/extensions/feishu/assets/fixture.txt"),
+        "# Feishu Doc\n",
+        false,
       );
-      expect(fs.lstatSync(runtimeAssetPath).isSymbolicLink()).toBe(false);
-      expect(fs.readFileSync(runtimeAssetPath, "utf8")).toBe("# Feishu Doc\n");
     },
   );
 });

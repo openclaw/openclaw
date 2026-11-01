@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
+import type { PluginUiCapability } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import { root } from "../infra/fs-safe.js";
 import { walkRootDirectory } from "../infra/root-walk.js";
 import type { PluginManifestControlUi } from "./manifest-types.js";
@@ -8,6 +10,32 @@ export const CONTROL_UI_PLUGIN_MAX_BUILD_BYTES = 8 * 1024 * 1024;
 export const CONTROL_UI_PLUGIN_MAX_ASSETS = 128;
 
 export type PluginControlUiAsset = { body: Buffer; contentType: string };
+
+/** Identity of the complete immutable browser generation produced by the CLI. */
+export function pluginControlUiGenerationHash(
+  files: readonly { name: string; contents: Uint8Array }[],
+): string {
+  const digest = createHash("sha256");
+  for (const file of files.toSorted((left, right) => left.name.localeCompare(right.name))) {
+    digest.update(`${file.name}\0${file.contents.length}\0`).update(file.contents);
+  }
+  return digest.digest("hex");
+}
+
+/** Shared by the live catalog and the packaged UI inventory; keep this byte contract stable. */
+export function pluginControlUiRevision(
+  declaration: PluginManifestControlUi,
+  uiCapabilities: readonly PluginUiCapability[] | undefined,
+  assets: ReadonlyMap<string, PluginControlUiAsset>,
+): string {
+  const digest = createHash("sha256").update(JSON.stringify({ declaration, uiCapabilities }));
+  for (const [name, asset] of [...assets].toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    digest.update(`${name}\0${asset.body.length}\0`).update(asset.body);
+  }
+  return digest.digest("hex");
+}
 
 /** Files admitted from a plugin's dedicated browser build directory. */
 export function isPluginControlUiAssetPath(relativePath: string): boolean {

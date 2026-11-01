@@ -11,6 +11,8 @@ import {
   parsePersistedExecApprovals,
   resolveExecApprovalsDisplayPath,
   tryParsePersistedExecApprovals,
+  stripExecApprovalsSocketCredentials,
+  stripExecApprovalsRawSocketCredentials,
 } from "./exec-approvals-config.js";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./exec-approvals-core.js";
 import {
@@ -45,6 +47,7 @@ export function assertExecApprovalsMutationAllowed(params: {
   db: EngineConnection;
   current: ExecApprovalsFile;
   next: ExecApprovalsFile;
+  agentId?: string;
 }): void {
   const current = normalizeExecApprovalsInternal(params.current);
   const next = normalizeExecApprovalsInternal(params.next);
@@ -52,6 +55,9 @@ export function assertExecApprovalsMutationAllowed(params: {
     ...new Set([...Object.keys(current.agents ?? {}), ...Object.keys(next.agents ?? {})]),
   ].filter((agentId) => !isDeepStrictEqual(current.agents?.[agentId], next.agents?.[agentId]));
   const agentIds = new Set(changed.map(normalizeAgentId));
+  if (params.agentId) {
+    agentIds.add(normalizeAgentId(params.agentId));
+  }
   if (agentIds.size === 0) {
     return;
   }
@@ -124,12 +130,24 @@ export function snapshotFromExecApprovalsRow(params: {
   };
 }
 
+export function snapshotFromReadReply(
+  reply: { row: ExecApprovalsConfigRow | undefined } | undefined,
+  displayPath: () => string,
+): ExecApprovalsSnapshot {
+  return snapshotFromExecApprovalsRow({
+    path: displayPath(),
+    row: reply?.row,
+    onMalformed: () =>
+      warnFailClosed("exec approvals SQLite row is malformed; denying host execution"),
+  });
+}
+
 export function projectionValues(file: ExecApprovalsFile) {
   const normalized = normalizeExecApprovalsInternal(file);
   const agents = Object.values(normalized.agents ?? {});
   return {
-    socket_path: normalized.socket?.path ?? null,
-    has_socket_token: normalized.socket?.token ? 1 : 0,
+    socket_path: null,
+    has_socket_token: 0,
     default_security: normalized.defaults?.security ?? null,
     default_ask: normalized.defaults?.ask ?? null,
     default_ask_fallback: normalized.defaults?.askFallback ?? null,
@@ -151,15 +169,18 @@ export function writeExecApprovalsConfigRow(params: {
   now?: number;
   change?: "policy" | "usage";
 }): string {
-  const normalized = normalizeExecApprovalsInternal(params.file);
-  const authored = params.raw ?? serializeExecApprovals(params.file);
+  const inputPolicy = stripExecApprovalsSocketCredentials(params.file);
+  const normalized = normalizeExecApprovalsInternal(inputPolicy);
+  const authored =
+    params.raw === undefined
+      ? serializeExecApprovals(inputPolicy)
+      : stripExecApprovalsRawSocketCredentials(params.raw);
   const parsed = parsePersistedExecApprovals(authored);
   // Malformed policy must remain visible to the fail-closed reader, not become partial defaults.
   const raw =
-    params.raw ??
-    (!parsed.ok && parsed.error === LEGACY_EXEC_APPROVALS_DIAGNOSTIC
+    params.raw === undefined && !parsed.ok && parsed.error === LEGACY_EXEC_APPROVALS_DIAGNOSTIC
       ? serializeExecApprovals(normalized)
-      : authored);
+      : authored;
   const values = {
     raw_json: raw,
     ...projectionValues(normalized),
@@ -172,7 +193,7 @@ export function writeExecApprovalsConfigRow(params: {
       .values({ config_key: EXEC_APPROVALS_CONFIG_KEY, ...values })
       .onConflict((conflict) => conflict.column("config_key").doUpdateSet(values)),
   );
-  const persisted = parsePersistedExecApprovals(raw);
+  const persisted = raw === authored ? parsed : parsePersistedExecApprovals(raw);
   const file = persisted.ok ? persisted.value : createFailClosedExecApprovalsFallback();
   const { socket: _socket, ...policy } = file;
   execApprovalsPublication.stagePostimages(params.db, [

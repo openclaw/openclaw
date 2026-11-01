@@ -1,6 +1,9 @@
 /** Keeps automatic auth profiles stable unless reset, unavailable, or recovering a preference. */
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import {
+  matchesSessionAuthProfileOverrideSnapshot,
+  resolveSessionAuthProfileOverrideSource,
+} from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import {
   sessionEntryCommitGuardOptions,
@@ -32,7 +35,6 @@ import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import { resolveModelRouteIntent } from "../model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { authProfilesLog } from "./constants.js";
 import { createSelectedAuthProfileUnavailableError } from "./selection-error.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "./source-check.js";
@@ -99,18 +101,6 @@ function applySessionAuthProfileOverrideState(
   entry.updatedAt = Math.max(entry.updatedAt ?? 0, updatedAt);
 }
 
-function matchesSessionAuthProfileOverrideSnapshot(
-  entry: SessionEntry,
-  snapshot: SessionAuthProfileOverrideSnapshot,
-): boolean {
-  return (
-    entry.sessionId === snapshot.sessionId &&
-    entry.authProfileOverride === snapshot.authProfileOverride &&
-    entry.authProfileOverrideSource === snapshot.authProfileOverrideSource &&
-    entry.authProfileOverrideCompactionCount === snapshot.authProfileOverrideCompactionCount
-  );
-}
-
 function synchronizeSessionEntry(entry: SessionEntry, latest: SessionEntry): void {
   for (const key of Object.keys(entry)) {
     if (!Object.hasOwn(latest, key)) {
@@ -120,16 +110,11 @@ function synchronizeSessionEntry(entry: SessionEntry, latest: SessionEntry): voi
   Object.assign(entry, latest);
 }
 
-async function persistSessionAuthProfileOverrideState(params: {
-  agentId: string;
-  sessionEntry: SessionEntry;
-  sessionStore: Record<string, SessionEntry>;
-  sessionKey: string;
-  state: SessionAuthProfileOverrideState;
-  storePath?: string;
-  assertCommitAllowed?: SessionSourceAssertion;
-  expectedSnapshot?: SessionAuthProfileOverrideSnapshot;
-}): Promise<SessionEntry | undefined> {
+async function persistSessionAuthProfileOverrideState(
+  params: Parameters<typeof clearSessionAuthProfileOverride>[0] & {
+    state: SessionAuthProfileOverrideState;
+  },
+): Promise<SessionEntry | undefined> {
   const { sessionEntry, sessionStore, sessionKey, state, storePath, expectedSnapshot } = params;
   params.assertCommitAllowed?.();
   const updatedAt = Date.now();
@@ -286,22 +271,11 @@ export async function clearSessionAuthProfileOverride(params: {
   });
 }
 
-async function resolveSessionAuthProfileOverride(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  modelId: string;
-  agentId: string;
-  agentDir: string;
-  reader?: SessionEntryCohortReader;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  storePath?: string;
-  assertCommitAllowed?: SessionSourceAssertion;
-  isNewSession: boolean;
-  acceptedProviderIds?: string[];
-  requesterProfileId?: string;
-}): Promise<SessionAuthProfileOverrideResult> {
+async function resolveSessionAuthProfileOverride(
+  params: Omit<Parameters<typeof resolveSessionAuthSelection>[0], "configuredProfileId"> & {
+    acceptedProviderIds?: string[];
+  },
+): Promise<SessionAuthProfileOverrideResult> {
   const {
     agentId,
     cfg,
@@ -497,7 +471,7 @@ async function resolveSessionAuthProfileOverride(params: {
           })
           .find(
             (profileId) =>
-              (store.usageStats?.[profileId]?.failureCounts?.rate_limit ?? 0) > 0 &&
+              store.usageStats?.[profileId]?.lastRateLimitAt !== undefined &&
               !isProfileUnavailableForSessionModel(profileId),
           )
       : undefined;
@@ -591,7 +565,6 @@ export async function resolveSessionAuthSelection(params: {
   modelId: string;
   agentId: string;
   configuredProfileId?: string;
-  harnessRuntime?: string;
   agentDir: string;
   reader?: SessionEntryCohortReader;
   sessionEntry?: SessionEntry;
@@ -608,16 +581,10 @@ export async function resolveSessionAuthSelection(params: {
     provider: params.provider,
     modelId,
   });
-  const acceptedProviderIds = listOpenAIAuthProfileProvidersForAgentRuntime({
-    provider: params.provider,
-    harnessRuntime: params.harnessRuntime,
-    config: params.cfg,
-  });
   const { profileId: rotatedProfileId, store } = await resolveSessionAuthProfileOverride({
     ...params,
     cfg,
     modelId,
-    acceptedProviderIds,
   });
   const rotatedSource = rotatedProfileId
     ? params.sessionEntry?.authProfileOverride?.trim() === rotatedProfileId
@@ -658,7 +625,7 @@ export async function resolveSessionAuthSelection(params: {
     profileId === configuredProfileId &&
     !isProfileForProvider({
       cfg,
-      providers: uniqueProviders(params.provider, acceptedProviderIds),
+      providers: uniqueProviders(params.provider),
       profileId,
       store: authStore,
     })

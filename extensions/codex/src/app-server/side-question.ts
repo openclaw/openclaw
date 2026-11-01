@@ -22,7 +22,7 @@ import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { retireUnsafeCodexTurnClientBestEffort } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import {
-  requireCodexSupervisionModelSelection,
+  assertCodexSessionRuntimeOwnership,
   resolveCodexBindingAppServerConnection,
 } from "./binding-connection.js";
 import {
@@ -118,6 +118,7 @@ import { SIDE_DEVELOPER_INSTRUCTIONS } from "./side-question-instructions.js";
 import {
   applySideQuestionModelSelection,
   buildSideRunAttemptParams,
+  resolveSideQuestionNativeModelSelection,
 } from "./side-question-run-params.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
@@ -154,7 +155,6 @@ export async function runCodexAppServerSideQuestion(
     agentId: params.agentId,
     config: params.cfg,
   });
-  const hostCapabilities = params.hostCapabilities;
   const denyToolCalls = params.toolCalls === "deny";
   if (denyToolCalls && (!options.nativeHookRelay || options.nativeHookRelay.enabled === false)) {
     throw new Error("Session fork tool denial requires the Codex native hook relay to be enabled.");
@@ -164,8 +164,12 @@ export async function runCodexAppServerSideQuestion(
     identity: bindingIdentity,
     config: params.cfg,
     storePath: params.storePath,
-    assertCurrent: hostCapabilities.assertActive,
+    assertCurrent: params.hostCapabilities.assertActive,
     signal: params.opts?.abortSignal,
+    assertBinding: params.expectedSessionRuntimeOwnership
+      ? (currentBinding) =>
+          assertCodexSessionRuntimeOwnership(currentBinding, params.expectedSessionRuntimeOwnership)
+      : undefined,
   });
   using _ = { [Symbol.dispose]: release };
   const assertCurrent = authority.assertCurrent;
@@ -200,9 +204,7 @@ export async function runCodexAppServerSideQuestion(
     agentId: sessionAgentId,
   });
   const usesSupervisionConnection = binding.connectionScope === "supervision";
-  const supervisionModelSelection = usesSupervisionConnection
-    ? requireCodexSupervisionModelSelection(binding)
-    : undefined;
+  const nativeModelSelection = resolveSideQuestionNativeModelSelection(binding);
   const preparedRuntimeAuth = params.preparedRuntimeAuth;
   const authHandoff = usesSupervisionConnection
     ? { authProfileId: undefined, nativeAuthProfile: true, preparedAuth: undefined }
@@ -224,31 +226,29 @@ export async function runCodexAppServerSideQuestion(
     nativeAuthProfile: preparedNativeAuthProfile,
     preparedAuth: startupPreparedAuth,
   } = authHandoff;
-  const reviewerPolicyContext = resolveCodexModelBackedReviewerPolicyContext({
-    provider: usesSupervisionConnection ? "codex" : params.provider,
-    model: supervisionModelSelection?.model ?? params.model,
-    bindingModelProvider: binding.modelProvider,
-    bindingModel: binding.model,
-    nativeAuthProfile: usesSupervisionConnection || preparedNativeAuthProfile,
-  });
+  const reviewerContext = {
+    ...resolveCodexModelBackedReviewerPolicyContext({
+      provider: nativeModelSelection ? "codex" : params.provider,
+      model: nativeModelSelection?.model ?? params.model,
+      bindingModelProvider: binding.modelProvider,
+      bindingModel: binding.model,
+      nativeAuthProfile: usesSupervisionConnection || preparedNativeAuthProfile,
+    }),
+    config: params.cfg,
+    env: process.env,
+    agentDir: params.agentDir,
+  };
   const connection = await resolveCodexBindingAppServerConnection({
     binding,
     authProfileId,
     pluginConfig,
     execPolicy,
     assertCurrent,
-    modelProvider: reviewerPolicyContext.modelProvider,
-    model: reviewerPolicyContext.model,
+    modelProvider: reviewerContext.modelProvider,
+    model: reviewerContext.model,
     config: params.cfg,
     agentDir: params.agentDir,
   });
-  const reviewerContext = {
-    modelProvider: reviewerPolicyContext.modelProvider,
-    model: reviewerPolicyContext.model,
-    config: params.cfg,
-    env: process.env,
-    agentDir: params.agentDir,
-  };
   const appServer = resolveCodexAppServerForModelProvider({
     appServer: applyCodexSessionPermissionPolicy({
       appServer: connection.appServer,
@@ -265,7 +265,7 @@ export async function runCodexAppServerSideQuestion(
     provider: reviewerContext.modelProvider,
   });
   const modelSelection =
-    supervisionModelSelection ??
+    nativeModelSelection ??
     (await resolveCodexAppServerThreadModelSelection({
       homeScope: appServer.start.homeScope,
       provider: params.provider,
@@ -293,7 +293,7 @@ export async function runCodexAppServerSideQuestion(
     fallbackCwd: agentWorkspaceDir,
   });
   const runId = params.opts?.runId ?? randomUUID();
-  const effectiveParams = applySideQuestionModelSelection(params, supervisionModelSelection);
+  const effectiveParams = applySideQuestionModelSelection(params, nativeModelSelection);
   const sideRunParams = buildSideRunAttemptParams(effectiveParams, {
     cwd,
     authProfileId,
@@ -306,6 +306,10 @@ export async function runCodexAppServerSideQuestion(
     agentId: sideRunParams.agentId,
     sandbox: params.sandbox,
   });
+  const assertNativeCurrent = () => {
+    assertCurrent();
+    nativeExecutionPolicy.source?.();
+  };
   try {
     assertCurrent();
     const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
@@ -337,10 +341,7 @@ export async function runCodexAppServerSideQuestion(
       );
     }
     const clientOptions = {
-      // Existing synchronous process startup admission.
-      assertCurrent: () => {
-        authority.assertLegacyCurrent();
-      },
+      assertCurrent: assertNativeCurrent,
       assertCurrentAsync: nativeExecutionPolicy.assertCurrent,
       startOptions: appServer.start,
       timeoutMs: appServer.requestTimeoutMs,
@@ -547,7 +548,7 @@ export async function runCodexAppServerSideQuestion(
         request: CodexAppServerServerRequest,
         _scope: CodexThreadRouteScope,
         requestSignal: AbortSignal,
-        setExecutionTimeoutMs?: (timeoutMs: number) => void,
+        setExecutionTimeoutMs?: (timeoutMs: number | null) => void,
       ) => {
         const signal = AbortSignal.any([requestSignal, runAbortController.signal]);
         if (signal.aborted || !childThreadId || !turnId) {
@@ -607,6 +608,7 @@ export async function runCodexAppServerSideQuestion(
           call,
           config: params.cfg,
           toolBridge,
+          parentTimeoutMs: SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
         });
         setExecutionTimeoutMs?.(timeoutMs);
         const toolStartedAt = Date.now();
@@ -666,9 +668,7 @@ export async function runCodexAppServerSideQuestion(
           allowedEvents: nativeHookRelayEvents,
           signal: runAbortController.signal,
           runBeforeToolCall: sideRunParams.hostCapabilities.runBeforeToolCall,
-          assertActive: () => {
-            authority.assertLegacyCurrent();
-          },
+          assertActive: assertNativeCurrent,
           assertActiveAsync: nativeExecutionPolicy.assertCurrent,
           onPreToolUseFailure: (failure) => {
             if (!nativePreToolUseFailures.active && nativeToolLifecycleProjector) {
@@ -701,29 +701,24 @@ export async function runCodexAppServerSideQuestion(
             bindingIdentity,
             async () => {
               const assertCurrentBinding = () => {
-                assertCurrent();
+                assertNativeCurrent();
                 runAbortController.signal.throwIfAborted();
-                const current = options.bindingStore.read(bindingIdentity);
-                if (
-                  !(denyToolCalls
-                    ? isSameCodexAppServerThreadOwner(current, binding)
-                    : isDeepStrictEqual(current, binding))
-                ) {
-                  throw new Error("Codex side-question binding changed before fork");
-                }
-              };
-              const currentRequestOptions = () => {
-                const scoped = requestOptions();
-                return {
-                  ...scoped,
-                  withCurrent: authority.withCurrent,
-                  assertCurrent: () => {
-                    scoped.assertCurrent();
-                    assertCurrentBinding();
-                  },
-                };
               };
               assertCurrentBinding();
+              // The lease pins this snapshot; later native effects still require live authority.
+              const current = options.bindingStore.read(bindingIdentity);
+              if (
+                !(denyToolCalls
+                  ? isSameCodexAppServerThreadOwner(current, binding)
+                  : isDeepStrictEqual(current, binding))
+              ) {
+                throw new Error("Codex side-question binding changed before fork");
+              }
+              const currentRequestOptions = (): ReturnType<typeof requestOptions> => ({
+                ...requestOptions(),
+                withCurrent: (write) => nativeExecutionPolicy.admit(write, authority.withCurrent),
+                assertCurrent: assertCurrentBinding,
+              });
               if (binding.connectionScope === "supervision") {
                 const { thread } = await forkClient.request(
                   "thread/read",
@@ -831,28 +826,20 @@ export async function runCodexAppServerSideQuestion(
               try {
                 assertCurrentBinding();
                 if (
-                  supervisionModelSelection &&
-                  (response.model !== supervisionModelSelection.model ||
-                    response.modelProvider !== supervisionModelSelection.modelProvider)
+                  nativeModelSelection &&
+                  (response.model !== nativeModelSelection.model ||
+                    response.modelProvider !== nativeModelSelection.modelProvider)
                 ) {
                   throw new Error(
-                    "Codex supervised side thread did not preserve its native model and provider",
+                    "Codex side thread did not preserve its native model and provider",
                   );
                 }
-                const scoped = requestOptions();
                 if (!denyToolCalls) {
                   await refreshCodexThreadPolicy({
                     client: forkClient,
                     threadId: childThreadId,
                     developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,
-                    ...scoped,
-                    withCurrent: authority.withCurrent,
-                    signal: runAbortController.signal,
-                    assertCurrent: () => {
-                      assertCurrent();
-                      runAbortController.signal.throwIfAborted();
-                      scoped.assertCurrent();
-                    },
+                    ...currentRequestOptions(),
                   });
                 }
               } catch (error) {
@@ -875,7 +862,7 @@ export async function runCodexAppServerSideQuestion(
             thinkLevel: params.resolvedThinkLevel ?? "off",
             modelId: modelSelection.model,
             supportedReasoningEfforts: readCodexSupportedReasoningEfforts(
-              params.runtimeModel?.compat,
+              effectiveParams.runtimeModel?.compat,
             ),
           });
       const turnResponse = assertCodexTurnStartResponse(
@@ -926,8 +913,8 @@ export async function runCodexAppServerSideQuestion(
             {
               timeoutMs: appServer.requestTimeoutMs,
               signal: runAbortController.signal,
-              assertCurrent,
-              withCurrent: authority.withCurrent,
+              assertCurrent: assertNativeCurrent,
+              withCurrent: (write) => nativeExecutionPolicy.admit(write, authority.withCurrent),
             },
           )
           .catch((error: unknown) => {

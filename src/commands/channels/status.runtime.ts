@@ -1,4 +1,3 @@
-// Runtime-only rendering and config fallback for `openclaw channels status`.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
@@ -6,18 +5,31 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import {
+  hasConfiguredUnavailableCredentialStatus,
+  hasResolvedCredentialValue,
+} from "../../channels/account-snapshot-fields.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
+import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import {
+  resolveChannelAccountSnapshot,
+  buildReadOnlySourceChannelAccountSnapshot,
+} from "../../channels/plugins/status.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getConfiguredChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { prepareCliGatewayStateAccess } from "../../cli/gateway-rpc.runtime.js";
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { formatPhoneNumberForCli } from "../../infra/phone-number-presentation.js";
-import { listConfiguredAnnounceChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
+import {
+  listConfiguredAnnounceChannelIdsForConfig,
+  listExplicitConfiguredChannelIdsForConfig,
+} from "../../plugins/channel-plugin-ids.js";
+import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { requireValidConfig } from "../config-validation.js";
+import { requireValidConfigFileSnapshot } from "../config-validation.js";
 import {
   appendBaseUrlBit,
   appendEnabledConfiguredLinkedBits,
@@ -27,7 +39,6 @@ import {
   type ChatChannel,
   NO_CONFIGURED_CHAT_CHANNELS_LINE,
 } from "./shared.js";
-import { formatConfigChannelsStatusLines } from "./status-config-format.js";
 import type { ChannelsStatusOptions } from "./status.js";
 
 function formatEventLoopBits(value: unknown): string | null {
@@ -202,19 +213,20 @@ export async function renderChannelsStatusFallback(params: {
         `${gatewayAuthUnavailable ? "Gateway auth unavailable" : "Gateway not reachable"}: ${safeError}`,
     );
   }
-  const cfg = await requireValidConfig(runtime, { observe: false });
-  if (!cfg) {
+  await prepareCliGatewayStateAccess();
+  const snapshot = await requireValidConfigFileSnapshot(runtime, { observe: false });
+  if (!snapshot) {
     return;
   }
-  const { resolvedConfig } = await resolveCommandConfigWithSecrets({
-    config: cfg,
+  const sourceConfig = snapshot.config;
+  const { resolvedConfig: cfg } = await resolveCommandConfigWithSecrets({
+    config: sourceConfig,
     commandName: "channels status",
-    targetIds: getConfiguredChannelsCommandSecretTargetIds(cfg),
+    targetIds: getConfiguredChannelsCommandSecretTargetIds(sourceConfig),
     mode: "read_only_status",
     runtime,
   });
-  const snapshot = await readConfigFileSnapshot({ observe: false });
-  const mode = cfg.gateway?.mode === "remote" ? "remote" : "local";
+  const mode = sourceConfig.gateway?.mode === "remote" ? "remote" : "local";
   const requestedChannel = opts.channel
     ? (normalizeChannelId(opts.channel) ?? normalizeOptionalLowercaseString(opts.channel))
     : null;
@@ -226,20 +238,78 @@ export async function renderChannelsStatusFallback(params: {
       configOnly: true,
       config: { path: snapshot.path, mode },
       configuredChannels: listConfiguredAnnounceChannelIdsForConfig({
-        config: resolvedConfig,
-        activationSourceConfig: cfg,
+        config: cfg,
+        activationSourceConfig: sourceConfig,
         env: process.env,
       }).filter((channelId) => !requestedChannel || channelId === requestedChannel),
     });
     return;
   }
-  runtime.log(
-    (
-      await formatConfigChannelsStatusLines(
-        resolvedConfig,
-        { path: snapshot.path, mode },
-        { sourceConfig: cfg, channel: opts.channel, fallbackReason },
-      )
-    ).join("\n"),
+  const lines = [theme.warn(fallbackReason)];
+  if (snapshot.path) {
+    lines.push(`Config: ${snapshot.path}`);
+  }
+  lines.push(`Mode: ${mode}`, "");
+  const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
+    activationSourceConfig: sourceConfig,
+    includeSetupFallbackPlugins: true,
+  }).filter((plugin) => !requestedChannel || plugin.id === requestedChannel);
+  const visibleChannelIds = new Set<string>();
+  const statusLinesStart = lines.length;
+  for (const plugin of plugins) {
+    visibleChannelIds.add(plugin.id);
+    for (const accountId of plugin.config.listAccountIds(cfg)) {
+      const sourceSnapshot = await buildReadOnlySourceChannelAccountSnapshot({
+        plugin,
+        cfg: sourceConfig,
+        accountId,
+      });
+      const resolvedSnapshot = await resolveChannelAccountSnapshot({ plugin, cfg, accountId });
+      const accountSnapshot =
+        sourceSnapshot &&
+        hasConfiguredUnavailableCredentialStatus(sourceSnapshot) &&
+        (!hasResolvedCredentialValue(resolvedSnapshot) ||
+          (sourceSnapshot.configured === true && resolvedSnapshot.configured === false))
+          ? sourceSnapshot
+          : resolvedSnapshot;
+      const bits: string[] = [];
+      appendEnabledConfiguredLinkedBits(bits, accountSnapshot);
+      appendModeBit(bits, accountSnapshot);
+      appendTokenSourceBits(bits, accountSnapshot);
+      appendBaseUrlBit(bits, accountSnapshot);
+      lines.push(
+        buildChannelAccountLine(plugin.id, accountSnapshot, bits, {
+          channelLabel: plugin.meta.label ?? plugin.id,
+        }),
+      );
+    }
+  }
+  const missingChannelIds = [
+    ...new Set([
+      ...listExplicitConfiguredChannelIdsForConfig(sourceConfig),
+      ...listExplicitConfiguredChannelIdsForConfig(cfg),
+    ]),
+  ].filter(
+    (channelId) =>
+      (!requestedChannel || channelId === requestedChannel) && !visibleChannelIds.has(channelId),
   );
+  const missingHints = resolveMissingOfficialExternalChannelPluginRepairHints({
+    config: cfg,
+    activationSourceConfig: sourceConfig,
+    channelIds: missingChannelIds,
+  });
+  if (missingHints.length > 0) {
+    lines.push("", theme.warn("Missing official external plugins:"));
+    for (const hint of missingHints) {
+      lines.push(`- ${hint.label}: ${hint.repairHint}`);
+    }
+  }
+  if (lines.length === statusLinesStart) {
+    lines.push(theme.muted(NO_CONFIGURED_CHAT_CHANNELS_LINE));
+  }
+  lines.push(
+    "",
+    `Tip: ${formatDocsLink("/cli/status", "status --deep")} adds gateway health checks to status output (requires a reachable gateway).`,
+  );
+  runtime.log(lines.join("\n"));
 }

@@ -7,7 +7,7 @@ import {
   sendWebDirectInboundMessage,
 } from "./auto-reply.test-harness.js";
 import { monitorWebChannel } from "./auto-reply/monitor.js";
-import type { WebInboundCallbackMessage } from "./inbound.js";
+import type { WebInboundCallbackMessage } from "./inbound/types.js";
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();

@@ -157,15 +157,15 @@ export function createCommandTerminationController(params: {
         params.killGraceMs + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS,
       );
       processTreeSettlement = new Promise<void>((resolve) => {
-        const deadline = Date.now() + params.killGraceMs;
+        const deadline = performance.now() + params.killGraceMs;
         const check = () => {
           if (!groupAlive()) {
             cleanup = "cooperative";
             resolve();
             return;
           }
-          if (Date.now() < deadline) {
-            setTimeout(check, Math.min(25, deadline - Date.now()));
+          if (performance.now() < deadline) {
+            setTimeout(check, Math.min(25, deadline - performance.now()));
             return;
           }
           void forceAndObserve().then(resolve);

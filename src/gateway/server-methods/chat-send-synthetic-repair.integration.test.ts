@@ -12,7 +12,10 @@ import {
   LEGACY_MISSING_TOOL_RESULT_TEXT,
   makeMissingToolResult,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { anthropicTextTurn } from "../../../test/anthropic-text-turn.test-support.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -20,6 +23,7 @@ import type { AssistantMessage } from "../../llm/types.js";
 import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { createPluginEnabledGatewayTestEnv } from "../test-helpers.env.js";
 
 function readStoredRows(storePath: string, sessionId: string) {
   const database = new DatabaseSync(storePath, { readOnly: true });
@@ -39,58 +43,22 @@ function readStoredRows(storePath: string, sessionId: string) {
 it("chat.send replays synthetic repairs through session history and the registered messages transport", async () => {
   const state = await createOpenClawTestState({
     label: "chat-send-synthetic-repair",
-    env: {
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-    },
+    env: createPluginEnabledGatewayTestEnv(),
   });
   const provider = "replay-fixture";
   const model = "replay-proof";
   const modelRef = `${provider}/${model}`;
   const requests: MessageCreateParamsStreaming[] = [];
   const providerWork: Promise<void>[] = [];
+  let nextRequestReceived: ReturnType<typeof createDeferred<void>> | undefined;
   const endpoint = createServer((request, response) => {
     const work = (async () => {
       expect(request.method).toBe("POST");
       expect(request.url).toBe("/v1/messages");
       requests.push(JSON.parse(await readText(request)));
-      const events = [
-        {
-          type: "message_start",
-          message: {
-            id: "replay-message",
-            type: "message",
-            role: "assistant",
-            model,
-            content: [],
-            stop_reason: null,
-            stop_sequence: null,
-            usage: { input_tokens: 100, output_tokens: 0 },
-          },
-        },
-        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "text_delta", text: "REPLAY_SETTLED" },
-        },
-        { type: "content_block_stop", index: 0 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn", stop_sequence: null },
-          usage: { output_tokens: 5 },
-        },
-        { type: "message_stop" },
-      ];
+      nextRequestReceived?.resolve();
       response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end(
-        events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""),
-      );
+      response.end(anthropicTextTurn(model, "REPLAY_SETTLED", "replay-message", 100, 5));
     })();
     providerWork.push(work);
     void work.catch((error: unknown) => {
@@ -118,7 +86,6 @@ it("chat.send replays synthetic repairs through session history and the register
           skipBootstrap: true,
           model: { primary: modelRef, fallbacks: [] },
           models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
-          heartbeat: { every: "0m" },
         },
       },
       models: {
@@ -130,15 +97,12 @@ it("chat.send replays synthetic repairs through session history and the register
             baseUrl: `http://127.0.0.1:${address.port}`,
             apiKey: "synthetic-replay-provider-key",
             models: [
-              {
-                id: model,
+              modelDefinition(model, {
                 name: "Replay proof",
                 reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 contextWindow: 64000,
                 maxTokens: 256,
-              },
+              }),
             ],
           },
         },
@@ -234,6 +198,8 @@ it("chat.send replays synthetic repairs through session history and the register
           manager.flushPendingPersistence();
           const original = readStoredRows(target.storePath, sessionId);
           const requestCount = requests.length;
+          const requestReceived = createDeferred();
+          nextRequestReceived = requestReceived;
           const started = await client.request<{ runId: string; status: string }>("chat.send", {
             sessionKey,
             message: "Summarize the health check.",
@@ -241,6 +207,7 @@ it("chat.send replays synthetic repairs through session history and the register
             deliver: false,
           });
           expect(started.status).toBe("started");
+          await requestReceived.promise;
           await expect(
             client.request("agent.wait", { runId: started.runId, timeoutMs: 30000 }),
           ).resolves.toMatchObject({ status: "ok" });
@@ -255,28 +222,20 @@ it("chat.send replays synthetic repairs through session history and the register
           );
           const results = blocks.filter((block) => block.type === "tool_result");
           expect(results).toHaveLength(4);
-          expect.soft(results, scenario).toEqual([
-            expect.objectContaining({
-              tool_use_id: "callmissing",
-              content: late ? "LATE_ACTUAL_RESULT" : DEFAULT_MISSING_TOOL_RESULT_TEXT,
-              is_error: !late,
-            }),
-            expect.objectContaining({
-              tool_use_id: "callreal",
-              content: "REAL_SIBLING_RESULT",
-              is_error: false,
-            }),
-            expect.objectContaining({
-              tool_use_id: "callerror",
-              content: "File not found",
-              is_error: true,
-            }),
-            expect.objectContaining({
-              tool_use_id: "callquoted",
-              content: DEFAULT_MISSING_TOOL_RESULT_TEXT,
-              is_error: false,
-            }),
-          ]);
+          const resultBlock = (id: string, content: string, is_error: boolean) =>
+            expect.objectContaining({ tool_use_id: `call${id}`, content, is_error });
+          expect
+            .soft(results, scenario)
+            .toEqual([
+              resultBlock(
+                "missing",
+                late ? "LATE_ACTUAL_RESULT" : DEFAULT_MISSING_TOOL_RESULT_TEXT,
+                !late,
+              ),
+              resultBlock("real", "REAL_SIBLING_RESULT", false),
+              resultBlock("error", "File not found", true),
+              resultBlock("quoted", DEFAULT_MISSING_TOOL_RESULT_TEXT, false),
+            ]);
           expect(blocks.filter((block) => block.type === "tool_use")).toEqual(
             ["missing", "real", "error", "quoted"].map((id) =>
               expect.objectContaining({

@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
@@ -10,202 +10,139 @@ import { childSessionListQuery, fetchChildSessionRows } from "./child-session-da
 import {
   createGatewayHarness,
   createTestSessionCapability,
+  sessionsResult,
 } from "./session-capability.test-support.ts";
 
 const parentKey = "agent:main:parent";
 
-function childRow(index: number): GatewaySessionRow {
-  return {
+const childRows = (count: number): GatewaySessionRow[] =>
+  Array.from({ length: count }, (_, index) => ({
     key: `agent:worker:child-${index}`,
     spawnedBy: parentKey,
     kind: "direct",
     updatedAt: index,
-  };
-}
+  }));
 
-function listResult(
+const listResult = (
   sessions: GatewaySessionRow[],
   totalCount: number,
-  nextOffset: number | null,
-): SessionsListResult {
-  return {
-    ts: 1,
-    path: "",
-    count: sessions.length,
-    totalCount,
-    hasMore: nextOffset !== null,
-    nextOffset,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
+  nextOffset?: number | null,
+): SessionsListResult => ({
+  ...sessionsResult(sessions, 1),
+  totalCount,
+  hasMore: nextOffset === undefined ? undefined : nextOffset !== null,
+  nextOffset,
+});
+
+const capability = (request: GatewayRequestHandler) =>
+  createTestSessionCapability(createGatewayHarness(createTestGatewayClient(request)).gateway);
+
+const childQuery = childSessionListQuery(parentKey);
+const load = (sessions: ReturnType<typeof capability>) =>
+  fetchChildSessionRows({ sessions, parentKey, isCurrent: () => true });
+
+it.each([50, 101])("loads a %i-child roster and reconciles renamed rows", async (count) => {
+  const children = childRows(count);
+  const renamed = {
+    ...children[0]!,
+    sessionId: "persisted-child-0",
+    updatedAt: 20,
+    label: "New child name",
   };
-}
-
-function capability(request: GatewayRequestHandler) {
-  const sessions = createTestSessionCapability(
-    createGatewayHarness(createTestGatewayClient(request)).gateway,
-  );
-  onTestFinished(() => sessions.dispose());
-  return sessions;
-}
-
-describe("fetchChildSessionRows", () => {
-  it("loads a default 50-child Swarm roster in one request", async () => {
-    const children = Array.from({ length: 50 }, (_, index) => childRow(index));
-    const renamed = {
-      ...children[0]!,
-      sessionId: "persisted-child-0",
-      updatedAt: 20,
-      label: "New child name",
-    };
-    children[0] = renamed;
-    const previous = { ...renamed, updatedAt: 10, label: "Old child name" };
-    const sessions = capability((method, params) => {
-      expect(method).toBe("sessions.list");
-      return (params as { spawnedBy?: string }).spawnedBy === parentKey
-        ? listResult(children, children.length, null)
-        : listResult([previous], 1, null);
-    });
-    await sessions.refresh({ force: true, agentId: "worker" });
-    expect(sessions.state.result?.sessions[0]?.label).toBe(previous.label);
-    const list = vi.spyOn(sessions, "refreshList");
-
-    const rows = await fetchChildSessionRows({
-      sessions,
-      parentKey,
-      isCurrent: () => true,
-    });
-
-    expect(rows).toHaveLength(50);
-    expect(list).toHaveBeenCalledOnce();
-    expect(list).toHaveBeenCalledWith({
-      spawnedBy: parentKey,
-      limit: 100,
-      includeGlobal: false,
-      includeUnknown: false,
-      configuredAgentsOnly: true,
-    });
-    const sampled = rows?.find((row) => row.key === renamed.key);
-    expect(sampled).toBeDefined();
-    expect(sessions.reconcile(sampled)).toBe(true);
-    expect(sessions.state.result?.sessions.find((row) => row.key === renamed.key)?.label).toBe(
-      renamed.label,
-    );
+  children[0] = renamed;
+  const previous = { ...renamed, updatedAt: 10, label: "Old child name" };
+  const sessions = capability((method, params) => {
+    expect(method).toBe("sessions.list");
+    const { spawnedBy, offset = 0 } = params as { spawnedBy?: string; offset?: number };
+    return spawnedBy === parentKey
+      ? listResult(children.slice(offset, offset + 100), count, count > offset + 100 ? 100 : null)
+      : listResult([previous], 1, null);
   });
-
-  it("continues paging when a child roster exceeds the default page", async () => {
-    const firstPage = Array.from({ length: 100 }, (_, index) => childRow(index));
-    const lastPage = [childRow(100)];
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(listResult(firstPage, 101, 100))
-      .mockResolvedValueOnce(listResult(lastPage, 101, null));
-    const sessions = capability(request);
-    const list = vi.spyOn(sessions, "refreshList");
-
-    const rows = await fetchChildSessionRows({
-      sessions,
-      parentKey,
-      isCurrent: () => true,
-    });
-
-    expect(rows).toHaveLength(101);
-    expect(list).toHaveBeenCalledTimes(2);
-    expect(list.mock.calls[1]?.[0]).toMatchObject({ offset: 100, limit: 100 });
+  await sessions.refresh({ force: true, agentId: "worker" });
+  expect(sessions.state.result?.sessions[0]?.label).toBe(previous.label);
+  const list = vi.spyOn(sessions, "refreshList");
+  const rows = await load(sessions);
+  expect(rows).toHaveLength(count);
+  expect(list).toHaveBeenCalledWith({
+    spawnedBy: parentKey,
+    limit: 100,
+    includeGlobal: false,
+    includeUnknown: false,
+    configuredAgentsOnly: true,
   });
+  const sampled = rows?.find((row) => row.key === renamed.key);
+  expect(sessions.reconcile(sampled)).toBe(true);
+  expect(sessions.state.result?.sessions[0]?.label).toBe(renamed.label);
+});
 
-  it.each([
-    { count: 1, deleted: true },
-    { count: 2, deleted: false },
-    { count: 101, deleted: true },
-  ])(
-    "completes a $count-child window during deletion (deleted: $deleted)",
-    async ({ count, deleted }) => {
-      let children = Array.from({ length: count }, (_, index) => ({
-        ...childRow(index),
-        sessionId: "child-session-" + index,
-      }));
-      const target = children[0]!;
-      const deletion = createDeferred<{ ok: true; deleted: boolean }>();
-      const offsets: number[] = [];
-      const sessions = capability((method, params) => {
-        if (method === "sessions.delete") {
-          return deletion.promise;
-        }
-        expect(method).toBe("sessions.list");
-        const query = params as { spawnedBy?: string; offset?: number; limit?: number };
-        if (!query.spawnedBy) {
-          return listResult(children, children.length, null);
-        }
-        const offset = query.offset ?? 0;
-        offsets.push(offset);
-        // Optional cursor flags are absent: advance using raw page membership.
-        const page = children.slice(offset, offset + (query.limit ?? 100));
-        return {
-          ...listResult(page, children.length, null),
-          hasMore: undefined,
-          nextOffset: undefined,
-        };
-      });
-      await sessions.refresh({ force: true });
-      const removal = sessions.delete(target.key, { expectedSessionId: target.sessionId });
-      try {
-        const rows = await fetchChildSessionRows({ sessions, parentKey, isCurrent: () => true });
-        expect(rows).toHaveLength(count - 1);
-        expect(rows?.some((row) => row.key === target.key)).toBe(false);
-        expect(offsets).toEqual(count > 100 ? [0, 100] : [0]);
-        expect(sessions.listSnapshot(childSessionListQuery(parentKey)).result).toMatchObject({
-          count: count - 1,
-          totalCount: count,
-        });
-        if (deleted) {
-          children = children.slice(1);
-        }
-        deletion.resolve({ ok: true, deleted });
-        await removal;
-        expect(
-          await fetchChildSessionRows({ sessions, parentKey, isCurrent: () => true }),
-        ).toHaveLength(deleted ? count - 1 : count);
-      } finally {
-        deletion.resolve({ ok: true, deleted: false });
-        await removal;
-      }
-    },
+it.each([
+  { count: 1, deleted: true },
+  { count: 2, deleted: false },
+  { count: 101, deleted: true },
+])("loads $count children during deletion (deleted: $deleted)", async ({ count, deleted }) => {
+  let children = childRows(count).map((child, index) =>
+    Object.assign(child, { sessionId: "child-session-" + index }),
   );
+  const target = children[0]!;
+  const deletion = createDeferred<{ ok: true; deleted: boolean }>();
+  const sessions = capability((method, params) => {
+    if (method === "sessions.delete") {
+      return deletion.promise;
+    }
+    expect(method).toBe("sessions.list");
+    const query = params as { spawnedBy?: string; offset?: number; limit?: number };
+    if (!query.spawnedBy) {
+      return listResult(children, children.length, null);
+    }
+    const offset = query.offset ?? 0;
+    // Optional cursor flags are absent: advance using raw page membership.
+    const page = children.slice(offset, offset + (query.limit ?? 100));
+    return listResult(page, children.length);
+  });
+  await sessions.refresh({ force: true });
+  const removal = sessions.delete(target.key, { expectedSessionId: target.sessionId });
+  try {
+    const rows = await load(sessions);
+    expect(rows).toHaveLength(count - 1);
+    expect(rows?.some((row) => row.key === target.key)).toBe(false);
+    const snapshot = sessions.listSnapshot(childQuery);
+    expect(snapshot.result).toMatchObject({ count: count - 1, totalCount: count });
+    if (deleted) {
+      children = children.slice(1);
+    }
+    deletion.resolve({ ok: true, deleted });
+    await removal;
+    expect(await load(sessions)).toHaveLength(deleted ? count - 1 : count);
+  } finally {
+    deletion.resolve({ ok: true, deleted: false });
+    await removal;
+  }
+});
 
-  it.each([true, false])(
-    "requires a complete current window after moving pages (recovers: %s)",
-    async (recovers) => {
-      const children = Array.from({ length: 101 }, (_, index) => childRow(index));
-      let pass = -1;
-      let firstPage = children.slice(0, 100);
-      const request = vi.fn(async (_method: string, params?: unknown) => {
-        const offset = (params as { offset?: number })?.offset ?? 0;
-        if (offset === 0) {
-          pass += 1;
-          firstPage = pass % 2 === 1 ? children.slice(1) : children.slice(0, 100);
-          return listResult(firstPage, 101, 100);
-        }
-        const tail = recovers && pass >= 2 ? children[100]! : firstPage[0]!;
-        return listResult([tail], 101, null);
-      });
-      const sessions = capability(request);
-      const query = {
-        spawnedBy: parentKey,
-        limit: 100,
-        includeGlobal: false,
-        includeUnknown: false,
-        configuredAgentsOnly: true,
-      };
-      const load = fetchChildSessionRows({ sessions, parentKey, isCurrent: () => true });
-      if (recovers) {
-        expect(await load).toHaveLength(101);
-        expect(sessions.listSnapshot(query).result?.sessions).toHaveLength(101);
-        expect(request).toHaveBeenCalledTimes(6);
-      } else {
-        await expect(load).rejects.toThrow("child session list kept changing");
-        expect(sessions.listSnapshot(query).result?.sessions).toHaveLength(100);
-        expect(request).toHaveBeenCalledTimes(8);
-      }
-    },
-  );
+it.each([
+  { recovers: true, calls: 6, count: 101 },
+  { recovers: false, calls: 8, count: 100 },
+])("retries moving pages (recovers: $recovers)", async ({ recovers, calls, count }) => {
+  const children = childRows(101);
+  let pass = -1;
+  let firstPage = children.slice(0, 100);
+  const request = vi.fn(async (_method: string, params?: unknown) => {
+    const offset = (params as { offset?: number })?.offset ?? 0;
+    if (offset === 0) {
+      pass += 1;
+      firstPage = pass % 2 === 1 ? children.slice(1) : children.slice(0, 100);
+      return listResult(firstPage, 101, 100);
+    }
+    const tail = recovers && pass >= 2 ? children[100]! : firstPage[0]!;
+    return listResult([tail], 101, null);
+  });
+  const sessions = capability(request);
+  const pending = load(sessions);
+  if (recovers) {
+    expect(await pending).toHaveLength(101);
+  } else {
+    await expect(pending).rejects.toThrow("child session list kept changing");
+  }
+  expect(sessions.listSnapshot(childQuery).result?.sessions).toHaveLength(count);
+  expect(request).toHaveBeenCalledTimes(calls);
 });

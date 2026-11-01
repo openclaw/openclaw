@@ -73,6 +73,32 @@ test -n "$CRABBOX"
 - Repairs: verify upstream; use clean task-owned checkout; preserve installed
   binary + unrelated source. Never trust sibling checkout merely by name.
 
+## Lease lifetime
+
+- TTL counts from creation, including hydration; idle timeout counts inactivity.
+  Earlier deadline wins. Defaults: 30m each, 4h maximum. Owner/org overrides can
+  allow up to 24h; use effective policy and sanitized clamp notices, not requested
+  durations. Policy tightening also applies to live leases.
+- `--keep` and `stop: never` do not prevent expiry. Request explicit bounded TTL
+  and idle for retained direct leases. Plain heartbeat, setup, sync, SSH, and
+  desktop use do not extend total TTL; `run` requests bounded auto-extension only
+  while a command executes, within policy, budget, and provider capability.
+- Before long source-dependent work, inspect remaining total lifetime. If allowed,
+  request one bounded `extend <id> --ttl <desired-total> --json`; extension does
+  not reset idle. Denied/budget/unsupported/nonadvancing/inactive outcomes require
+  a visible skip or failure, never provider switching or infinite lease chains.
+  Creation-fixed providers such as Daytona need enough TTL at allocation.
+- Direct guest-refresh failure can leave a longer provider deadline with the old
+  on-box deadline. Keep the same local state and retry the same fixed total TTL
+  only to reconcile; do not treat the failed extension as protection.
+- Honor trusted `directLeases: deny` and `directLeaseAllow`. A denied provider
+  requires the configured coordinator route; never bypass with direct credentials.
+  Testbox retains its native job and idle limits;
+  `--ttl` does not extend a delegated workflow.
+- `list` shows live coordinator leases; `list --retained` adds kept terminal
+  resources whose cleanup is unconfirmed. Use exact-ID inspect/stop for recovery.
+  Retain claims and recovery state until a blocking stop confirms completion.
+
 ## Trusted Testbox
 
 Resolved provider = Testbox (or explicitly requested): commands preserve it.
@@ -100,7 +126,10 @@ Rules:
   `--no-sync` for remote baseline: Blacksmith has no native bypass; released
   Crabbox versions can silently ignore flag. Unchanged intentional rerun ≠ exception.
 - `--reclaim` only for deliberate checkout-path ownership transfer.
-- Base/head change: stop; rewarm. No stale-lease override.
+- Follow the consumer's allocation receipt for reuse. Compatible source commits
+  may reuse a lease when task, physical checkout, base, dependencies, preparation,
+  and workflow/job/ref remain unchanged. Keep the original allocation provenance.
+  Incompatible receipt: stop; rewarm. No stale-lease override.
 - Raw SHA unreliable for `warmup --ref`; use branch/tag.
 - `blacksmith testbox list` hides states. Use `list --all` or `status --id <tbx_id>`.
 - Testbox status/stop: `--id`. No status `--json`.
@@ -136,7 +165,7 @@ env -u CRABBOX_AWS_INSTANCE_PROFILE \
   --provider aws --network public --tailscale=false \
   --tailscale-exit-node= \
   --tailscale-exit-node-allow-lan-access=false \
-  --keep --timing-json
+  --ttl 4h --idle-timeout 90m --keep --timing-json
 
 "$CRABBOX" inspect --provider aws --id <cbx_id> --json | \
   jq -e '.network == "public" and .tailscale == null' >/dev/null

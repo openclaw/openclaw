@@ -366,15 +366,11 @@ function buildCodexDiagnosticsSessions(
         accountId:
           normalizeOptionalString(delivery?.accountId) ??
           normalizeOptionalString(origin?.accountId) ??
-          (isCurrent ? (params.ctx.AccountId ?? undefined) : undefined),
+          (isCurrent ? params.ctx.AccountId : undefined),
         messageThreadId:
           delivery?.threadId ??
           origin?.threadId ??
-          (isCurrent &&
-          (typeof params.ctx.MessageThreadId === "string" ||
-            typeof params.ctx.MessageThreadId === "number")
-            ? params.ctx.MessageThreadId
-            : undefined),
+          (isCurrent ? params.ctx.MessageThreadId : undefined),
         threadParentId: isCurrent ? normalizeOptionalString(params.ctx.ThreadParentId) : undefined,
       };
     });

@@ -1,11 +1,53 @@
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { type FastMode, normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir } from "../agents/agent-scope.js";
+import { prepareAuthProfileProvider } from "../agents/auth-profiles/store-runtime.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { shouldPreserveSessionAuthProfileOverride } from "../sessions/auth-profile-preservation.js";
 import { resolveSessionPatchModelSelection } from "./server-methods/sessions-patch-model-selection.js";
+import type { CreateGatewaySessionParams } from "./session-create-service.types.js";
+
+/** Project requested settings without turning omitted fields into clearing mutations. */
+export function buildSessionCreateSettingsPatch(
+  params: Pick<
+    CreateGatewaySessionParams,
+    | "category"
+    | "agentRuntime"
+    | "cyberAccessProgram"
+    | "toolOverrides"
+    | "communication"
+    | "permissionMode"
+  >,
+  selected: {
+    key: string;
+    label?: string;
+    model?: string;
+    contextWindow?: string;
+    thinkingLevel?: string;
+    fastMode?: FastMode;
+  },
+) {
+  // Patch appliers read key presence as caller intent (present = change, null = clear).
+  // Omitted model/context/effort fields must stay absent to retain selection state.
+  return {
+    key: selected.key,
+    label: selected.label,
+    category: normalizeOptionalString(params.category),
+    ...(selected.model ? { model: selected.model } : {}),
+    ...(params.agentRuntime !== undefined ? { agentRuntime: params.agentRuntime } : {}),
+    ...(selected.contextWindow ? { contextWindow: selected.contextWindow } : {}),
+    ...(selected.thinkingLevel ? { thinkingLevel: selected.thinkingLevel } : {}),
+    ...(params.cyberAccessProgram !== undefined
+      ? { cyberAccessProgram: params.cyberAccessProgram }
+      : {}),
+    ...(selected.fastMode !== undefined ? { fastMode: selected.fastMode } : {}),
+    ...(params.toolOverrides !== undefined ? { toolOverrides: params.toolOverrides } : {}),
+    ...(params.communication !== undefined ? { communication: params.communication } : {}),
+    ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
+  };
+}
 
 /** Creation can adopt a key, but only an explicit settings mutation can replace its policy. */
 export function sessionCreatePolicyAdoptionError(
@@ -37,6 +79,7 @@ export async function existingSessionSelectionWouldChange(params: {
   requestedModel?: string;
   requestedAgentRuntime?: string;
   requestedContextWindow?: string;
+  requestedCyberAccessProgram?: SessionEntry["cyberAccessProgram"] | null;
   requestedFastMode?: FastMode;
   requestedThinkingLevel?: string;
   subagentModelHint?: string;
@@ -50,6 +93,12 @@ export async function existingSessionSelectionWouldChange(params: {
   if (
     params.requestedAgentRuntime !== undefined &&
     params.requestedAgentRuntime !== params.existingEntry.agentRuntimeOverride
+  ) {
+    return true;
+  }
+  if (
+    params.requestedCyberAccessProgram !== undefined &&
+    (params.requestedCyberAccessProgram ?? undefined) !== params.existingEntry.cyberAccessProgram
   ) {
     return true;
   }
@@ -120,13 +169,19 @@ export async function existingSessionSelectionWouldChange(params: {
   }
   const existingProfile = normalizeOptionalString(params.existingEntry.authProfileOverride);
   const requestedProfile = normalizeOptionalString(resolved.profile);
+  const agentDir = resolveAgentDir(params.cfg, params.agentId);
+  const recordedProvider =
+    requestedProfile === undefined && existingProfile
+      ? await prepareAuthProfileProvider({ agentDir, profileId: existingProfile })
+      : undefined;
   const profileWouldChange =
     requestedProfile !== undefined
       ? requestedProfile !== existingProfile
       : existingProfile !== undefined &&
         !shouldPreserveSessionAuthProfileOverride({
           cfg: params.cfg,
-          agentDir: resolveAgentDir(params.cfg, params.agentId),
+          agentDir,
+          recordedProvider,
           currentProvider:
             params.existingEntry.providerOverride ??
             params.existingEntry.modelProvider ??

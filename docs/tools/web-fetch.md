@@ -12,6 +12,14 @@ sidebarTitle: "Web Fetch"
 markdown or text). It does **not** execute JavaScript. For JS-heavy sites or
 login-protected pages, use the [Web Browser](/tools/browser) instead.
 
+Basic HTML extraction preserves boundaries around block content such as quotes,
+figure captions, and collapsible sections.
+
+HTML cleanup excludes text hidden by recognized inline styles, including scale
+transforms that collapse the X or Y axis, such as `scale(0, 0)` and
+`scale3d(0, 0, 0)`. Nonzero scales and a zero Z axis alone remain visible.
+Basic HTML extraction keeps definition-list terms and values on separate lines.
+
 ## Quick start
 
 Enabled by default, no configuration needed:
@@ -27,7 +35,13 @@ URL to fetch. `http(s)` only.
 </ParamField>
 
 <ParamField path="extractMode" type="'markdown' | 'text'" default="markdown">
-Output format after main-content extraction.
+Output format after main-content extraction. For Markdown responses, text mode
+normalizes prose whitespace but preserves indentation, repeated spaces, tabs,
+and blank lines inside code blocks fenced with backticks or tildes.
+Text mode removes complete link destinations, including nested parentheses.
+An escaped `!` before a link stays literal rather than causing the link text to
+be omitted as an image.
+Readability text output keeps headings, paragraphs, and list items on separate lines.
 </ParamField>
 
 <ParamField path="maxChars" type="number">
@@ -283,6 +297,25 @@ outbound policy after DNS resolution.
   pinning. Hostname matching ignores case and a single trailing DNS dot in
   either the URL or the `NO_PROXY` entry.
 </Note>
+
+## Saved output
+
+When fetched content exceeds the inline limit, `web_fetch` includes a `spill.path`
+and a **Full output** location. Use `read` with that path and bounded `offset`/`limit`
+arguments to retrieve the omitted content. Saved output retains the untrusted-content
+warning and is capped at 2,000,000 characters; `spill.truncated` indicates an
+incomplete saved response.
+
+Local Docker and Podman sandboxes save this output in their existing private
+input-staging area, accessible through the sandbox reader. Cached saved paths remain
+scoped to the requesting session and sandbox workspace. Recovery also works when
+guest workspace access is read-only: the trusted input-staging owner prepares the
+file without granting guest write access.
+
+Other backends, including remote-shell sandboxes, need a prepared input-staging
+capability before saved output is available. Without it, the inline result reports
+that full output is unavailable, makes no staging write, and advertises no host-only
+path. An unsuccessful save is not cached.
 
 ## Limits and safety
 

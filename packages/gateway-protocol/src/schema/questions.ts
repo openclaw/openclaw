@@ -1,9 +1,10 @@
-// Gateway Protocol schema module defines transient operator questions.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { withSince } from "./since.js";
+// Gateway Protocol schema module defines transient operator questions.
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 const QuestionIdSchema = Type.String({ pattern: "^[a-z][a-z0-9_]*$" });
 const QuestionResolutionIdSchema = withSince(
@@ -35,10 +36,10 @@ const QuestionResourcePreviewSchema = Type.Union([
 
 const QuestionResourceInputSchema = closedObject({
   viewId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
-  selection: Type.Union([Type.Literal("explicit"), Type.Literal("implicit")]),
+  selection: stringLiteralUnion(["explicit", "implicit"]),
   userOptions: Type.Optional(
     closedObject({
-      kind: Type.Union([Type.Literal("file"), Type.Literal("directory")]),
+      kind: stringLiteralUnion(["file", "directory"]),
       accept: Type.Optional(Type.Array(Type.String({ maxLength: 128 }), { maxItems: 32 })),
     }),
   ),
@@ -55,7 +56,7 @@ export const QuestionOptionSchema = closedObject({
 
 export const QuestionSecretStoreBindingSchema = closedObject({
   name: Type.String({ minLength: 1, maxLength: 128, pattern: "^[A-Z][A-Z0-9_]{0,127}$" }),
-  kind: Type.Union([Type.Literal("secret"), Type.Literal("env")]),
+  kind: stringLiteralUnion(["secret", "env"]),
   allowedHosts: Type.Optional(QuestionSecretStoreAllowedHostsSchema),
   reason: Type.Optional(Type.String({ maxLength: 200 })),
 });
@@ -98,11 +99,11 @@ export const QuestionAnswersSchema = closedObject({
   answers: Type.Record(QuestionIdSchema, Type.Array(Type.String())),
 });
 
-export const QuestionStatusSchema = Type.Union([
-  Type.Literal("pending"),
-  Type.Literal("answered"),
-  Type.Literal("cancelled"),
-  Type.Literal("expired"),
+export const QuestionStatusSchema = stringLiteralUnion([
+  "pending",
+  "answered",
+  "cancelled",
+  "expired",
 ]);
 
 /**

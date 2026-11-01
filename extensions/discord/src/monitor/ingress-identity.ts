@@ -42,7 +42,7 @@ function normalizeDiscordNameSubject(value: string): string | null {
   const nameSlug = normalizeDiscordAllowList([value], DISCORD_ALLOW_LIST_PREFIXES)
     ?.names.values()
     .next().value;
-  return typeof nameSlug === "string" && nameSlug ? nameSlug : null;
+  return nameSlug || null;
 }
 
 export const discordIngressIdentity = defineStableChannelIngressIdentity({

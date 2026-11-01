@@ -1,7 +1,6 @@
 import { foldNodeProp } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { classHighlighter, highlightCode } from "@lezer/highlight";
-import { html } from "lit";
 import { loadCodeLanguage } from "../../../components/code-language.ts";
 import type { DiffSyntaxFold } from "../../../lib/chat/session-diff-folds.ts";
 import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
@@ -11,6 +10,21 @@ import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
 const MAX_HIGHLIGHT_CHARS = 120_000;
 
 export type DiffHighlightToken = { text: string; classes: string };
+
+// A retained disclosure marker is transparent only when its complete numbered context follows it.
+function isRevealedGap(lines: readonly DiffLine[], index: number): boolean {
+  const gap = lines[index]?.gap;
+  if (!gap || gap.count < 1 || gap.count > lines.length - index - 1) {
+    return false;
+  }
+  for (let offset = 0; offset < gap.count; offset++) {
+    const line = lines[index + offset + 1]!;
+    if (line.kind !== "ctx" || line.lineNo !== gap.newStart + offset) {
+      return false;
+    }
+  }
+  return true;
+}
 
 export async function analyzeDiffSyntax(lines: readonly DiffLine[], path: string, oldPath = path) {
   const highlighted = new Map<DiffLine, DiffHighlightToken[]>();
@@ -24,7 +38,11 @@ export async function analyzeDiffSyntax(lines: readonly DiffLine[], path: string
   }
   let section: { path: string; oldPath: string; lines: DiffLine[] } = { path, oldPath, lines: [] };
   const sections: (typeof section)[] = [];
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!;
+    if (line.kind === "skip" && isRevealedGap(lines, index)) {
+      continue;
+    }
     if (line.kind === "file" || line.kind === "skip") {
       sections.push(section);
       section =
@@ -137,27 +155,4 @@ export async function analyzeDiffSyntax(lines: readonly DiffLine[], path: string
     }),
   );
   return { highlighted, folds };
-}
-
-export async function highlightDiffTokens(
-  lines: readonly DiffLine[],
-  path: string,
-  oldPath = path,
-) {
-  return (await analyzeDiffSyntax(lines, path, oldPath)).highlighted;
-}
-
-export async function highlightDiffLines(lines: readonly DiffLine[], path: string, oldPath = path) {
-  const tokens = await highlightDiffTokens(lines, path, oldPath);
-  return new Map(
-    [...tokens].map(
-      ([line, parts]) =>
-        [
-          line,
-          parts.map(({ text, classes }) =>
-            classes ? html`<span class=${classes}>${text}</span>` : text,
-          ),
-        ] as const,
-    ),
-  );
 }

@@ -60,12 +60,7 @@ export {
   listSlackDirectoryGroupsFromConfig,
   listSlackDirectoryPeersFromConfig,
 } from "./src/directory-config.js";
-export {
-  handleSlackHttpRequest,
-  normalizeSlackWebhookPath,
-  registerSlackHttpHandler,
-  type SlackHttpRequestHandler,
-} from "./src/http/index.js";
+export { normalizeSlackWebhookPath } from "./src/http/paths.js";
 export type {
   SlackInteractiveHandlerContext,
   SlackInteractiveHandlerRegistration,

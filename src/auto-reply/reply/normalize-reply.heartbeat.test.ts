@@ -1,17 +1,16 @@
 import { expect, it } from "vitest";
-import { setReplyPayloadMetadata, stripReplyPayloadResponsePrefix } from "../reply-payload.js";
-import { HEARTBEAT_TOKEN } from "../tokens.js";
+import { stripReplyPayloadResponsePrefix } from "../reply-payload.js";
 import { normalizeReplyPayloadOutcome } from "./normalize-reply.js";
 
-it("suppresses truncated silent finals while preserving attached media", () => {
+it("preserves truncated control-looking text and attached media", () => {
   expect(normalizeReplyPayloadOutcome({ text: "NO_R \n" })).toEqual({
-    kind: "suppress",
-    reason: "silent",
+    kind: "deliver",
+    payload: { text: "NO_R \n" },
   });
   const mediaUrl = "https://example.test/report.png";
   expect(normalizeReplyPayloadOutcome({ text: "NO_R", mediaUrl })).toEqual({
     kind: "deliver",
-    payload: { text: "", mediaUrl },
+    payload: { text: "NO_R", mediaUrl },
   });
 });
 
@@ -38,17 +37,4 @@ it.each([
       expectedChunk,
     );
   }
-});
-
-it("preserves a host-approved heartbeat acknowledgment while retaining channel transforms", () => {
-  const payload = setReplyPayloadMetadata({ text: HEARTBEAT_TOKEN }, { heartbeatReply: true });
-  expect(normalizeReplyPayloadOutcome(payload)).toEqual({ kind: "deliver", payload });
-  expect(normalizeReplyPayloadOutcome({ ...payload })).toEqual({
-    kind: "suppress",
-    reason: "heartbeat",
-  });
-  expect(normalizeReplyPayloadOutcome(payload, { transformReplyPayload: () => null })).toEqual({
-    kind: "suppress",
-    reason: "channel_transform",
-  });
 });

@@ -75,10 +75,9 @@ export function createOpenAIServiceTierObservationWrapper(
         return;
       }
       const responseTier = observation.rejected ? undefined : observation.responseTier;
-      recordObservation(model, { requestedTier, responseTier });
-      // Catalog changes are deduplicated; each fulfilled request still needs attribution.
+      const changed = recordObservation(model, { requestedTier, responseTier });
       if (requestedTier !== responseTier) {
-        log.info(
+        log[changed ? "info" : "debug"](
           `OpenAI ${requestedTier} requested; ${responseTier ? `served as ${responseTier}` : "rejected"} for the selected account/model route.`,
           {
             ...attribution,

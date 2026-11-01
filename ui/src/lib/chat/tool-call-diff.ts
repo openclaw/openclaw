@@ -176,31 +176,12 @@ function compactLineDiff(lines: DiffLine[], inputTruncated: boolean): DiffLine[]
   return preview;
 }
 
-/**
- * Compute a line diff between two snippets (no file line numbers available).
- * Bounded LCS comparison retains deletion-first alignment for equal-length paths.
- */
-export function computeLineDiff(oldText: string, newText: string): LineDiffResult {
-  const allOldLines = splitDiffLines(oldText);
-  const allNewLines = splitDiffLines(newText);
-  const inputTruncated =
-    allOldLines.length > MAX_DIFF_INPUT_LINES || allNewLines.length > MAX_DIFF_INPUT_LINES;
-  const inputsEqual =
-    allOldLines.length === allNewLines.length &&
-    allOldLines.every((line, index) => line === allNewLines[index]);
-  const comparisonTruncated = inputTruncated && !inputsEqual;
-  const lines: DiffLine[] = [];
-  // Reconstruction consumes equal leading lines before consulting the LCS table.
-  let prefix = 0;
-  while (
-    prefix < Math.min(allOldLines.length, allNewLines.length, MAX_DIFF_INPUT_LINES) &&
-    allOldLines[prefix] === allNewLines[prefix]
-  ) {
-    lines.push({ kind: "ctx", text: allOldLines[prefix]! });
-    prefix++;
-  }
-  const oldLines = allOldLines.slice(prefix, MAX_DIFF_INPUT_LINES);
-  const newLines = allNewLines.slice(prefix, MAX_DIFF_INPUT_LINES);
+/** Callers bound input sizes; both line and inline diffs use deletion-first LCS ties. */
+export function visitTextDiff(
+  oldLines: readonly string[],
+  newLines: readonly string[],
+  visit: (kind: "ctx" | "del" | "add", text: string) => void,
+): void {
   const stride = newLines.length + 1;
   // The extra row/column are zero sentinels; bounded LCS lengths fit in Uint16.
   const lcs = new Uint16Array((oldLines.length + 1) * stride);
@@ -217,20 +198,47 @@ export function computeLineDiff(oldText: string, newText: string): LineDiffResul
     const oldLine = oldLines[i];
     const newLine = newLines[j];
     if (oldLine !== undefined && oldLine === newLine) {
-      lines.push({ kind: "ctx", text: oldLine });
+      visit("ctx", oldLine);
       i++;
       j++;
     } else if (
       oldLine !== undefined &&
       (newLine === undefined || lcs[(i + 1) * stride + j]! >= lcs[i * stride + j + 1]!)
     ) {
-      lines.push({ kind: "del", text: oldLine });
+      visit("del", oldLine);
       i++;
     } else if (newLine !== undefined) {
-      lines.push({ kind: "add", text: newLine });
+      visit("add", newLine);
       j++;
     }
   }
+}
+
+/** Compute a bounded line diff between snippets, without file line numbers. */
+export function computeLineDiff(oldText: string, newText: string): LineDiffResult {
+  const allOldLines = splitDiffLines(oldText);
+  const allNewLines = splitDiffLines(newText);
+  const inputTruncated =
+    allOldLines.length > MAX_DIFF_INPUT_LINES || allNewLines.length > MAX_DIFF_INPUT_LINES;
+  const inputsEqual =
+    allOldLines.length === allNewLines.length &&
+    allOldLines.every((line, index) => line === allNewLines[index]);
+  const comparisonTruncated = inputTruncated && !inputsEqual;
+  const lines: DiffLine[] = [];
+  // Exclude equal leading lines from the LCS allocation.
+  let prefix = 0;
+  while (
+    prefix < Math.min(allOldLines.length, allNewLines.length, MAX_DIFF_INPUT_LINES) &&
+    allOldLines[prefix] === allNewLines[prefix]
+  ) {
+    lines.push({ kind: "ctx", text: allOldLines[prefix]! });
+    prefix++;
+  }
+  visitTextDiff(
+    allOldLines.slice(prefix, MAX_DIFF_INPUT_LINES),
+    allNewLines.slice(prefix, MAX_DIFF_INPUT_LINES),
+    (kind, text) => lines.push({ kind, text }),
+  );
   const preview = compactLineDiff(lines, comparisonTruncated);
   return comparisonTruncated
     ? { kind: "truncated", lines: preview }

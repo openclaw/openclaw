@@ -1,3 +1,6 @@
+import type { JSX } from "@solidjs/web";
+import type { IconName } from "./icon-data.ts";
+
 export type PickerOption = {
   value: string;
   label: string;
@@ -6,7 +9,11 @@ export type PickerOption = {
   disabled?: boolean;
 };
 
-export type PickerGroup = { id: string; label: string; leading?: unknown };
+export type PickerGroup = { id: string; label: string; leading?: JSX.Element };
+export type PickerFocusHandle = {
+  trigger: HTMLButtonElement;
+  elements(): readonly HTMLElement[];
+};
 export type PickerParams<Option extends PickerOption> = {
   id?: string;
   label: string;
@@ -23,12 +30,18 @@ export type PickerParams<Option extends PickerOption> = {
   sheet?: boolean;
   /** `true` searches long lists; `"always"` keeps the field for short lists too. */
   searchable?: boolean | "always";
+  /** Supply intrinsic-width content for large flat catalogs; undefined declines windowing. */
+  windowed?: (visibleOptions: readonly Option[]) => JSX.Element;
   searchPlaceholder?: string;
   groupBy?: (option: Option) => PickerGroup | undefined;
   showOptionTooltips?: boolean;
+  /** Trigger chevron for anchored menus; submenus and sheets keep their own direction. */
+  triggerIcon?: IconName;
   showSelectedDescription?: boolean;
   onOpen?: () => void;
+  /** Exposes this mounted picker's controls to an enclosing focus boundary. */
+  focusRef?: (handle: PickerFocusHandle) => void;
   onChange: (value: string) => void;
   onChangeTarget?: (value: string, select: HTMLElement) => void;
-  renderLeading?: (option: Option) => unknown;
+  renderLeading?: (option: Option) => JSX.Element;
 };

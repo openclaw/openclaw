@@ -3,7 +3,7 @@ import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/sess
 import type { SkillUsagePath } from "../../skills/types.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveRuntimeSkillsPrompt } from "../embedded-agent-runner/skills-prompt.js";
-import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
+import { ensureSandboxWorkspaceForSession } from "../sandbox/context.js";
 import type { RunCliAgentParams } from "./types.js";
 
 export async function resolveCliSkillsPrompt(params: {
@@ -18,7 +18,7 @@ export async function resolveCliSkillsPrompt(params: {
   params.assertCurrent();
   const agentWorkspaceDir = resolveAgentWorkspaceDir(params.config ?? {}, params.agentId);
   const executionWorkspace = resolveSessionSkillExecutionWorkspace(
-    params.run.sessionEntry?.worktree?.canonicalWorkspaceDir,
+    params.run.sessionEntry,
     params.executionWorkspaceDir,
   );
   const skillsSnapshot =

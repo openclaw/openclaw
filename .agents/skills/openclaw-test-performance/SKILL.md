@@ -24,7 +24,7 @@ guesswork.
    - Prefer `pnpm test:perf:groups --full-suite --allow-failures --output <file>`
      for full-suite ranking.
    - For bundled plugin breadth, run the smallest relevant `pnpm
-test:extensions:batch <plugin[,plugin...]>` or plugin-inspector command
+     test:extensions:batch <plugin[,plugin...]>` or plugin-inspector command
      before jumping to the full extension sweep.
    - For a scoped hotspot use:
      `/usr/bin/time -l pnpm test <file-or-files> --maxWorkers=1 --reporter=verbose`
