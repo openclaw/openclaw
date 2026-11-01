@@ -71,11 +71,11 @@ export async function throwTtsProjectionError(
   error: unknown,
   cleanup: () => void | Promise<void>,
 ): Promise<never> {
-  try {
-    await Promise.resolve().then(cleanup);
-  } catch (cleanupError) {
-    throw new AggregateError([error, cleanupError], formatErrorMessage(error), { cause: error });
-  }
+  await Promise.resolve()
+    .then(cleanup)
+    .catch((cleanupError: unknown) => {
+      throw new AggregateError([error, cleanupError], formatErrorMessage(error), { cause: error });
+    });
   throw error;
 }
 
