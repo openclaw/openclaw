@@ -82,3 +82,4 @@ export const detailsSnapshotSchema = json.optional(
 );
 
 export type ChatDetailsSnapshot = NonNullable<json.SnapshotValue<typeof detailsSnapshotSchema>>;
+export type DetailsSnapshotPatch = Partial<Omit<ChatDetailsSnapshot, "locale">>;
