@@ -53,7 +53,7 @@ function labels(selector = ".settings-sidebar__item-label") {
 
 function requestedIdentityIds(ensure: SidebarProps["agentIdentity"]["ensure"]) {
   return [...new Set(vi.mocked(ensure).mock.calls.flatMap(([ids]) => ids))].toSorted((a, b) =>
-    a.localeCompare(b),
+    (a ?? "").localeCompare(b ?? ""),
   );
 }
 
