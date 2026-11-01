@@ -133,6 +133,24 @@ function savedPrompts(prompt: string, promptChars = 0) {
   };
 }
 
+it.each([false, true])(
+  "owns mutable list entries without copying fresh metadata (participants: %s)",
+  async (includeParticipants) => {
+    const worktree = { id: "list-worktree", branch: "main", repoRoot: "/repo" };
+    const scope = await seed("list-ownership", { worktree });
+    const read = () => listSessionEntriesReadOnly({ ...scope, includeParticipants });
+    read();
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    const [row] = read();
+    expect(row?.entry.worktree).toEqual(worktree);
+    if (!includeParticipants) {
+      expect(clone).not.toHaveBeenCalled();
+    }
+    row!.entry.worktree!.branch = "reader-local";
+    expect(read()[0]?.entry.worktree).toEqual(worktree);
+  },
+);
+
 it("reopens pre-device-folder entries through the codec, full accessor, and list cache", async () => {
   const scope = createSessionScope("pre-device-folder");
   const previousEntry: SessionEntry = {

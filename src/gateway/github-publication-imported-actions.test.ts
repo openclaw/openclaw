@@ -112,6 +112,7 @@ async function fixture(previousPublication = false, prepared = true, bound = tru
   let onRead: ((endpoint: string) => Promise<void>) | undefined;
   let permission = "write";
   let loseEditResponse = false;
+  let loseReviewResponse = false;
   mocks.runCommand.mockImplementation(async (argv: string[], options) => {
     if (argv[0] !== "gh" || !argv.includes("--method")) {
       return await previous(argv, options);
@@ -146,6 +147,9 @@ async function fixture(previousPublication = false, prepared = true, bound = tru
       state.state = "closed";
       state.merge_commit_sha = "e".repeat(40);
     } else if (endpoint.endsWith("/comments")) {
+      if (loseReviewResponse) {
+        throw new Error("Connection lost after GitHub accepted the review request");
+      }
       return commandResult(
         JSON.stringify({
           id: 123,
@@ -188,6 +192,9 @@ async function fixture(previousPublication = false, prepared = true, bound = tru
     loseEditResponse() {
       loseEditResponse = true;
     },
+    loseReviewResponse() {
+      loseReviewResponse = true;
+    },
     setPermission(value: string) {
       permission = value;
     },
@@ -199,6 +206,58 @@ describe("actions on the imported original PR", () => {
     creatorEmail: "publication-guest@example.test",
     sandbox: "required",
     realWorktree: true,
+  });
+
+  it.each(["guest", "admin"] as const)(
+    "requests re-review of an explicit verified PR without importing source (%s)",
+    async (actor) => {
+      const f = await fixture(false, false, false);
+      f.base.permissions.push = false;
+      f.state.maintainer_can_modify = false;
+      if (actor === "admin") {
+        f.state.user = { id: 999, login: "other-contributor" };
+      }
+      const worktree = structuredClone(loadSessionEntryReadOnly(f.scope)?.worktree);
+      const checkpoints = checkpoint.mock.calls.length;
+      const result = await f.invoke(actor, {
+        action: "request_review",
+        pullRequestUrl: url,
+        expectedHeadCommit: headCommit,
+      });
+      expect(result.details).toMatchObject({
+        pullRequest: { url, repository: "example/repository", branch: "topic" },
+        headCommit,
+        reviewRequest: { status: "posted", url: `${url}#issuecomment-123` },
+      });
+      if (actor === "admin") {
+        await expect(f.act("request_review", { pullRequestUrl: url })).rejects.toThrow(
+          /not authored/,
+        );
+      }
+      expect(f.writes).toEqual([
+        {
+          endpoint: "repos/example/repository/issues/7/comments",
+          input: { body: "@clawsweeper re-review" },
+        },
+      ]);
+      expect(loadSessionEntryReadOnly(f.scope)?.worktree).toEqual(worktree);
+      expect(checkpoint.mock.calls.length).toBe(checkpoints);
+      expect(f.externalWrites).toEqual([]);
+    },
+  );
+
+  it("does not retry an explicit re-review after a lost response", async () => {
+    const f = await fixture(false, false, false);
+    f.loseReviewResponse();
+    await expect(f.act("request_review", { pullRequestUrl: url })).rejects.toThrow(
+      /may already have been posted.*Read the PR comments.*do not retry blindly/u,
+    );
+    expect(f.writes).toEqual([
+      {
+        endpoint: "repos/example/repository/issues/7/comments",
+        input: { body: "@clawsweeper re-review" },
+      },
+    ]);
   });
 
   it.each(["unbound", "publication", "binding"])(
@@ -345,40 +404,54 @@ describe("actions on the imported original PR", () => {
     },
   );
 
-  it.each(["requester", "head", "title"])(
-    "rechecks explicit-target %s before the write",
-    async (change) => {
-      const f = await fixture(false, false, false);
-      let reads = 0;
-      f.onRead(async (endpoint) => {
-        if (endpoint.endsWith("/pulls/7") && ++reads === 2) {
-          if (change === "requester") {
-            await f.revoke();
-          }
-          if (change === "head") {
-            f.state.head.sha = "f".repeat(40);
-          }
-          if (change === "title") {
-            f.state.title = "New human title";
-          }
+  it.each([
+    ["edit", "requester"],
+    ["edit", "head"],
+    ["edit", "title"],
+    ["request_review", "requester"],
+    ["request_review", "head"],
+    ["request_review", "closed"],
+    ["request_review", "author"],
+  ])("rechecks explicit %s target %s before the write", async (action, change) => {
+    const f = await fixture(false, false, false);
+    let reads = 0;
+    f.onRead(async (endpoint) => {
+      if (endpoint.endsWith("/pulls/7") && ++reads === 2) {
+        if (change === "requester") {
+          await f.revoke();
         }
-      });
-      await expect(
-        f.act("edit", {
-          pullRequestUrl: url,
-          title: "Requested title",
-          expectedTitle: "Original title",
-        }),
-      ).rejects.toThrow(
-        change === "requester"
-          ? /role changed/
-          : change === "head"
-            ? /head changed/
-            : /metadata changed/,
-      );
-      expect(f.writes).toEqual([]);
-    },
-  );
+        if (change === "head") {
+          f.state.head.sha = "f".repeat(40);
+        }
+        if (change === "title") {
+          f.state.title = "New human title";
+        }
+        if (change === "closed") {
+          f.state.state = "closed";
+        }
+        if (change === "author") {
+          f.state.user.id = 999;
+        }
+      }
+    });
+    await expect(
+      f.act(action, {
+        pullRequestUrl: url,
+        ...(action === "edit" ? { title: "Requested title", expectedTitle: "Original title" } : {}),
+      }),
+    ).rejects.toThrow(
+      change === "requester"
+        ? /role changed/
+        : change === "head"
+          ? /head changed/
+          : change === "closed"
+            ? /closed/
+            : change === "author"
+              ? /not authored/
+              : /metadata changed/,
+    );
+    expect(f.writes).toEqual([]);
+  });
 
   it("reconciles an accepted explicit edit after a lost response without repeating the write", async () => {
     const f = await fixture(false, false, false);

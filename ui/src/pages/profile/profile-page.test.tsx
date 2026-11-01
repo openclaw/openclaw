@@ -146,7 +146,13 @@ it("renders identity before Usage statistics and opens the usage page", async ()
 
   await waitForFast(() =>
     expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
-      ["users.self", "users.listModelAccounts", "users.prefs.get"].toSorted(),
+      [
+        "users.self",
+        "users.listModelAccounts",
+        "users.prefs.get",
+        "users.channelIdentity",
+        "users.channelIdentity",
+      ].toSorted(),
     ),
   );
   const identity = page.querySelector("#settings-profile-identity");

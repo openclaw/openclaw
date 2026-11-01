@@ -106,7 +106,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
   }
   const discoveredRoot = await resolveUpdateRoot();
   const installKey = resolveUpdateInstallRoot(discoveredRoot);
-  if (pluginCohort && pluginCohort.cohort.installKey !== installKey) {
+  if (pluginCohort && resolveUpdateInstallRoot(pluginCohort.cohort.installKey) !== installKey) {
     throw new Error("Plugin cohort recovery belongs to a different installation.");
   }
   await refuseHostOwnedUpdate(discoveredRoot, opts);
@@ -212,6 +212,9 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
   };
   using handoff =
     hasCliProcessScope() &&
+    // A package-to-source link needs the executor's claim on both the saved
+    // package slot and its destination; a canonical-only handoff cannot grant it.
+    (!pluginCohort || pluginCohort.cohort.installKey === installKey) &&
     !inheritedRunId &&
     !env.OPENCLAW_UPDATE_RUN_HANDOFF &&
     !env[POST_CORE_UPDATE_ENV] &&
@@ -231,7 +234,10 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     const settleCohort = async (ownership: UpdateRecoveryFence) => {
       const assertCurrent = () => {
         ownership.assertCurrent();
-        if (resolveUpdateInstallRoot(discoveredRoot) !== installKey) {
+        if (
+          resolveUpdateInstallRoot(discoveredRoot) !== installKey ||
+          resolveUpdateInstallRoot(originalPair.cohort.installKey) !== installKey
+        ) {
           throw new Error("Plugin cohort recovery installation changed during repair.");
         }
       };
@@ -244,7 +250,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
       if (
         !current ||
         current.cohort.transactionId !== originalPair.cohort.transactionId ||
-        current.cohort.installKey !== installKey
+        current.cohort.installKey !== originalPair.cohort.installKey
       ) {
         throw new Error("Plugin cohort recovery changed before repair acquired ownership.");
       }
@@ -289,7 +295,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
       await settleCohort(handoff);
     } else {
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const ownership = await executor.enter(installKey);
+        const ownership = await executor.enter(originalPair.cohort.installKey);
         if (captureUpdateCommandExecutorAuthority(ownership).installKey !== installKey) {
           throw new Error("Plugin cohort recovery lost its installation executor.");
         }

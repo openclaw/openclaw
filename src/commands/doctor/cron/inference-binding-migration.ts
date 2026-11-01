@@ -170,12 +170,22 @@ export async function maybeRepairCronInferenceBindings(params: {
             provider: selected.provider,
             modelId: selected.model,
           }).policy?.id;
-        if (runtime && runtime !== "openclaw" && runtime !== "auto") {
+        if (runtime && runtime !== "openclaw" && runtime !== "auto" && runtime !== "codex") {
           warnings.push(
             `Automation ${label}: runtime ${runtime} inference ownership was left unchanged; no host account was adopted. Use that runtime's account/recovery flow if this job needs adoption.`,
           );
           continue;
         }
+        // Codex also runs with host-managed accounts. Its core auth planner owns that
+        // choice; selecting the runtime alone does not establish native login ownership.
+        const runtimeAuth =
+          runtime === "codex"
+            ? {
+                harnessId: runtime,
+                harnessRuntime: runtime,
+                harnessAuthBootstrap: "harness" as const,
+              }
+            : {};
         const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(
           selected.owner.agentDir,
         );
@@ -196,6 +206,7 @@ export async function maybeRepairCronInferenceBindings(params: {
             : undefined);
         const explicitUserSelection = Boolean(explicitProfileId);
         const currentAuth = prepareAgentRuntimeAuth({
+          ...runtimeAuth,
           config: cfg,
           provider: selected.provider,
           modelId: selected.model,
@@ -246,6 +257,10 @@ export async function maybeRepairCronInferenceBindings(params: {
             "The current route uses an ambient credential, not a durable stored account.",
           );
         }
+        if (runtime === "codex" && firstSource?.kind !== "profile") {
+          // Native/credentialless auth has no host account for Doctor to adopt.
+          continue;
+        }
         if (!explicitProfileId) {
           const providerPin = resolveProviderEntryApiKeyProfileReference({
             cfg,
@@ -266,7 +281,7 @@ export async function maybeRepairCronInferenceBindings(params: {
           : resolveAuthProfileOrderWithMetadata({
               cfg,
               store,
-              provider: selected.provider,
+              provider: currentAuth.plan.harnessAuthProvider ?? selected.provider,
               forModel: selected.model,
               readinessMode: "read-only",
               includePendingOAuthRefresh: true,
@@ -278,6 +293,7 @@ export async function maybeRepairCronInferenceBindings(params: {
         for (const profileId of order) {
           try {
             const prepared = prepareAgentRuntimeAuth({
+              ...runtimeAuth,
               config: cfg,
               provider: selected.provider,
               modelId: selected.model,
@@ -309,6 +325,7 @@ export async function maybeRepairCronInferenceBindings(params: {
         }
         if (candidates.length === 0 && !explicitProfileId) {
           const prepared = prepareAgentRuntimeAuth({
+            ...runtimeAuth,
             config: cfg,
             provider: selected.provider,
             modelId: selected.model,
@@ -382,6 +399,7 @@ export async function maybeRepairCronInferenceBindings(params: {
             profileId: candidate.profileId,
             authorizationId: authority.authorizationId,
             authRequirement: candidate.authRequirement,
+            ...(runtime === "codex" ? { runtime } : {}),
             source: explicitUserSelection
               ? "user"
               : (currentAuth.plan.forwardedAuthProfileSource ?? "auto"),

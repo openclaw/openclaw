@@ -723,7 +723,9 @@ export async function handleControlUiHttpRequest(
   const encodings = resolveControlUiAssetEncodings({
     req,
     contentPath: fileRel,
-    precompressed: fingerprintedAsset,
+    // The mutable worker still revalidates; representation encoding is independent
+    // of the immutable cache policy used by fingerprinted assets.
+    precompressed: fingerprintedAsset || (isBundledRoot && fileRel === "sw.js"),
   });
   let asset = await readControlUiRootAsset(rootState, fileRel, readBody, encodings);
   if (!asset) {

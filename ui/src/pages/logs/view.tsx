@@ -83,7 +83,9 @@ export function LogsView(props: LogsProps) {
     // eslint-disable-next-line solid/no-react-specific-props -- The shared status API calls this prop className.
     <PanelRefreshStatus status={props.status} className="logs-refresh-status" />
   );
-  const needle = createMemo(() => normalizeLowercaseStringOrEmpty(props.filterText));
+  const needle = createMemo(() =>
+    normalizeLowercaseStringOrEmpty(props.filterText).normalize("NFC"),
+  );
   const filtered = createMemo(() => {
     const query = needle();
     const matches =
@@ -94,7 +96,9 @@ export function LogsView(props: LogsProps) {
             (!query ||
               normalizeLowercaseStringOrEmpty(
                 [entry.message, entry.subsystem, entry.raw].filter(Boolean).join(" "),
-              ).includes(query));
+              )
+                .normalize("NFC")
+                .includes(query));
     const rows: LogRow[] = [];
     const byKey = new Map<VirtualItem["key"], number>();
     for (const entry of props.entries) {
@@ -267,7 +271,7 @@ export function LogsView(props: LogsProps) {
     return (
       <div
         ref={(node) => (element = node)}
-        class={["log-row", { "log-row--last": rowProps.item.index === rows().length - 1 }]}
+        class="log-row"
         role="listitem"
         aria-posinset={rowProps.item.index + 1}
         aria-setsize={rows().length}

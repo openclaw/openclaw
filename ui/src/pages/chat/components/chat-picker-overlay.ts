@@ -46,13 +46,8 @@ function bindChatPickerOverlay(
     const mobile = details.ownerDocument.defaultView?.matchMedia?.(
       MOBILE_COMPOSER_OVERLAY_QUERY,
     ).matches;
-    const raisedToolbar =
-      details.closest(".agent-chat__composer-shell")?.getAttribute("data-mobile-composer") ===
-      "true";
     anchor.update(
-      mobile && !raisedToolbar
-        ? (details.closest<HTMLElement>(".agent-chat__input") ?? trigger)
-        : trigger,
+      mobile ? (details.closest<HTMLElement>(".agent-chat__input") ?? trigger) : trigger,
       "top-end",
     );
     if (!overlay.request(details.open)) {

@@ -107,8 +107,9 @@ it("publishes the complete immutable generation with only useful eligible sideca
   for (const [name, body] of files) {
     const target = path.join(output, revisions[0]!, name);
     expect(await readText(target)).toBe(body);
-    const compressed = name === "large.js" || name === "small.css";
     for (const extension of ["br", "gz"]) {
+      const compressed =
+        name === "large.js" || name === "small.css" || (name === "index.js" && extension === "br");
       const sidecar = `${target}.${extension}`;
       if (!compressed) {
         await expect(fs.stat(sidecar)).rejects.toMatchObject({ code: "ENOENT" });

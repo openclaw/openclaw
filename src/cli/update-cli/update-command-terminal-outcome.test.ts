@@ -531,6 +531,14 @@ describe("composed cleanup and terminal outcome", () => {
     expect(value.lease).toBe("absent");
     expect(value.retainedExists).toBe(false);
     expect(value.observedResults).toEqual([expect.objectContaining({ status: "ok" })]);
+    // Verified retirement is recorded with its wall time, not only on warnings.
+    expect(value.observedResults[0]?.steps).toContainEqual(
+      expect.objectContaining({
+        name: "package-backup-retention",
+        exitCode: 0,
+        durationMs: expect.any(Number),
+      }),
+    );
     expect(value.observationLeases).toEqual(["absent"]);
     expect(value.humanOutput.join("\n").toLowerCase()).toContain("updated");
     expect(value.errorOutput).not.toContain(

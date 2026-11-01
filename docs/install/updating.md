@@ -8,6 +8,14 @@ title: "Updating"
 
 Keep OpenClaw up to date.
 
+Failed-update recovery on Linux restarts an installed Gateway through systemd.
+If a foreground OpenClaw process owns that service's state directory, recovery
+checks native restart permission and live identity, requests graceful shutdown, and waits for it to exit
+before starting the unit. Processes belonging to another supervisor are preserved.
+An inconclusive readiness check is reported separately from current serving health.
+This recovery repair is supplied by the candidate CLI; older updaters using
+`gateway restart --preserve-definition` can use it without an updater upgrade.
+
 App-owned packages declare their update owner in `openclaw-install-owner.json`
 at the package root. For `owner: "macos-app"`, update OpenClaw.app through its
 app updater to update the bundled Gateway and runtime together. `openclaw update`,
@@ -45,6 +53,20 @@ backup.
 
 ## Update implementation contract
 
+Pre-update config copies publish through a temporary file and same-directory
+rename. An interrupted write preserves the previous `.pre-update` copy, and a
+later snapshot attempt can retry. Post-update recovery refuses malformed copies
+and leaves the current config intact. This repair must be present in the updater
+taking the snapshot; it does not establish power-loss durability.
+
+On macOS, Doctor reports generated service environment values surrounded by
+literal double quotes. Interactive `openclaw doctor` can back up the private env
+file and remove one outer quote pair after confirmation; unrelated bytes stay
+unchanged. Quotes can be intentional, so unattended Doctor and `doctor --fix --yes`
+only report this finding. Restart the affected gateway or node service after
+repair, and correct inherited shell values before reinstalling. This recovery
+requires the candidate Doctor; the service writer continues to preserve input values.
+
 Managed systemd Gateway activation also covers packages replaced outside
 `openclaw update`. Before ordinary startup admission, the native service reader
 must identify this process as the running unit's MainPID. Only older database
@@ -70,6 +92,14 @@ that never reached activation is removed after checking for surviving work;
 uncertain cleanup leaves a warning and retains the stage. Activation recovery
 and backups remain with their existing recovery owners. These changes must be
 present in the installed updater; a newer candidate cannot repair an old launcher.
+
+If an update driver disappears after the candidate was recorded as installed and
+serving, reconciliation records success with a driver-loss warning. It preserves
+plugin warnings and does not invent command exit codes or a current health check.
+Unverified candidates and recorded failures or recovery keep their failure path.
+The reconciling candidate must contain this change; it uses observations older
+updaters already record. A first update from an older release still uses that
+release's handoff launcher, and previously terminal history is not rewritten.
 
 Managed systemd stops bound the native command by the selected unit's effective
 stop timeout plus five seconds. Unavailable or infinite policy uses the finite
@@ -121,7 +151,9 @@ the reason identifies the failed check, not the writer or underlying cause.
 Candidate Doctor preserves same-conversation automation continuations when adopting
 a stored inference account. It carries forward the original authenticated source
 only when its old executable revision still matches, then binds that source and
-existing standing-grant references to the restricted definition. Stale captures
+existing standing-grant references to the restricted definition. It also records
+a determinable host-managed account and its explicitly selected Codex runtime;
+native-owned and model-locked sessions remain unchanged. Stale captures
 stay stale; runtime authorization, conversation identity and revocation checks
 remain required. The candidate must contain this repair.
 
@@ -501,6 +533,10 @@ After a Doctor child settles, the updater drains its retained handles for the
 affected shared-state database and revokes their schema admission, even when
 Doctor exits unsuccessfully. The next parent access admits the resulting schema
 again and refuses a version newer than the running updater supports.
+
+Before Doctor admits the installed updater's database capture, plugin rollback
+journal discovery preserves the original SQLite WAL/SHM family. Older updaters
+can then verify their physical fingerprints without a false source-change refusal.
 
 After Doctor backs up and admits shared-state maintenance reads, native Codex
 assignment detection reads one database transaction snapshot. Lease renewals and

@@ -235,14 +235,10 @@ export async function resumePostUpdateWindowsAutoStart(
   result: UpdateRunResult,
   readStopped: () => PreManagedServiceStop | undefined,
   callbacks?: {
-    beforeAttempt: () => void;
     onFailure: (cause: unknown) => Promise<unknown>;
   },
 ): Promise<void> {
   try {
-    if (callbacks && readStopped()?.windowsTaskAutoStartRecovery) {
-      callbacks.beforeAttempt();
-    }
     const stopped = readStopped();
     await stopped?.windowsTaskAutoStartRecovery?.restore(
       true,

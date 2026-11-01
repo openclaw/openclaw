@@ -537,6 +537,22 @@ function collectRequiredCompatibilityChunks(
   return [...requiredByPath.values()];
 }
 
+// Older updaters import these after package activation, while their module cache still
+// holds the older release's dependency instances. Their bridges run the current export
+// in a worker so current code never links against those cached modules.
+const ISOLATED_COMPATIBILITY_ORIGINS = new Set([
+  "src/cli/update-cli/update-command-fresh-doctor.ts:runUpdateFinalizationDoctorInFreshProcess",
+  "src/cli/update-cli/update-command-failure-recovery.ts:verifyUpdateFailureRecovery",
+  "src/infra/update-triage.ts:prepareUpdateFailureTriage",
+]);
+// Released recovery paths load these owners' imports after activation; keep them isolated.
+const POST_ACTIVATION_RECOVERY_OWNERS = new Set([
+  "src/cli/update-cli/update-command-service-recovery.ts",
+  "src/cli/update-cli/update-command-triage.ts",
+  "src/cli/update-cli/update-finalization-lifecycle.ts",
+]);
+export const ISOLATED_COMPATIBILITY_BRIDGE = "update-compat-isolated-bridge.mjs";
+
 const STABLE_10_1_CLEANUP_FACADE = "runtime-cleanup-DlrF_x2c.mjs";
 const STABLE_10_1_CLEANUP_OWNER = "runtime-cleanup-Dowg583v.mjs";
 
@@ -592,6 +608,27 @@ export function writeUpdateCompatibilityChunks(params: {
     for (const entry of chunk.exports) {
       const origin = currentOrigin(entry.origin, params.sourceDir, sourceGraph);
       origins.set(`${entry.origin.module}:${entry.origin.symbol}`, origin);
+    }
+  }
+  const isolated = (origin: UpdateCompatibilityOrigin) => {
+    const current = origins.get(`${origin.module}:${origin.symbol}`)!;
+    return ISOLATED_COMPATIBILITY_ORIGINS.has(`${current.module}:${current.symbol}`);
+  };
+  for (const release of params.inventory.releases) {
+    for (const chunk of release.chunks) {
+      for (const imported of chunk.imports) {
+        if (!POST_ACTIVATION_RECOVERY_OWNERS.has(imported.owner)) {
+          continue;
+        }
+        for (const name of imported.exports) {
+          const entry = chunk.exports.find((candidate) => candidate.exported === name);
+          if (entry && !isolated(entry.origin)) {
+            throw new Error(
+              `${release.version} recovery import ${chunk.path}:${name} from ${imported.owner} must run isolated; add ${entry.origin.module}:${entry.origin.symbol} to ISOLATED_COMPATIBILITY_ORIGINS`,
+            );
+          }
+        }
+      }
     }
   }
   const ownerModules = new Set([...origins.values()].map((origin) => origin.module));
@@ -656,6 +693,25 @@ export function writeUpdateCompatibilityChunks(params: {
       );
     }
     const lines = [UPDATE_COMPATIBILITY_CHUNK_HEADER];
+    const isolatedCount = chunk.exports.filter((entry) => isolated(entry.origin)).length;
+    if (isolatedCount > 0 && isolatedCount !== chunk.exports.length) {
+      throw new Error(
+        `Cannot bridge ${chunk.path}: isolated and in-process exports cannot share one module`,
+      );
+    }
+    if (isolatedCount > 0) {
+      let bridge = portable(
+        path.relative(path.dirname(destination), path.join(distDir, ISOLATED_COMPATIBILITY_BRIDGE)),
+      );
+      if (!bridge.startsWith(".")) {
+        bridge = `./${bridge}`;
+      }
+      lines.push(`import { isolatedUpdateCompatExport } from ${JSON.stringify(bridge)};`);
+      outputs.set(
+        ISOLATED_COMPATIBILITY_BRIDGE,
+        `${UPDATE_COMPATIBILITY_CHUNK_HEADER}\n${fs.readFileSync(new URL("./update-compat-isolated-bridge.mjs", import.meta.url), "utf8")}`,
+      );
+    }
     for (const entry of chunk.exports) {
       const origin = origins.get(`${entry.origin.module}:${entry.origin.symbol}`)!;
       const matches = [...(candidates.get(`${origin.module}:${origin.symbol}`)?.values() ?? [])];
@@ -689,6 +745,10 @@ export function writeUpdateCompatibilityChunks(params: {
         lines.push(
           "// 10.1's already-loaded owner must drain its original pending disposer queue.",
           `export { i as runCliDisposerAfterPending } from "./${STABLE_10_1_CLEANUP_OWNER}";`,
+        );
+      } else if (isolatedCount > 0) {
+        lines.push(
+          `export const ${entry.exported} = isolatedUpdateCompatExport(import.meta.url, ${JSON.stringify(specifier)}, ${JSON.stringify(match.exported)});`,
         );
       } else {
         lines.push(

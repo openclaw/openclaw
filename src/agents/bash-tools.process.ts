@@ -6,7 +6,6 @@ import { createAbortError as createNamedAbortError } from "../infra/abort-signal
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import type { ManagedRunStdin } from "../process/supervisor/types.js";
-import { sleep } from "../utils/sleep.js";
 import {
   captureAgentToolSourceExecutionGuard,
   runWithAgentToolSourceExecutionScope,
@@ -20,10 +19,10 @@ import {
   deleteSession,
   getFinishedSession,
   getSession,
-  hasPendingPollDelivery,
   listFinishedSessions,
   listRunningSessions,
   prepareSessionPoll,
+  waitForSessionPoll,
 } from "./bash-process-registry.js";
 import { createProcessToolScope } from "./bash-process-scope.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
@@ -243,13 +242,6 @@ function createAbortError(reason: unknown): Error {
   return createNamedAbortError(typeof reason === "string" ? reason : "Aborted");
 }
 
-function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void> {
-  // Shared sleeps retain their timer so one-shot callers still receive the child's result.
-  return sleep(ms, signal).catch((error: unknown) => {
-    throw signal?.aborted ? createAbortError(signal.reason) : error;
-  });
-}
-
 // Unknown keys otherwise pass through the schema and silently turn a waiting poll into a no-wait poll.
 function assertSupportedProcessParams(args: unknown): void {
   if (isRecord(args) && Object.hasOwn(args, "timeoutMs")) {
@@ -452,24 +444,9 @@ export function createProcessTool(
           }
           const pollWaitMs = resolvePollWaitMs(params.timeout);
           if (pollWaitMs > 0 && !scopedSession.exited) {
+            await waitForSessionPoll(scopedSession, pollWaitMs, signal);
             if (signal?.aborted) {
               throw createAbortError(signal.reason);
-            }
-            // The wait budget is elapsed time, so a wall-clock step cannot end it early
-            // or stretch it past the requested timeout.
-            const deadline = performance.now() + pollWaitMs;
-            // Interactive children cannot progress until their pending prompt reaches the model.
-            while (
-              !scopedSession.exited &&
-              !hasPendingPollDelivery(scopedSession) &&
-              scopedSession.pendingStdoutChars + scopedSession.pendingStderrChars === 0 &&
-              !scopedSession.pendingOutputDropped &&
-              performance.now() < deadline
-            ) {
-              await sleepPollInterval(
-                Math.max(0, Math.min(250, deadline - performance.now())),
-                signal,
-              );
             }
           }
           return await runWithAgentToolSourceExecutionScope(assertSourceCurrent, async () => {

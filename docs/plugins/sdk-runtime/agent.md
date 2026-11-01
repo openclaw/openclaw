@@ -110,7 +110,8 @@ this same worker path. Incognito retains its process-local persistence owner;
 its awaited API preserves the same completion ordering.
 
 The low-level `persistAsync` retains its raw persistence contract and does not add
-the supplied entry to the loaded tree; use an append method or reload afterward.
+the supplied entry to the loaded tree. It does not prepare a replacement view;
+use an append method or explicitly await `reloadPersistedTranscriptAsync()` afterward.
 `branchAsync` and `resetLeafAsync` prepare navigation in queue order without
 writing a leaf record by themselves. The synchronous `resetLeaf()` remains a
 supported in-memory operation.

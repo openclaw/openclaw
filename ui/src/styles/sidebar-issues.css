@@ -28,7 +28,7 @@
   max-block-size: calc(var(--shell-canvas-height) - var(--safe-area-top));
   padding-block-end: var(--shell-safe-area-bottom);
   border-width: 1px 0 0;
-  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  border-radius: var(--overlay-modal-radius) var(--overlay-modal-radius) 0 0;
   background: var(--popover);
   animation: sidebar-sheet-in var(--motion-sheet);
 }
@@ -118,7 +118,6 @@
   flex: none;
   overflow-x: auto;
   background: transparent;
-  box-sizing: border-box;
   flex-shrink: 0;
   width: 100%;
   padding-inline: 8px;
@@ -161,7 +160,6 @@
 }
 
 .sidebar-issues-panel__list > [data-attention-kind] {
-  box-sizing: border-box;
   margin-inline: -6px;
 }
 
@@ -508,7 +506,6 @@ footer.sidebar-issues-panel__mentions-note {
 }
 
 .sidebar-update-issue__body .sidebar-update-card {
-  box-sizing: border-box;
   margin: 0;
 }
 
@@ -635,7 +632,6 @@ footer.sidebar-issues-panel__mentions-note {
 }
 
 .sidebar-approval-row__command {
-  box-sizing: border-box;
   width: 100%;
   max-width: 100%;
   align-self: flex-start;

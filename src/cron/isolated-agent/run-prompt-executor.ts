@@ -33,7 +33,6 @@ import type { VerboseLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { registerCronRunExecSource } from "../../infra/cron-run-exec-source.js";
-import { captureReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
@@ -46,7 +45,6 @@ import { prepareCronRunInference } from "../run-inference.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import { isCommandStyleCronMessage } from "./command-style-prompt.js";
-import { resolveIsolatedCronPromptCacheKey } from "./prompt-cache-key.js";
 import {
   assertCronCandidateSandboxPlacement,
   assertCronRuntimeAuthorityCandidate,
@@ -163,6 +161,7 @@ export function createCronPromptExecutor(
   let sandboxPlacement: CronSandboxPlacement | undefined;
 
   return async (promptText: string, runStartedAt: number): Promise<CronCompletedPromptRun> => {
+    let currentContextSnapshot: CronCompletedPromptRun["currentContextSnapshot"];
     using inferenceLease = new DisposableStack();
     const binding = params.job.inferenceBinding;
     const inference = await prepareCronRunInference({
@@ -304,6 +303,7 @@ export function createCronPromptExecutor(
       sessionOverride: { kind: "preserve" },
       abortSignal: params.abortSignal,
       runCandidate: async (providerOverride, modelOverride, runOptions) => {
+        currentContextSnapshot = undefined;
         const preparedSessionPersisted = canReusePreparedSession;
         canReusePreparedSession = false;
         params.lifecycle.beginAttempt();
@@ -485,7 +485,7 @@ export function createCronPromptExecutor(
             userTurnTranscriptRecorder,
             suppressNextUserMessagePersistence:
               userTurnTranscriptRecorder.hasPersisted() || userTurnTranscriptRecorder.isBlocked(),
-          }) satisfies Partial<Parameters<CronEmbeddedRuntime["runEmbeddedAgent"]>[0]>;
+          }) satisfies Partial<Parameters<CronEmbeddedRuntime["runCronEmbeddedAgent"]>[0]>;
         if (cliExecution) {
           const allowCliAuthProfileForwarding = cliBackendAcceptsAuthProfileForwarding({
             provider: executionProvider,
@@ -630,19 +630,11 @@ export function createCronPromptExecutor(
             await deferredLifecycle.complete();
           }
         }
-        const { runEmbeddedAgent } = await cronEmbeddedRuntimeLoader.load();
-        const promptCacheKey = resolveIsolatedCronPromptCacheKey({
-          job: params.job,
-          agentId: params.agentId,
-          agentSessionKey: params.agentSessionKey,
-          provider: providerOverride,
-          model: modelOverride,
-        });
+        const { runCronEmbeddedAgent } = await cronEmbeddedRuntimeLoader.load();
         // Embedded runs receive both the explicit route and the current-channel
         // id so message-tool policy can target the same chat as fallback delivery.
-        const embeddedRunParams: Parameters<CronEmbeddedRuntime["runEmbeddedAgent"]>[0] = {
+        const embeddedRunParams: Parameters<CronEmbeddedRuntime["runCronEmbeddedAgent"]>[0] = {
           ...buildCommonRunParams(),
-          promptCacheKey,
           cleanupBundleMcpOnRunEnd: params.usesDetachedRunSession,
           allowGatewaySubagentBinding: true,
           messageTo: params.resolvedDelivery.to,
@@ -691,11 +683,9 @@ export function createCronPromptExecutor(
           abortSignal: params.abortSignal,
           onLaneWait: params.onLaneWait,
         };
-        embeddedRunParams.joinObservation = captureReplyMessageJoinObservation({
-          run: { ...embeddedRunParams, sessionFile: params.runSessionKey },
-          sessionEntry: params.cronSession.sessionEntry,
+        const result = await runCronEmbeddedAgent(embeddedRunParams, params, (snapshot) => {
+          currentContextSnapshot = snapshot;
         });
-        const result = await runEmbeddedAgent(embeddedRunParams);
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,
         );
@@ -732,6 +722,7 @@ export function createCronPromptExecutor(
     });
     const completed = {
       runResult: fallbackResult.result,
+      currentContextSnapshot,
       fallbackProvider: fallbackResult.provider,
       fallbackModel: fallbackResult.model,
       runStartedAt,

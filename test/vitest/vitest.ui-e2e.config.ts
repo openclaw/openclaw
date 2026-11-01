@@ -62,6 +62,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/config-raw-save.e2e.test.ts",
   "ui/src/e2e/control-ui-shell-routing.e2e.test.ts",
   "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
+  "ui/src/e2e/cron-human-owner.real-gateway.e2e.test.ts",
   "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
   "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",

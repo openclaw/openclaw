@@ -6,12 +6,7 @@ import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  constants,
-  monitorEventLoopDelay,
-  PerformanceObserver,
-  type PerformanceEntry,
-} from "node:perf_hooks";
+import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -23,6 +18,7 @@ import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { SessionCatalogEntrySnapshot } from "../../src/plugins/session-catalog.js";
 import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 import { generateTeamShapeFixture, parseTeamShapeOptions } from "./team-shape-fixture.ts";
 
@@ -244,17 +240,9 @@ const inspector = new Session();
 const collections: { kind: number; ms: number }[] = [];
 let measuredStart = Infinity;
 let measuredEnd = Infinity;
-function recordGc(records: PerformanceEntry[]) {
-  for (const entry of records) {
-    if (entry.startTime >= measuredStart && entry.startTime < measuredEnd) {
-      collections.push({
-        kind: (entry as PerformanceEntry & { detail: { kind: number } }).detail.kind,
-        ms: entry.duration,
-      });
-    }
-  }
-}
-const observer = new PerformanceObserver((batch) => recordGc(batch.getEntries()));
+const observer = new PerformanceObserver((batch) =>
+  recordGcCollections(batch.getEntries(), collections, measuredStart, measuredEnd),
+);
 const loop = monitorEventLoopDelay({ resolution: 1 });
 try {
   for (let index = 0; index < 20; index++) {
@@ -304,7 +292,7 @@ try {
   const after = process.memoryUsage();
   loop.disable();
   await nextTurn();
-  recordGc(observer.takeRecords());
+  recordGcCollections(observer.takeRecords(), collections, measuredStart, measuredEnd);
   observer.disconnect();
   const profile = values.allocations
     ? (await inspector.post("HeapProfiler.stopSampling")).profile

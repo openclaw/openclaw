@@ -44,7 +44,6 @@ import { assertFixtureProcessGroupStopped } from "./exited-descendant-reaper.tes
 import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
 import { createProcessGroupTimingPreload } from "./pr-operation-lock.test-support.js";
 import {
-  copyPrWrapperSources,
   copyPrRoutingWrapperSources,
   createSettledPrCacheEntry,
   readPrCacheState,
@@ -359,7 +358,8 @@ function fixtureGit(env: NodeJS.ProcessEnv = process.env) {
 }
 
 function installPrCliFixture(repoDir: string, env: NodeJS.ProcessEnv = process.env) {
-  const wrapperSources = copyPrWrapperSources(repoDir);
+  const wrapperSources = copyPrRoutingWrapperSources(repoDir);
+  expect(existsSync(join(repoDir, "src"))).toBe(false);
   const cli = join(repoDir, "scripts/pr");
   chmodSync(cli, 0o755);
   const binDir = join(repoDir, "isolated-bin");

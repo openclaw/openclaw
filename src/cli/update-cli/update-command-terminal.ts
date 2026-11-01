@@ -608,6 +608,12 @@ export async function recordUpdatePackageCompletion(
   if (!transaction) {
     return;
   }
+  const retention = {
+    name: "package-backup-retention",
+    command: "openclaw update",
+    cwd: result.root ?? params.root,
+    durationMs: 0,
+  };
   if (
     isUpdateGatewayReadinessPending(result) ||
     (result.status === "ok" &&
@@ -617,10 +623,7 @@ export async function recordUpdatePackageCompletion(
     assertCurrent();
     const message = `Gateway readiness is pending; backup retirement deferred for ${transaction.backupRoot}. Verify readiness before cleanup.`;
     result.steps.push({
-      name: "package-backup-retention",
-      command: "openclaw update",
-      cwd: result.root ?? params.root,
-      durationMs: 0,
+      ...retention,
       exitCode: 0,
       advisory: { kind: "recoverable-maintenance", message },
     });
@@ -638,6 +641,8 @@ export async function recordUpdatePackageCompletion(
   if (params.databaseBackup?.restoreRefusal) {
     transaction.databaseBackupRoot = undefined;
   }
+  // Retirement deletes the previous package before exit; time it even on success.
+  const retirementStartedAt = performance.now();
   const retained: UpdateStepResult | void = await transaction
     .complete({ activationVerified: result.status === "ok" }, assertCurrent)
     .catch((error: unknown) => {
@@ -647,19 +652,16 @@ export async function recordUpdatePackageCompletion(
       }
       cleanupFailure = error;
       return {
-        name: "package-backup-retention",
-        command: "openclaw update",
-        cwd: result.root ?? params.root,
-        durationMs: 0,
+        ...retention,
         exitCode: 1,
         stderrTail: `Update backup cleanup failed: ${formatErrorMessage(error)}. Inspect ${transaction.backupRoot} before manual cleanup.`,
       };
     });
   assertCurrent();
-  if (!retained) {
-    return;
-  }
-  const step = { ...retained, stderrTail: retained.stderrTail };
+  const step: UpdateStepResult = {
+    ...(retained ?? { ...retention, exitCode: 0 }),
+    durationMs: Math.round(performance.now() - retirementStartedAt),
+  };
   if (step.exitCode !== 0) {
     const recoveryPath = `Recovery transaction backup path: ${transaction.backupRoot}`;
     if (!step.advisory) {
@@ -670,6 +672,9 @@ export async function recordUpdatePackageCompletion(
     }
   }
   result.steps = [...result.steps, step];
+  if (!retained) {
+    return;
+  }
   if (result.status !== "ok" && !result.recovery?.packageRollbackVerified) {
     defaultRuntime.error(step.stderrTail);
     return;

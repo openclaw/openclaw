@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { readSessionEntryCount } from "../config/sessions/session-accessor.sqlite-entry-inventory.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import { runSessionStartupMigration } from "../config/sessions/startup-migration-runtime.js";
@@ -324,7 +325,7 @@ it("closes a captured session inspection reader before removing its private snap
       await capture.settle();
       expect(capture.receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
       expect(warnings).toEqual([]);
-      expect(fs.readFileSync(legacy.databasePath)).toEqual(originalBytes);
+      expectBytesEqual(fs.readFileSync(legacy.databasePath), originalBytes, "inspected database");
     } finally {
       await scope.close();
       snapshot?.cleanup();
@@ -717,7 +718,7 @@ it.each(["preparation", "native open"] as const)(
         : /changed during repair admission/,
     );
     expect(replaced).toBe(true);
-    expect(fs.readFileSync(legacy.databasePath)).toEqual(originalBytes);
+    expectBytesEqual(fs.readFileSync(legacy.databasePath), originalBytes, "replacement database");
     if (process.platform !== "win32") {
       expect(fs.statSync(legacy.databasePath).mode & 0o777).toBe(0o644);
     }
@@ -753,7 +754,11 @@ it("stops cold admission when the repair owner retires before native open return
     }),
   ).toThrow("repair owner retired during admission");
   expect(retired).toBe(true);
-  expect(fs.readFileSync(legacy.databasePath)).toEqual(originalBytes);
+  expectBytesEqual(
+    fs.readFileSync(legacy.databasePath),
+    originalBytes,
+    "retired admission database",
+  );
 });
 
 it("reuses inspected raw targets while preserving deferred schema repair", async () => {

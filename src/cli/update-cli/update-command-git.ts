@@ -557,6 +557,7 @@ export async function updateGitInstall(params: {
     const checkout = params.switchToGit
       ? await ensureGitCheckout({
           dir: updateRoot,
+          assertCurrent: params.assertCurrent,
           env: installEnv,
           timeoutMs: effectiveTimeout,
           progress: params.progress,
