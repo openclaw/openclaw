@@ -278,7 +278,7 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
         trigger={<Icon name="listFilter" />}
         label={t("sessionsView.filters")}
         class="sessions-filter-popover"
-        header={search()}
+        headerAction={search()}
       >
         <div class="sessions-filter-popover__panel">{fields()}</div>
       </PhoneSheet>

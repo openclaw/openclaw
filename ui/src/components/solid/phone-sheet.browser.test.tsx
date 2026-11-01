@@ -1,4 +1,5 @@
 import { cleanup, render } from "@solidjs/testing-library";
+import type { JSX } from "@solidjs/web";
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { userEvent } from "vitest/browser";
@@ -8,14 +9,14 @@ import type { PopoverHandle } from "./popover.tsx";
 
 afterEach(cleanup);
 
-function mountSheet(header?: () => HTMLElement | string) {
+function mountSheet(action?: () => JSX.Element) {
   let handle!: PopoverHandle;
   const view = render(() => (
     <form data-testid="form">
       <PhoneSheet
         id="filters-sheet"
         label="Filters"
-        header={header?.()}
+        headerAction={action?.()}
         ref={(next) => (handle = next)}
       >
         <input name="provider" aria-label="Provider" value="slack" />
@@ -48,11 +49,23 @@ describe("PhoneSheet", () => {
     expect(surface.getBoundingClientRect().width).toBe(document.documentElement.clientWidth);
   });
 
-  it("uses a caller's header instead of the title", () => {
-    const { part } = mountSheet(() => "Search");
-    expect(part("title")).toBeNull();
-    expect(part("header").textContent).toContain("Search");
-  });
+  it.each([false, true])(
+    "centers the title on the sheet with an action: %s",
+    async (withAction) => {
+      const { view, surface, part } = mountSheet(
+        withAction ? () => <button type="button">Search</button> : undefined,
+      );
+      await userEvent.click(view.getByRole("button", { name: "Filters" }));
+      await phase(surface, "open");
+      const center = (element: HTMLElement) => {
+        const { left, width } = element.getBoundingClientRect();
+        return left + width / 2;
+      };
+      expect(part("title").textContent).toBe("Filters");
+      expect(Math.abs(center(part("title")) - center(part("panel")))).toBeLessThan(1);
+      expect(part("close").getBoundingClientRect().right).toBeGreaterThan(center(part("panel")));
+    },
+  );
 
   it("slides away from the backdrop and reopens where it belongs", async () => {
     const { view, handle, surface, part } = mountSheet();

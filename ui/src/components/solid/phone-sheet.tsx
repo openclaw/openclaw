@@ -32,8 +32,8 @@ export function PhoneSheet(props: {
   triggerId?: string;
   triggerClass?: JSX.HTMLAttributes<HTMLButtonElement>["class"];
   triggerTitle?: string;
-  /** Replaces the centered title beside the close button. */
-  header?: JSX.Element;
+  /** A control beside the close button; the title stays centered on the sheet. */
+  headerAction?: JSX.Element;
   children?: JSX.Element;
   onOpenChange?(open: boolean): void;
   ref?(handle: PopoverHandle): void;
@@ -133,7 +133,11 @@ export function PhoneSheet(props: {
         if (open) {
           restore();
           // Focus the close button, not the first field, so a tap doesn't raise the keyboard.
-          queueMicrotask(() => closeButton.focus({ preventScroll: true }));
+          // The surface takes it when a header action has hidden the close button.
+          queueMicrotask(() => {
+            handle?.overlay.surface.focus({ preventScroll: true });
+            closeButton.focus({ preventScroll: true });
+          });
         }
         props.onOpenChange?.(open);
       }}
@@ -148,8 +152,9 @@ export function PhoneSheet(props: {
       />
       <div ref={(element) => (panel = element)} class="oc-sheet__panel">
         <div ref={(element) => (grabber = element)} class="oc-sheet__grabber" aria-hidden="true" />
-        <div class={["oc-sheet__header", { "oc-sheet__header--custom": Boolean(props.header) }]}>
-          {props.header ?? <h2 class="oc-sheet__title">{props.label}</h2>}
+        <div class="oc-sheet__header">
+          <h2 class="oc-sheet__title">{props.label}</h2>
+          <div class="oc-sheet__action">{props.headerAction}</div>
           <button
             ref={(element) => (closeButton = element)}
             type="button"
