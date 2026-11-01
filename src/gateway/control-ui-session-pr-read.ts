@@ -198,6 +198,10 @@ function withControlUiTaskPrTarget(
 
 export type ControlUiSessionPrRead = () => Promise<ControlUiSessionPrTarget | undefined>;
 
+/** Passive sidebar audiences share a receipt-only cell beside the full session target. */
+export const receiptsOnlyTargetIdentity = (identity: string) =>
+  JSON.stringify([identity, "receipts-only"]);
+
 /** Background facts use the Gateway's current row owner, never a completed caller's grant. */
 export async function prepareControlUiSessionPrServiceTarget(
   getProjection: () => SessionRowProjection | undefined,
@@ -559,7 +563,7 @@ export function createControlUiSessionPrRead(params: {
             ...(params.taskReceiptsOnly
               ? {
                   taskReceiptsOnly: true,
-                  identity: JSON.stringify([target.target.identity, "receipts-only"]),
+                  identity: receiptsOnlyTargetIdentity(target.target.identity),
                 }
               : {}),
             assertCurrent: () => {

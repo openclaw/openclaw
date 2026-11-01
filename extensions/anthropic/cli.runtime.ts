@@ -255,7 +255,6 @@ async function injectInput(
   void started.promise.catch(() => {});
   let written: Promise<void> | undefined;
   await turn.context.prepareExecutionAdmission();
-  turn.context.assertCurrent();
   await withCurrent(() => {
     // Native lifecycle is the receipt; recheck availability after host preparation.
     if (!session.transport || !canInjectInput(session, turn)) {

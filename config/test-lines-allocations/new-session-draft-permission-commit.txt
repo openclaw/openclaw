@@ -1,0 +1,2 @@
+# New Session reload waits until the durable draft records the chosen permission mode.
+19

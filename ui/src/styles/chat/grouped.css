@@ -1651,30 +1651,6 @@ button.chat-reply-attribution__target:disabled {
   color: var(--text);
 }
 
-/* Reuse the shared text-shimmer owner; accessibility modes keep static text. */
-@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
-  .agent-chat__typing-text[data-typing] {
-    background-image: linear-gradient(
-      90deg,
-      var(--muted) 0%,
-      var(--muted) 35%,
-      var(--text) 50%,
-      var(--muted) 65%,
-      var(--muted) 100%
-    );
-    background-size: 200% 100%;
-    background-repeat: repeat-x;
-    background-clip: text;
-    color: transparent;
-    -webkit-text-fill-color: transparent;
-    animation: text-shimmer 2.4s ease-in-out infinite;
-  }
-
-  .agent-chat__typing-text[data-typing] .agent-chat__typing-name {
-    color: inherit;
-  }
-}
-
 .agent-chat__typing-preview-text {
   display: block;
   white-space: pre-wrap;
@@ -2064,10 +2040,39 @@ button.chat-reply-attribution__target:disabled {
     display: none;
   }
 
+  .chat-reply-attribution--reply {
+    align-items: center;
+    min-height: var(--chat-reply-attribution-line-height);
+  }
+
   .chat-reply-attribution--reply .chat-reply-attribution__label {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+  }
+
+  /* The icon carries the cue on screen; assistive tech still hears the label. */
+  .chat-reply-attribution--reply .chat-reply-attribution__label-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .chat-reply-attribution--reply .chat-reply-attribution__name-rest {
+    display: none;
+  }
+
+  .chat-reply-attribution--reply button.chat-reply-attribution__target {
+    position: relative;
+  }
+
+  /* A larger hit area without changing the line's height. */
+  .chat-reply-attribution--reply button.chat-reply-attribution__target::after {
+    content: "";
+    position: absolute;
+    inset: -8px -4px;
   }
 
   .chat-reply-attribution__mobile-icon {

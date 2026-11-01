@@ -444,6 +444,12 @@ diagnostic failures remain warnings, while refused config writes and incomplete
 required migrations remain errors. Historical runs cannot recover facts that
 their updater never recorded.
 
+Reviewed public failure reports keep known ledger diagnostics when a matching
+restart sentinel has no exit code or failure facts. Supplied errors use the same
+bounded public diagnostic redaction as failed steps; private paths, commands, and
+arbitrary error text remain excluded. The reporting Gateway or CLI must contain
+this fix; it does not repair the failed update itself.
+
 If a candidate check exits by signal, its failed step retains `termination`,
 `signal`, and a redacted `stderrTail` (up to 80 lines, 512 characters per line,
 and 8,192 characters total, reserving the fatal header when present). The report names the check, including **Checking

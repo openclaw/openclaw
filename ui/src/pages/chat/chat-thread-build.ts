@@ -70,7 +70,7 @@ import {
   hasRenderableNormalizedMessage,
   insertionIndexesForBounds,
   type ChatProjection,
-  messageMatchesSearchQuery,
+  createChatSearchMatcher,
   rawMessageTimestamp,
   insertChatItemsByTimestamp,
   sanitizeStreamText,
@@ -186,12 +186,13 @@ export function buildChatItems(
     ),
   );
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
+  const matchesSearch = createChatSearchMatcher(
+    searchFiltering ? (props.searchQuery ?? "") : "",
+    props.messageRecovery,
+  );
   const hiddenHistoryKeys = new Set<string>();
   const hideSearchMiss = (item: Extract<ChatItem, { kind: "message" }>) => {
-    if (
-      searchFiltering &&
-      !messageMatchesSearchQuery(item.message, props.searchQuery ?? "", props.messageRecovery)
-    ) {
+    if (searchFiltering && !matchesSearch(item.message)) {
       hiddenHistoryKeys.add(item.key);
     }
   };
@@ -202,13 +203,7 @@ export function buildChatItems(
       readNodePermissionRequest(asRecord(card.details)?.permissionMissing),
     );
   const historyItems = buildMessageItems(history);
-  const canvasTurns = collectCanvasTurns(
-    historyItems,
-    normalizedHistory,
-    (message) =>
-      !searchFiltering ||
-      messageMatchesSearchQuery(message, props.searchQuery ?? "", props.messageRecovery),
-  );
+  const canvasTurns = collectCanvasTurns(historyItems, normalizedHistory, matchesSearch);
   const compaction = props.compactionStatus;
   const compactionKey = compaction
     ? `divider:compaction:live:${compaction.runId}:${compaction.itemId ?? "manual"}`

@@ -464,7 +464,7 @@ describe("pending recovery finalizer", () => {
         { ...process.env, ...f.env, OPENCLAW_CONFIG_PATH: configPath },
         () => invoke({ json: true, yes: true, deferCompletionCache: true }),
       ),
-    ).rejects.toThrow("full-state recovery is deferred");
+    ).rejects.toThrow("Interrupted shared-database publication left");
     expect(resolveRoot).not.toHaveBeenCalled();
     f.expectRetained();
     expect(fs.readFileSync(configPath)).toEqual(originalConfig);

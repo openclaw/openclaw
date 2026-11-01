@@ -62,12 +62,12 @@ it("rejects multibyte paths above MAX_PATH_LENGTH bytes", () => {
   expect(() => formatOcPath({ file: multibyteFile })).toThrow(`length: ${pathBytes}`);
 });
 
-it("rejects paths whose NFC normalization exceeds the byte limit", () => {
-  // U+0344 grows from two to four UTF-8 bytes under NFC; the emoji takes four.
+it("preserves raw Unicode at the byte limit and rejects the next byte", () => {
   const input = `oc://${"a".repeat(74)}😀${"\u0344".repeat(2006)}`;
-  expect(Buffer.byteLength(input, "utf8")).toBeLessThanOrEqual(PATH_LENGTH_LIMIT);
-  expect(Buffer.byteLength(input.normalize("NFC"), "utf8")).toBeGreaterThan(PATH_LENGTH_LIMIT);
-  expect(() => parseOcPath(input)).toThrow(expect.objectContaining({ code: "OC_PATH_TOO_LONG" }));
+  expect(Buffer.byteLength(input, "utf8")).toBe(PATH_LENGTH_LIMIT - 1);
+  expect(formatOcPath(parseOcPath(input))).toBe(input);
+  expect(formatOcPath(parseOcPath(input + "a"))).toBe(input + "a");
+  expect(() => parseOcPath(input + "aa")).toThrow(/exceeds 4096 bytes/);
 });
 
 it("walker depth cap fires on synthetic deeply-nested AST", () => {

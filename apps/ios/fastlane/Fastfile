@@ -9,6 +9,7 @@ require "digest/md5"
 require "time"
 require "rubygems/version"
 require_relative "screenshot_diagnostics"
+require_relative "watch_runtime_admission"
 require_relative "testflight"
 
 default_platform(:ios)
@@ -284,13 +285,13 @@ def require_exclusive_screenshot_simulator!(udid, diagnostics)
   UI.user_error!("Task-owned screenshot simulator #{udid} is #{state}, not Booted; CoreSimulator ended its session.") unless state == "Booted"
 end
 
-def repair_watch_screenshot_runtime!(runtime)
-  version = runtime ? runtime.split(".watchOS-").last.tr("-", ".") : sh("xcrun", "--sdk", "watchsimulator", "--show-sdk-version").strip
-  runtime ||= "com.apple.CoreSimulator.SimRuntime.watchOS-#{version.tr(".", "-")}"
+def delete_watch_screenshot_runtime!(runtime)
   2.times do |attempt|
     images = JSON.parse(sh("xcrun", "simctl", "runtime", "list", "-j", log: false)).values
       .select { |image| image["runtimeIdentifier"] == runtime }
     report_watch_runtime_images(runtime, images)
+    # CoreSimulator can retain a deleting registration beside its replacement.
+    images.reject! { |image| image["state"] == "Deleting" }
     UI.user_error!("Cannot repair #{runtime}: expected at most one registered disk image, found #{images.length}.") if images.length > 1
     break if images.empty?
 
@@ -308,20 +309,49 @@ def repair_watch_screenshot_runtime!(runtime)
     UI.important("Watch runtime asset reclamation was incomplete; re-registering before one more targeted deletion.")
     sh("xcrun", "simctl", "runtime", "scan-and-mount")
   end
+end
 
-  sh("xcodebuild", "-downloadPlatform", "watchOS", "-buildVersion", version)
+def fallback_watch_runtime_image(images, runtime)
+  images.find do |image|
+    image["runtimeIdentifier"] == runtime && image["kind"] == "Patchable Cryptex Disk Image" &&
+      image["mountPath"].to_s.start_with?("/Library/Developer/CoreSimulator/Volumes/")
+  end
+end
+
+def repair_watch_screenshot_runtime!(runtime, staged_image: nil)
+  version = runtime ? runtime.split(".watchOS-").last.tr("-", ".") : sh("xcrun", "--sdk", "watchsimulator", "--show-sdk-version").strip
+  runtime ||= "com.apple.CoreSimulator.SimRuntime.watchOS-#{version.tr(".", "-")}"
+  unless staged_image
+    delete_watch_screenshot_runtime!(runtime)
+    sh("xcodebuild", "-downloadPlatform", "watchOS", "-buildVersion", version)
+    images = WatchRuntimeAdmission.wait!(runtime)
+    staged_image = fallback_watch_runtime_image(images, runtime)
+  end
+  if staged_image
+    asset = staged_image.fetch("path")
+    packages = Dir[File.join(asset, "Restore", "*.dmg")]
+    UI.user_error!("Cannot stabilize #{runtime}: expected one runtime DMG, found #{packages.length}.") unless packages.one?
+    Dir.mktmpdir("openclaw-watch-runtime-") do |directory|
+      package = File.join(directory, File.basename(packages.first))
+      sh("/bin/cp", "-c", packages.first, package)
+      delete_watch_screenshot_runtime!(runtime)
+      UI.user_error!("Cannot stabilize #{runtime}: its old MobileAsset was not reclaimed.") if File.exist?(asset)
+      sh("xcrun", "simctl", "runtime", "add", package)
+    end
+  end
   images = JSON.parse(sh("xcrun", "simctl", "runtime", "list", "-j", log: false)).values
     .select { |image| image["runtimeIdentifier"] == runtime }
   report_watch_runtime_images(runtime, images)
   restored = images.any? do |image|
-    image["state"] == "Ready" && image["runtimeBundlePath"] && File.directory?(image["runtimeBundlePath"])
+    image["state"] == "Ready" && image["runtimeBundlePath"] && File.directory?(image["runtimeBundlePath"]) &&
+      (!staged_image || image["signatureState"] == "Verified")
   end
-  UI.user_error!("watchOS #{version} download did not restore a mounted runtime for #{runtime}.") unless restored
+  UI.user_error!("watchOS #{version} repair did not restore a mounted runtime for #{runtime}.") unless restored
 end
 
 def report_watch_runtime_images(runtime, images)
   facts = images.map do |image|
-    image.slice("state", "version", "build").merge("mountedPathExists" => !!(image["runtimeBundlePath"] && File.directory?(image["runtimeBundlePath"])))
+    image.slice("state", "version", "build", "kind", "signatureState").merge("mountedPathExists" => !!(image["runtimeBundlePath"] && File.directory?(image["runtimeBundlePath"])))
   end
   UI.important("Watch runtime images for #{runtime}: #{JSON.generate(facts)}")
 end
@@ -333,22 +363,35 @@ end
 def create_watch_screenshot_simulator(name)
   # Runtime availability can change during the phone/tablet captures. One repair
   # covers resolution and creation together; boot and capture are never retried.
-  2.times do |attempt|
+  repaired = false
+  2.times do
     template = resolve_simulator_device(name)
     if template
       begin
+        if ENV["CI"] == "true"
+          images = WatchRuntimeAdmission.wait!(template.fetch("runtime"))
+          image = fallback_watch_runtime_image(images, template.fetch("runtime"))
+          # A fallback-mounted cryptex is re-imported every ten minutes, ending
+          # active Watch sessions. Retire its asset and stage the signed DMG once.
+          if image
+            UI.user_error!("Watch runtime still needs stabilization after one repair.") if repaired
+            repaired = true
+            repair_watch_screenshot_runtime!(template.fetch("runtime"), staged_image: image)
+          end
+        end
         return [template, create_screenshot_simulator(template)]
       rescue StandardError => error
-        raise unless ENV["CI"] == "true" && error.message.include?("runtime path not found")
+        raise unless ENV["CI"] == "true" && (error.is_a?(WatchRuntimeAdmission::Unavailable) || error.message.include?("runtime path not found"))
         reason = error.message
       end
     else
       reason = "No available watchOS runtime. Install one for the selected Xcode with: xcodebuild -downloadPlatform watchOS"
     end
     UI.user_error!(reason) unless ENV["CI"] == "true"
-    UI.user_error!("Watch simulator creation failed after one runtime repair: #{reason}") unless attempt.zero?
+    UI.user_error!("Watch simulator creation failed after one runtime repair: #{reason}") if repaired
 
     UI.important("Watch runtime unavailable; repairing once before simulator creation.")
+    repaired = true
     repair_watch_screenshot_runtime!(template && template.fetch("runtime"))
   end
 end
@@ -372,8 +415,20 @@ def with_screenshot_simulator(template = nil, watch_name: nil, diagnostics: nil)
 
   begin
     screenshot_phase(diagnostics, "boot", device: name, udid: udid) do
-      sh("xcrun", "simctl", "bootstatus", udid, "-b")
-      require_exclusive_screenshot_simulator!(udid, diagnostics)
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      inventory_started = nil
+      begin
+        sh("xcrun", "simctl", "bootstatus", udid, "-b")
+        inventory_started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        require_exclusive_screenshot_simulator!(udid, diagnostics)
+      ensure
+        finished = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        if diagnostics
+          event = diagnostics.events.last
+          event["bootstatusSeconds"] = ((inventory_started || finished) - started).round(2)
+          event["inventorySeconds"] = (finished - inventory_started).round(2) if inventory_started
+        end
+      end
     end
     if ENV["OPENCLAW_SNAPSHOT_STARTUP_PROBE"] == "1"
       screenshot_phase(diagnostics, "simulator-idle", device: name, udid: udid) { sleep(120) }
@@ -2454,6 +2509,7 @@ platform :ios do
           "-derivedDataPath", derived_data_path,
           "-destination", "generic/platform=iOS Simulator",
           "ARCHS=#{RbConfig::CONFIG.fetch("host_cpu")}", "ONLY_ACTIVE_ARCH=YES",
+          "COMPILER_INDEX_STORE_ENABLE=NO",
           "-allowProvisioningUpdates", "build-for-testing"
         ],
         log_path: File.join(log_directory, "build.log")

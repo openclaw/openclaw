@@ -66,6 +66,9 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket. N
 Admission and transcript persistence are separate. A `chat.send`, `sessions.send`,
 or initial `sessions.create` acknowledgment can arrive while approved input
 waits in durable pending-input custody, including during workspace preparation.
+Uploads are validated and saved before acknowledgment. Copying saved attachments
+into the agent workspace happens during turn preparation; a failed copy appears
+as a run error while the saved original remains in the conversation.
 Skill-library selection and authoring preparation run after that acknowledgment,
 under the admitted run's cancellation and error handling, alongside workspace
 and reply startup. Preparation failures appear as run errors. The Gateway reserves the existing

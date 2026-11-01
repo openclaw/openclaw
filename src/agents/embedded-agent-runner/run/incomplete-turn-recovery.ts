@@ -158,6 +158,9 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): boolean {
+  if (params.attempt.inputAlreadyDelivered) {
+    return !params.aborted && !params.timedOut && params.attempt.terminal.kind === "ok";
+  }
   const assistant = classifyAssistantTurn(params);
   const completion = resolveReplyCompletion(
     resolveReplyExpectation(params),

@@ -16,6 +16,7 @@ import {
   isProviderApiKeyConfigured,
   isProviderApiKeyConfiguredAsync,
 } from "../plugins/provider-auth-availability.js";
+import type { ImageGenerationSourceImage } from "./asset-types.js";
 import {
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
@@ -26,7 +27,6 @@ import type {
   ImageGenerationProviderCapabilities,
   ImageGenerationRequest,
   ImageGenerationResult,
-  ImageGenerationSourceImage,
 } from "./types.js";
 
 // Match the guarded HTTP default, including when no request timeout is supplied.

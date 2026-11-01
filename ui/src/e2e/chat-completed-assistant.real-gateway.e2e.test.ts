@@ -209,8 +209,8 @@ suite.define(() => {
           await pane.getByText(answer, { exact: true }).waitFor();
           await expect.poll(() => reads.slice(after).some((read) => read.completed)).toBe(true);
           await expect
-            .poll(() => pane.evaluate((element) => Reflect.get(element, "transcriptLoading")))
-            .toBe(false);
+            .poll(() => pane.evaluate((element) => Reflect.get(element, "transcriptReady")))
+            .toBe(true);
           await pane.evaluate((element) => Reflect.get(element, "updateComplete"));
           const work = pane.locator(".chat-work-group > .chat-activity-group__summary");
           if (await work.count()) {
@@ -243,6 +243,10 @@ suite.define(() => {
             sessionKey,
             sidebarView: "sessions",
           };
+          // Sidebar persistence has its own writer; transcript settlement does not flush it.
+          await page
+            .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
+            .waitFor();
           const warm = await page.evaluate(persistColdLoadWarmState, warmInput);
           const record = warm.storage.records.snapshots.find((entry) =>
             entry.sessionKey.endsWith(`\u0000${sessionKey}`),

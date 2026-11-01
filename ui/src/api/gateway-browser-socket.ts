@@ -75,7 +75,6 @@ export async function probeGatewayReachability(url: string, signal: AbortSignal)
 export function createBrowserGatewaySocket(
   url: string,
   handlers: GatewayProtocolSocketHandlers,
-  maxPayloadBytes?: () => number | undefined,
 ): GatewayProtocolSocket {
   const socket = new WebSocket(gatewayWebSocketTransportUrl(url));
   const listeners = new AbortController();
@@ -139,13 +138,7 @@ export function createBrowserGatewaySocket(
 
   return {
     isOpen: () => !listeners.signal.aborted && socket.readyState === WebSocket.OPEN,
-    send: (data) => {
-      const limit = maxPayloadBytes?.();
-      if (limit !== undefined && new TextEncoder().encode(data).byteLength > limit) {
-        throw new GatewayPayloadLimitError();
-      }
-      socket.send(data);
-    },
+    send: (data) => socket.send(data),
     close: (code, reason) => {
       if (listeners.signal.aborted) {
         return;
@@ -158,13 +151,4 @@ export function createBrowserGatewaySocket(
       finishClose(code ?? 1000, reason ?? "");
     },
   };
-}
-
-export class GatewayPayloadLimitError extends Error {
-  constructor() {
-    super(
-      "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
-    );
-    this.name = "GatewayPayloadLimitError";
-  }
 }

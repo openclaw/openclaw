@@ -1,4 +1,5 @@
 import type { StopReason } from "../../../packages/llm-core/src/types.js";
+import type { AcquireConfiguredProviderLocalService } from "../../agents/provider-local-service-target.js";
 import type { CreateChannelIngressDrainOptions } from "../../channels/message/ingress-drain.js";
 import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.types.js";
 import type { ConfigMutationBase } from "../../config/mutation-types.js";
@@ -451,7 +452,7 @@ export type PluginRuntimeCore = {
   tts: {
     /** Await machine preference preparation before rendering; optional for older custom runtimes. */
     buildSystemPromptHintAsync?: TtsRuntimeApi["buildTtsSystemPromptHintAsync"];
-    prepareTtsRequest: TtsRuntimeApi["prepareTtsRequest"];
+    prepareTtsRequest: typeof import("../../tts/tts-request.js").prepareTtsRequest;
     textToSpeech: typeof import("../../tts/tts.js").textToSpeech;
     textToSpeechStream: TtsRuntimeApi["textToSpeechStream"];
     textToSpeechTelephony: TtsRuntimeApi["textToSpeechTelephony"];
@@ -557,15 +558,7 @@ export type PluginRuntimeCore = {
   };
   llm: {
     complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
-    acquireLocalService: (
-      target: {
-        providerId: string;
-        baseUrl: string;
-        headers?: HeadersInit;
-        reconcile?: import("../provider-plugin.types.js").ProviderPlugin["reconcileLocalService"];
-      },
-      signal?: AbortSignal | null,
-    ) => Promise<{ release: () => void } | undefined>;
+    acquireLocalService: AcquireConfiguredProviderLocalService;
   };
   modelConfig: {
     /** Read-only model selection; no session mutation or harness execution authority. */

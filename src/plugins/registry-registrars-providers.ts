@@ -164,7 +164,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     }
     const coreEntry = getCoreEmbeddingProvider(id);
     const existing =
-      coreEntry ?? registry.embeddingProviders.find((entry) => entry.provider.id === id);
+      coreEntry ?? registry.embeddingProviders.find((entry) => entry.provider.id.trim() === id);
     if (existing) {
       const ownerPluginId =
         "ownerPluginId" in existing
@@ -203,7 +203,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
         reportRegistrationError(record, `${kindLabel} registration missing id`);
         return params.catalogKinds ? undefined : false;
       }
-      const existing = params.registrations.find((entry) => entry.provider.id === id);
+      const existing = params.registrations.find((entry) => entry.provider.id.trim() === id);
       if (existing) {
         reportRegistrationError(
           record,

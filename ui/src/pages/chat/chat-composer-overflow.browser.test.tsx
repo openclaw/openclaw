@@ -114,6 +114,9 @@ it.each([390, 2048])("fits skill rows at %ipx", async (width) => {
   await click(".agent-chat__attach-menu .agent-chat__input-btn--attach");
   await expect.poll(() => container.querySelector('[data-value="open-skills"]')).not.toBeNull();
   await click('[data-value="open-skills"]');
+  await expect
+    .poll(() => container.querySelector('.agent-chat__capability-menu [data-value^="skill:"]'))
+    .not.toBeNull();
   await afterLayout();
   const dropdown = query(".agent-chat__capability-menu");
   const menu = query(".oc-menu", dropdown);

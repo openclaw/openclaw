@@ -25,7 +25,10 @@ const SkillsSearchSchema = Type.Object({
   query: Type.String({ minLength: 1, maxLength: 1000 }),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
 });
-const SkillsReadSchema = Type.Object({ name: Type.String({ minLength: 1 }) });
+const SkillsReadSchema = Type.Object({
+  name: Type.String({ minLength: 1 }),
+  relativePath: Type.Optional(Type.String({ minLength: 1 })),
+});
 
 export function createInstalledSkillTools(skills: readonly InstalledSkill[]): AnyAgentTool[] {
   if (skills.length === 0) {
@@ -73,17 +76,23 @@ export function createInstalledSkillTools(skills: readonly InstalledSkill[]): An
         name: "skills_read",
         label: "Read Installed Skill",
         description:
-          "Load complete SKILL.md instructions for an exact installed skill name. Use a known name directly; search is not required first. Does not execute the skill or grant additional tool permissions.",
+          "Load complete SKILL.md instructions for an exact installed skill name; search is not required first. Optional relativePath reads a UTF-8 text companion (up to 256 KiB) inside a local skill directory. Restricted placements are instruction-only. Does not execute files or grant command permissions.",
         parameters: SkillsReadSchema,
         execute: async (_id, args, signal) => {
           const params = asToolParamsRecord(args);
           const name = readToolStringParam(params, "name", { required: true });
-          const instructions = await readInstalledSkill(skills, name, signal);
+          const relativePath = readToolStringParam(params, "relativePath", {
+            required: params.relativePath !== undefined || params.relative_path !== undefined,
+            trim: false,
+          });
+          const instructions = await readInstalledSkill(skills, name, signal, relativePath);
           const result = {
             content: [{ type: "text" as const, text: formatSkillInstructions(instructions) }],
             details: instructions,
           };
-          rememberSkillInstructionDelivery(result, instructions.content);
+          if (relativePath === undefined) {
+            rememberSkillInstructionDelivery(result, instructions.content);
+          }
           return result;
         },
       },

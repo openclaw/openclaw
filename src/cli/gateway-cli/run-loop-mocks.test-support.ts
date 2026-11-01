@@ -153,6 +153,7 @@ const m = {
   })),
   armShutdownHardExitWatchdog: vi.fn(
     (_params: { delayMs: number; onError: (error: unknown) => void }) => ({
+      reportPending: vi.fn(),
       cancel: cancelShutdownHardExitWatchdog,
     }),
   ),

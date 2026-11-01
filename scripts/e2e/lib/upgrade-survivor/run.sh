@@ -584,7 +584,7 @@ trap 'on_signal SIGINT 130' INT
 trap 'on_signal SIGTERM 143' TERM
 
 phase() {
-  local name="$1" phase_status previous_phase="$CURRENT_PHASE"
+  local name="$1" phase_status previous_phase="$CURRENT_PHASE" phase_started="$SECONDS"
   shift
   CURRENT_PHASE="$name"
   echo "==> upgrade-survivor:$name" >&3
@@ -592,6 +592,8 @@ phase() {
   "$@"
   phase_status=$?
   [ "$phase_status" -eq 0 ] || return "$phase_status"
+  # Timed-out containers lose phases.jsonl; the streamed log keeps the budget breakdown.
+  echo "==> upgrade-survivor:$name passed $((SECONDS - phase_started))s (total ${SECONDS}s)" >&3
   json_event "$name" passed
   CURRENT_PHASE="$previous_phase"
 }
@@ -1687,6 +1689,9 @@ update_candidate() {
   # classifying the result; an unreadable package must not retain the baseline.
   installed_version="$(read_installed_version)" || installed_version=""
   update_exit_code="$update_status"
+  node -e 'const steps = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).steps ?? [];
+    console.log(`update steps: ${steps.map((s) => `${s.name}=${Math.round(s.durationMs / 1000)}s`).join(", ")}`);' \
+    "$update_json" >&3 2>/dev/null || true
   # A nonzero command never runs the JSON assertion and must not be labeled as one.
   if [ "$after_repair" = "1" ] && [ "$update_status" -eq 0 ]; then
     CURRENT_PHASE="recovery-update-result-assertion"

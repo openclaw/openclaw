@@ -55,6 +55,9 @@ import {
 } from "./server-plugin-reload.fixture-tools.test-support.js";
 import {
   verifyManagedCandidateRetirement,
+  verifyOverlappingCandidatePreparationFailure,
+  verifyOverlappingGenerationRetirement,
+  verifySerializedCandidateStartup,
   verifyExpandedReplacementTargets,
   verifyPreCommitRetirementOwnership,
   verifyPendingServiceCleanupRetry,
@@ -76,8 +79,10 @@ import {
 } from "./server-plugin-reload.recovery.test-support.js";
 import {
   verifyCandidateResourceCleanup,
+  verifyOverlapPublishesDuringAdmittedCall,
   registerPluginRetainedWorkReloadTests,
   verifySharedResourceReplacement,
+  verifySerializedSuccessorJoinsOverlappingPredecessor,
 } from "./server-plugin-reload.resources.test-support.js";
 import { registerPluginServiceRecoveryTests } from "./server-plugin-reload.service-recovery.test-support.js";
 import {
@@ -362,6 +367,33 @@ it("disables and re-enables a plugin after its service cleanup fails", () =>
 
 it("preserves pending old service cleanup when candidate startup fails", () =>
   verifyPendingServiceCleanupRollback(createRecoveryFixture));
+
+it.for([undefined, false] as const)(
+  "keeps registration serialized without generation overlap opt-in (%s)",
+  (generationOverlap, { signal }) =>
+    verifySerializedCandidateStartup(createRecoveryFixture, generationOverlap, signal),
+);
+
+it("serializes mixed plugins without draining an opted predecessor's idle background authority", ({
+  signal,
+}) => verifySerializedCandidateStartup(createRecoveryFixture, "mixed", signal));
+
+it("publishes an opted-in successor before stopping an admitted call's service", ({ signal }) =>
+  verifyOverlapPublishesDuringAdmittedCall(createRecoveryFixture, signal));
+
+it("keeps the admitted predecessor serving when an overlapping successor fails preparation", ({
+  signal,
+}) => verifyOverlappingCandidatePreparationFailure(createRecoveryFixture, signal));
+
+it.for(["reload again", "restart"] as const)(
+  "owns overlapping plugin generations until their admitted callers finish across %s",
+  (action, { signal }) =>
+    verifyOverlappingGenerationRetirement(createRecoveryFixture, action, signal),
+);
+
+it("joins an older overlapping predecessor before registering a serialized successor", ({
+  signal,
+}) => verifySerializedSuccessorJoinsOverlappingPredecessor(createRecoveryFixture, signal));
 
 it.each([15_000, 70_000])(
   "waits for an admitted write before replacement and keeps serving on timeout (%i ms)",

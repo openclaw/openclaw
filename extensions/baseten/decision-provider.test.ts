@@ -26,6 +26,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
 const ids = [
   "decision-models/baseten-elephant-9b-latest",
   "decision-models/baseten-mammoth-27b-latest",
+  "decision-models/baseten-joey-2b-latest",
 ];
 const route = {
   type: "choice",

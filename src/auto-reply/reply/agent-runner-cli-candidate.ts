@@ -15,7 +15,7 @@ import {
   resolveDelegationCapability,
 } from "../../agents/delegation-capability.js";
 import { withAdmittedCliCandidate } from "../../agents/embedded-agent-runner/run-entry-cli.js";
-import type { CompactionAccountingTarget } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
@@ -59,7 +59,7 @@ export async function runCliFallbackCandidate(
       AgentFallbackCandidateCommonParams["candidateRun"],
       "authProfileId" | "authProfileIdSource"
     >;
-    onSessionWriter: (writer: CompactionAccountingTarget) => void;
+    onCompactionAccounting: (fact: CompactionAccountingFact) => void;
   },
 ): ReturnType<typeof runCliAgentWithLifecycle> {
   if (
@@ -197,6 +197,7 @@ export async function runCliFallbackCandidate(
         readMode: "read-only",
         getSessionEntry: () => turn.getActiveSessionEntry(),
         classifyResult: params.classifyResult,
+        onCompactionAccounting: params.onCompactionAccounting,
       },
       async ({
         sessionEntry: initialSessionEntry,
@@ -554,14 +555,6 @@ export async function runCliFallbackCandidate(
             onExecutionPhase: params.signalExecutionPhaseForTyping,
           },
         });
-        if (sessionTarget && sessionEntry) {
-          // History preparation publishes its committed writer into this candidate's detached row.
-          params.onSessionWriter({
-            ...sessionTarget,
-            lifecycleRevision: sessionEntry.lifecycleRevision,
-            activeWriterRunId: sessionEntry.activeWriterRunId,
-          });
-        }
         if (droppedCliSessionReplacement) {
           // The room-event transform removed native continuity; only its guarded
           // invalidation remains, and failure must retain the returned turn.

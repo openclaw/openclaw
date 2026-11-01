@@ -837,21 +837,6 @@ extension OpenClawChatView {
                 ChatSpeechStatusChip(isPreparing: isPreparing) { speech.stop() }
                     .padding(.leading, 8)
             }
-            #if os(iOS)
-            if !isUser, showsActions {
-                self.messageActionsMenu(for: actionMessage)
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
-                    .font(OpenClawChatTypography.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(
-                        width: CleanChatComposerMetrics.controlTouchSize,
-                        height: CleanChatComposerMetrics.controlTouchSize)
-                    .contentShape(Rectangle())
-                    .padding(.leading, 8)
-                    .padding(.bottom, 8)
-            }
-            #endif
             #if os(macOS)
             if self.isDesktopLayout, showsActions, isUser || self.isListenable(msg) {
                 HStack(spacing: 12) {

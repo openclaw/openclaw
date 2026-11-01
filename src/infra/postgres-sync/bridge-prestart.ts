@@ -24,12 +24,14 @@ export function postgresBridgeReuseKey(params: PostgresBridgeParameters): string
   return sha256Hex(
     JSON.stringify([
       params.url,
-      params.schema,
-      params.storeId,
       params.lockTimeoutMs ?? POSTGRES_LOCK_TIMEOUT_MS,
       params.statementTimeoutMs ?? POSTGRES_STATEMENT_TIMEOUT_MS,
     ]),
   );
+}
+
+function preparedBridgeKey(params: PostgresBridgeParameters): string {
+  return JSON.stringify([postgresBridgeReuseKey(params), params.schema, params.storeId]);
 }
 
 export function createPostgresBridge(params: PostgresBridgeParameters): PostgresBridge {
@@ -91,8 +93,10 @@ function findPreparedBridge(key: string): PreparedBridgeScope | undefined {
   return undefined;
 }
 
-export function takePreparedPostgresBridge(key: string): PostgresBridge | undefined {
-  const scope = findPreparedBridge(key);
+export function takePreparedPostgresBridge(
+  params: PostgresBridgeParameters,
+): PostgresBridge | undefined {
+  const scope = findPreparedBridge(preparedBridgeKey(params));
   const bridge = scope?.bridge;
   if (scope && bridge) {
     scope.bridge = undefined;
@@ -103,7 +107,7 @@ export function takePreparedPostgresBridge(key: string): PostgresBridge | undefi
 
 /** Load the bridge during its owner's imports; connecting remains the constructor's job. */
 export function preparePostgresBridge(params: PostgresBridgeParameters, signal?: AbortSignal) {
-  const key = postgresBridgeReuseKey(params);
+  const key = preparedBridgeKey(params);
   const inherited = findPreparedBridge(key);
   const scope: PreparedBridgeScope = {
     key,
@@ -122,7 +126,11 @@ export function preparePostgresBridge(params: PostgresBridgeParameters, signal?:
     // The awaited disposer still reports retirement failures to the scope owner.
     void dispose().catch(() => {});
   };
-  if (!signal?.aborted && !inherited && !(params.reuse && hasIdlePostgresBridge(key))) {
+  if (
+    !signal?.aborted &&
+    !inherited &&
+    !(params.reuse && hasIdlePostgresBridge(postgresBridgeReuseKey(params)))
+  ) {
     scope.bridge = createPostgresBridge(params);
     signal?.addEventListener("abort", abort, { once: true });
   }

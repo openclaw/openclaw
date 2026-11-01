@@ -72,6 +72,8 @@ type AuthProfileOverrideProvenance = Pick<
   SessionEntry,
   "authProfileOverride" | "authProfileOverrideSource" | "authProfileOverrideCompactionCount"
 >;
+type SessionAuthProfileOverrideSnapshot = AuthProfileOverrideProvenance &
+  Pick<SessionEntry, "sessionId">;
 
 export function resolveSessionAuthProfileOverrideSource(
   entry: AuthProfileOverrideProvenance | undefined,
@@ -91,9 +93,10 @@ export function resolveCollapsedSessionAuthPinSource(
   return source === "user-link" ? "user" : source;
 }
 
-function matchesLoginSnapshot(
-  current: ProviderLoginSessionEntry,
-  snapshot: ProviderLoginSessionEntry,
+/** Compare stored pin identity without normalizing its provenance. */
+export function matchesSessionAuthProfileOverrideSnapshot(
+  current: SessionAuthProfileOverrideSnapshot,
+  snapshot: SessionAuthProfileOverrideSnapshot,
 ): boolean {
   return (
     current.sessionId === snapshot.sessionId &&
@@ -139,7 +142,7 @@ export function decideProviderLoginSessionAdoption(params: {
     return { status: "unchanged" };
   }
   if (params.snapshot) {
-    if (!matchesLoginSnapshot(params.current, params.snapshot)) {
+    if (!matchesSessionAuthProfileOverrideSnapshot(params.current, params.snapshot)) {
       return { status: "rejected" };
     }
   } else {

@@ -117,15 +117,14 @@ it.each([
       assert(prepared.ok, "attachment preparation failed");
       ctx.media = prepared.value.mediaPathOffloads;
       sessionCtx.media = ctx.media;
-    } else {
-      await stageSandboxMedia({
-        ctx,
-        sessionCtx,
-        cfg,
-        sessionKey: "agent:main:chat",
-        workspaceDir: localWorkspace,
-      });
     }
+    await stageSandboxMedia({
+      ctx,
+      sessionCtx,
+      cfg,
+      sessionKey: "agent:main:chat",
+      workspaceDir: localWorkspace,
+    });
 
     expect(await readRemote("seeded.txt")).toBe("first turn");
     if (workspaceAccess === "ro") {

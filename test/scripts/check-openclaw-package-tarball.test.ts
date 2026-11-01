@@ -1,5 +1,6 @@
-// Check Openclaw Package Tarball tests cover check openclaw package tarball script behavior.
 import { spawnSync } from "node:child_process";
+// Check Openclaw Package Tarball tests cover check openclaw package tarball script behavior.
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -109,6 +110,52 @@ function checkCraftedTarball(
     expect(result.stderr).toContain(expectedError);
   }
 }
+
+it("extracts a digest-bound package without lifecycle and rejects mismatched bytes or links", () => {
+  const root = tempDirs.make("openclaw-package-extract-");
+  const tarball = join(root, "input.tgz");
+  const manifest = JSON.stringify({ name: "openclaw", scripts: { postinstall: "exit 99" } });
+  const entries: Array<HeaderData & { body?: string }> = [
+    { path: "package/package.json", type: "File", body: manifest },
+    { path: "package/run.mjs", type: "File", mode: 0o777, body: "export {};" },
+  ];
+  for (const mode of ["valid", "digest", "link"] as const) {
+    writeCraftedTarball(
+      tarball,
+      mode === "link"
+        ? [...entries, { path: "package/link", type: "SymbolicLink", linkpath: "../outside" }]
+        : entries,
+    );
+    const bytes = readFileSync(tarball);
+    const workspace = tempDirs.make("openclaw-package-extract-workspace-");
+    const digest =
+      mode === "digest" ? "0".repeat(64) : createHash("sha256").update(bytes).digest("hex");
+    const result = spawnSync(
+      process.execPath,
+      [
+        resolve(PUBLIC_CHECK_SCRIPT),
+        "--extract-only",
+        workspace,
+        digest,
+        String(bytes.length),
+        tarball,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(mode === "valid" ? 0 : 1);
+    if (mode === "valid") {
+      expect(readFileSync(join(workspace, "extract/package/package.json"), "utf8")).toBe(manifest);
+      if (process.platform !== "win32") {
+        expect(statSync(join(workspace, "extract/package/run.mjs")).mode & 0o777).toBe(0o755);
+      }
+    } else {
+      expect(result.stderr).toMatch(
+        mode === "digest" ? /snapshot digest\/size mismatch/ : /link|entry type/i,
+      );
+      expect(existsSync(join(workspace, "extract"))).toBe(false);
+    }
+  }
+});
 
 type TarballCheck = {
   inventory?: Parameters<typeof withTarball>[0];

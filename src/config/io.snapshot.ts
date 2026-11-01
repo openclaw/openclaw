@@ -1,3 +1,4 @@
+import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
@@ -54,7 +55,7 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { warnIfConfigFromFuture } from "./io.warnings.js";
-import { captureConfigRootWriteTarget } from "./io.write-safety.js";
+import { captureConfigFileWritePathProof } from "./io.write-safety.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./types.js";
@@ -580,7 +581,12 @@ export async function readConfigFileSnapshotForWriteFromContext(
     }
   };
   assertConfigSelection();
-  const { pathProof } = captureConfigRootWriteTarget(context.configPath, context.deps.fs);
+  // Reads may follow file aliases; the writer separately pins its publication target.
+  const pathProof = captureConfigFileWritePathProof(
+    context.configPath,
+    resolvePathViaExistingAncestorSync(context.configPath),
+    context.deps.fs,
+  );
   const assertConfigPathForWrite = composeConfigWriteAssertions(
     assertConfigSelection,
     pathProof.assertCurrent,

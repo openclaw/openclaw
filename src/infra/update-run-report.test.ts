@@ -191,6 +191,30 @@ it.each([true, false])("separates saved and current health (responding=%s)", (re
   expect(report.headline).not.toContain("gateway is running");
 });
 
+it.each(["restart-unhealthy", "service-not-running", "timeout"])(
+  "does not claim a responding Gateway is absent after %s",
+  (code) => {
+    const report = renderRecord(
+      failed({
+        reason: "doctor-failed",
+        steps: [
+          failedStep("gateway recovery verification", {
+            exitCode: 1,
+            failureFacts: [{ check: "settled", code }],
+          }),
+        ],
+        verification: { serviceRunning: false },
+      }),
+      { currentHealth: { kind: "responding", version: "2026.9.2" } },
+    );
+    expectText(report.markdown, [
+      `Recorded recovery: readiness unverified (${code}).`,
+      "Current health: Gateway answered on the recorded port (2026.9.2).",
+    ]);
+    expect(report.markdown).not.toContain("not serving");
+  },
+);
+
 it("preserves recorded restart constraints over newer healthy recovery facts", async () => {
   const record = observedFailure(serving("2026.9.5", "runtime-verification-failed"), {
     reason: "post-update-plugins",

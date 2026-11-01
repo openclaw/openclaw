@@ -59,9 +59,16 @@ describe("worker placement restart recovery", () => {
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "saves an interrupted worker's files before releasing its claim (disconnected: %s)",
-    async (disconnected) => {
+  it.each([
+    "startup",
+    "disconnected startup",
+    "interrupted drain",
+    "stale interrupted drain",
+  ] as const)(
+    "saves an interrupted worker's files before releasing its claim: %s",
+    async (mode) => {
+      const interruptedDrain = mode === "interrupted drain" || mode === "stale interrupted drain";
+      const disconnected = mode !== "startup";
       const workspacePath = path.join(support.testState.root, "gateway-workspace");
       const workerPath = path.join(support.testState.root, "worker-workspace");
       await fs.mkdir(workspacePath);
@@ -74,26 +81,43 @@ describe("worker placement restart recovery", () => {
       const original = await createHarness(support.testState.stateDb, placements);
       const active = await original.placements.seedActive(2);
       assert(active.state === "active");
-      const claim = await placements.claimTurn(makeClaimInput(active, "interrupted-worker"));
+      const claim = interruptedDrain
+        ? undefined
+        : await placements.claimTurn(makeClaimInput(active, "interrupted-worker"));
+      if (interruptedDrain) {
+        await placements.startDrain({
+          sessionId: active.sessionId,
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+          expectedGeneration: active.generation,
+        });
+      }
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
 
-      const restartedStore = createWorkerSessionPlacementStore({
-        database: support.testState.stateDb,
-        now: () => 2_000,
-      });
+      const restartedStore = interruptedDrain
+        ? placements
+        : createWorkerSessionPlacementStore({
+            database: support.testState.stateDb,
+            now: () => 2_000,
+          });
       const restarted = await createHarness(support.testState.stateDb, restartedStore, {
         workspacePath,
       });
       restarted.markEnvironmentNodeDeviceId("interrupted-worker-node");
+      if (mode === "stale interrupted drain") {
+        restarted.markEnvironmentProtocolFeatures([]);
+      }
       const tunnel = restarted.tunnelHandle(active.activeOwnerEpoch);
       const launchTurn = vi.spyOn(tunnel, "launchTurn");
       vi.mocked(tunnel.reconcileWorkspace).mockImplementation(
         async ({ source, baseManifestRef }) => {
           assert(source.kind === "local");
-          expect(restarted.log).toContain("teardown:stop");
-          expect(restarted.log.indexOf("teardown:stop")).toBeLessThan(
-            restarted.log.indexOf("workspace:quiesce"),
-          );
+          if (!interruptedDrain) {
+            expect(restarted.log).toContain("teardown:stop");
+            expect(restarted.log.indexOf("teardown:stop")).toBeLessThan(
+              restarted.log.indexOf("workspace:quiesce"),
+            );
+          }
           const current = await manifestFor(workerPath);
           const applied = await applyStagedWorkerWorkspace({
             root: source.path,
@@ -123,10 +147,26 @@ describe("worker placement restart recovery", () => {
         );
       }
 
-      await restarted.service.reconcile("startup");
+      if (interruptedDrain) {
+        await restarted.service.reconcileActive(active.environmentId);
+        const pending = await restartedStore.listPendingWorkspaceResultsAsync();
+        expect(pending).toHaveLength(1);
+        expect(pending[0]).toMatchObject({
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+          recoveryRequestedAtMs: 1_000,
+        });
+        expect(restarted.environments.startTunnel).not.toHaveBeenCalled();
+        await restarted.service.reconcileActive(active.environmentId);
+        expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual(pending);
+      } else {
+        await restarted.service.reconcile("startup");
+      }
 
       if (disconnected) {
-        expectPlacement(restartedStore, "active", { turnClaim: { claimId: claim.claimId } });
+        expectPlacement(restartedStore, interruptedDrain ? "draining" : "active", {
+          turnClaim: { claimId: claim?.claimId ?? expect.stringMatching(/^reclaim-/) },
+        });
         expect(await restartedStore.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         expect(restarted.environments.destroy).not.toHaveBeenCalled();
         await expect(fs.readFile(path.join(workspacePath, "result.txt"), "utf8")).resolves.toBe(
@@ -137,10 +177,54 @@ describe("worker placement restart recovery", () => {
       await expect(fs.readFile(path.join(workspacePath, "result.txt"), "utf8")).resolves.toBe(
         "unfinished worker edit\n",
       );
-      expectPlacement(restartedStore, "active", { turnClaim: null });
+      expectPlacement(restartedStore, interruptedDrain ? "reclaimed" : "active", {
+        turnClaim: null,
+      });
       expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual([]);
-      expect(restarted.environments.destroy).not.toHaveBeenCalled();
+      expect(restarted.environments.destroy).toHaveBeenCalledTimes(interruptedDrain ? 1 : 0);
+      expect(restarted.environments.createWithRequest).not.toHaveBeenCalled();
       expect(launchTurn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["claimed turn", "replaced owner", "detached owner", "provider loss"] as const)(
+    "does not enroll interrupted-drain recovery over a %s",
+    async (scenario) => {
+      const placements = createPlacementStore();
+      const harness = await createHarness(support.testState.stateDb, placements);
+      const active = await harness.placements.seedActive(2);
+      assert(active.state === "active");
+      harness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
+      if (scenario === "claimed turn") {
+        await placements.claimTurn(makeClaimInput(active, "live-worker"));
+      }
+      const draining = await placements.startDrain({
+        sessionId: active.sessionId,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        expectedGeneration: active.generation,
+      });
+      if (scenario === "replaced owner") {
+        harness.markEnvironmentOwnerEpoch(3);
+      } else if (scenario === "detached owner") {
+        harness.markEnvironmentAttachments(["another-session"]);
+      } else if (scenario === "provider loss") {
+        harness.markEnvironmentFailed();
+      }
+
+      await harness.service.reconcileActive(active.environmentId);
+
+      if (scenario === "provider loss") {
+        expectPlacement(placements, "failed", {
+          recoveryError: expect.stringContaining("Unresolved workspace changes remain unverified"),
+        });
+      } else {
+        expect(placements.get(active.sessionId)).toEqual(draining);
+        expect(harness.environments.destroy).not.toHaveBeenCalled();
+      }
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+      expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+      expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     },
   );
 
@@ -172,6 +256,7 @@ describe("worker placement restart recovery", () => {
             makeClaimInput(active, "retirement-claim", "retirement-run"),
           );
           if (scenario === "pending result") {
+            await gitInit(support.testState.root);
             await placements.markWorkspaceResultPending(claim);
             await placements.handoffWorkspaceResultRecovery(claim);
           }

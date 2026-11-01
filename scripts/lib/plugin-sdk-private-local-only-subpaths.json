@@ -31,7 +31,6 @@
   "channel-route",
   "channel-secret-owner-runtime",
   "channel-secret-tts-runtime",
-  "channel-target-testing",
   "channel-targets",
   "channel-test-helpers",
   "chat-channel-ids",

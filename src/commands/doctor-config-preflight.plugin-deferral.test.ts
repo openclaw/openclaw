@@ -263,6 +263,92 @@ async function installStatelessFixture(
 }
 
 describe("configured plugin migration deferral", () => {
+  it.each(["absent", "default", "after-session-repair", "detector-failed"])(
+    "inspects an inactive owner's retained settings without activating it (%s)",
+    (source) =>
+      withFixture(async (f) => {
+        const actions = [{ id: "data" }, { id: "repair", phase: "after-session-repair" }];
+        const configPaths = [["plugins", "entries", f.pluginId, "config"]];
+        await installFixture(
+          f.root,
+          "@example/inactive-fixture",
+          {
+            id: f.pluginId,
+            configSchema: objectSchema({ enabled: { type: "boolean" } }),
+            configContracts: {
+              compatibilityMigrationPaths: [`plugins.entries.${f.pluginId}.config`],
+            },
+            doctorContract: { stateMigrations: actions },
+          },
+          false,
+          'throw Error("Disabled plugin runtime must not be evaluated");',
+        );
+        await fs.writeFile(
+          path.join(f.root, "doctor-contract-api.cjs"),
+          `const fs = require('node:fs');
+module.exports.stateMigrations = ${JSON.stringify(actions)}.map(action => ({
+  ...action, label: action.id,
+  detectLegacyState({ config }) {
+    if (config.plugins.entries.fixture.config.enabled !== false) throw Error('Retained settings missing');
+    if (${JSON.stringify(source)} === 'detector-failed') throw Error('Cannot inspect source');
+    const source = action.phase ? ${JSON.stringify(f.migrated)} : ${JSON.stringify(f.source)};
+    return fs.existsSync(source) ? { preview: ['Retained source data'] } : null;
+  },
+  migrateLegacyState() { throw Error('Disabled owner must not migrate source data'); }
+}));`,
+        );
+        const config = {
+          ...f.config(undefined, [f.root]),
+          plugins: {
+            allow: [f.pluginId],
+            load: { paths: [f.root] },
+            entries: { [f.pluginId]: { enabled: false, config: { enabled: false } } },
+          },
+        };
+        await f.write(config);
+        if (source === "default" || source === "after-session-repair") {
+          await fs.writeFile(source === "default" ? f.source : f.migrated, binding);
+        }
+        await recordDeferredPluginMigrations({
+          pending: [
+            {
+              pluginId: f.pluginId,
+              requiresStateMigration: true,
+              configPaths,
+              validationExcludedPaths: configPaths,
+              reason: "Pending plugin upgrade",
+              command: "openclaw doctor --fix",
+            },
+          ],
+        });
+        await doctor();
+        expect((await f.read()).plugins).toEqual(config.plugins);
+        if (source === "absent") {
+          expect(readDeferredPluginMigrations({ includeDeferred: true })).toEqual([]);
+        } else {
+          f.pending({ requiresStateMigration: true });
+          if (source !== "detector-failed") {
+            await expectBinding(source === "default" ? f.source : f.migrated);
+          }
+        }
+        const loaded = await loadGatewayStartupPluginRuntime({
+          cfg: config,
+          log: { info() {}, warn() {}, error() {}, debug() {} },
+          baseMethods: [],
+          startupPluginIds: [f.pluginId],
+        });
+        try {
+          expect(loaded.pluginRegistry.tools).toEqual([]);
+          expect(
+            loaded.pluginRegistry.plugins.find(({ id }) => id === f.pluginId)?.activated,
+          ).not.toBe(true);
+        } finally {
+          loaded.retireGatewayRuntimeBindings();
+          await disposePluginRegistryInstances(loaded.pluginRegistry);
+        }
+      }),
+  );
+
   it("gates a settled inactive owner until Doctor migrates it after installation and enablement", () =>
     withFixture(async (f) => {
       await fs.writeFile(f.source, binding);
