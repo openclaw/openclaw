@@ -62,8 +62,8 @@ suite.define(() => {
         const box = (await composer.boundingBox())!;
         expect(box.y).toBeGreaterThanOrEqual(offsetTop);
         expect(box.y + box.height).toBeLessThanOrEqual(380 + offsetTop);
-        // Docked on the keyboard: no empty band below the composer.
-        expect(380 + offsetTop - (box.y + box.height)).toBeLessThanOrEqual(12);
+        // Docked on the keyboard with the mobile chat composer's bottom gap.
+        expect(380 + offsetTop - (box.y + box.height)).toBe(10);
         expect(
           await send.evaluate((element) => {
             const bounds = element.getBoundingClientRect();
