@@ -137,7 +137,7 @@ flow:
                     [firstParagraph, ...codeBlocks, finalParagraph].join('\n\n')
               - set: auditPath
                 value:
-                  expr: path.join(env.gateway.runtimeEnv.OPENCLAW_STATE_DIR, "qa-prepared-delivery-recovery", `${marker}.jsonl`)
+                  expr: path.join(env.gateway.workspaceDir, "qa-prepared-delivery-recovery", `${marker}.jsonl`)
               - call: env.gateway.restartAfterStateMutation
                 args:
                   - lambda:
