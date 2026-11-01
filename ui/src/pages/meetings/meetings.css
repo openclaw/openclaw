@@ -402,6 +402,7 @@
 
 .transcripts-filter-popover {
   --oc-popover-padding: 0;
+  --settings-control-height: 40px;
   --oc-overlay-max-width: min(366px, calc(100vw - 24px));
   --oc-overlay-max-height: calc(100dvh - 16px);
 }
@@ -413,8 +414,9 @@
   padding: var(--space-3);
 }
 
+/* A full date plus its calendar needs more than half of the narrowest phones. */
 .transcripts-filter-popover .transcripts-filters__advanced {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   /* A date label can wrap in wide-glyph themes; the two inputs stay level. */
   align-items: end;
   margin-block-start: 0;
@@ -424,8 +426,10 @@
   grid-column: 1 / -1;
 }
 
-.transcripts-filter-popover input[type="date"] {
-  padding-inline: var(--space-2);
+.transcripts-filter-popover input {
+  width: 100%;
+  min-width: 0;
+  font-size: 16px;
 }
 
 .transcripts-filter-popover .transcripts-caption {
@@ -435,11 +439,14 @@
 .transcripts-filter-popover__actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-2);
+  gap: var(--space-3);
 }
 
 .transcripts-filter-popover__actions .btn {
   justify-content: center;
+  height: var(--settings-control-height);
+  min-height: var(--settings-control-height);
+  font-size: var(--control-ui-text-md);
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
