@@ -1292,7 +1292,20 @@ describe("RealtimeCallHandler path routing", () => {
     ]);
   });
 
-  it("waits for partial transcript fragments to settle before consulting", async () => {
+  it.each([
+    {
+      name: "ASCII",
+      first: "Send a Discord",
+      second: "message.",
+      text: "Send a Discord message.",
+    },
+    {
+      name: "Unicode overlap",
+      first: "Meet in İstanbul",
+      second: "İstanbul tomorrow",
+      text: "Meet in İstanbul tomorrow",
+    },
+  ])("settles $name fragments before consulting", async ({ first, second, text }) => {
     const { submitToolResult, consult, callbacks } = await openConsult(
       async () => ({ text: "I sent it." }),
       undefined,
@@ -1300,21 +1313,21 @@ describe("RealtimeCallHandler path routing", () => {
     );
 
     vi.useFakeTimers();
-    callbacks?.onTranscript?.("user", "Send a Discord", false);
+    callbacks?.onTranscript?.("user", first, false);
     requestConsult(callbacks, "consult-call", "message");
     await vi.advanceTimersByTimeAsync(50);
-    callbacks?.onTranscript?.("user", "message.", false);
+    callbacks?.onTranscript?.("user", second, false);
     await vi.advanceTimersByTimeAsync(350);
 
     await waitFor(() => expect(consult).toHaveBeenCalledTimes(1), { timeout: 2_000 });
     const [args, callId, context] = expectDefined(consult.mock.calls.at(0), "consult");
     expect(args).toMatchObject({
-      question: "Send a Discord message.",
+      question: text,
       context: "Realtime provider supplied a shorter consult question: message",
     });
     expect(callId).toBe("call-1");
     expect(context).toEqual({
-      partialUserTranscript: "Send a Discord message.",
+      partialUserTranscript: text,
       abortSignal: expect.any(AbortSignal),
     });
     await expectToolResult(submitToolResult, "consult-call", { text: "I sent it." }, true);
