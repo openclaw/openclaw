@@ -141,7 +141,7 @@ export function ChannelRefresh(params: {
     <openclaw-tooltip prop:content={updatedLabel()}>
       <button
         type="button"
-        class="btn btn--xs btn--icon"
+        class="btn btn--xs btn--icon channels-refresh"
         aria-label={t("common.refresh")}
         disabled={params.disabled}
         onClick={() => params.onRefresh()}
