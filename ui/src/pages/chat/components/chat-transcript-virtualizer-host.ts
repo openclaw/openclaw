@@ -22,7 +22,7 @@ import {
   isTranscriptRangeCommitted,
   createPositionRailGutter,
 } from "./chat-transcript-geometry.ts";
-import { reconcileTranscriptHeaderMargin } from "./chat-transcript-header.ts";
+import { commitTranscriptRows, reconcileTranscriptHeaderMargin } from "./chat-transcript-header.ts";
 import { TranscriptInitialRange } from "./chat-transcript-initial-range.ts";
 import {
   reconcileChatTranscriptInteractionResize,
@@ -47,6 +47,7 @@ import {
   leavingTranscriptMcpAppRows,
   previewTranscriptRowKeys,
 } from "./chat-transcript-range.ts";
+import { TranscriptReaderAnchor } from "./chat-transcript-reader-anchor.ts";
 import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
 import {
   applyPendingScrollOffset,
@@ -64,13 +65,13 @@ import {
 import { TranscriptViewportRect } from "./chat-transcript-viewport-rect.ts";
 
 export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
-  private readonly renderer = new ChatTranscriptRenderer();
-  private readonly offsetState = new TranscriptOffsetState();
+  readonly renderer = new ChatTranscriptRenderer();
+  readonly offsetState = new TranscriptOffsetState();
   readonly entryAnimations = new ChatMessageEntryAnimations();
   readonly messageElements = createTranscriptMessageElements(this.entryAnimations.refFor);
   expandedAssistantMessages = new Map<string, AssistantMessageExpansionState>();
   private readonly positionRail: ReturnType<typeof createPositionRailGutter>;
-  private readonly virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;
+  readonly virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;
   private readonly viewportRect: TranscriptViewportRect;
   private readonly presentation: ReturnType<typeof createTranscriptPresentation>;
   private cleanupVirtualizer?: () => void;
@@ -78,9 +79,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   connected = false;
   // The in-flow history header's fixed height, folded into scrollMargin.
   // appliedHeaderHeight is what the current virtualizer margin already carries.
-  private headerHeight = 0;
+  headerHeight = 0;
   private appliedHeaderHeight = 0;
-  private readonly initialRange: TranscriptInitialRange;
+  readonly initialRange: TranscriptInitialRange;
   private readonly endAnchor = new TranscriptEndAnchor((fn) => this.renderer.queueAfterCommit(fn));
   private readonly recordEndLayoutCorrection = (before: number, after: number) => {
     this.endAnchor.recordLayoutCorrection(before, after);
@@ -143,6 +144,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     });
   }
   private readonly rowRefs: TranscriptRowRefs;
+  private readonly readerAnchor = new TranscriptReaderAnchor(this);
   private readonly captureInteractionResize = (event: Event) => {
     const anchor = resolveChatTranscriptInteractionAnchor(event);
     if (!anchor) {
@@ -161,7 +163,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   private rowKeys: readonly string[] = [];
   private rowIndexesByKey = new Map<string, number>();
   private messageRowKeysById: ReadonlyMap<string, string> = new Map();
-  private readonly prependAnchor = new TranscriptPrependAnchor(
+  readonly prependAnchor = new TranscriptPrependAnchor(
     this.messageElements.elements,
     this.recordEndLayoutCorrection,
   );
@@ -194,7 +196,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     );
     this.viewportRect = new TranscriptViewportRect({
       getScrollElement: () => this.scrollElement,
-      getHeaderHeight: () => this.appliedHeaderHeight,
+      getHeaderHeight: () => this.appliedHeaderHeight - this.layout.rowShift,
       positionRail: this.positionRail,
       commitComposerResize: () => this.commitComposerResize(true),
       measureConnectedRows: () => this.presentation.measureRows(),
@@ -205,6 +207,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     });
     this.virtualizer = new Virtualizer({
       onChange: () => {
+        this.readerAnchor.flush();
         invalidate();
         this.scheduleEndReconcile();
       },
@@ -251,8 +254,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       scrollEndThreshold: -1,
       overscan: CHAT_TRANSCRIPT_OVERSCAN,
     });
-    // Initial placement owns compensation; an estimated end is not a native scroll target.
-    this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false;
+    // Initial placement owns compensation until it finishes; the reader anchor owns it after.
+    this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange = this.readerAnchor.landSize;
     // A boot re-anchor can precede its native extent; only reader geometry may override it.
     const beforeMeasure = () => this.initialRange.reading && this.offsetState.syncNativeOffset?.();
     this.presentation = createTranscriptPresentation(
@@ -266,6 +269,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
         this.threadInnerElement?.contains(element) === true && this.rowIndexesByKey.has(key),
       beforeMeasure,
       onMount: () => this.queueLayout(),
+      rows: this.readerAnchor,
     });
     this.scrollRestoreHost = {
       offsetState: this.offsetState,
@@ -397,6 +401,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.prependAnchor.clear();
     this.offsetState.touching = false;
     this.offsetState.touchScrolling = false;
+    // A parked pane restores native offsets; it cannot keep a column shift.
+    this.readerAnchor.reset();
     this.renderPreviousRows = null;
     this.messageReveal.clear();
     if (this.scrollRestoreHost.pendingScrollFrame !== null) {
@@ -717,16 +723,11 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     // The header margin must land in the same setOptions as the key change:
     // the edge-key re-anchor uses absolute offsets, so a prepend that also
     // removes the header (exhausted history) compensates in one adjustment.
-    const scrollMargin =
-      this.virtualizer.options.scrollMargin + this.headerHeight - this.appliedHeaderHeight;
+    const headerDelta = this.headerHeight - this.appliedHeaderHeight;
     this.appliedHeaderHeight = this.headerHeight;
-    this.virtualizer.setOptions({
-      ...this.virtualizer.options,
-      count: nextKeys.length,
-      getItemKey: (index) => nextKeys[index]!,
-      rangeExtractor: (range) => this.initialRange.extract(range),
-      scrollMargin,
-    });
+    commitTranscriptRows(this.virtualizer, nextKeys, headerDelta, (range) =>
+      this.initialRange.extract(range),
+    );
   }
 
   private queueLayout(): void {

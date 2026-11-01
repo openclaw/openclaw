@@ -89,11 +89,19 @@
   bottom: -2px;
   width: 10px;
   height: 10px;
-  border: 1.5px solid color-mix(in srgb, currentColor 28%, transparent);
-  border-top-color: currentColor;
+  color: var(--accent);
   border-radius: 50%;
   background: var(--bg);
   animation: btn-spinner-spin 1.6s linear infinite;
+}
+
+/* The disc behind the ring stays opaque, so only this layer takes the mask. */
+.chat-processes__spinner::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: currentColor;
+  mask: var(--spinner-mask);
 }
 .chat-processes__open {
   white-space: normal;
