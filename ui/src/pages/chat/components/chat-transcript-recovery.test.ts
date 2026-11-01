@@ -5,10 +5,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { resetChatViewState } from "../chat-view-state.test-support.ts";
+import {
+  cacheChatSessionSnapshot,
+  createChatDisplayFacts,
+  readChatSessionSnapshot,
+  resolveChatSnapshotKey,
+  type ChatMessageCache,
+} from "../session-message-cache.ts";
+import { createSnapshotRecord, parseSnapshotRecord } from "../session-snapshot-record.ts";
 import { renderChatThread, TranscriptTestHost } from "../test-helpers/chat-transcript-native.tsx";
 import type { SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 import { toggleTranscriptSearch, type ChatThreadProps } from "./chat-thread-interactions.ts";
 import { createChatTranscript } from "./chat-transcript-controller.ts";
+import { projectTranscriptRecovery } from "./chat-transcript-recovery.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -91,6 +100,63 @@ async function searchTranscript(pane: RecoveryTranscriptElement, query: string) 
 describe("chat transcript full-message recovery", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it("retains accepted long Markdown for reload without pairing or server replay data", async () => {
+    const markdown = Array.from(
+      { length: 24 },
+      (_, i) => `- **Verification ${i + 1}** ${"Synthetic evidence. ".repeat(30)}`,
+    ).join("\n\n");
+    const source = { ...previewMessage, content: `${markdown.slice(0, 8000)}\n...(truncated)...` };
+    const cache: ChatMessageCache = new Map();
+    const host = {
+      assistantAgentId: "work",
+      settings: { gatewayUrl: "wss://cache.example" },
+      client: { recoveryScope: "operator-a", recoveryScopeReady: true },
+    };
+    const target = { sessionKey: "agent:work:main", agentId: "work" };
+    cacheChatSessionSnapshot(cache, host, target, {
+      messages: [source],
+      pagination: { hasMore: false },
+      sessionId: "physical-session",
+    });
+    const pending = createDeferred<FullMessageResult>();
+    const recovery = projectTranscriptRecovery(
+      new Map(),
+      threadProps("recovery-snapshot", target.sessionKey, [source], {
+        fullMessageAgentId: target.agentId,
+        displayFacts: createChatDisplayFacts(cache, host, target),
+        loadFullAssistantMessage: () => pending.promise,
+      }),
+    );
+    recovery.expand("assistant-full-1");
+    pending.resolve({
+      ok: true,
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: markdown },
+          { type: "openclaw_pairing_qr", terminalText: "Synthetic QR" },
+        ],
+        openclawResponsesInputReplay: { text: "Server replay only" },
+      },
+    });
+    await pending.promise;
+    expect(recovery.get("assistant-full-1")).toMatchObject({ status: "loaded", markdown });
+    const snapshot = readChatSessionSnapshot(cache, host, target)!;
+    const recovered = {
+      source: source.content,
+      message: { role: "assistant", content: [{ type: "text", text: markdown }] },
+    };
+    expect(snapshot.rowDisplay?.["assistant-full-1"]?.recoveredMessage).toEqual(recovered);
+    const prepared = await createSnapshotRecord(resolveChatSnapshotKey(host, target), {
+      savedAt: 1,
+      snapshot,
+    });
+    const restored = await parseSnapshotRecord(prepared?.record);
+    expect(restored?.snapshot.rowDisplay?.["assistant-full-1"]?.recoveredMessage).toEqual(
+      recovered,
+    );
+  });
 
   it("updates an unchanged search when a hidden reply finishes recovering", async () => {
     const pending = createDeferred<FullMessageResult>();

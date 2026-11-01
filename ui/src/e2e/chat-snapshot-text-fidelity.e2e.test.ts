@@ -54,7 +54,7 @@ suite.define(() => {
       const cachedHeight = await body.evaluate((element) => element.getBoundingClientRect().height);
       await gateway.resolveDeferred("connect");
       await gateway.waitForRequest("chat.message.get");
-      await expect.poll(() => body.textContent()).toBe(liveText);
+      expect(await body.textContent()).toBe(liveText);
       expect(
         Math.abs(
           (await body.evaluate((element) => element.getBoundingClientRect().height)) - cachedHeight,

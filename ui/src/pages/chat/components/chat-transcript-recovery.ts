@@ -1,8 +1,10 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { CHAT_MESSAGE_MAX_CHARS } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
+import { removePairingQrContent } from "../../../lib/chat/pairing-qr.ts";
 import {
   messageRecoveryKey,
+  resolveCappedMessageId,
   resolveSourceMessageId,
   type AssistantMessageExpansionState,
 } from "../chat-message-recovery.ts";
@@ -26,6 +28,7 @@ export function projectTranscriptRecovery(
     | "pendingInputs"
     | "sessionKey"
     | "loadFullAssistantMessage"
+    | "displayFacts"
   >,
 ) {
   if (expandedAssistantMessages.size > 0) {
@@ -63,17 +66,32 @@ export function projectTranscriptRecovery(
       if (expandedAssistantMessages.get(key) !== pending) {
         return;
       }
-      const markdown =
-        result?.ok && result.message && typeof result.message === "object"
-          ? (extractTextCached(result.message) ?? "")
-          : null;
+      const message = result?.ok ? asNullableRecord(result.message) : null;
+      const markdown = message ? (extractTextCached(message) ?? "") : null;
       setExpansionState(
         expandedAssistantMessages,
         key,
         markdown === null
           ? { status: "error", revision: revision + 1 }
-          : { status: "loaded", markdown, message: result?.message, revision: revision + 1 },
+          : { status: "loaded", markdown, message, revision: revision + 1 },
       );
+      const source = message
+        ? props.messages.find(
+            (entry) =>
+              asNullableRecord(entry)?.role === "assistant" &&
+              resolveCappedMessageId(entry, "assistant") === messageId,
+          )
+        : undefined;
+      if (message && source) {
+        // Retain the accepted display, independently of API read-through memoization.
+        const { openclawResponsesInputReplay: _replay, ...display } = message;
+        props.displayFacts?.forRow(messageId)?.write({
+          recoveredMessage: {
+            source: extractTextCached(source) ?? "",
+            message: removePairingQrContent(display),
+          },
+        });
+      }
     };
     void loader({
       sessionKey: props.sessionKey,

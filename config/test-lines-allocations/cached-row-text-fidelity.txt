@@ -1,2 +1,2 @@
-# Scoped full-message persistence/privacy and native offline reload fidelity; existing media test also covers cached and changed source.
-150
+# Accepted transcript recovery persistence/privacy and native reload fidelity; existing media test covers cached and changed source.
+156
