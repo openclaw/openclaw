@@ -1,0 +1,2 @@
+304
+# Renderer fallback/reporting regression, real Code Mode skill access, and opt-in live selection/compliance proof.
