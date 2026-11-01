@@ -15,7 +15,7 @@ export function isUpdateAdmissionInvocation(
     !invocation.hasHelpOrVersion &&
     invocation.commandPath.length === 2 &&
     invocation.commandPath[0] === "update" &&
-    invocation.commandPath[1] === "admit"
+    ["admit", "preflight"].includes(invocation.commandPath[1] ?? "")
   );
 }
 
@@ -39,28 +39,50 @@ export async function tryRunUpdateAdmissionBeforeStartup(
     return reject(profile.error);
   }
   const args = getCommandArgsWithRootOptions(profile.argv, {
-    commandPath: ["update", "admit"],
+    commandPath: invocation.commandPath,
     mode: "command-path",
   });
+  const preflight = invocation.commandPath[1] === "preflight";
   let contextPath: string | undefined;
+  const preflightOptions: { sourceRoot?: string; timeout?: string } = {};
   if (args) {
     for (let index = 0; index < args.length; index += 1) {
       const arg = args[index];
       const rootConsumed = consumeRootCommandOptionToken(args, index);
       if (rootConsumed > 0) {
         index += rootConsumed - 1;
-      } else if (contextPath === undefined && arg === "--context") {
+      } else if (preflight && arg === "--json") {
+        continue;
+      } else if (preflight && (arg === "--source-root" || arg === "--timeout")) {
+        const value = args[++index];
+        if (!value || value.startsWith("--")) {
+          return reject(`Candidate preflight requires a value for ${arg}.`);
+        }
+        preflightOptions[arg === "--source-root" ? "sourceRoot" : "timeout"] = value;
+      } else if (
+        preflight &&
+        (arg?.startsWith("--source-root=") || arg?.startsWith("--timeout="))
+      ) {
+        const separator = arg.indexOf("=");
+        const value = arg.slice(separator + 1);
+        if (!value) {
+          return reject("Candidate preflight requires nonempty option values.");
+        }
+        preflightOptions[arg.startsWith("--source-root=") ? "sourceRoot" : "timeout"] = value;
+      } else if (!preflight && contextPath === undefined && arg === "--context") {
         contextPath = args[++index];
-      } else if (contextPath === undefined && arg?.startsWith("--context=")) {
+      } else if (!preflight && contextPath === undefined && arg?.startsWith("--context=")) {
         contextPath = arg.slice("--context=".length);
       } else {
         return reject(
-          "Candidate admission requires only --context <absolute-path> and root options.",
+          preflight
+            ? "Candidate preflight accepts only --json, --source-root, --timeout and root options."
+            : "Candidate admission requires only --context <absolute-path> and root options.",
         );
       }
     }
   }
-  if (!args || !contextPath || !path.isAbsolute(contextPath)) {
+  if (!args || (!preflight && (!contextPath || !path.isAbsolute(contextPath)))) {
     return reject("Candidate admission requires --context <absolute-path>.");
   }
   const { isUpdateAdmissionAuthorityEnvKey } =
@@ -72,6 +94,11 @@ export async function tryRunUpdateAdmissionBeforeStartup(
     applyCliProfileEnv({ profile: profile.profile });
   }
   normalizeFsSafeNativeEnv();
+  if (preflight) {
+    const { updatePreflightCommand } = await import("./update-cli/update-command-preflight.js");
+    await updatePreflightCommand(preflightOptions);
+    return true;
+  }
   const { updateAdmitCommand } = await import("./update-cli/update-command-admit.js");
   await updateAdmitCommand(contextPath);
   return true;
