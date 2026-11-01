@@ -185,11 +185,12 @@ describe("models.list plugin metadata handoff", () => {
             inference: prepared === "cleared" ? { chat: false } : native.inference,
           });
         }
-        if (prepared === "remote" || prepared === "remote-cleared") {
+        if (prepared === "remote" || prepared === "remote-cleared" || prepared === "alias") {
           snapshot.entries.push({
             ...native,
             id: "remote",
             name: "Remote decisions",
+            provider: prepared === "alias" ? "fixture-alias" : "fixture",
             inference: prepared === "remote-cleared" ? { chat: false } : native.inference,
           });
         }
@@ -237,7 +238,7 @@ describe("models.list plugin metadata handoff", () => {
           expected
             ? [
                 { ...decision, pluginId: "decisions" },
-                ...(prepared === "remote"
+                ...(prepared === "remote" || prepared === "alias"
                   ? [{ ...decision, id: "remote", name: "Remote decisions", pluginId: "decisions" }]
                   : []),
               ]
