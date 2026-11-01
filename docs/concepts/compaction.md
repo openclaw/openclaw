@@ -247,6 +247,14 @@ This works with local models too, for example a second Ollama model dedicated to
 
 When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit `agents.defaults.compaction.model` override remains exact and does not inherit the session fallback chain.
 
+If the summarizer refuses the request, built-in compaction keeps the prepared recent
+history without requesting another summary. This applies to automatic maintenance
+and `/compact`. A persisted marker records that older messages were omitted without
+a new summary; saved history remains intact. A warning always explains the trim and
+asks you to resend essential older details, even when ordinary compaction notices
+are disabled. If the current request cannot fit, reduce it or use `/new` and resend
+the context needed to continue. Provider refusals do not switch models.
+
 Preflight compaction also uses that chain when the primary auth profile is already in cooldown. Each candidate must pass auth admission before summarization; a healthy fallback can compact the session without waiting for the primary cooldown to expire.
 
 In safeguard mode, provider timeouts and rate limits from built-in summarization remain eligible for that chain when no earlier summary can be reused. A summary deadline or an HTTP 408 or 504 instead uses the automatic timeout fallback (see [Auto-compaction](#auto-compaction)). Caller cancellation and failed safeguard quality checks do not trigger a model switch.

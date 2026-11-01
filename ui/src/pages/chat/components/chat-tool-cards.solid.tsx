@@ -163,7 +163,11 @@ function ToolCardRowPlaceholder(props: ToolCardProps) {
       <span class="chat-tool-disclosure__content">
         <Show
           when={verb() && input().path}
-          fallback={<span class="chat-tool-msg-summary__label">{display().label}</span>}
+          fallback={
+            <span class={["chat-tool-msg-summary__label", { "text-shimmer": running() }]}>
+              {display().label}
+            </span>
+          }
         >
           <span class={["chat-tool-row__verb", { "text-shimmer": running() }]}>{verb()}</span>
           <span class="chat-tool-row__target">{pathDisplayName(input().path!)}</span>

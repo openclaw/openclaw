@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fnv1a from "../../../lib/fnv1a.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { resetWorkingProgress } from "../chat-progress.ts";
 import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
@@ -137,6 +138,27 @@ it("changes the footprint revision when the same message ID receives new content
     before.kind === "item" && before.revision,
   );
   expect(replay.kind === "item" && replay.revision).toBe(before.kind === "item" && before.revision);
+});
+
+it("fingerprints loaded rows once when an older page rebuilds the index", () => {
+  const turn = (id: string, seq: number, content: string) =>
+    makeMessage(id, seq, { role: seq % 2 ? "user" : "assistant", runId: `run-${seq}`, content });
+  const body = "Loaded reply. ".repeat(400);
+  const loaded = Array.from({ length: 20 }, (_, index) =>
+    turn(`loaded-${index}`, 21 + index, body),
+  );
+  const older = Array.from({ length: 20 }, (_, index) =>
+    turn(`older-${index}`, 1 + index, "Older"),
+  );
+  const before = indexFor(projectHistory(loaded)).rows;
+  const hash = vi.spyOn(fnv1a, "fnv1aUtf16");
+  const after = indexFor(projectHistory([...older, ...loaded])).rows;
+  const hashed = hash.mock.calls.reduce((sum, [value]) => sum + value.length, 0);
+  hash.mockRestore();
+  expect(after.slice(-before.length).map((row) => row.kind === "item" && row.revision)).toEqual(
+    before.map((row) => row.kind === "item" && row.revision),
+  );
+  expect(hashed).toBeLessThan(body.length);
 });
 
 it("invalidates only a changed reaction row while retaining other cached footprints", () => {

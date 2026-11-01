@@ -337,6 +337,7 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
   const elements = new Set<HTMLDivElement>();
   const windowed = () => props.rows.length > 20;
   const canManage = createMemo(() => props.canManage);
+  const canCreate = createMemo(() => props.canCreate);
   const busy = createMemo(() => props.busy);
   const connected = createMemo(() => props.connected);
   const getItemKey = createMemo(() => {
@@ -437,6 +438,8 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
   function Row(row: { job: CronJob }) {
     let element: HTMLDivElement;
     const item = () => geometry().get(row.job.id);
+    // Equal permission results must not wake the retained row controls.
+    const canManageJob = createMemo(() => props.canManageJob?.(row.job) ?? canManage());
     onSettled(() => {
       elements.add(element);
       virtualizer.measureElement(element);
@@ -449,8 +452,8 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
       <JobRow
         job={row.job}
         jobs={props.jobs}
-        canManage={props.canManageJob?.(row.job) ?? canManage()}
-        canCreate={props.canCreate}
+        canManage={canManageJob()}
+        canCreate={canCreate()}
         busy={busy()}
         connected={connected()}
         toggleSavingJobId={props.toggleSavingJobId}

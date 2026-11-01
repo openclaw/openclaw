@@ -1,10 +1,9 @@
+import type { CronJob } from "../../api/types.ts";
 import type { buildCronViewProps } from "./view-props.ts";
 
 type CronViewProps = ReturnType<typeof buildCronViewProps>;
 type OptionalViewProp =
   | "ownerOptions"
-  | "canCreate"
-  | "canManageJob"
   | "reads"
   | "eventSource"
   | "channelLabels"
@@ -16,6 +15,8 @@ type OptionalViewProp =
 export type CronProps = Omit<CronViewProps, OptionalViewProp | "gateway"> &
   Partial<Pick<CronViewProps, OptionalViewProp>> & {
     gateway: CronViewProps["gateway"] | null;
+    canCreate?: boolean;
+    canManageJob?: (job: CronJob) => boolean;
     toggleSavingJobId?: string | null;
     focus?: {
       readonly target: string | undefined;

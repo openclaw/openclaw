@@ -460,7 +460,7 @@
   min-width: 0;
   min-height: 56px;
   padding: 8px;
-  border-radius: var(--radius-md);
+  border-radius: var(--menu-item-radius);
   font-size: 12px;
   line-height: 18px;
 }

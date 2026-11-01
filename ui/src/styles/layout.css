@@ -2345,6 +2345,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-online__running .session-run-spinner {
   width: calc(9px * var(--control-ui-text-scale));
   height: calc(9px * var(--control-ui-text-scale));
+  mask: var(--spinner-mask-small);
   margin-inline-end: 4px;
   vertical-align: baseline;
 }
@@ -3553,11 +3554,11 @@ openclaw-tooltip.sidebar-hover-tooltip {
   margin-top: 14px;
 }
 
-.content--workboard > openclaw-router-outlet {
-  display: flex;
-  flex: 1 1 0;
-  flex-direction: column;
-  min-height: 0;
+.content--workboard > openclaw-router-outlet,
+.content--custodian > openclaw-router-outlet {
+  /* These pages already fill the shell. A retained outlet box would move when
+     their route inset replaces the previous page's, creating a layout shift. */
+  display: contents;
 }
 
 /* Embedded pages own their spacing and scrolling inside the frame. */
@@ -3578,7 +3579,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .content--chat > openclaw-router-outlet,
-.content--custodian > openclaw-router-outlet,
 .content.content--plugin-embed > openclaw-router-outlet {
   display: flex;
   flex: 1 1 0;
