@@ -1,21 +1,22 @@
 import type { Virtualizer, VirtualItem } from "@tanstack/virtual-core";
 import { isIosBrowserPlatform } from "../../../lib/browser-platform.ts";
 import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
-import type { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
+import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
+import type { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
 
 type TranscriptVirtualizer = Virtualizer<HTMLDivElement, HTMLElement>;
-type ReaderAnchorHost = Pick<
-  ChatSessionVirtualizerHost,
-  | "virtualizer"
-  | "layout"
-  | "offsetState"
-  | "renderer"
-  | "initialRange"
-  | "prependAnchor"
-  | "headerHeight"
-  | "scrollElement"
-  | "contentElement"
->;
+/** The owning virtualizer host's geometry and positioning facts. */
+type ReaderAnchorHost = {
+  readonly virtualizer: TranscriptVirtualizer;
+  readonly layout: TranscriptLayoutOwner;
+  readonly offsetState: TranscriptOffsetState;
+  readonly renderer: { readonly columnElement: HTMLElement | undefined };
+  readonly initialRange: { readonly pending: boolean };
+  readonly prependAnchor: { readonly messageKey: string | null };
+  readonly headerHeight: number;
+  readonly scrollElement: HTMLDivElement | null;
+  readonly contentElement: HTMLDivElement | null;
+};
 
 /** A row first measured while crossing the top edge was laid out above the reader. */
 function isAboveReader(top: number, height: number, first: boolean, readerTop: number): boolean {
@@ -82,7 +83,8 @@ export class TranscriptReaderAnchor {
 
   private readonly resized = (entries: ResizeObserverEntry[]): void => {
     const element = this.host.scrollElement;
-    if (!element) {
+    // A hidden pane reports collapsed rows; they keep their last laid-out heights.
+    if (!element?.clientHeight) {
       return;
     }
     const readerTop = element.getBoundingClientRect().top;
@@ -91,19 +93,19 @@ export class TranscriptReaderAnchor {
     this.ownedSinceDelivery = false;
     // Earlier rows in this delivery push later ones; recover each row's pre-change top.
     const rows = entries
-      .filter(({ target }) => target.isConnected && element.contains(target))
-      .map((entry) => ({
-        entry,
-        row: entry.target as HTMLElement,
-        top: entry.target.getBoundingClientRect().top,
-      }))
+      .flatMap((entry) => {
+        const row = entry.target;
+        return row instanceof HTMLElement && row.isConnected && element.contains(row)
+          ? [{ entry, row, top: row.getBoundingClientRect().top }]
+          : [];
+      })
       .toSorted((left, right) => left.top - right.top);
     let moved = 0;
     let correction = 0;
     for (const { entry, row, top } of rows) {
       const key = row.dataset.virtualRowKey;
       const height = entry.borderBoxSize?.[0]?.blockSize ?? row.offsetHeight;
-      if (!key) {
+      if (!key || !height) {
         continue;
       }
       const first = !this.heights.has(row);
