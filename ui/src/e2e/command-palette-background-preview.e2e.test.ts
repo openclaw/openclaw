@@ -24,7 +24,8 @@ suite.define(() => {
       await gateway.deferNext("sessions.create");
       await input.press("ControlOrMeta+Enter");
       const create = await gateway.waitForRequest("sessions.create");
-      const key = String((create.params as { key?: unknown }).key ?? "");
+      const { key: requestedKey } = create.params as { key?: unknown };
+      const key = typeof requestedKey === "string" ? requestedKey : "";
       expect(key).toMatch(/^agent:main:dashboard:[\da-f-]{36}$/u);
       await input.waitFor({ state: "hidden" });
 
