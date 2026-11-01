@@ -1,5 +1,10 @@
 import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import { describe, expect, it } from "vitest";
+import {
+  PROVIDER_MODEL_INPUT,
+  type ProviderContext,
+  type ProviderModel,
+} from "../provider-types.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import type { AssistantMessage, Context, Model, ToolResultMessage, UserMessage } from "../types.js";
 import { buildGoogleInteractionsParams } from "./google-interactions-request.js";
@@ -81,6 +86,50 @@ describe("buildGoogleInteractionsParams", () => {
     });
   });
 
+  it("projects native user video as a private slot placeholder", () => {
+    const context: ProviderContext = {
+      messages: [
+        {
+          role: "user",
+          timestamp: 0,
+          content: [
+            text("Describe this clip"),
+            { type: "video", mimeType: "video/mp4", data: "dmlkZW8=" },
+          ],
+        },
+      ],
+    };
+    const videoInput: ProviderModel["input"] = ["text", "image", "video"];
+    const withVideo = { [PROVIDER_MODEL_INPUT]: videoInput };
+    expect(buildGoogleInteractionsParams(model, context, withVideo).input).toEqual([
+      {
+        type: "user_input",
+        content: [
+          text("Describe this clip"),
+          text("(video omitted: native video slot unavailable)"),
+        ],
+      },
+    ]);
+  });
+
+  it("omits user video when the provider-normalized model has no video input", () => {
+    const context: ProviderContext = {
+      messages: [
+        {
+          role: "user",
+          timestamp: 0,
+          content: [{ type: "video", mimeType: "video/mp4", data: "dmlkZW8=" }],
+        },
+      ],
+    };
+    expect(buildGoogleInteractionsParams(model, context).input).toEqual([
+      {
+        type: "user_input",
+        content: [text("(video omitted: provider does not support video input)")],
+      },
+    ]);
+  });
+
   it("preserves chronological model step order in stateless replay", () => {
     expect(
       params([
@@ -111,14 +160,6 @@ describe("buildGoogleInteractionsParams", () => {
       { type: "function_call", id: "call_123", name: "getWeather", arguments: { city: "Tokyo" } },
       missingResult("call_123", "getWeather"),
     ]);
-  });
-
-  it("rejects unsupported explicit prompt caching locally", () => {
-    expect(() =>
-      params([user("Hello")], {
-        cachedContent: "cachedContents/123",
-      } as Record<string, unknown>),
-    ).toThrow(/Explicit prompt caching/);
   });
 
   it("maps an explicit tool choice into generation_config", () => {
