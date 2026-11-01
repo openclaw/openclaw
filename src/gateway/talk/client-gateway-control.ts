@@ -382,8 +382,6 @@ export function createTalkClientGatewayControlOwner(
     if (!acceptingProviderTranscripts || (signal.aborted && !final)) {
       return;
     }
-    // Clients concatenate nonfinal fragments, so a whitespace-only fragment carries a
-    // word boundary and must be forwarded; only blank final utterances stay filtered.
     if (final ? !text.trim() : !text) {
       return;
     }

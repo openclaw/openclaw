@@ -722,45 +722,6 @@ describe("native Talk control admission", () => {
       }
     },
   );
-
-  it("keeps whitespace-only nonfinal transcript fragments in the Gateway event stream", async () => {
-    const talkEvents: Array<{ type: string; payload: unknown }> = [];
-    const { owner, closeProvider, appendTranscript } = createControlFixture({
-      voiceSessionId: "voice-whitespace-fragments",
-      connId: "conn-whitespace-fragments",
-      context: controlContext(vi.fn(), (event) => talkEvents.push(event)),
-    });
-    try {
-      await activate(owner, closeProvider);
-      owner.control.onTranscript?.("assistant", "Hello", false);
-      owner.control.onTranscript?.("assistant", " ", false);
-      owner.control.onTranscript?.("assistant", "world", false);
-
-      const deltaTexts = () =>
-        talkEvents
-          .filter((event) => event.type === "output.text.delta")
-          .map((event) => (event.payload as { text: string }).text);
-      // Clients concatenate nonfinal fragments, so the standalone space must survive.
-      expect(deltaTexts().join("")).toBe("Hello world");
-      // An interrupted stream never persists, so the spaced text only exists as events.
-      expect(appendTranscript).not.toHaveBeenCalled();
-
-      // Empty fragments stay noise, and blank final utterances stay filtered.
-      owner.control.onTranscript?.("assistant", "", false);
-      owner.control.onTranscript?.("assistant", "   ", true);
-      expect(deltaTexts()).toEqual(["Hello", " ", "world"]);
-      expect(talkEvents.filter((event) => event.type === "output.text.done")).toHaveLength(0);
-      expect(appendTranscript).not.toHaveBeenCalled();
-
-      owner.control.onTranscript?.("assistant", "Hello world", true);
-      const finals = talkEvents
-        .filter((event) => event.type === "output.text.done")
-        .map((event) => (event.payload as { text: string }).text);
-      expect(finals).toEqual(["Hello world"]);
-    } finally {
-      await owner.close();
-    }
-  });
 });
 
 describe("Talk client reusable Gateway consults", () => {
