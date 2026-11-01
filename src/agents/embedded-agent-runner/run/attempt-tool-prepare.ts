@@ -27,6 +27,7 @@ import type { CodeModeSkill } from "../../code-mode-skills.js";
 import { loadPairedComputerUseAvailabilityForSurface } from "../../computer-use-node-capabilities.js";
 import { prepareConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { projectConversationToolNames } from "../../conversation-tool-policy-pipeline.js";
+import { runWithCronCreatorAuthorityCapabilityResolver } from "../../cron-creator-authority-context.js";
 import { gateBoundTool } from "../../harness/host-bound-tool.js";
 import { isWorkspaceTool } from "../../harness/host-capability-workspace.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-surface-bridge.js";
@@ -403,16 +404,33 @@ export async function prepareEmbeddedAttemptToolBase(params: {
           : undefined,
         onYield: params.onYield,
       };
-      const allTools = await createOpenClawCodingToolsInternalAsync(
-        codingToolOptions,
-        params.skillReadResources,
-        undefined,
-        undefined,
-        {
-          reader: getReplyOperationSessionReader(attempt.replyOperation),
-          assertCurrent: assertActive,
+      const allTools = await runWithCronCreatorAuthorityCapabilityResolver({
+        capability: attempt.cronCreatorAuthorityCapability,
+        runId: attempt.runId,
+        resolve: async ({ signal } = {}) => {
+          abortSignal.throwIfAborted();
+          signal?.throwIfAborted();
+          assertActive?.();
+          const provenance = cronCreatorToolAllowlistCaptureRef.value;
+          if (!assertActive || provenance?.source !== "final-executable-surface") {
+            throw new Error("The embedded creator tool surface is not ready.");
+          }
+          // Factories bind before final policy/schema capture. Read only this
+          // generation's completed capture; retired factories cannot borrow its successor.
+          return { tools: structuredClone(cronCreatorToolAllowlist), provenance };
         },
-      );
+        run: () =>
+          createOpenClawCodingToolsInternalAsync(
+            codingToolOptions,
+            params.skillReadResources,
+            undefined,
+            undefined,
+            {
+              reader: getReplyOperationSessionReader(attempt.replyOperation),
+              assertCurrent: assertActive,
+            },
+          ),
+      });
       // Built-in tools retain their own authority wrappers; both harness paths share readiness.
       let boundTools = allTools;
       if (attempt.hostCapabilities) {
