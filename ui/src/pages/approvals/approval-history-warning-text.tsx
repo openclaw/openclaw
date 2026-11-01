@@ -1,6 +1,5 @@
 import { Show } from "solid-js";
 import type { TerminalApprovalSnapshot } from "../../../../packages/gateway-protocol/src/schema/approvals.js";
-import { t } from "../../lib/reactive/i18n.ts";
 
 export function ApprovalHistoryWarningText(props: { item: TerminalApprovalSnapshot }) {
   const warningText = () =>
