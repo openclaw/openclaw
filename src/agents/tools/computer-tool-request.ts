@@ -339,14 +339,7 @@ export function buildComputerActParams(params: {
       break;
     }
     case "browser_dialog": {
-      copyOptionalStringParams(wire, input, "dialogRef");
-      const promptText = readToolStringParam(input, "promptText", {
-        trim: false,
-        allowEmpty: true,
-      });
-      if (promptText !== undefined) {
-        wire.promptText = promptText;
-      }
+      copyOptionalStringParams(wire, input, "dialogRef", "promptText");
       copyDeliveryMode(wire, input);
       break;
     }

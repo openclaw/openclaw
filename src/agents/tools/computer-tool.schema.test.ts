@@ -466,17 +466,19 @@ describe("createComputerTool v2 execution", () => {
   );
 
   it.each(["inspect", "accept"])(
-    "preserves prompt whitespace and captures an after-image only for a dialog mutation: %s",
+    "captures an after-image only for a dialog mutation: %s",
     async (dialogAction) => {
-      const promptText = dialogAction === "inspect" ? undefined : " \t ";
       useActions(["browser_dialog"]);
-      mockComputerAct(() => ({ payload: { ok: true, effect: "confirmed" } }));
+      callGatewayToolMock.mockImplementation(async (_method, _opts, body) =>
+        (body as ComputerActBody).command === COMPUTER_ACT_COMMAND
+          ? { payload: { ok: true, effect: "confirmed" } }
+          : screenshotPayload(),
+      );
       await createVisionComputerTool().execute("dialog", {
         action: "browser_dialog",
         browserRef: "browser-1",
         pageRef: "page-1",
         dialogAction,
-        promptText,
         ...(dialogAction === "inspect" ? {} : { dialogRef: "dialog-1" }),
       });
       expect(
@@ -486,7 +488,6 @@ describe("createComputerTool v2 execution", () => {
           ? [COMPUTER_ACT_COMMAND]
           : [COMPUTER_ACT_COMMAND, "screen.snapshot"],
       );
-      expect(readLastComputerActParams().promptText).toBe(promptText);
     },
   );
 
