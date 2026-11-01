@@ -44,6 +44,7 @@ vi.mock("../config/config.js", () => ({
 const { spawnSync: actualSpawnSync } =
   await vi.importActual<typeof import("node:child_process")>("node:child_process");
 
+import childProcess from "node:child_process";
 import { Command } from "commander";
 import { replaceWideAreaZoneFile } from "../infra/widearea-dns.js";
 import { defaultRuntime } from "../runtime.js";
@@ -304,6 +305,49 @@ describe("dns-cli probe bounds", () => {
       );
       const published = actualSpawnSync("ls", ["-lde", corefilePath], { encoding: "utf-8" });
       expect(published.stdout).toContain("deny read");
+    },
+  );
+
+  // A capture failure must not silently strip the operator's policy: the
+  // publication aborts with the operator's file untouched.
+  it.runIf(process.platform === "darwin")(
+    "aborts the publication when the access policy cannot be captured",
+    async () => {
+      const etcDir = path.join(brewPrefix, "etc", "coredns");
+      const corefilePath = path.join(etcDir, "Corefile");
+      fs.mkdirSync(etcDir, { recursive: true });
+      fs.writeFileSync(corefilePath, ".:53 {\n  errors\n}\n");
+      fs.chmodSync(corefilePath, 0o644);
+      const original = fs.readFileSync(corefilePath, "utf-8");
+      const denied = actualSpawnSync("chmod", ["+a", "user:nobody deny read", corefilePath], {
+        encoding: "utf-8",
+      });
+      expect(denied.status).toBe(0);
+      const captureFailure = Object.assign(new Error("/bin/ls: capture failed"), {
+        status: 1,
+      });
+      const spawnSpy = vi.spyOn(childProcess, "spawnSync").mockImplementation(((
+        command: string,
+        args: string[],
+      ) => {
+        if (command === "/bin/ls") {
+          return captureFailure as unknown as ReturnType<typeof childProcess.spawnSync>;
+        }
+        return actualSpawnSync(command, args, { encoding: "utf-8" });
+      }) as typeof childProcess.spawnSync);
+
+      try {
+        await expect(runDnsSetupApply()).rejects.toThrow(/access policy/);
+      } finally {
+        spawnSpy.mockRestore();
+      }
+
+      // The operator's file and its policy are untouched.
+      expect(fs.readFileSync(corefilePath, "utf-8")).toBe(original);
+      const policy = actualSpawnSync("ls", ["-lde", corefilePath], { encoding: "utf-8" });
+      expect(policy.stdout).toContain("deny read");
+      // No staging sibling was left behind.
+      expect(fs.readdirSync(etcDir).filter((entry) => entry.startsWith("."))).toEqual([]);
     },
   );
 
