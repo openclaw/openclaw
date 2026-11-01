@@ -204,6 +204,7 @@ export type CronServiceDeps = {
       agentId?: string;
       sessionKey?: string;
       contextKey?: string;
+      deliver?: false;
       deliveryContext?: DeliveryContext;
       expectedTarget?: SessionEventTarget;
       createIfMissing?: true;

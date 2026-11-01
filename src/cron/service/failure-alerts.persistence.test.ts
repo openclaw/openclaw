@@ -287,3 +287,59 @@ it.each([1, 3])(
     expect(job.state.failureAlertIncident).toBeUndefined();
   },
 );
+
+it("reloads persisted incidents after an owner route change", async () => {
+  const dueAt = Date.parse("2026-08-01T15:05:00.000Z");
+  let now = dueAt + 10;
+  const store = fixtures.makeStorePath();
+  const jobs = [
+    createAlertJob({ id: "route-change", dueAt }),
+    createAlertJob({ id: "explicit-selector", dueAt }),
+    createAlertJob({ id: "non-owner", dueAt }),
+  ];
+  jobs[0]!.delivery = { mode: "announce", channel: "last" };
+  jobs[1]!.delivery = { mode: "announce", target: "owner" };
+  jobs[1]!.failureAlert = { after: 1, cooldownMs: 60_000, channel: "last" };
+  jobs[2]!.delivery = { mode: "announce", channel: "last" };
+  await saveCronStore(store.storePath, { version: 1, jobs });
+
+  const send = vi.fn<SendCronFailureAlert>(async () => undefined);
+  const failAll = async (targetState: ReturnType<typeof createAlertState>, targets: CronJob[]) => {
+    for (const job of targets) {
+      await finalizeAlertOutcome({
+        state: targetState,
+        job,
+        status: "error",
+        error: "provider unavailable",
+        startedAt: now,
+        endedAt: now + 10,
+      });
+    }
+  };
+
+  const initialState = createAlertState({
+    storePath: store.storePath,
+    nowMs: () => now,
+    sendCronFailureAlert: send,
+  });
+  await failAll(initialState, jobs);
+  expect(send).toHaveBeenCalledTimes(3);
+  const persisted = await loadCronStore(store.storePath);
+  expect(persisted.jobs.every((job) => job.state.failureAlertIncident)).toBe(true);
+
+  const changed = persisted.jobs.find((job) => job.id === "route-change");
+  assert(changed, "expected route-change job");
+  changed.delivery = { mode: "announce", target: "owner" };
+  await saveCronStore(store.storePath, persisted);
+
+  now += 61_000;
+  send.mockClear();
+  const reloadedState = createAlertState({
+    storePath: store.storePath,
+    nowMs: () => now,
+    sendCronFailureAlert: send,
+  });
+  await failAll(reloadedState, persisted.jobs);
+  expect(send).toHaveBeenCalledOnce();
+  expect(send.mock.calls[0]?.[0]).toMatchObject({ target: "owner" });
+});

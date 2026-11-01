@@ -244,6 +244,10 @@ async function transportFailureAlert(
             params.payload.text ?? "",
             "failure-alert",
             routing,
+            {
+              privateFallback:
+                params.route.target === "owner" || params.route.directPolicy === "block",
+            },
           );
         }
       },
