@@ -159,11 +159,44 @@
   height: 16px;
 }
 
+/* One rhythm for every sheet's form. Real inputs sit on iOS's 16px floor, so the rest of the
+   sheet matches it instead of going below it. */
 .oc-sheet__body {
+  --settings-control-height: 40px;
+
   min-height: 0;
   padding: var(--space-2) var(--space-4) var(--space-4);
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+.oc-popover.oc-sheet .oc-sheet__body :is(input, select, textarea) {
+  font-size: 16px;
+}
+
+.oc-popover.oc-sheet .oc-sheet__body .btn {
+  justify-content: center;
+  width: 100%;
+  height: var(--settings-control-height);
+  min-height: var(--settings-control-height);
+  font-size: var(--control-ui-text-md);
+}
+
+/* A long value keeps its chevron: the same one-line clip as the shared select family. */
+@supports (appearance: base-select) {
+  .oc-sheet__body select.settings-select:not([multiple], [size]) {
+    overflow: hidden;
+    align-items: flex-start;
+    padding-block: 0;
+    line-height: calc(var(--settings-control-height) - 2px);
+    overflow-wrap: anywhere;
+    white-space: normal;
+
+    &::picker-icon {
+      flex: none;
+      align-self: center;
+    }
+  }
 }
 
 @keyframes oc-sheet-in {

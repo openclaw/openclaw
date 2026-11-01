@@ -152,11 +152,15 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
                     : t("sessionsView.limitTooltip")
                 }
               >
-                <label class="session-filter-field">
-                  <span class="session-filter-label">{t(labelKey)}</span>
+                <label class={phone() ? "field" : "session-filter-field"}>
+                  <span class={phone() ? undefined : "session-filter-label"}>{t(labelKey)}</span>
                   <input
                     ref={(element) => (input = element)}
-                    class={["session-filter-input", `session-filter-input--${suffix}`]}
+                    class={
+                      phone()
+                        ? "settings-input"
+                        : ["session-filter-input", `session-filter-input--${suffix}`]
+                    }
                     placeholder={
                       key === "activeMinutes" ? t("sessionsView.minutesPlaceholder") : undefined
                     }
@@ -204,10 +208,12 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
           }}
         </For>
       </div>
-      <label class="session-groupby">
-        <span class="session-groupby__label">{t("sessionsView.groupBy")}</span>
+      <label class={phone() ? "field" : "session-groupby"}>
+        <span class={phone() ? undefined : "session-groupby__label"}>
+          {t("sessionsView.groupBy")}
+        </span>
         <SettingsSelect
-          class="session-groupby__select"
+          class={phone() ? "settings-select" : "session-groupby__select"}
           value={props.groupBy}
           options={SESSION_GROUP_MODES.filter(
             (mode) => mode !== "person" || props.personGroupingAvailable,
