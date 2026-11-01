@@ -1175,16 +1175,16 @@ select.settings-select:not([multiple]) {
 
       & option:is(:hover, :focus-visible):not(:disabled) {
         outline: 0;
-        background: var(--surface-hover);
+        background: var(--menu-hover);
       }
 
       & option:checked {
-        background: transparent;
+        background: var(--menu-selected);
         font-weight: var(--control-ui-font-weight-semibold);
       }
 
-      & option:checked:is(:hover, :focus-visible) {
-        background: var(--surface-hover);
+      & option:checked:is(:hover, :focus-visible):not(:disabled) {
+        background: var(--surface-selected-hover);
       }
 
       & option::checkmark {

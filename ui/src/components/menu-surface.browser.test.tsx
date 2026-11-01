@@ -10,6 +10,7 @@ import { Menu, type MenuProps } from "./solid/menu.tsx";
 import "../test-helpers/load-styles.ts";
 import "./agent-select-registration.ts";
 import "./menu-surface.ts";
+import selectPickerStyles from "../styles/select-picker.css?inline";
 import sessionMenuStyles from "../styles/session-menu.css?inline";
 import overlayStyles from "./solid/overlay.css?inline";
 import "./resizable-divider.ts";
@@ -368,8 +369,13 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
             plain: ["--bg-hover", "--bg-hover", "1"],
           },
           {
+            name: "unchecked",
+            menu: ["transparent", "--menu-hover", "1"],
+            plain: ["transparent", "--bg-hover", "1"],
+          },
+          {
             name: "checked",
-            menu: ["transparent", "--surface-hover", "1"],
+            menu: ["--surface-selected", "--surface-selected-hover", "1"],
             plain: ["transparent", "--bg-hover", "1"],
           },
           {
@@ -428,6 +434,9 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
                 item.setAttribute(attribute, "true");
               }
             }
+            if (state === "unchecked") {
+              item.setAttribute("aria-checked", "false");
+            }
             if (danger) {
               item.dataset.variant = "danger";
               item.classList.add("session-menu__item--destructive");
@@ -460,6 +469,77 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
         }
       },
     );
+
+    it("keeps selected, hover and switch choice rows apart without moving them", async () => {
+      const { page } = await import("vitest/browser");
+      const style = document.head.appendChild(document.createElement("style"));
+      onTestFinished(() => style.remove());
+      style.textContent = `${sessionMenuStyles}\n${overlayStyles}`;
+      const park = host.appendChild(document.createElement("button"));
+      park.textContent = "Outside the menu";
+      park.style.cssText = "position: fixed; right: 16px; bottom: 16px";
+      const color = (token: string) => colorSwatch(`var(${token})`);
+      const row = (className: string, attributes: Record<string, string>) => {
+        const element = host.appendChild(document.createElement("button"));
+        element.className = className;
+        element.textContent = className;
+        for (const [name, value] of Object.entries(attributes)) {
+          element.setAttribute(name, value);
+        }
+        return element;
+      };
+      const cases = [
+        [
+          row("oc-menu-item", { "aria-checked": "true" }),
+          "--surface-selected",
+          "--surface-selected-hover",
+        ],
+        [
+          row("session-menu__item", { "aria-pressed": "true" }),
+          "--surface-selected",
+          "--surface-selected-hover",
+        ],
+        [row("session-menu__item", { "aria-pressed": "false" }), "", "--menu-hover"],
+        [
+          row("oc-menu-item oc-menu-item--switch", { "aria-checked": "true" }),
+          "",
+          "--surface-hover",
+        ],
+      ] as const;
+      for (const [element, resting, hovered] of cases) {
+        await page.elementLocator(park).hover();
+        const box = element.getBoundingClientRect();
+        expect(getComputedStyle(element).backgroundColor).toBe(
+          resting ? color(resting) : "rgba(0, 0, 0, 0)",
+        );
+        await page.elementLocator(element).hover();
+        await expect.poll(() => getComputedStyle(element).backgroundColor).toBe(color(hovered));
+        expect(element.getBoundingClientRect().toJSON()).toEqual(box.toJSON());
+      }
+      style.textContent += `\n${selectPickerStyles}`;
+      const fill = (element: Element) => getComputedStyle(element, "::before").backgroundColor;
+      const option = (className: string, selected: string) =>
+        row(className, { role: "option", "aria-selected": selected });
+      const chosen = option("picker-select__option", "true");
+      const unchosen = option("picker-select__option", "false");
+      const highlighted = option("multi-select__option", "true");
+      await page.elementLocator(park).hover();
+      expect(fill(chosen)).toBe(color("--surface-selected"));
+      expect(getComputedStyle(chosen, "::before").opacity).toBe("1");
+      // A multi-select's aria-selected names its highlight, which must read as hover.
+      expect(fill(highlighted)).toBe(color("--menu-hover"));
+      await page.elementLocator(chosen).hover();
+      await expect.poll(() => fill(chosen)).toBe(color("--surface-selected-hover"));
+      await page.elementLocator(unchosen).hover();
+      await expect.poll(() => fill(unchosen)).toBe(color("--menu-hover"));
+      expect(fill(chosen)).toBe(color("--surface-selected"));
+      const channels = (token: string) => {
+        const match = /([\d.]+)\)$/u.exec(colorSwatch(`var(${token})`));
+        return Number(match?.[1]);
+      };
+      expect(channels("--menu-hover")).toBeLessThan(channels("--surface-selected"));
+      expect(channels("--surface-selected")).toBeLessThan(channels("--surface-selected-hover"));
+    });
 
     it("matches session menu geometry and theme inside browser cards", async () => {
       const view = mountSolid(() => (

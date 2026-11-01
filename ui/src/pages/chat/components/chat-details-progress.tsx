@@ -205,7 +205,7 @@ export function MobileTaskProgressControls(props: MobileTaskProgressProps) {
         <button
           {...attributes}
           type="button"
-          class="oc-menu-item task-progress-details__show-in-chat"
+          class="oc-menu-item oc-menu-item--switch task-progress-details__show-in-chat"
         >
           <span class="oc-menu-item__label">{t("sessionProgressCard.showInChat")}</span>
           <span

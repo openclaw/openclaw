@@ -167,7 +167,7 @@ export function MicrophoneMenu(props: {
           label: t("chat.composer.holdToDictate"),
           type: "checkbox",
           checked: props.picker.holdToDictate !== false,
-          class: "chat-talk-input-picker__preference",
+          class: "oc-menu-item--switch chat-talk-input-picker__preference",
           attributes: { "data-chat-talk-preference": "hold-to-dictate" },
           closeOnSelect: false,
           details: (

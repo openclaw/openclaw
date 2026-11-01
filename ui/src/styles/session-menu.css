@@ -65,6 +65,23 @@
   background: var(--bg-hover);
 }
 
+/* Plain choice rows follow the menu's own hover and selected fills. */
+.session-menu__item:where(:not(.oc-menu-item))[aria-pressed]:is(:hover, :focus-visible):not(
+    :disabled
+  ):not([aria-disabled="true"]) {
+  background: var(--menu-hover);
+}
+
+.session-menu__item:where(:not(.oc-menu-item))[aria-pressed="true"] {
+  background: var(--menu-selected);
+}
+
+.session-menu__item:where(:not(.oc-menu-item))[aria-pressed="true"]:is(:hover, :focus-visible):not(
+    :disabled
+  ):not([aria-disabled="true"]) {
+  background: var(--surface-selected-hover);
+}
+
 .session-menu__item:where(:not(.oc-menu-item)):disabled,
 .session-menu__item:where(:not(.oc-menu-item))[aria-disabled="true"] {
   opacity: 0.5;

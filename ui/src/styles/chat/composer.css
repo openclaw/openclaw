@@ -1051,11 +1051,6 @@
   font-size: 13px;
 }
 
-.chat-talk-input-picker__item[aria-checked="true"],
-.chat-controls__permission-option--selected {
-  background: var(--chat-composer-menu-selected);
-}
-
 .chat-talk-input-picker__option-icon,
 .chat-talk-input-picker__check,
 .chat-controls__inline-select-check {
@@ -2234,7 +2229,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 .chat-controls__inline-select-option:is(:hover, :focus-visible):not(:disabled):not(
     [aria-disabled="true"]
   ) {
-  background: var(--surface-hover);
+  background: var(--menu-hover);
   outline: none;
 }
 
@@ -2458,10 +2453,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   font-size: 11px;
   line-height: 1.4;
   text-wrap: pretty;
-}
-
-.chat-controls__permission-option--selected.chat-controls__permission-option--full {
-  background: var(--accent-subtle);
 }
 
 .chat-controls__permission-option--selected.chat-controls__permission-option--full
@@ -2778,7 +2769,12 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 .chat-controls__model-option[data-chat-model-highlighted] {
   border-color: transparent;
-  background: var(--bg-hover);
+  background: var(--menu-hover);
+}
+
+/* Opening the picker highlights its current model, which keeps the plain selected fill. */
+.chat-controls__inline-select-option--selected[data-chat-model-highlighted] {
+  background: var(--chat-composer-menu-selected);
 }
 
 .chat-controls__model-option-provider {

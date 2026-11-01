@@ -322,10 +322,6 @@
   font-size: 13px;
 }
 
-.model-setup-provider-select__option[data-selected] {
-  background: var(--menu-selected);
-}
-
 .model-setup-provider-select__option > .oc-menu-item__label {
   width: 100%;
 }
