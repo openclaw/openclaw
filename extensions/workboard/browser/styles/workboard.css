@@ -326,6 +326,8 @@
 }
 
 .workboard-agent-filter {
+  inline-size: 200px;
+  flex: none;
   max-width: 200px;
   min-width: 0;
 }

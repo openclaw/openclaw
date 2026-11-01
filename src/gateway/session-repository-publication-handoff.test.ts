@@ -35,7 +35,8 @@ import {
   assertReceiptOwner,
   prepareReceiptOwner,
 } from "./github-repository-publication-workspace.js";
-import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
+import { createRepositoryGatewayMovePreparation } from "./session-repository-materialization.js";
+import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./worker-environments/workspace-manifest.js";
@@ -303,10 +304,19 @@ it.each([
             options,
           ),
       );
+      const prepareMove = createRepositoryGatewayMovePreparation({
+        placements: createWorkerSessionPlacementStore(),
+        getConfig: () => cfg,
+        environments: {
+          get: () => undefined,
+          startTunnel: async () => {
+            throw new Error("Unexpected worker tunnel for retained checkpoint fixture");
+          },
+        },
+      });
       const move = () =>
-        materializeSessionRepositoryWorkspaceOnGateway({
+        prepareMove({
           ...scope,
-          cfg,
           sessionId,
           assertCurrent: () => {
             if (!currentOwner) {
@@ -436,8 +446,6 @@ it.each([
 );
 it("can hold publisher exclusion during an existing reclaim claim without taking repository admission", async () => {
   await withOpenClawTestState({ label: "handoff-exclusion" }, async () => {
-    const { createWorkerSessionPlacementStore } =
-      await import("./worker-environments/placement-store.js");
     const { seedActivePlacement, REQUEST } =
       await import("./worker-environments/placement-dispatch-test-fixtures.js");
     const { placementTurnOwner } = await import("./worker-environments/placement-record.js");

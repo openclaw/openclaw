@@ -40,7 +40,7 @@ checkouts keep their index unchanged.
 
 ## Existing folders on devices
 
-**Existing folder on device** is separate from a managed worktree. A compatible
+An existing folder on a device is separate from a managed worktree. A compatible
 paired session host can run a session directly in an absolute folder on that
 specific device. OpenClaw does not clone, snapshot, transfer, reconcile, or remove
 that folder as a managed worktree. Choose **New workspace** or a repository source

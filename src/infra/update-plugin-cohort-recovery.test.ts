@@ -30,6 +30,7 @@ import {
   recordDeferredPluginMigrations,
   restorePluginCohortMigrationPublications,
 } from "./deferred-plugin-migrations.js";
+import { readUpdateDatabaseGenerationPair } from "./update-database-generations.js";
 import {
   decodePluginCohortRecovery,
   type PluginCohortRecovery,
@@ -97,6 +98,24 @@ function setup() {
     readPluginCohortRecoveryPairRows(openOpenClawStateDatabase(options).db, cohort);
   return { options, reservation, cohort, rows };
 }
+
+it("preserves a released updater's SQLite capture before Doctor starts", async () => {
+  const f = setup();
+  await closeOpenClawStateDatabaseAsync();
+  const pathname = resolveOpenClawStateSqlitePath(f.options.env);
+  const before = readUpdateDatabaseGenerationPair([pathname]).physical;
+  await withPluginCohortConfigCapture(
+    {
+      ...f.options,
+      ...fence,
+      runId: f.cohort.runId,
+      installKey: f.cohort.installKey,
+    },
+    async () => {
+      expect(readUpdateDatabaseGenerationPair([pathname]).physical).toEqual(before);
+    },
+  );
+});
 
 it("reopens the paired intent, retains old-reader refusal and settles only its own rows", async () => {
   const f = setup();

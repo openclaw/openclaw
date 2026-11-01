@@ -77,11 +77,16 @@ async function sampleSheetTransition(
   page: Page,
   time: number,
   action: () => Promise<void>,
-  inspect: (state: Awaited<ReturnType<typeof shellState>>) => void | Promise<void>,
+  inspect: (
+    state: Awaited<ReturnType<typeof shellState>> & { launcherVisible: boolean },
+  ) => void | Promise<void>,
 ) {
   const sample = await page.locator(".chat-mobile-host").evaluateHandle(
     (shell, sampleTime) => ({
-      started: new Promise<CSSTransition[]>((resolve, reject) => {
+      started: new Promise<{
+        animations: CSSTransition[];
+        state: Awaited<ReturnType<typeof shellState>> & { launcherVisible: boolean };
+      }>((resolve, reject) => {
         const onTransition = (event: Event) => {
           if (
             !(event instanceof TransitionEvent) ||
@@ -102,7 +107,26 @@ async function sampleSheetTransition(
             animation.pause();
             animation.currentTime = sampleTime;
           }
-          resolve(animations);
+          // Sample in this frame: pausing CSS does not pause the owner's exit timer.
+          const style = getComputedStyle(shell);
+          const bounds = shell.getBoundingClientRect();
+          const region = shell.parentElement!.getBoundingClientRect();
+          resolve({
+            animations,
+            state: {
+              hidden: shell.hasAttribute("hidden"),
+              visibility: style.visibility,
+              mode: shell.getAttribute("data-mode"),
+              height: bounds.height,
+              top: bounds.top,
+              regionHeight: region.height,
+              regionBottom: region.bottom,
+              easing: style.transitionTimingFunction,
+              launcherVisible:
+                (shell.querySelector(".chat-panel-launcher-mobile")?.getClientRects().length ?? 0) >
+                0,
+            },
+          });
         };
         shell.addEventListener("transitionrun", onTransition);
       }),
@@ -110,12 +134,12 @@ async function sampleSheetTransition(
     time,
   );
   await action();
-  await sample.evaluate(({ started }) => started.then(() => undefined));
+  const state = await sample.evaluate(({ started }) => started.then((value) => value.state));
   try {
-    await inspect(await shellState(page));
+    await inspect(state);
   } finally {
     await sample.evaluate(async ({ started }) => {
-      for (const animation of await started) {
+      for (const animation of (await started).animations) {
         animation.play();
       }
     });
@@ -192,6 +216,7 @@ suite.define(() => {
         },
       );
       await settle(page);
+      await page.locator(".chat-panel-launcher-mobile").waitFor();
       const open = await shellState(page);
       expect(Math.abs(open.top + open.height - open.regionBottom)).toBeLessThan(1.5);
 
@@ -199,13 +224,13 @@ suite.define(() => {
         page,
         60,
         () => page.locator(".chat-mobile-host__header .chat-mobile-host__circle").first().click(),
-        async (leaving) => {
+        (leaving) => {
           // Hidden immediately for focus and accessibility, but still sliding out on screen.
           expect(leaving.hidden).toBe(true);
           expect(leaving.visibility).toBe("visible");
           expect(leaving.top).toBeGreaterThan(open.top + 10);
           // The page it showed slides away with it instead of blanking first.
-          expect(await page.locator(".chat-panel-launcher-mobile").boundingBox()).not.toBeNull();
+          expect(leaving.launcherVisible).toBe(true);
         },
       );
       await settle(page);

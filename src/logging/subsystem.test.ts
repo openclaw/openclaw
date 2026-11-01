@@ -1,11 +1,11 @@
 import fs from "node:fs";
-import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import util from "node:util";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
@@ -246,12 +246,12 @@ describe("createSubsystemLogger().isEnabled", () => {
     const unsubscribeLogs = onInternalDiagnosticEvent(listener, { include: ["log.record"] });
     log.info("log listener");
     log.warn("warning with listener");
-    await yieldToEventLoop();
+    await waitForDiagnosticEventsDrained();
     setDiagnosticsEnabledForProcess(false);
     log.info("disabled diagnostics");
     setDiagnosticsEnabledForProcess(true);
     log.raw("enabled diagnostics");
-    await yieldToEventLoop();
+    await waitForDiagnosticEventsDrained();
     unsubscribeLogs();
     log.info("removed log listener");
     unsubscribeUnrelated();

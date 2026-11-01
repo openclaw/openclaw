@@ -1,9 +1,22 @@
 .sidebar-issues-panel {
+  --sidebar-issues-text-title: calc(13.5px * var(--control-ui-text-scale));
+  --sidebar-issues-text-meta: calc(12.5px * var(--control-ui-text-scale));
+  --sidebar-issues-text-action: calc(13px * var(--control-ui-text-scale));
+  --sidebar-issues-line-title: calc(20px * var(--control-ui-text-scale));
+  --sidebar-issues-line-meta: calc(18px * var(--control-ui-text-scale));
+  --sidebar-issues-marker-size: 28px;
+  --sidebar-issues-row-inset: 10px;
+  --sidebar-issues-row-gap: 12px;
+  --sidebar-issues-age-on-hover: hidden;
+  --sidebar-issues-text-button: var(--sidebar-issues-text-action);
+  --sidebar-issues-button-inset: 11px;
+  --sidebar-issues-quiet-button-inset: 8px;
+
   position: fixed;
   z-index: 121;
   width: min(390px, calc(100vw - 16px));
   block-size: min(
-    500px,
+    560px,
     calc(
       100dvh -
         max(var(--sidebar-issues-panel-top, 8px), calc(8px + env(safe-area-inset-top, 0px))) -
@@ -21,7 +34,22 @@
   box-shadow: var(--overlay-shadow);
 }
 
+/* Mono themes set wider labels; tighter buttons keep the decision row on one line. */
+:root:is(
+    [data-theme="crt"],
+    [data-theme="crt-light"],
+    [data-theme="phosphor"],
+    [data-theme="phosphor-light"]
+  )
+  .sidebar-issues-panel {
+  --sidebar-issues-text-button: var(--control-ui-text-sm);
+  --sidebar-issues-button-inset: 9px;
+  --sidebar-issues-quiet-button-inset: 6px;
+}
+
 .shell--mobile-nav .sidebar-issues-panel {
+  --sidebar-issues-age-on-hover: visible;
+
   inset: auto var(--safe-area-right) calc(100% - var(--shell-canvas-height)) var(--safe-area-left) !important;
   width: auto;
   block-size: calc(var(--shell-canvas-height) * 0.68);
@@ -46,39 +74,39 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 12px;
+  padding: 14px 10px 4px 16px;
   background: transparent;
 }
 
 .sidebar-issues-panel__heading {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
   margin: 0;
   color: var(--text-strong);
-  font-size: calc(var(--control-ui-text-sm) + 1px);
-  font-weight: 650;
+  font-size: calc(var(--control-ui-text-md) + 1px);
+  font-weight: 600;
   line-height: 1.2;
-}
-
-.sidebar-issues-panel__heading-icon {
-  display: inline-flex;
-  color: var(--icon-decorative, var(--muted));
 }
 
 .sidebar-issues-panel__header-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   margin-inline-start: auto;
+}
+
+.sidebar-issues-panel__header-actions .sidebar-brand__icon {
+  width: 28px;
+  height: 28px;
+}
+
+.sidebar-issues-panel__header-actions .sidebar-brand__icon svg {
+  width: 14px;
+  height: 14px;
 }
 
 .sidebar-issues-panel__dismiss-shown {
   min-height: 28px;
-}
-
-.sidebar-issues-panel__mobile-close {
-  display: none;
+  padding-inline: 8px;
+  font-size: var(--sidebar-issues-text-meta);
 }
 
 .shell--mobile-nav .sidebar-issues-panel__header-actions .sidebar-brand__icon {
@@ -96,44 +124,52 @@
   transform: scale(0.97);
 }
 
-.shell--mobile-nav .sidebar-issues-panel__dismiss {
-  width: 40px;
-  height: 40px;
-  flex-basis: 40px;
-}
-
 .shell--mobile-nav .sidebar-issues-panel__dismiss-shown {
   min-height: 40px;
 }
 
-/* Hub-tab strip (shared hub-tabs.css owns the tab look); this block only
-   places it in the popover: the track hairline doubles as the header/list
-   separator, so it must span the full panel width. */
-:root[data-theme-mode="dark"] .sidebar-issues-panel__tabs.hub-tabs {
-  --track-color: color-mix(in srgb, var(--border-strong) 60%, transparent);
-}
+/* Hub-tab strip (shared hub-tabs.css owns the tab look); here the active
+   underline stands alone, with no track and no scrollbar. */
+.sidebar-issues-panel__tabs.hub-tabs {
+  --track-color: transparent;
 
-.sidebar-issues-panel__tabs {
   display: flex;
   flex: none;
+  gap: 20px;
   overflow-x: auto;
-  background: transparent;
-  flex-shrink: 0;
   width: 100%;
-  padding-inline: 8px;
+  padding-inline: 16px;
+  background: transparent;
+  box-shadow: none;
+  scrollbar-width: none;
 }
 
-.shell--mobile-nav .sidebar-issues-panel__tabs {
-  gap: 0;
-  padding-inline: 0;
+.sidebar-issues-panel__tabs.hub-tabs::-webkit-scrollbar {
+  display: none;
 }
 
-.sidebar-issues-panel__tabs .hub-tab {
-  flex: 1 0 auto;
-  /* Popover tabs are tap targets (mobile sheet); keep a taller hit area than
-     the page-hub sub tabs. */
-  justify-content: center;
+.sidebar-issues-panel__tabs.hub-tabs .hub-tab {
+  flex: none;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 0 9px;
+  font-size: var(--sidebar-issues-text-meta);
+  font-weight: 500;
+}
+
+/* The sheet's tabs are tap targets; keep a taller hit area there. */
+.shell--mobile-nav .sidebar-issues-panel__tabs.hub-tabs .hub-tab {
   padding-block: 8px 11px;
+}
+
+.sidebar-issues-panel__tabs.hub-tabs .hub-tab .hub-tab__badge {
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
 
 .sidebar-issues-panel__list-wrap {
@@ -150,37 +186,13 @@
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 0;
+  gap: 2px;
   overflow-y: auto;
-  padding: 6px;
+  padding: 6px 6px 14px;
   overscroll-behavior: contain;
   scroll-padding-block: 6px 18px;
   scrollbar-width: thin;
   touch-action: pan-y;
-}
-
-.sidebar-issues-panel__list > [data-attention-kind] {
-  margin-inline: -6px;
-}
-
-.sidebar-issues-panel__list > [data-attention-kind]:not(.sidebar-approval-row) {
-  padding-inline: 0;
-}
-
-.sidebar-issues-panel__list > [data-attention-kind] + [data-attention-kind] {
-  border-block-start: 3px solid var(--sidebar-issues-row-separator, var(--sidebar-bg));
-}
-
-.sidebar-issues-panel__list > [data-attention-kind]:is(:hover, :focus-within, [open]),
-.sidebar-issues-panel__list
-  > [data-attention-kind]:is(:hover, :focus-within, [open])
-  + [data-attention-kind],
-.sidebar-issues-panel__list
-  > .sidebar-issues-panel__update:has(> .sidebar-issues-panel__details[open]),
-.sidebar-issues-panel__list
-  > .sidebar-issues-panel__update:has(> .sidebar-issues-panel__details[open])
-  + [data-attention-kind] {
-  --sidebar-issues-row-separator: transparent;
 }
 
 .sidebar-issues-panel__list:focus-visible {
@@ -198,24 +210,14 @@
   gap: 4px;
   padding: 24px;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: var(--sidebar-issues-text-action);
   text-align: center;
 }
 
 .sidebar-issues-panel__empty strong {
   color: var(--text-strong);
   font-size: var(--control-ui-text-md);
-}
-
-.sidebar-issues-panel__empty-icon {
-  display: inline-flex;
-  margin-block-end: 12px;
-  color: var(--icon-decorative, var(--muted));
-}
-
-.sidebar-issues-panel__empty-icon svg {
-  width: 28px;
-  height: 28px;
+  font-weight: 500;
 }
 
 .sidebar-issues-panel__overflow-cue {
@@ -245,43 +247,32 @@
   flex: none;
   justify-items: start;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 10px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: var(--control-ui-text-sm);
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
 
 footer.sidebar-issues-panel__mentions-note {
-  padding: 12px;
+  padding: 10px 16px;
   border-block-start: 1px solid var(--border);
-  font-size: var(--control-ui-text-sm);
-}
-
-.sidebar-issues-panel__update > .sidebar-issues-panel__details {
-  margin-inline: -6px;
-}
-
-.sidebar-issues-panel__list
-  > [data-attention-kind]
-  + .sidebar-issues-panel__update
-  > .sidebar-issues-panel__details {
-  border-block-start: 3px solid var(--sidebar-issues-row-separator, var(--sidebar-bg));
+  font-size: var(--sidebar-issues-text-meta);
 }
 
 .sidebar-issues-panel__details {
   margin: 0;
-  border-radius: 0;
+  border-radius: var(--radius-md);
 }
 
 .sidebar-issues-panel__summary {
+  position: relative;
   display: flex;
   min-width: 0;
-  min-height: 40px;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-radius: 0;
+  gap: var(--sidebar-issues-row-gap);
+  padding: var(--sidebar-issues-row-inset);
+  border-radius: inherit;
   cursor: var(--cursor-action);
   list-style: none;
 }
@@ -315,11 +306,17 @@ footer.sidebar-issues-panel__mentions-note {
   box-shadow: var(--focus-ring);
 }
 
+/* The body sits in the text column; the closed row above it never moves. */
 .sidebar-issues-panel__body {
-  margin-inline-start: 36px;
-  padding: 6px 12px 10px;
+  margin-block-start: calc(var(--sidebar-issues-row-inset) * -1);
+  padding: 8px var(--sidebar-issues-row-inset) var(--sidebar-issues-row-inset)
+    calc(
+      var(--sidebar-issues-row-inset) + var(--sidebar-issues-marker-size) +
+        var(--sidebar-issues-row-gap)
+    );
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: var(--sidebar-issues-text-meta);
+  line-height: var(--sidebar-issues-line-meta);
 }
 
 .sidebar-issues-panel__facts {
@@ -327,56 +324,95 @@ footer.sidebar-issues-panel__mentions-note {
   gap: 4px;
   margin: 0;
   padding-inline-start: 16px;
-  line-height: 1.35;
   overflow-wrap: anywhere;
 }
 
 .sidebar-issues-panel__actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: 6px;
   margin-top: 10px;
 }
 
-.sidebar-issues-panel__action {
-  min-height: 28px;
-  padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  color: var(--muted);
-  cursor: var(--cursor-action);
-  font: inherit;
-  font-size: var(--control-ui-text-xs);
-  font-weight: 600;
+.sidebar-issues-panel__actions:first-child {
+  margin-top: 2px;
 }
 
-.sidebar-issues-panel__action--primary {
-  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
-  background: color-mix(in srgb, var(--accent-subtle) 50%, var(--bg-elevated));
+/* One button set for approvals and opened rows. */
+.sidebar-issues-panel .sidebar-issues-panel__action,
+.sidebar-issues-panel .sidebar-approval-row__action,
+.sidebar-issues-panel .sidebar-update-card__compact-actions .sidebar-update-card__review {
+  display: inline-flex;
+  width: auto;
+  min-height: 30px;
+  margin: 0;
+  flex: none;
+  align-items: center;
+  padding: 0 var(--sidebar-issues-button-inset);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--sidebar-issues-text-button);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: normal;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.sidebar-issues-panel__action {
+  border: 1px solid var(--border-strong);
+  background: transparent;
   color: var(--text);
+  cursor: var(--cursor-action);
 }
 
 .sidebar-issues-panel__action:hover {
   background: var(--bg-hover);
-  color: var(--text);
+}
+
+.sidebar-issues-panel .sidebar-issues-panel__action--primary,
+.sidebar-issues-panel .sidebar-update-card__review--primary {
+  border-color: transparent;
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.sidebar-issues-panel .sidebar-issues-panel__action--primary:hover,
+.sidebar-issues-panel .sidebar-update-card__review--primary:hover {
+  background: var(--primary-hover);
+  color: var(--primary-foreground);
+}
+
+.shell--mobile-nav .sidebar-issues-panel .sidebar-issues-panel__action,
+.shell--mobile-nav .sidebar-issues-panel .sidebar-approval-row__action {
+  min-height: 36px;
 }
 
 .sidebar-issues-panel__icon {
   display: inline-grid;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
+  width: var(--sidebar-issues-marker-size);
+  height: var(--sidebar-issues-marker-size);
+  flex: 0 0 var(--sidebar-issues-marker-size);
   place-items: center;
-  border-radius: var(--radius-sm);
-  color: color-mix(in srgb, var(--muted) 72%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--muted);
 }
 
-.sidebar-issues-panel__heading-icon svg,
-.sidebar-issues-panel__icon svg,
-.sidebar-issues-panel__chevron svg {
-  width: 16px;
-  height: 16px;
+.sidebar-issues-panel__icon:has(.viewer-avatar) {
+  background: transparent;
+}
+
+.sidebar-issues-panel__icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.sidebar-issues-panel__icon .viewer-avatar {
+  width: var(--sidebar-issues-marker-size);
+  height: var(--sidebar-issues-marker-size);
+  border: 0;
+  font-size: 12px;
 }
 
 .sidebar-issues-panel__content {
@@ -384,32 +420,35 @@ footer.sidebar-issues-panel__mentions-note {
   min-width: 0;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 1px;
+}
+
+.sidebar-issues-panel__heading-row {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 10px;
 }
 
 .sidebar-issues-panel__state-row {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: var(--sidebar-issues-text-meta);
+  line-height: var(--sidebar-issues-line-meta);
   white-space: nowrap;
 }
 
-.sidebar-issues-panel__meta-context,
-.sidebar-issues-panel__meta-time {
+.sidebar-issues-panel__meta-context {
   min-width: 0;
   overflow: hidden;
-  color: var(--muted);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .sidebar-issues-panel__meta-status {
   flex: none;
-  color: var(--muted-strong);
-  font-weight: 600;
 }
 
 .sidebar-issues-panel__navigation-link {
@@ -417,17 +456,14 @@ footer.sidebar-issues-panel__mentions-note {
   min-width: 0;
   flex: 1 1 auto;
   align-items: center;
-  gap: 8px;
+  gap: var(--sidebar-issues-row-gap);
   color: inherit;
-}
-
-.sidebar-issues-panel__summary--navigation {
-  position: relative;
 }
 
 .sidebar-issues-panel__navigation-link::after {
   position: absolute;
   inset: 0;
+  border-radius: inherit;
   content: "";
 }
 
@@ -436,33 +472,39 @@ footer.sidebar-issues-panel__mentions-note {
 }
 
 .sidebar-issues-panel__entity {
+  min-width: 0;
+  flex: 1 1 auto;
   color: var(--text-strong);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 550;
+  font-size: var(--sidebar-issues-text-title);
+  font-weight: 500;
+  line-height: var(--sidebar-issues-line-title);
 }
 
 .sidebar-issues-panel__state {
   min-width: 0;
   flex: 1 1 auto;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: var(--sidebar-issues-text-meta);
+  line-height: var(--sidebar-issues-line-meta);
 }
 
-.sidebar-issues-panel__icon--critical {
-  color: var(--danger);
+.sidebar-issues-panel__age {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.sidebar-issues-panel__details[data-attention-kind="scopeUpgrade"] .sidebar-issues-panel__icon {
-  color: var(--warn);
-}
-
+/* Hover, keyboard focus and opened rows trade the time for the dismiss control. */
 .sidebar-issues-panel__dismiss {
-  position: relative;
+  position: absolute;
   z-index: 1;
+  inset-block-start: 6px;
+  inset-inline-end: 4px;
   display: inline-grid;
-  width: 24px;
-  height: 24px;
-  flex: 0 0 24px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   place-items: center;
   border: 0;
@@ -470,39 +512,77 @@ footer.sidebar-issues-panel__mentions-note {
   background: transparent;
   color: var(--icon-interactive, var(--muted));
   cursor: var(--cursor-action);
+  opacity: 0;
+  pointer-events: none;
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
 }
 
 .sidebar-issues-panel__dismiss svg {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
+}
+
+.sidebar-issues-panel__summary:is(:hover, :focus-visible, :has(:focus-visible))
+  .sidebar-issues-panel__dismiss,
+.sidebar-issues-panel__details[open]
+  > .sidebar-issues-panel__summary
+  .sidebar-issues-panel__dismiss {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sidebar-issues-panel__summary:has(> .sidebar-issues-panel__dismiss):is(
+    :hover,
+    :focus-visible,
+    :has(:focus-visible)
+  )
+  .sidebar-issues-panel__age,
+.sidebar-issues-panel__details[open]
+  > .sidebar-issues-panel__summary:has(> .sidebar-issues-panel__dismiss)
+  .sidebar-issues-panel__age {
+  visibility: var(--sidebar-issues-age-on-hover);
 }
 
 @media (hover: hover) {
   .sidebar-issues-panel__dismiss:hover {
-    background: var(--bg-hover);
+    background: color-mix(in srgb, var(--text) 8%, transparent);
     color: var(--text-strong);
   }
 }
 
-.sidebar-issues-panel__chevron {
-  display: inline-flex;
-  flex: none;
-  color: var(--icon-interactive, var(--muted));
-  transition: transform var(--duration-fast) ease;
+/* Touch has no hover: time and dismiss sit side by side. */
+@media (hover: none), (pointer: coarse) {
+  .sidebar-issues-panel {
+    --sidebar-issues-age-on-hover: visible;
+  }
+
+  .sidebar-issues-panel__dismiss {
+    position: relative;
+    inset: auto;
+    flex: 0 0 28px;
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
-.sidebar-issues-panel__details[open]
-  > .sidebar-issues-panel__summary
-  .sidebar-issues-panel__chevron {
-  transform: rotate(90deg);
+.shell--mobile-nav .sidebar-issues-panel__dismiss {
+  position: relative;
+  inset: auto;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  margin-inline-end: -8px;
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .sidebar-update-issue__body {
-  margin-inline-start: 0;
-  padding: 2px 12px 8px;
+  padding-inline-start: calc(
+    var(--sidebar-issues-row-inset) + var(--sidebar-issues-marker-size) +
+      var(--sidebar-issues-row-gap)
+  );
 }
 
 .sidebar-update-issue__body .sidebar-update-card {
@@ -519,8 +599,8 @@ footer.sidebar-issues-panel__mentions-note {
   display: -webkit-box;
   overflow: hidden;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.4;
+  font-size: var(--sidebar-issues-text-meta);
+  line-height: var(--sidebar-issues-line-meta);
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
@@ -535,67 +615,29 @@ footer.sidebar-issues-panel__mentions-note {
   gap: 6px;
 }
 
-.sidebar-update-card__compact-actions .sidebar-update-card__review {
-  width: auto;
-  min-height: 28px;
-  margin: 0;
-}
-
-.sidebar-update-card__review--primary {
-  border-color: var(--primary);
-  background: var(--primary);
-  color: var(--primary-foreground);
-}
-
-.sidebar-update-card__review--primary:hover {
-  background: var(--primary-hover);
-  color: var(--primary-foreground);
-}
-
-.sidebar-issues-panel__notification-meta .sidebar-issues-panel__state {
-  flex: 0 1 auto;
-}
-
-.sidebar-issues-panel__age {
-  flex: none;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  white-space: nowrap;
-}
-
 .sidebar-mention-row__excerpt {
-  margin: 6px 0 0;
+  margin: 0;
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  font-size: var(--sidebar-issues-text-action);
+  line-height: 1.5;
   overflow-wrap: anywhere;
-}
-
-.sidebar-mention-row__actions {
-  margin-block-start: 8px;
-}
-
-.sidebar-mention-row__actions a {
-  display: inline-flex;
-  align-items: center;
-  text-decoration: none;
-}
-
-.shell--mobile-nav .sidebar-mention-row__actions .sidebar-issues-panel__action {
-  min-height: 40px;
+  -webkit-line-clamp: 4;
 }
 
 .sidebar-approval-row {
   display: flex;
   min-width: 0;
-  min-height: 104px;
   align-items: flex-start;
-  gap: 8px;
-  padding: 8px 12px;
-  border-radius: 0;
-  transition: background var(--duration-fast) ease;
+  gap: var(--sidebar-issues-row-gap);
+  padding: var(--sidebar-issues-row-inset);
+  border-radius: var(--radius-md);
 }
 
-.sidebar-approval-row:hover,
-.sidebar-approval-row:focus-within {
-  background: var(--surface-hover);
+/* Centered on the title line; the row grows below it. */
+.sidebar-approval-row__icon {
+  margin-block-start: calc(
+    (var(--sidebar-issues-line-title) - var(--sidebar-issues-marker-size)) / 2
+  );
 }
 
 .sidebar-approval-row__content {
@@ -606,23 +648,15 @@ footer.sidebar-issues-panel__mentions-note {
 .sidebar-approval-row__header {
   display: flex;
   min-width: 0;
-  align-items: center;
-  gap: 6px;
+  align-items: baseline;
+  gap: 10px;
   white-space: nowrap;
-}
-
-.sidebar-approval-row__header .sidebar-issues-panel__entity {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  font-weight: 600;
-  text-overflow: ellipsis;
 }
 
 .sidebar-approval-row__timer {
   flex: none;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -636,65 +670,49 @@ footer.sidebar-issues-panel__mentions-note {
   max-width: 100%;
   align-self: flex-start;
   overflow: hidden;
-  margin-block-start: 7px;
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--bg-hover) 95%, var(--text) 5%);
+  margin-block-start: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--text) 5%, var(--popover));
   color: var(--text);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.3;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* Long labels wrap whole buttons; the hover-only session link never takes a line. */
 .sidebar-approval-row__actions {
+  position: relative;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 5px;
-  margin-top: 7px;
+  gap: 6px;
+  margin-top: 10px;
 }
 
-.sidebar-approval-row__action {
-  min-height: 28px;
+.sidebar-approval-row__actions:has(> .sidebar-approval-row__open-session) {
+  padding-inline-end: 16px;
 }
 
-.sidebar-issues-panel
-  .sidebar-approval-row
-  .sidebar-approval-row__action.sidebar-approval-row__action--allow-once {
-  border-color: color-mix(in srgb, var(--ok) 36%, var(--border));
-  background: color-mix(in srgb, var(--ok) 20%, var(--bg-elevated));
-  color: var(--ok);
+.sidebar-issues-panel .sidebar-approval-row .sidebar-approval-row__action--allow-always {
+  border-color: var(--border-strong);
+  background: transparent;
+  color: var(--text);
 }
 
-.sidebar-issues-panel
-  .sidebar-approval-row
-  .sidebar-approval-row__action.sidebar-approval-row__action--allow-once:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--ok) 27%, var(--bg-elevated));
-  color: var(--ok);
-}
-
-.sidebar-issues-panel
-  .sidebar-approval-row
-  .sidebar-approval-row__action.sidebar-approval-row__action--allow-once:active:not(:disabled) {
-  background: color-mix(in srgb, var(--ok) 31%, var(--bg-elevated));
-  color: var(--ok);
-}
-
-.sidebar-approval-row__action--deny {
-  color: var(--danger);
-}
-
-.sidebar-approval-row__action.sidebar-approval-row__action--deny:hover:not(:disabled),
-.sidebar-approval-row__action.sidebar-approval-row__action--deny:focus-visible:not(:disabled) {
-  background: var(--danger-subtle);
-  color: var(--danger);
+.sidebar-issues-panel .sidebar-approval-row .sidebar-approval-row__action--deny {
+  padding-inline: var(--sidebar-issues-quiet-button-inset);
+  color: var(--muted);
 }
 
 .sidebar-approval-row__open-session {
+  position: absolute;
+  inset-block-end: 1px;
+  inset-inline-end: -6px;
   display: inline-grid;
   width: 28px;
   height: 28px;
-  margin-inline-start: auto;
   place-items: center;
   border-radius: var(--radius-sm);
   color: var(--muted);
@@ -720,10 +738,10 @@ footer.sidebar-issues-panel__mentions-note {
 }
 
 .sidebar-approval-row__message {
-  margin: 0 6px 6px;
+  margin: 8px 0 0;
   color: var(--warn);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.35;
+  font-size: var(--sidebar-issues-text-meta);
+  line-height: var(--sidebar-issues-line-meta);
 }
 
 .sidebar-approval-row__message--error {

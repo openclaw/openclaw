@@ -5,6 +5,7 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { board } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -20,6 +21,7 @@ suite.define(() => {
         await page.clock.install();
         const gateway = await installMockGateway(page, {
           sessionKey,
+          sessionArchiveFiltering: true,
           awaitInitialRoster: false,
           heldMethods: ["connect"],
           authMethod: "trusted-proxy",
@@ -28,6 +30,14 @@ suite.define(() => {
           featureMethods: [...defaultControlUiFeatureMethods, "board.get"],
           methodResponses: { "board.get": board(sessionKey) },
           sessions: [
+            // The bounded sidebar boot roster cannot carry this older archived descriptor.
+            ...Array.from({ length: 200 }, (_, index) =>
+              createControlUiSessionRow(
+                `agent:main:header-${index}`,
+                `Fixture ${index}`,
+                index + 2,
+              ),
+            ),
             {
               key: sessionKey,
               sessionId: "observatory",
@@ -35,6 +45,7 @@ suite.define(() => {
               label: "Observatory report",
               boardFace: "dashboard",
               updatedAt: 1,
+              archived: true,
             },
           ],
           historyMessages: [{ role: "assistant", content: transcript }],
@@ -96,6 +107,7 @@ suite.define(() => {
         await conversation.waitFor();
         await capture("boot");
         expect(await status.count()).toBe(0);
+        expect(await header.locator(".chat-header-session-menu__trigger").count()).toBe(0);
         const before = await geometry();
         await page.clock.fastForward(2_000);
         await status.waitFor({ state: "visible" });
@@ -110,6 +122,7 @@ suite.define(() => {
         await capture("slow");
         await gateway.resolveDeferred("connect");
         await status.waitFor({ state: "hidden" });
+        await header.locator(".chat-header-session-menu__trigger").waitFor();
         expect(await geometry()).toEqual(before);
         await capture("connected");
 

@@ -41,6 +41,7 @@ const { values } = parseArgs({
     "capture-ms": { type: "string", default: "8000" },
     "transcript-late-paint": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
+    "cpu-profile": { type: "boolean", default: false },
     route: { type: "string", default: "both" },
     "audit-report": { type: "string" },
     "paint-audit": { type: "string" },
@@ -52,7 +53,7 @@ if (values.help) {
   --dist dist --ui-root dist/control-ui --output .local/warm-reload-proof
   --admission signed-in|token --base <dist|ref> --candidate <dist|ref>
   --reloads 11 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
-  --transcript-late-paint --reload-after-navigation
+  --transcript-late-paint --reload-after-navigation --cpu-profile
 Creates fresh isolated state and Chromium, records cold + warm reloads, then stops both.
 Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
 See scripts/perf/warm-reload-proof.md for metric definitions and limitations.`);
@@ -63,10 +64,14 @@ if (values["audit-report"] || values["paint-audit"]) {
     throw new Error("--audit-report and --paint-audit must be supplied together");
   }
   const audited = await applyWarmReloadPaintAudit(values["audit-report"], values["paint-audit"]);
-  const report: { results: Parameters<typeof createWarmReloadComparison>[0] } = JSON.parse(
-    await readFile(audited, "utf8"),
-  );
-  if (report.results.some((result) => result.arm === "base" || result.arm === "candidate")) {
+  const report: {
+    results: Parameters<typeof createWarmReloadComparison>[0];
+    profiled?: boolean;
+  } = JSON.parse(await readFile(audited, "utf8"));
+  if (
+    !report.profiled &&
+    report.results.some((result) => result.arm === "base" || result.arm === "candidate")
+  ) {
     await createWarmReloadComparison(report.results, path.dirname(audited));
   }
   console.info("Wrote audited-report.json beside the immutable capture report");
@@ -205,6 +210,24 @@ async function inspectWarmCache(page: Page, sessionKey: string, removeTarget = f
           });
         const snapshots = await readKeys("snapshots");
         const sidebar = await readKeys("sidebarSnapshots");
+        const sidebarRecords = await Promise.all(
+          sidebar.map(
+            (value) =>
+              new Promise<unknown>((resolve, reject) => {
+                const request = database
+                  .transaction("sidebarSnapshots", "readonly")
+                  .objectStore("sidebarSnapshots")
+                  .get(value);
+                request.addEventListener("success", () => resolve(request.result), { once: true });
+                request.addEventListener(
+                  "error",
+                  () =>
+                    reject(new Error("Unable to read sidebar snapshot", { cause: request.error })),
+                  { once: true },
+                );
+              }),
+          ),
+        );
         const targetKeys = snapshots.filter(
           (value) =>
             typeof value === "string" &&
@@ -257,6 +280,18 @@ async function inspectWarmCache(page: Page, sessionKey: string, removeTarget = f
           ),
           snapshots: snapshots.length,
           sidebarSnapshots: sidebar.length,
+          sidebarRecordBytes: sidebarRecords.map(
+            (value) => new TextEncoder().encode(JSON.stringify(value)).length,
+          ),
+          sidebarHost: {
+            state: document.querySelector("aside.sidebar")?.getAttribute("data-snapshot-state"),
+            saved: document.querySelector("aside.sidebar")?.getAttribute("data-snapshot-saved"),
+            rows: new Set(
+              [...document.querySelectorAll("openclaw-app-sidebar [data-session-key]")].map((row) =>
+                row.getAttribute("data-session-key"),
+              ),
+            ).size,
+          },
         };
       } finally {
         database.close();
@@ -395,7 +430,19 @@ async function captureReload(
   cdp.on("Network.webSocketFrameSent", onSent);
   cdp.on("Network.webSocketFrameReceived", onReceived);
   page.on("pageerror", onError);
+  const profiling = warm && values["cpu-profile"];
+  const timeline: unknown[] = [];
+  const onTrace = ({ value }: { value: unknown[] }) => timeline.push(...value);
   try {
+    if (profiling) {
+      cdp.on("Tracing.dataCollected", onTrace);
+      await cdp.send("Profiler.enable");
+      await cdp.send("Profiler.start");
+      await cdp.send("Tracing.start", {
+        categories: "toplevel,loading,blink.user_timing,devtools.timeline,v8",
+        transferMode: "ReportEvents",
+      });
+    }
     await cdp.send("Page.startScreencast", {
       format: "png",
       maxWidth: viewport.width,
@@ -442,7 +489,9 @@ async function captureReload(
       ...probe.loaf,
       ...probe.shifts,
       ...probe.domStates,
+      ...probe.textStates,
       ...probe.animationSamples,
+      ...probe.sidebarFrames,
     ]) {
       entry.atMs += documentOffsetMs;
     }
@@ -588,6 +637,20 @@ async function captureReload(
     );
     return report;
   } finally {
+    if (profiling) {
+      const { profile } = await cdp.send("Profiler.stop");
+      const complete = new Promise<void>((resolve) => {
+        cdp.once("Tracing.tracingComplete", () => resolve());
+      });
+      await cdp.send("Tracing.end");
+      await complete;
+      cdp.off("Tracing.dataCollected", onTrace);
+      await writeFile(path.join(outputDir, "reload.cpuprofile"), JSON.stringify(profile));
+      await writeFile(
+        path.join(outputDir, "trace.json"),
+        JSON.stringify({ traceEvents: timeline }),
+      );
+    }
     await cdp.send("Page.stopScreencast").catch(() => {});
     cdp.off("Page.screencastFrame", onFrame);
     cdp.off("Network.requestWillBeSent", onDocument);
@@ -836,12 +899,6 @@ try {
             await page.goto(handoffUrl.href);
           }
           await waitForControlUiGatewayReady(page, 60000);
-          const operator = values["transcript-late-paint"]
-            ? await evaluateControlUiContext(page, (application) => ({
-                gatewayUrl: application.gateway.connection.gatewayUrl.replace(/\/$/u, ""),
-                userId: application.gateway.snapshot.selfUser?.id,
-              }))
-            : null;
           await page.waitForFunction(() => navigator.serviceWorker.controller !== null, undefined, {
             timeout: 60000,
           });
@@ -872,31 +929,33 @@ try {
             storageTypes: "indexeddb,cache_storage",
           });
           await cdp.send("Network.clearBrowserCache");
-          if (operator && fixture.fixtureSummary.transcriptLatePaint) {
-            if (!operator.userId) {
-              throw new Error("Transcript late-paint fixture requires an identified operator");
-            }
-            await page.evaluate(
-              ({ gatewayUrl, userId, settings }) => {
-                localStorage.setItem("openclaw:sidebar:sessions:grouping", settings.grouping);
-                localStorage.setItem("openclaw:sidebar:sessions:sort-mode", settings.sort);
-                localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
-                localStorage.setItem(
-                  "openclaw:sidebar:sessions:collapsed-sections",
-                  JSON.stringify(settings.collapsedSections),
-                );
-                localStorage.setItem(
-                  `openclaw.control.sidebarSessionOwnerFilter.v1:${gatewayUrl}:${encodeURIComponent(userId!)}`,
-                  settings.ownerFilter,
-                );
-                localStorage.setItem(
-                  `openclaw.control.sidebarEmptyGroups.v1:${gatewayUrl}:user:${encodeURIComponent(userId!)}`,
-                  settings.emptyGroups,
-                );
-              },
-              { ...operator, settings: fixture.fixtureSummary.transcriptLatePaint },
-            );
-          }
+          await page.evaluate(
+            ({ viewerId, groups }) => {
+              const gatewayUrl = `ws://${location.host}`;
+              localStorage.setItem("openclaw:sidebar:sessions:grouping", "category");
+              localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "created");
+              localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
+              localStorage.setItem(
+                "openclaw:sidebar:sessions:collapsed-sections",
+                JSON.stringify(groups.slice(0, 5).map((group) => `category:${group}`)),
+              );
+              localStorage.setItem(
+                `openclaw.control.sidebarSessionOwnerFilter.v1:${gatewayUrl}:${encodeURIComponent(viewerId)}`,
+                "involving-me",
+              );
+              localStorage.setItem(
+                `openclaw.control.sidebarEmptyGroups.v1:${gatewayUrl}:user:${encodeURIComponent(viewerId)}`,
+                "always",
+              );
+            },
+            {
+              viewerId: fixture.fixtureSummary.viewerId,
+              groups: Array.from(
+                { length: 97 },
+                (_, index) => `Synthetic group ${String(index + 1).padStart(2, "0")}`,
+              ),
+            },
+          );
           const url = `${baseUrl}${routePath}`;
           results.push({
             arm: arm.name,
@@ -914,6 +973,21 @@ try {
               ),
             ],
           });
+          // Persist actual disclosure choices, not hand-authored snapshot fields.
+          for (const parent of fixture.fixtureSummary.sidebarParents) {
+            const toggle = page.locator(
+              `[data-child-session-toggle=${JSON.stringify(parent.key)}]`,
+            );
+            await toggle.waitFor({ state: "visible" });
+            if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+              await toggle.click();
+            }
+            for (const key of parent.childKeys) {
+              await page
+                .locator(`.sidebar-session-content [data-session-key=${JSON.stringify(key)}]`)
+                .waitFor({ state: "visible" });
+            }
+          }
           const details = page.locator(".chat-details-toggle:visible");
           if (
             route === "chat" &&
@@ -1031,6 +1105,7 @@ try {
   }
   const report = {
     revision,
+    profiled: values["cpu-profile"],
     buildIdentity,
     dist,
     viewport,
@@ -1070,7 +1145,7 @@ try {
     results,
   };
   await writeFile(path.join(directory, "report.json"), JSON.stringify(report, null, 2));
-  if (values.base) {
+  if (values.base && !values["cpu-profile"]) {
     await createWarmReloadComparison(results, directory);
   }
   console.info(`Retained proof: ${directory}/report.json`);

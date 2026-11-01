@@ -2926,6 +2926,9 @@ importers:
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../normalization-core
+      json5:
+        specifier: 2.2.3
+        version: 2.2.3
       markdown-it:
         specifier: 15.0.3
         version: 15.0.3

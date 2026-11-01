@@ -316,9 +316,20 @@ Gateway export preparation also requires the original attached disk and a fresh
 snapshot, preserving private Git history and working files. It verifies the source
 again before binding the local worktree. Staged changes and unavailable history
 fail closed rather than silently losing index contents or commits. This preparation
-is not the disk-mode Move lifecycle: paused-disk preparation and the final durable
-handoff remain prerequisites before activation. Missing or replaced disks never
-fall back to a stored mirror or source-only reconstruction.
+also serves an explicit **Move to Gateway** for an already-bound, active disk.
+The existing pending-result record retains the immutable export and original
+resource receipt. Only after the verified managed worktree is bound to the session
+does the repository owner retire disk custody; the existing environment owner
+then settles exact-resource cleanup before the placement finishes locally.
+
+An interrupted Move before local binding captures the original disk again rather
+than restoring an old mirror. After local binding, recovery keeps that worktree
+and finishes custody retirement and cleanup without reapplying an export. Missing
+exports, replaced disks, or changed session ownership keep recovery held. Existing
+mirrored pending results keep their original acceptance semantics. This uses the
+existing schema and cleanup owners; it adds no disk-mode selector or activation.
+Paused-disk preparation remains a separate prerequisite. Missing or replaced disks
+never fall back to a stored mirror or source-only reconstruction.
 
 The shared-state schema upgrade preserves old rows with an absent receipt and
 fences older binaries that cannot honor recorded identities. To roll back, first

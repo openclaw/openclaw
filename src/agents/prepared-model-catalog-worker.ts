@@ -400,6 +400,8 @@ export function createPreparedModelCatalogWorker(
   ): Promise<Extract<PreparedModelWorkerResult, { status: "ok" }>> => {
     let message: PreparedModelWorkerResult;
     let requestPool: typeof pool;
+    let requestOwner: GatewayCatalogPool | undefined;
+    let acceptResult: typeof validate | undefined;
     let pending: Promise<PreparedModelWorkerResult> | undefined;
     let credentials: ReturnType<typeof beginAuthProfileCredentialBatch> | undefined;
     const task: { onRecovery?: (error: Error) => void } = {};
@@ -474,7 +476,7 @@ export function createPreparedModelCatalogWorker(
         ? await getGatewayCatalogPool(workerInput, metadataSnapshot, environmentFingerprint)
         : undefined;
       if (shared) {
-        sharedOwner = shared;
+        sharedOwner = requestOwner = shared;
         shared.borrowers.add(borrower);
       }
       requestPool = pool =
@@ -512,7 +514,7 @@ export function createPreparedModelCatalogWorker(
             captureOpenClawStateWorkerContext({ env: input.env }),
           );
           credentials = publication;
-          receiveResult = (result) => {
+          acceptResult = receiveResult = (result) => {
             // Even a failed or retired catalog may have committed a credential refresh.
             publication.committed(result.authCredentials);
             publication.finish(true);
@@ -579,6 +581,14 @@ export function createPreparedModelCatalogWorker(
       await stop(failure);
       throw error;
     } finally {
+      // Failed transport replies skip validation and can dispatch the next task immediately.
+      // Release only this request's callback, never the successor's publication.
+      if (receiveResult === acceptResult) {
+        receiveResult = validate;
+      }
+      if (requestOwner && requestOwner.validate === acceptResult) {
+        requestOwner.validate = undefined;
+      }
       credentials?.finish(false);
       task.onRecovery = undefined;
       if (pending) {
