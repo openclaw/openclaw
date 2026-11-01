@@ -11,6 +11,7 @@ import { resolveStagedInputMediaPaths } from "../../../media/staged-inputs.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import { readSessionForkSource } from "../../../sessions/input-provenance.js";
 import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
 import {
   readAdmittedRunOperatorAuthority,
@@ -362,7 +363,8 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         githubPublicationAvailable: attempt.githubPublicationAvailable,
         abortSignal,
         skillWorkshop: {
-          ...(attempt.skillWorkshopReviewOf ? { reviewOf: attempt.skillWorkshopReviewOf } : {}),
+          // A background fork credits its tool changes to the session it reviews.
+          reviewOf: readSessionForkSource(attempt.inputProvenance),
           libraryAuthoring: attempt.skillLibraryAuthoring,
         },
         modelCompat: extractModelCompat(attempt.model),

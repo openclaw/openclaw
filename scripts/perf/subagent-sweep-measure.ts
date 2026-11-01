@@ -16,7 +16,7 @@ import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import type { SubagentRunRecord } from "../../src/agents/subagents/registry/subagent-registry.types.js";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { summarizeDurationDistribution } from "../lib/perf-duration-distribution.ts";
 import { recordGcCollections } from "../lib/perf-gc-collections.ts";
@@ -63,15 +63,10 @@ process.env = {
   TMPDIR: path.join(stateDir, "tmp"),
 };
 const profilePath = path.join(stateDir, "allocation.heapprofile");
-const marker = (phase: string) =>
-  writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
 // Identify the main isolate before source imports can start a worker.
-marker("identify-start");
+writeGatewayGcTraceMarker("identify-start", profilePath);
 global.gc();
-marker("identify-stop");
+writeGatewayGcTraceMarker("identify-stop", profilePath);
 
 const [memory, { createSubagentRegistrySweeper }, agentRuns] = await Promise.all([
   import("../../src/agents/subagents/registry/subagent-registry-memory.js"),
@@ -250,7 +245,7 @@ try {
   const cpu = process.cpuUsage();
   const threadCpu = process.threadCpuUsage();
   loop.reset();
-  marker("heap-start");
+  writeGatewayGcTraceMarker("heap-start", profilePath);
   measuredStart = performance.now();
   for (let index = 0; index < operations; index++) {
     const started = performance.now();
@@ -262,7 +257,7 @@ try {
   const usedCpu = process.cpuUsage(cpu);
   const usedThreadCpu = process.threadCpuUsage(threadCpu);
   const after = process.memoryUsage();
-  marker("heap-stop");
+  writeGatewayGcTraceMarker("heap-stop", profilePath);
   loop.disable();
   await nextTurn();
   recordGcCollections(observer.takeRecords(), collections, measuredStart, measuredEnd);

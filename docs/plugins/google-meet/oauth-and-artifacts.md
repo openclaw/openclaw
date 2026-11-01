@@ -208,6 +208,9 @@ For `artifacts` and `attendance`, `--output <path>` writes the selected format, 
 
 `export` writes a folder with `summary.md`, `attendance.csv`, `transcript.md`, `artifacts.json`, `attendance.json`, and `manifest.json`. `manifest.json` records the chosen input, export options, conference records, output files, counts, token source, any Calendar event used, and partial-retrieval warnings. `--zip` also writes a portable archive next to the folder. `--include-doc-bodies` exports linked transcript/smart-note Google Docs text through Drive `files.export` (requires the Drive Meet readonly scope); without it, exports include Meet metadata and structured transcript entries only. A partial artifact failure (smart-note listing, transcript-entry, or document-body error) keeps the warning in the summary/manifest instead of failing the whole export. `--dry-run` fetches the same data and prints the manifest JSON without creating the folder or ZIP.
 
+Document bodies requested with `--include-doc-bodies` remain in `transcript.md`
+when `--no-transcript-entries` is set or only smart notes are available.
+
 For `export`, `--output <dir>` preserves the literal directory name, including leading or trailing spaces; quote such paths in the shell. A missing or all-whitespace value uses the generated default directory.
 
 Agents use the same actions through the `google_meet` tool (`export`, `create` with `accessType`, `end_active_conference`, `test_listen`); see [Tool](/plugins/google-meet/tool-and-modes#tool).

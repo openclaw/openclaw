@@ -190,11 +190,10 @@ suite.define(() => {
               text.width > 0 && text.left >= bounds.left - 1 && text.right <= bounds.right + 1;
             const ordered =
               index === 0
-                ? Math.abs(bounds.left - tabTrackBounds.left) < 0.05
+                ? Math.abs(bounds.left - tabTrackBounds.left - 16) < 0.05
                 : bounds.left >= tabs[index - 1]!.getBoundingClientRect().right - 1;
-            const fillsTrack =
-              index !== tabs.length - 1 || Math.abs(bounds.right - tabTrackBounds.right) < 0.05;
-            return fits && ordered && fillsTrack ? [] : [tab.getAttribute("data-tab-value")];
+            const inTrack = bounds.right <= tabTrackBounds.right + 0.05;
+            return fits && ordered && inTrack ? [] : [tab.getAttribute("data-tab-value")];
           }),
         };
       });

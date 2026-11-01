@@ -103,7 +103,6 @@ export class TranscriptInitialRange {
 
   finish(viewportOnly = false): void {
     this.pending = false;
-    this.virtualizer().shouldAdjustScrollPositionOnItemSizeChange = undefined;
     if (!this.tailRows && !this.viewportOnly) {
       return;
     }
