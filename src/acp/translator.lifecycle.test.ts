@@ -261,7 +261,7 @@ it.each([
       }
       return method === "sessions.list" ? sessions(rows) : { ok: true };
     };
-    const first = fixture([], request, { eventLedger: ledger }).agent;
+    const first = createTranslatorScenario(request, { eventLedger: ledger, sessions: [] }).agent;
     const created = await first.newSession(createNewSessionRequest(cwd));
     const key = `acp-bridge:${created.sessionId}`;
     await ledger.recordUserPrompt({
