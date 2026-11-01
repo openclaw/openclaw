@@ -39,7 +39,7 @@ it("retains pin action geometry without restoring mutation authority", () => {
     { key: "agent:main:promoted", spawnedBy: "agent:main:parent" },
     { key: "agent:main:promoted-root", spawnedBy: "agent:main:parent", sidebarRoot: true },
   ].map((row) => projectSidebarSession(row));
-  const saved = parse({ pinnedSessions: JSON.parse(JSON.stringify(snapshotSessions(rows))) });
+  const saved = parse({ pinnedSessions: structuredClone(snapshotSessions(rows)) });
   expect(saved).not.toBeNull();
   const restored = saved!.pinnedSessions.map((row) => restoreSnapshotSession(row, ""));
   expect(restored.every((row) => !row.pinnable)).toBe(true);
@@ -57,7 +57,7 @@ it("retains a collapsed parent's disclosure without inventing loaded children", 
     key: "agent:main:parent",
     childSessions: ["agent:main:child", "agent:main:dashboard:incognito-private"],
   });
-  const saved = parse({ pinnedSessions: JSON.parse(JSON.stringify(snapshotSessions([row]))) });
+  const saved = parse({ pinnedSessions: structuredClone(snapshotSessions([row])) });
   const restored = restoreSnapshotSession(saved!.pinnedSessions[0]!, "");
   expect(restored.children).toEqual([]);
   expect(restored.childSessionKeys).toEqual([]);
