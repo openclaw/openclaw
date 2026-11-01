@@ -3,7 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
+import { parseArgs, promisify } from "node:util";
 import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.ts";
 import {
   assignPostgresConformanceShards,
@@ -84,6 +84,7 @@ let targets = explicitTargets
       "src/infra/exec-approvals-native.test.ts",
       "src/infra/client-credential-update.test.ts",
       "src/infra/update-candidate-state.postgres.test.ts",
+      "src/infra/update-managed-service-handoff-engine.test.ts",
       "src/snapshot/postgres-generation.postgres.test.ts",
       "src/state/openclaw-state-db.postgres.test.ts",
       "src/state/openclaw-agent-db.postgres.test.ts",
@@ -126,7 +127,9 @@ if (shardCount) {
   targets = targets.filter((target) => selected.has(target));
 }
 if (values.list) {
-  console.log(JSON.stringify(explicitTargets ? forwarded : [...targets, ...forwarded], null, 2));
+  await promisify(process.stdout.write.bind(process.stdout))(
+    `${JSON.stringify(explicitTargets ? forwarded : [...targets, ...forwarded], null, 2)}\n`,
+  );
   process.exit(0);
 }
 

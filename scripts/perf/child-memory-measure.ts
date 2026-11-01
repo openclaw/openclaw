@@ -27,7 +27,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -114,11 +114,6 @@ assert.ok(
 const outputPath = path.resolve(values.output);
 const profilePath = `${outputPath}.heapprofile`;
 const fixture = fileURLToPath(new URL("./child-memory-fixture.cjs", import.meta.url));
-const marker = (phase: string) =>
-  fs.writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
 const { watchChildMemory }: typeof import("../../src/process/child-memory.js") = await import(
   values.owner
     ? pathToFileURL(path.resolve(values.owner)).href
@@ -126,9 +121,9 @@ const { watchChildMemory }: typeof import("../../src/process/child-memory.js") =
 );
 if (values["gc-log"]) {
   assert.ok(global.gc, "Trace mode requires --expose-gc");
-  marker("identify-start");
+  writeGatewayGcTraceMarker("identify-start", profilePath);
   global.gc();
-  marker("identify-stop");
+  writeGatewayGcTraceMarker("identify-stop", profilePath);
 }
 
 function allocated(profile: HeapProfiler.SamplingHeapProfile) {
@@ -284,11 +279,11 @@ try {
   const threadCpuStart = process.threadCpuUsage();
   const cpuStart = process.cpuUsage();
   resourceHook?.enable();
-  marker("heap-start");
+  writeGatewayGcTraceMarker("heap-start", profilePath);
   capturingSamples = true;
   await delay(seconds * 1000);
   capturingSamples = false;
-  marker("heap-stop");
+  writeGatewayGcTraceMarker("heap-stop", profilePath);
   resourceHook?.disable();
   const cpu = process.cpuUsage(cpuStart);
   const threadCpu = process.threadCpuUsage(threadCpuStart);

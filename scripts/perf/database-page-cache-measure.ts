@@ -8,7 +8,7 @@ import path from "node:path";
 import { monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 
 const { values } = parseArgs({
   options: {
@@ -44,14 +44,9 @@ if (values["owner-dir"]) {
   process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ""} --import=${preload}`;
   await import("./database-page-cache-preload.mjs");
 }
-const marker = (phase: string, profilePath?: string) =>
-  fs.writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
-marker("identify-start");
+writeGatewayGcTraceMarker("identify-start");
 global.gc();
-marker("identify-stop");
+writeGatewayGcTraceMarker("identify-stop");
 const [
   { prepareGatewayStartupSessions },
   { warmGatewayDatabasePageCache },
@@ -195,7 +190,7 @@ try {
     }
     loop.reset();
     const childCpuStart = childCpuMs() + brokerCpuMs();
-    marker("diagnostics-start", profilePath);
+    writeGatewayGcTraceMarker("diagnostics-start", profilePath);
     const cpuStart = process.cpuUsage(),
       threadStart = process.threadCpuUsage();
     captureStart = performance.now();
@@ -211,7 +206,7 @@ try {
       thread = process.threadCpuUsage(threadStart);
     const childrenMs = childCpuMs() + brokerCpuMs() - childCpuStart;
     active = false;
-    marker("diagnostics-stop", profilePath);
+    writeGatewayGcTraceMarker("diagnostics-stop", profilePath);
     loop.disable();
     let sampledBytes: number | undefined;
     let heapProfile: HeapProfiler.SamplingHeapProfile | undefined;

@@ -1163,7 +1163,7 @@ process.stdout.write(${JSON.stringify(
         `const OriginalDate = Date;
 globalThis.Date = class extends OriginalDate {
   constructor(...args) {
-    super(...(args.length ? args : [${Date.parse(observation.prerequisitesCompletedAt) + 300_001}]));
+    super(...(args.length ? args : [${Date.parse(observation.collectionCompletedAt) + 300_001}]));
   }
 };
 `,
