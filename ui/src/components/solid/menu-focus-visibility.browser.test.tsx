@@ -39,6 +39,34 @@ it("shows the ring as soon as the keyboard takes over a pointer-opened menu", as
   expect(ringed(trigger())).toBe(true);
 });
 
+it("shows the ring on the current row when a key leaves focus in place", async () => {
+  const view = mountMenu();
+  await userEvent.click(trigger());
+  await phase(surface(), "open");
+  await keyFocus("{Home}", rows(view)[0]!);
+  expect(ringed(rows(view)[0]!)).toBe(true);
+  expect(view.handle.overlay.open).toBe(true);
+});
+
+it("shows the ring in a one-item menu on any key", async () => {
+  const view = mountMenu({ items: [{ id: "only", label: "Only" }] });
+  await userEvent.click(trigger());
+  await phase(surface(), "open");
+  const only = rows(view)[0]!;
+  expect(ringed(only)).toBe(false);
+  await keyFocus("{ArrowDown}", only);
+  expect(ringed(only)).toBe(true);
+  expect(view.handle.overlay.open).toBe(true);
+});
+
+it("ignores modifier keys until a real key is pressed", async () => {
+  const view = mountMenu();
+  await userEvent.click(trigger());
+  await phase(surface(), "open");
+  await userEvent.keyboard("{Shift}");
+  expect(ringed(rows(view)[0]!)).toBe(false);
+});
+
 it.each(["{Enter}", " ", "{ArrowDown}"])("shows the ring when %j opens the menu", async (key) => {
   const view = mountMenu();
   trigger().focus();
@@ -67,7 +95,7 @@ it("paints a programmatic ring only after keyboard input", async () => {
   expect(document.activeElement).toBe(button);
   expect(ringed(button)).toBe(false);
   button.blur();
-  await userEvent.keyboard("{Shift}");
+  await userEvent.keyboard("x");
   focusProgrammatically(button);
   expect(ringed(button)).toBe(true);
   button.remove();
