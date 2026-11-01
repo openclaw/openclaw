@@ -247,6 +247,14 @@ Use the shared schema validation helpers for the declared tool schema. Do not
 copy private validation markers or run a second before-call hook. Validation is
 scoped to the tool call and remains isolated from concurrent calls.
 
+Codex dynamic tools recheck the original session immediately before the
+implementation starts, after hooks and steering have finished. Interactive
+MCP tools check again after approval, before calling the provider. If the
+session was replaced, the call stops before spending a voice confirmation or
+starting the tool. The tool starts under its caller's original context as soon as the worker
+confirms the owner. The tool's own database writes queue independently,
+including when an approval resolves immediately.
+
 Retain accepted background work before middleware: `isAsyncStartedToolResult`
 and `readAsyncStartedTaskIds` from `openclaw/plugin-sdk/agent-harness-tool-runtime`
 expose its task metadata. `normalizeAcceptedSessionSpawnResult` from

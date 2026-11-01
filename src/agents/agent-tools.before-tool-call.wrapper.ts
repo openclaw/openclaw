@@ -64,7 +64,10 @@ import {
   createInternalExecutionPreparer,
   readInternalExecutionControl,
 } from "./agent-tools.execution-preparer.js";
-import { validateToolExecutionParams } from "./agent-tools.execution-validation.js";
+import {
+  startWithToolExecutionAuthority,
+  validateToolExecutionParams,
+} from "./agent-tools.execution-validation.js";
 import {
   bindBeforeToolCallMetadata,
   clearBeforeToolCallWrappedMarker,
@@ -479,137 +482,159 @@ export function wrapToolWithBeforeToolCallHook(
         }
         onImplementationStart = decision.start;
       }
-      // A voice grant binds the post-finalizer execution shape. Consume it only
-      // after steering can no longer suppress the prepared call.
-      const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
-        toolCallId,
-        toolName,
-        toolKind: hookMetadata?.toolKind,
-        params: executeParams,
-        ctx,
-      });
-      if (!voiceConfirmation.allowed) {
-        return await blockToolCall({
-          reason: voiceConfirmation.reason,
-          deniedReason: "client-voice-confirmation",
-          toolParams: executeParams,
-        });
-      }
-      // Host capabilities can close while hooks, approval, validation, or
-      // steering awaits. Recheck at the final synchronous source boundary.
-      signal?.throwIfAborted();
-      assertAgentPluginRuntimeCurrent();
-      runAgentToolSourceExecutionGuard(tool);
-      admitExecution?.();
-      onImplementationStart?.();
-      recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
-      const eventBase = buildEventBase(executeParams);
-      recordToolExecutionStarted(toolCallId, ctx?.runId);
-      const liveness = startToolExecutionLiveness(eventBase, hookOptions.emitDiagnostics, signal);
-      const startedAt = Date.now();
+      let entered = false;
       try {
-        let result: Awaited<ReturnType<ForwardedToolExecution>>;
-        try {
-          const args = [toolCallId, executeParams, signal, onUpdate, ...executionArgs];
-          const invoke = () => liveness.run(() => (execute as ForwardedToolExecution)(...args));
-          result = outcome.ownerDecision
-            ? await invoke()
-            : await runWithGenericToolActionDecision(tool, toolCallId, invoke);
-        } catch (error) {
-          throw hookOptions.protectNetworkErrors !== false &&
-            tool.resultContentSource === "network" &&
-            getBeforeToolCallFailureDisposition(error) === undefined
-            ? protectNetworkToolExecutionError(error, "Tool execution failed.", signal)
-            : error;
-        }
-        const durationMs = Date.now() - startedAt;
-        const preparedTerminalPresentation = prepareToolTerminalPresentation({
-          ctx,
-          tool,
-          toolParams: executeParams,
-          toolCallId,
-          toolCallOrdinal,
-        });
-        await recordLoopOutcome({
-          ctx,
-          toolName: normalizedToolName,
-          toolParams: executeParams,
-          toolCallId,
-          result,
-          resultContentSource: tool.resultContentSource,
-          toolCallOrdinal,
-          terminalPresentation: preparedTerminalPresentation?.project?.(result),
-        });
-        // A harness abort can settle before a cancellation-ignoring source returns.
-        if (!signal?.aborted) {
-          rememberPendingTerminalPresentation(preparedTerminalPresentation, ctx?.runId, toolCallId);
-        }
-        const terminalDiagnostic = resolveToolResultTerminalDiagnostic(result, durationMs);
-        const skillMatch = findSkillUsageMatch({
-          toolName: normalizedToolName,
-          toolParams: executeParams,
-          ctx,
-        });
-        if (skillMatch && terminalDiagnostic.type === "tool.execution.completed") {
-          recordRunSkillUsage({
-            runId: ctx?.runId,
-            name: skillMatch.skillName,
-            source: skillMatch.skillSource,
-            activation: skillMatch.activation,
-            ...(skillMatch.skillFile ? { skillFile: skillMatch.skillFile } : {}),
-          });
-          emitSkillUsedDiagnostic({
-            ctx,
-            match: skillMatch,
-            toolName: normalizedToolName,
+        return await startWithToolExecutionAuthority(toolCallId, async () => {
+          entered = true;
+          // A voice grant binds the post-finalizer execution shape. Consume it only
+          // after steering can no longer suppress the prepared call.
+          const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
             toolCallId,
+            toolName,
+            toolKind: hookMetadata?.toolKind,
+            params: executeParams,
+            ctx,
           });
-        }
-        if (hookOptions.emitDiagnostics) {
-          emitTrustedDiagnosticEventWithPrivateData(
-            {
-              ...eventBase,
-              ...terminalDiagnostic,
-            },
-            buildToolContentPrivateData(toolContentPolicy, {
-              input: executeParams,
-              output: result,
-              includeOutput: true,
-            }),
+          if (!voiceConfirmation.allowed) {
+            return await blockToolCall({
+              reason: voiceConfirmation.reason,
+              deniedReason: "client-voice-confirmation",
+              toolParams: executeParams,
+            });
+          }
+          // Host capabilities can close while hooks, approval, validation, or
+          // steering awaits. Recheck at the final synchronous source boundary.
+          signal?.throwIfAborted();
+          assertAgentPluginRuntimeCurrent();
+          runAgentToolSourceExecutionGuard(tool);
+          admitExecution?.();
+          onImplementationStart?.();
+          recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
+          const eventBase = buildEventBase(executeParams);
+          recordToolExecutionStarted(toolCallId, ctx?.runId);
+          const liveness = startToolExecutionLiveness(
+            eventBase,
+            hookOptions.emitDiagnostics,
+            signal,
           );
-        }
-        // Keep loop hashes and diagnostics on the raw outcome; this note is model feedback only.
-        return outcome.loopWarning ? appendToolLoopWarning(result, outcome.loopWarning) : result;
-      } catch (err) {
-        if (hookOptions.emitDiagnostics) {
-          emitTrustedDiagnosticEventWithPrivateData(
-            {
-              type: "tool.execution.error",
-              ...eventBase,
-              durationMs: Date.now() - startedAt,
-              ...resolveToolErrorDiagnostic(err, signal),
-            },
-            buildToolContentPrivateData(toolContentPolicy, {
-              input: executeParams,
-              includeOutput: false,
-            }),
-          );
-        }
-        await recordLoopOutcome({
-          ctx,
-          toolName: normalizedToolName,
-          toolParams: executeParams,
-          toolCallId,
-          error: err,
-          resultContentSource:
-            isTrustedToolExecutionPreflightError(err) || (signal?.aborted && err === signal.reason)
-              ? undefined
-              : tool.resultContentSource,
-          toolCallOrdinal,
+          const startedAt = Date.now();
+          try {
+            let result: Awaited<ReturnType<ForwardedToolExecution>>;
+            try {
+              const args = [toolCallId, executeParams, signal, onUpdate, ...executionArgs];
+              const invoke = () => liveness.run(() => (execute as ForwardedToolExecution)(...args));
+              result = outcome.ownerDecision
+                ? await invoke()
+                : await runWithGenericToolActionDecision(tool, toolCallId, invoke);
+            } catch (error) {
+              throw hookOptions.protectNetworkErrors !== false &&
+                tool.resultContentSource === "network" &&
+                getBeforeToolCallFailureDisposition(error) === undefined
+                ? protectNetworkToolExecutionError(error, "Tool execution failed.", signal)
+                : error;
+            }
+            const durationMs = Date.now() - startedAt;
+            const preparedTerminalPresentation = prepareToolTerminalPresentation({
+              ctx,
+              tool,
+              toolParams: executeParams,
+              toolCallId,
+              toolCallOrdinal,
+            });
+            await recordLoopOutcome({
+              ctx,
+              toolName: normalizedToolName,
+              toolParams: executeParams,
+              toolCallId,
+              result,
+              resultContentSource: tool.resultContentSource,
+              toolCallOrdinal,
+              terminalPresentation: preparedTerminalPresentation?.project?.(result),
+            });
+            // A harness abort can settle before a cancellation-ignoring source returns.
+            if (!signal?.aborted) {
+              rememberPendingTerminalPresentation(
+                preparedTerminalPresentation,
+                ctx?.runId,
+                toolCallId,
+              );
+            }
+            const terminalDiagnostic = resolveToolResultTerminalDiagnostic(result, durationMs);
+            const skillMatch = findSkillUsageMatch({
+              toolName: normalizedToolName,
+              toolParams: executeParams,
+              ctx,
+            });
+            if (skillMatch && terminalDiagnostic.type === "tool.execution.completed") {
+              recordRunSkillUsage({
+                runId: ctx?.runId,
+                name: skillMatch.skillName,
+                source: skillMatch.skillSource,
+                activation: skillMatch.activation,
+                ...(skillMatch.skillFile ? { skillFile: skillMatch.skillFile } : {}),
+              });
+              emitSkillUsedDiagnostic({
+                ctx,
+                match: skillMatch,
+                toolName: normalizedToolName,
+                toolCallId,
+              });
+            }
+            if (hookOptions.emitDiagnostics) {
+              emitTrustedDiagnosticEventWithPrivateData(
+                {
+                  ...eventBase,
+                  ...terminalDiagnostic,
+                },
+                buildToolContentPrivateData(toolContentPolicy, {
+                  input: executeParams,
+                  output: result,
+                  includeOutput: true,
+                }),
+              );
+            }
+            // Keep loop hashes and diagnostics on the raw outcome; this note is model feedback only.
+            return outcome.loopWarning
+              ? appendToolLoopWarning(result, outcome.loopWarning)
+              : result;
+          } catch (err) {
+            if (hookOptions.emitDiagnostics) {
+              emitTrustedDiagnosticEventWithPrivateData(
+                {
+                  type: "tool.execution.error",
+                  ...eventBase,
+                  durationMs: Date.now() - startedAt,
+                  ...resolveToolErrorDiagnostic(err, signal),
+                },
+                buildToolContentPrivateData(toolContentPolicy, {
+                  input: executeParams,
+                  includeOutput: false,
+                }),
+              );
+            }
+            await recordLoopOutcome({
+              ctx,
+              toolName: normalizedToolName,
+              toolParams: executeParams,
+              toolCallId,
+              error: err,
+              resultContentSource:
+                isTrustedToolExecutionPreflightError(err) ||
+                (signal?.aborted && err === signal.reason)
+                  ? undefined
+                  : tool.resultContentSource,
+              toolCallOrdinal,
+            });
+            throw err;
+          } finally {
+            liveness.close();
+          }
         });
-        throw err;
-      } finally {
-        liveness.close();
+      } catch (error) {
+        if (!entered) {
+          recordPreExecutionError(error, executeParams, "tool_preparation");
+        }
+        throw error;
       }
     },
   };

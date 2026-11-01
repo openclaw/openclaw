@@ -1,4 +1,3 @@
-/** Harness-facing materialization of configured MCP tools. */
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -16,6 +15,8 @@ import {
 } from "./agent-bundle-mcp-materialize.js";
 import { mergeMcpConnectCatalog } from "./agent-bundle-mcp-requester-connect.js";
 import type { McpToolCatalog } from "./agent-bundle-mcp-types.js";
+/** Harness-facing materialization of configured MCP tools. */
+import { startWithToolExecutionAuthority } from "./agent-tools.execution-validation.js";
 import type { CodexMcpServersConfig } from "./codex-mcp-config.types.js";
 import {
   resolveConversationCapabilityProfile,
@@ -142,7 +143,10 @@ function applyConfiguredMcpApproval(
             mode: approvalMode,
             isActive: () => active,
           });
-          return await execute(toolCallId, params, signal, onUpdate);
+          return await startWithToolExecutionAuthority(toolCallId, () => {
+            signal?.throwIfAborted();
+            return execute(toolCallId, params, signal, onUpdate);
+          });
         } finally {
           active = false;
         }

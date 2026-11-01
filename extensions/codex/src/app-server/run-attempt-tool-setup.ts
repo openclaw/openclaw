@@ -554,6 +554,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
             cwd: effectiveCwd ?? effectiveWorkspace,
           });
     const toolBridge = createCodexDynamicToolBridge({
+      withCurrent: connection.withCurrent,
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
       registeredFallbackTools,

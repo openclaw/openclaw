@@ -550,9 +550,8 @@ export async function startOrResumeThread(
             bindingInputFingerprint: binding.pluginAppsInputFingerprint,
             config: rebuilt,
           });
-          if (revalidatedPluginInput) {
-            prebuiltPluginThreadConfig = rebuilt;
-          }
+          // Fresh threads consume the same current policy if reuse is rejected.
+          prebuiltPluginThreadConfig = rebuilt;
         }
         if (!revalidatedPluginInput) {
           rotateStaleBinding(binding, "plugin app config");

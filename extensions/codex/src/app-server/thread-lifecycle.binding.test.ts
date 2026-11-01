@@ -4242,6 +4242,50 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
   });
 
+  it("starts a replacement with the current restrictive policy after a stale input is rebuilt", async () => {
+    const { sessionFile, workspaceDir } = createPaths();
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+      pluginAppsFingerprint: "old-apps",
+      pluginAppsInputFingerprint: "old-input",
+      pluginAppPolicyContext: createPluginAppPolicyContext(),
+    });
+    const request = createFixedThreadRequest("replacement", ["thread/start"]);
+    const { client } = createFakeCodexAppServerClient(request);
+    const configPatch = { apps: { _default: { enabled: false } } };
+    const build = vi.fn(async () => ({
+      enabled: true,
+      configPatch,
+      inputFingerprint: "new-input",
+      fingerprint: "apps-denied",
+      policyContext: { fingerprint: "deny", apps: {}, pluginAppIds: {} },
+      diagnostics: [],
+    }));
+    await startOrResumeThread({
+      client,
+      pluginThreadConfig: {
+        enabled: true,
+        requiresCurrentPolicyCheck: true,
+        inputFingerprint: "new-input",
+        enabledPluginConfigKeys: ["google-calendar"],
+        build,
+      },
+    });
+    expect(build).toHaveBeenCalledOnce();
+    expect(request.mock.calls.find(([method]) => method === "thread/start")?.[1]).toMatchObject({
+      config: configPatch,
+    });
+    expect(request.mock.calls.some(([method]) => method === "thread/resume")).toBe(false);
+    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+      threadId: "replacement",
+      pluginAppsFingerprint: "apps-denied",
+    });
+  });
+
   it("replays compatible plugin app bindings on thread resume", async () => {
     const { workspaceDir } = createPaths();
 

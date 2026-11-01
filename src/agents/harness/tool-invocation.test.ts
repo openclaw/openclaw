@@ -1,12 +1,79 @@
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentToolResult } from "../../../packages/agent-core/src/types.js";
+import {
+  type StoreWriterQueue,
+  isActiveStoreWriter,
+  runQueuedStoreWrite,
+} from "../../shared/store-writer-queue.js";
+import {
+  runWithToolExecutionValidation,
+  startWithToolExecutionAuthority,
+} from "../agent-tools.execution-validation.js";
 import type { AnyAgentTool } from "../agent-tools.types.js";
 import { createAgentHarnessToolExecutionBoundaryRegistry } from "./tool-execution.js";
 import { runAgentHarnessToolInvocation } from "./tool-invocation.js";
 import { recordAgentHarnessToolResultTelemetry } from "./tool-result-facts.js";
 
 describe("runAgentHarnessToolInvocation", () => {
+  it("starts the tool during the owner check and queues its own database write independently", async () => {
+    const queues = new Map<string, StoreWriterQueue>();
+    const storePath = "session-store";
+    const write = (fn: () => Promise<void>) =>
+      runQueuedStoreWrite({ queues, storePath, label: "session", reentrant: true, fn });
+    const events: string[] = [];
+    await runWithToolExecutionValidation(
+      "original",
+      undefined,
+      () =>
+        startWithToolExecutionAuthority("original", async () => {
+          expect(isActiveStoreWriter(queues, storePath)).toBe(false);
+          events.push("tool started");
+          await write(async () => {
+            expect(isActiveStoreWriter(queues, storePath)).toBe(true);
+            events.push("tool write");
+          });
+        }),
+      (admit) =>
+        write(async () => {
+          expect(isActiveStoreWriter(queues, storePath)).toBe(true);
+          events.push("owner current");
+          admit();
+          events.push("release read");
+        }),
+    );
+    expect(events).toEqual(["owner current", "tool started", "release read", "tool write"]);
+  });
+
+  it("refuses an unwrapped implementation before dispatch when its owner changed", async () => {
+    const execute = vi.fn(async () => textToolResult("sent", {}));
+    const error = new Error("session replaced");
+    const tool: AnyAgentTool = {
+      name: "send",
+      label: "send",
+      description: "Send once.",
+      parameters: Type.Object({}),
+      execute,
+    };
+    const started = await runAgentHarnessToolInvocation({
+      tool,
+      call: { toolCallId: "stale-raw", toolName: tool.name, arguments: {} },
+      signal: new AbortController().signal,
+      boundaries: createAgentHarnessToolExecutionBoundaryRegistry(),
+      withCurrent: async () => {
+        throw error;
+      },
+      applyMiddleware: async (event) => event.result,
+      onResult: () => true,
+      onError: (failure) => {
+        expect(failure.error).toBe(error);
+        return failure.boundary.executionStarted;
+      },
+    });
+    expect(started).toBe(false);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["failed output", { status: "failed", exitCode: 1 }, { command: "false" }, true, false],
     [
