@@ -55,13 +55,17 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `7e8ba3d34d10`: align the install fixture's elapsed clock with the
-real installer's monotonic deadline. The production owner switched to
-`performance.now()`, while the fixture still advances only `Date.now()`.
-Extend an existing no-profile installer case to observe its supplied elapsed
-budget; preserve every declaration, input and prior assertion. Production is
-unchanged. Untouched baseline, failing control, passing candidate, focused
-checks, fresh review and final-head proof remain pending.
+Pinned main `7e8ba3d34d10`: [190118](https://github.com/openclaw/openclaw/pull/190118)
+aligns the install fixture's existing elapsed clock with the real installer's
+`performance.now()` deadline. The existing no-profile case now observes its
+supplied 1,000 ms budget. On the unchanged fixture it fails with an advanced
+clock past4.6 million ms; with the correct clock spy it passes.
+Untouched baseline and candidate: all138 cases across nine ordinary consumer
+suites pass, including all four clock-supplying callers. The two built/native
+consumers select no fake clock; their sources are unchanged and no native
+runtime result is claimed. Every declaration, input and prior assertion remains;
+one assertion is added, with zero net test/support LOC and no production change.
+Focused types, lint, format and MDX pass. Fresh review, final-head proof and CI remain pending.
 
 ## Completed source review
 
