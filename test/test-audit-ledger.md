@@ -45,12 +45,17 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `418bb925ca47`: removing nine implied/repeated assertion sites and
-duplicate harness/reset bookkeeping across six core files. Every declaration,
-input and independent keeper remains. All affected source matches the original
-qualification. Eight-suite baseline/candidate proof (including the required
-attempt suite), targeted keeper faults, removal scans, scoped checks, fresh
-review and final published-head proof are pending. No production changes.
+Pinned main `418bb925ca4`: [189966](https://github.com/openclaw/openclaw/pull/189966)
+removes nine implied/repeated assertion sites and duplicate environment/admission
+flag bookkeeping across six core test/support files. Every declaration, input
+and independent keeper remains. The same eight runtime suites pass before and
+after the 16-line cut, including the runner owner's required attempt suite.
+Five temporary owner faults are caught by the surviving approval-copy,
+transcript-content, admission-cancellation, empty-cancellation-payload and stable
+error-copy assertions. All temporary faults are restored. All removal phases have identical diagnostics before/after, including the existing
+unused `observePublication` export in `scripts/lib/release-publication-watch.mts`.
+Focused types, lint, format and MDX pass. Fresh committed review, final
+published-head proof and CI are pending. No production behavior changes.
 
 ## Completed source review
 
