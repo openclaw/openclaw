@@ -74,6 +74,19 @@ describe("WhatsApp text runtime", () => {
     expect(chunks.join("")).not.toMatch(/\p{Co}/u);
   });
 
+  it("quotes every line of a multi-line blockquote", () => {
+    expect(markdownToWhatsApp("> **First** line\n> second line\n>\n> - item\n\nafter")).toBe(
+      "> *First* line\n> second line\n\n> • item\n\nafter",
+    );
+  });
+
+  it("keeps the quote on blockquote lines carried into later chunks", () => {
+    expect(markdownToWhatsAppChunks("> alpha beta gamma\n> delta epsilon", 20)).toEqual([
+      "> alpha beta gamma\n",
+      "> delta epsilon",
+    ]);
+  });
+
   it("applies the chunk limit to whitespace-only text", () => {
     expect(markdownToWhatsAppChunks(" ".repeat(12), 5)).toEqual(["    ", "    ", "  "]);
   });
