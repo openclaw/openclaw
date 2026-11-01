@@ -270,7 +270,12 @@ export async function handleAgentExecutionError(params: {
       `Auto-compaction failed (${message}). Preserving existing session mapping for ${turn.sessionKey ?? turn.followupRun.run.sessionId}.`,
     );
     turn.replyOperation?.fail("run_failed", err);
-    return finalFailure(buildContextOverflowRecoveryText());
+    return finalFailure(
+      buildContextOverflowRecoveryText({
+        agentId: turn.followupRun.run.agentId,
+        sessionKey: turn.sessionKey,
+      }),
+    );
   }
   const replayPrevented = findCliTimeoutError(err)?.cliTimeout.observedActivity === true;
   if (providerRequestError) {

@@ -105,7 +105,10 @@ export async function settleAgentFallbackCycle(params: {
     }
     turn.replyOperation?.fail("run_failed", embeddedError);
     const text = isCompactionFailure
-      ? buildContextOverflowRecoveryText()
+      ? buildContextOverflowRecoveryText({
+          agentId: turn.followupRun.run.agentId,
+          sessionKey: turn.sessionKey,
+        })
       : cycle.shouldSurfaceToControlUi
         ? renderControlUiAgentFailureCopy()
         : PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE;

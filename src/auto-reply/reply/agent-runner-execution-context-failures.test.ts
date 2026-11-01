@@ -56,7 +56,10 @@ it.each([
 
   assert(result.kind === "final");
   expect(result.payload.text).toContain("kept this conversation mapped to the current session");
-  expect(result.payload.text).toContain("fresh session or using a model");
+  expect(result.payload.text).not.toContain("/compact");
+  expect(result.payload.text).toContain(
+    "`openclaw sessions compact agent:main:main --agent main --max-lines 200`",
+  );
   expectRecordFields(requireRecord(getReplyPayloadMetadata(result.payload), "reply metadata"), {
     deliverDespiteSourceReplySuppression: true,
   });
@@ -122,5 +125,6 @@ it("uses the built-in compaction failure hint when the fallback candidate throws
   const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
 
   assert(result.kind === "final");
-  expect(result.payload.text).toContain("fresh session or using a model");
+  expect(result.payload.text).toContain("Try a model with a larger context window.");
+  expect(result.payload.text).not.toContain("/compact");
 });
