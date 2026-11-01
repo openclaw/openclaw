@@ -1,10 +1,8 @@
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
 import { assertOutboundHandoffCurrent } from "../../infra/outbound/deliver-handoff.js";
-import {
-  prepareMessageActionWriteAuthority,
-  withMessageActionWriteAuthority,
-} from "../../infra/outbound/message-action-write-authority.js";
+import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
+import { enforceMessageActionAllowlist } from "../../infra/outbound/outbound-policy.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-normalize.js";
@@ -20,11 +18,59 @@ import {
 } from "./message-action-current-conversation.js";
 import {
   resolveChannelMessageActionFacts,
+  type ChannelMessageActionName,
   type ChannelMessageActionReadPolicy,
 } from "./message-action-names.js";
 import { resolveChannelPluginRegistration } from "./registry.js";
-import type { ChannelMessageActionContext, ChannelMessageActionName } from "./types.js";
+import type { ChannelMessageActionContext } from "./types.core.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "./types.plugin.js";
+
+/** Admit preparation and execution against the same invocation configuration. */
+async function prepareMessageActionWriteAuthority(params: {
+  context: ChannelMessageActionContext & { accountId: string };
+  plugin: ChannelPlugin;
+  hasRegistrationAuthority: boolean;
+  assertCurrent: () => void;
+}): Promise<ChannelMessageActionContext> {
+  const { context, plugin } = params;
+  const { action, channel, accountId } = context;
+  if (
+    !params.hasRegistrationAuthority ||
+    !plugin.actions?.writeAuthorityActions?.includes(action)
+  ) {
+    throw new Error(
+      `Scheduled ${channel}:${action} requires an active bundled or verified official plugin with write authorization support. Update and reload a supported plugin, then retry.`,
+    );
+  }
+  const assertCurrent = () => {
+    params.assertCurrent();
+    context.assertDirectAdapterHandoff?.();
+  };
+  assertCurrent();
+  // Configuration governs admission; later retries retain that decision while
+  // still checking the live job, caller, and selected plugin before every request.
+  const cfg = context.cfg;
+  enforceMessageActionAllowlist({ cfg, agentId: context.agentId, action });
+  await validateExplicitMessageAccountSelection({ cfg, channel, accountId, plugin });
+  assertCurrent();
+  const discoveryContext = {
+    cfg,
+    accountId,
+    agentId: context.agentId ?? undefined,
+    sessionKey: context.sessionKey ?? undefined,
+    sessionId: context.sessionId ?? undefined,
+    requesterSenderId: context.requesterSenderId ?? undefined,
+    senderIsOwner: context.senderIsOwner,
+  };
+  const available = plugin.actions.describeMessageToolAsync
+    ? await plugin.actions.describeMessageToolAsync(discoveryContext)
+    : plugin.actions.describeMessageTool(discoveryContext);
+  assertCurrent();
+  if (!available?.actions?.includes(action)) {
+    throw new Error(`Scheduled ${channel}:${action} is disabled for this account.`);
+  }
+  return { ...context, accountId, assertDirectAdapterHandoff: assertCurrent };
+}
 
 declare const serverOwnedConversationReadOrigin: unique symbol;
 
@@ -204,7 +250,7 @@ function attachExternalCurrentTargetSibling(params: {
       (!requestedTarget.kind || !normalized.kind || normalized.kind === requestedTarget.kind)
     );
   });
-  if (typeof trustedCurrentTarget !== "string" || !trustedCurrentTarget.trim()) {
+  if (!trustedCurrentTarget) {
     return params.ctx;
   }
   return {
@@ -619,5 +665,22 @@ export async function dispatchChannelMessageAction(
   if (!scheduledWrite) {
     return await run(prepared.actionContext);
   }
-  return await withMessageActionWriteAuthority({ context: scheduledWrite, run });
+  /** Retain an admitted writer's request guard through provider settlement. */
+  const context = scheduledWrite;
+  let open = true;
+  const assertCurrent = () => {
+    if (!open) {
+      throw new Error(
+        `Scheduled ${context.channel}:${context.action} invocation is no longer active.`,
+      );
+    }
+    context.assertDirectAdapterHandoff?.();
+  };
+  try {
+    assertCurrent();
+    return await run({ ...context, assertDirectAdapterHandoff: assertCurrent });
+  } finally {
+    // Submitted requests settle; neither success nor rejection leaves a replayable callback.
+    open = false;
+  }
 }

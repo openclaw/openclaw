@@ -30,11 +30,6 @@ export function cronOverdueAt(job: CronAttentionJob, schedulerEnabled: boolean |
     : Infinity;
 }
 
-type SidebarAttentionContent = Omit<
-  SidebarAttentionItem,
-  "category" | "dismissal" | "requiresAction" | "type"
->;
-
 export function buildSidebarAttentionEntries(params: {
   cronJobs: readonly CronAttentionJob[];
   cronSchedulerEnabled: boolean | null;
@@ -45,7 +40,7 @@ export function buildSidebarAttentionEntries(params: {
 }): SidebarAttentionItem[] {
   const entries: SidebarAttentionItem[] = [];
   const attentionEntry = (
-    item: SidebarAttentionContent,
+    item: Omit<SidebarAttentionItem, "category" | "dismissal" | "requiresAction" | "type">,
     category: SidebarAttentionItem["category"],
   ): SidebarAttentionItem => ({
     ...item,

@@ -3,14 +3,13 @@ import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import type { PreparedMessageToolCatalog } from "../../channels/plugins/message-action-discovery.js";
-import type { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
-import type { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-targets.js";
 import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
+import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 
 export type MessageToolOptions = {
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   agentAccountId?: string;
   agentSessionKey?: string;
   runSessionKey?: string;
@@ -19,11 +18,7 @@ export type MessageToolOptions = {
   agentId?: string;
   config?: OpenClawConfig;
   preparedMessageToolCatalog?: PreparedMessageToolCatalog;
-  getRuntimeConfig?: () => OpenClawConfig;
   admitScheduledInvocation?: () => OpenClawConfig;
-  getScopedChannelsCommandSecretTargets?: typeof getScopedChannelsCommandSecretTargets;
-  resolveCommandSecretRefsViaGateway?: typeof resolveCommandSecretRefsViaGateway;
-  runMessageAction?: typeof runMessageAction;
   currentChannelId?: string;
   currentChatType?: ChatType;
   currentMessagingTarget?: string;

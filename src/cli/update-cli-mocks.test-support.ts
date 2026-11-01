@@ -60,9 +60,6 @@ const spinner = vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), clear: vi.fn() }))
 export const triageCommand = vi.fn<typeof import("../commands/triage.js").triageCommand>();
 export const triageAfterFailure =
   vi.fn<typeof import("../commands/triage-failure.js").triageAfterFailure>();
-const updateFailureActionMocks = vi.hoisted(() => ({
-  runInteractiveUpdateFailureAction: vi.fn(),
-}));
 
 export const readPackageName = vi.fn();
 export const readPackageVersion = vi.fn();
@@ -173,7 +170,10 @@ export const fixtureEnvSnapshot = captureEnv([
 
 vi.mock("@clack/prompts", () => ({
   confirm,
-  select,
+  select: (params: Parameters<typeof import("@clack/prompts").select>[0]) =>
+    params.options.some((option) => option.value === "triage")
+      ? Promise.resolve("triage")
+      : select(params),
   text,
   isCancel,
   spinner,
@@ -399,7 +399,7 @@ vi.mock("node:child_process", async () => {
   };
   return {
     ...actual,
-    // SQLite snapshots and their native broker need real IPC; updater/service children stay simulated.
+    // SQLite and directory-watch helpers need real IPC; updater/service children stay simulated.
     spawnSync: (...args: Parameters<typeof actual.spawnSync>) => {
       remapSqliteChild(args);
       return actual.spawnSync(...args);
@@ -412,23 +412,66 @@ vi.mock("node:child_process", async () => {
     },
     spawn: (...args: Parameters<typeof actual.spawn>) => {
       const brokerArgv = resolveRuntimeWorkerArgv(brokerUrl);
-      const childArgs = args[1];
+      const directoryWatchArgv = [
+        ...resolveRuntimeWorkerArgv(resolveRuntimeProcessEntrypointUrl("directoryWatchHost")),
+        String(process.pid),
+      ];
+      const childArgs = Array.isArray(args[1]) ? args[1] : [];
       if (
         args[0] === process.execPath &&
-        Array.isArray(childArgs) &&
         childArgs.length === brokerArgv.length &&
         childArgs.every((arg, index) => arg === brokerArgv[index])
       ) {
         // Simulated Node selection must not mix runtimes on the real broker's advanced IPC.
         return actual.spawn(hostExecPath, hostBrokerArgv, args[2]);
       }
-      if (remapSqliteChild(args)) {
+      if (
+        remapSqliteChild(args) ||
+        (args[0] === process.execPath &&
+          childArgs.length === directoryWatchArgv.length &&
+          childArgs.every((arg, index) => arg === directoryWatchArgv[index])) ||
+        (args[0] === process.execPath &&
+          childArgs.length === 3 &&
+          childArgs[0] === "-e" &&
+          childArgs[2] === String(process.pid))
+      ) {
         return actual.spawn(...args);
       }
-      return Array.isArray(childArgs) &&
-        (isMacosAclInspection(args[0], childArgs) || isPlistStdinConversion(args[0], childArgs))
+      return isMacosAclInspection(args[0], childArgs) || isPlistStdinConversion(args[0], childArgs)
         ? actual.spawn(...args)
         : spawn(...args);
+    },
+  };
+});
+
+// Synthetic CLI packages omit the candidate worker; native delegation is covered separately.
+// Keep compensation on its real live owner while replacing only the process adapter.
+vi.mock("./update-cli/update-command-cohort.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./update-cli/update-command-cohort.js")>();
+  return {
+    ...actual,
+    settleUpdatePluginCohortInCandidate: async (
+      params: Parameters<typeof actual.settleUpdatePluginCohortInCandidate>[0],
+    ) => {
+      const { settleUpdatePluginCohort } = await import("../plugins/update-cohort-recovery.js");
+      const { readUpdateConfigSnapshot } =
+        await import("./update-cli/update-command-config-snapshot.js");
+      params.configRestoration.assertCurrent();
+      const settled = await settleUpdatePluginCohort({
+        runId: params.run.runId,
+        env: params.env,
+        fence: expectDefined(params.run.executorFence, "live fixture update executor"),
+        action: "rollback",
+      });
+      params.configRestoration.assertCurrent();
+      for (const file of params.configRestoration.files) {
+        if (settled.configPaths.includes(file.path)) {
+          const snapshot = await readUpdateConfigSnapshot(file.path);
+          params.configRestoration.assertCurrent();
+          params.configRestoration.expectedHashes.set(file.path, snapshot.hash);
+        }
+      }
+      return settled;
     },
   };
 });
@@ -580,7 +623,8 @@ vi.mock("../daemon/launchd.js", async (importOriginal) => ({
     launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
 }));
 
-vi.mock("../daemon/schtasks.js", () => ({
+vi.mock("../daemon/schtasks-control.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/schtasks-control.js")>()),
   suspendScheduledTaskAutoStartForUpdate: (...args: unknown[]) =>
     suspendScheduledTaskAutoStartForUpdate(...args),
   resumeScheduledTaskAutoStartAfterUpdate: (...args: unknown[]) =>
@@ -668,11 +712,9 @@ vi.mock("../runtime.js", async (importOriginal) => ({
 }));
 vi.mock("../commands/triage.js", () => ({ triageCommand }));
 vi.mock("../commands/triage-failure.js", () => ({ triageAfterFailure }));
-vi.mock("./update-cli/update-command-report.js", () => updateFailureActionMocks);
 
 export {
   commandTransport,
-  updateFailureActionMocks,
   managedUpdateHandoff,
   candidateValidation,
   retainUpdateRuntime,

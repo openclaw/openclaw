@@ -9,6 +9,9 @@ read_when:
 
 ## Test performance tooling
 
+For a busy Gateway's New Session → ACK → first assistant delta → first tool
+start waterfall, use the [session-start measurement harness](/reference/session-start-measurement).
+
 - `pnpm test:perf:imports`: enables Vitest import-duration + import-breakdown reporting, while still using scoped lane routing for explicit file/directory targets. `pnpm test:perf:imports:changed` scopes the same profiling to files changed since `origin/main`.
 - `pnpm test:perf:changed:bench -- --ref <git-ref>` benchmarks the routed changed-mode path against the native root-project run for the same committed git diff; `pnpm test:perf:changed:bench -- --worktree` benchmarks the current worktree change set without committing first.
 - `pnpm test:perf:profile:main` writes a CPU profile for the Vitest main thread; `pnpm test:perf:profile:runner` writes CPU + heap profiles for each unit worker. Both print their output directory (a temporary directory by default). Use `-- --output-dir <dir>` or `OPENCLAW_VITEST_PROFILE_DIR` to retain profiles at a chosen location.
@@ -196,6 +199,55 @@ and encoding keep their existing runtime behavior.
 
 ## Benchmarks
 
+<Accordion title="Decision transport (scripts/bench-decision-transport.mts)">
+
+This instrumented component benchmark calls the registered TypeSafe Decision
+provider against a deterministic loopback HTTP server. It checks normalized
+answers, completed request counts, accepted TCP connections, and explicit
+transport-pool teardown. No credentials or billed inference are used.
+
+Prepare separate, clean source checkouts with their own frozen dependencies for
+the baseline and candidate. Overlay the same benchmark builder, worker, and
+`scripts/lib/{benchmark-harness,arg-utils}.mts` on both checkouts. Build once in
+each checkout, outside the measured interval:
+
+```bash
+node --import ./scripts/tsx.mjs scripts/build-decision-transport-bench.mts <source-sha>
+```
+
+Each build prints its manifest path after a two-request correctness smoke test.
+Run both manifests on the same otherwise idle host and Node version:
+
+```bash
+node scripts/bench-decision-transport.mts \
+  --baseline <baseline-manifest.json> --candidate <candidate-manifest.json> \
+  --runs 20 --requests 50 --json --output .artifacts/decision-transport.json
+```
+
+The driver alternates baseline and candidate in serial ABAB order. It verifies
+output hashes before and after the run and rejects unequal worker/helper bytes.
+The report includes per-sample first-evaluation and warm-request latency, process
+CPU, sampled RSS, and heap/external memory before work, after work, and after
+teardown. Warm latency summaries compare each sample's median, not pooled
+requests. Tail percentiles require at least 20 samples per revision.
+
+For a connection-reuse comparison, require identical completed work and zero
+sockets after teardown. Fewer accepted connections establish reuse, not a latency
+win. Before measuring, use a 10% median latency reduction as the improvement
+threshold and a 20% regression in p95 latency, CPU, or sampled peak RSS as a
+reason to withhold a performance-win claim. Report raw samples and inconclusive
+results. Record runner CPU quotas separately; affinity and memory capacity are
+included, but the driver does not resolve CPU quotas.
+
+Builds and eager imports are outside this workload. The first evaluation and
+total CPU include lazy client loading and validator compilation; warm timings
+exclude that initialization. CPU also includes the loopback server and answer
+checks. Model inference, TLS handshakes, and Gateway startup are not measured.
+RSS is sampled between requests and may miss short peaks. These results are not
+packaged Gateway or end-to-end agent performance evidence.
+
+</Accordion>
+
 <Accordion title="Session history (scripts/bench-session-history.ts)">
 
 Measure SQLite history pages and the Gateway's bounded history reader with
@@ -324,9 +376,15 @@ cache is warm.
 Workspace inventory inspection, raw manifest parsing and comparison, and bulk file
 hashing use a bounded computation pool on the Gateway and node. Decoded manifests
 are compared synchronously against typed entries without another inventory copy.
+Reconciliation prepares the source difference once and sends changed nodes and
+their ancestors to each preflight. Each preflight still inspects the target
+filesystem again before mutation or acceptance; it does not reuse local node state.
 Independent workspaces can progress while the main thread serves requests. The
 host owns session authority, workspace mutations, Git subprocesses, and durable
-acceptance; cancellation joins outstanding work before cleanup.
+acceptance; cancellation joins outstanding work before cleanup. Raw snapshot imports
+return their tree ID directly, and empty-entry reconciliation reuses the base tree
+instead of importing and diffing it again. Result staging carries repository
+identity into the shared ref-mutation queue instead of repeating discovery.
 
 Node capture reuses this pool and its compiled manifest program rather than
 starting a process per verification. Each capture has a private workspace, hash
@@ -354,6 +412,19 @@ event-loop delay, memory, and HTTP latency from an external check. Worker task
 diagnostics distinguish queueing, input preparation, transfer, and execution.
 The HTTP check measures responsiveness of the computation's owning process;
 paired-node wire tests provide the full Gateway dispatch and reconciliation proof.
+
+Use `--scenarios reconcile --sizes 20000 --changed-files 100 --file-bytes 128`
+to measure sparse checkpoint updates through real Git patch application and
+accepted-manifest verification. This scenario creates real files sequentially
+and uses an in-memory journal adapter. It does not simulate a watcher trigger or
+measure a full Gateway. `--sampling-interval 32768` samples main-isolate allocations,
+including collected objects; run CPU comparisons separately with sampling disabled.
+
+For externally coordinated comparisons, seed each side with `--prepare-root <dir>`,
+then measure using `--reuse-root <dir>` and matching workload options. `--start-at`
+sets the epoch time for the first warm measurement, after cold and warmup calls.
+`--source-commit <sha>` permits a single archived source tree without Git metadata;
+the report labels that revision as operator-supplied and unverified.
 
 </Accordion>
 

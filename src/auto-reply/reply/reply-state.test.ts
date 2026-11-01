@@ -9,6 +9,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   buildHistoryContext,
@@ -33,9 +34,10 @@ import { incrementCompactionCount } from "./session-updates.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-compact-");
 
-async function seedSessionStore(storePath: string, sessionKey: string, entry: SessionEntry) {
+async function seedCompaction(storePath: string, sessionKey: string, entry: SessionEntry) {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   await upsertSessionEntryCore({ storePath, sessionKey }, entry);
+  return { storePath, sessionKey, sessionEntry: entry, sessionStore: { [sessionKey]: entry } };
 }
 
 const loadStoredEntry = (storePath: string, sessionKey: string) =>
@@ -154,7 +156,11 @@ describe("shouldRunMemoryFlush", () => {
     for (const tokenCount of [12_767, 12_768, 12_769]) {
       expect(
         shouldRunPreflightCompaction({
-          entry: { totalTokens: tokenCount, totalTokensFresh: true, totalTokensVersion: 1 },
+          entry: {
+            totalTokens: tokenCount,
+            totalTokensFresh: true,
+            totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+          },
           threshold,
         }),
       ).toBe(tokenCount >= 12_768);
@@ -167,7 +173,7 @@ describe("shouldRunMemoryFlush", () => {
         entry: {
           totalTokens: 96_000,
           totalTokensFresh: true,
-          totalTokensVersion: 1,
+          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
           compactionCount: 2,
           memoryFlush: { kind: "succeeded", compactionCount: 2 },
         },
@@ -224,14 +230,10 @@ describe("incrementCompactionCount", () => {
       agentId: "main",
     }).path;
     const entry = { sessionId: "incognito-session", updatedAt: 1 } as SessionEntry;
-    const sessionStore = { [sessionKey]: entry };
-    await seedSessionStore(scopedStorePath, sessionKey, entry);
-
+    const seeded = await seedCompaction(scopedStorePath, sessionKey, entry);
     await incrementCompactionCount({
+      ...seeded,
       agentId: "main",
-      sessionEntry: entry,
-      sessionStore,
-      sessionKey,
       storePath: durableStorePath,
     });
 
@@ -255,14 +257,8 @@ describe("incrementCompactionCount", () => {
     } as SessionEntry;
     const storePath = path.join(sessionDirs.make(), "sessions.json");
     const sessionKey = "main";
-    const sessionStore = { [sessionKey]: entry };
-    await seedSessionStore(storePath, sessionKey, entry);
-
     await incrementCompactionCount({
-      sessionEntry: entry,
-      sessionStore,
-      sessionKey,
-      storePath,
+      ...(await seedCompaction(storePath, sessionKey, entry)),
       tokensAfter: 12_000,
     });
 

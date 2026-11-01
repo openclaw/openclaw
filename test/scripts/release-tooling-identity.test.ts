@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import JSZip from "jszip";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   downloadFullReleaseNpmPreflight,
@@ -20,6 +19,7 @@ import {
   verifyReleaseWorkflowRun,
 } from "../../scripts/release-tooling-identity.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -30,6 +30,8 @@ const PARENT_RUN_ID = "67890";
 const PARENT_RUN_ATTEMPT = "2";
 const REF = `release-publish/${SHA.slice(0, 12)}-${RUN_ID}`;
 const FULL_REF = `refs/tags/${REF}`;
+const tagObject = { ref: FULL_REF, object: { sha: SHA, type: "commit" } };
+const jsonReader = (value: unknown) => () => JSON.stringify(value);
 const releaseCiRef = `release-ci/${SHA.slice(0, 12)}-123`;
 const identityJson = (sha = SHA, ref = "main") =>
   JSON.stringify({ ref, fullRef: `refs/heads/${ref}`, sha });
@@ -59,13 +61,16 @@ const parentRun = (overrides = {}) => ({
   conclusion: null,
   ...overrides,
 });
-const parentIdentity = () => ({
-  identity: { ref: REF, fullRef: FULL_REF, sha: SHA },
+const parentBinding = {
   releasePublishFullRef: "refs/heads/main",
   releasePublishRef: "main",
   releasePublishRunAttempt: PARENT_RUN_ATTEMPT,
   releasePublishRunId: PARENT_RUN_ID,
   repository: "openclaw/openclaw",
+};
+const parentIdentity = () => ({
+  ...parentBinding,
+  identity: { ref: REF, fullRef: FULL_REF, sha: SHA },
 });
 
 function protectedIdentity(
@@ -182,11 +187,10 @@ describe("release tooling identity", () => {
       verifyReleaseToolingIdentity({
         allowPrevalidatedRef: true,
         ...protectedIdentity(),
-        runGh: () =>
-          JSON.stringify({
-            ref: "refs/heads/release/2026.8.1",
-            object: { sha: OTHER_SHA, type: "commit" },
-          }),
+        runGh: jsonReader({
+          ref: "refs/heads/release/2026.8.1",
+          object: { sha: OTHER_SHA, type: "commit" },
+        }),
         workflowFullRef: "refs/heads/release/2026.8.1",
         workflowRef: "release/2026.8.1",
         workflowSha: SHA,
@@ -197,10 +201,7 @@ describe("release tooling identity", () => {
   it("binds a distinct current parent run independently from tag provenance", () => {
     const runGh = vi.fn((args: string[]) => {
       if (args[1]?.includes("/git/ref/tags/")) {
-        return JSON.stringify({
-          ref: FULL_REF,
-          object: { sha: SHA, type: "commit" },
-        });
+        return JSON.stringify(tagObject);
       }
       return JSON.stringify(parentRun());
     });
@@ -208,11 +209,8 @@ describe("release tooling identity", () => {
     expect(
       verifyReleaseToolingIdentity({
         ...protectedIdentity(),
-        releasePublishFullRef: "refs/heads/main",
+        ...parentBinding,
         releasePublishParentStatePolicy: "active",
-        releasePublishRef: "main",
-        releasePublishRunAttempt: PARENT_RUN_ATTEMPT,
-        releasePublishRunId: PARENT_RUN_ID,
         runGh,
       }),
     ).toMatchObject({ route: "protected-tag", sha: SHA });
@@ -267,17 +265,16 @@ describe("release tooling identity", () => {
           workflowPath: ".github/workflows/openclaw-release-publish.yml",
           workflowEvent: "workflow_dispatch",
           runStatePolicy,
-          runGh: () =>
-            JSON.stringify(
-              parentRun({
-                id: Number(RUN_ID),
-                run_attempt: 1,
-                path: `.github/workflows/openclaw-release-publish.yml@${FULL_REF}`,
-                head_branch: REF,
-                status,
-                conclusion,
-              }),
-            ),
+          runGh: jsonReader(
+            parentRun({
+              id: Number(RUN_ID),
+              run_attempt: 1,
+              path: `.github/workflows/openclaw-release-publish.yml@${FULL_REF}`,
+              head_branch: REF,
+              status,
+              conclusion,
+            }),
+          ),
         });
       if (accepted) {
         expect(verify()).toMatchObject({ status, conclusion });
@@ -293,11 +290,7 @@ describe("release tooling identity", () => {
         ...protectedIdentity(),
         releasePublishRunAttempt: PARENT_RUN_ATTEMPT,
         releasePublishRunId: PARENT_RUN_ID,
-        runGh: () =>
-          JSON.stringify({
-            ref: FULL_REF,
-            object: { sha: SHA, type: "commit" },
-          }),
+        runGh: jsonReader(tagObject),
       }),
     ).toThrow("run id, attempt, ref, full ref, and parent state policy must be provided together");
   });
@@ -357,7 +350,7 @@ describe("historical npm preflight tooling", () => {
 
   function proof(overrides: Record<string, unknown> = {}) {
     const responses: Record<string, unknown> = {
-      [`git/ref/tags/${REF}`]: { ref: FULL_REF, object: { sha: SHA, type: "commit" } },
+      [`git/ref/tags/${REF}`]: tagObject,
       [`git/matching-refs/heads/${REF}`]: [],
       [`compare/${SHA}...main`]: { status: "ahead" },
       [`compare/${SHA}...${OTHER_SHA}`]: { status: "ahead" },
@@ -573,40 +566,49 @@ function qualificationFixture({
       throw new Error(`Unexpected proof request: ${endpoint}`);
     };
   }
-  return { input, resolutionInput, reader };
+  return {
+    input,
+    resolutionInput,
+    reader,
+    verify: (
+      overrides: Partial<Parameters<typeof verifyNpmPreflightProducer>[0]> = {},
+      runGh = reader(),
+    ) => verifyNpmPreflightProducer({ ...input, ...overrides, runGh }),
+    resolve: (
+      overrides: Partial<Parameters<typeof resolveFullReleaseNpmPreflight>[0]> = {},
+      runGh = reader(),
+    ) => resolveFullReleaseNpmPreflight({ ...resolutionInput, ...overrides, runGh }),
+  };
 }
 
 describe("npm qualification", () => {
-  const { input, resolutionInput, reader } = qualificationFixture(independentProducerRoute);
+  const { input, resolutionInput, reader, verify, resolve } =
+    qualificationFixture(independentProducerRoute);
   const { manifest, fullReleaseManifest, workflowPath } = input;
   const { producer } = manifest;
   it.each(qualificationRoutes)("requires exact qualifier and artifact for $label", (route) => {
     const fixture = qualificationFixture(route);
     const runGh = vi.fn(fixture.reader());
-    const verify = (
-      overrides: Partial<Parameters<typeof verifyNpmPreflightProducer>[0]> = {},
-      read = fixture.reader(),
-    ) => verifyNpmPreflightProducer({ ...fixture.input, ...overrides, runGh: read });
-    expect(resolveFullReleaseNpmPreflight({ ...fixture.resolutionInput, runGh })).toMatchObject({
+    expect(fixture.resolve({}, runGh)).toMatchObject({
       producer: { runId: RUN_ID, runAttempt: "1" },
       artifact: { id: 555 },
     });
     expect(runGh.mock.calls.map(([args]) => args[1])).toContain(
       `repos/openclaw/openclaw/actions/runs/${RUN_ID}/attempts/1`,
     );
-    expect(verify()).toMatchObject({ provenance: "immutable-manifest" });
-    expect(() => verify({}, fixture.reader({ conclusion: "failure" }))).toThrow(
+    expect(fixture.verify()).toMatchObject({ provenance: "immutable-manifest" });
+    expect(() => fixture.verify({}, fixture.reader({ conclusion: "failure" }))).toThrow(
       "completed producer job",
     );
-    expect(() => verify({ manifestSha256: "f".repeat(64) })).toThrow(
+    expect(() => fixture.verify({ manifestSha256: "f".repeat(64) })).toThrow(
       "exact full release qualification",
     );
-    expect(() => verify({ fullReleaseManifest: undefined })).toThrow("qualified npm preflight");
+    expect(() => fixture.verify({ fullReleaseManifest: undefined })).toThrow(
+      "qualified npm preflight",
+    );
   });
   it("rejects stale source or attempt and raw-only package evidence", () => {
-    expect(() =>
-      verifyNpmPreflightProducer({ ...input, manifest: { version: 1 }, runGh: reader() }),
-    ).toThrow("qualified version 3");
+    expect(() => verify({ manifest: { version: 1 } })).toThrow("qualified version 3");
     expect(() => validateFullReleaseNpmPreflight({ ...resolutionInput, sourceSha: SHA })).toThrow(
       "qualified npm preflight",
     );
@@ -645,9 +647,7 @@ describe("npm qualification", () => {
         const retainedProducer = fixture.input.manifest.producer;
         retainedProducer.workflowRef = retainedProducer.workflowRef.replace("-100", "-300");
       }
-      expect(() =>
-        resolveFullReleaseNpmPreflight({ ...fixture.resolutionInput, runGh: fixture.reader() }),
-      ).toThrow("qualified npm preflight");
+      expect(() => fixture.resolve()).toThrow("qualified npm preflight");
     },
   );
 
@@ -670,9 +670,7 @@ describe("npm qualification", () => {
     const changed = structuredClone(fullReleaseManifest);
     const descriptor = changed.publicationArtifacts.npmPreflight;
     Object.assign(descriptor[section], patch);
-    expect(() =>
-      resolveFullReleaseNpmPreflight({ ...resolutionInput, manifest: changed, runGh: reader() }),
-    ).toThrow();
+    expect(() => resolve({ manifest: changed })).toThrow();
   });
 
   it.each([
@@ -684,12 +682,7 @@ describe("npm qualification", () => {
     ["unfinished", { status: "in_progress", conclusion: null }, {}],
     ["artifact", {}, { workflow_run: { id: 777, head_sha: SHA } }],
   ])("rejects changed live %s evidence", (_mismatch, runOverrides, artifactOverrides) => {
-    expect(() =>
-      resolveFullReleaseNpmPreflight({
-        ...resolutionInput,
-        runGh: reader({}, artifactOverrides, runOverrides),
-      }),
-    ).toThrow();
+    expect(() => resolve({}, reader({}, artifactOverrides, runOverrides))).toThrow();
   });
 
   it.each(["valid", "archive changed", "manifest changed", "deadline exceeded"])(
@@ -707,15 +700,11 @@ describe("npm qualification", () => {
         "dependency-evidence/npm-package-locks.json": npmLockBytes,
         "dependency-evidence/npm-package-locks.md": Buffer.from("# npm package-lock mirrors\n"),
       };
-      const zip = new JSZip();
-      for (const [name, bytes] of Object.entries(files)) {
-        zip.file(name, bytes, { createFolders: false });
-      }
-      const archive = await zip.generateAsync({
-        type: "nodebuffer",
-        compression: "STORE",
-        platform: "UNIX",
-      });
+      const archive = makeStoredZip(
+        Object.fromEntries(
+          Object.entries(files).map(([name, bytes]) => [name, bytes.toString("utf8")]),
+        ),
+      );
       const selected = structuredClone(fullReleaseManifest);
       const descriptor = selected.publicationArtifacts.npmPreflight;
       descriptor.artifact.digest = digest(archive);

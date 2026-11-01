@@ -114,12 +114,13 @@ Omit this option for existing plugins that use raw callbacks. Their arguments,
 detail mode, custom line builder, and terminal command/patch rendering remain
 supported. This is an adapter capability, not a user configuration setting.
 
-Telegram and Discord additionally pass `showWorkStatus: true`. With the detailed
-tool log hidden, the compositor keeps one current-operation status and bounded
-subagent status rows from prepared items. This projection excludes arguments,
-command titles, output, and private child prose; it retains the real item IDs
-for updates and retractions. Other adapters keep their existing presentation
-unless they opt into this capability.
+Telegram additionally passes `showWorkStatus: true`. With the detailed tool
+log hidden, this keeps one current-operation status and bounded subagent status
+rows from prepared items. This projection excludes arguments, command titles,
+output, and private child prose; it retains the real item IDs for updates and
+retractions. Discord leaves this capability disabled so tool and subagent
+lifecycle rows require the tool log. Other adapters keep their existing
+presentation unless they opt into this capability.
 
 For default-on drafts, pass `progressRequiresReply: true` in reply options.
 Dispatch uses its already-admitted reply expectation to keep optional quiet

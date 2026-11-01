@@ -48,16 +48,6 @@ beforeEach(() => {
 
 afterEach(clearEmbeddingProviders);
 
-it("falls back to declared capability adapters when the registry is cold", () => {
-  mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("ollama")]);
-  mocks.resolvePluginCapabilityProvider.mockReturnValue(createCapabilityAdapter("ollama"));
-
-  expect(listProviders().map(({ id }) => id)).toEqual(["openai-compatible", "ollama"]);
-  expect(getProvider("ollama")?.id).toBe("ollama");
-  expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
-  expectCapabilityLookup("ollama");
-});
-
 it.each([false, true])("resolves a configured API with registered adapter=%s", (registered) => {
   const ollamaAdapter = createCapabilityAdapter("ollama");
   const config = configuredOllama("ollama-custom", "http://ollama-host:11435");

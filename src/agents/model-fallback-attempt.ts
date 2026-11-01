@@ -20,7 +20,11 @@ import {
 } from "./failover-error.js";
 import { isLikelyContextOverflowError } from "./failover/classify.js";
 import type { FailoverReason } from "./failover/signal.js";
-import { MissingAgentHarnessError, isAgentHarnessPreflightError } from "./harness/errors.js";
+import {
+  MissingAgentHarnessError,
+  isAgentHarnessPreflightError,
+  resolveAgentHarnessPreflightOwner,
+} from "./harness/errors.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { getRegisteredAgentHarness } from "./harness/registry.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
@@ -403,6 +407,41 @@ export function resolveNextFallbackCandidateIndex(params: {
   return params.candidates.length;
 }
 
+/** Index of the next candidate that will not repeat a harness-local preflight failure, or undefined when the error is chain-global or none remains. */
+export function resolveHarnessPreflightFallbackIndex(params: {
+  error: unknown;
+  candidates: readonly ModelCandidate[];
+  currentIndex: number;
+  excludedProviders: ReadonlySet<string>;
+  runtime: Pick<
+    ModelFallbackRuntimeContext,
+    "cfg" | "agentId" | "sessionKey" | "resolveAgentHarnessRuntimeOverride"
+  >;
+}): number | undefined {
+  const failedHarnessId = resolveAgentHarnessPreflightOwner(params.error);
+  if (!failedHarnessId) {
+    // Pre-scope callers established that their preflight is global to the
+    // fallback chain. Keep that public contract until they declare an owner.
+    return undefined;
+  }
+  for (let index = params.currentIndex + 1; index < params.candidates.length; index += 1) {
+    const next = params.candidates[index];
+    if (!next || params.excludedProviders.has(next.provider)) {
+      continue;
+    }
+    const nextRuntime = resolveModelFallbackCandidateAgentRuntime({
+      ...params.runtime,
+      ...next,
+    }).runtime;
+    // An unresolved runtime remains eligible: only suppress candidates
+    // proven to repeat the exact harness-local failure.
+    if (nextRuntime !== failedHarnessId) {
+      return index;
+    }
+  }
+  return undefined;
+}
+
 export async function resolveModelFallbackCandidateHarnessAuthPrecheck(
   params: ModelFallbackRuntimeContext & ModelCandidate & { skipAuthProfileRuntime?: boolean },
 ): Promise<{ skipsProviderAuthCooldown: boolean; agentHarnessRuntimeOverride?: string }> {
@@ -446,7 +485,7 @@ export async function resolveModelFallbackCandidateHarnessAuthPrecheck(
   throw new MissingAgentHarnessError(runtime);
 }
 
-export function resolveModelFallbackCandidateAgentRuntime(
+function resolveModelFallbackCandidateAgentRuntime(
   params: ModelFallbackRuntimeContext & ModelCandidate,
 ): {
   agentHarnessRuntimeOverride?: string;

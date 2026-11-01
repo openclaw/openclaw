@@ -21,6 +21,7 @@ import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveProjectedSessionContextTokens } from "../../config/sessions/context-token-provenance.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { formatInjectedWorkspaceFileLabel } from "../../config/sessions/session-system-prompt-report.js";
 import {
   resolveFreshSessionTotalTokens,
   type SessionEntry,
@@ -314,9 +315,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   }
 
   const fileLines = report.injectedWorkspaceFiles.map((f) => {
-    // Layered workspaces can inject one basename from two directories; show the source then.
-    const shared = report.injectedWorkspaceFiles.some((o) => o !== f && o.name === f.name);
-    const label = shared ? `${f.name} (${f.path})` : f.name;
+    const label = formatInjectedWorkspaceFileLabel(f, report.injectedWorkspaceFiles);
     const nativeUnverified = f.injectionStatus === "native_unverified";
     const status = nativeUnverified
       ? "NATIVE/UNVERIFIED"

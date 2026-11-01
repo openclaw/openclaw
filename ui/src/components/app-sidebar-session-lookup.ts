@@ -23,12 +23,6 @@ type SidebarSessionLookupData = Pick<
   | "sessionResultsByAgent"
 >;
 
-type SidebarSessionLookupSource = {
-  readonly sessionData: SidebarSessionLookupData;
-  getSessionNavigationState(): SidebarSessionNavigationState;
-  visibleSessionCatalogs(): readonly SessionCatalog[];
-};
-
 export function findActiveSidebarLineageRow(
   sessionData: SidebarSessionLookupData,
   sessionKey: string,
@@ -50,7 +44,11 @@ export function findActiveSidebarLineageRow(
 }
 
 export function findSidebarHovercardRow(
-  source: SidebarSessionLookupSource,
+  source: {
+    readonly sessionData: SidebarSessionLookupData;
+    getSessionNavigationState(): SidebarSessionNavigationState;
+    visibleSessionCatalogs(): readonly SessionCatalog[];
+  },
   sessionKey: string,
   projectedRows: readonly SidebarRecentSession[],
 ): SidebarSessionHovercardRow | undefined {

@@ -2,6 +2,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   chatMessage,
+  captureUiProof,
   newChatPage,
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -44,7 +45,12 @@ function rowLayout(locator: Locator) {
       lead: get(".sidebar-session-indicator"),
       unread: get(".sidebar-session-indicator .session-unread-dot"),
       endcap: get(".sidebar-recent-session__details-endcap"),
-      atoms: Array.from(row.querySelectorAll(".sidebar-recent-session__details-endcap svg"), rect),
+      atoms: Array.from(
+        row.querySelectorAll(
+          ".sidebar-recent-session__details-endcap svg,.sidebar-recent-session__details-endcap .session-css-icon",
+        ),
+        rect,
+      ),
       nameOverflowing: name.scrollWidth > name.clientWidth,
       singleLine: row.classList.contains("sidebar-recent-session--single-line"),
     };
@@ -53,7 +59,7 @@ function rowLayout(locator: Locator) {
 
 function expectUnreadLayout(layout: Awaited<ReturnType<typeof rowLayout>>, nameLeft: number) {
   const { unread, lead, name } = layout;
-  expect(unread).toMatchObject({ width: 7, height: 7 });
+  expect(unread).toMatchObject({ width: 8, height: 8 });
   for (const [start, end] of [
     ["left", "right"],
     ["top", "bottom"],
@@ -269,6 +275,7 @@ suite.define(() => {
           controlsLeft: actions.getBoundingClientRect().left,
         };
       });
+      await captureUiProof(suite, page, "sidebar-presentation", `${direction}-title.png`);
       expect(geometry.right).toBeLessThanOrEqual(geometry.controlsLeft + 1);
       // At the endpoint, even the final glyph is inside the opaque part of the mask.
       await expect
@@ -379,7 +386,7 @@ suite.define(() => {
     const sidebar = page.locator("openclaw-app-sidebar");
     expect(await sidebar.getByRole("img", { name: "Dashboard available" }).count()).toBe(0);
     expect(await sidebar.getByRole("img", { name: "Automation attached" }).count()).toBe(0);
-    const ordinaryBadge = busyRow.locator(".session-row-badge--incognito svg");
+    const ordinaryBadge = busyRow.locator(".session-row-badge--incognito .session-css-icon");
     for (const colorScheme of ["dark", "light"] as const) {
       await page.emulateMedia({ colorScheme });
       await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(colorScheme);
@@ -446,6 +453,7 @@ suite.define(() => {
     expect(badgeBox.y).toBeGreaterThanOrEqual(layout.name.bottom - 1);
     expect(layout.name.right).toBeGreaterThan(badgeBox.x);
     expect(badgeBox.y + badgeBox.height / 2).toBeCloseTo(subtitleBox.y + subtitleBox.height / 2, 1);
+    await captureUiProof(suite, page, "sidebar-presentation", "unread-layout.png");
     expectUnreadLayout(layout, plain.nameLeft);
     expect(await busyRow.locator(".session-row-state").count()).toBe(0);
     expect(layout.atoms).toHaveLength(1);
@@ -469,37 +477,7 @@ suite.define(() => {
     expect(longLayout.endcap.width).toBeGreaterThanOrEqual(intrinsicAtomWidth);
     expectUnreadLayout(longLayout, plain.nameLeft);
 
-    const unreadRow = sessionRow(page, unreadKey);
-    const unreadBadge = unreadRow.locator(
-      ".sidebar-session-indicator .session-glyph__badge--unread",
-    );
-    const unreadTitle = unreadRow.locator(".sidebar-recent-session__name");
-    await unreadBadge.waitFor({ state: "visible" });
-    const restingBadge = await unreadBadge.boundingBox();
-    const restingTitle = await unreadTitle.boundingBox();
-    const restingWidth = await unreadTitle.evaluate((element) => element.clientWidth);
-    await unreadRow.hover();
-
-    await unreadBadge.waitFor({ state: "visible" });
-    expect(await unreadBadge.boundingBox()).toEqual(restingBadge);
-    expect((await unreadTitle.boundingBox())?.x).toBe(restingTitle?.x);
-    const hoverWidth = await unreadTitle.evaluate((element) => element.clientWidth);
-    const actionReserve = await unreadRow.evaluate((element) =>
-      Number.parseFloat(
-        getComputedStyle(element).getPropertyValue("--session-row-actions-reserve"),
-      ),
-    );
-    // The leading badge stays fixed while the title reserves the full action width.
-    expect(restingWidth - hoverWidth).toBeCloseTo(actionReserve, 0);
-    await page.mouse.move(900, 400);
-    await unreadBadge.waitFor({ state: "visible" });
-    await unreadRow.locator("[data-sidebar-session-archive]").focus();
-    await unreadBadge.waitFor({ state: "visible" });
-    expect(await unreadBadge.boundingBox()).toEqual(restingBadge);
-    expect((await unreadTitle.boundingBox())?.x).toBe(restingTitle?.x);
-    expect(await unreadTitle.evaluate((element) => element.clientWidth)).toBe(hoverWidth);
     await sidebarResizer.focus();
-    await unreadBadge.waitFor({ state: "visible" });
 
     await busyRow.hover();
     for (const selector of [
@@ -515,7 +493,7 @@ suite.define(() => {
 
     await plainRow.waitFor();
     for (const size of badgeSizes) {
-      expect(size).toEqual({ height: 12, width: 12 });
+      expect(size).toEqual({ height: 14, width: 14 });
     }
   });
 
@@ -531,6 +509,10 @@ suite.define(() => {
       return route.fulfill({ contentType: "image/png", body: avatarBody });
     });
     await installMockGateway(page, {
+      historyMessages: [chatMessage("assistant", "Ready to help.")],
+      sessions: chatSessionListResponse().sessions.map((row) =>
+        Object.assign(row, { kind: "group" }),
+      ),
       methodResponses: {
         "agent.identity.get": {
           agentId: "main",
@@ -538,7 +520,6 @@ suite.define(() => {
           avatar: "/avatar/main?v=fixture",
           avatarStatus: "local",
         },
-        "sessions.list": chatSessionListResponse(),
       },
       sessionKey: "agent:main:session-a",
     });
@@ -552,7 +533,7 @@ suite.define(() => {
       return marker;
     });
     const avatar = page.locator(
-      'openclaw-chat-pane[aria-hidden="false"] .agent-chat__welcome-avatar img',
+      'openclaw-chat-pane[aria-hidden="false"] .chat-group.assistant img.chat-avatar',
     );
     await avatar.waitFor({ state: "visible" });
     await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);

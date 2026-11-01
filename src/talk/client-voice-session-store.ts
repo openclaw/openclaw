@@ -145,44 +145,6 @@ export function readVoiceSessionRecordInTransaction(
   return parseStoredVoiceSessionRecord(row?.value_json);
 }
 
-type VoiceSessionFacts = Readonly<
-  Pick<
-    ClientVoiceSessionRecord,
-    "agentId" | "sessionKey" | "origin" | "status" | "transcriptCapable" | "hasUserTranscript"
-  >
->;
-/** Synchronous tool policy reads the current record without a separate freshness probe. */
-function readVoiceSessionFacts(
-  agentId: string,
-  voiceSessionId: string,
-  options?: Pick<OpenClawAgentDatabaseOptions, "env" | "path">,
-): VoiceSessionFacts | undefined {
-  const record = readVoiceSessionRecord(agentId, voiceSessionId, options);
-  return (
-    record &&
-    Object.freeze({
-      agentId: record.agentId,
-      sessionKey: record.sessionKey,
-      origin: record.origin,
-      status: record.status,
-      transcriptCapable: record.transcriptCapable,
-      hasUserTranscript: record.hasUserTranscript,
-    })
-  );
-}
-
-export function readOwnedVoiceSessionFacts(
-  params: ClientVoiceRunBinding,
-  options?: Pick<OpenClawAgentDatabaseOptions, "env" | "path">,
-): VoiceSessionFacts {
-  const record = readVoiceSessionFacts(params.agentId, params.voiceSessionId, options);
-  if (!record) {
-    throw new Error("voice session not found");
-  }
-  assertVoiceSessionOwnership(record, params);
-  return record;
-}
-
 export type VoiceSessionLookup =
   | { kind: "legacy"; agentId: string; sessionKey: string }
   | { kind: "stale"; agentId: string; updatedBefore: number; excludeVoiceSessionId?: string };

@@ -1,13 +1,14 @@
-// Voice Call tests cover telnyx plugin behavior.
 import crypto from "node:crypto";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { fetchWithSsrFGuard } from "../../api.js";
 import type { WebhookContext } from "../types.js";
 import { TelnyxProvider } from "./telnyx.js";
 
 const PROVIDER_CONFIG = { apiKey: "KEY123", connectionId: "CONN456", publicKey: undefined };
 
 const apiMocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(),
+  fetchWithSsrFGuard: vi.fn<typeof fetchWithSsrFGuard>(),
 }));
 
 vi.mock("../../api.js", () => ({
@@ -30,24 +31,33 @@ function createCtx(params?: Partial<WebhookContext>): WebhookContext {
   };
 }
 
+function createProvider(publicKey?: string, skipVerification = false) {
+  return new TelnyxProvider({ ...PROVIDER_CONFIG, publicKey }, { skipVerification });
+}
+
+function parseEvent(
+  event_type: string,
+  payload: Record<string, unknown>,
+  verifiedRequestKey?: string,
+) {
+  return new TelnyxProvider(PROVIDER_CONFIG).parseWebhookEvent(
+    createCtx({ rawBody: JSON.stringify({ data: { id: "evt-fixture", event_type, payload } }) }),
+    { verifiedRequestKey },
+  );
+}
+
+function mockResponse(data: Record<string, unknown> = {}) {
+  const release = vi.fn(async () => {});
+  apiMocks.fetchWithSsrFGuard.mockResolvedValue({
+    response: new Response(JSON.stringify({ data }), { status: 200 }),
+    finalUrl: "https://api.telnyx.com/v2/calls",
+    release,
+  });
+  return release;
+}
+
 function requireFetchRequest() {
-  const [call] = apiMocks.fetchWithSsrFGuard.mock.calls;
-  if (!call) {
-    throw new Error("expected Telnyx provider to call fetchWithSsrFGuard");
-  }
-  const [request] = call;
-  if (!request || typeof request !== "object" || Array.isArray(request)) {
-    throw new Error("expected Telnyx provider to call fetchWithSsrFGuard");
-  }
-  return request as {
-    url?: string;
-    auditContext?: string;
-    policy?: unknown;
-    init?: {
-      method?: string;
-      body?: unknown;
-    };
-  };
+  return expectDefined(apiMocks.fetchWithSsrFGuard.mock.calls[0], "Telnyx API request")[0];
 }
 
 function createSignedTelnyxCtx(params: {
@@ -69,95 +79,37 @@ function createSignedTelnyxCtx(params: {
   });
 }
 
-function expectReplayVerification(
-  results: Array<{ ok: boolean; isReplay?: boolean; verifiedRequestKey?: string }>,
-) {
-  expect(results.map((result) => result.ok)).toEqual([true, true]);
-  expect(results.map((result) => Boolean(result.isReplay))).toEqual([false, true]);
-  const firstResult = results[0];
-  if (!firstResult?.verifiedRequestKey) {
-    throw new Error("expected Telnyx verification to produce a request key");
-  }
-  const secondResult = results[1];
-  if (!secondResult?.verifiedRequestKey) {
-    throw new Error("expected replayed Telnyx verification to preserve the request key");
-  }
-  const firstKey = firstResult.verifiedRequestKey;
-  const secondKey = secondResult.verifiedRequestKey;
-  expect(firstKey.length).toBeGreaterThan(0);
-  expect(secondKey).toBe(firstKey);
-}
-
-function requireJwkX(jwk: JsonWebKey) {
-  if (typeof jwk.x !== "string" || jwk.x.length === 0) {
-    throw new Error("expected Ed25519 JWK export to expose x");
-  }
-  return jwk.x;
-}
-
-function expectWebhookVerificationSucceeds(params: {
-  publicKey: string;
-  privateKey: crypto.KeyObject;
-}) {
-  const provider = new TelnyxProvider(
-    { apiKey: "KEY123", connectionId: "CONN456", publicKey: params.publicKey },
-    { skipVerification: false },
-  );
-
-  const rawBody = JSON.stringify({
-    event_type: "call.initiated",
-    payload: { call_control_id: "x" },
-  });
-  const result = provider.verifyWebhook(
-    createSignedTelnyxCtx({ privateKey: params.privateKey, rawBody }),
-  );
-  expect(result.ok).toBe(true);
-}
-
 describe("TelnyxProvider.verifyWebhook", () => {
   it("fails closed when public key is missing and skipVerification is false", () => {
-    const provider = new TelnyxProvider(PROVIDER_CONFIG, { skipVerification: false });
-
-    const result = provider.verifyWebhook(createCtx());
-    expect(result.ok).toBe(false);
+    expect(createProvider().verifyWebhook(createCtx()).ok).toBe(false);
   });
 
   it("allows requests when skipVerification is true (development only)", () => {
-    const provider = new TelnyxProvider(PROVIDER_CONFIG, { skipVerification: true });
-
-    const result = provider.verifyWebhook(createCtx());
-    expect(result.ok).toBe(true);
+    expect(createProvider(undefined, true).verifyWebhook(createCtx()).ok).toBe(true);
   });
 
   it("fails when signature headers are missing (with public key configured)", () => {
-    const provider = new TelnyxProvider(
-      { apiKey: "KEY123", connectionId: "CONN456", publicKey: "public-key" },
-      { skipVerification: false },
-    );
-
-    const result = provider.verifyWebhook(createCtx({ headers: {} }));
-    expect(result.ok).toBe(false);
+    expect(createProvider("public-key").verifyWebhook(createCtx({ headers: {} })).ok).toBe(false);
   });
 
   it("verifies a valid signature with a raw Ed25519 public key (Base64)", () => {
     const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
 
     const jwk = publicKey.export({ format: "jwk" }) as JsonWebKey;
-    expect(jwk.kty).toBe("OKP");
-    expect(jwk.crv).toBe("Ed25519");
-
-    const rawPublicKey = Buffer.from(requireJwkX(jwk), "base64url");
+    const rawPublicKey = Buffer.from(expectDefined(jwk.x, "Ed25519 public key"), "base64url");
     const rawPublicKeyBase64 = rawPublicKey.toString("base64");
-    expectWebhookVerificationSucceeds({ publicKey: rawPublicKeyBase64, privateKey });
+    const provider = createProvider(rawPublicKeyBase64);
+    const rawBody = JSON.stringify({
+      event_type: "call.initiated",
+      payload: { call_control_id: "x" },
+    });
+    expect(provider.verifyWebhook(createSignedTelnyxCtx({ privateKey, rawBody })).ok).toBe(true);
   });
 
   it("returns replay status when the same signed request is seen twice", () => {
     const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
     const spkiDer = publicKey.export({ format: "der", type: "spki" }) as Buffer;
-    const provider = new TelnyxProvider(
-      { apiKey: "KEY123", connectionId: "CONN456", publicKey: spkiDer.toString("base64") },
-      { skipVerification: false },
-    );
+    const provider = createProvider(spkiDer.toString("base64"));
 
     const rawBody = JSON.stringify({
       event_type: "call.initiated",
@@ -169,109 +121,71 @@ describe("TelnyxProvider.verifyWebhook", () => {
     const first = provider.verifyWebhook(ctx);
     const second = provider.verifyWebhook(ctx);
 
-    expectReplayVerification([first, second]);
+    expect([first.ok, second.ok]).toEqual([true, true]);
+    expect([Boolean(first.isReplay), Boolean(second.isReplay)]).toEqual([false, true]);
+    expect(first.verifiedRequestKey).toEqual(expect.any(String));
+    expect(first.verifiedRequestKey?.length).toBeGreaterThan(0);
+    expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
   });
 });
 
 describe("TelnyxProvider.parseWebhookEvent", () => {
   it("maps call direction and phone numbers from Call Control callbacks", () => {
-    const provider = new TelnyxProvider(PROVIDER_CONFIG);
-    const result = provider.parseWebhookEvent(
-      createCtx({
-        rawBody: JSON.stringify({
-          data: {
-            id: "evt-inbound",
-            event_type: "call.initiated",
-            payload: {
-              call_control_id: "call-1",
-              direction: "incoming",
-              from: "+15551111111",
-              to: "+15550000000",
-            },
-          },
-        }),
-      }),
-      { verifiedRequestKey: "telnyx:req:abc" },
+    const result = parseEvent(
+      "call.initiated",
+      {
+        call_control_id: "call-1",
+        direction: "incoming",
+        from: "+15551111111",
+        to: "+15550000000",
+      },
+      "telnyx:req:abc",
     );
 
-    expect(result.events).toHaveLength(1);
-    const event = result.events[0];
-    expect(event?.dedupeKey).toBe("telnyx:req:abc");
-    expect(event?.type).toBe("call.initiated");
-    expect(event?.direction).toBe("inbound");
-    expect(event?.from).toBe("+15551111111");
-    expect(event?.to).toBe("+15550000000");
+    expect(result.events).toMatchObject([
+      {
+        dedupeKey: "telnyx:req:abc",
+        type: "call.initiated",
+        direction: "inbound",
+        from: "+15551111111",
+        to: "+15550000000",
+      },
+    ]);
   });
 
   it("uses raw client_state fallback when client_state is malformed base64", () => {
-    const provider = new TelnyxProvider(PROVIDER_CONFIG);
-    const result = provider.parseWebhookEvent(
-      createCtx({
-        rawBody: JSON.stringify({
-          data: {
-            id: "evt-client-state",
-            event_type: "call.initiated",
-            payload: {
-              call_control_id: "call-fallback",
-              client_state: "call-1@@@",
-            },
-          },
-        }),
-      }),
-    );
+    const result = parseEvent("call.initiated", {
+      call_control_id: "call-fallback",
+      client_state: "call-1@@@",
+    });
 
-    expect(result.events).toHaveLength(1);
-    expect(result.events[0]?.callId).toBe("call-1@@@");
+    expect(result.events).toMatchObject([{ callId: "call-1@@@" }]);
   });
 
   it("reads transcription text from Telnyx transcription_data payloads", () => {
-    const provider = new TelnyxProvider(PROVIDER_CONFIG);
-    const result = provider.parseWebhookEvent(
-      createCtx({
-        rawBody: JSON.stringify({
-          data: {
-            id: "evt-transcription",
-            event_type: "call.transcription",
-            payload: {
-              call_control_id: "call-1",
-              transcription_data: {
-                transcript: "hello this is a test speech",
-                is_final: false,
-                confidence: 0.977219,
-              },
-            },
-          },
-        }),
-      }),
-    );
+    const result = parseEvent("call.transcription", {
+      call_control_id: "call-1",
+      transcription_data: {
+        transcript: "hello this is a test speech",
+        is_final: false,
+        confidence: 0.977219,
+      },
+    });
 
-    expect(result.events).toHaveLength(1);
-    const event = result.events[0];
-    expect(event?.type).toBe("call.speech");
-    if (event?.type !== "call.speech") {
-      throw new Error("expected Telnyx transcription callback to produce a speech event");
-    }
-    expect(event?.transcript).toBe("hello this is a test speech");
-    expect(event?.isFinal).toBe(false);
-    expect(event?.confidence).toBe(0.977219);
+    expect(result.events).toMatchObject([
+      {
+        type: "call.speech",
+        transcript: "hello this is a test speech",
+        isFinal: false,
+      },
+    ]);
   });
 
-  it.each([undefined])("does not emit blank transcription payloads %#", (transcript) => {
-    const provider = new TelnyxProvider(PROVIDER_CONFIG);
-    const result = provider.parseWebhookEvent(
-      createCtx({
-        rawBody: JSON.stringify({
-          data: {
-            id: "evt-blank-transcription",
-            event_type: "call.transcription",
-            payload: {
-              call_control_id: "call-1",
-              transcription_data: { transcript },
-            },
-          },
-        }),
-      }),
-    );
+  it("does not emit blank transcription payloads", () => {
+    const result = parseEvent("call.transcription", {
+      call_control_id: "call-1",
+      transcription_data: { transcript: undefined },
+    });
 
     expect(result.events).toEqual([]);
   });
@@ -279,12 +193,7 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
 
 describe("TelnyxProvider Media Streaming (PCMU)", () => {
   it("omits streaming fields from the dial payload when streamUrl is absent", async () => {
-    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
-      response: new Response(JSON.stringify({ data: { call_control_id: "call-control-1" } }), {
-        status: 200,
-      }),
-      release: vi.fn(async () => {}),
-    });
+    mockResponse({ call_control_id: "call-control-1" });
     const provider = new TelnyxProvider(PROVIDER_CONFIG);
 
     await provider.initiateCall({
@@ -302,10 +211,7 @@ describe("TelnyxProvider Media Streaming (PCMU)", () => {
   });
 
   it("embeds streaming fields in the answer action when streamUrl is provided", async () => {
-    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
-      response: new Response(JSON.stringify({ data: {} }), { status: 200 }),
-      release: vi.fn(async () => {}),
-    });
+    mockResponse();
     const provider = new TelnyxProvider(PROVIDER_CONFIG);
 
     await provider.answerCall({
@@ -316,43 +222,24 @@ describe("TelnyxProvider Media Streaming (PCMU)", () => {
     });
 
     const body = JSON.parse(requireFetchRequest().init?.body as string) as Record<string, unknown>;
-    expect(body.command_id).toBe("openclaw-answer-call-1");
-    expect(body.stream_url).toBe("wss://example.test/voice/stream/realtime/token-xyz");
-    expect(body.stream_codec).toBe("PCMU");
-    expect(body.stream_bidirectional_target_legs).toBe("self");
-    expect(body.stream_auth_token).toBe("token-xyz");
+    expect(body).toMatchObject({
+      command_id: "openclaw-answer-call-1",
+      stream_url: "wss://example.test/voice/stream/realtime/token-xyz",
+      stream_codec: "PCMU",
+      stream_bidirectional_target_legs: "self",
+      stream_auth_token: "token-xyz",
+    });
   });
 
   it("silently acknowledges streaming.started and streaming.stopped webhooks", () => {
-    const provider = new TelnyxProvider(PROVIDER_CONFIG, { skipVerification: true });
-    // Telnyx documents stream lifecycle webhooks as `streaming.started` and
-    // `streaming.stopped` (no `call.` prefix). The bridge tracks its own
-    // lifecycle on the WebSocket; we ack the carrier webhook with 200 and
-    // emit nothing to avoid duplicate signal at the manager.
+    // The WebSocket owns stream lifecycle; carrier callbacks must not duplicate it.
     for (const eventType of ["streaming.started", "streaming.stopped"]) {
-      const rawBody = JSON.stringify({
-        data: {
-          event_type: eventType,
-          id: `evt-${eventType}`,
-          payload: { call_control_id: "call-control-1" },
-        },
-      });
-      const result = provider.parseWebhookEvent(createCtx({ rawBody }), {
-        verifiedRequestKey: "key-1",
-      });
-      expect(result.events).toHaveLength(0);
-      expect(result.statusCode).toBe(200);
+      const result = parseEvent(eventType, { call_control_id: "call-control-1" }, "key-1");
+      expect(result).toMatchObject({ events: [], statusCode: 200 });
     }
   });
-});
-
-describe("TelnyxProvider speak control", () => {
   it("passes custom Telnyx voice ids to the speak action", async () => {
-    const release = vi.fn(async () => {});
-    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
-      response: new Response(JSON.stringify({ data: {} }), { status: 200 }),
-      release,
-    });
+    const release = mockResponse();
     const provider = new TelnyxProvider(PROVIDER_CONFIG);
 
     await provider.playTts({
@@ -364,10 +251,12 @@ describe("TelnyxProvider speak control", () => {
 
     expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
     const request = requireFetchRequest();
-    expect(request.url).toBe("https://api.telnyx.com/v2/calls/call-control-1/actions/speak");
-    expect(request.auditContext).toBe("voice-call.telnyx.api");
+    expect(request).toMatchObject({
+      url: "https://api.telnyx.com/v2/calls/call-control-1/actions/speak",
+      auditContext: "voice-call.telnyx.api",
+      init: { method: "POST" },
+    });
     expect(request.policy).toEqual({ allowedHostnames: ["api.telnyx.com"] });
-    expect(request.init?.method).toBe("POST");
     expect(typeof request.init?.body).toBe("string");
     const body = JSON.parse(request.init?.body as string) as { voice?: string };
     expect(body.voice).toBe("Telnyx.Qwen3TTS.12345678-1234-1234-1234-123456789abc");

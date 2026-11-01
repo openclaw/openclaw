@@ -6,6 +6,7 @@ import {
   type AgentItemEventData,
 } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { readAutomationDisplayState } from "../infra/agent-run-registry.automation.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
 import { resolveCompletedActivityWrappers } from "./agent-activity-presentation.js";
@@ -107,7 +108,6 @@ export function buildToolCallSummary(
     meta,
     commandBearing: isCommandBearingToolCall(toolName, args),
     instanceReplaySafe,
-    mutatingAction: mutation.mutatingAction,
     ...(ownerKey ? { ownerKey } : {}),
     replaySafe:
       (instanceReplaySafe && !mutation.mutatingAction) ||
@@ -135,9 +135,6 @@ export function emitTrackedItemEvent(
   if (itemData.phase === "start") {
     ctx.state.itemActiveIds.add(itemData.itemId);
     ctx.state.itemStartedCount += 1;
-  } else if (itemData.phase === "end") {
-    ctx.state.itemActiveIds.delete(itemData.itemId);
-    ctx.state.itemCompletedCount += 1;
   }
   // Reply liveness and channel delivery still consume every original callback.
   if (itemData.phase !== "update" || emitLiveUpdate) {
@@ -383,6 +380,8 @@ export function handleToolExecutionStart(
     ctx.state.toolMetaById.set(toolCallId, callSummary);
 
     const shouldEmitToolEvents = ctx.shouldEmitToolResult();
+    const hideFromChannelProgress =
+      evt.hideFromChannelProgress === true || readAutomationDisplayState(runId) !== "ordinary";
     const itemData = {
       ...projectAgentToolActivity({
         toolCallId,
@@ -390,11 +389,10 @@ export function handleToolExecutionStart(
         phase: "start",
         args,
         meta,
-        hideFromChannelProgress: evt.hideFromChannelProgress,
+        hideFromChannelProgress,
       }),
       startedAt,
     };
-    const hideFromChannelProgress = evt.hideFromChannelProgress === true;
     emitTrackedItemEvent(ctx, itemData);
     const createStartEvent = () => ({
       stream: "tool" as const,
@@ -414,6 +412,7 @@ export function handleToolExecutionStart(
     if (
       ctx.params.onToolResult &&
       shouldEmitToolEvents &&
+      !hideFromChannelProgress &&
       !isAgentPlanProgressToolName(toolName) &&
       !ctx.state.toolSummaryById.has(toolCallId)
     ) {

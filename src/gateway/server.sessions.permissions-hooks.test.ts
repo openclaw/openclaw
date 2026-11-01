@@ -5,7 +5,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { listSessionEntriesCore, loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import {
   agentDiscoveryMock,
   connectWebchatClient,
@@ -82,7 +82,8 @@ test("webchat session mutations follow operator scope policy", async () => {
     ["sessions.branches.switch", { sessionKey: mainKey, leafEntryId: "entry-1" }, "operator.admin"],
     ["sessions.rewind", { sessionKey: mainKey, entryId: "entry-1" }, "operator.admin"],
     ["sessions.fork", { sessionKey: mainKey, entryId: "entry-1" }, "operator.write"],
-    ["sessions.dispatch", { key: mainKey, profileId: "test" }, "operator.admin"],
+    ["sessions.dispatch", { key: mainKey, profileId: "test" }, "operator.write"],
+    ["sessions.dispatch", { key: mainKey }, "operator.admin"],
     ["sessions.dispatch", { key: mainKey, deviceId: "device-1" }, "operator.write"],
     ["sessions.reclaim", { key: mainKey }, "operator.write"],
     [
@@ -206,7 +207,7 @@ test("sessions.reset applies a rootless permission mode and interrupts admitted 
   const { storePath } = await seedActiveMainSession();
   let interrupted = false;
   let releaseAdmission = () => {};
-  const admissionLease = await beginSessionWorkAdmission({
+  const admissionLease = await beginSessionEffect({
     scope: storePath,
     identities: ["agent:main:main", "sess-main"],
     assertAllowed: () => {},

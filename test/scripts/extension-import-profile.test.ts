@@ -13,10 +13,17 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runtime = { node: "v24.19.0", v8: "13.6", abi: "137", platform: "linux", arch: "x64" };
 const observation = { pid: 42, maxRssKb: 2048, runtime };
+const resourceLine = (overrides: Record<string, unknown>) =>
+  RESOURCE_MARKER + JSON.stringify({ ...observation, userCpuUs: 1, systemCpuUs: 0, ...overrides });
 const sample = (userCpuUs: number, systemCpuUs: number) =>
-  parseImportResources(
-    RESOURCE_MARKER + JSON.stringify({ ...observation, userCpuUs, systemCpuUs }),
-  );
+  parseImportResources(resourceLine({ userCpuUs, systemCpuUs }));
+function identityFixture(file: string, content: string) {
+  const root = tempDirs.make("openclaw-import-identity-");
+  const target = path.join(root, file);
+  mkdirSync(path.dirname(target), { recursive: true });
+  writeFileSync(target, content);
+  return { root, target };
+}
 
 describe("cold-import resource observations", () => {
   it("reconciles signed baseline deltas without hiding negative costs", () => {
@@ -38,65 +45,44 @@ describe("cold-import resource observations", () => {
   it.each([
     "not a resource record",
     RESOURCE_MARKER + "{",
-    ...[undefined, 0, 1.5].map(
-      (pid) =>
-        RESOURCE_MARKER + JSON.stringify({ ...observation, pid, userCpuUs: 1, systemCpuUs: 0 }),
-    ),
-    ...[undefined, -1, 1.5].map(
-      (maxRssKb) =>
-        RESOURCE_MARKER +
-        JSON.stringify({ ...observation, maxRssKb, userCpuUs: 1, systemCpuUs: 0 }),
-    ),
-    RESOURCE_MARKER + JSON.stringify({ ...observation, userCpuUs: -1, systemCpuUs: 0, runtime }),
-    RESOURCE_MARKER + JSON.stringify({ ...observation, userCpuUs: 1.5, systemCpuUs: 0, runtime }),
-    RESOURCE_MARKER + JSON.stringify({ ...observation, userCpuUs: 1, runtime }),
-    RESOURCE_MARKER + JSON.stringify({ ...observation, userCpuUs: 1, systemCpuUs: 0, runtime: {} }),
-    RESOURCE_MARKER +
-      JSON.stringify({
-        ...observation,
-        userCpuUs: Number.MAX_SAFE_INTEGER,
-        systemCpuUs: 1,
-        runtime,
-      }),
+    ...[undefined, 0, 1.5].map((pid) => resourceLine({ pid })),
+    ...[undefined, -1, 1.5].map((maxRssKb) => resourceLine({ maxRssKb })),
+    resourceLine({ userCpuUs: -1 }),
+    resourceLine({ userCpuUs: 1.5 }),
+    resourceLine({ systemCpuUs: undefined }),
+    resourceLine({ runtime: {} }),
+    resourceLine({ userCpuUs: Number.MAX_SAFE_INTEGER, systemCpuUs: 1 }),
   ])("does not admit incomplete or invalid counters: %s", (line) => {
     expect(parseImportResources(line)).toBeNull();
   });
 
   it("keeps unavailable build identity and changed entry bytes visible", () => {
-    const root = tempDirs.make("openclaw-import-identity-");
-    const file = path.join(root, "dist/extensions/example/index.js");
-    mkdirSync(path.dirname(file), { recursive: true });
-    writeFileSync(file, "export {};\n");
-    const before = captureImportIdentity(root, [file]);
+    const { root, target } = identityFixture("dist/extensions/example/index.js", "export {};\n");
+    const before = captureImportIdentity(root, [target]);
     expect(before.entries[0]).toMatchObject({
       path: "dist/extensions/example/index.js",
       sha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
     });
     expect(importIdentityGaps(before, before)).toContain("canonical build identity unavailable");
-    writeFileSync(file, "export const changed = true;\n");
-    expect(importIdentityGaps(before, captureImportIdentity(root, [file]))).toContain(
+    writeFileSync(target, "export const changed = true;\n");
+    expect(importIdentityGaps(before, captureImportIdentity(root, [target]))).toContain(
       "source, build metadata, or entry changed during profiling",
     );
     expect(JSON.stringify(before)).not.toContain(root);
   });
 
   it("rejects mismatched build declarations even when entry bytes stay unchanged", () => {
-    const root = tempDirs.make("openclaw-import-build-");
-    mkdirSync(path.join(root, "dist"));
-    writeFileSync(
-      path.join(root, "dist/build-info.json"),
+    const { root } = identityFixture(
+      "dist/build-info.json",
       JSON.stringify({ commit: "b".repeat(40) }),
     );
-    const observed = captureImportIdentity(root, []);
-    const identity = {
-      ...observed,
-      source: { commit: "a".repeat(40), tree: "c".repeat(40), trackedClean: true },
-    };
+    const identity = captureImportIdentity(root, []);
+    identity.source = { commit: "a".repeat(40), tree: "c".repeat(40), trackedClean: true };
     expect(importIdentityGaps(identity, identity)).toEqual([
       "build declaration does not match source commit",
     ]);
-    const changed = { ...identity, source: { ...identity.source, trackedClean: false } };
-    expect(importIdentityGaps(changed, changed)).toContain(
+    identity.source.trackedClean = false;
+    expect(importIdentityGaps(identity, identity)).toContain(
       "source identity unavailable or tracked source dirty",
     );
   });

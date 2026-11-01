@@ -29,8 +29,17 @@ app. Click **Open** to continue.
 </Frame>
 </Step>
 <Step title="Approve find local networks">
-macOS then asks whether OpenClaw may find devices on your local network.
-Click **Allow**. The app uses this to reach a Gateway on another machine.
+macOS may ask whether **OpenClaw** or **bun** may find devices on your local
+network. Bun is the runtime included with OpenClaw.app's bundled Gateway. Choose
+**Allow** when you want LAN discovery and access to a Gateway on another machine.
+**Don't Allow** can prevent discovery and local-network connections.
+
+A separate firewall prompt may ask whether **bun** can accept incoming network
+connections. **Allow** permits incoming connections subject to your Gateway's
+bind and authentication settings; **Don't Allow** can block other devices from
+reaching this Mac's Gateway. These prompts do not change Gateway authentication
+or enable a LAN listener. You can revisit local-network and firewall permissions
+in macOS System Settings.
 
 <Frame>
 <img src="/assets/macos-onboarding/02-local-networks.jpeg" alt="macOS dialog that asks whether OpenClaw may find devices on the local network" />
@@ -80,6 +89,12 @@ Where does the **Gateway** run?
   Local setup reuses a compatible CLI installation or uses the bundled installer
   to install `openclaw` and Node in a private managed runtime. It does not require
   a global npm, pnpm, or bun install.
+
+When creating a brand-new workspace without Git metadata, OpenClaw checks
+`git --version` and attempts `git init` if Git is available. On a Mac without
+Command Line Tools, invoking Apple's Git stub may show an installation prompt.
+Git initialization is optional: workspace creation continues if Git is unavailable
+or initialization fails. Install the tools if you want to use Git in the workspace.
 
 Attaching to an independently managed local Gateway skips CLI installation
 and proceeds to AI checks without taking over its CLI or service installation.

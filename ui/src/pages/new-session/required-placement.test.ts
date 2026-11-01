@@ -1,24 +1,17 @@
-import { createComponent } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import type { ModelCatalogEntry } from "../../api/types.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
+import { nativeRuntime } from "../../test-helpers/chat-model.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
-import { NewSessionPlaceControls } from "./target-controls-view.tsx";
+import {
+  hostedRuntime,
+  mountPlacement,
+  placementDevice,
+  placementFixture,
+} from "./placement.test-support.ts";
 
-const runtime = {
-  id: "openclaw",
-  source: "model" as const,
-  cloudPlacementSupported: true,
-  cloudPlacementExecutionMode: "worker-turn" as const,
-  devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-};
-const hostedRuntime = {
-  id: "agentsapi",
-  source: "model" as const,
-  cloudPlacementSupported: false,
-  workspaceEnvironment: { kind: "provider-hosted" as const, label: "OpenAI (Agents API)" },
-};
+const runtime = nativeRuntime();
 const profile = {
   id: "dedicated",
   providerId: "device",
@@ -26,75 +19,62 @@ const profile = {
   executionModes: ["worker-turn"],
 };
 const catalog = { requiredProfile: profile.id, profiles: [profile], environments: [] };
+const optionalCatalog = { profiles: [], environments: [] };
+const model = (): ModelCatalogEntry => ({
+  id: "default",
+  provider: "openai",
+  name: "Default",
+  available: false,
+  unavailableReason: "missing-auth",
+  agentRuntime: runtime,
+  runtimeChoices: [
+    hostedRuntime,
+    { ...runtime, id: "external-runtime", cloudPlacementExecutionMode: "remote-exec" as const },
+  ].map((agentRuntime) => ({ agentRuntime, available: true })),
+});
 function fixture(
   request: (method: string) => Promise<unknown> = async () => catalog,
   modelSelectionPolicy?: { restricted: true; defaultModel: string | null },
   modelReady: Promise<void> = Promise.resolve(),
 ) {
-  return createDraftFixture({
+  return placementFixture(model(), {
     methods: ["environments.list", "sessions.create", "sessions.send", "sessions.describe"],
     scopes: ["operator.read", "operator.write"],
-    agents: [
-      {
-        id: "main",
-        workspace: "/workspace",
-        model: { primary: "openai/default" },
-        agentRuntime: runtime,
-      },
-    ],
     modelCatalog: async () => {
       await modelReady;
       return {
         ...(modelSelectionPolicy ? { modelSelectionPolicy } : {}),
-        models: [
-          {
-            id: "default",
-            provider: "openai",
-            name: "Default",
-            available: false,
-            unavailableReason: "missing-auth",
-            agentRuntime: runtime,
-            runtimeChoices: [
-              { agentRuntime: hostedRuntime, available: true },
-              {
-                available: true,
-                agentRuntime: {
-                  ...runtime,
-                  id: "external-runtime",
-                  cloudPlacementExecutionMode: "remote-exec",
-                },
-              },
-            ],
-          },
-        ],
+        models: [model()],
       };
     },
     placementPolicy: async () => {
-      const value = (await request("agents.list")) as {
+      const { requiredProfile: id, profiles } = (await request("agents.list")) as {
         requiredProfile?: string;
         profiles?: Array<typeof profile>;
       };
       return {
-        sessionPlacement: value.requiredProfile
-          ? {
-              requiredProfile: {
-                id: value.requiredProfile,
-                ...value.profiles?.find((entry) => entry.id === value.requiredProfile),
-              },
-            }
+        sessionPlacement: id
+          ? { requiredProfile: { id, ...profiles?.find((entry) => entry.id === id) } }
           : {},
       };
     },
     request,
   });
 }
-async function ready(f: ReturnType<typeof fixture>) {
+async function ready(f = fixture()) {
   await Promise.all([
     f.gateway.retryRequiredPlacement(),
-    settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" }),
+    loadModelCatalog(f.context.gateway.snapshot.client!, { agentId: "main" }),
   ]);
   f.place.restorePreferenceSelections();
   f.flow.setMessage("Inspect the workspace");
+  return f;
+}
+
+async function expectBlocked(f: ReturnType<typeof fixture>) {
+  expect(f.flow.canSubmit()).toBe(false);
+  await f.flow.submit();
+  expect(f.context.sessions.createResult).not.toHaveBeenCalled();
 }
 afterEach(() => {
   vi.restoreAllMocks();
@@ -102,31 +82,38 @@ afterEach(() => {
   localStorage.clear();
 });
 
-it("starts a required worker for a non-admin without manual placement or workspace choices", async () => {
-  const f = fixture();
-  await ready(f);
-  expect(f.place.cloudProfileId).toBe(profile.id);
-  expect(f.place.freshWorkspace).toBe(true);
-  expect(f.flow.canSubmit()).toBe(true);
-  f.context.placementStartup.start = vi.fn();
-  vi.mocked(f.context.sessions.createResult).mockResolvedValue({
-    key: "agent:main:required",
-    initialRun: { status: "idle" },
-  });
-  await f.flow.submit(undefined, true);
-  expect(f.context.sessions.createResult).toHaveBeenCalledWith(
-    expect.objectContaining({ message: "", worktree: true, worktreeSource: "empty" }),
-    expect.anything(),
-  );
-  expect(f.context.placementStartup.start).toHaveBeenCalledWith(
-    expect.objectContaining({
-      recovery: expect.objectContaining({
-        target: { kind: "profile", profileId: profile.id, required: true },
+it.each(["idle", "rejected"] as const)(
+  "retains required worker startup outcome: %s",
+  async (status) => {
+    const f = await ready();
+    const key = "agent:main:required";
+    const error = "Required worker is offline";
+    expect(f.place).toMatchObject({ cloudProfileId: profile.id, freshWorkspace: true });
+    expect(f.flow.canSubmit()).toBe(true);
+    f.context.placementStartup.start = vi.fn();
+    vi.mocked(f.context.sessions.createResult).mockResolvedValue({
+      key,
+      initialRun: status === "idle" ? { status } : { status, error },
+    });
+    await f.flow.submit(undefined, true);
+    expect(f.context.sessions.createResult).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "", worktree: true, worktreeSource: "empty" }),
+      expect.anything(),
+    );
+    expect(f.context.sessions.createResult).toHaveBeenCalledOnce();
+    expect(f.context.placementStartup.start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recovery: expect.objectContaining(
+          status === "idle"
+            ? { target: { kind: "profile", profileId: profile.id, required: true } }
+            : { sessionKey: key, phase: "paused", reason: "not-sent", error },
+        ),
       }),
-    }),
-  );
-  expect(f.request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
-});
+    );
+    expect(f.request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
+    expect(f.request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
+  },
+);
 
 it("waits for initial policy and never falls back when its required profile is missing", async () => {
   const pending = createDeferred<unknown>();
@@ -137,15 +124,12 @@ it("waits for initial policy and never falls back when its required profile is m
   pending.resolve({ ...catalog, profiles: [] });
   await read;
   expect(f.place.cloudProfileId).toBe(profile.id);
-  expect(f.flow.canSubmit()).toBe(false);
-  await f.flow.submit();
-  expect(f.context.sessions.createResult).not.toHaveBeenCalled();
+  await expectBlocked(f);
 });
 
 it("projects the latest policy over cached placement without persisting that policy as a preference", async () => {
   let current: typeof catalog | { profiles: (typeof profile)[]; environments: never[] } = catalog;
-  const f = fixture(async () => current);
-  await ready(f);
+  const f = await ready(fixture(async () => current));
   f.place.selectDevice("");
   expect(f.place.cloudProfileId).toBe(profile.id);
   current = {
@@ -155,36 +139,31 @@ it("projects the latest policy over cached placement without persisting that pol
   };
   await f.gateway.retryRequiredPlacement();
   expect(f.place.cloudProfileId).toBe("replacement");
-  current = { profiles: [], environments: [] };
+  current = optionalCatalog;
   await f.gateway.retryRequiredPlacement();
-  expect(f.place.cloudProfileId).toBe("");
-  expect(f.place.remotePlacement).toBe(false);
+  expect(f.place).toMatchObject({ cloudProfileId: "", remotePlacement: false });
 });
 
 it("rejects direct hosted placement and blocks hosted model changes under required placement", async () => {
-  const f = fixture();
-  await ready(f);
+  const f = await ready();
   f.place.selectHostedEnvironment("agentsapi");
   expect(f.place.modelControl.agentRuntime).toBeUndefined();
-  expect(f.place.cloudProfileId).toBe(profile.id);
-  expect(f.place.worktree).toBe(true);
+  expect(f.place).toMatchObject({ cloudProfileId: profile.id, worktree: true });
 
   f.place.modelControl.selectModel("openai/default", "agentsapi");
-  expect(f.place.hostedEnvironment).toBeUndefined();
-  expect(f.place.remotePlacement).toBe(true);
-  expect(f.place.worktree).toBe(true);
+  expect(f.place).toMatchObject({
+    hostedEnvironment: undefined,
+    remotePlacement: true,
+    worktree: true,
+  });
   expect(f.flow.submitBlock()?.gate).toBe("cloud");
   await f.flow.submit();
   expect(f.context.sessions.createResult).not.toHaveBeenCalled();
 });
 
 it("applies a newly required profile over an open hosted draft without advertising a hosted destination", async () => {
-  let current: typeof catalog | { profiles: (typeof profile)[]; environments: never[] } = {
-    profiles: [],
-    environments: [],
-  };
-  const f = fixture(async () => current);
-  await ready(f);
+  let current: typeof catalog | typeof optionalCatalog = optionalCatalog;
+  const f = await ready(fixture(async () => current));
   f.place.selectHostedEnvironment("agentsapi");
   expect(f.place.hostedEnvironment).toEqual(hostedRuntime.workspaceEnvironment);
   expect(f.flow.canSubmit()).toBe(true);
@@ -196,16 +175,16 @@ it("applies a newly required profile over an open hosted draft without advertisi
   f.place.restorePreferenceSelections();
   f.place.restorePreferenceSelections();
   expect(close).toHaveBeenCalledOnce();
-  expect(f.place.hostedEnvironment).toBeUndefined();
   expect(f.place.modelControl.modelDefaultsPolicy).toBe("configured");
   expect(f.place.browser.popoverOpen("where")).toBe(false);
-  expect(f.place.cloudProfileId).toBe(profile.id);
-  expect(f.place.worktree).toBe(true);
-  expect(f.flow.canSubmit()).toBe(false);
-  await f.flow.submit();
-  expect(f.context.sessions.createResult).not.toHaveBeenCalled();
+  expect(f.place).toMatchObject({
+    hostedEnvironment: undefined,
+    cloudProfileId: profile.id,
+    worktree: true,
+  });
+  await expectBlocked(f);
 
-  current = { profiles: [], environments: [] };
+  current = optionalCatalog;
   await f.gateway.retryRequiredPlacement();
   f.place.restorePreferenceSelections();
   expect(f.place.hostedEnvironment).toEqual(hostedRuntime.workspaceEnvironment);
@@ -226,8 +205,7 @@ it("uses worker configured defaults instead of a cached external runtime without
     agent: f.place.selectedAgent(),
     preference,
   });
-  await settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" });
-  expect(f.place.modelControl.agentRuntime).toBe("external-runtime");
+  await vi.waitFor(() => expect(f.place.modelControl.agentRuntime).toBe("external-runtime"));
   await ready(f);
   expect(f.place.modelControl.modelForSubmission()).toBe("");
   expect(f.place.modelControl.agentRuntime).toBeUndefined();
@@ -239,37 +217,16 @@ it("uses worker configured defaults instead of a cached external runtime without
 });
 
 it("does not grant a model or write permission through required worker metadata", async () => {
-  const restricted = fixture(undefined, { restricted: true, defaultModel: null });
-  await ready(restricted);
+  const restricted = await ready(fixture(undefined, { restricted: true, defaultModel: null }));
   expect(restricted.flow.canSubmit()).toBe(false);
-  const f = fixture();
-  await ready(f);
+  const f = await ready();
   f.context.gateway.snapshot.hello!.auth!.scopes = ["operator.read"];
   expect(f.flow.submitBlock()?.gate).toBe("access");
 });
 
 it("renders required placement as a readonly indicator, not a machine or workspace picker", async () => {
-  const f = fixture();
-  await ready(f);
-  const container = document.createElement("div");
-  mountSolid(
-    () =>
-      createComponent(NewSessionPlaceControls, {
-        params: {
-          context: f.context,
-          data: undefined,
-          gateway: f.gateway,
-          place: f.place,
-          submitting: false,
-          pendingPlacement: false,
-          onConnectMachine: vi.fn(),
-          onNavigate: vi.fn(),
-          onFocusComposer: vi.fn(),
-          onChange: vi.fn(),
-        },
-      }),
-    { container },
-  );
+  const f = await ready();
+  const container = mountPlacement(f);
   expect(container.textContent).toContain("OpenClaw worker");
   expect(container.querySelector("[data-required-placement]")).not.toBeNull();
   expect(container.querySelector("button, input, .oc-popover")).toBeNull();
@@ -298,29 +255,6 @@ it("keeps an initial failed catalog closed and allows its existing refresh owner
   }
 });
 
-it("keeps a server startup failure with the created session for Retry rather than sending or creating again", async () => {
-  const f = fixture();
-  await ready(f);
-  f.context.placementStartup.start = vi.fn();
-  vi.mocked(f.context.sessions.createResult).mockResolvedValue({
-    key: "agent:main:failed-required",
-    initialRun: { status: "rejected", error: "Required worker is offline" },
-  });
-  await f.flow.submit(undefined, true);
-  expect(f.context.sessions.createResult).toHaveBeenCalledOnce();
-  expect(f.context.placementStartup.start).toHaveBeenCalledWith(
-    expect.objectContaining({
-      recovery: expect.objectContaining({
-        sessionKey: "agent:main:failed-required",
-        phase: "paused",
-        reason: "not-sent",
-        error: "Required worker is offline",
-      }),
-    }),
-  );
-  expect(f.request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
-});
-
 it("keeps a cold required-worker draft on configured defaults across asynchronous catalogs", async () => {
   const place = createDeferred<unknown>();
   const modelsReady = createDeferred();
@@ -332,7 +266,7 @@ it("keeps a cold required-worker draft on configured defaults across asynchronou
   await read;
   f.place.restorePreferenceSelections();
   modelsReady.resolve();
-  await settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" });
+  await loadModelCatalog(f.context.gateway.snapshot.client!, { agentId: "main" });
   f.place.restorePreferenceSelections();
   expect(f.place.modelControl.modelForSubmission()).toBe("");
   expect(f.place.modelControl.agentRuntime).toBeUndefined();
@@ -396,4 +330,79 @@ it("does not hold an ordinary local start behind unrelated pending inventory", a
     await refresh;
     f.gateway.disconnect();
   }
+});
+async function inferenceFixture(reason: "missing-auth" | "auth-failed" = "missing-auth") {
+  const deviceProfile = { providerId: "device", executionModes: ["worker-turn"] };
+  const result = placementFixture(
+    {
+      id: "gpt-4.1-mini",
+      name: "GPT-4.1 mini",
+      provider: "openai",
+      available: false,
+      unavailableReason: reason,
+      agentRuntime: runtime,
+    },
+    {
+      methods: ["environments.list", "sessions.create", "sessions.dispatch"],
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+      request: async (method) =>
+        method === "environments.list"
+          ? {
+              environments: [placementDevice("paired", { label: "Paired worker" })],
+              profiles: [
+                { ...deviceProfile, id: "direct", inference: "worker" },
+                { ...deviceProfile, id: "proxied" },
+                { ...deviceProfile, id: "raw-settings", settings: { inference: "worker" } },
+              ],
+            }
+          : {},
+    },
+  );
+  await Promise.all([
+    result.gateway.refreshCloudProfiles(),
+    loadModelCatalog(result.context.gateway.snapshot.client!, { agentId: "main" }),
+  ]);
+  result.flow.setMessage("Check the workspace");
+  return result;
+}
+
+describe("worker inference New Session scope", () => {
+  it("uses worker credentials only for the selected direct profile", async () => {
+    const { flow, place } = await inferenceFixture("auth-failed");
+    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
+    place.selectCloudProfile("direct");
+    expect(flow.canSubmit()).toBe(true);
+    expect(place.modelControl.modelForSubmission()).toBe("");
+    place.selectCloudProfile("proxied");
+    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
+    place.selectCloudProfile("raw-settings");
+    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
+    place.selectDevice("paired");
+    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
+    place.selectDevice("");
+    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
+    place.selectCloudProfile("direct");
+    expect(flow.canSubmit()).toBe(true);
+  });
+
+  it("preserves explicit model/runtime validation instead of discarding a selection", async () => {
+    const { flow, place } = await inferenceFixture();
+    place.selectCloudProfile("direct");
+    place.modelControl.selected = "openai/gpt-4.1-mini";
+    place.modelControl.agentRuntime = "openclaw";
+    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
+    expect(place.modelControl.modelForSubmission()).toBe("openai/gpt-4.1-mini");
+    place.modelControl.agentRuntime = "unavailable-runtime";
+    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
+  });
+
+  it("still waits for current agent defaults on a worker-inference profile", async () => {
+    const { flow, place, context } = await inferenceFixture();
+    place.selectCloudProfile("direct");
+    const agentsList = context.agents.state.agentsList;
+    context.agents.state.agentsList = null;
+    expect(flow.submitBlock()?.gate).toBe("agents");
+    context.agents.state.agentsList = agentsList;
+    expect(flow.canSubmit()).toBe(true);
+  });
 });

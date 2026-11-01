@@ -38,7 +38,6 @@ import { pushWarning, type ResolverContext, type SecretDefaults } from "./runtim
 import { getActiveSecretsRuntimeSnapshotState } from "./runtime-state.js";
 import { runtimeWebSecretOwnerId } from "./runtime-web-secret-owner.js";
 import type {
-  RuntimeWebProviderSelectionResult,
   RuntimeWebSecretOwner,
   RuntimeWebUnavailableProvider,
   SecretResolutionResult,
@@ -47,12 +46,7 @@ import {
   readConfiguredProviderCredential,
   resolveRuntimeWebProviderSelection,
 } from "./runtime-web-tools.shared.js";
-import type {
-  RuntimeWebDiagnostic,
-  RuntimeWebFetchMetadata,
-  RuntimeWebSearchMetadata,
-  RuntimeWebToolsMetadata,
-} from "./runtime-web-tools.types.js";
+import type { RuntimeWebDiagnostic, RuntimeWebToolsMetadata } from "./runtime-web-tools.types.js";
 import { isExpectedResolvedSecretValue } from "./secret-value.js";
 import { isRecord } from "./shared.js";
 
@@ -111,70 +105,6 @@ function attachWebProviderFailures(
 ): void {
   for (const unavailable of unavailableProviders) {
     unavailable.providerFailure = providerFailuresByRefKey.get(unavailable.refKey);
-  }
-}
-
-function collectUnavailableWebProviders(params: {
-  kind: "search" | "fetch";
-  result: RuntimeWebProviderSelectionResult;
-  context: ResolverContext;
-  sourceConfig: OpenClawConfig;
-  metadata: RuntimeWebSearchMetadata | RuntimeWebFetchMetadata;
-  degradedOwners: DegradedSecretOwner[];
-  forceColdRefKeys?: ReadonlySet<string>;
-}): void {
-  for (const unavailable of params.result.unavailableProviders) {
-    let degradationState = classifySecretOwnerDegradationState({
-      ownerKind: "capability",
-      ownerId: runtimeWebSecretOwnerId(params.kind, unavailable.providerId),
-      refs: [unavailable.ref],
-      config: params.sourceConfig,
-      contractDigest: unavailable.contractDigest,
-      forceColdRefKeys: params.forceColdRefKeys,
-    });
-    if (degradationState === "stale") {
-      const active = getActiveSecretsRuntimeSnapshotState();
-      const activeOwner = active?.secretOwners?.find(
-        (entry) =>
-          entry.ownerKind === "capability" &&
-          entry.ownerId === runtimeWebSecretOwnerId(params.kind, unavailable.providerId),
-      );
-      const value = activeOwner?.resolvedValues?.find(
-        (entry) => entry.refKey === unavailable.refKey,
-      )?.value;
-      try {
-        if (typeof value !== "string" || !unavailable.restoreResolvedValue) {
-          throw new Error("last-known-good web credential is unavailable");
-        }
-        unavailable.restoreResolvedValue(value);
-        unavailable.resolvedValue = value;
-        const selectedOwner = params.result.secretOwners.find(
-          (entry) =>
-            entry.providerId === unavailable.providerId && entry.refKey === unavailable.refKey,
-        );
-        if (selectedOwner) {
-          selectedOwner.resolvedValue = value;
-        }
-        const activeMetadata =
-          params.kind === "search" ? active?.webTools.search : active?.webTools.fetch;
-        if (!activeMetadata) {
-          throw new Error("last-known-good web metadata is unavailable");
-        }
-        for (const key of Object.keys(params.metadata)) {
-          delete (params.metadata as Record<string, unknown>)[key];
-        }
-        Object.assign(params.metadata, activeMetadata);
-      } catch {
-        degradationState = "cold";
-      }
-    }
-    const owner = createUnavailableWebProviderOwner({
-      kind: params.kind,
-      unavailable,
-      degradationState,
-    });
-    params.degradedOwners.push(owner);
-    warnDegradedSecretOwner(params.context, owner);
   }
 }
 
@@ -381,115 +311,6 @@ function readNonEmptyEnvValue(
     }
   }
   return {};
-}
-
-async function resolveSecretInputWithEnvFallback(params: {
-  kind: "search" | "fetch";
-  providerId: string;
-  sourceConfig: OpenClawConfig;
-  context: ResolverContext;
-  defaults: SecretDefaults | undefined;
-  value: unknown;
-  path: string;
-  envVars: string[];
-  contractDigest: string;
-  providerFailuresByRefKey: RuntimeWebProviderFailureByRefKey;
-  forceColdRefKeys?: ReadonlySet<string>;
-}): Promise<SecretResolutionResult<SecretResolutionSource>> {
-  // Provider credential callbacks retain their shipped unknown-valued input contract.
-  const ref = coerceSecretRef(params.value, params.defaults);
-
-  if (!ref) {
-    const configValue = normalizeSecretInput(params.value);
-    if (configValue) {
-      return {
-        value: configValue,
-        source: "config",
-        secretRefConfigured: false,
-      };
-    }
-    const fallback = readNonEmptyEnvValue(params.context.env, params.envVars);
-    if (fallback.value) {
-      return {
-        value: fallback.value,
-        source: "env",
-        fallbackEnvVar: fallback.envVar,
-        secretRefConfigured: false,
-      };
-    }
-    return {
-      source: "missing",
-      secretRefConfigured: false,
-    };
-  }
-
-  const associateFailure = (error: unknown, reason: RuntimeWebProviderFailure["reason"]) => {
-    associateWebProviderResolutionError({
-      kind: params.kind,
-      config: params.sourceConfig,
-      error,
-      forceColdRefKeys: params.forceColdRefKeys,
-      unavailableProviders: [
-        {
-          providerId: params.providerId,
-          path: params.path,
-          ref,
-          refKey: secretRefKey(ref),
-          reason,
-          contractDigest: params.contractDigest,
-        },
-      ],
-    });
-  };
-
-  let resolvedFromRef: string | undefined;
-  let unresolvedRefReason: SecretResolutionResult<SecretResolutionSource>["unresolvedRefReason"];
-
-  if (params.kind === "fetch" && ref.source === "env" && !params.envVars.includes(ref.id)) {
-    throw new Error(`${params.path} SecretRef is not allowed for this provider.`);
-  } else {
-    try {
-      const resolved = await resolveSecretRefValues([ref], {
-        config: params.sourceConfig,
-        env: params.context.env,
-        cache: params.context.cache,
-        manifestRegistry: params.context.manifestRegistry,
-      });
-      const resolvedValue = resolved.get(secretRefKey(ref));
-      if (!isExpectedResolvedSecretValue(resolvedValue, "string")) {
-        const error = new Error(`${params.path} resolved to a non-string or empty value.`);
-        associateFailure(error, "resolved secret value was invalid");
-        throw error;
-      }
-      resolvedFromRef = normalizeSecretInput(resolvedValue);
-    } catch (error) {
-      const reason = describeSecretResolutionError(error);
-      if (!reason || !isRetryableSecretDegradationReason(reason)) {
-        // Invalid provider config or resolved values are structural failures. They must fail
-        // activation before publishing an owner degradation that could imply retryability.
-        if (reason) {
-          associateFailure(error, reason);
-        }
-        throw error;
-      }
-      unresolvedRefReason = reason;
-      if (isProviderScopedSecretResolutionError(error)) {
-        params.providerFailuresByRefKey.set(secretRefKey(ref), {
-          source: error.source,
-          provider: error.provider,
-        });
-      }
-    }
-  }
-
-  return {
-    ...(resolvedFromRef
-      ? { value: resolvedFromRef, source: "secretRef" as const }
-      : { source: "missing" as const, unresolvedRefReason }),
-    secretRef: ref,
-    secretRefKey: secretRefKey(ref),
-    secretRefConfigured: true,
-  };
 }
 
 async function resolveBundledWebProviders(params: {
@@ -735,27 +556,162 @@ export async function resolveRuntimeWebTools(params: {
           unavailableProviders: error.unavailableProviders,
         });
       },
-      resolveSecretInput: (input) =>
-        resolveSecretInputWithEnvFallback({
-          ...input,
-          kind,
-          sourceConfig: params.sourceConfig,
-          context: params.context,
-          defaults,
-          providerFailuresByRefKey,
-          forceColdRefKeys: params.forceColdRefKeys,
-        }),
+      resolveSecretInput: async (
+        input,
+      ): Promise<SecretResolutionResult<SecretResolutionSource>> => {
+        const { value, providerId, path, envVars, contractDigest } = input;
+        const { sourceConfig, context, forceColdRefKeys } = params;
+        // Provider credential callbacks retain their shipped unknown-valued input contract.
+        const ref = coerceSecretRef(value, defaults);
+
+        if (!ref) {
+          const configValue = normalizeSecretInput(value);
+          if (configValue) {
+            return {
+              value: configValue,
+              source: "config",
+              secretRefConfigured: false,
+            };
+          }
+          const fallback = readNonEmptyEnvValue(context.env, envVars);
+          if (fallback.value) {
+            return {
+              value: fallback.value,
+              source: "env",
+              fallbackEnvVar: fallback.envVar,
+              secretRefConfigured: false,
+            };
+          }
+          return {
+            source: "missing",
+            secretRefConfigured: false,
+          };
+        }
+
+        const associateFailure = (error: unknown, reason: RuntimeWebProviderFailure["reason"]) => {
+          associateWebProviderResolutionError({
+            kind,
+            config: sourceConfig,
+            error,
+            forceColdRefKeys,
+            unavailableProviders: [
+              {
+                providerId,
+                path,
+                ref,
+                refKey: secretRefKey(ref),
+                reason,
+                contractDigest,
+              },
+            ],
+          });
+        };
+
+        let resolvedFromRef: string | undefined;
+        let unresolvedRefReason: SecretResolutionResult<SecretResolutionSource>["unresolvedRefReason"];
+
+        if (kind === "fetch" && ref.source === "env" && !envVars.includes(ref.id)) {
+          throw new Error(`${path} SecretRef is not allowed for this provider.`);
+        } else {
+          try {
+            const resolved = await resolveSecretRefValues([ref], {
+              config: sourceConfig,
+              env: context.env,
+              cache: context.cache,
+              manifestRegistry: context.manifestRegistry,
+            });
+            const resolvedValue = resolved.get(secretRefKey(ref));
+            if (!isExpectedResolvedSecretValue(resolvedValue, "string")) {
+              const error = new Error(`${path} resolved to a non-string or empty value.`);
+              associateFailure(error, "resolved secret value was invalid");
+              throw error;
+            }
+            resolvedFromRef = normalizeSecretInput(resolvedValue);
+          } catch (error) {
+            const reason = describeSecretResolutionError(error);
+            if (!reason || !isRetryableSecretDegradationReason(reason)) {
+              // Invalid provider config or resolved values are structural failures. They must fail
+              // activation before publishing an owner degradation that could imply retryability.
+              if (reason) {
+                associateFailure(error, reason);
+              }
+              throw error;
+            }
+            unresolvedRefReason = reason;
+            if (isProviderScopedSecretResolutionError(error)) {
+              providerFailuresByRefKey.set(secretRefKey(ref), {
+                source: error.source,
+                provider: error.provider,
+              });
+            }
+          }
+        }
+
+        return {
+          ...(resolvedFromRef
+            ? { value: resolvedFromRef, source: "secretRef" as const }
+            : { source: "missing" as const, unresolvedRefReason }),
+          secretRef: ref,
+          secretRefKey: secretRefKey(ref),
+          secretRefConfigured: true,
+        };
+      },
     });
     attachWebProviderFailures(selection.unavailableProviders, providerFailuresByRefKey);
-    collectUnavailableWebProviders({
-      kind,
-      result: selection,
-      context: params.context,
-      sourceConfig: params.sourceConfig,
-      metadata,
-      degradedOwners,
-      forceColdRefKeys: params.forceColdRefKeys,
-    });
+    const {
+      sourceConfig: degradationConfig,
+      context: degradationContext,
+      forceColdRefKeys: degradationForceColdRefKeys,
+    } = params;
+    for (const unavailable of selection.unavailableProviders) {
+      let degradationState = classifySecretOwnerDegradationState({
+        ownerKind: "capability",
+        ownerId: runtimeWebSecretOwnerId(kind, unavailable.providerId),
+        refs: [unavailable.ref],
+        config: degradationConfig,
+        contractDigest: unavailable.contractDigest,
+        forceColdRefKeys: degradationForceColdRefKeys,
+      });
+      if (degradationState === "stale") {
+        const active = getActiveSecretsRuntimeSnapshotState();
+        const activeOwner = active?.secretOwners?.find(
+          (entry) =>
+            entry.ownerKind === "capability" &&
+            entry.ownerId === runtimeWebSecretOwnerId(kind, unavailable.providerId),
+        );
+        const value = activeOwner?.resolvedValues?.find(
+          (entry) => entry.refKey === unavailable.refKey,
+        )?.value;
+        try {
+          if (typeof value !== "string" || !unavailable.restoreResolvedValue) {
+            throw new Error("last-known-good web credential is unavailable");
+          }
+          unavailable.restoreResolvedValue(value);
+          unavailable.resolvedValue = value;
+          const selectedOwner = selection.secretOwners.find(
+            (entry) =>
+              entry.providerId === unavailable.providerId && entry.refKey === unavailable.refKey,
+          );
+          if (selectedOwner) {
+            selectedOwner.resolvedValue = value;
+          }
+          const activeMetadata =
+            kind === "search" ? active?.webTools.search : active?.webTools.fetch;
+          if (!activeMetadata) {
+            throw new Error("last-known-good web metadata is unavailable");
+          }
+          for (const key of Object.keys(metadata)) {
+            delete (metadata as Record<string, unknown>)[key];
+          }
+          Object.assign(metadata, activeMetadata);
+        } catch {
+          degradationState = "cold";
+        }
+      }
+      const owner = createUnavailableWebProviderOwner({ kind, unavailable, degradationState });
+      degradedOwners.push(owner);
+      warnDegradedSecretOwner(degradationContext, owner);
+    }
     for (const owner of selection.secretOwners) {
       secretOwners.push(toWebSecretOwnerRefState(kind, owner));
     }
@@ -763,4 +719,3 @@ export async function resolveRuntimeWebTools(params: {
 
   return result;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,39 +1,26 @@
-// Native browser lifecycle proof with an injected microphone-ended event.
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
-  captureMicrophoneLossProof,
+  createTalkRegressionSuite,
+  installTalkGateway,
+} from "./browser-talk-regression.test-support.ts";
+import {
   installMicrophoneLossWebRtcFixture,
   type MicrophoneLossE2eProof,
-  TALK_READY_HISTORY_MESSAGE,
-  videoTalkCatalog,
   waitForTalkReady,
 } from "./browser-talk-start-stop.fixtures.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+const suite = createTalkRegressionSuite("Control UI browser microphone lifetime");
 
-const suite = createControlUiE2eSuite({
-  name: "Control UI browser microphone lifetime",
-  browserLaunchOptions: {
-    args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"],
-  },
-});
+async function installMicrophone(page: Page, voiceSessionId: string) {
+  const gateway = await installTalkGateway(page, voiceSessionId);
+  await installMicrophoneLossWebRtcFixture(page);
+  return gateway;
+}
 
 suite.define(() => {
   it("guides a pending microphone request and clears guidance when voice connects", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        historyMessages: [TALK_READY_HISTORY_MESSAGE],
-        methodResponses: {
-          "talk.catalog": videoTalkCatalog("openai"),
-          "talk.client.create": {
-            provider: "openai",
-            voiceSessionId: "voice-microphone-access-e2e",
-            transport: "webrtc",
-            clientSecret: "test-client-secret",
-          },
-        },
-      });
-      await installMicrophoneLossWebRtcFixture(page);
+      const gateway = await installMicrophone(page, "voice-microphone-access-e2e");
       await page.addInitScript(() => {
         const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
         let release = () => {};
@@ -60,7 +47,6 @@ suite.define(() => {
         )
         .toBe(true);
       expect(await gateway.getRequests("talk.client.create")).toHaveLength(0);
-      await captureMicrophoneLossProof(suite, page, "prepared-input-pending.png");
       const guidance = page.locator('.agent-chat__talk-status[role="status"]');
       await expect
         .poll(() => guidance.allTextContents())
@@ -80,56 +66,19 @@ suite.define(() => {
         .toBe(1);
       await expect.poll(() => guidance.count()).toBe(0);
       expect(await gateway.getRequests("talk.client.create")).toHaveLength(1);
-      await captureMicrophoneLossProof(suite, page, "prepared-input-ready.png");
       await page.getByRole("button", { name: "Stop voice input" }).click();
     });
   });
 
   it("surfaces microphone loss and closes native browser call resources", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        historyMessages: [TALK_READY_HISTORY_MESSAGE],
-        methodResponses: {
-          "talk.catalog": videoTalkCatalog("openai"),
-          "talk.client.create": {
-            provider: "openai",
-            voiceSessionId: "voice-microphone-loss-e2e",
-            transport: "webrtc",
-            clientSecret: "test-client-secret",
-          },
-        },
-      });
-      await installMicrophoneLossWebRtcFixture(page);
+      const gateway = await installMicrophone(page, "voice-microphone-loss-e2e");
       await page.goto(`${suite.server.baseUrl}chat`);
       await waitForTalkReady(page);
       await page.getByRole("button", { name: "Start voice input" }).click();
-      try {
-        await expect
-          .poll(() =>
-            page.evaluate(() => {
-              const proof = (
-                window as Window & { openclawMicrophoneLossE2e?: MicrophoneLossE2eProof }
-              ).openclawMicrophoneLossE2e;
-              return {
-                status: document
-                  .querySelector(".agent-chat__voice-activity")
-                  ?.getAttribute("data-status"),
-                detail: document.querySelector(".agent-chat__talk-status")?.textContent,
-                stage: proof?.stage,
-                trackState: proof?.trackState,
-                localConnection: proof?.localConnection,
-                localIce: proof?.localIce,
-                remoteIce: proof?.remoteIce,
-                remoteGathering: proof?.remoteGathering,
-              };
-            }),
-          )
-          .toMatchObject({ status: "listening" });
-      } catch (error) {
-        await captureMicrophoneLossProof(suite, page, "microphone-loss-setup-failure.png");
-        throw error;
-      }
-      await captureMicrophoneLossProof(suite, page, "microphone-loss-before-listening.png");
+      await expect
+        .poll(() => page.locator(".agent-chat__voice-activity").getAttribute("data-status"))
+        .toBe("listening");
 
       await page.evaluate(() => {
         (
@@ -156,12 +105,8 @@ suite.define(() => {
           }),
         )
         .toEqual({ tracksStopped: 1, peerClosed: true, trackState: "ended", audioElements: 0 });
-      await captureMicrophoneLossProof(suite, page, "microphone-loss-after-error.png");
       await gateway.waitForRequest("talk.client.close");
       await page.getByRole("button", { name: "Dismiss voice input error" }).click();
-      console.info(
-        "[microphone-loss-e2e] native capture+local peer; injected track ended; visible error; track+peer+audio released",
-      );
     });
   });
 });

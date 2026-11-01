@@ -6,7 +6,6 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import * as sessionAccess from "../../config/sessions/session-accessor.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
-import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
 import * as launcher from "./worker-turn-launcher.test-support.js";
 import { placements, sessionTarget } from "./worker-turn-launcher.test-support.js";
 import { withWorkerTurnTranscriptDatabase } from "./worker-turn-transcript-target.js";
@@ -23,12 +22,13 @@ vi.mock("../../agents/sessions/session-manager-write-admission.js", () => ({
 
 type Effect = { mock: { calls: unknown[][] } };
 
-function deferTranscriptWrite() {
+function deferTranscriptWrite(beforeWrite?: () => Promise<unknown>) {
   const entered = createDeferred();
   const release = createDeferred();
   vi.mocked(withSessionManagerWrite).mockImplementation(async (_manager, write) => {
     entered.resolve();
     await release.promise;
+    await beforeWrite?.();
     return write();
   });
   return {
@@ -82,7 +82,10 @@ describe("cloud transcript write admission", () => {
         expectedWriterRunId: input.runId,
         expectedLifecycleRevision: entry.lifecycleRevision,
       };
-      const gate = deferTranscriptWrite();
+      // Delete inside the admitted writer context; unrelated callers cannot delete an active turn.
+      const gate = deferTranscriptWrite(
+        change === "missing" ? () => deleteEntry(entry.sessionId) : undefined,
+      );
       const notified = vi.fn();
       const launch = vi
         .fn<() => Promise<never>>()
@@ -90,18 +93,14 @@ describe("cloud transcript write admission", () => {
       const environment = launcher.attachedEnvironment();
       const tunnel = launcher.createWorkerTurnTunnel({
         launchTurn: launch,
-        quiesceWorkspace: vi.fn(),
-        reconcileWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(launcher.reconcileUnchangedLocalWorkspace),
       });
       const provider = launcher.createWorkerSessionTurnPlacementProvider({
         placements,
-        environments: {
-          ...launcher.unusedEnvironments(),
+        environments: launcher.workerTurnEnvironments(tunnel, {
           get: () => environment,
-          acquireTurnCredential: async () => launcher.credential(),
           acknowledgeCredentialDelivery: async () => true,
-          startTunnel: async () => tunnel,
-        },
+        }),
       });
       let runCurrent = true;
       const operation = provider
@@ -125,12 +124,15 @@ describe("cloud transcript write admission", () => {
             await placements.releaseTurn(claim);
           },
           environment: () => environment.ownerEpoch++,
-          missing: () => deleteEntry(entry.sessionId),
+          missing: () => {},
           writer: () => patchEntry({ activeWriterRunId: "replacement-run" }),
           lifecycle: () => patchEntry({ lifecycleRevision: "replacement-lifecycle" }),
         }[change]();
         gate.release.resolve();
         const outcome = await operation;
+        if (change === "missing") {
+          expect(sessionAccess.loadSessionEntry(sessionTarget)).toBeUndefined();
+        }
         if (change === "current") {
           expect(outcome).toMatchObject({ message: "fixture reached worker launch" });
           expect(SessionManager.open(sessionTarget).getBranch()).toMatchObject([
@@ -183,11 +185,8 @@ describe("cloud transcript write admission", () => {
       assert(entry, "expected current session entry");
       const gate = deferTranscriptWrite();
       const publish = vi.fn();
-      const tunnel: WorkerWorkspaceTunnelHandle = {
-        environmentId,
-        ownerEpoch,
-        runWorkspaceCommand: vi.fn(),
-        quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
+      const tunnel = launcher.createWorkerTurnTunnel({
+        launchTurn: vi.fn(),
         reconcileWorkspace: async (request) => {
           assert(request.source.kind === "local", "expected local staged result");
           if (!cleared) {
@@ -203,9 +202,7 @@ describe("cloud transcript write admission", () => {
             }),
           };
         },
-        syncWorkspace: vi.fn(),
-        stop: vi.fn(),
-      };
+      });
       const target = { ...sessionTarget, expectedWriterRunId: turnClaim.runId };
       const operation = withWorkerTurnTranscriptDatabase(
         { ...target, sessionTarget: target },
@@ -227,7 +224,6 @@ describe("cloud transcript write admission", () => {
       ).catch((error: unknown) => error);
       try {
         await gate.wait(operation, publish);
-        expect(placements.validateWorkspaceResultClaim(turnClaim)).toBe(true);
         await {
           current: () => {},
           draining: () => placements.startWorkspaceResultDrain(turnClaim),

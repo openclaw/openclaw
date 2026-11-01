@@ -3,6 +3,36 @@ import { en } from "./en.ts";
 
 // Plugin management and its lazy sibling surfaces register this shared copy on use.
 const enPluginManagement = {
+  pluginUi: {
+    sessionRecentMessages: "Recent messages",
+    sessionHistoryUnavailable: "Session history could not be loaded. Try again.",
+    sessionHistoryEmpty: "No recent messages.",
+    customize: "Customize UI",
+    selectionScope: "Choose views for this browser window. Built-in views are always available.",
+    builtin: "Built-in view",
+    retryView: en.pluginUi.retryView,
+    inlineLoading: en.pluginUi.inlineLoading,
+    inlineUnavailable: en.pluginUi.inlineUnavailable,
+    reload: "Reload plugin UI",
+    dashboardTitle: en.pluginUi.dashboardTitle,
+    dashboardEmpty: "This session has no dashboard widgets yet.",
+    customPluginsDisabled: en.pluginUi.customPluginsDisabled,
+    customPluginsEnableHint: en.pluginUi.customPluginsEnableHint,
+    surface: {
+      "session-list": "Session list",
+      composer: "Composer",
+      workspace: "Workspace",
+      transcript: "Transcript",
+      "tool-result": "Tool results",
+    },
+  },
+  chat: {
+    clawhub: {
+      retryStatus: "Status unavailable · Retry",
+      viewDetails: "View details",
+      signIn: "Sign in",
+    },
+  },
   custodian: {
     pluginPlaceholder: "Ask OpenClaw about {plugin}",
     pluginIntroTitle: "Ask about {plugin}",
@@ -16,6 +46,94 @@ const enPluginManagement = {
     pluginHelpFailed: "Could not prepare the setting question. Try Ask OpenClaw again.",
     pluginHelpUnset: "Not set",
     pluginHelpValue: "Current value: {value}",
+    title: "OpenClaw",
+    subtitleCaretaker: "System setup and care.",
+    exitSetup: "Exit setup",
+    hatchDraft: "Wake up, my friend!",
+    placeholder: "Message OpenClaw…",
+    sensitivePlaceholder: "Enter sensitive value…",
+    sensitiveReply: "Sensitive reply sent",
+    cancel: "Cancel",
+    send: "Send",
+    thinking: "OpenClaw is thinking",
+    earlier: "Earlier",
+    requestFailed: "OpenClaw could not reply. Try again.",
+    connectionChanged: "The Gateway connection changed. Retry to continue this setup.",
+    sessionRestarted:
+      "{error} OpenClaw started a fresh session; earlier messages remain for context.",
+    unsupportedGateway:
+      "This Gateway does not offer openclaw.chat. Update the Gateway and reconnect to continue setup.",
+    accessRequired:
+      "Setup requires openclaw.chat with operator.admin access. Pair this browser with operator.admin scope, then reconnect.",
+    autoSetup: {
+      title: "AI setup",
+      connecting: "Connecting your AI...",
+      verifying: "Checking a real conversation. This may take a minute or more.",
+      using: "Using {label} ({modelRef}) on {gateway}",
+      sharedCodexLogin: "Using your existing Codex login · sessions shared with Codex",
+      separateLogin: "Use a separate login",
+      thisComputer: en.custodian.autoSetup.thisComputer,
+      thisGateway: "this Gateway",
+      alternatives: "Or use another AI",
+      signInTitle: "Connect ChatGPT to get started",
+      signInBody: "OpenClaw is ready to connect your ChatGPT account.",
+      signIn: "Sign in with ChatGPT",
+      startingSignIn: "Opening ChatGPT sign-in...",
+      unavailableTitle: "Your AI needs a little help",
+      unavailableBody: "OpenClaw could not connect an AI automatically.",
+      nativeSetup: "Open AI setup",
+      commandHint: "To connect an AI, run",
+      differentGateway: "Use a different Gateway",
+      reviewPermissions: "Review permissions",
+      failed: "OpenClaw could not finish AI setup. Try again.",
+      safety:
+        "OpenClaw can take actions using the permissions and services you enable. Review prompts and only connect tools you trust.",
+    },
+    panel: {
+      title: "OpenClaw",
+      toggle: "Toggle Ask OpenClaw",
+      close: "Close Ask OpenClaw",
+      resize: "Resize Ask OpenClaw",
+      dockBottom: "Dock Ask OpenClaw at bottom",
+      dockRight: "Dock Ask OpenClaw at right",
+    },
+    history: {
+      button: "History",
+      title: "Recent changes",
+      description: "What changed on this system, newest first.",
+      loading: "Loading recent changes…",
+      empty: "No recorded changes yet.",
+      requestFailed: "OpenClaw could not load change history.",
+      loadMore: "Load more",
+      loadingMore: "Loading more…",
+      changedPaths: "Changed paths ({count})",
+      invalidEdit: "This manual edit did not pass configuration validation.",
+      opaqueChange: "Formatting or comments changed without visible configuration path changes.",
+      sources: {
+        systemAgent: "system-agent",
+        doctor: "doctor",
+        settings: "settings",
+        cli: "CLI",
+        pluginInstall: "plugin install",
+        manualEdit: "manual edit",
+        unknown: "unknown",
+      },
+    },
+    nudge: {
+      configReload: "Configuration reload stopped — ask me what happened",
+      channelAuth: "{channel} authentication degraded — ask me what happened",
+      channelDisconnected: "{channel} just disconnected — ask me what happened",
+      channelDegraded: "{channel} is degraded — ask me what happened",
+      channelFallback: "A channel",
+      dismiss: "Dismiss this update",
+      channelSetupTitle: "Reach OpenClaw outside this app",
+      channelSetupBody:
+        "The web app already works. Add a channel only if you want to message OpenClaw from another service.",
+      channelSetupAction: "Set up a channel",
+      channelSetupDismiss: "Keep using the web app",
+      channelStatusErrorTitle: "Channel status is unavailable",
+      channelStatusErrorBody: "Retry the check, or keep using the web app without a channel.",
+    },
   },
   pluginsPage: {
     compatibilityDeprecatedDated:
@@ -144,6 +262,7 @@ const enPluginManagement = {
         description: "Adds information or controls alongside sessions.",
       },
       widget: { name: "Dashboard widgets", description: "Adds widgets to the dashboard." },
+      inline: { name: "Inline views", description: "Shows native plugin views in conversations." },
       replacement: {
         name: "Interface replacements",
         description: "Replaces supported parts of the interface.",
@@ -217,14 +336,19 @@ const enPluginManagement = {
       edit: "Edit",
       connected: "Connected",
       configured: "Configured",
-      editAccount: "Edit {name} connection",
       editCredential: "Edit {name}",
-      connectAccount: "Connect {name}",
+      connectAccount: "Sign in to {name}",
+      signOut: "Sign out",
+      signOutAccount: "Sign out of {name}",
+      signOutConfirmTitle: "Sign out of {name}?",
+      signOutUnavailable: "Sign-out could not open. Your account is still connected; try again.",
+      signOutConfirmMessage:
+        "OpenClaw removes the saved sign-in for {name}. Its tools stop working until you sign in again.",
       configure: "Configure",
       configureCredential: "Configure {name}",
-      connect: "Connect",
-      requestFailed: "Sign-in did not finish. Try connecting again.",
-      sessionExpired: "This sign-in session expired. Try connecting again.",
+      connect: "Sign in",
+      requestFailed: "Sign-in did not finish. Try signing in again.",
+      sessionExpired: "This sign-in session expired. Try signing in again.",
     },
     toggleNamed: "Enable or disable {name}",
     schemaUnavailable: "Plugin settings schema is unavailable.",
@@ -329,6 +453,7 @@ const enPluginManagement = {
       transport: "Transport",
       authentication: "Authentication",
       scope: "Requested permissions",
+      description: "What this server does",
       unavailable: "Connection details are not included in this plugin’s catalog metadata.",
       auth: { oauth: "OAuth", "api-key": "API key", none: "None" },
     },
@@ -420,6 +545,8 @@ const enPluginManagement = {
       "Plugin availability changed. Refresh the catalog to see its current state.",
     installDestinationChanged:
       "The Gateway or operator changed. Install the plugin again to request a fresh review.",
+    installBlockedByUpdate:
+      "Installation blocked: an OpenClaw upgrade is in progress, try again when it finishes.",
   },
 } satisfies TranslationMap;
 
@@ -427,6 +554,10 @@ export const registerPluginManagementEnglish = Object.assign(
   () => {
     Object.assign(en.custodian, enPluginManagement.custodian);
     en.pluginsPage = enPluginManagement.pluginsPage;
+    const { surface, ...labels } = enPluginManagement.pluginUi;
+    Object.assign(en.pluginUi, labels);
+    Object.assign(en.pluginUi.surface, surface);
+    Object.assign(en.chat.clawhub, enPluginManagement.chat.clawhub);
   },
   { catalog: enPluginManagement },
 );

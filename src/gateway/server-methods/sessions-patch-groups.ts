@@ -1,4 +1,24 @@
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { isReadMarkerOnly } from "./session-unread-ack.js";
 import type { PreparedPatchTarget } from "./sessions-patch-types.js";
+
+export function resolveSessionPatchLifecycleTargets(targets: readonly PreparedPatchTarget[]) {
+  return {
+    kind: targets.every((target) => isReadMarkerOnly(target.fullPatch))
+      ? ("read-marker" as const)
+      : undefined,
+    targets: targets.map((target) =>
+      captureSessionTarget({
+        storeScope: target.storePath,
+        sessionKey: target.canonicalKey,
+        aliases: target.lifecycleIdentities,
+        incarnation: target.initialEntry?.sessionId,
+        agentId: target.targetAgentId,
+      }),
+    ),
+  };
+}
 
 /** Tree archival commits descendants before ancestors, including across physical stores. */
 export async function runSessionPatchGroups(
@@ -26,12 +46,6 @@ export async function runSessionPatchGroups(
     }
     return;
   }
-  const groups = new Map<string, PreparedPatchTarget[]>();
-  for (const target of ready) {
-    const key = target.storePath + "\0" + target.targetAgentId;
-    const group = groups.get(key) ?? [];
-    group.push(target);
-    groups.set(key, group);
-  }
-  await Promise.all([...groups.values()].map(apply));
+  const groups = groupRecords(ready, (target) => target.storePath + "\0" + target.targetAgentId);
+  await Promise.all(Array.from(groups.values(), apply));
 }

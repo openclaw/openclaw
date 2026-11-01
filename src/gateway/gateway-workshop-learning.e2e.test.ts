@@ -2,24 +2,21 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
-import { text as readText } from "node:stream/consumers";
 import { describe, expect, it } from "vitest";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "../../test/helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { runSkillExperienceReview } from "../skills/workshop/experience-review.js";
 import { createExperienceReviewCandidate } from "../skills/workshop/experience-review.test-support.js";
 import { listWorkshopChanges } from "../skills/workshop/library.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createTrackedProvider } from "./test-helpers.tracked-provider.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 type ProviderRequest = {
@@ -27,65 +24,22 @@ type ProviderRequest = {
   tools?: Array<{ name?: string }>;
 };
 
-function withResponsesProvider(
+async function withResponsesProvider(
   handle: (body: string, response: ServerResponse) => void | Promise<void>,
   run: (baseUrl: string, errors: unknown[]) => Promise<void>,
 ) {
-  const errors: unknown[] = [];
-  return withServer(
-    (request, response) => {
-      if (request.method !== "POST" || request.url !== "/v1/responses") {
-        response.writeHead(404).end();
-        return;
-      }
-      void readText(request)
-        .then((body) => handle(body, response))
-        .catch((error: unknown) => {
-          errors.push(error);
-          response.writeHead(500).end(String(error));
-        });
-    },
-    (baseUrl) => run(baseUrl, errors),
-  );
-}
-
-function respondWithTool(
-  response: ServerResponse,
-  callId: string,
-  name: string,
-  args: Record<string, unknown>,
-): void {
-  const item = {
-    type: "function_call",
-    id: `fc_${callId}`,
-    call_id: callId,
-    name,
-    arguments: JSON.stringify(args),
-    status: "completed",
-  };
-  writeOpenAiResponsesSse(response, [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...item, status: "in_progress", arguments: "" },
-    },
-    {
-      type: "response.function_call_arguments.done",
-      item_id: item.id,
-      output_index: 0,
-      arguments: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_${callId}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
-      },
-    },
-  ]);
+  const provider = createTrackedProvider((body, response, request) => {
+    if (request.method !== "POST" || request.url !== "/v1/responses") {
+      response.writeHead(404).end();
+      return;
+    }
+    return handle(body, response);
+  });
+  try {
+    await run(await provider.listen(), provider.errors);
+  } finally {
+    await provider.close();
+  }
 }
 
 describe("Gateway automatic Workshop learning", () => {
@@ -129,7 +83,7 @@ describe("Gateway automatic Workshop learning", () => {
               {
                 workspaceDir: state.workspaceDir,
                 modelId: "gpt-workshop-rate-limit-test",
-                baseUrl: `${baseUrl}/v1`,
+                baseUrl,
                 apiKey: "synthetic-workshop-provider-key",
               },
             );
@@ -243,9 +197,15 @@ Retain the distinct rollback procedure after verifying the previous public gener
             if (foregroundRequests < 10) {
               foregroundRequests += 1;
               if (foregroundRequests < 10) {
-                respondWithTool(response, `foreground_${foregroundRequests}`, "read", {
-                  path: `receipt-${foregroundRequests}.txt`,
-                });
+                writeToolCall(
+                  response,
+                  "read",
+                  {
+                    path: `receipt-${foregroundRequests}.txt`,
+                  },
+                  10,
+                  10,
+                );
               } else {
                 writeOpenAiResponsesText(response, {
                   text: "Verified all receipts. Public generation matches the release; health alone was insufficient.",
@@ -262,7 +222,7 @@ Retain the distinct rollback procedure after verifying the previous public gener
             }
             const next = reviewActions[reviewRequests.length - 1];
             if (next) {
-              respondWithTool(response, `review_${reviewRequests.length}`, next.name, next.args);
+              writeToolCall(response, next.name, next.args, 10, 10);
             } else {
               writeOpenAiResponsesText(response, {
                 text: "NO_REPLY",
@@ -272,7 +232,7 @@ Retain the distinct rollback procedure after verifying the previous public gener
             }
           },
           async (baseUrl, providerErrors) => {
-            const provider = buildMockOpenAiResponsesProvider(`${baseUrl}/v1`, "workshop-learning");
+            const provider = buildMockOpenAiResponsesProvider(baseUrl, "workshop-learning");
             const token = "isolated-workshop-learning-token";
             const config = {
               agents: {

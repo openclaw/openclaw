@@ -1,9 +1,12 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
+import { registerBoardEnglish } from "../../i18n/locales/en-board.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardGrantDecision } from "../../lib/board/view-types.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../tooltip.ts";
+
+registerEnglishCatalog(registerBoardEnglish);
 
 export function BoardPendingCapabilities(props: {
   widget: BoardWidget;
@@ -99,11 +102,16 @@ export function BoardGrantedCapabilities(props: {
         when={props.presentation === "details"}
         fallback={
           <openclaw-tooltip
+            open-on-click
             prop:content={`${t("board.widget.activeCapabilities")}\n${capabilities().join("\n")}`}
           >
-            <span class="board-widget__capabilities" data-test-id="board-capabilities-granted">
+            <button
+              type="button"
+              class="board-widget__capabilities"
+              data-test-id="board-capabilities-granted"
+            >
               {t("board.widget.granted")}
-            </span>
+            </button>
           </openclaw-tooltip>
         }
       >

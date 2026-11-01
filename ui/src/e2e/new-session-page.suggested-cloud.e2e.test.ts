@@ -19,11 +19,11 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
       const picker = page.locator(".oc-popover.new-session-page__where-popover");
-      await picker.getByRole("searchbox").waitFor();
+      await picker.locator(".header-search__toggle").waitFor();
       expect(await picker.getByRole("button", { name: "Cloud", exact: true }).count()).toBe(0);
       await captureUiProof({ artifactDir }, page, "suggested-cloud-before.png", {
         surface: picker,
-        content: [picker.getByRole("searchbox")],
+        content: [picker.locator(".header-search__toggle")],
       });
     });
   });

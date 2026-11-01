@@ -4,12 +4,19 @@ import {
   snapshotPluginRecoverySourceResolver,
   type PluginRecoverySourceResolverSnapshot,
 } from "./plugin-generation-source-lookup.js";
+import { isPluginSourcePreparationOperation } from "./plugin-instance-error.js";
 import {
   isOwnedPluginNativeRecovery,
   restorePluginNativeRecovery,
   snapshotPluginNativeRecovery,
   type PluginNativeRecoverySnapshot,
 } from "./plugin-native-admission.js";
+import { snapshotPluginNativeRootLease } from "./plugin-native-root-lease.js";
+
+export type GenerationNativeRootTransport = {
+  exportRoot(root: PluginNativeRecoverySnapshot["roots"][number]): number;
+  importRoot(id: number): PluginNativeRecoverySnapshot["roots"][number];
+};
 
 export type GenerationWireValue =
   | { kind: "value"; value: unknown }
@@ -27,6 +34,7 @@ export type GenerationWireValue =
   | { kind: "array" | "set"; id: number; entries: GenerationWireValue[] }
   | { kind: "map"; id: number; entries: [GenerationWireValue, GenerationWireValue][] }
   | { kind: "url"; id: number; value: string }
+  | { kind: "native-root"; id: number; rootId: number }
   | { kind: "native"; id: number; snapshot: GenerationWireValue };
 
 /** Internal owner-to-owner codec. Stateful functions remain in their producing isolate. */
@@ -48,9 +56,7 @@ export class GenerationCodec {
       sourceCapture: boolean,
       disposal: boolean,
     ) => unknown,
-    private readonly retainNativeRoot: (
-      root: PluginNativeRecoverySnapshot["roots"][number],
-    ) => void,
+    private readonly nativeRoots: GenerationNativeRootTransport,
   ) {}
 
   retainResource(resource: object): void {
@@ -81,6 +87,11 @@ export class GenerationCodec {
     return released;
   }
 
+  isSourcePreparationCall(handle: number): boolean {
+    const operation = this.handles.get(handle);
+    return typeof operation === "function" && isPluginSourcePreparationOperation(operation);
+  }
+
   releaseReceivedHandles(handles: readonly number[]): void {
     for (const id of handles) {
       const value = this.received.get(id);
@@ -94,6 +105,22 @@ export class GenerationCodec {
   encodeArguments(values: unknown[]): GenerationWireValue[] {
     const seen = new Map<object, number>();
     return values.map((value) => this.encode(value, seen));
+  }
+
+  /** Method replies share their producer's lifetime; returned resources own themselves. */
+  encodeResult(value: unknown, handle: number): GenerationWireValue {
+    const owners = this.owners.get(handle);
+    if (!owners || owners.unowned) {
+      return this.encode(value);
+    }
+    const [first, ...remaining] = owners.resources;
+    const encoded = this.encode(value, undefined, undefined, first);
+    if (value !== null && (typeof value === "object" || typeof value === "function")) {
+      for (const owner of remaining) {
+        this.retainSharedHandles(value, owner);
+      }
+    }
+    return encoded;
   }
 
   encode(
@@ -134,6 +161,14 @@ export class GenerationCodec {
     }
     this.retainHandle(id, owner);
     seen.set(value, id);
+    const nativeRoot = snapshotPluginNativeRootLease(value);
+    if (nativeRoot) {
+      const rootId = this.nativeRoots.exportRoot(nativeRoot.root);
+      // The host already holds preparation custody. Consume the sender's
+      // temporary lease without retaining RPC methods or a worker resource.
+      nativeRoot.release();
+      return { kind: "native-root", id, rootId };
+    }
     if (typeof value === "function") {
       if (sourceResolver) {
         return {
@@ -150,9 +185,8 @@ export class GenerationCodec {
         ...(key === "dispose" || key === "disposeAsync" ? { disposal: true as const } : {}),
       };
     }
-    if (isOwnedPluginNativeRecovery(value)) {
+    if (native) {
       const snapshot = snapshotPluginNativeRecovery(value);
-      snapshot.roots.forEach(this.retainNativeRoot);
       return { kind: "native", id, snapshot: this.encode(snapshot, seen, undefined, owner) };
     }
     if (value instanceof URL) {
@@ -271,6 +305,8 @@ export class GenerationCodec {
       );
     } else if (value.kind === "url") {
       result = new URL(value.value);
+    } else if (value.kind === "native-root") {
+      result = this.nativeRoots.importRoot(value.rootId);
     } else if (value.kind === "native") {
       // Both endpoints use this codec and the native admission owner's descriptor.
       result = restorePluginNativeRecovery(

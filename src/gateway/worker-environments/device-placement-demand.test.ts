@@ -3,7 +3,8 @@ import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
+import type { IdentityTarget } from "../../sessions/session-controller.target.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createContext } from "../server-methods/sessions.abort-agent-scope.test-support.js";
@@ -16,7 +17,7 @@ import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
 
 type Environment = NonNullable<ReturnType<WorkerEnvironmentService["get"]>>;
-type Admission = Parameters<typeof beginSessionWorkAdmission>[0];
+type Admission = Extract<Parameters<typeof beginSessionEffect>[0], IdentityTarget>;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
@@ -55,7 +56,7 @@ function createFixture() {
   const admit = async (
     options: Partial<Pick<Admission, "scope" | "identities" | "resolveGatewayContext">> = {},
   ) => {
-    const lease = await beginSessionWorkAdmission({
+    const lease = await beginSessionEffect({
       scope,
       identities: [placement.sessionKey, placement.sessionId],
       resolveGatewayContext,

@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import "../../lib/toast-host.ts";
+import * as groupDefaultsDialog from "../../components/session-group-defaults-dialog.tsx";
+import "../../lib/toast-host.tsx";
+import { editSessionGroupDefaults } from "../../components/session-organizer-menu.runtime.ts";
 import {
   createContext,
   createGatewayHarness,
@@ -13,8 +15,8 @@ import {
 } from "../app-sidebar.ts";
 import { createDataTransferStub } from "../drag-data.ts";
 import { installDialogPolyfill, submitInputDialog } from "../modal-dialog.ts";
-import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.tsx";
+import { waitForFast } from "../wait-for.ts";
 
 function requiredElement(root: ParentNode, selector: string): HTMLElement {
   const element = root.querySelector<HTMLElement>(selector);
@@ -133,7 +135,7 @@ describe("AppSidebar group mutation collapsed state", () => {
     ["group-defaults", "replacement"],
     ["rename-group", "reconnect"],
     ["group-defaults", "reconnect"],
-  ])("retires an open %s dialog on %s", async (action, transition) => {
+  ])("keeps the correct owner for an open %s dialog on %s", async (action, transition) => {
     const client = () =>
       ({
         request: async (method: string) => {
@@ -172,6 +174,16 @@ describe("AppSidebar group mutation collapsed state", () => {
     await sidebar.updateComplete;
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await vi.dynamicImportSettled();
+    if (transition === "reconnect" && action === "rename-group") {
+      await waitForFast(() =>
+        expect(harness.groupsRename).toHaveBeenCalledExactlyOnceWith("Alpha", "Beta"),
+      );
+      await waitForFast(() =>
+        expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull(),
+      );
+      expect(replacement.groupsRename).not.toHaveBeenCalled();
+      return;
+    }
     expectNoGroupMutations(harness, replacement);
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
 
@@ -218,6 +230,17 @@ describe("AppSidebar group mutation collapsed state", () => {
         await deleteGroupThroughConfirm(sidebar);
         await waitForFast(() => expect(harness.groupsDelete).toHaveBeenCalledWith("Alpha"));
       }
+      if (operation === "rename" && !succeeds) {
+        await waitForFast(() =>
+          expect(
+            document.body.querySelector("openclaw-modal-dialog [role=alert]")?.textContent,
+          ).toContain("rename failed"),
+        );
+        expect(
+          document.body.querySelector<HTMLInputElement>('openclaw-modal-dialog input[name="value"]')
+            ?.value,
+        ).toBe("Beta");
+      }
       await Promise.resolve();
       await Promise.resolve();
       const stored = localStorage.getItem(COLLAPSED_STORAGE_KEY);
@@ -239,8 +262,15 @@ describe("AppSidebar group mutation collapsed state", () => {
 
     reconnect(gatewayHarness);
     rename.resolve("stale");
-    await Promise.resolve();
-    await Promise.resolve();
+    await waitForFast(() =>
+      expect(
+        document.body.querySelector("openclaw-modal-dialog [role=alert]")?.textContent,
+      ).toContain("Connection changed"),
+    );
+    expect(
+      document.body.querySelector<HTMLInputElement>('openclaw-modal-dialog input[name="value"]')
+        ?.value,
+    ).toBe("Beta");
 
     expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
   });
@@ -310,10 +340,20 @@ describe("AppSidebar group mutation collapsed state", () => {
       const gatewayHarness = createGatewayHarness(client);
       const harness = createSessionsHarness("main", ["agent:main:main"]);
       const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
+      harness.sessions.state.groupSettings = [{ name: "Alpha", position: 0, cwd: "/repos/client" }];
+      const opened =
+        deferred<Parameters<typeof groupDefaultsDialog.showSessionGroupDefaultsDialog>[0]>();
+      vi.spyOn(groupDefaultsDialog, "showSessionGroupDefaultsDialog").mockImplementation(
+        async (options) => {
+          opened.resolve(options);
+        },
+      );
+      await editSessionGroupDefaults(sidebar.sessionOrganizer, "Alpha");
+      const options = await opened.promise;
       const pending =
         kind === "folders"
-          ? sidebar.listSessionGroupFolders("/repos/client")
-          : sidebar.inspectSessionGroupRepository("/repos/client");
+          ? options.listDirectory("/repos/client")
+          : options.inspectRepository("/repos/client");
       reconnect(gatewayHarness);
       result.resolve(kind === "folders" ? folders : repository);
       await expect(pending).rejects.toThrow(

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isPathRelativeEscape } from "@openclaw/fs-safe/path";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { resolveCompactionThreshold } from "../../../../packages/agent-core/src/harness/compaction/compaction-threshold.js";
 import { getRuntimeConfigSnapshot } from "../../../config/config.js";
 import type { ModelCompatConfig } from "../../../config/types.models.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
@@ -22,6 +23,7 @@ import {
   freezeDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { observeDiagnosticsTimelinePhases } from "../../../infra/diagnostics-timeline.js";
 import {
   DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
   ensureGlobalUndiciDispatcherStreamTimeouts,
@@ -33,11 +35,16 @@ import {
   resolveProviderRuntimePluginHandle,
   type ProviderRuntimePluginHandle,
 } from "../../../plugins/provider-hook-runtime.js";
+import { hasPersistedMedia } from "../../../sessions/user-turn-media.js";
+import { getUserTurnTranscriptAdmissionOwner } from "../../../sessions/user-turn-transcript-admission.js";
+import { readModelPromptProjection } from "../../../sessions/user-turn-transcript.message.js";
+import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
-import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers/context-file.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
+import { isSandboxProvisioningError } from "../../sandbox/provisioning-error.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
@@ -59,15 +66,19 @@ import {
   resolveLiveToolResultMaxChars,
 } from "../tool-result-truncation.js";
 import { mapThinkingLevel, mapThinkingLevelForProvider } from "../utils.js";
+import { publishEmbeddedRequestContext } from "./attempt-context-accounting.js";
 import { buildLoopPromptCacheInfo } from "./attempt-context-engine-helpers.js";
+import { resolveModelPromptText } from "./attempt-llm-boundary.js";
 import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
   logEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
 import { hydratePromptMediaMessages } from "./images.js";
-import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
-import { checkMidTurnPrecheck } from "./preemptive-compaction.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
+import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import { resolveProjectedRequestPressure } from "./preemptive-compaction.js";
+import { promptImageSessionKey } from "./prompt-image-decisions.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PreparedProviderRuntimePluginHandle = ProviderRuntimePluginHandle & {
@@ -78,6 +89,7 @@ type PreparedProviderRuntimePluginHandle = ProviderRuntimePluginHandle & {
 export type EmbeddedAttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAttemptSetup>>;
 
 export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptParams) {
+  using phases = observeDiagnosticsTimelinePhases("attempt.setup.initialize");
   // Ultra is a logical orchestration mode, not a provider effort. Preserve it for
   // prompt/status surfaces, then lower only at agent-core and provider boundaries.
   const providerThinkingLevel = mapThinkingLevelForProvider(params.thinkLevel, params.model);
@@ -114,7 +126,60 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
     );
   };
 
-  const workspace = await resolveAttemptWorkspaceSandbox(params);
+  phases.mark("attempt.setup.workspace");
+  const workspace = await resolveAttemptWorkspaceSandbox(params).catch(async (error: unknown) => {
+    const recorder = params.userTurnTranscriptRecorder;
+    if (isSandboxProvisioningError(error) && recorder?.captureModelPromptProjection) {
+      const assertCurrent = resolveAdmittedRunActiveAssertion(
+        params.admittedRunContext,
+        params.abortSignal,
+      );
+      if (assertCurrent && !recorder.isBlocked()) {
+        try {
+          assertCurrent();
+          const message = await recorder.resolveMessage();
+          assertCurrent();
+          if (
+            message &&
+            hasPersistedMedia(message) &&
+            readModelPromptProjection(message) === undefined
+          ) {
+            // Provisioning is terminal before prompt hooks or provider dispatch. Retain
+            // this input's prepared attachment context while its original owner is live.
+            await recorder.persistFallback();
+            assertCurrent();
+            const persisted = recorder.getPersistedMessage?.();
+            if (persisted && readModelPromptProjection(persisted) === undefined) {
+              const approvedText =
+                extractTextFromChatContent(persisted.content, {
+                  joinWith: "\n",
+                  normalizeText: (value) => value,
+                }) ?? "";
+              const submittedText = getUserTurnTranscriptAdmissionOwner(recorder)?.submittedText;
+              const text =
+                submittedText === undefined
+                  ? approvedText
+                  : resolveModelPromptText({
+                      text: approvedText,
+                      transcriptPrompt: submittedText,
+                      modelPrompt: params.prompt,
+                    });
+              await recorder.captureModelPromptProjection(text, assertCurrent);
+            }
+          }
+        } catch (retentionError) {
+          // Keep the provisioning cause so model fallback cannot retry this setup error.
+          throw new AggregateError(
+            [error, retentionError],
+            "Sandbox setup failed and accepted attachment context could not be retained",
+            { cause: retentionError },
+          );
+        }
+      }
+    }
+    throw error;
+  });
+  phases.mark("attempt.setup.finalize");
   const { effectiveWorkspace } = workspace;
 
   const getCurrentAttemptPluginMetadataSnapshot = (): PluginMetadataSnapshot | undefined =>
@@ -166,11 +231,24 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
 
 type PromptCacheRetention = Parameters<typeof buildLoopPromptCacheInfo>[0]["retention"];
 
+// Stream completion can retain this callback beyond the attempt's context guards.
+function createCacheTouchRecorder(initialTimestamp: number | null) {
+  let lastCacheTouchAt = initialTimestamp;
+  return {
+    get lastCacheTouchAt() {
+      return lastCacheTouchAt;
+    },
+    recordCacheTouch: (startedAt: number) => {
+      lastCacheTouchAt = startedAt;
+    },
+  };
+}
+
 export function installEmbeddedAttemptContextGuards(input: {
   activeContextEngine?: ContextEngine;
   activeSession: AgentSession;
   agentDir: string;
-  attempt: EmbeddedRunAttemptParams;
+  attempt: EmbeddedRunAttemptInternalParams;
   computerContextEpoch: { value: number };
   dropThinkingBlocksForEstimate: boolean;
   effectiveCwd: string;
@@ -219,12 +297,14 @@ export function installEmbeddedAttemptContextGuards(input: {
       ? resolveCacheTtlPruningSettings(contextPruning)
       : undefined;
   const previousCacheTtlTransform = activeSession.agent.transformContext;
-  let lastCacheTouchAt = cacheTtlSettings
-    ? readLastCacheTtlTimestamp(input.sessionManager, {
-        provider: attempt.provider,
-        modelId: attempt.modelId,
-      })
-    : null;
+  const cacheTouch = createCacheTouchRecorder(
+    cacheTtlSettings
+      ? readLastCacheTtlTimestamp(input.sessionManager, {
+          provider: attempt.provider,
+          modelId: attempt.modelId,
+        })
+      : null,
+  );
   if (cacheTtlSettings) {
     activeSession.agent.transformContext = async (messages, signal) => {
       const sourceMessages = previousCacheTtlTransform
@@ -234,7 +314,7 @@ export function installEmbeddedAttemptContextGuards(input: {
         messages: sourceMessages,
         settings: cacheTtlSettings,
         contextWindowTokens: contextTokenBudget,
-        lastCacheTouchAt,
+        lastCacheTouchAt: cacheTouch.lastCacheTouchAt,
         dropThinkingBlocksForEstimate: input.dropThinkingBlocksForEstimate,
         now: Date.now(),
         projectionState: input.toolResultPromptProjectionState,
@@ -243,7 +323,7 @@ export function installEmbeddedAttemptContextGuards(input: {
         pruneNewRounds: !input.getServerToolClearingEnabled(),
         onPruned: () => {
           declarePromptHistoryRewrite({ ...attempt, reason: "pruning" });
-          lastCacheTouchAt = Date.now();
+          cacheTouch.recordCacheTouch(Date.now());
         },
       });
     };
@@ -273,6 +353,7 @@ export function installEmbeddedAttemptContextGuards(input: {
       tokenBudget: attempt.contextTokenBudget,
       reserveTokens: () => settingsManager.getCompactionReserveTokens(),
       getSystemPrompt: input.getSystemPrompt,
+      getTools: () => activeSession.agent.state.tools,
       modelId: attempt.modelId,
       ...(input.repairToolUseResultPairing
         ? {
@@ -313,7 +394,6 @@ export function installEmbeddedAttemptContextGuards(input: {
             }),
         }),
       runtimeSettings,
-      isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
     });
   }
   const removeToolResultGuard = installToolResultContextGuard({
@@ -338,6 +418,7 @@ export function installEmbeddedAttemptContextGuards(input: {
           ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
           : undefined,
       onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
+      imageSessionKey: promptImageSessionKey(attempt),
     });
     const modelContext = previousContextTransform
       ? await previousContextTransform.call(activeSession.agent, hydrated, signal)
@@ -351,21 +432,38 @@ export function installEmbeddedAttemptContextGuards(input: {
   };
 
   return {
-    checkMidTurnPrecheck: (
-      request: Pick<Parameters<typeof checkMidTurnPrecheck>[0], "context" | "previousRequest">,
+    checkMidTurnPrecheck: async (
+      request: Pick<
+        Parameters<typeof resolveProjectedRequestPressure>[0],
+        "context" | "previousRequest"
+      > & { measuredContextTokens?: number },
     ) => {
-      // Compaction ownership does not waive host admission at the provider boundary.
-      if (
-        activeSession[agentSessionDeferThresholdCompaction] ||
-        (!activeContextEngine?.info.ownsCompaction &&
-          attempt.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled !== true)
-      ) {
-        return;
-      }
-      checkMidTurnPrecheck({
+      // Deferring maintenance never authorizes an over-window provider request.
+      const deferThreshold = activeSession[agentSessionDeferThresholdCompaction];
+      const compaction = attempt.config?.agents?.defaults?.compaction;
+      const reserveTokens = settingsManager.getCompactionReserveTokens();
+      const threshold = resolveCompactionThreshold({
+        contextWindowTokens: contextTokenBudget,
+        reserveTokensFloor: reserveTokens,
+      });
+      // Provider-measured occupancy drives proactive maintenance. An estimate of
+      // pending content protects the hard window without declaring a full prompt's
+      // conservative estimate to be a provider refusal.
+      const proactive =
+        !deferThreshold &&
+        compaction?.enabled !== false &&
+        (request.measuredContextTokens ?? request.previousRequest?.contextTokens ?? 0) >= threshold;
+      const decision = resolveProjectedRequestPressure({
         ...request,
         contextTokenBudget,
-        reserveTokens: settingsManager.getCompactionReserveTokens(),
+        reserveTokens: deferThreshold
+          ? 0
+          : proactive
+            ? contextTokenBudget - threshold
+            : activeContextEngine?.info.ownsCompaction ||
+                compaction?.midTurnPrecheck?.enabled === true
+              ? reserveTokens
+              : 0,
         toolResultMaxChars,
         replay: {
           model: attempt.model,
@@ -373,15 +471,16 @@ export function installEmbeddedAttemptContextGuards(input: {
           authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
           enabled: input.getCompactionReplayEnabled(),
         },
-        onPrecheck: (precheck) => {
-          pendingMidTurnPrecheckRequest = precheck;
-        },
       });
+      await publishEmbeddedRequestContext(attempt, decision.estimatedPromptTokens);
+      if (decision.route !== "fits") {
+        pendingMidTurnPrecheckRequest = { ...decision, route: decision.route };
+        throw new MidTurnPrecheckSignal(pendingMidTurnPrecheckRequest);
+      }
+      return decision.estimatedPromptTokens;
     },
     getAfterTurnCheckpoint: () => afterTurnCheckpoint,
-    recordCacheTouch: (startedAt: number) => {
-      lastCacheTouchAt = startedAt;
-    },
+    recordCacheTouch: cacheTouch.recordCacheTouch,
     remove: () => {
       activeSession.agent.transformContext = previousContextTransform;
       removeToolResultGuard();

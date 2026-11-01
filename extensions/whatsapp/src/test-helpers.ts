@@ -1,33 +1,19 @@
-// Whatsapp helper module supports test helpers behavior.
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveTimezone } from "openclaw/plugin-sdk/time-runtime";
+import { resolveEnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inbound";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { vi } from "vitest";
 import type { MockBaileysSocket } from "../../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../../test/mocks/baileys.js";
 
 // Use globalThis to store the mock config so it survives vi.mock hoisting
 const CONFIG_KEY = Symbol.for("openclaw:testConfigMock");
+// Default open access; individual fixtures override it.
 const DEFAULT_CONFIG = {
-  channels: {
-    whatsapp: {
-      // Tests can override; default remains open to avoid surprising fixtures
-      allowFrom: ["*"],
-    },
-  },
-  messages: {
-    messagePrefix: undefined,
-    responsePrefix: undefined,
-  },
+  channels: { whatsapp: { allowFrom: ["*"] } },
+  messages: { messagePrefix: undefined, responsePrefix: undefined },
 };
 
-// Initialize default if not set
 if (!(globalThis as Record<symbol, unknown>)[CONFIG_KEY]) {
   (globalThis as Record<symbol, unknown>)[CONFIG_KEY] = () => DEFAULT_CONFIG;
 }
@@ -42,24 +28,15 @@ export function resetLoadConfigMock() {
 function resolveStorePathFallback(store?: string, opts?: { agentId?: string }) {
   if (!store) {
     const agentId = normalizeLowercaseStringOrEmpty(opts?.agentId?.trim() || "main");
-    return path.join(
-      process.env.HOME ?? "/tmp",
-      ".openclaw",
-      "agents",
-      agentId,
-      "sessions",
-      "sessions.json",
-    );
+    const root = path.join(process.env.HOME ?? "/tmp", ".openclaw", "agents");
+    return path.join(root, agentId, "sessions", "sessions.json");
   }
   return path.resolve(store.replaceAll("{agentId}", opts?.agentId?.trim() || "main"));
 }
 
 function loadConfigMock() {
   const getter = (globalThis as Record<symbol, unknown>)[CONFIG_KEY];
-  if (typeof getter === "function") {
-    return getter();
-  }
-  return DEFAULT_CONFIG;
+  return typeof getter === "function" ? getter() : DEFAULT_CONFIG;
 }
 
 async function updateLastRouteMock(params: {
@@ -79,164 +56,11 @@ async function updateLastRouteMock(params: {
   await fs.writeFile(params.storePath, JSON.stringify(store));
 }
 
-function loadSessionStoreMock(storePath: string) {
-  try {
-    return JSON.parse(fsSync.readFileSync(storePath, "utf8")) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
-}
-
-type BufferedDispatchReplyParams = {
-  ctx: Record<string, unknown>;
-  replyResolver: (
-    ctx: Record<string, unknown>,
-    opts?: BufferedReplyOptions,
-  ) => Promise<Record<string, unknown> | undefined>;
-  replyOptions?: BufferedReplyOptions;
-  dispatcherOptions: {
-    deliver: (
-      payload: Record<string, unknown>,
-      info: { kind: "tool" | "block" | "final" },
-    ) => Promise<void>;
-    onReplyStart?: (() => Promise<void>) | (() => void);
-  };
-};
-
-type MockTypingController = {
-  markDispatchIdle?: () => void;
-  markRunComplete?: () => void;
-};
-
-type BufferedReplyOptions = Record<string, unknown> & {
-  onTypingController?: (typing: MockTypingController) => void;
-};
-
-type TestEnvelopeOptions = {
-  timezone?: string;
-  includeTimestamp?: boolean;
-  includeElapsed?: boolean;
-  userTimezone?: string;
-};
-
-type TestInboundEnvelopeParams = {
-  channel?: string;
-  from?: string;
-  body: string;
-  timestamp?: number | Date;
-  chatType?: string;
-  senderLabel?: string;
-  sender?: { name?: string; e164?: string; id?: string };
-  previousTimestamp?: number | Date;
-  envelope?: TestEnvelopeOptions;
-  fromMe?: boolean;
-};
-
-function sanitizeEnvelopeHeaderPart(value: string) {
-  return value
-    .replace(/\r\n|\r|\n/g, " ")
-    .replaceAll("[", "(")
-    .replaceAll("]", ")")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function resolveEnvelopeOptionsMock(cfg?: {
-  agents?: {
-    defaults?: {
-      userTimezone?: string;
-    };
-  };
-}): TestEnvelopeOptions {
-  const defaults = cfg?.agents?.defaults;
-  const configuredTimezone = normalizeOptionalString(defaults?.userTimezone);
-  return {
-    timezone: configuredTimezone ? (resolveTimezone(configuredTimezone) ?? "local") : undefined,
-    includeTimestamp: true,
-    includeElapsed: true,
-    userTimezone: defaults?.userTimezone,
-  };
-}
-
-function resolveEnvelopeTimestampMock(
-  timestamp: number | Date | undefined,
-  envelope?: TestEnvelopeOptions,
-) {
-  if (!timestamp || envelope?.includeTimestamp === false) {
-    return undefined;
-  }
-  const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
-  if (Number.isNaN(date.getTime())) {
-    return undefined;
-  }
-  const zone = envelope?.timezone?.trim();
-  if (zone === "user") {
-    return formatEnvelopeTimestamp(date, envelope?.userTimezone?.trim() || "local");
-  }
-  return formatEnvelopeTimestamp(date, zone || "local");
-}
-
-function resolveSenderLabelMock(sender?: TestInboundEnvelopeParams["sender"]) {
-  const display = sender?.name?.trim();
-  const idPart = sender?.e164?.trim() || sender?.id?.trim();
-  if (display && idPart && display !== idPart) {
-    return `${display} (${idPart})`;
-  }
-  return display || idPart || undefined;
-}
-
-function resolveDirectEnvelopeBodyLabelMock(from?: string) {
-  const label = sanitizeEnvelopeHeaderPart(from?.trim() || "");
-  const idMarkerIndex = label.search(/\s+id:/i);
-  if (idMarkerIndex > 0) {
-    const displayLabel = label.slice(0, idMarkerIndex).trim();
-    return displayLabel.includes(":") ? "(sender)" : displayLabel;
-  }
-  return label.includes(":") ? "(sender)" : label;
-}
-
-function formatInboundEnvelopeMock(params: TestInboundEnvelopeParams) {
-  const chatType = normalizeLowercaseStringOrEmpty(params.chatType);
-  const isDirect = !chatType || chatType === "direct";
-  const sender = params.senderLabel?.trim() || resolveSenderLabelMock(params.sender);
-  const directSender = resolveDirectEnvelopeBodyLabelMock(params.from);
-  const body =
-    isDirect && params.fromMe
-      ? `(self): ${params.body}`
-      : isDirect && directSender
-        ? `${directSender}: ${params.body}`
-        : !isDirect && sender
-          ? `${sanitizeEnvelopeHeaderPart(sender)}: ${params.body}`
-          : params.body;
-  const parts = [sanitizeEnvelopeHeaderPart(params.channel?.trim() || "Channel")];
-  const from = params.from?.trim();
-  if (from) {
-    parts.push(sanitizeEnvelopeHeaderPart(from));
-  }
-  const timestamp = resolveEnvelopeTimestampMock(params.timestamp, params.envelope);
-  if (timestamp) {
-    parts.push(timestamp);
-  }
-  return `[${parts.join(" ")}] ${body}`;
-}
-
-function createChannelMessageReplyPipelineMock() {
-  return {
-    onModelSelected: undefined,
-    responsePrefix: undefined,
-  };
-}
+type EnvelopeConfig = { agents?: { defaults?: { userTimezone?: string } } };
 
 function normalizePhoneLikeToE164(value: string) {
   const digits = value.replace(/\D+/g, "");
   return digits ? `+${digits}` : null;
-}
-
-function resolveIdentityNamePrefixMock(
-  cfg: { messages?: { responsePrefix?: string } },
-  _agentId: string,
-) {
-  return cfg.messages?.responsePrefix;
 }
 
 function resolveSendableOutboundReplyPartsMock(payload: Record<string, unknown>) {
@@ -249,84 +73,10 @@ function resolveSendableOutboundReplyPartsMock(payload: Record<string, unknown>)
   };
 }
 
-function resolveChannelMessageSourceReplyDeliveryModeMock(params: {
-  cfg: {
-    messages?: {
-      visibleReplies?: "automatic" | "message_tool";
-      groupChat?: { visibleReplies?: "automatic" | "message_tool" };
-    };
-  };
-  ctx: { ChatType?: string; CommandSource?: "text" | "native" };
-  requested?: "automatic" | "message_tool_only";
-}) {
-  if (params.requested) {
-    return params.requested;
-  }
-  if (params.ctx.CommandSource === "native") {
-    return "automatic";
-  }
-  const chatType = normalizeLowercaseStringOrEmpty(params.ctx.ChatType);
-  if (chatType === "group" || chatType === "channel") {
-    return params.cfg.messages?.groupChat?.visibleReplies === "automatic"
-      ? "automatic"
-      : "message_tool_only";
-  }
-  return params.cfg.messages?.visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
-}
-
-function toLocationContextMock(location: unknown) {
-  return { Location: location };
-}
-
-function createBufferedDispatchReplyMock() {
-  return vi.fn(async (params: BufferedDispatchReplyParams) => {
-    let typingController: MockTypingController | undefined;
-    const replyOptions: BufferedReplyOptions = {
-      ...params.replyOptions,
-      onTypingController: (typing) => {
-        typingController = typing;
-        params.replyOptions?.onTypingController?.(typing);
-      },
-    };
-    await params.dispatcherOptions.onReplyStart?.();
-    try {
-      const payload = await params.replyResolver(params.ctx, replyOptions);
-      if (!payload || typeof payload !== "object") {
-        return {
-          queuedFinal: false,
-          counts: { tool: 0, block: 0, final: 0 },
-        };
-      }
-      const text = typeof payload.text === "string" ? payload.text.trim() : "";
-      const hasMedia =
-        typeof payload.mediaUrl === "string" ||
-        typeof payload.mediaPath === "string" ||
-        typeof payload.fileUrl === "string";
-      if (!text && !hasMedia) {
-        return {
-          queuedFinal: false,
-          counts: { tool: 0, block: 0, final: 0 },
-        };
-      }
-      await params.dispatcherOptions.deliver(payload, { kind: "final" });
-      return {
-        queuedFinal: true,
-        counts: { tool: 0, block: 0, final: 1 },
-      };
-    } finally {
-      typingController?.markRunComplete?.();
-      typingController?.markDispatchIdle?.();
-    }
-  });
-}
-
+type VisibilityConfig = { contextVisibility?: string };
+type ChannelVisibilityConfig = VisibilityConfig & { accounts?: Record<string, VisibilityConfig> };
 function resolveChannelContextVisibilityModeMock(params: {
-  cfg: {
-    channels?: Record<
-      string,
-      { contextVisibility?: string; accounts?: Record<string, { contextVisibility?: string }> }
-    >;
-  };
+  cfg: { channels?: Record<string, ChannelVisibilityConfig> };
   channel: string;
   accountId?: string | null;
   configuredContextVisibility?: string;
@@ -342,121 +92,21 @@ function resolveChannelContextVisibilityModeMock(params: {
   return accountMode ?? channelConfig?.contextVisibility ?? "all";
 }
 
-function resolveGroupSessionKeyMock(ctx: { From?: string; ChatType?: string; Provider?: string }) {
-  const from = ctx.From?.trim() ?? "";
-  const chatType = normalizeLowercaseStringOrEmpty(ctx.ChatType);
-  const normalizedFrom = normalizeLowercaseStringOrEmpty(from);
-  if (!from) {
-    return null;
-  }
-  const isGroup =
-    chatType === "group" ||
-    chatType === "channel" ||
-    from.includes(":group:") ||
-    from.endsWith("@g.us");
-  if (!isGroup) {
-    return null;
-  }
-  return {
-    key: `whatsapp:group:${normalizedFrom}`,
-    channel: normalizeLowercaseStringOrEmpty(ctx.Provider) || "whatsapp",
-    id: normalizedFrom,
-    chatType: chatType === "channel" ? "channel" : "group",
-  };
-}
-
-function resolveChannelGroupPolicyMock(params: {
-  cfg: {
-    channels?: {
-      whatsapp?: {
-        groups?: Record<string, Record<string, unknown>>;
-        groupPolicy?: string;
-        allowFrom?: string[];
-        groupAllowFrom?: string[];
-      };
-    };
-  };
-  groupId?: string | null;
-  hasGroupAllowFrom?: boolean;
-}) {
-  const whatsappCfg = params.cfg.channels?.whatsapp;
-  const groups = whatsappCfg?.groups;
-  const groupConfig = params.groupId ? groups?.[params.groupId] : undefined;
-  const defaultConfig = groups?.["*"];
-  const hasGroups = Boolean(groups && Object.keys(groups).length > 0);
-  const allowAll = Boolean(defaultConfig);
-  const groupPolicy = whatsappCfg?.groupPolicy ?? "disabled";
-  const senderFilterBypass =
-    groupPolicy === "allowlist" && !hasGroups && Boolean(params.hasGroupAllowFrom);
-  const allowed =
-    groupPolicy === "disabled"
-      ? false
-      : groupPolicy !== "allowlist" || allowAll || Boolean(groupConfig) || senderFilterBypass;
-  return {
-    allowlistEnabled: groupPolicy === "allowlist" || hasGroups,
-    allowed,
-    groupConfig,
-    defaultConfig,
-  };
-}
-
-function resolveChannelGroupRequireMentionMock(params: {
-  cfg: {
-    channels?: {
-      whatsapp?: {
-        groups?: Record<string, { requireMention?: boolean }>;
-      };
-    };
-  };
-  groupId?: string | null;
-  requireMentionOverride?: boolean;
-}) {
-  const groups = params.cfg.channels?.whatsapp?.groups;
-  const groupConfig = params.groupId ? groups?.[params.groupId] : undefined;
-  const defaultConfig = groups?.["*"];
-  if (typeof groupConfig?.requireMention === "boolean") {
-    return groupConfig.requireMention;
-  }
-  if (typeof defaultConfig?.requireMention === "boolean") {
-    return defaultConfig.requireMention;
-  }
-  if (typeof params.requireMentionOverride === "boolean") {
-    return params.requireMentionOverride;
-  }
-  return true;
-}
-
-vi.mock("./auto-reply/config.runtime.js", () => ({
+// Match the current facade: session/group policy and dispatch moved to their SDK owners.
+vi.mock("./auto-reply/config.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auto-reply/config.runtime.js")>()),
   getRuntimeConfig: loadConfigMock,
-  loadConfig: loadConfigMock,
   updateLastRoute: updateLastRouteMock,
-  loadSessionStore: loadSessionStoreMock,
-  recordSessionMetaFromInbound: async () => undefined,
   resolveStorePath: resolveStorePathFallback,
-  evaluateSessionFreshness: () => ({ fresh: false }),
   resolveChannelContextVisibilityMode: resolveChannelContextVisibilityModeMock,
-  resolveChannelGroupPolicy: resolveChannelGroupPolicyMock,
-  resolveChannelGroupRequireMention: resolveChannelGroupRequireMentionMock,
-  resolveChannelResetConfig: () => undefined,
-  resolveGroupSessionKey: resolveGroupSessionKeyMock,
-  resolveSessionKey: (_scope: string, msg: { From?: string }, mainKey?: string) =>
-    msg.From?.trim() || mainKey || "main",
-  resolveSessionResetPolicy: () => undefined,
-  resolveSessionResetType: () => "message",
-  resolveThreadFlag: () => false,
 }));
 
-vi.mock("./inbound/runtime-api.js", () => ({
+vi.mock("./inbound/runtime-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./inbound/runtime-api.js")>()),
   DisconnectReason: { loggedOut: 401 },
   isJidGroup: (jid: string) => typeof jid === "string" && jid.endsWith("@g.us"),
   normalizeMessageContent: (message: unknown) => message,
   downloadMediaMessage: vi.fn().mockResolvedValue(Buffer.from("img")),
-  saveMediaBuffer: vi.fn().mockImplementation(async (_buf: Buffer, contentType?: string) => ({
-    id: "mid",
-    path: "/tmp/mid",
-    size: _buf.length,
-    contentType,
-  })),
 }));
 
 vi.mock("./auto-reply/monitor/runtime-api.js", async (importOriginal) => ({
@@ -473,27 +123,26 @@ vi.mock("./auto-reply/monitor/runtime-api.js", async (importOriginal) => ({
       ? `Chat messages since your last reply:\n${rendered}\n\n${params.currentMessage}`
       : params.currentMessage;
   },
-  createChannelMessageReplyPipeline: createChannelMessageReplyPipelineMock,
-  dispatchReplyWithBufferedBlockDispatcher: createBufferedDispatchReplyMock(),
-  formatInboundEnvelope: formatInboundEnvelopeMock,
+  createChannelMessageReplyPipeline: () => ({
+    onModelSelected: undefined,
+    responsePrefix: undefined,
+  }),
   getAgentScopedMediaLocalRoots: () => [] as string[],
   isControlCommandMessage: () => false,
   jidToE164: normalizePhoneLikeToE164,
   logVerbose: (_msg: string) => undefined,
   normalizeE164: normalizePhoneLikeToE164,
-  readStoreAllowFromForDmPolicy: async () => [] as string[],
-  recordSessionMetaFromInbound: async () => undefined,
-  resolveChannelMessageSourceReplyDeliveryMode: resolveChannelMessageSourceReplyDeliveryModeMock,
   resolveChannelContextVisibilityMode: resolveChannelContextVisibilityModeMock,
   resolveChunkMode: () => undefined,
-  resolveIdentityNamePrefix: resolveIdentityNamePrefixMock,
+  resolveIdentityNamePrefix: (cfg: { messages?: { responsePrefix?: string } }, _agentId: string) =>
+    cfg.messages?.responsePrefix,
   resolveInboundLastRouteSessionKey: (params: { sessionKey: string }) => params.sessionKey,
   resolveInboundSessionEnvelopeContextAsync: async (params: {
-    cfg: { session?: { store?: string } } & Parameters<typeof resolveEnvelopeOptionsMock>[0];
+    cfg: { session?: { store?: string } } & EnvelopeConfig;
     agentId: string;
   }) => ({
     storePath: resolveStorePathFallback(params.cfg.session?.store, { agentId: params.agentId }),
-    envelopeOptions: resolveEnvelopeOptionsMock(params.cfg),
+    envelopeOptions: resolveEnvelopeFormatOptions(params.cfg),
     previousTimestamp: undefined,
   }),
   resolveMarkdownTableMode: () => undefined,
@@ -508,29 +157,18 @@ vi.mock("./auto-reply/monitor/runtime-api.js", async (importOriginal) => ({
   resolveTextChunkLimit: () => 64_000,
   shouldComputeCommandAuthorized: () => false,
   shouldLogVerbose: () => false,
-  toLocationContext: toLocationContextMock,
-}));
-
-vi.mock("./auto-reply/monitor/group-activation.runtime.js", () => ({
-  normalizeGroupActivation: (value: unknown) =>
-    value === "always" || value === "mention" ? value : undefined,
-}));
-
-vi.mock("./auto-reply/monitor/message-line.runtime.js", () => ({
-  formatInboundEnvelope: formatInboundEnvelopeMock,
 }));
 
 vi.mock("./auth-store.runtime.js", () => ({
   resolveOAuthDir: () => "/tmp/openclaw-oauth",
 }));
 
+// mock-isolation: synthetic Baileys sockets keep tests off real WhatsApp sessions and credentials.
 vi.mock("./session.runtime.js", () => {
   const created = createMockBaileys();
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")] =
     created.lastSocket;
-  return {
-    ...created.mod,
-  };
+  return { ...created.mod };
 });
 
 vi.mock("./qr-terminal.js", () => ({
@@ -539,19 +177,13 @@ vi.mock("./qr-terminal.js", () => ({
 
 export const baileys = await import("./session.runtime.js");
 
-function resetMockExport<T extends (...args: never[]) => unknown>(params: {
-  current: T;
-  implementation: T;
-}) {
-  if (!("mockReset" in params.current) || typeof params.current.mockReset !== "function") {
+function resetMockExport<T extends (...args: never[]) => unknown>(current: T, implementation: T) {
+  if (!("mockReset" in current) || typeof current.mockReset !== "function") {
     return;
   }
-  params.current.mockReset();
-  if (
-    "mockImplementation" in params.current &&
-    typeof params.current.mockImplementation === "function"
-  ) {
-    params.current.mockImplementation(params.implementation);
+  current.mockReset();
+  if ("mockImplementation" in current && typeof current.mockImplementation === "function") {
+    current.mockImplementation(implementation);
   }
 }
 
@@ -560,44 +192,10 @@ export function resetBaileysMocks() {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")] =
     recreated.lastSocket;
 
-  const makeWASocket = vi.mocked(baileys.makeWASocket);
-  const makeWASocketImpl: typeof baileys.makeWASocket = (...args) =>
-    (recreated.mod.makeWASocket as unknown as typeof baileys.makeWASocket)(...args);
-  resetMockExport({
-    current: makeWASocket,
-    implementation: makeWASocketImpl,
-  });
-
-  const useMultiFileAuthState = vi.mocked(baileys.useMultiFileAuthState);
-  const useMultiFileAuthStateImpl: typeof baileys.useMultiFileAuthState = (...args) =>
-    (recreated.mod.useMultiFileAuthState as unknown as typeof baileys.useMultiFileAuthState)(
-      ...args,
-    );
-  resetMockExport({
-    current: useMultiFileAuthState,
-    implementation: useMultiFileAuthStateImpl,
-  });
-
-  const fetchLatestBaileysVersion = vi.mocked(baileys.fetchLatestBaileysVersion);
-  const fetchLatestBaileysVersionImpl: typeof baileys.fetchLatestBaileysVersion = (...args) =>
-    (
-      recreated.mod.fetchLatestBaileysVersion as unknown as typeof baileys.fetchLatestBaileysVersion
-    )(...args);
-  resetMockExport({
-    current: fetchLatestBaileysVersion,
-    implementation: fetchLatestBaileysVersionImpl,
-  });
-
-  const makeCacheableSignalKeyStore = vi.mocked(baileys.makeCacheableSignalKeyStore);
-  const makeCacheableSignalKeyStoreImpl: typeof baileys.makeCacheableSignalKeyStore = (...args) =>
-    (
-      recreated.mod
-        .makeCacheableSignalKeyStore as unknown as typeof baileys.makeCacheableSignalKeyStore
-    )(...args);
-  resetMockExport({
-    current: makeCacheableSignalKeyStore,
-    implementation: makeCacheableSignalKeyStoreImpl,
-  });
+  resetMockExport(baileys.makeWASocket, recreated.mod.makeWASocket);
+  resetMockExport(baileys.useMultiFileAuthState, recreated.mod.useMultiFileAuthState);
+  resetMockExport(baileys.fetchLatestBaileysVersion, recreated.mod.fetchLatestBaileysVersion);
+  resetMockExport(baileys.makeCacheableSignalKeyStore, recreated.mod.makeCacheableSignalKeyStore);
 }
 
 export function getLastSocket(): MockBaileysSocket {
@@ -605,8 +203,5 @@ export function getLastSocket(): MockBaileysSocket {
   if (typeof getter === "function") {
     return (getter as () => MockBaileysSocket)();
   }
-  if (!getter) {
-    throw new Error("Baileys mock not initialized");
-  }
-  throw new Error("Invalid Baileys socket getter");
+  throw new Error(getter ? "Invalid Baileys socket getter" : "Baileys mock not initialized");
 }

@@ -1,94 +1,24 @@
-import { mountOpenClawApp } from "./app/app-root.tsx";
 import "./styles.css";
+import "./styles/settings-native-controls.css";
 import { unsupportedControlUiBrowser } from "./app/boot-capabilities.ts";
-import { inferControlUiPublicAssetPath } from "./app/public-assets.ts";
-import { isRemoteControlUiIngress } from "./app/remote-ingress.ts";
-import {
-  installMissingStylesheetRecovery,
-  installStaleChunkReloadListener,
-} from "./app/stale-chunk-reload.ts";
-import { CONTROL_UI_BUILD_INFO, controlUiWorkerActivationRetires } from "./build-info.ts";
-import kbdStyles from "./components/kbd.css?inline";
-
-type ViteImportMeta = ImportMeta & {
-  readonly env?: {
-    readonly PROD?: boolean;
-  };
-};
+import { prepareApplicationStartup } from "./app/bootstrap-connection.ts";
+import { initializeControlUiDocumentHead } from "./app/control-ui-document-head.ts";
+import { startEarlyApplicationGateway } from "./app/early-gateway.ts";
 
 if (!unsupportedControlUiBrowser) {
-  const root = document.querySelector<HTMLElement>("openclaw-app");
-  if (root) {
-    mountOpenClawApp(root);
-  }
-  const isProd = (import.meta as ViteImportMeta).env?.PROD === true;
-  const currentControlUiBuildId = CONTROL_UI_BUILD_INFO.buildId;
-
-  // Share the exact keyboard-hint rules with shadow roots without making renderers
-  // depend on bundler-only CSS imports (they are also imported by Node consumers).
-  const keyboardHintStyles = document.createElement("style");
-  keyboardHintStyles.textContent = kbdStyles;
-  document.head.append(keyboardHintStyles);
-
-  for (const [selector, asset] of [
-    ['link[rel="icon"][type="image/svg+xml"]', "favicon.svg"],
-    ['link[rel="icon"][type="image/png"]', "favicon-32.png"],
-    ['link[rel="apple-touch-icon"]', "apple-touch-icon.png"],
-    ['link[rel="manifest"]', "manifest.webmanifest"],
-  ] as const) {
-    const link = document.querySelector<HTMLLinkElement>(selector);
-    if (link) {
-      link.href = inferControlUiPublicAssetPath(asset);
-    }
-  }
-  installStaleChunkReloadListener();
-  installMissingStylesheetRecovery();
-
-  if (isRemoteControlUiIngress() && window.parent !== window) {
-    void import("./app/native-gateways.runtime.ts")
-      .then(({ nativeGatewaysCapability }) => nativeGatewaysCapability())
-      .catch((error: unknown) => {
-        console.warn("OpenClaw embedder Gateway switcher failed to load.", error);
-      });
-  }
-
-  if (isProd && !isRemoteControlUiIngress() && "serviceWorker" in navigator) {
-    const swUrl = new URL(inferControlUiPublicAssetPath("sw.js"), window.location.origin);
-    swUrl.searchParams.set("v", currentControlUiBuildId);
-    if (document.documentElement.dataset.openclawProxySessionEntry === "true") {
-      swUrl.searchParams.set("session-entry", "1");
-    }
-    const refresh = () =>
-      import("./app/sw-refresh.runtime.ts")
-        .then(({ refreshControlUiServiceWorker }) => refreshControlUiServiceWorker())
-        .catch((error: unknown) => {
-          console.warn("OpenClaw service worker refresh failed.", error);
-        });
-    navigator.serviceWorker.addEventListener("message", (event) => {
-      if (
-        event.source === navigator.serviceWorker.controller &&
-        controlUiWorkerActivationRetires(event.data)
-      ) {
-        // A fresh document can still be controlled by the preceding build.
-        void refresh();
-      }
-      if (event.data?.type === "sw-version-probe") {
-        event.ports[0]?.postMessage({ version: currentControlUiBuildId });
-      }
-    });
-    navigator.serviceWorker.addEventListener("controllerchange", () => void refresh());
-    void navigator.serviceWorker
-      .register(swUrl, { updateViaCache: "none" })
-      .then(refresh)
-      .catch((error: unknown) => {
-        console.warn("OpenClaw service worker registration failed.", error);
-      });
-  } else if (!isProd && !isRemoteControlUiIngress() && "serviceWorker" in navigator) {
-    // Unregister any leftover dev SW to avoid stale cache issues.
-    void navigator.serviceWorker.getRegistrations().then((registrations) => {
-      for (const r of registrations) {
-        void r.unregister();
-      }
-    });
-  }
+  const initial = prepareApplicationStartup();
+  initializeControlUiDocumentHead();
+  const early = startEarlyApplicationGateway(initial);
+  // Keep transport first; the scoped read and validation overlap the application graph.
+  initial.prewarmChatSnapshot();
+  // Route hints fetch the renderer while the challenge/signature is pending.
+  // Cold chat evaluation overlaps the reply; New and admitted cached views
+  // must not wait for a challenge from an unreachable Gateway.
+  void (
+    early?.credentials && !early.credentials.hasWarmBoot
+      ? early.transport.client.initialConnectSent
+      : Promise.resolve()
+  )
+    .then(() => import("./main.runtime.ts"))
+    .then(({ startControlUi }) => startControlUi(initial, early));
 }

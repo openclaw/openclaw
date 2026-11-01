@@ -19,7 +19,7 @@ import {
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
-import { LOGBOOK_POSTGRES_SCHEMA_SQL } from "./logbook-postgres-schema.js";
+import { logbookEngineSchema } from "./store-engine-schema.js";
 import { LOGBOOK_SCHEMA_VERSION, SCHEMA } from "./store-schema.js";
 
 export const LOGBOOK_SQLITE_BUSY_TIMEOUT_MS = 5_000;
@@ -41,12 +41,7 @@ export function createLogbookDatabase(dbPath: string, input?: DatabaseEngineInpu
       openEngineStore({
         anchor,
         input,
-        schema: {
-          id: "logbook",
-          version: LOGBOOK_SCHEMA_VERSION,
-          sqlite: SCHEMA,
-          postgres: LOGBOOK_POSTGRES_SCHEMA_SQL,
-        },
+        schema: logbookEngineSchema,
         inspectSqlite: () => {
           admitSqliteSchema(anchor);
           const facts = getAdmittedSqliteSchemaFacts(anchor);

@@ -1,11 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import process from "node:process";
 
-type ChildProcessBridgeOptions = {
-  signals?: NodeJS.Signals[];
-  onSignal?: (signal: NodeJS.Signals) => void;
-};
-
 const defaultSignals: NodeJS.Signals[] =
   process.platform === "win32"
     ? ["SIGTERM", "SIGINT", "SIGBREAK"]
@@ -14,11 +9,11 @@ const defaultSignals: NodeJS.Signals[] =
 /** Forwards process termination signals to a child and detaches on terminal lifecycle events. */
 export function attachChildProcessBridge(
   child: ChildProcess,
-  { signals = defaultSignals, onSignal }: ChildProcessBridgeOptions = {},
+  onSignal?: (signal: NodeJS.Signals) => void,
 ): { detach: () => void } {
   const listeners = new Map<NodeJS.Signals, () => void>();
   let childExited = false;
-  for (const signal of signals) {
+  for (const signal of defaultSignals) {
     const listener = (): void => {
       if (childExited) {
         return;

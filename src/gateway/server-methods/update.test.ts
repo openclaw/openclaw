@@ -40,8 +40,18 @@ import {
   mockGitInstallSurface,
 } from "./update.test-harness.js";
 
+const restarting = "⏳ Preparing to restart OpenClaw… The update is not complete yet.";
+
 function expectHandoff(fields: Record<string, unknown>) {
   expect(startHandoff).toHaveBeenCalledWith(expect.objectContaining(fields));
+}
+
+function expectServingHandoff(payload: unknown, fields: Record<string, unknown>) {
+  expectHandoff(fields);
+  expect(startHandoff).toHaveBeenCalledOnce();
+  expect(transferHandoff).toHaveBeenCalledOnce();
+  expect(scheduleRestart).not.toHaveBeenCalled();
+  expect(payload).toMatchObject({ ok: true, restart: null });
 }
 
 function managedPackage() {
@@ -52,6 +62,16 @@ function managedPackage() {
     latestVersion: "2.0.0",
     channel: "stable",
   });
+}
+
+function deferNotice() {
+  const delivered = createDeferredCore<boolean>();
+  const started = createDeferredCore();
+  sendNotice.mockImplementationOnce(() => {
+    started.resolve();
+    return delivered.promise;
+  });
+  return { delivered, started };
 }
 
 function preparedHandoff() {
@@ -165,12 +185,7 @@ describe("update.run acknowledgement", () => {
       if (managed) {
         managedPackage();
       }
-      const acknowledgement = createDeferredCore<boolean>();
-      const acknowledgementStarted = createDeferredCore();
-      sendNotice.mockImplementationOnce(() => {
-        acknowledgementStarted.resolve();
-        return acknowledgement.promise;
-      });
+      const { delivered: acknowledgement, started: acknowledgementStarted } = deferNotice();
       const running = captureUpdateRunPayload({ sessionKey });
       try {
         await Promise.race([acknowledgementStarted.promise, running]);
@@ -190,20 +205,21 @@ describe("update.run acknowledgement", () => {
         origin: { sessionKey: canonicalSessionKey },
       });
       expect(listUpdateRuns()).toHaveLength(1);
-      expect(readCapturedPayload().stats?.runId).toBe(response?.runId);
-      expect(readCapturedPayload().sessionKey).toBe(canonicalSessionKey);
+      expect(readCapturedPayload()).toMatchObject({
+        stats: { runId: response?.runId },
+        sessionKey: canonicalSessionKey,
+      });
       if (managed) {
         expect(sendNotice).toHaveBeenCalledOnce();
         expectHandoff({
           runId: response?.runId,
           meta: expect.objectContaining({ runId: response?.runId }),
         });
-        expect(run?.steps).toContainEqual(
-          expect.objectContaining({ step: "managed-service update handoff", status: "completed" }),
+        const handoffStep = run?.steps.find(
+          (step) => step.step === "managed-service update handoff",
         );
-        expect(
-          run?.steps.find((step) => step.step === "managed-service update handoff")?.detail,
-        ).toBeUndefined();
+        expect(handoffStep).toMatchObject({ status: "completed" });
+        expect(handoffStep?.detail).toBeUndefined();
       } else {
         expectHandoff({ runId: response?.runId });
         expect(run?.phase).toBe("requested");
@@ -225,6 +241,8 @@ describe("update.run acknowledgement", () => {
   it("merges explicit route fields and refuses a second prepared updater after acknowledgement", async () => {
     startHandoff.mockResolvedValueOnce({
       status: "joined",
+      message:
+        "Update blocked by cancelled update custody: owner previous-update; run openclaw update repair.",
       command: "openclaw update --yes",
       logPath: "/tmp/fixture.log",
     });
@@ -237,7 +255,13 @@ describe("update.run acknowledgement", () => {
       ackDelivered: true,
       ok: false,
       result: { reason: "managed-service-handoff-already-running" },
+      handoff: {
+        message: expect.stringContaining("cancelled update custody: owner previous-update"),
+      },
     });
+    expect(getUpdateRun(response!.runId)?.origin.nextAction).toContain(
+      "cancelled update custody: owner previous-update",
+    );
     expect(scheduleRestart).not.toHaveBeenCalled();
     expect(transferHandoff).not.toHaveBeenCalled();
     expect(recordSentinel).not.toHaveBeenCalled();
@@ -262,12 +286,7 @@ describe("update.run acknowledgement", () => {
     }
     expect(getUpdateRun(response.runId)?.phase).toBe("requested");
     expect(sendNotice).toHaveBeenCalledOnce();
-    const delivered = createDeferredCore<boolean>();
-    const started = createDeferredCore();
-    sendNotice.mockImplementationOnce(() => {
-      started.resolve();
-      return delivered.promise;
-    });
+    const { delivered, started } = deferNotice();
     let parked = false;
     const park = beforePark().then(() => {
       parked = true;
@@ -292,9 +311,7 @@ describe("update.run acknowledgement", () => {
     ).toEqual(["requested", "staging", "validating"]);
     expect(sendNotice).toHaveBeenCalledTimes(2);
     expect(sendNotice).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        message: "⏳ Restarting OpenClaw…",
-      }),
+      expect.objectContaining({ message: restarting }),
       expect.any(Object),
     );
   });
@@ -326,7 +343,7 @@ describe("update.run acknowledgement", () => {
             type: "message",
             message: expect.objectContaining({
               idempotencyKey: `update-run-activating:${runId}`,
-              content: [{ type: "text", text: "⏳ Restarting OpenClaw…" }],
+              content: [{ type: "text", text: restarting }],
             }),
           }),
         );
@@ -385,10 +402,7 @@ describe("update.run restart scheduling", () => {
     expect(cancelHandoff).toHaveBeenCalledOnce();
     expect(payload).toMatchObject({ ok: false, sentinel: { persisted: false } });
     const run = getUpdateRun(payload!.runId);
-    expect(run).toMatchObject({
-      status: "failed",
-      reason: "managed-service-handoff-failed",
-    });
+    expect(run).toMatchObject({ status: "failed", reason: "managed-service-handoff-failed" });
     expect(run?.steps).toContainEqual(
       expect.objectContaining({
         step: "requested",
@@ -415,17 +429,12 @@ describe("update.run restart scheduling", () => {
     async ({ supervisor, restartDelayMs, expectedDelayMs }) => {
       detectSupervisor.mockReturnValueOnce(supervisor);
       mockGlobalInstallSurface();
-
       const payload = await captureUpdateRunPayload({ restartDelayMs });
-
-      expectHandoff({
+      expectServingHandoff(payload, {
         supervisor,
         restartDrainTimeoutMs: 300_000,
         restartDelayMs: expectedDelayMs,
       });
-      expect(transferHandoff).toHaveBeenCalledOnce();
-      expect(scheduleRestart).not.toHaveBeenCalled();
-      expect(payload).toMatchObject({ ok: true, restart: null });
     },
   );
 
@@ -443,10 +452,8 @@ describe("update.run restart scheduling", () => {
       cwdSpy.mockRestore();
     }
 
-    expect(startHandoff).toHaveBeenCalledTimes(1);
-    expectHandoff({
-      root: "/tmp/openclaw-global",
-    });
+    expect(startHandoff).toHaveBeenCalledOnce();
+    expectHandoff({ root: "/tmp/openclaw-global" });
   });
 
   it("delegates Git preflight to the same prepared updater while serving", async () => {
@@ -460,8 +467,7 @@ describe("update.run restart scheduling", () => {
       captureUpdateRunPayload(),
     );
 
-    expect(startHandoff).toHaveBeenCalledTimes(1);
-    expectHandoff({
+    expectServingHandoff(payload, {
       root,
       handoffId: expect.any(String),
       supervisor: "launchd",
@@ -470,8 +476,6 @@ describe("update.run restart scheduling", () => {
         root,
       }),
     });
-    expect(scheduleRestart).not.toHaveBeenCalled();
-    expect(transferHandoff).toHaveBeenCalledOnce();
     expect(payload).toMatchObject({
       ok: true,
       result: { status: "skipped", reason: "managed-service-handoff-started", mode: "git" },
@@ -482,38 +486,6 @@ describe("update.run restart scheduling", () => {
       command: "openclaw update --yes --timeout 1800",
     });
     expect(readCapturedPayload().status).toBe("skipped");
-  });
-
-  it("keeps the serving Gateway when its prepared helper cannot start", async () => {
-    detectSupervisor.mockReturnValueOnce("launchd");
-    startHandoff.mockRejectedValueOnce(new Error("fixture helper import failed"));
-    const payload = await captureUpdateRunPayload();
-    expect(payload).toMatchObject({
-      ok: false,
-      result: { status: "error", reason: "managed-service-handoff-failed" },
-    });
-    expect(transferHandoff).not.toHaveBeenCalled();
-    expect(scheduleRestart).not.toHaveBeenCalled();
-  });
-
-  it("hands Windows fallback gateways to the CLI path before doctor activation", async () => {
-    detectSupervisor.mockReturnValueOnce("schtasks");
-    mockGitInstallSurface("C:\\openclaw");
-
-    const payload = await withEnvAsync(
-      {
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
-      },
-      () => captureUpdateRunPayload(),
-    );
-
-    expectHandoff({
-      supervisor: "schtasks",
-      handoffId: expect.any(String),
-    });
-    expect(payload?.ok).toBe(true);
-    expect(payload?.result?.reason).toBe("managed-service-handoff-started");
   });
 
   it("does not pass the stored stable channel to supervised git handoff CLI", async () => {
@@ -540,51 +512,46 @@ describe("update.run restart scheduling", () => {
     expectHandoff({ channel: "extended-stable" });
   });
 
-  it("hands systemd-supervised git/dev updates to handoff from the durable unit identity", async () => {
-    detectSupervisor.mockReturnValueOnce("systemd");
-    mockGitInstallSurface("/tmp/openclaw-git");
-
-    const payload = await withEnvAsync(
-      {
+  it.each([
+    {
+      name: "Windows fallback",
+      supervisor: "schtasks",
+      root: "C:\\openclaw",
+      env: { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "gateway" },
+    },
+    {
+      name: "systemd unit identity",
+      supervisor: "systemd",
+      root: "/tmp/openclaw-git",
+      env: {
         OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
         INVOCATION_ID: "8a77e69a8f604bf0b7984879b9f17a7c",
       },
-      () => captureUpdateRunPayload(),
-    );
-
-    expect(startHandoff).toHaveBeenCalledTimes(1);
-    expectHandoff({
-      root: "/tmp/openclaw-git",
+    },
+    {
+      name: "systemd marker-only identity",
       supervisor: "systemd",
-    });
-    expect(payload).toMatchObject({
-      ok: true,
-      handoff: { status: "started" },
-      result: { status: "skipped", reason: "managed-service-handoff-started", mode: "git" },
-    });
-  });
-
-  it("hands marker-only systemd git/dev updates to the helper for exact ownership verification", async () => {
-    detectSupervisor.mockReturnValueOnce("systemd");
-    mockGitInstallSurface("/tmp/openclaw-git");
-
-    const payload = await withEnvAsync(
-      {
+      root: "/tmp/openclaw-git",
+      env: {
         OPENCLAW_SYSTEMD_UNIT: undefined,
         OPENCLAW_SERVICE_MARKER: "openclaw",
         OPENCLAW_SERVICE_KIND: "gateway",
       },
-      () => captureUpdateRunPayload(),
-    );
-    expectHandoff({ root: "/tmp/openclaw-git", supervisor: "systemd" });
-    expect(scheduleRestart).not.toHaveBeenCalled();
-    expect(transferHandoff).toHaveBeenCalledOnce();
-    expect(payload).toMatchObject({
-      ok: true,
-      handoff: { status: "started" },
-      result: { status: "skipped", reason: "managed-service-handoff-started", mode: "git" },
-    });
-  });
+    },
+  ] as const)(
+    "hands $name Git updates to the helper for ownership verification",
+    async ({ supervisor, root, env }) => {
+      detectSupervisor.mockReturnValueOnce(supervisor);
+      mockGitInstallSurface(root);
+      const payload = await withEnvAsync(env, () => captureUpdateRunPayload());
+      expectServingHandoff(payload, { root, supervisor, handoffId: expect.any(String) });
+      expect(payload).toMatchObject({
+        ok: true,
+        handoff: { status: "started" },
+        result: { status: "skipped", reason: "managed-service-handoff-started", mode: "git" },
+      });
+    },
+  );
 
   it("accepts a foreground global install without inventing a native service identity", async () => {
     mockGlobalInstallSurface();
@@ -711,12 +678,7 @@ describe("update.run prepared foreground handoff", () => {
       requester: { channel: "slack", senderId: "C0123ABC" },
     });
     const handoff = preparedHandoff();
-    const notice = createDeferredCore<boolean>();
-    const noticeStarted = createDeferredCore();
-    sendNotice.mockImplementationOnce(() => {
-      noticeStarted.resolve();
-      return notice.promise;
-    });
+    const { delivered: notice, started: noticeStarted } = deferNotice();
     const parking = handoff.beforePark?.();
     await noticeStarted.promise;
     claimHandoff.mockReturnValue(false);

@@ -5,6 +5,7 @@ import type { WorkerProfile } from "../../plugins/types.js";
 import type { EnvironmentRecipe } from "./environment-recipe.js";
 import {
   WorkerPreparationTargetSchema,
+  type WorkerRuntimePreparationIdentity,
   type WorkerPreparationArtifacts,
   type WorkerProjectPreparationIdentity,
 } from "./preparation-identity.schema.js";
@@ -12,8 +13,14 @@ import type { WorkerProjectSnapshot } from "./workspace-git-base.js";
 
 export type WorkerProviderPreparedIntent = {
   providerId: string;
-  profileSnapshot: WorkerProfile;
-  preparationKey?: string;
+  profileSnapshot: WorkerProfile &
+    (
+      | {
+          project?: WorkerProjectSnapshot & { preparation?: WorkerProjectPreparationIdentity };
+          runtimePreparation?: never;
+        }
+      | { project?: never; runtimePreparation: WorkerRuntimePreparationIdentity }
+    );
 };
 
 export function createWorkerPreparationIdentity(params: {
@@ -22,6 +29,7 @@ export function createWorkerPreparationIdentity(params: {
   profileId: string;
   profileSnapshot: WorkerProfile;
   project?: WorkerProjectSnapshot;
+  imageReserve?: true;
   target: WorkerProjectPreparationIdentity["target"];
   artifacts: WorkerPreparationArtifacts;
   setupRecipe?: string;
@@ -63,7 +71,9 @@ export function createWorkerPreparationIdentity(params: {
     // Providers own the disk fingerprint; unknown providers conservatively retain
     // their settings. Installation and execution mode belong to runtime readiness.
     profile: facts.target.profileKey ?? params.profileSnapshot.settings,
-    project: params.project ? { key: params.project.key } : { source: "empty" },
+    project: params.project
+      ? { key: params.project.key }
+      : { source: params.imageReserve ? "image" : "empty" },
     workspaceProtocol: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
   };
   const digest = (value: unknown) => sha256Hex(stableStringify(value));

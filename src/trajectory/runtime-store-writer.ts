@@ -339,7 +339,7 @@ async function appendSqliteTrajectoryRuntimeEventsInWorker(
       return (retained) => {
         const admission = createSqliteWorkerOperationAdmission((request, grant) => {
           binding.authorize(request);
-          if (request.stage === "transaction") {
+          if (request.stage === "transaction" || request.stage === "commit") {
             transaction = { admission, retained };
           }
           assertCurrent();

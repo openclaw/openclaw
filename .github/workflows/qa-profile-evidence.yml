@@ -102,7 +102,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.x"
+  NODE_VERSION: "24.22.1"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   # Package-candidate builds run after shard concurrency starts and need the same explicit
   # heap authority as the initial private-QA build on Blacksmith runners.
@@ -177,7 +177,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       # github.workflow_sha identifies the caller during workflow_call. Resolve the called
@@ -212,7 +212,8 @@ jobs:
           );
           NODE
 
-      - name: Prepare Git owner
+      - &prepare_qa_git_owner
+        name: Prepare Git owner
         uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout selected ref
@@ -316,7 +317,8 @@ jobs:
     steps:
       # Keep the permission control in the same job as the dynamic checkouts. Besides enforcing
       # direct dispatches, this makes the trusted caller boundary visible to static analysis.
-      - name: Require authorized workflow actor
+      - &require_authorized_qa_actor
+        name: Require authorized workflow actor
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
@@ -353,10 +355,10 @@ jobs:
               );
             }
 
-      - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
+      - *prepare_qa_git_owner
 
-      - name: Checkout trusted QA harness
+      - &checkout_trusted_qa_harness
+        name: Checkout trusted QA harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: openclaw/openclaw
@@ -364,7 +366,8 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Restore trusted QA harness revision
+      - &restore_trusted_qa_harness
+        name: Restore trusted QA harness revision
         env:
           EXPECTED_WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
         shell: bash
@@ -386,7 +389,8 @@ jobs:
           install-bun: "false"
           install-deps: "false"
 
-      - name: Checkout selected ref
+      - &checkout_selected_qa_revision
+        name: Checkout selected ref
         env:
           EXPECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
         shell: bash
@@ -484,67 +488,13 @@ jobs:
     steps:
       # Keep the permission control in the same job as the dynamic checkouts. Besides enforcing
       # direct dispatches, this makes the trusted caller boundary visible to static analysis.
-      - name: Require authorized workflow actor
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        env:
-          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
-          JOB_CONTEXT: ${{ toJSON(job) }}
-        with:
-          script: |
-            const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
-            const callerWorkflowRef = process.env.CALLER_WORKFLOW_REF ?? "";
-            const calledWorkflowRef =
-              "openclaw/openclaw/.github/workflows/qa-profile-evidence.yml@refs/heads/main";
-            const trustedMainCaller =
-              callerWorkflowRef !== calledWorkflowRef &&
-              /^openclaw\/openclaw\/.github\/workflows\/[A-Za-z0-9_.-]+\.yml@refs\/heads\/main$/u.test(
-                callerWorkflowRef,
-              ) &&
-              job.workflow_repository === "openclaw/openclaw" &&
-              job.workflow_ref === calledWorkflowRef;
-            if (context.actor === "github-actions[bot]") {
-              if (!trustedMainCaller) {
-                throw new Error("Bot invocation is not bound to a trusted main-branch caller.");
-              }
-              return;
-            }
-            const allowed = new Set(["admin", "maintain", "write"]);
-            const { owner, repo } = context.repo;
-            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
-              owner,
-              repo,
-              username: context.actor,
-            });
-            if (!allowed.has(data.permission)) {
-              throw new Error(
-                `Workflow requires write/maintain/admin access; actor ${context.actor} has ${data.permission}.`,
-              );
-            }
+      - *require_authorized_qa_actor
 
-      - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
+      - *prepare_qa_git_owner
 
-      - name: Checkout trusted QA harness
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: openclaw/openclaw
-          ref: main
-          fetch-depth: 1
-          persist-credentials: false
+      - *checkout_trusted_qa_harness
 
-      - name: Restore trusted QA harness revision
-        env:
-          EXPECTED_WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! "$EXPECTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Expected workflow SHA must be a full lowercase commit SHA." >&2
-            exit 1
-          fi
-          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_WORKFLOW_SHA"
-          git checkout --detach "$EXPECTED_WORKFLOW_SHA"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_WORKFLOW_SHA"
+      - *restore_trusted_qa_harness
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -554,23 +504,7 @@ jobs:
           install-bun: "true"
           install-deps: "false"
 
-      - name: Checkout selected ref
-        env:
-          EXPECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ ! -e selected ]] || { echo "Selected checkout path already exists." >&2; exit 1; }
-          if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Expected selected SHA must be a full lowercase commit SHA." >&2
-            exit 1
-          fi
-          git init selected
-          git -C selected remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
-          cd selected
-          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_SHA"
-          git checkout --detach FETCH_HEAD
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - *checkout_selected_qa_revision
 
       - name: Install selected dependencies
         shell: bash
@@ -806,67 +740,13 @@ jobs:
     steps:
       # Keep the permission control in the same job as the dynamic checkouts. Besides enforcing
       # direct dispatches, this makes the trusted caller boundary visible to static analysis.
-      - name: Require authorized workflow actor
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        env:
-          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
-          JOB_CONTEXT: ${{ toJSON(job) }}
-        with:
-          script: |
-            const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
-            const callerWorkflowRef = process.env.CALLER_WORKFLOW_REF ?? "";
-            const calledWorkflowRef =
-              "openclaw/openclaw/.github/workflows/qa-profile-evidence.yml@refs/heads/main";
-            const trustedMainCaller =
-              callerWorkflowRef !== calledWorkflowRef &&
-              /^openclaw\/openclaw\/.github\/workflows\/[A-Za-z0-9_.-]+\.yml@refs\/heads\/main$/u.test(
-                callerWorkflowRef,
-              ) &&
-              job.workflow_repository === "openclaw/openclaw" &&
-              job.workflow_ref === calledWorkflowRef;
-            if (context.actor === "github-actions[bot]") {
-              if (!trustedMainCaller) {
-                throw new Error("Bot invocation is not bound to a trusted main-branch caller.");
-              }
-              return;
-            }
-            const allowed = new Set(["admin", "maintain", "write"]);
-            const { owner, repo } = context.repo;
-            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
-              owner,
-              repo,
-              username: context.actor,
-            });
-            if (!allowed.has(data.permission)) {
-              throw new Error(
-                `Workflow requires write/maintain/admin access; actor ${context.actor} has ${data.permission}.`,
-              );
-            }
+      - *require_authorized_qa_actor
 
-      - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
+      - *prepare_qa_git_owner
 
-      - name: Checkout trusted QA harness
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: openclaw/openclaw
-          ref: main
-          fetch-depth: 1
-          persist-credentials: false
+      - *checkout_trusted_qa_harness
 
-      - name: Restore trusted QA harness revision
-        env:
-          EXPECTED_WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! "$EXPECTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Expected workflow SHA must be a full lowercase commit SHA." >&2
-            exit 1
-          fi
-          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_WORKFLOW_SHA"
-          git checkout --detach "$EXPECTED_WORKFLOW_SHA"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_WORKFLOW_SHA"
+      - *restore_trusted_qa_harness
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -876,23 +756,7 @@ jobs:
           install-bun: "false"
           install-deps: "false"
 
-      - name: Checkout selected ref
-        env:
-          EXPECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ ! -e selected ]] || { echo "Selected checkout path already exists." >&2; exit 1; }
-          if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Expected selected SHA must be a full lowercase commit SHA." >&2
-            exit 1
-          fi
-          git init selected
-          git -C selected remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
-          cd selected
-          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_SHA"
-          git checkout --detach FETCH_HEAD
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - *checkout_selected_qa_revision
 
       - name: Install selected dependencies
         shell: bash

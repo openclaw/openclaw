@@ -29,7 +29,7 @@ import {
 const execFileAsync = promisify(execFile);
 const CONTAINER_WIRE_ENABLED = process.env.OPENCLAW_DOCKER_NODE_WORKER_E2E === "1";
 const CONTROL_UI_PROOF_ENABLED = process.env.OPENCLAW_DOCKER_NODE_WORKER_UI_PROOF === "1";
-const CONTAINER_IMAGE = process.env.OPENCLAW_DOCKER_NODE_WORKER_IMAGE ?? "node:24-bookworm";
+const CONTAINER_IMAGE = process.env.OPENCLAW_DOCKER_NODE_WORKER_IMAGE ?? "node:24-trixie";
 const CONTAINER_GATEWAY_HOST =
   process.env.OPENCLAW_DOCKER_NODE_WORKER_GATEWAY_HOST ?? "host.docker.internal";
 const SESSION_KEY = "agent:qa:node-worker-container-wire";
@@ -212,7 +212,7 @@ async function startControlUiProof(gateway: WireGateway) {
 }
 
 it.runIf(CONTAINER_WIRE_ENABLED)(
-  "runs a full-access remote turn in Docker without producing approval requests",
+  "runs full-access Docker turns without approvals and preserves results across destination-policy revocation",
   { timeout: PROOF_TIMEOUT_MS + 120_000 },
   async () => {
     const root = tempDirs.make("openclaw-node-worker-container-wire-");
@@ -271,7 +271,13 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
           session?: {
             execCwd?: string;
             spawnedCwd?: string;
-            placement?: { state?: string; remoteWorkspaceDir?: string };
+            placement?: {
+              state?: string;
+              remoteWorkspaceDir?: string;
+              generation: number;
+              environmentId: string;
+              activeOwnerEpoch: number;
+            };
           };
         }>;
 
@@ -523,6 +529,73 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
       expect(workerNode.invokeErrors).toEqual([]);
       await workerNode.waitForWorkersIdle();
       await expect(containerIds(`id=${container.id}`)).resolves.toBe("");
+
+      // Reuse the accepted Docker result for the move/teardown authority boundary.
+      const request = operator.request.bind(operator);
+      const session = <T>(method: string, params = {}) =>
+        request<T>(`sessions.${method}`, { key: sessionKey, ...params });
+      const expectPlacement = (result: Promise<unknown>, state: string) =>
+        expect(result).resolves.toMatchObject({ placement: { state } });
+      const expectAcceptedFile = () =>
+        expect(fs.readFile(path.join(gatewayWorkspaceDir!, EXEC_FILE), "utf8")).resolves.toBe(
+          EXEC_MARKER,
+        );
+      const moveToGateway = async () => {
+        const placement = (await describeSession()).session?.placement;
+        if (!placement) {
+          throw new Error("session omitted its worker placement");
+        }
+        const { generation, environmentId, activeOwnerEpoch: ownerEpoch } = placement;
+        return session("move", {
+          expected: { generation, environmentId, ownerEpoch },
+          target: { kind: "gateway" },
+        });
+      };
+      const deviceId = workerNode.identity.deviceId;
+      await expectPlacement(moveToGateway(), "local");
+      await expectPlacement(session("dispatch", { deviceId }), "active");
+      const originalStop = workerNode.supervisor.stopEnvironment.bind(workerNode.supervisor);
+      const stop = vi.spyOn(workerNode.supervisor, "stopEnvironment");
+      stop.mockImplementationOnce(async (identity) => {
+        await originalStop(identity);
+        const snapshot = await request<{ hash: string }>("config.get", {});
+        await request("config.patch", {
+          baseHash: snapshot.hash,
+          raw: JSON.stringify({
+            cloudWorkers: {
+              requiredProfile: "docker-proof",
+              preparedPool: { maxTotal: 0 },
+              profiles: {
+                "docker-proof": {
+                  provider: "device",
+                  readyWorkers: 0,
+                  settings: { device: deviceId },
+                },
+              },
+            },
+          }),
+        });
+      });
+      try {
+        await expect(moveToGateway()).rejects.toThrow("required worker profile policy");
+      } finally {
+        stop.mockRestore();
+      }
+      expect((await describeSession()).session?.placement?.state).toBe("reclaimed");
+      await expectAcceptedFile();
+      for (const [method, selection] of [
+        ["dispatch", { deviceId }],
+        ["dispatch", { profileId: "docker-proof", machineClass: "override" }],
+        ["dispatch", { profileId: "docker-proof", os: "linux" }],
+        ["patch", { execNode: deviceId }],
+      ] as const) {
+        await expect(session(method, selection)).rejects.toThrow("requires worker profile");
+      }
+      await expectPlacement(session("dispatch", { profileId: "docker-proof" }), "active");
+      await expect(moveToGateway()).rejects.toThrow("required worker profile policy");
+      await expectPlacement(session("reclaim"), "reclaimed");
+      await expectAcceptedFile();
+      expect(workerNode.invokeErrors).toEqual([]);
     };
     await runQaGatewayFixture(
       runProof,

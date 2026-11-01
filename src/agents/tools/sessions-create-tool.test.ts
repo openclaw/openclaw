@@ -1,7 +1,7 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.tool-authority.js";
+import { createReplyTurnParticipants } from "../../sessions/session-controller.tool-authority.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { captureRequesterOrigin } from "../requester-origin.js";
 import { SANDBOX_DEFAULT_TOOL_ALLOW, type SandboxToolPolicy } from "../sandbox/types.js";
 import type { AnyAgentTool } from "./common.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
@@ -37,7 +37,7 @@ const created = {
 };
 function withTool(check: (tool: AnyAgentTool) => Promise<void>) {
   return withSessionToolTestCaller(
-    () => check(expectDefined(createSessionsCreateTool(), "creation tool")),
+    () => check(createSessionsCreateTool()),
     issueAuthority().authority,
   );
 }
@@ -48,18 +48,29 @@ beforeEach(() => {
 });
 
 describe("sessions_create", () => {
-  it("requires issued session-write authority and rejects a retained revoked source", async () => {
-    expect(createSessionsCreateTool()).toBeNull();
-    expect(
+  it("keeps the definition stable while refusing calls without session-write authority", async () => {
+    const denied = [
+      createSessionsCreateTool(),
       createSessionsCreateTool({
         sessionControlAuthority: issueAuthority(["operator.read"]).authority,
       }),
-    ).toBeNull();
+    ];
+    await withTool(async (authorized) => {
+      for (const tool of denied) {
+        expect(tool.name).toBe(authorized.name);
+        expect(tool.description).toBe(authorized.description);
+        expect(tool.parameters).toEqual(authorized.parameters);
+        const result = await tool.execute("denied", {});
+        expect(result.details).toMatchObject({ gated: true });
+        expect(JSON.stringify(result.content)).toContain("session write authority");
+      }
+    });
+    expect(gateway.request).not.toHaveBeenCalled();
+  });
+
+  it("requires issued authority and rejects a retained revoked source", async () => {
     const { authority, revoke } = issueAuthority();
-    const tool = expectDefined(
-      createSessionsCreateTool({ sessionControlAuthority: authority }),
-      "creation tool",
-    );
+    const tool = createSessionsCreateTool({ sessionControlAuthority: authority });
     expect(tool.parameters).not.toHaveProperty("properties.action");
     expect(tool.parameters).toHaveProperty("additionalProperties", false);
     expect(() => createSessionsCreateTool({ sessionControlAuthority: { ...authority } })).toThrow(
@@ -149,7 +160,13 @@ describe("sessions_create", () => {
   });
 
   it("uses only a verified selected participant's live operator authority", async () => {
-    const { authority: selected } = issueAuthority(undefined, "selected-requester");
+    const { authority: selected, revoke } = issueAuthority(undefined, "selected-requester");
+    const requesterOrigin = captureRequesterOrigin({
+      sessionKey: "agent:main:main",
+      operatorProfileId: selected.profileId,
+      messageProvider: "webchat",
+      senderId: "selected-sender",
+    });
     const participants = createReplyTurnParticipants({
       operatorAuthority: issueAuthority().authority,
     });
@@ -163,17 +180,30 @@ describe("sessions_create", () => {
             personalToolParticipants: participants,
           },
           async () => {
-            await expect(tool.execute("ambiguous", {})).rejects.toThrow(
-              "Several people have steered this turn",
-            );
+            await tool.execute("incumbent", {});
+            await expect(
+              tool.execute("missing-origin", { user: selected.profileId }),
+            ).rejects.toThrow("Selected user's requester identity is unavailable");
+            expect(gateway.request).toHaveBeenCalledOnce();
+            participants.accept({ operatorAuthority: selected, requesterOrigin });
             await tool.execute("selected", { user: selected.profileId });
+            revoke();
+            await expect(
+              tool.execute("revoked-selected", { user: selected.profileId }),
+            ).rejects.toThrow(/access changed|creation source revoked/);
           },
         );
-        expect(gateway.request).toHaveBeenCalledOnce();
-        expect(gateway.request.mock.calls[0]?.[0].sessionCreation.actor.id).toBe(
-          selected.profileId,
-        );
-        expect(gateway.request.mock.calls[0]?.[0].params).not.toHaveProperty("user");
+        expect(gateway.request).toHaveBeenCalledTimes(2);
+        expect(gateway.request.mock.calls[1]?.[0].sessionCreation.actor).toEqual({
+          type: "human",
+          source: "profile",
+          id: selected.profileId,
+        });
+        expect(gateway.request.mock.calls[1]?.[0].agentToolCaller.requesterOrigin).toEqual({
+          ...requesterOrigin,
+          delegatedCreatorProfileId: null,
+        });
+        expect(gateway.request.mock.calls[1]?.[0].params).not.toHaveProperty("user");
       });
     } finally {
       participants.close();
@@ -196,6 +226,35 @@ describe("sessions_create", () => {
     expect(result.policy?.allow).toEqual([...allow, ...added]);
     expect(result.renameOnly).toBe(renameOnly);
     expect(policy.allow).toBe(allow);
+  });
+
+  it("projects only the captured operator grant, including its absence and revocation", async () => {
+    const allow = ["read"];
+    const policy: SandboxToolPolicy = { allow, deny: [], [SANDBOX_DEFAULT_TOOL_ALLOW]: allow };
+    const captured = issueAuthority();
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:catalog",
+        operatorAuthority: issueAuthority(["operator.admin"], "other-requester").authority,
+      },
+      () => {
+        for (const authority of [null, issueAuthority(["operator.read"]).authority]) {
+          expect(prepareSandboxSessionTools({ policy, senderIsOwner: false, authority })).toEqual({
+            policy,
+            renameOnly: false,
+          });
+        }
+        const params = { policy, senderIsOwner: false, authority: captured.authority };
+        expect(prepareSandboxSessionTools(params).policy?.allow).toEqual([
+          "read",
+          "sessions",
+          "sessions_create",
+        ]);
+        captured.revoke();
+        expect(() => prepareSandboxSessionTools(params)).toThrow("creation source revoked");
+      },
+    );
   });
 
   it("does not expand explicit allowlists or senderless/insufficient-authority defaults", () => {

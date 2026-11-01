@@ -1,4 +1,4 @@
-import type { GetPromptResult } from "@modelcontextprotocol/sdk/types.js";
+import type { GetPromptResult } from "@modelcontextprotocol/client";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createMcpStructuredContentMirrorMatcher } from "./mcp-structured-mirror.js";

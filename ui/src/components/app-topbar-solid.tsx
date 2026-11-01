@@ -9,6 +9,7 @@ import type { GatewayStatusProps } from "./gateway-status.ts";
 import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, ShortcutText } from "./solid/kbd.tsx";
+import { MobileNavToggle } from "./solid/mobile-nav-toggle.tsx";
 import "./tooltip.ts";
 
 type Props = {
@@ -26,26 +27,18 @@ defineSolidBridge<Props>(
   "openclaw-app-topbar",
   (props, host) => {
     host.style.display = "contents";
-    const drawerLabel = () => (props.navDrawerOpen ? t("nav.collapse") : t("nav.expand"));
     return (
       <header class="topbar">
         <div class="topnav-shell">
-          <openclaw-tooltip prop:content={drawerLabel()}>
-            <button
-              type="button"
-              class="topbar-icon-btn topbar-nav-toggle"
-              onClick={(event) => props.onToggleDrawer?.(event.currentTarget)}
-              aria-label={drawerLabel()}
-              aria-expanded={props.navDrawerOpen ? "true" : "false"}
-              data-connection-status={props.gatewayStatus?.kind ?? undefined}
-            >
-              <span class="nav-collapse-toggle__icon" aria-hidden="true">
-                <Icon name="menu" />
-              </span>
-              <Show when={props.gatewayStatus?.kind}>
-                <span class="gateway-status-dot" aria-hidden="true" />
-              </Show>
-            </button>
+          <openclaw-tooltip
+            prop:content={props.navDrawerOpen ? t("nav.collapse") : t("nav.expand")}
+          >
+            <MobileNavToggle
+              class="topbar-nav-toggle"
+              open={props.navDrawerOpen}
+              status={props.gatewayStatus?.kind}
+              onToggle={(trigger) => props.onToggleDrawer?.(trigger)}
+            />
           </openclaw-tooltip>
           <div class="topnav-shell__content" onMouseDown={beginNativeWindowDrag}>
             <Show when={props.gatewayStatus?.kind && props.gatewayStatus.kind !== "connected"}>
@@ -74,6 +67,7 @@ defineSolidBridge<Props>(
             <openclaw-tooltip prop:content={t("chat.commandPaletteTitle")}>
               <span slot="content">
                 <ShortcutText
+                  fallback={t("chat.openCommandPalette")}
                   text={t("chat.commandPaletteTitle").replace("⌘K", "{shortcut}")}
                   shortcut={() => <Kbd keys={["⌘", "K"]} inline />}
                 />

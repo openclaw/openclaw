@@ -10,16 +10,11 @@ import {
   revokeMessageActionTurnCapability,
 } from "../src/gateway/message-action-turn-capability.js";
 import { PlatformMessageNotDispatchedError } from "../src/infra/outbound/deliver-types.js";
-import { runMessageAction } from "../src/infra/outbound/message-action-runner.js";
 import { withServer } from "../src/plugin-sdk/test-helpers/http-test-server.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
-import {
-  commandSecretFixture,
-  readRequestText,
-  respondJson,
-} from "./helpers/gateway-integration-fixtures.js";
+import { readRequestText, respondJson } from "./helpers/gateway-integration-fixtures.js";
 import { createDeferred, withTestTimeout } from "./helpers/promise.js";
 
 const AUTH_PATH = "/open-apis/auth/v3/tenant_access_token/internal";
@@ -66,53 +61,46 @@ function defaultResponse({ method, path }: WireRequest, appId: string) {
   });
 }
 
+function makeRoute(
+  name: string,
+  params: Record<string, unknown>,
+  requests: string[],
+  result: Record<string, unknown>,
+) {
+  return { name, params, requests, result: { ok: true, ...result } };
+}
+
+const edited = (contentType: string) => ({ action: "edit", messageId: MESSAGE_ID, contentType });
+const removeReaction = [`GET ${REACTION_PATH}`, `DELETE ${REACTION_PATH}/reaction_own`];
 const routes = [
-  {
-    name: "text edit",
-    params: { action: "edit" },
-    requests: [`PUT ${MESSAGE_PATH}`],
-    result: { ok: true, action: "edit", messageId: MESSAGE_ID, contentType: "post" },
-  },
-  {
-    name: "card edit",
-    params: {
+  makeRoute("text edit", { action: "edit" }, [`PUT ${MESSAGE_PATH}`], edited("post")),
+  makeRoute(
+    "card edit",
+    {
       action: "edit",
       message: undefined,
       card: { elements: [{ tag: "markdown", content: "Updated card" }] },
     },
-    requests: [`PATCH ${MESSAGE_PATH}`],
-    result: { ok: true, action: "edit", messageId: MESSAGE_ID, contentType: "interactive" },
-  },
-  {
-    name: "pin",
-    params: { action: "pin" },
-    requests: [`POST ${PIN_PATH}`],
-    result: { ok: true, action: "pin", pin: { messageId: MESSAGE_ID } },
-  },
-  {
-    name: "unpin",
-    params: { action: "unpin" },
-    requests: [`DELETE ${PIN_PATH}/${MESSAGE_ID}`],
-    result: { ok: true, action: "unpin", messageId: MESSAGE_ID },
-  },
-  {
-    name: "reaction addition",
-    params: { action: "react", emoji: "SMILE" },
-    requests: [`POST ${REACTION_PATH}`],
-    result: { ok: true, added: "SMILE" },
-  },
-  {
-    name: "reaction removal",
-    params: { action: "react", emoji: "SMILE", remove: true },
-    requests: [`GET ${REACTION_PATH}`, `DELETE ${REACTION_PATH}/reaction_own`],
-    result: { ok: true, removed: "SMILE" },
-  },
-  {
-    name: "clearing reactions",
-    params: { action: "react", clearAll: true },
-    requests: [`GET ${REACTION_PATH}`, `DELETE ${REACTION_PATH}/reaction_own`],
-    result: { ok: true, removed: 1 },
-  },
+    [`PATCH ${MESSAGE_PATH}`],
+    edited("interactive"),
+  ),
+  makeRoute("pin", { action: "pin" }, [`POST ${PIN_PATH}`], {
+    action: "pin",
+    pin: { messageId: MESSAGE_ID },
+  }),
+  makeRoute("unpin", { action: "unpin" }, [`DELETE ${PIN_PATH}/${MESSAGE_ID}`], {
+    action: "unpin",
+    messageId: MESSAGE_ID,
+  }),
+  makeRoute("reaction addition", { action: "react", emoji: "SMILE" }, [`POST ${REACTION_PATH}`], {
+    added: "SMILE",
+  }),
+  makeRoute("reaction removal", { action: "react", emoji: "SMILE", remove: true }, removeReaction, {
+    removed: "SMILE",
+  }),
+  makeRoute("clearing reactions", { action: "react", clearAll: true }, removeReaction, {
+    removed: 1,
+  }),
 ];
 
 const mutationScopes = routes.filter(({ name }) =>
@@ -195,8 +183,6 @@ async function withFeishuMutation(
           agentSessionKey: identity.sessionKey,
           workspaceDir: state.workspaceDir,
           messageActionTurnCapability: token,
-          ...commandSecretFixture,
-          runMessageAction,
         });
         try {
           await run({

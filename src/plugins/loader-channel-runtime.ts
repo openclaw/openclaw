@@ -1,11 +1,11 @@
 import fs from "node:fs";
+import { mergeChannelPlugins } from "../channels/plugins/merge-plugin-section.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { describeRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import type { NormalizedPluginsConfig } from "./config-state.js";
 import {
   channelPluginIdBelongsToManifest,
   loadBundledRuntimeChannelPlugin,
-  mergeSetupRuntimeChannelPlugin,
   resolveBundledRuntimeChannelRegistration,
   resolveSetupChannelRegistration,
 } from "./loader-channel-setup.js";
@@ -180,23 +180,12 @@ export function loadSetupRuntimeChannelCandidate(params: {
         );
         return true;
       }
-      mergedSetupPlugin = mergeSetupRuntimeChannelPlugin(
+      mergedSetupPlugin = mergeChannelPlugins(
         runtimePluginRegistration.plugin,
         setupRegistration.plugin,
+        "merge",
       );
     }
-  }
-  if (
-    !channelPluginIdBelongsToManifest({
-      channelId: mergedSetupPlugin.id,
-      pluginId: record.id,
-      manifestChannels: manifestRecord.channels,
-    })
-  ) {
-    params.pushPluginLoadError(
-      `plugin id mismatch (config uses "${record.id}", setup export uses "${mergedSetupPlugin.id}")`,
-    );
-    return true;
   }
   if (registrationPlan.mode === "setup-runtime" && setupRegistration.registerSetupRuntime) {
     try {

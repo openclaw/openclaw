@@ -78,6 +78,8 @@ export type GatewayServiceControlArgs = {
   beforeMutation?: () => Promise<void>;
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
+  /** Prepare service-targeted restart intent after foreground recovery has settled. */
+  prepareRestart?: () => Promise<void>;
   disable?: boolean;
   preserveDefinition?: boolean;
   /** Start the captured manager without changing its separately restored enable policy. */
@@ -209,9 +211,13 @@ export type GatewayServiceReadOptions = {
   systemdReadBinding?: SystemdServiceReadBinding;
   timeoutMs?: number;
   requireEffective?: boolean;
+  /** Reinstall may replace an absent LaunchAgent plist; existing definitions still require strict reads. */
+  allowMissingDefinition?: boolean;
   /** Carry the command reader's verdict into runtime inspection without repeating it. */
   commandInspection?: GatewayServiceCommandInspection;
   onCommandInspection?: (inspection: GatewayServiceCommandInspection) => void;
+  /** Same-read native executable; separate from persisted argv and command fingerprints. */
+  onEffectiveExecutable?: (executable: string) => void;
   /** Command inspection must not load an unloaded native unit. */
   requireLoaded?: boolean;
   loadForInspection?: GatewayServiceUnitInspection;
@@ -436,12 +442,13 @@ export type GatewayServiceState = {
   running: boolean;
   env: GatewayServiceEnv;
   command: GatewayServiceCommandConfig | null;
+  /** Operation-local observation, never persisted as service or recovery configuration. */
+  effectiveExecutable?: string;
   definitionMutationCapability?: ServiceDefinitionMutationCapability;
   runtime?: GatewayServiceRuntime;
 };
 
 export type GatewayServiceStartRepairIssue = {
-  code: "missing-program" | "port-mismatch" | "temporary-program";
   message: string;
 };
 

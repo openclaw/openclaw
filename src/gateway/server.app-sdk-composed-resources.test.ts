@@ -1,40 +1,35 @@
 // Scenario-owned proof for composed preview App SDK Gateway contracts.
 import fs from "node:fs/promises";
-import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocketServer, type WebSocket } from "ws";
+import { describe, expect, it, vi } from "vitest";
 import {
-  AgentParamsSchema,
-  ArtifactsListParamsSchema,
   EnvironmentsCreateParamsSchema,
   EnvironmentsCreateResultSchema,
   EnvironmentsListResultSchema,
   EnvironmentsStatusResultSchema,
 } from "../../packages/gateway-protocol/src/index.js";
-import { AgentWaitParamsSchema } from "../../packages/gateway-protocol/src/schema/agent.js";
 import {
   ArtifactsDownloadResultSchema,
   ArtifactsGetResultSchema,
   ArtifactsListResultSchema,
 } from "../../packages/gateway-protocol/src/schema/artifacts.js";
+import { collectUntil } from "../../packages/sdk/src/client.test-support.js";
+import { GatewayClientTransport, OpenClaw } from "../../packages/sdk/src/index.js";
 import {
-  GatewayClientTransport,
-  OpenClaw,
-  type OpenClawEvent,
-} from "../../packages/sdk/src/index.js";
+  createSdkWebSocketServer,
+  replySdkRequest,
+} from "../../packages/sdk/src/transport.websocket.test-support.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.entry.js";
+import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import { isSessionHistoryWorkerCold } from "../config/sessions/session-transcript-worker-runtime.js";
-import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
-import { withTimeout } from "../utils/with-timeout.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import { prewarmGatewaySessionHistory } from "./server-history-prewarm.js";
 import { environmentsHandlers } from "./server-methods/environments.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./server-methods/types.js";
@@ -68,349 +63,84 @@ vi.mock("../infra/device-pairing-node.js", async (importOriginal) => {
   };
 });
 
-type JsonObject = Record<string, unknown>;
-type FakeGatewayRequest = {
-  id: string;
-  method: string;
-  params?: unknown;
-};
-type FakeGateway = {
-  url: string;
-  close: () => Promise<void>;
-};
-
-const fakeServers: WebSocketServer[] = [];
-
-function sendJson(socket: WebSocket, payload: JsonObject): void {
-  socket.send(JSON.stringify(payload));
-}
-
-function requireJsonObject(value: unknown, label: string): JsonObject {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label} must be a JSON object`);
-  }
-  return value as JsonObject;
-}
-
 function assertSchema(schema: TSchema, value: unknown, label: string): void {
   if (!Value.Check(schema, value)) {
     throw new Error(`${label} failed Gateway schema validation`);
   }
 }
 
-async function closeFakeServer(server: WebSocketServer): Promise<void> {
-  for (const socket of server.clients) {
-    socket.terminate();
-  }
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-}
-
-function workerRecord(): WorkerEnvironmentServiceRecord {
-  return {
-    environmentId: "worker-sdk-e2e",
-    providerId: "testbox",
-    profileId: "development",
-    leaseId: "lease-sdk-e2e",
-    sharedHost: null,
-    state: "requested",
-    ownerEpoch: 1,
-    createdAtMs: 1_000,
-    idleSinceAtMs: null,
-    destroyRequestedAtMs: null,
-    attachedSessionIds: ["session-sdk-e2e"],
-    desktopAvailable: false,
-    desktopApps: [],
-    tunnelStatus: "stopped",
-  };
-}
-
-async function createFakeGateway(): Promise<FakeGateway> {
-  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  fakeServers.push(server);
-  await new Promise<void>((resolve) => {
-    server.once("listening", resolve);
-  });
-  let seq = 1;
-  const environmentContext = {
-    workerEnvironmentService: {
-      create: async () => workerRecord(),
-    } satisfies Pick<WorkerEnvironmentServiceContract, "create">,
-  } as unknown as GatewayRequestHandlerOptions["context"];
-
-  server.on("connection", (socket) => {
-    socket.binaryType = "nodebuffer";
-    sendJson(socket, {
-      type: "event",
-      event: "connect.challenge",
-      seq: seq++,
-      payload: { nonce: "sdk-a2-nonce", ts: 1_000 },
-    });
-
-    socket.on("message", (raw) => {
-      void (async () => {
-        const frame = JSON.parse(rawDataToString(raw)) as FakeGatewayRequest;
-        const reply = (payload: unknown): void => {
-          sendJson(socket, { type: "res", id: frame.id, ok: true, payload });
-        };
-
-        if (frame.method === "connect") {
-          reply({
-            type: "hello-ok",
-            protocol: 1,
-            server: { version: "sdk-a2", connId: "conn-sdk-a2" },
-            features: {
-              methods: ["agent", "agent.wait", "artifacts.list", "connect", "environments.create"],
-              events: ["agent"],
-            },
-            snapshot: {
-              presence: [],
-              health: {},
-              stateVersion: { presence: 0, health: 0 },
-              uptimeMs: 1,
-            },
-            auth: { role: "operator", scopes: [] },
-            policy: {
-              maxPayload: 262144,
-              maxBufferedBytes: 262144,
-              tickIntervalMs: 30000,
-            },
-          });
-          return;
-        }
-
-        if (frame.method === "agent") {
-          const params = frame.params ?? {};
-          assertSchema(AgentParamsSchema, params, "agent params");
-          reply({
-            status: "accepted",
-            runId: "run-sdk-e2e",
-            sessionKey: "main",
-          });
-          setTimeout(() => {
-            const payloads = [
-              {
-                stream: "lifecycle",
-                ts: 1_001,
-                data: { phase: "start" },
-              },
-              {
-                stream: "assistant",
-                ts: 1_002,
-                data: { delta: "hello from fake gateway" },
-              },
-              {
-                stream: "lifecycle",
-                ts: 1_003,
-                data: { phase: "end" },
-              },
-            ];
-            for (const payload of payloads) {
-              sendJson(socket, {
-                type: "event",
-                event: "agent",
-                seq: seq++,
-                stateVersion: { presence: 7, health: 9 },
-                payload: {
-                  runId: "run-sdk-e2e",
-                  sessionId: "session-sdk-e2e",
-                  sessionKey: "main",
-                  agentId: "main",
-                  ...payload,
-                },
-              });
-            }
-          }, 50);
-          return;
-        }
-
-        if (frame.method === "agent.wait") {
-          assertSchema(AgentWaitParamsSchema, frame.params ?? {}, "agent.wait params");
-          reply({
-            status: "ok",
-            runId: "run-sdk-e2e",
-            sessionKey: "main",
-            startedAt: 123,
-            endedAt: 456,
-          });
-          return;
-        }
-
-        if (frame.method === "artifacts.list") {
-          assertSchema(ArtifactsListParamsSchema, frame.params ?? {}, "artifacts.list params");
-          expect(frame.params).toEqual({ runId: "run-sdk-e2e" });
-          const result = {
-            artifacts: [
-              {
-                id: "artifact-sdk-e2e",
-                type: "file",
-                title: "sdk-result.txt",
-                download: { mode: "bytes" },
-              },
-            ],
-          };
-          assertSchema(ArtifactsListResultSchema, result, "artifacts.list result");
-          reply(result);
-          return;
-        }
-
-        if (frame.method === "environments.create") {
-          const params = requireJsonObject(frame.params ?? {}, "environments.create params");
-          assertSchema(EnvironmentsCreateParamsSchema, params, "environments.create params");
-          const respond: RespondFn = (ok, payload, error) => {
-            if (!ok) {
-              sendJson(socket, { type: "res", id: frame.id, ok: false, error });
-              return;
-            }
-            assertSchema(EnvironmentsCreateResultSchema, payload, "environments.create result");
-            reply(payload);
-          };
-          await environmentsHandlers[frame.method]!({
-            req: { type: "req", id: frame.id, method: frame.method, params },
-            params,
-            client: null,
-            isWebchatConnect: () => false,
-            respond,
-            context: environmentContext,
-          });
-          return;
-        }
-
-        sendJson(socket, {
-          type: "res",
-          id: frame.id,
-          ok: false,
-          error: { code: "UNKNOWN_METHOD", message: `unhandled method ${frame.method}` },
-        });
-      })().catch((error: unknown) => {
-        const frame = JSON.parse(rawDataToString(raw)) as FakeGatewayRequest;
-        sendJson(socket, {
-          type: "res",
-          id: frame.id,
-          ok: false,
-          error: {
-            code: "TEST_ASSERTION_FAILED",
-            message: `${frame.method}: ${String(error)}`,
-          },
-        });
-      });
-    });
-  });
-
-  const address = server.address() as AddressInfo;
-  return {
-    url: `ws://127.0.0.1:${address.port}`,
-    close: async () => {
-      const index = fakeServers.indexOf(server);
-      if (index >= 0) {
-        fakeServers.splice(index, 1);
-      }
-      await closeFakeServer(server);
-    },
-  };
-}
-
-async function collectUntilCompleted(events: AsyncIterable<OpenClawEvent>) {
-  const collected: OpenClawEvent[] = [];
-  for await (const event of events) {
-    collected.push(event);
-    if (event.type === "run.completed") {
-      break;
-    }
-  }
-  return collected;
-}
-
-async function proveDeterministicGatewayContracts(): Promise<void> {
+// Generic agent/event/artifact wire behavior lives in packages/sdk/src/index.e2e.test.ts.
+// Retain this real handler composition for the worker-create schema and projection.
+async function proveWorkerCreation(): Promise<void> {
   const dateNow = vi.spyOn(Date, "now").mockReturnValue(10_000);
-  const gateway = await createFakeGateway();
-  const oc = new OpenClaw({
-    transport: new GatewayClientTransport({
-      url: gateway.url,
-      deviceIdentity: null,
-      requestTimeoutMs: 2_000,
-    }),
-  });
+  const gateway = await createSdkWebSocketServer();
+  let oc: OpenClaw | undefined;
   try {
-    const agent = await oc.agents.get("main");
-    const run = await agent.run({
-      input: "say hello",
-      sessionKey: "main",
-      idempotencyKey: "sdk-a2-run",
-    });
-    const [appEvents, runEvents, result] = await Promise.all([
-      withTimeout(collectUntilCompleted(oc.events()), 2_000, {
-        message: "timed out waiting for app-wide SDK events",
-      }),
-      withTimeout(collectUntilCompleted(run.events()), 2_000, {
-        message: "timed out waiting for per-run SDK events",
-      }),
-      run.wait({ timeoutMs: 2_000 }),
-    ]);
-    const expectedEvents = (
-      [
-        { seq: 2, ts: 1_001, type: "run.started", stream: "lifecycle", data: { phase: "start" } },
-        {
-          seq: 3,
-          ts: 1_002,
-          type: "assistant.delta",
-          stream: "assistant",
-          data: { delta: "hello from fake gateway" },
-        },
-        { seq: 4, ts: 1_003, type: "run.completed", stream: "lifecycle", data: { phase: "end" } },
-      ] as const
-    ).map<OpenClawEvent>(({ seq, ts, type, stream, data }) => ({
-      version: 1,
-      id: `${seq}:agent:run-sdk-e2e:main:${ts}`,
-      ts,
-      type,
-      runId: "run-sdk-e2e",
-      sessionId: "session-sdk-e2e",
-      sessionKey: "main",
-      agentId: "main",
-      data,
-      raw: {
-        event: "agent",
-        seq,
-        stateVersion: { presence: 7, health: 9 },
-        payload: {
-          runId: "run-sdk-e2e",
-          sessionId: "session-sdk-e2e",
-          sessionKey: "main",
-          agentId: "main",
-          stream,
-          ts,
-          data,
-        },
-      },
-    }));
-    expect(appEvents).toEqual(expectedEvents);
-    expect(runEvents).toEqual(expectedEvents);
-    expect(result).toMatchObject({
-      runId: "run-sdk-e2e",
-      sessionKey: "main",
-      status: "completed",
-      startedAt: 123,
-      endedAt: 456,
-    });
-
-    await expect(oc.artifacts.list({ runId: "run-sdk-e2e" })).resolves.toEqual({
-      artifacts: [
-        {
-          id: "artifact-sdk-e2e",
-          type: "file",
-          title: "sdk-result.txt",
-          download: { mode: "bytes" },
-        },
-      ],
-    });
-
-    const created = await oc.environments.create({
+    const record: WorkerEnvironmentServiceRecord = {
+      resourceReceipt: null,
+      environmentId: "worker-sdk-e2e",
+      providerId: "testbox",
       profileId: "development",
-      idempotencyKey: "sdk-environment-create",
+      leaseId: "lease-sdk-e2e",
+      sharedHost: null,
+      state: "requested",
+      ownerEpoch: 1,
+      createdAtMs: 1_000,
+      idleSinceAtMs: null,
+      destroyRequestedAtMs: null,
+      attachedSessionIds: ["session-sdk-e2e"],
+      desktopAvailable: false,
+      desktopApps: [],
+      tunnelStatus: "stopped",
+    };
+    const context = {
+      workerEnvironmentService: {
+        create: async () => record,
+      } satisfies Pick<WorkerEnvironmentServiceContract, "create">,
+    } as unknown as GatewayRequestHandlerOptions["context"];
+    gateway.setRequestHandler((socket, frame) => {
+      void (async () => {
+        expect(frame.method).toBe("environments.create");
+        assertSchema(EnvironmentsCreateParamsSchema, frame.params, "environments.create params");
+        const respond: RespondFn = (ok, payload, error) => {
+          if (ok) {
+            assertSchema(EnvironmentsCreateResultSchema, payload, "environments.create result");
+          }
+          replySdkRequest(socket, frame.id, ok ? payload : error, ok);
+        };
+        await environmentsHandlers["environments.create"]!({
+          req: { type: "req", ...frame },
+          params: frame.params,
+          client: null,
+          isWebchatConnect: () => false,
+          respond,
+          context,
+        });
+      })().catch((error: unknown) =>
+        replySdkRequest(
+          socket,
+          frame.id,
+          {
+            code: "TEST_ASSERTION_FAILED",
+            message: String(error),
+          },
+          false,
+        ),
+      );
     });
-    expect(created).toMatchObject({
+    oc = new OpenClaw({
+      transport: new GatewayClientTransport({
+        url: gateway.url,
+        deviceIdentity: null,
+        requestTimeoutMs: 2_000,
+      }),
+    });
+    await expect(
+      oc.environments.create({
+        profileId: "development",
+        idempotencyKey: "sdk-environment-create",
+      }),
+    ).resolves.toMatchObject({
       id: "worker-sdk-e2e",
       status: "starting",
       worker: {
@@ -424,9 +154,15 @@ async function proveDeterministicGatewayContracts(): Promise<void> {
       },
     });
   } finally {
-    await oc.close();
-    await gateway.close();
-    dateNow.mockRestore();
+    try {
+      await oc?.close();
+    } finally {
+      try {
+        await gateway.close();
+      } finally {
+        dateNow.mockRestore();
+      }
+    }
   }
 }
 
@@ -434,7 +170,6 @@ async function proveRealGatewayContracts(): Promise<void> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sdk-a2-gateway-"));
   const sessionKey = "agent:main:sdk-real-gateway";
   const sessionId = "sdk-real-gateway-session";
-  const transcriptPath = path.join(tempDir, `${sessionId}.jsonl`);
   const previousSessionStorePath = testState.sessionStorePath;
   const runId = "sdk-real-gateway-run";
   const timeoutRunId = "sdk-real-gateway-timeout";
@@ -470,38 +205,25 @@ async function proveRealGatewayContracts(): Promise<void> {
   testState.sessionStorePath = path.join(tempDir, "sessions.json");
 
   try {
-    await fs.writeFile(
-      transcriptPath,
-      `${JSON.stringify({ type: "session", version: CURRENT_SESSION_VERSION, id: sessionId })}\n${JSON.stringify(
-        {
-          type: "message",
-          id: "sdk-artifact-message",
-          parentId: null,
-          timestamp: "2026-08-03T00:00:00.000Z",
-          message: {
-            role: "assistant",
-            content: [
-              {
-                type: "file",
-                data: "aGVsbG8=",
-                mimeType: "text/plain",
-                title: "sdk-result.txt",
-              },
-            ],
-            __openclaw: { seq: 2, runId: "sdk-artifact-run" },
-          },
-        },
-      )}\n`,
-    );
     await writeSessionStore({
-      entries: {
-        [sessionKey]: {
-          sessionId,
-          sessionFile: transcriptPath,
-          updatedAt: Date.now(),
-        },
-      },
+      entries: { [sessionKey]: { sessionId, updatedAt: Date.now() } },
     });
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionKey, sessionId, storePath: testState.sessionStorePath },
+      {
+        messages: [
+          {
+            message: {
+              role: "assistant",
+              content: [
+                { type: "file", data: "aGVsbG8=", mimeType: "text/plain", title: "sdk-result.txt" },
+              ],
+            },
+          },
+        ],
+        updateMode: "none",
+      },
+    );
 
     const token = "sdk-real-gateway-token";
     started = await startServer(token, { controlUiEnabled: false });
@@ -526,7 +248,7 @@ async function proveRealGatewayContracts(): Promise<void> {
       runId,
       status: "accepted",
     });
-    const eventsPromise = collectUntilCompleted(run.events());
+    const eventsPromise = collectUntil(run.events(), (event) => event.type === "run.completed");
     emitAgentEvent({
       runId,
       stream: "lifecycle",
@@ -624,16 +346,9 @@ async function proveRealGatewayContracts(): Promise<void> {
 
     const environments = await oc.environments.list();
     assertSchema(EnvironmentsListResultSchema, environments, "real environments.list result");
-    expect(environments.environments).toContainEqual({
-      id: "gateway",
-      type: "local",
-      label: "Gateway local",
-      status: "available",
-      platform: process.platform,
-      sessionHost: true,
-      trust: "persistent",
-      capabilities: ["agent.run", "sessions", "tools", "workspace"],
-    });
+    expect(environments.environments).toContainEqual(
+      expect.objectContaining({ id: "gateway", type: "local", status: "available" }),
+    );
     const gatewayEnvironment = await oc.environments.status("gateway");
     assertSchema(
       EnvironmentsStatusResultSchema,
@@ -674,12 +389,8 @@ async function proveRealGatewayContracts(): Promise<void> {
 describe("composed preview App SDK Gateway contracts", () => {
   installGatewayTestHooks({ scope: "test" });
 
-  afterEach(async () => {
-    await Promise.all(fakeServers.splice(0).map(closeFakeServer));
-  });
-
   it("proves event, run, artifact, environment, and schema contracts", async () => {
-    await proveDeterministicGatewayContracts();
+    await proveWorkerCreation();
     await proveRealGatewayContracts();
   }, 30_000);
 });

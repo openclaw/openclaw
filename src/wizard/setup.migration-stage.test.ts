@@ -6,7 +6,6 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { summarizeMigrationItems } from "../plugin-sdk/migration.js";
-import type { MigrationPlan } from "../plugins/types.js";
 import {
   assertDisjointPromotionTargets,
   type PromotionJournal,
@@ -23,10 +22,10 @@ const journalPath = (root: string) => path.join(root, "onboarding-promotion.json
 const writeMemory = (root: string, text = "staged\n") => fs.writeFile(memoryPath(root), text);
 const readMemory = (root: string) => fs.readFile(memoryPath(root), "utf8");
 
-function migrationPaths(workspaceInState = false) {
+function migrationPaths() {
   const root = tempRoots.make("openclaw-migration-stage-");
   const stateDir = path.join(root, "state");
-  const workspaceDir = path.join(workspaceInState ? stateDir : root, "workspace");
+  const workspaceDir = path.join(root, "workspace");
   const reportDir = path.join(stateDir, "migration", "claude", "attempt");
   return { root, stateDir, workspaceDir, reportDir };
 }
@@ -207,30 +206,29 @@ it.runIf(process.platform !== "win32")(
   },
 );
 
-it("uses the most-specific path mapping when workspace lives under state", async () => {
-  const paths = migrationPaths(true);
-  const stage = await createStage(paths);
-  const { workspaceDir } = paths;
-  const target = memoryPath(workspaceDir);
-  const plan = {
-    ...continuation().plan,
-    target,
-    items: [
-      {
-        id: "workspace:memory",
-        kind: "memory",
-        action: "copy",
-        status: "planned",
-        target,
-      },
-    ],
-    summary: { ...continuation().plan.summary, total: 1, planned: 1 },
-  } satisfies MigrationPlan;
-
-  const projected = stage.projectPlanToStage(plan);
-
-  expect(projected.target).toBe(memoryPath(stage.staged.workspaceDir));
-  expect(projected.items[0]?.target).toBe(memoryPath(stage.staged.workspaceDir));
+it("isolates caller and snapshot edits from staged and promoted config", async () => {
+  const paths = migrationPaths();
+  const targetConfig = { agents: { defaults: { workspace: paths.workspaceDir } } };
+  const stage = await createSetupMigrationStage({ providerId: "claude", ...paths, targetConfig });
+  expect(targetConfig.agents.defaults.workspace).toBe(paths.workspaceDir);
+  targetConfig.agents.defaults.workspace = "caller edit";
+  const replacement = stage.getStagedConfig();
+  expect(replacement.agents?.defaults?.workspace).toBe(stage.staged.workspaceDir);
+  const model = { primary: "synthetic/model" };
+  replacement.agents!.defaults!.model = model;
+  stage.replaceStagedConfig(replacement);
+  model.primary = "caller edit";
+  const snapshot = stage.getStagedConfig();
+  expect(snapshot.agents?.defaults?.model).toEqual({ primary: "synthetic/model" });
+  snapshot.agents!.defaults!.workspace = "snapshot edit";
+  expect(stage.getStagedConfig().agents?.defaults?.workspace).toBe(stage.staged.workspaceDir);
+  await writeMemory(stage.staged.workspaceDir);
+  const promoted = await promote(stage);
+  expect(promoted.config.agents?.defaults).toEqual({
+    workspace: paths.workspaceDir,
+    model: { primary: "synthetic/model" },
+  });
+  await promoted.resume.complete();
   await stage.cleanup();
 });
 

@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type * as Activation from "./package-update-activation-immutable.js";
 import { packageActivationRuntimeIdentity } from "./package-update-activation-paths.js";
 import type { ImmutableInstallRecord } from "./update-immutable-install-schema.js";
@@ -14,6 +15,7 @@ import {
 } from "./update-immutable-layout.test-support.js";
 
 const mocks = vi.hoisted(() => ({
+  owner: vi.fn(),
   read: vi.fn<typeof import("./update-immutable-install-record.js").readImmutableInstallRecord>(),
   record: vi.fn<typeof Activation.recordImmutablePreparedGeneration>(),
   command: vi.fn<import("./update-runner-types.js").CommandRunner>(),
@@ -22,9 +24,12 @@ const mocks = vi.hoisted(() => ({
   seal: vi.fn<typeof import("./update-immutable-generation.js").sealImmutableGeneration>(),
   copy: vi.fn<typeof import("./update-immutable-generation.js").copyImmutableGeneration>(),
 }));
-vi.mock("./update-immutable-owner.js", () => ({
-  withImmutableUpdateOwner: async (_root: string, run: (assertCurrent: () => void) => unknown) =>
-    run(() => {}),
+vi.mock("./update-immutable-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-immutable-owner.js")>()),
+  withImmutableUpdateOwner: async (_root: string, run: (assertCurrent: () => void) => unknown) => {
+    mocks.owner();
+    return run(() => {});
+  },
 }));
 vi.mock("./update-immutable-install-record.js", () => ({ readImmutableInstallRecord: mocks.read }));
 vi.mock("./package-update-activation-immutable.js", () => ({
@@ -37,8 +42,18 @@ vi.mock("./update-immutable-generation.js", async (importOriginal) => ({
   copyImmutableGeneration: mocks.copy,
   installImmutableLauncher: vi.fn(),
 }));
-vi.mock("./update-immutable-service.js", () => ({ verifyImmutableService: async () => {} }));
-vi.mock("./update-git-runtime.js", () => ({ collectGitRuntimeErrors: async () => [] }));
+vi.mock("./update-immutable-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-immutable-service.js")>()),
+  readImmutableService: async () => ({ command: { environment: { PATH: "/usr/bin:/bin" } } }),
+}));
+vi.mock("../process/exec.js", async (original) => ({
+  ...(await original<typeof import("../process/exec.js")>()),
+  runCommandWithTimeout: mocks.command,
+}));
+vi.mock("./update-git-runtime.js", async (original) => ({
+  ...(await original<typeof import("./update-git-runtime.js")>()),
+  collectGitRuntimeErrors: async () => [],
+}));
 // mock-isolation: The synthetic installation cannot launch native systemd build services.
 vi.mock("./update-immutable-build.js", () => ({ runImmutableBuild: mocks.build }));
 vi.mock("./update-runner-git-schema.js", async (importOriginal) => ({
@@ -93,13 +108,18 @@ beforeEach(async () => {
   });
   mocks.command.mockImplementation(async (argv) => ({
     code: 0,
-    stdout: argv.includes("ls-remote") ? `${nextSha}\trefs/heads/main\n` : "",
+    stdout: argv.includes("ls-remote")
+      ? `${nextSha}\trefs/heads/main\n`
+      : argv[0] === "/usr/bin/getent"
+        ? "openclaw-fixture:x:1002:1002::/home/fixture:/bin/sh"
+        : "",
     stderr: "",
   }));
   mocks.build.mockImplementation(async ({ stage, sha }) => {
     const built = path.join(stage, "generation");
     await fs.mkdir(path.join(built, "dist"), { recursive: true, mode: 0o755 });
     await fs.writeFile(path.join(built, "dist/index.js"), `candidate ${sha}`);
+    await fs.writeFile(path.join(built, "dist/build-info.json"), JSON.stringify({ commit: sha }));
   });
 });
 afterEach(() => vi.restoreAllMocks());
@@ -152,6 +172,7 @@ it.each([
 it("resolves a dry-run target without filesystem or receipt changes", async () => {
   const before = new Set(await fs.readdir(root));
   const result = await prepareImmutableUpdate({ root, dryRun: true });
+  expect(result.status, result.reason).toBe("dry-run");
   expect(result).toMatchObject({ status: "dry-run", targetSha: nextSha });
   expect(result.coverage?.target).toEqual({ sha: nextSha, preparation: "unknown" });
   expect(new Set(await fs.readdir(root))).toEqual(before);
@@ -167,7 +188,26 @@ it("refuses abbreviated targets before fetching or building", async () => {
   await expectUnchanged(mocks.command);
 });
 
-describe.skipIf(process.platform !== "linux")("immutable preparation", () => {
+describe("immutable preparation", () => {
+  it("refuses root-only ownership before acquiring the writer or creating staging", async () => {
+    record.descriptor.service.account = "root";
+    mocks.command.mockResolvedValue({ code: 0, stdout: "root:x:0:0::/root:/bin/sh", stderr: "" });
+    const stat = fs.stat;
+    vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      const result = await stat(...args);
+      Object.defineProperty(result, "uid", { value: 0 });
+      return result;
+    });
+    const before = await fs.readdir(root);
+    const result = await prepareImmutableUpdate({ root, sha: nextSha });
+    expect(result).toMatchObject({
+      status: "error",
+      reason: expect.stringContaining("Run openclaw update as the service user"),
+    });
+    expect(await fs.readdir(root)).toEqual(before);
+    await expectUnchanged(mocks.owner, mocks.build, mocks.record);
+  });
+  beforeEach(() => vi.spyOn(process, "platform", "get").mockReturnValue("linux"));
   it("refuses a different Node executable before touching a candidate", async () => {
     const runtime = path.join(path.dirname(root), "node");
     await fs.writeFile(runtime, "synthetic external runtime", { mode: 0o755 });
@@ -183,7 +223,8 @@ describe.skipIf(process.platform !== "linux")("immutable preparation", () => {
       reason: expect.stringContaining("Run preparation with the adopted Node executable"),
     });
     expect(await fs.readdir(path.join(root, "releases"))).toEqual([currentSha]);
-    await expectUnchanged(mocks.build, mocks.record, mocks.command);
+    await expectUnchanged(mocks.build, mocks.record);
+    expect(mocks.command.mock.calls.every(([argv]) => argv[0] === "/usr/bin/getent")).toBe(true);
   });
 
   it("does no candidate work when the exact target is already current", async () => {
@@ -196,7 +237,15 @@ describe.skipIf(process.platform !== "linux")("immutable preparation", () => {
   });
 
   it("freezes the exact candidate, seals and records it without selecting it", async () => {
-    const result = await prepareImmutableUpdate({ root });
+    const onWarning = vi.fn(() => {
+      expect(mocks.owner).not.toHaveBeenCalled();
+      expect(mocks.build).not.toHaveBeenCalled();
+      expect(mocks.record).not.toHaveBeenCalled();
+    });
+    const result = await prepareImmutableUpdate({ root, onWarning });
+    expect(onWarning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("openclaw-fixture (uid 1002, gid 1002)"),
+    );
     const destination = path.join(root, "releases", nextSha);
     expect(result).toMatchObject({
       status: "prepared",
@@ -205,6 +254,17 @@ describe.skipIf(process.platform !== "linux")("immutable preparation", () => {
     });
     expect(await pointer()).toBe(`releases/${currentSha}`);
     expect(await readRelease(nextSha, "dist/index.js")).toBe(`candidate ${nextSha}`);
+    expect(JSON.parse(await readRelease(nextSha, "dist/build-info.json"))).toEqual({
+      commit: nextSha,
+      immutableBuild: {
+        builtBy: "operator",
+        isolation: "none",
+        account: "openclaw-fixture",
+        uid: 1002,
+        gid: 1002,
+      },
+    });
+    expect(result.warnings).toEqual([expect.stringContaining("isolated build account is missing")]);
     expect(await readRelease(currentSha, "serving")).toBe("previous Gateway bytes");
     expect(mocks.command.mock.calls.filter(([argv]) => argv.includes("ls-remote"))).toHaveLength(1);
     expect(mocks.seal).toHaveBeenCalledOnce();
@@ -212,11 +272,28 @@ describe.skipIf(process.platform !== "linux")("immutable preparation", () => {
     expect(new Set(await fs.readdir(root))).toEqual(new Set(["current", "releases"]));
   });
 
+  it("keeps a provisioned build account without operator provenance or warning", async () => {
+    record.descriptor.build = {
+      account: "builder",
+      uid: 1001,
+      gid: 1001,
+      toolchainPath: "/usr/bin",
+      resources: { memoryMaxBytes: 1024, tasksMax: 16, buildFreeBytes: 1, runtimeFreeBytes: 1 },
+    };
+    const result = await prepareImmutableUpdate({ root, sha: nextSha });
+    expect(result.status, result.reason).toBe("prepared");
+    expect(result.warnings).toEqual([]);
+    expect(JSON.parse(await readRelease(nextSha, "dist/build-info.json"))).toEqual({
+      commit: nextSha,
+    });
+    expect(mocks.build.mock.calls[0]?.[0].operator).toBeUndefined();
+  });
+
   it("retains build custody without sealing or publishing when descendants did not settle", async () => {
     mocks.build.mockRejectedValueOnce(new CommandProcessCleanupError());
     const result = await prepareImmutableUpdate({ root, sha: nextSha });
     expect(result.status).toBe("error");
-    expect(result.warnings).toEqual([expect.stringContaining("processes did not settle")]);
+    expect(result.warnings).toContainEqual(expect.stringContaining("processes did not settle"));
     expect((await fs.readdir(root)).some((name) => name.startsWith(".openclaw-immutable-"))).toBe(
       true,
     );
@@ -236,5 +313,13 @@ describe.skipIf(process.platform !== "linux")("immutable preparation", () => {
     });
     expect(await readRelease(nextSha, "incomplete")).toBe("retain for inspection");
     await expectUnchanged(mocks.build, mocks.record);
+  });
+
+  it("preserves the serving generation and refuses publication when sealing fails", async () => {
+    mocks.seal.mockRejectedValueOnce(new Error("Candidate seal failed"));
+    const result = await prepareImmutableUpdate({ root, sha: nextSha });
+    expect(result).toMatchObject({ status: "error", reason: "Candidate seal failed" });
+    expect(await fs.readdir(path.join(root, "releases"))).toEqual([currentSha]);
+    await expectUnchanged(mocks.record);
   });
 });

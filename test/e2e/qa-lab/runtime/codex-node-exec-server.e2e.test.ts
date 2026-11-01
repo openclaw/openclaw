@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import { createServer } from "node:http";
 import path from "node:path";
 import { setTimeout as waitForProofTick } from "node:timers/promises";
 import { promisify } from "node:util";
@@ -27,7 +27,10 @@ import {
   type FixtureReceiptChannel,
 } from "../../../helpers/fixture-receipts.js";
 import { acquireGatewayTestClient } from "../../../helpers/gateway-client.js";
-import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
+import {
+  writeOpenAiResponsesItem,
+  readLatestUserMarker,
+} from "../../../helpers/openai-responses-item.test-support.js";
 import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
@@ -60,6 +63,19 @@ const REQUEST_TIMEOUT_MS = 120_000;
 const WAIT_OPTIONS = { timeout: 60_000, interval: 100 };
 const WORKER_COMMAND_ARGS = new Set(["worker", "--internal-worker-session"]);
 const WORKER_OR_CODEX_COMMAND_ARGS = new Set([...WORKER_COMMAND_ARGS, "codex"]);
+const PROOF_USAGE = {
+  input_tokens: 32,
+  input_tokens_details: null,
+  output_tokens: 16,
+  output_tokens_details: null,
+  total_tokens: 48,
+};
+const SCENARIO_MARKERS = [
+  ["recovery", RECOVERY_MARKER],
+  ["repeat", REPEAT_MARKER],
+  ["disconnect", DISCONNECT_MARKER],
+  ["success", SUCCESS_MARKER],
+] as const;
 let receipts: FixtureReceiptChannel;
 
 beforeAll(async () => {
@@ -73,7 +89,7 @@ afterAll(async () => {
 type ProofScenario = "success" | "repeat" | "disconnect" | "recovery";
 type PendingPluginApproval = {
   id: string;
-  request?: { pluginId?: string; allowedDecisions?: string[]; title?: string };
+  request?: { pluginId?: string };
 };
 type NodeStatus = NonNullable<Awaited<ReturnType<typeof readNode>>> & {
   commands?: string[];
@@ -125,52 +141,6 @@ function waitForTurn(reviewer: GatewayClient, runId: string, timeoutMs = REQUEST
 }
 type ProofProvider = Awaited<ReturnType<typeof startProofProvider>>;
 
-function finishProofResponse(response: ServerResponse, item: Record<string, unknown>): void {
-  const responseId = `resp_codex_node_${randomUUID()}`;
-  writeOpenAiResponsesSse(response, [
-    { type: "response.created", response: { id: responseId } },
-    { type: "response.output_item.done", item },
-    {
-      type: "response.completed",
-      response: {
-        id: responseId,
-        status: "completed",
-        output: [item],
-        usage: {
-          input_tokens: 32,
-          input_tokens_details: null,
-          output_tokens: 16,
-          output_tokens_details: null,
-          total_tokens: 48,
-        },
-      },
-    },
-  ]);
-}
-
-function readProofScenario(body: Record<string, unknown>): ProofScenario | undefined {
-  const input = Array.isArray(body.input) ? body.input : [];
-  for (const entry of input.toReversed()) {
-    if (!isRecord(entry) || entry.role !== "user") {
-      continue;
-    }
-    const userText = JSON.stringify(entry);
-    if (userText.includes(RECOVERY_MARKER)) {
-      return "recovery";
-    }
-    if (userText.includes(REPEAT_MARKER)) {
-      return "repeat";
-    }
-    if (userText.includes(DISCONNECT_MARKER)) {
-      return "disconnect";
-    }
-    if (userText.includes(SUCCESS_MARKER)) {
-      return "success";
-    }
-  }
-  return undefined;
-}
-
 function proofShellCommand(params: {
   scenario: ProofScenario;
   baseUrl: string;
@@ -207,7 +177,11 @@ function proofShellCommand(params: {
           "runtimeInjectionPresent:Boolean(process.env.NODE_OPTIONS),",
           "ordinary:process.env.NODE_ENV||null,",
           `privateHome:process.env.HOME!==${JSON.stringify(params.nodeHome)},`,
-          'privateCodexHome:Boolean(process.env.CODEX_HOME&&process.env.CODEX_HOME.startsWith(process.env.HOME+"/")),',
+          // Retained workspace HOME and ephemeral credential-free CODEX_HOME have separate owners.
+          "privateCodexHome:Boolean(process.env.CODEX_HOME",
+          '&&process.env.CODEX_HOME!==process.env.HOME+"/.codex"',
+          `&&process.env.CODEX_HOME!==${JSON.stringify(`${params.nodeHome}/.codex`)}`,
+          "&&(fs.statSync(process.env.CODEX_HOME).mode&0o077)===0),",
           "http:await response.text(),pid:process.pid};",
           `fs.writeFileSync(${JSON.stringify(evidenceFile)},JSON.stringify(evidence));`,
           `console.log(${JSON.stringify(params.scenario === "recovery" ? "CODEX_NODE_FRESH_ATTEMPT_OK" : "CODEX_NODE_PROCESS_OK")});`,
@@ -220,7 +194,6 @@ async function startProofProvider(nodeHome: string) {
   const mock = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
   let httpHits = 0;
   let nativeExecCalls = 0;
-  const observations: string[] = [];
   const visibleTools = new Set<string>();
   let baseUrl = "";
   const server = createServer((request, response) => {
@@ -244,42 +217,44 @@ async function startProofProvider(nodeHome: string) {
             visibleTools.add(tool.name);
           }
         }
-        const scenario = readProofScenario(body);
+        const scenario = readLatestUserMarker(body, SCENARIO_MARKERS);
         if (scenario) {
           const callId = `call_codex_node_${scenario}`;
           const completed = (Array.isArray(body.input) ? body.input : []).some(
             (entry) =>
               isRecord(entry) && entry.type === "function_call_output" && entry.call_id === callId,
           );
-          observations.push(`${scenario}:${completed ? "completed" : "native-call"}`);
-          if (observations.length > 16) {
-            observations.shift();
-          }
           if (completed) {
-            finishProofResponse(response, {
-              type: "message",
-              role: "assistant",
-              id: `msg_codex_node_${scenario}`,
-              content: [{ type: "output_text", text: `CODEX_NODE_${scenario.toUpperCase()}_OK` }],
-            });
+            writeOpenAiResponsesItem(
+              response,
+              `resp_codex_node_${randomUUID()}`,
+              {
+                type: "message",
+                role: "assistant",
+                id: `msg_codex_node_${scenario}`,
+                content: [{ type: "output_text", text: `CODEX_NODE_${scenario.toUpperCase()}_OK` }],
+              },
+              PROOF_USAGE,
+            );
             return;
           }
           nativeExecCalls += 1;
-          finishProofResponse(response, {
-            type: "function_call",
-            call_id: callId,
-            name: "exec_command",
-            arguments: JSON.stringify({
-              cmd: proofShellCommand({ scenario, baseUrl, nodeHome }),
-              yield_time_ms: scenario === "disconnect" ? 10_000 : 30_000,
-              max_output_tokens: 1_000,
-            }),
-          });
+          writeOpenAiResponsesItem(
+            response,
+            `resp_codex_node_${randomUUID()}`,
+            {
+              type: "function_call",
+              call_id: callId,
+              name: "exec_command",
+              arguments: JSON.stringify({
+                cmd: proofShellCommand({ scenario, baseUrl, nodeHome }),
+                yield_time_ms: scenario === "disconnect" ? 10_000 : 30_000,
+                max_output_tokens: 1_000,
+              }),
+            },
+            PROOF_USAGE,
+          );
           return;
-        }
-        observations.push("unmatched");
-        if (observations.length > 16) {
-          observations.shift();
         }
       }
 
@@ -325,7 +300,6 @@ async function startProofProvider(nodeHome: string) {
       get nativeExecCalls() {
         return nativeExecCalls;
       },
-      observations,
       visibleTools,
       async stop() {
         const cleanup = await Promise.allSettled([closeWireServer(server), mock.stop()]);
@@ -375,57 +349,17 @@ async function connectApprovalReviewer(
 async function resolveNextApproval(
   reviewer: GatewayClient,
   decision: "allow-once" | "allow-always" | "deny",
-  context: { gateway: GatewayHandle; runId: string },
-): Promise<PendingPluginApproval> {
-  let pending: PendingPluginApproval;
-  try {
-    pending = await vi.waitFor(
-      async () => {
-        const [candidate] = await pendingCodexApprovals(reviewer);
-        expect(candidate, "expected a pending Codex paired-node approval").toBeDefined();
-        return candidate!;
-      },
-      { timeout: 15_000, interval: 100 },
-    );
-  } catch (error) {
-    const [terminal, approvals] = await Promise.allSettled([
-      reviewer.request<{ status?: string; error?: string }>(
-        "agent.wait",
-        { runId: context.runId, timeoutMs: 1_000 },
-        { timeoutMs: 2_000 },
-      ),
-      reviewer.request<PendingPluginApproval[]>("plugin.approval.list", {}),
-    ]);
-    const details = {
-      runId: context.runId,
-      turn:
-        terminal.status === "fulfilled"
-          ? { status: terminal.value.status, error: terminal.value.error?.slice(0, 512) }
-          : { status: "unavailable" },
-      approvals:
-        approvals.status === "fulfilled"
-          ? approvals.value.map((approval) => ({
-              pluginId: approval.request?.pluginId,
-              title: approval.request?.title,
-              decisions: approval.request?.allowedDecisions,
-            }))
-          : "unavailable",
-    };
-    throw new Error(
-      `Codex paired-node approval did not become pending: ${JSON.stringify(details)}\n${context.gateway.logs().slice(-6_000)}`,
-      { cause: error },
-    );
-  }
-  expect(
-    pending.request,
-    `unexpected Codex approval request: ${JSON.stringify(pending.request)}`,
-  ).toMatchObject({
-    pluginId: "codex",
-    title: "Run Codex on this node placement",
-    allowedDecisions: ["allow-once", "allow-always", "deny"],
-  });
+): Promise<void> {
+  const pending = await vi.waitFor(
+    async () => {
+      const [candidate] = await pendingCodexApprovals(reviewer);
+      expect(candidate, "expected a pending Codex paired-node approval").toBeDefined();
+      return candidate!;
+    },
+    { timeout: 15_000, interval: 100 },
+  );
+  expect(pending.request?.pluginId).toBe("codex");
   await reviewer.request("plugin.approval.resolve", { id: pending.id, decision });
-  return pending;
 }
 
 async function readRemoteEvidence<T>(filePath: string): Promise<T> {
@@ -510,26 +444,9 @@ async function waitForProofState(
   }
 }
 
-async function expectSuccessfulTurn(params: {
-  reviewer: GatewayClient;
-  gateway: GatewayHandle;
-  node: CapturedChild;
-  provider: ProofProvider;
-  runId: string;
-}): Promise<void> {
-  const outcome = await waitForTurn(params.reviewer, params.runId);
-  if (outcome.status !== "ok") {
-    throw new Error(
-      `Codex paired-node turn failed: ${JSON.stringify({
-        runId: params.runId,
-        status: outcome.status,
-        error: outcome.error?.slice(0, 512),
-        nativeExecCalls: params.provider.nativeExecCalls,
-        httpHits: params.provider.httpHits,
-        observations: params.provider.observations,
-      })}\nGateway logs:\n${params.gateway.logs().slice(-6_000)}\nNode logs:\n${params.node.logs().slice(-6_000)}`,
-    );
-  }
+async function expectSuccessfulTurn(reviewer: GatewayClient, runId: string): Promise<void> {
+  const outcome = await waitForTurn(reviewer, runId);
+  expect(outcome, JSON.stringify(outcome)).toMatchObject({ status: "ok" });
 }
 
 describe("Codex paired-device exec-server carrier", () => {
@@ -564,11 +481,13 @@ describe("Codex paired-device exec-server carrier", () => {
         published = await createPublishedWireWorkspace(path.join(root, "workspace"));
         gateway = await gatewayOwner.start({
           repoRoot: process.cwd(),
+          initializeCurrentRuntimeState: true,
           command: {
             executablePath: process.execPath,
             argsPrefix: ["dist/index.js"],
             cwd: process.cwd(),
             usePackagedPlugins: true,
+            tempParentDir: root,
           },
           transportBaseUrl: "http://127.0.0.1",
           providerMode: "mock-openai",
@@ -713,7 +632,7 @@ describe("Codex paired-device exec-server carrier", () => {
         expect(remoteWorkspace).toEqual(expect.any(String));
 
         const denied = await startTurn(requester, SUCCESS_MARKER);
-        await resolveNextApproval(reviewer, "deny", { gateway, runId: denied.runId });
+        await resolveNextApproval(reviewer, "deny");
         const deniedOutcome = await waitForTurn(reviewer, denied.runId);
         expect(deniedOutcome).toMatchObject({ status: "error" });
         expect(provider.nativeExecCalls).toBe(0);
@@ -722,8 +641,8 @@ describe("Codex paired-device exec-server carrier", () => {
         ).rejects.toThrow();
 
         const allowed = await startTurn(requester, SUCCESS_MARKER);
-        await resolveNextApproval(reviewer, "allow-always", { gateway, runId: allowed.runId });
-        await expectSuccessfulTurn({ reviewer, gateway, node, provider, runId: allowed.runId });
+        await resolveNextApproval(reviewer, "allow-always");
+        await expectSuccessfulTurn(reviewer, allowed.runId);
         expect(provider.visibleTools).toContain("exec_command");
         expect(provider.httpHits).toBe(1);
         const expectedEvidence = {
@@ -750,13 +669,14 @@ describe("Codex paired-device exec-server carrier", () => {
         );
         const nodePid = node.child.pid;
         expect(nodePid).toBeTruthy();
-        const children = await nodeChildCommands(nodePid!);
         expect(
-          children.filter((command) => launchCommandHasArg(command, WORKER_COMMAND_ARGS)),
+          (await nodeChildCommands(nodePid!)).filter((command) =>
+            launchCommandHasArg(command, WORKER_COMMAND_ARGS),
+          ),
         ).toEqual([]);
 
         const repeated = await startTurn(requester, REPEAT_MARKER);
-        await expectSuccessfulTurn({ reviewer, gateway, node, provider, runId: repeated.runId });
+        await expectSuccessfulTurn(reviewer, repeated.runId);
         await waitForProofState(
           () => expectEvidence("codex-node-repeat.json"),
           "repeated Codex node execution evidence",
@@ -767,65 +687,28 @@ describe("Codex paired-device exec-server carrier", () => {
 
         await requester.request("sessions.messages.subscribe", { key: SESSION_KEY });
         const interrupted = await startTurn(requester, DISCONNECT_MARKER, interruptedRunId);
-        let interruptedProcess: number;
-        try {
-          const readStartedProcess = async () => {
-            const evidence = await readRemoteEvidence<{ pid?: number }>(
-              path.join(remoteWorkspace!, "codex-node-disconnect.json"),
-            );
-            expect(evidence.pid).toEqual(expect.any(Number));
-            expect(processIsAlive(evidence.pid!)).toBe(true);
-            return evidence.pid!;
-          };
-          // Receipt and terminal events use separate transports. A terminal that wins
-          // checks the PID record written before the fixture reports entry.
-          interruptedProcess = await withinTest(
-            Promise.race([
-              receipts.waitFor(DISCONNECT_MARKER, "started"),
-              interruptedTurnSettled.promise,
-            ]).then(readStartedProcess),
-            signal,
+        const readStartedProcess = async () => {
+          const evidence = await readRemoteEvidence<{ pid?: number }>(
+            path.join(remoteWorkspace!, "codex-node-disconnect.json"),
           );
-        } catch (error) {
-          const terminal = await reviewer
-            .request<{ status?: string; error?: string }>(
-              "agent.wait",
-              { runId: interrupted.runId, timeoutMs: 1_000 },
-              { timeoutMs: 2_000 },
-            )
-            .catch(() => ({ status: "unavailable" }));
-          throw new Error(
-            `Codex disconnect process never started: ${JSON.stringify({
-              runId: interrupted.runId,
-              turn: {
-                status: terminal.status,
-                error: "error" in terminal ? terminal.error?.slice(0, 512) : undefined,
-              },
-              nativeExecCalls: provider.nativeExecCalls,
-              httpHits: provider.httpHits,
-              observations: provider.observations,
-              nativeExecAvailable: provider.visibleTools.has("exec_command"),
-            })}\n${gateway.logs().slice(-6_000)}`,
-            { cause: error },
-          );
-        }
+          expect(evidence.pid).toEqual(expect.any(Number));
+          expect(processIsAlive(evidence.pid!)).toBe(true);
+          return evidence.pid!;
+        };
+        // Receipts and terminals use separate transports; both confirm the recorded live PID.
+        const interruptedProcess = await withinTest(
+          Promise.race([
+            receipts.waitFor(DISCONNECT_MARKER, "started"),
+            interruptedTurnSettled.promise,
+          ]).then(readStartedProcess),
+          signal,
+        );
         const interruptedTerminal = waitForTurn(reviewer, interrupted.runId, 12_000);
         await stopChild(node);
         node = undefined;
         const interruptedOutcome = await interruptedTerminal;
         expect(interruptedOutcome).toMatchObject({ status: "error" });
-        expect(
-          interruptedOutcome.error,
-          `Codex node disconnect omitted actionable guidance: ${JSON.stringify({
-            runId: interrupted.runId,
-            status: interruptedOutcome.status,
-            error:
-              typeof interruptedOutcome.error === "string"
-                ? interruptedOutcome.error.slice(0, 1_000)
-                : undefined,
-            observations: provider.observations,
-          })}\n${gateway.logs().slice(-6_000)}`,
-        ).toEqual(expect.stringMatching(/execution node disconnected.*fresh attempt/iu));
+        expect(interruptedOutcome.error).toMatch(/execution node disconnected.*fresh attempt/iu);
         await waitForProofState(
           () => expect(processIsAlive(interruptedProcess)).toBe(false),
           `interrupted Codex command ${interruptedProcess} to exit`,
@@ -875,8 +758,8 @@ describe("Codex paired-device exec-server carrier", () => {
         );
         const recovered = await startTurn(requester, RECOVERY_MARKER);
         expect(recovered.runId).not.toBe(interrupted.runId);
-        await resolveNextApproval(reviewer, "allow-once", { gateway, runId: recovered.runId });
-        await expectSuccessfulTurn({ reviewer, gateway, node, provider, runId: recovered.runId });
+        await resolveNextApproval(reviewer, "allow-once");
+        await expectSuccessfulTurn(reviewer, recovered.runId);
         await waitForProofState(
           async () => {
             await expectEvidence("codex-node-recovery.json");
@@ -890,37 +773,23 @@ describe("Codex paired-device exec-server carrier", () => {
           signal,
         );
         expect(provider.httpHits).toBe(3);
-        console.info(
-          JSON.stringify({
-            proof: "codex-paired-device-remote-exec",
-            gatewayUrl: gateway.baseUrl,
-            nodeId,
-            deniedRunId: denied.runId,
-            allowedRunId: allowed.runId,
-            repeatedRunId: repeated.runId,
-            interruptedRunId: interrupted.runId,
-            recoveredRunId: recovered.runId,
-            httpHits: provider.httpHits,
-          }),
-        );
       };
-      await runQaGatewayFixture(runProof, async () => {
-        const connectionCleanup = await Promise.allSettled([
-          stopChild(node),
-          requester?.stopAndWait({ timeoutMs: 5_000 }) ?? Promise.resolve(),
-          reviewer?.stopAndWait({ timeoutMs: 5_000 }) ?? Promise.resolve(),
-        ]);
-        const resourceCleanup = await Promise.allSettled([
-          stopQaGatewayFixture(gatewayOwner),
-          published ? closeWireServer(published.server) : Promise.resolve(),
-          provider?.stop() ?? Promise.resolve(),
-        ]);
-        const failures = [...connectionCleanup, ...resourceCleanup].flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
+      await runQaGatewayFixture(
+        runProof,
+        () => stopChild(node),
+        () => requester?.stopAndWait({ timeoutMs: 5_000 }),
+        () => reviewer?.stopAndWait({ timeoutMs: 5_000 }),
+        () => stopQaGatewayFixture(gatewayOwner),
+        () => (published ? closeWireServer(published.server) : undefined),
+        () => provider?.stop(),
+      ).catch((cause: unknown) => {
+        throw new Error(
+          `Codex node execution failed:
+${gateway?.readLogsSince(0) ?? ""}`,
+          {
+            cause,
+          },
         );
-        if (failures.length) {
-          throw new AggregateError(failures, "Codex paired-node proof cleanup failed");
-        }
       });
     },
   );

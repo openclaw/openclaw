@@ -143,7 +143,6 @@ export function enqueueContextEngineTurnIntent(params: OutboxKernelParams<"enque
     ...params,
     payload: {
       admission: params.admission,
-      isHeartbeat: params.isHeartbeat,
       state: "admitted",
     },
   });
@@ -154,7 +153,6 @@ export function acceptContextEngineTurnIntent(params: OutboxKernelParams<"accept
     ...params,
     payload: {
       boundary: params.boundary,
-      isHeartbeat: params.isHeartbeat,
       state: "accepted",
       runtimeContext: params.runtimeContext,
     },
@@ -178,7 +176,6 @@ function blockContextEngineTurnIntent(
     boundary: TranscriptTurnBoundary;
     database: ContextEngineTurnOutboxConnection;
     failure: BlockedContextEngineTurnOutboxPayload["failure"];
-    isHeartbeat: boolean;
   },
 ): void {
   writeContextEngineTurnOutboxPayload({
@@ -186,7 +183,6 @@ function blockContextEngineTurnIntent(
     payload: {
       boundary: params.boundary,
       failure: params.failure,
-      isHeartbeat: params.isHeartbeat,
       state: "blocked",
     },
   });
@@ -238,7 +234,6 @@ function advanceAcceptedContextEngineTurn(
         database: owner.database,
         engineId: owner.engineId,
         failure: closedTurn.kind,
-        isHeartbeat: payload.isHeartbeat,
         ownerPluginId: owner.ownerPluginId,
       });
     }
@@ -250,7 +245,6 @@ function advanceAcceptedContextEngineTurn(
     ownerPluginId: owner.ownerPluginId,
     payload: {
       boundary: payload.boundary,
-      isHeartbeat: payload.isHeartbeat,
       messages: closedTurn.messages,
       runtimeContext: payload.runtimeContext,
     },

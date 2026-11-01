@@ -196,7 +196,9 @@ it.each([
       return;
     }
     expect(result.changes.join("\n")).toContain("Quarantined unusable agent deletion journal");
-    expect(result.warnings.join("\n")).toContain(pathname);
+    if (agentId === "retired") {
+      expect(result.warnings.join("\n")).toContain(pathname);
+    }
     const files = fs.readdirSync(recoveryDir);
     expect(files).toHaveLength(1);
     const receipt = JSON.parse(fs.readFileSync(path.join(recoveryDir, files[0]!), "utf8"));
@@ -230,13 +232,21 @@ it.each([
       expect(result.warnings.join("\n")).toMatch(/agents add '?retired'?/);
       expect(result.warnings.join("\n")).toMatch(/agents delete '?retired'? --force/);
     } else {
-      expect(result.warnings.join("\n")).toContain("reserved system agent");
-      expect(result.warnings.join("\n")).not.toMatch(/agents (?:add|delete)/);
+      expect(result.warnings).toEqual([]);
     }
     const next = await prepareDoctorDatabasePreflight({ cfg });
-    expect(next.agentDatabaseMigrationDiscovery?.discovery.targets).toEqual([
-      expect.objectContaining({ agentId: "main", path: healthy }),
-    ]);
+    const targets = next.agentDatabaseMigrationDiscovery?.discovery.targets;
+    if (agentId === "retired") {
+      expect(targets).toEqual([expect.objectContaining({ agentId: "main", path: healthy })]);
+    } else {
+      expect(targets).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ agentId: "main", path: healthy }),
+          expect.objectContaining({ agentId, path: pathname }),
+        ]),
+      );
+      expect(next.agentDatabaseMigrationDiscovery?.discovery.unverifiedTargets).toEqual([]);
+    }
     expect((await repairJournal(next, env)).changes).toEqual([]);
     expect(fs.readdirSync(recoveryDir)).toEqual(files);
     expect(fs.readFileSync(pathname)).toEqual(before);
@@ -548,8 +558,7 @@ it.each([
       expect(catalogs).toMatchObject({ detected: 0, migrated: 0, warnings: [] });
       expect(await maybeRepairCodexSessionRoutes({ cfg, env, shouldRepair: true })).toMatchObject({
         scannedStores: 0,
-        repairedStores: 0,
-        repairedSessions: 0,
+        changes: [],
       });
       const leaseId = claimOpenClawAgentDatabaseLease({
         agentId: "retired",

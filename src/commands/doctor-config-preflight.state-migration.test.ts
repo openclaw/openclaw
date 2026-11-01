@@ -37,6 +37,7 @@ function withPluginConfig(check: (result: PreflightResult) => void) {
   );
 }
 function expectDeferredPlugin(result: PreflightResult, warning: string) {
+  expect(result.stateMigrationUnsettled).toBe(true);
   expect(result.stateMigrationStepReceipts).toContainEqual(
     expect.objectContaining({
       id: "plugin:discord",

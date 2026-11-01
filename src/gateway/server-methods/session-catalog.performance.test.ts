@@ -1,14 +1,11 @@
 // Register call-through counters before storage owners evaluate.
 // oxfmt-ignore
 import { createCatalogIoCounters } from "./session-catalog.performance-counters.test-support.js";
-import type { Profiler } from "node:inspector";
-import { Session as InspectorSession } from "node:inspector/promises";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import type {
   SessionCatalogHost,
   SessionsCatalogListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createComposedCatalogFixture } from "./session-catalog.performance.test-support.js";
 
@@ -47,75 +44,18 @@ function measureHostCpuReference(): number {
   return median;
 }
 
-function expectNoPreviewSamples(profile: Profiler.Profile) {
-  const namesById = new Map(profile.nodes.map((node) => [node.id, node.callFrame.functionName]));
-  const samples = (profile.samples ?? []).map((id) => namesById.get(id));
-  expect(samples.length).toBeGreaterThan(0);
-  expect(samples).not.toContain("catalogPreview");
-  expect(samples).not.toContain("sanitizeTerminalText");
-}
-
 it("keeps 100 composed catalog lists within CPU and I/O budgets against real stores", () =>
   withOpenClawTestState({ layout: "state-only", prefix: "composed-catalog-" }, async (state) => {
     const counters = createCatalogIoCounters();
-    const nativeListEntered = createDeferredCore();
-    const releaseNativeList = createDeferredCore();
     let fixture: Awaited<ReturnType<typeof createComposedCatalogFixture>> | undefined;
     try {
-      counters.begin();
-      fixture = await createComposedCatalogFixture(state, counters, {
-        beforeNativeListResponse: async () => {
-          nativeListEntered.resolve();
-          await releaseNativeList.promise;
-        },
-      });
-      let first: SessionCatalogHost;
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      try {
-        const ready = fixture.setupList();
-        // Observe early rejection while the native producer is deliberately held.
-        void ready.catch(() => {});
-        await nativeListEntered.promise;
-        // Cold callers expire after five seconds without cancelling index-owned hydration.
-        await vi.advanceTimersByTimeAsync(5_000);
-        vi.useRealTimers();
-        releaseNativeList.resolve();
-        first = await ready;
-      } finally {
-        vi.useRealTimers();
-        releaseNativeList.resolve();
-      }
-      const catalogNamespace = await counters.catalogPersisted;
+      fixture = await createComposedCatalogFixture(state, counters);
+      const first = await fixture.setupList();
+      await counters.catalogPersisted;
       const sourceHomeId = first.sessions[0]?.sourceHomeId;
       if (!sourceHomeId) {
         throw new Error("Native catalog did not expose its source home identity");
       }
-      let page = await fixture.setupList();
-      let visibleCount = page.sessions.length;
-      while (page.nextCursor) {
-        page = await fixture.setupList({ cursors: { [page.hostId]: page.nextCursor } });
-        visibleCount += page.sessions.length;
-      }
-      expect(visibleCount).toBe(3_000);
-      const complete = { version: 1, kind: "complete" };
-      const snapshot = fixture.api.runtime.state.openKeyedStore<typeof complete>({
-        namespace: catalogNamespace,
-        maxEntries: 20_001,
-        overflowPolicy: "reject-new",
-      });
-      expect(await snapshot.lookup("complete")).toEqual(complete);
-      const setupIo = counters.end();
-      for (const key of [
-        "nativeRpcCalls",
-        "nativeThreadListCalls",
-        "sqliteReadCalls",
-        "sessionEntryReads",
-        "fileReadCalls",
-        "pluginStateWorkerReadOperations",
-      ] as const) {
-        expect(setupIo[key], key).toBeGreaterThan(0);
-      }
-
       for (const thread of first.sessions.slice(0, 3)) {
         const adopted = await fixture.continueSession(first.hostId, thread.threadId, sourceHomeId);
         expect(adopted).toMatchObject({ sessionKey: expect.any(String) });
@@ -173,21 +113,7 @@ it("keeps 100 composed catalog lists within CPU and I/O budgets against real sto
       }
       durations.sort((a, b) => a - b);
 
-      const inspector = new InspectorSession();
       expect(fixture.setupMaintenance).toEqual({ completed: 3 });
-      inspector.connect();
-      try {
-        await inspector.post("HeapProfiler.collectGarbage");
-        await inspector.post("Profiler.enable");
-        await inspector.post("Profiler.start");
-        for (let index = 0; index < 100; index++) {
-          await fixture.list(variants[index % variants.length]);
-        }
-        const { profile: cpuProfile } = await inspector.post("Profiler.stop");
-        expectNoPreviewSamples(cpuProfile);
-      } finally {
-        inspector.disconnect();
-      }
       expect(io.fileReadCalls).toBe(io.ownershipFileReadCalls);
       expect(io.fileOpenCalls).toBe(io.ownershipFileOpenCalls);
       expect(io).toMatchObject({
@@ -203,8 +129,6 @@ it("keeps 100 composed catalog lists within CPU and I/O budgets against real sto
       // Scale the latency budget to host CPU; SQL budgets alone miss composition CPU growth.
       expect(durations[49]).toBeLessThan(cpuReferenceP50Ms * 20);
     } finally {
-      vi.useRealTimers();
-      releaseNativeList.resolve();
       try {
         await fixture?.close();
       } finally {

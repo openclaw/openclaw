@@ -27,6 +27,7 @@ import {
   createOperatorClient,
 } from "./server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
 function syntheticRequest(
@@ -44,12 +45,10 @@ function syntheticRequest(
   const context = createContext([[method, scope, "scope-proof", handler]]);
   const request = withOperatorToolGatewayAuthority(
     {
-      authenticatedUserProfile: {
-        profileId: ensureProfileForEmail("scope-owner@example.test").id,
+      authenticatedUserProfile: gatewayProfile(
+        ensureProfileForEmail("scope-owner@example.test").id,
         displayName,
-        hasAvatar: false,
-        updatedAt: 1,
-      },
+      ),
       scopes,
     },
     () =>

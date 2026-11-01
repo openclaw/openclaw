@@ -13,9 +13,9 @@ export const plan: TelegramProofPlan = {
   maxDurationMs: 1000,
   expectations: ["The bot answers reply"],
 };
-export const canonicalPlan =
+const canonicalPlan =
   '{"actions":[{"atMs":0,"text":"hello","type":"send"}],"claim":"A selected reply is observed","expectations":["The bot answers reply"],"maxDurationMs":1000,"modelReplies":["reply"],"settings":{"nativeCommands":false,"streaming":"off"}}';
-export const planDigest = createHash("sha256").update(canonicalPlan).digest("hex");
+const planDigest = createHash("sha256").update(canonicalPlan).digest("hex");
 export const identity = telegramProofIdentitySchema.parse({
   request_id: "a".repeat(64),
   plan_sha256: planDigest,

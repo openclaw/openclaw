@@ -1,7 +1,6 @@
 import { vi } from "vitest";
-import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import { createSystemPackageOwnershipInspection } from "../../infra/update-system-package-ownership.js";
-import type { UpdateCommandOptions } from "./shared.js";
 
 const command = vi.hoisted(() => ({
   prepare: vi.fn<typeof import("./update-command-run.js").prepareUpdateCommand>(),
@@ -106,21 +105,6 @@ export async function runNativeMaintenanceUpdate(
   handoffId: string,
   serviceRoot?: string,
 ) {
-  const snapshot: ConfigFileSnapshot = {
-    path: `${process.env.HOME}/.openclaw/openclaw.json`,
-    exists: true,
-    raw: "{}",
-    parsed: {},
-    resolved: {},
-    sourceConfig: {},
-    config: {},
-    runtimeConfig: {},
-    valid: true,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-  };
-  const run: NonNullable<UpdateCommandOptions["run"]> = { runId, env: process.env };
   command.prepare.mockResolvedValue({
     startedAt: Date.now(),
     postCoreUpdateResume: false,
@@ -135,13 +119,13 @@ export async function runNativeMaintenanceUpdate(
     servicePlan: serviceRoot ? { rootRedirect: null, serviceRoot } : undefined,
     pkgOwnership: createSystemPackageOwnershipInspection(),
   });
-  command.admit.mockResolvedValue(run);
+  command.admit.mockResolvedValue({ runId, env: process.env });
   command.target.mockResolvedValue({
     root,
     mode: "npm",
     updateInstallKind: "package",
     refuseUpdate: async () => {},
-    configSnapshot: snapshot,
+    configSnapshot: createTestConfigSnapshot({}, {}, `${process.env.HOME}/.openclaw/openclaw.json`),
     configReadFailure: undefined,
     legacyConfigPlan: undefined,
     storedChannel: null,

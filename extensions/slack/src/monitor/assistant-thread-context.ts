@@ -8,7 +8,6 @@ import type { SlackEventScope } from "./event-scope.js";
 export type SlackAssistantThreadContext = {
   assistantChannelId: string;
   threadTs: string;
-  userId?: string;
   channelId?: string;
   teamId?: string;
   enterpriseId?: string | null;
@@ -58,7 +57,6 @@ export async function readSlackAssistantThreadContext(params: {
   client: WebClient;
   channelId: string;
   threadTs: string;
-  userId?: string;
 }): Promise<Omit<SlackAssistantThreadContext, "updatedAt"> | undefined> {
   const response = await params.client.conversations.replies({
     channel: params.channelId,
@@ -72,7 +70,6 @@ export async function readSlackAssistantThreadContext(params: {
       return {
         assistantChannelId: params.channelId,
         threadTs: params.threadTs,
-        userId: params.userId,
         ...context,
       };
     }

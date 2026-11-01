@@ -1,6 +1,6 @@
+import * as engineSessions from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 // Memory Core tests cover cross-agent session search visibility behavior.
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import * as sessionTranscriptHit from "openclaw/plugin-sdk/session-transcript-hit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import {
@@ -15,12 +15,12 @@ const crossAgentStore: Record<string, TestSessionEntry> = {
 };
 let combinedSessionStore: Record<string, TestSessionEntry> = crossAgentStore;
 
-vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => {
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-hit")>();
+    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-sessions")>();
   return {
     ...actual,
-    loadCombinedSessionStoreForGatewayAsync: vi.fn(async () => ({
+    loadMemorySearchSessionStore: vi.fn(async () => ({
       storePath: "(test)",
       store: combinedSessionStore,
     })),
@@ -29,7 +29,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
 
 describe("filterMemorySearchHitsBySessionVisibility across agents", () => {
   afterEach(() => {
-    vi.mocked(sessionTranscriptHit.loadCombinedSessionStoreForGatewayAsync).mockClear();
+    vi.mocked(engineSessions.loadMemorySearchSessionStore).mockClear();
     combinedSessionStore = crossAgentStore;
   });
 

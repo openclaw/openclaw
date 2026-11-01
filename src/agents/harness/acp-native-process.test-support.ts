@@ -3,8 +3,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
-import type { AcpxRuntime } from "acpx/runtime";
 import { afterEach, beforeEach, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { fixtureReceiptClientSource } from "../../../test/helpers/fixture-receipts.js";
@@ -20,39 +18,20 @@ import { createPluginStateRuntimeStores } from "../../plugin-state/plugin-state-
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
-  getActivePluginRegistry,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import type {
-  OpenClawPluginDefinition,
-  OpenClawPluginService,
-  OpenClawPluginServiceContext,
-} from "../../plugins/types.js";
+import type { OpenClawPluginDefinition, OpenClawPluginService } from "../../plugins/types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { createEmptyAgentDiscoveryStores } from "../embedded-agent-runner/model.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { registerAgentHarness } from "./registry.js";
 
 const agents = ["opencode", "qwen", "pi", "kilocode"] as const;
-type ServiceModule = {
-  createAcpxRuntimeService: () => OpenClawPluginService & {
-    getRuntime: (
-      ctx: OpenClawPluginServiceContext,
-    ) => Promise<
-      Pick<AcpRuntime, "ensureSession"> &
-        Required<Pick<AcpRuntime, "setMode">> &
-        Pick<AcpxRuntime, "getStatus" | "setModel">
-    >;
-  };
-};
 export function useNativeProcessFixture() {
   let snapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
   let lifetime: ReturnType<typeof createFixtureLifetime>;
@@ -96,11 +75,6 @@ export async function registerNative(
       `${fixtureReceiptClientSource(peerOptions.receiptEndpoint)}\nexport { sendReceipt };\n`,
     );
   }
-  const module = await loadBundledPluginFacade<ServiceModule>({
-    pluginId: "acpx",
-    artifactBasename: "register.runtime.js",
-  });
-  const factory = vi.spyOn(module, "createAcpxRuntimeService");
   const { default: plugin } = await loadBundledPluginFacade<{ default: OpenClawPluginDefinition }>({
     pluginId: "acpx",
     artifactBasename: "index.js",
@@ -116,6 +90,7 @@ export async function registerNative(
     ...(peerOptions.allowAlwaysOnly ? ["--allow-always-only"] : []),
     ...(peerOptions.receiptEndpoint ? [`--receipt-module=${receiptModule}`] : []),
   ];
+  let service: OpenClawPluginService | undefined;
   const api = createTestPluginApi({
     id: "acpx",
     config,
@@ -134,17 +109,14 @@ export async function registerNative(
       },
     }),
     registerAgentHarness: (harness) => registerAgentHarness(harness, { ownerPluginId: "acpx" }),
-    registerReload: (registration) => {
-      const registry = getActivePluginRegistry();
-      assert(registry, "Native process test registry missing");
-      registry.reloads.push({ pluginId: "acpx", pluginName: "ACPX", source: "test", registration });
+    registerService: (registered) => {
+      assert(registered.apiVersion !== 2, "Expected ACPX service API version 1");
+      service = registered;
     },
   });
   assert(plugin.register, "ACPX registration missing");
   plugin.register(api);
-  const result = factory.mock.results.at(-1);
-  assert(result?.type === "return", "ACPX service missing");
-  const service = result.value;
+  assert(service, "ACPX service missing");
   const context = {
     config,
     workspaceDir: state.workspaceDir,
@@ -169,15 +141,7 @@ export async function attemptFor(
   const entry = { sessionId: target.sessionId, updatedAt: Date.now() };
   await upsertSessionEntry({ ...target, entry });
   const runId = randomUUID();
-  const admission = prepareAgentRunAdmission({
-    cfg: config,
-    facts: {
-      runId,
-      agentId: "main",
-      ingress: { kind: "system", boundary: "native-execution-test", state: "present" },
-    },
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-  });
+  const admission = prepareSystemAgentRunAdmission(config, runId, "main", "native-execution-test");
   const admittedRunContext = await admission.admit("plugin-harness", "acpx");
   const provider = `acp-${agent}`;
   const prompt = "Record the requested native effect.";

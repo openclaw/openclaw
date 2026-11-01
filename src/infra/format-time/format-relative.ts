@@ -1,12 +1,5 @@
 import { bucketRelativeTimeMs } from "@openclaw/normalization-core";
 
-type FormatTimeAgoOptions = {
-  /** Append "ago" suffix. Default: true. When false, returns bare unit: "5m", "2h" */
-  suffix?: boolean;
-  /** Return value for invalid/null/negative input. Default: "unknown" */
-  fallback?: string;
-};
-
 /**
  * Format a duration (in ms) as a human-readable relative time.
  *
@@ -17,7 +10,12 @@ type FormatTimeAgoOptions = {
  */
 export function formatTimeAgo(
   durationMs: number | null | undefined,
-  options?: FormatTimeAgoOptions,
+  options?: {
+    /** Append "ago" suffix. Default: true. When false, returns bare unit: "5m", "2h" */
+    suffix?: boolean;
+    /** Return value for invalid/null/negative input. Default: "unknown" */
+    fallback?: string;
+  },
 ): string {
   const suffix = options?.suffix !== false;
   const fallback = options?.fallback ?? "unknown";
@@ -38,28 +36,15 @@ export function formatTimeAgo(
   return suffix ? `${label} ago` : label;
 }
 
-type FormatRelativeTimestampOptions = {
-  /** If true, fall back to short date (e.g. "Oct 5") for timestamps >7 days. Default: false */
-  dateFallback?: boolean;
-  /** IANA timezone for date fallback display */
-  timezone?: string;
-  /** Return value for invalid/null input. Default: "n/a" */
-  fallback?: string;
-};
-
 /**
  * Format an epoch timestamp relative to now.
  *
  * Handles both past ("5m ago") and future ("in 5m") timestamps.
- * Optionally falls back to a short date for timestamps older than 7 days.
+ * Falls back to a short date for timestamps older than 7 days.
  */
-export function formatRelativeTimestamp(
-  timestampMs: number | null | undefined,
-  options?: FormatRelativeTimestampOptions,
-): string {
-  const fallback = options?.fallback ?? "n/a";
+export function formatRelativeTimestamp(timestampMs: number | null | undefined): string {
   if (timestampMs == null || !Number.isFinite(timestampMs)) {
-    return fallback;
+    return "";
   }
 
   const diff = Date.now() - timestampMs;
@@ -71,7 +56,7 @@ export function formatRelativeTimestamp(
     return isPast ? "just now" : "in <1m";
   }
   const relative = isPast ? `${value}${unit[0]} ago` : `in ${value}${unit[0]}`;
-  if (unit !== "day" || !options?.dateFallback || value <= 7) {
+  if (unit !== "day" || value <= 7) {
     return relative;
   }
 
@@ -79,7 +64,6 @@ export function formatRelativeTimestamp(
     return new Intl.DateTimeFormat("en-US", {
       month: "short",
       day: "numeric",
-      ...(options.timezone ? { timeZone: options.timezone } : {}),
     }).format(new Date(timestampMs));
   } catch {
     return relative;

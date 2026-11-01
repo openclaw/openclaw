@@ -23,44 +23,49 @@ const TELEGRAM_NAMED_HTML_ENTITIES = new Map([
   ["apos", "'"],
 ]);
 
-// Structural tags force line boundaries when projecting HTML to plain text (transcript protection).
-const TELEGRAM_LINE_BREAK_STRUCTURAL_TAGS = new Set([
+// Rich islands also form transcript line boundaries; named anchors are handled separately.
+export const TELEGRAM_HTML_BLOCK_ISLAND_TAGS: readonly string[] = [
   "aside",
   "audio",
   "blockquote",
+  "details",
+  "figure",
+  "footer",
+  "hr",
+  "img",
+  "ol",
+  "p",
+  "pre",
+  "table",
+  "tg-collage",
+  "tg-map",
+  "tg-math-block",
+  "tg-slideshow",
+  "ul",
+  "video",
+];
+
+// Structural tags force line boundaries when projecting HTML to plain text (transcript protection).
+const TELEGRAM_LINE_BREAK_STRUCTURAL_TAGS = new Set([
+  ...TELEGRAM_HTML_BLOCK_ISLAND_TAGS,
   "caption",
   "col",
   "colgroup",
-  "details",
   "figcaption",
-  "figure",
-  "footer",
   "h1",
   "h2",
   "h3",
   "h4",
   "h5",
   "h6",
-  "hr",
-  "img",
   "li",
-  "ol",
-  "p",
-  "pre",
   "summary",
-  "table",
   "tbody",
   "td",
   "tfoot",
   "th",
   "thead",
-  "tg-collage",
-  "tg-map",
-  "tg-math-block",
-  "tg-slideshow",
   "tr",
-  "ul",
-  "video",
 ]);
 
 export function isTelegramRichLineBreakStructuralTag(rawTag: string, tagName: string): boolean {

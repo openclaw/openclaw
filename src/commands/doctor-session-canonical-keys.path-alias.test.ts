@@ -15,104 +15,72 @@ import {
   repairCanonicalSessionKeys,
 } from "./doctor-session-canonical-keys.test-support.js";
 
+const history = (id: string, content: string) => [
+  expect.objectContaining({ id, message: { role: "user", content } }),
+];
+
 it.each([false, true])(
   "preserves history through case-variant agent paths (foreign winner: %s)",
   async (foreignWinner) => {
     await withOpenClawTestState({ prefix: "doctor-agent-path-alias-" }, async (state) => {
-      // Existing installs have a deletion journal before aliases appear. A symlink in fresh
-      // state correctly prevents inferring empty deletion history and blocks maintenance.
+      // Seed deletion history first; aliases in fresh state correctly block maintenance.
       openOpenClawStateDatabase({ env: state.env });
-      const upperDirectory = state.statePath("agents", "BA-EA");
-      const lowerDirectory = state.statePath("agents", "ba-ea");
+      const agentPath = (id: string, ...parts: string[]) => state.statePath("agents", id, ...parts);
+      const upperDirectory = agentPath("BA-EA");
+      const lowerDirectory = agentPath("ba-ea");
       fs.mkdirSync(upperDirectory, { recursive: true });
       // Exercise native case aliases on macOS and the same physical alias on case-sensitive hosts.
       if (!fs.existsSync(lowerDirectory)) {
         fs.symlinkSync(upperDirectory, lowerDirectory, "junction");
       }
-      const scope = {
-        agentId: "ba-ea",
+      const scopeFor = (directory: string, agentId = "ba-ea") => ({
+        agentId,
         env: state.env,
-        storePath: state.statePath("agents", "BA-EA", "sessions", "sessions.json"),
-      };
-      const canonicalScope = {
-        ...scope,
-        storePath: state.statePath("agents", "ba-ea", "sessions", "sessions.json"),
-      };
+        storePath: agentPath(directory, "sessions", "sessions.json"),
+      });
+      const scope = scopeFor("BA-EA");
+      const canonicalScope = scopeFor("ba-ea");
       const cfg: OpenClawConfig = {
         agents: { entries: { "ba-ea": {}, ...(foreignWinner ? { main: {} } : {}) } },
       };
       setRuntimeConfigSnapshot(cfg);
       const legacyKey = "agent:BA-EA:telegram:direct:123";
       const canonicalKey = "agent:ba-ea:telegram:direct:123";
-      const source = foreignWinner
-        ? {
-            ...scope,
-            agentId: "main",
-            storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
-          }
-        : scope;
-      insertLegacySession({
-        ...canonicalScope,
-        sessionKey: canonicalKey,
-        entry: { sessionId: "older-history", updatedAt: 1 },
-        eventText: "Retain the older destination in its archive.",
-      });
-      insertLegacySession({
-        ...source,
-        sessionKey: legacyKey,
-        entry: { sessionId: "kept-history", updatedAt: 2 },
-        eventText: "Preserve this transcript through Doctor.",
-      });
-      const report = await repairCanonicalSessionKeys({ apply: true, cfg, env: state.env });
-      expect(report).toMatchObject({
-        repairedGroups: 1,
-        removedRows: 1,
-      });
-      expect(loadExactSessionEntryReadOnly({ ...scope, sessionKey: legacyKey })).toBeUndefined();
-      expect(
-        loadExactSessionEntryReadOnly({ ...canonicalScope, sessionKey: legacyKey }),
-      ).toBeUndefined();
-      expect(loadExactSessionEntryReadOnly({ ...source, sessionKey: legacyKey })).toBeUndefined();
+      const source = foreignWinner ? scopeFor("main", "main") : scope;
+      for (const [target, sessionKey, sessionId, updatedAt, eventText] of [
+        [canonicalScope, canonicalKey, "older-history", 1, "older history"],
+        [source, legacyKey, "kept-history", 2, "kept history"],
+      ] as const) {
+        insertLegacySession({ ...target, sessionKey, entry: { sessionId, updatedAt }, eventText });
+      }
+      const winner = { sessionKey: canonicalKey, sessionId: "kept-history" };
+      const repair = () => repairCanonicalSessionKeys({ apply: true, cfg, env: state.env });
+      const load = (alias: typeof scope, sessionKey: string) =>
+        loadExactSessionEntryReadOnly({ ...alias, sessionKey });
+      const report = await repair();
+      expect(report).toMatchObject({ repairedGroups: 1, removedRows: 1 });
+      for (const alias of [scope, canonicalScope, source]) {
+        expect(load(alias, legacyKey)).toBeUndefined();
+      }
       for (const aliasScope of [scope, canonicalScope]) {
-        expect(
-          loadExactSessionEntryReadOnly({ ...aliasScope, sessionKey: canonicalKey })?.entry
-            .sessionId,
-        ).toBe("kept-history");
-        expect(
-          await loadTranscriptEvents({
-            ...aliasScope,
-            sessionKey: canonicalKey,
-            sessionId: "kept-history",
-          }),
-        ).toEqual([
-          expect.objectContaining({
-            id: "kept-history-message",
-            message: { role: "user", content: "Preserve this transcript through Doctor." },
-          }),
-        ]);
+        expect(load(aliasScope, canonicalKey)?.entry.sessionId).toBe("kept-history");
+        expect(await loadTranscriptEvents({ ...aliasScope, ...winner })).toEqual(
+          history("kept-history-message", "kept history"),
+        );
       }
       const olderArchives = report.archivedTranscriptDirectories.flatMap((directory) =>
         fs
           .readdirSync(directory)
           .filter((name) => name.startsWith("older-history.jsonl.deleted."))
-          .map((name) => readSessionArchiveContentSync(path.join(directory, name))),
+          .map((name) =>
+            readSessionArchiveContentSync(path.join(directory, name))
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line)),
+          ),
       );
-      expect(olderArchives).toHaveLength(1);
-      expect(
-        olderArchives[0]!
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line)),
-      ).toEqual([
-        expect.objectContaining({
-          id: "older-history-message",
-          message: { role: "user", content: "Retain the older destination in its archive." },
-        }),
-      ]);
-      expect(await repairCanonicalSessionKeys({ apply: true, cfg, env: state.env })).toMatchObject({
-        foundGroups: 0,
-        repairedGroups: 0,
-      });
+      expect(olderArchives).toEqual([history("older-history-message", "older history")]);
+      expect(await repair()).toMatchObject({ foundGroups: 0, repairedGroups: 0 });
     });
   },
 );

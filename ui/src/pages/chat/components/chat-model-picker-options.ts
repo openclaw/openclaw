@@ -1,4 +1,7 @@
-import { formatRawProviderLabel, providerDisplayLabel } from "../../../components/provider-icon.ts";
+import {
+  formatRawProviderLabel,
+  providerDisplayLabel,
+} from "../../../components/provider-icon-data.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { formatContextTokenCapacity } from "../../../lib/format.ts";
@@ -41,27 +44,36 @@ export function isModelPickerOptionSelected(
   );
 }
 
-export function formatModelContextMeta(option: ChatModelPickerOption): string {
+export function formatModelContextMeta(
+  option: ChatModelPickerOption,
+  translate: typeof t = t,
+): string {
   const active = option.contextTokens;
   const maximum = option.contextWindow;
-  if (active && maximum && active !== maximum) {
-    return t("chat.modelControls.contextActiveAndMax", {
+  if (active && maximum && active < maximum) {
+    return translate("chat.modelControls.contextActiveAndMax", {
       active: formatContextTokenCapacity(active),
       maximum: formatContextTokenCapacity(maximum),
     });
   }
-  return maximum ? formatContextTokenCapacity(maximum) : "";
+  const capacity = active || maximum;
+  return capacity ? formatContextTokenCapacity(capacity) : "";
 }
 
+/** Owners omit completed empty groups; a published group has rows or an active receipt. */
 export type ChatModelPickerTargetGroup = {
   errorLabel: string;
   id: string;
   label: string;
+  /** Accepted rows stay synchronous for search, shortcuts, and account offsets. */
   options: readonly { label: string; value: string }[];
-  status: "loading" | "ready" | "error";
+  /** The box keys the boundary without unwrapping its promise outside Loading. */
+  completion: { promise: Promise<ChatModelPickerTargetGroup["options"]> };
 };
 
-export function formatModelLabel(option: ChatModelPickerOption): string {
+export function formatModelLabel(
+  option: Pick<ChatModelPickerOption, "label" | "provider">,
+): string {
   const prefixes = [
     formatRawProviderLabel(option.provider),
     providerDisplayLabel(option.provider),

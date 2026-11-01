@@ -232,6 +232,26 @@ import Testing
         #expect(presentation.helperText == nil)
     }
 
+    @Test @MainActor func `manual host validation explains URL schemes`() {
+        for host in ["https://gateway.example.com", "wss://192.168.1.20", " WSS://device.sample.ts.net "] {
+            #expect(
+                GatewayConnectionController.manualHostValidationMessage(host: host)
+                    == "Enter the host without https:// or wss://.")
+        }
+    }
+
+    @Test @MainActor func `manual host validation rejects hosts that cannot form a gateway URL`() {
+        #expect(
+            GatewayConnectionController.manualHostValidationMessage(host: "gateway.example.com:8443")
+                == "Enter only a host name or IP address.")
+    }
+
+    @Test @MainActor func `manual host validation accepts dialable hosts`() {
+        for host in ["", "gateway.example.com", "openclaw.local", "192.168.1.20", "[fd00::1]", "localhost"] {
+            #expect(GatewayConnectionController.manualHostValidationMessage(host: host) == nil)
+        }
+    }
+
     @Test @MainActor func `manual connections allow private lan plaintext`() {
         let controller = self.makeController()
 

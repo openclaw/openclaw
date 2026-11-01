@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isStandaloneRuntimeExecutable } from "../../cli-invocation.mjs";
 import {
   resolveBunRuntimeInfo,
   resolvePinnedDaemonRuntimePath,
@@ -64,6 +65,19 @@ export async function resolveDaemonInstallRuntimeInputs(params: {
   const devMode = params.devMode ?? resolveGatewayDevMode();
   if (params.wrapperPath?.trim()) {
     return { devMode, runtime: params.runtime, runtimePath: params.runtimePath };
+  }
+  if (params.runtime === "standalone") {
+    const executable =
+      params.pinnedRuntimePath ??
+      params.runtimePath ??
+      (isStandaloneRuntimeExecutable() ? process.execPath : undefined);
+    if (!executable) {
+      throw new Error(
+        "Standalone services require --runtime-path pointing to a complete standalone artifact.",
+      );
+    }
+    const runtimePath = await resolvePinnedDaemonRuntimePath(executable, "standalone", params.env);
+    return { devMode: false, runtime: "standalone", runtimePath };
   }
   const pinnedRuntimePath =
     params.pinnedRuntimePath === undefined

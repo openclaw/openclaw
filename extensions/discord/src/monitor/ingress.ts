@@ -1,5 +1,6 @@
 // Discord plugin module owns raw gateway-message durable ingress and replay draining.
-import { GatewayDispatchEvents, type APIMessage } from "discord-api-types/v10";
+import type { GatewayMessageCreateDispatchData } from "discord-api-types/v10";
+import { prepareChannelIngressEvent } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createChannelIngressError,
   createChannelIngressMonitor,
@@ -12,7 +13,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Client } from "../internal/discord.js";
-import { mapGatewayDispatchData } from "../internal/gateway-dispatch.js";
+import { createMessageDispatchData } from "../internal/gateway-dispatch.js";
 import { getDiscordRuntime } from "../runtime.js";
 import type { DiscordMessageEvent } from "./listeners.js";
 
@@ -22,7 +23,7 @@ const DISCORD_INGRESS_DRAIN_INTERVAL_MS = 1_000;
 type DiscordIngressPayload = {
   version: 1;
   receivedAt: number;
-  rawMessage: APIMessage;
+  rawMessage: GatewayMessageCreateDispatchData;
 };
 
 type DiscordIngressBody = Omit<DiscordIngressPayload, "version">;
@@ -37,7 +38,7 @@ type DiscordIngressDispatch = (
 ) => Promise<DiscordIngressDispatchResult | void> | DiscordIngressDispatchResult | void;
 
 type DiscordIngressMonitor = {
-  accept: (rawMessage: APIMessage) => Promise<void>;
+  accept: (rawMessage: GatewayMessageCreateDispatchData) => Promise<void>;
   start: () => void;
   stop: () => Promise<void>;
 };
@@ -61,7 +62,7 @@ function inspectDiscordMessage(rawMessage: unknown): { eventId: string; laneKey:
 }
 
 function decodeDiscordIngressPayload(
-  payload: DiscordIngressPayload,
+  payload: unknown,
   claimedId: string,
 ): { version: unknown; body: DiscordIngressBody } {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -79,7 +80,7 @@ function decodeDiscordIngressPayload(
     version: candidate.version,
     body: {
       receivedAt: candidate.receivedAt as number,
-      rawMessage: candidate.rawMessage as APIMessage,
+      rawMessage: candidate.rawMessage as GatewayMessageCreateDispatchData,
     },
   };
 }
@@ -100,9 +101,11 @@ function isDiscordAuthenticationFailure(error: unknown): boolean {
 
 export function createDiscordIngressMonitor(params: {
   accountId: string;
+  botUserId?: string;
   client: Client;
   runtime: Pick<RuntimeEnv, "error" | "log">;
   dispatch: DiscordIngressDispatch;
+  onDeadLetter?: (event: DiscordMessageEvent, signal: AbortSignal) => Promise<void>;
   queue?: ChannelIngressQueue<DiscordIngressPayload>;
 }): DiscordIngressMonitor {
   const queue =
@@ -111,12 +114,29 @@ export function createDiscordIngressMonitor(params: {
       accountId: params.accountId,
     });
   const monitor = createChannelIngressMonitor<
-    APIMessage,
+    GatewayMessageCreateDispatchData,
     DiscordIngressBody,
     DiscordIngressPayload
   >({
     queue,
     inspect: inspectDiscordMessage,
+    prepareAdmission: async (rawMessage, { receivedAt, signal }) => {
+      const prepared = await prepareChannelIngressEvent(rawMessage, {
+        channelId: "discord",
+        accountId: params.accountId,
+        signal,
+      });
+      if (!prepared) {
+        return undefined;
+      }
+      // The existing provider decoder admits transformed values under the same
+      // identity contract as replayed transport payloads.
+      const decoded = decodeDiscordIngressPayload(
+        { version: DISCORD_INGRESS_PAYLOAD_VERSION, receivedAt, rawMessage: prepared.event },
+        rawMessage.id,
+      );
+      return { raw: decoded.body.rawMessage, assertCurrent: prepared.assertCurrent };
+    },
     payload: {
       version: DISCORD_INGRESS_PAYLOAD_VERSION,
       serialize: (rawMessage, { receivedAt }) => ({ receivedAt, rawMessage }),
@@ -132,11 +152,7 @@ export function createDiscordIngressMonitor(params: {
     },
     // Gateway mapping is intentionally delayed until after the durable claim.
     deliver: async (rawMessage, lifecycle) => {
-      const event = mapGatewayDispatchData(
-        params.client,
-        GatewayDispatchEvents.MessageCreate,
-        rawMessage,
-      ) as DiscordMessageEvent;
+      const event = createMessageDispatchData(params.client, rawMessage);
       return await params.dispatch(event, lifecycle);
     },
     pollIntervalMs: DISCORD_INGRESS_DRAIN_INTERVAL_MS,
@@ -148,6 +164,18 @@ export function createDiscordIngressMonitor(params: {
     },
     appendRetryDelaysMs: [0],
     drain: {
+      // Native mentions can overtake recovery chatter; canonical preflight still
+      // decides access and retains every ambient message for pending history.
+      prioritizePending: ({ payload }) => {
+        const raw = payload?.rawMessage;
+        return Boolean(
+          params.botUserId &&
+          raw?.guild_id &&
+          Date.parse(raw.timestamp) >= Date.now() - 15 * 60_000 &&
+          Array.isArray(raw.mentions) &&
+          raw.mentions.some((user) => user?.id === params.botUserId),
+        );
+      },
       deferredLaneOccupancy: "release",
       retryPolicy: {
         maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
@@ -161,6 +189,10 @@ export function createDiscordIngressMonitor(params: {
           return { reason: "authentication-failed", message: formatErrorMessage(error) };
         }
         return null;
+      },
+      onDeadLetter: async (claim, _failure, signal) => {
+        const { rawMessage } = decodeDiscordIngressPayload(claim.payload, claim.id).body;
+        await params.onDeadLetter?.(createMessageDispatchData(params.client, rawMessage), signal);
       },
       onLog: (message) => params.runtime.error?.(danger(`discord ingress: ${message}`)),
     },

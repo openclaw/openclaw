@@ -3,6 +3,8 @@ import type { TalkClientCreateResult } from "../../../../packages/gateway-protoc
 import type { PrepareAssistantTranscriptMessage } from "../../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
+import { getRpcSourceForGateway } from "../../../sessions/session-controller.rpc-sources.js";
 import type { BoundedSerialQueue } from "../../../shared/bounded-serial-queue.js";
 import type { RealtimeVoiceAgentControlResult } from "../../../talk/agent-run-control.js";
 import type { ClientVoiceSessionSource } from "../../../talk/client-voice-session-source.js";
@@ -22,8 +24,8 @@ import type { RealtimeVoiceBridgeSession } from "../../../talk/session-runtime.j
 import type { TalkEvent, TalkEventInput } from "../../../talk/talk-session-controller.js";
 import { abortChatRunById } from "../../chat-abort.js";
 import type { GatewayRequestContext } from "../../server-methods/shared-types.js";
-import type { TalkAgentConsultAuthority } from "../client-gateway-control.js";
 import type { TalkClientRunAuthority } from "../client-run-authority.js";
+import type { TalkAgentConsultAuthority } from "../client-tool-authority.js";
 import type { PreparedTalkSessionTarget } from "../session-target.types.js";
 import type { RelayToolCallLedger } from "./tool-call-ledger.js";
 
@@ -107,6 +109,7 @@ export class TalkRealtimeRelayOutputOwnership {
     private readonly activeTurnId: () => string | undefined,
     private readonly ensureTurn: () => string,
     private readonly fail: (message: string) => void,
+    private readonly continuousOutput: () => boolean,
   ) {}
 
   get discarding(): boolean {
@@ -155,7 +158,13 @@ export class TalkRealtimeRelayOutputOwnership {
     if (this.discarding) {
       return undefined;
     }
-    const activeTurnId = this.activeTurnId();
+    // Continuous transports never send response.created, so output that arrives
+    // before client input starts its own turn, as an ID-less response does.
+    const activeTurnId =
+      this.activeTurnId() ??
+      (claim && this.phase === "unowned" && this.continuousOutput()
+        ? this.ensureTurn()
+        : undefined);
     if (activeTurnId && this.mode === "turn-bound" && claim && this.phase === "unowned") {
       this.cancelledTerminal = undefined;
       Object.assign(this, { phase: "owned" as const, turnId: activeTurnId });
@@ -257,7 +266,7 @@ export type RelayAgentRun = {
 
 export type RelayAgentRunRegistration = {
   run: RelayAgentRun;
-  isCurrent: () => boolean;
+  isCurrent: (phase?: "active" | "completion") => boolean;
   release: () => void;
   abortIfCurrent: () => void;
   prepareTranscript: PrepareAssistantTranscriptMessage;
@@ -267,7 +276,7 @@ export type RelaySession = {
   getToolAuthorityOverlay?: (
     authority?: TalkAgentConsultAuthority,
     source?: "reply" | "attempt",
-  ) => import("../../../auto-reply/reply/reply-run-registry.contracts.js").ReplyToolAuthorityOverlay;
+  ) => import("../../../sessions/session-controller.contracts.js").ReplyToolAuthorityOverlay;
   id: string;
   connId: string;
   context: GatewayRequestContext;
@@ -448,9 +457,27 @@ export function hasRelayAgentRunRegistrations(
 }
 
 export function pruneInactiveRelayAgentRuns(session: RelaySession): number {
-  for (const runId of session.activeAgentRuns.keys()) {
-    if (!session.context.chatAbortControllers.has(runId)) {
+  const target = captureSessionTarget({
+    storeScope: session.sessionTarget.storePath,
+    sessionKey: session.sessionTarget.canonicalKey,
+    agentId: session.sessionTarget.agentId,
+  });
+  let active = 0;
+  for (const [runId, run] of session.activeAgentRuns) {
+    if (!getRpcSourceForGateway(runId, session.context.resolveGatewayContext, target)) {
+      // Final delivery can outlive the controller turn, but cannot control another turn.
+      const completionCurrent =
+        run.standalone?.isCurrent("completion") ||
+        [...session.activeAgentToolCalls.values()].some(
+          (registration) => registration.run === run && registration.isCurrent("completion"),
+        );
+      if (completionCurrent) {
+        continue;
+      }
       session.activeAgentRuns.delete(runId);
+      run.releaseVoice?.();
+    } else {
+      active += 1;
     }
   }
   for (const [callId, { run }] of session.activeAgentToolCalls) {
@@ -458,7 +485,7 @@ export function pruneInactiveRelayAgentRuns(session: RelaySession): number {
       session.activeAgentToolCalls.delete(callId);
     }
   }
-  return session.activeAgentRuns.size;
+  return active;
 }
 
 /** Omitting the abort reason releases relay correlation while accepted work continues. */
@@ -468,16 +495,24 @@ export function retireRelayAgentRuns(session: RelaySession, reason?: string): vo
       run.detached = true;
     }
   } else {
+    const target = captureSessionTarget({
+      storeScope: session.sessionTarget.storePath,
+      sessionKey: session.sessionTarget.canonicalKey,
+      agentId: session.sessionTarget.agentId,
+    });
     for (const [runId, run] of session.activeAgentRuns) {
       const current =
         run.standalone?.isCurrent() ||
         [...session.activeAgentToolCalls.values()].some(
           (registration) => registration.run === run && registration.isCurrent(),
         );
-      if (current) {
+      const source =
+        current && getRpcSourceForGateway(runId, session.context.resolveGatewayContext, target);
+      if (source) {
         abortChatRunById(session.context, {
           runId,
           sessionKey: run.sessionKey,
+          expectedEntry: source,
           stopReason: reason,
         });
       }

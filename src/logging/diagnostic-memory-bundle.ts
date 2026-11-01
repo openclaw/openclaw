@@ -25,7 +25,13 @@ export function readMemoryUsage(input: unknown, label: string): DiagnosticMemory
     memory,
     label,
     [
+      "anonymousRssBytes",
+      "anonymousSwapBytes",
+      "heapSizeLimitBytes",
+      "oldGenerationAfterGcBytes",
       "workerCount",
+      "postgresBridgeCount",
+      "postgresPoolSelfRootCount",
       "workerHeapSampledCount",
       "workerHeapTotalBytes",
       "workerHeapUsedBytes",
@@ -59,7 +65,14 @@ export function readMemoryUsage(input: unknown, label: string): DiagnosticMemory
         sample,
         worker,
         entryLabel,
-        ["threadId", "external", "arrayBuffers", "sampleAgeMs", "heapSizeLimitBytes"],
+        [
+          "threadId",
+          "external",
+          "arrayBuffers",
+          "sampleAgeMs",
+          "heapSizeLimitBytes",
+          "oldGenerationAfterGcBytes",
+        ],
         readOptionalPositiveInteger,
       );
       if (Array.isArray(worker.retainedData)) {

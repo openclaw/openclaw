@@ -16,20 +16,6 @@ const VIDEO_PREFIX = "data:video/mp4;base64,";
 const VIDEO_OMISSION = "(video omitted: untrusted or unsupported Moonshot video)";
 const MOONSHOT_REQUEST_BYTES_EXCLUSIVE = 100_000_000;
 
-function forEachUserContentPart(payload: unknown, visit: (part: Record<string, unknown>) => void) {
-  const messages = isRecord(payload) && Array.isArray(payload.messages) ? payload.messages : [];
-  for (const message of messages) {
-    if (!isRecord(message) || message.role !== "user" || !Array.isArray(message.content)) {
-      continue;
-    }
-    for (const part of message.content) {
-      if (isRecord(part)) {
-        visit(part);
-      }
-    }
-  }
-}
-
 function partUrl(part: Record<string, unknown>, field: "image_url" | "video_url") {
   const url = isRecord(part[field]) ? part[field].url : undefined;
   return typeof url === "string" ? url : undefined;
@@ -38,32 +24,6 @@ function partUrl(part: Record<string, unknown>, field: "image_url" | "video_url"
 function replacePart(part: Record<string, unknown>, text: string) {
   Object.keys(part).forEach((key) => Reflect.deleteProperty(part, key));
   Object.assign(part, { type: "text", text });
-}
-
-function finalizePayload(
-  result: unknown,
-  payload: Record<string, unknown>,
-  requestBytesExclusive: number,
-) {
-  const admitted: Record<string, unknown>[] = [];
-  forEachUserContentPart(payload, (part) => {
-    const videoUrl = partUrl(part, "video_url");
-    const imageUrl = partUrl(part, "image_url");
-    if (part.type === "video_url" && videoUrl?.startsWith(VIDEO_PREFIX)) {
-      admitted.push(part);
-    } else if (part.type === "video_url" || imageUrl?.startsWith("data:video/")) {
-      replacePart(part, VIDEO_OMISSION);
-    }
-  });
-  const isOversized = () =>
-    Buffer.byteLength(JSON.stringify(payload), "utf8") >= requestBytesExclusive;
-  while (admitted.length > 0 && isOversized()) {
-    replacePart(admitted.pop()!, "(video omitted: Moonshot request size limit)");
-  }
-  if (isOversized()) {
-    throw new Error(`Moonshot request body must be smaller than ${requestBytesExclusive} bytes`);
-  }
-  return result;
 }
 
 export function wrapMoonshotStream(
@@ -88,6 +48,36 @@ export function wrapMoonshotStream(
       thinkingLevel: ctx.thinkingLevel,
     }),
     resolveMoonshotThinkingKeep({ configuredThinking: ctx.extraParams?.thinking }),
-    (result, payload) => finalizePayload(result, payload, requestBytesExclusive),
+    (result, payload) => {
+      const admitted: Record<string, unknown>[] = [];
+      const messages = isRecord(payload) && Array.isArray(payload.messages) ? payload.messages : [];
+      for (const message of messages) {
+        if (!isRecord(message) || message.role !== "user" || !Array.isArray(message.content)) {
+          continue;
+        }
+        for (const part of message.content) {
+          if (!isRecord(part)) {
+            continue;
+          }
+          const videoUrl = partUrl(part, "video_url");
+          const imageUrl = partUrl(part, "image_url");
+          if (part.type === "video_url" && videoUrl?.startsWith(VIDEO_PREFIX)) {
+            admitted.push(part);
+          } else if (part.type === "video_url" || imageUrl?.startsWith("data:video/")) {
+            replacePart(part, VIDEO_OMISSION);
+          }
+        }
+      }
+      while (Buffer.byteLength(JSON.stringify(payload), "utf8") >= requestBytesExclusive) {
+        const part = admitted.pop();
+        if (!part) {
+          throw new Error(
+            `Moonshot request body must be smaller than ${requestBytesExclusive} bytes`,
+          );
+        }
+        replacePart(part, "(video omitted: Moonshot request size limit)");
+      }
+      return result;
+    },
   );
 }

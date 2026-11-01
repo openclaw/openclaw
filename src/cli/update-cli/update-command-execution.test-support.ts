@@ -2,8 +2,10 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import * as gatewayBindings from "../../daemon/managed-gateway-bindings.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import type * as schema from "./schema-preflight.js";
 import type { executeMutableUpdate } from "./update-command-execution.js";
+import { resultFixture } from "./update-command-fixtures.test-support.js";
 import type * as managed from "./update-command-managed-context.js";
 import type * as serviceCommand from "./update-command-service-command.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
@@ -35,6 +37,20 @@ const mocks = vi.hoisted(() => ({
 }));
 
 export { mocks };
+
+export function readyCanary(steps: UpdateStepResult[], durationMs = 1, logTail: string[] = []) {
+  return { status: "ok" as const, phase: "readiness" as const, steps, durationMs, logTail };
+}
+
+export function packageCandidate(root: string) {
+  return async (
+    params: Parameters<typeof import("./update-command-package.js").runPackageInstallUpdate>[0],
+  ) => {
+    await params.validateCandidate(root);
+    await params.beforeActivate();
+    return successfulUpdate;
+  };
+}
 
 vi.mock(import("./update-command-service-command.js"), async (original) => ({
   ...(await original()),
@@ -120,15 +136,11 @@ vi.mock("./update-command-service.js", async () => {
   };
 });
 
-export const successfulUpdate: UpdateRunResult = {
-  status: "ok",
-  mode: "npm",
-  root: "/opt/openclaw",
+export const successfulUpdate: UpdateRunResult = resultFixture("/opt/openclaw", {
   before: { version: "1.0.0" },
   after: { version: "1.0.1" },
-  steps: [],
   durationMs: 1,
-};
+});
 
 export function executionParams(
   updateInstallKind: "git" | "package",
@@ -160,12 +172,11 @@ export function executionParams(
 export async function bindExecutionGuards(
   params: Omit<ExecutionParams, "executionGuards">,
 ): Promise<ExecutionParams> {
-  const finalParams = { ...params };
   const { createUpdateCommandExecutionGuards: createGuards } =
     await import("./update-command-execution-guards.js");
   return {
-    ...finalParams,
-    executionGuards: createGuards(finalParams.opts, finalParams.root),
+    ...params,
+    executionGuards: createGuards(params.opts, params.root),
   };
 }
 
@@ -207,13 +218,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([]);
   mocks.serviceStopped = false;
-  mocks.validateCanary.mockResolvedValue({
-    status: "ok",
-    phase: "readiness",
-    steps: [],
-    durationMs: 1,
-    logTail: [],
-  });
+  mocks.validateCanary.mockResolvedValue(readyCanary([]));
   mocks.captureManagedContext.mockResolvedValue(undefined);
   mocks.captureManagedPreflight.mockResolvedValue(schemaContext("default"));
   mocks.captureSchemaContext.mockResolvedValue(schemaContext("invoker"));

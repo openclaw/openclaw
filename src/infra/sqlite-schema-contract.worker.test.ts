@@ -70,30 +70,20 @@ it("uses fingerprints in a cold worker and loads diagnostics only after schema d
     worker.postMessage(undefined, []);
     return pending.promise;
   };
+  const expectInspection = (diagnosticCatalogReads: number, issues: unknown[] = []) =>
+    expect(inspect()).resolves.toEqual({ issues, comparisonDdl: 0, diagnosticCatalogReads });
   try {
-    await expect(inspect()).resolves.toEqual({
-      issues: [],
-      comparisonDdl: 0,
-      diagnosticCatalogReads: 0,
-    });
+    await expectInspection(0);
     database.exec("ALTER TABLE session_nodes ADD COLUMN foreign_column TEXT DEFAULT ''");
-    await expect(inspect()).resolves.toEqual({
-      issues: [
-        {
-          code: "unexpected-column",
-          objectName: "session_nodes.foreign_column",
-          message: "column definitions differ for session_nodes",
-        },
-      ],
-      comparisonDdl: 0,
-      diagnosticCatalogReads: 1,
-    });
+    await expectInspection(1, [
+      {
+        code: "unexpected-column",
+        objectName: "session_nodes.foreign_column",
+        message: "column definitions differ for session_nodes",
+      },
+    ]);
     database.exec("ALTER TABLE session_nodes DROP COLUMN foreign_column");
-    await expect(inspect()).resolves.toEqual({
-      issues: [],
-      comparisonDdl: 0,
-      diagnosticCatalogReads: 1,
-    });
+    await expectInspection(1);
   } finally {
     await worker.terminate();
     database.close();

@@ -1,9 +1,7 @@
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
-import {
-  createPlacementMoveOps,
-  readWorkerPlacementMovesReadOnly,
-} from "./placement-move-intent.js";
+import { createPlacementMoveOps } from "./placement-move-intent.js";
+import { readWorkerPlacementMovesReadOnly } from "./placement-move-row-codec.js";
 import {
   isCurrentPlacementTurnClaim,
   nextGeneration,
@@ -12,10 +10,12 @@ import {
   projectWorkerSessionTurnClaim,
   required,
   type WorkerSessionPlacementTransitionPatch,
+  type WorkerSessionPlacementIdentity,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
 import {
   fromRow,
+  ensureLocal,
   getRequired,
   query,
   transitionValues,
@@ -41,6 +41,7 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
       to: WorkerSessionPlacementState;
       expectedGeneration: number;
       patch?: WorkerSessionPlacementTransitionPatch;
+      localIdentity?: WorkerSessionPlacementIdentity;
     }): PlacementTurnClaimReceipt {
       if (!canTransitionWorkerSessionPlacement(input.from, input.to)) {
         throw new Error(
@@ -55,7 +56,9 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
       }
       const sessionId = required(input.sessionId, "session id");
       return write((db) => {
-        const current = getRequired(db, sessionId);
+        const current = input.localIdentity
+          ? ensureLocal(db, input.localIdentity, now())
+          : getRequired(db, sessionId);
         if (current.state !== input.from || current.generation !== input.expectedGeneration) {
           throw new Error(
             `Worker session placement ${sessionId} changed: expected ${input.from}@${input.expectedGeneration}, found ${current.state}@${current.generation}`,
@@ -183,11 +186,14 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
       sessionId: string;
       recoveryError: string;
       expectedGeneration?: number;
+      localIdentity?: WorkerSessionPlacementIdentity;
     }): PlacementTurnClaimReceipt {
       const sessionId = required(input.sessionId, "session id");
       const recoveryError = boundedWorkerError(input.recoveryError);
       return write((db) => {
-        const current = getRequired(db, sessionId);
+        const current = input.localIdentity
+          ? ensureLocal(db, input.localIdentity, now())
+          : getRequired(db, sessionId);
         if (
           input.expectedGeneration !== undefined &&
           current.generation !== input.expectedGeneration

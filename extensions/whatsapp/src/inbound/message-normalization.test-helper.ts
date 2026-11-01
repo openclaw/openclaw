@@ -33,6 +33,7 @@ export function normalizeTestWhatsAppMessage(params: {
   };
   const socketSession: WhatsAppAttachedSocketSession = {
     connectedAtMs: params.connectedAtMs ?? 0,
+    hasSyncedHistory: false,
     self: { e164: params.selfE164 === undefined ? "+15550009999" : params.selfE164 },
     onClose: new Promise<WebListenerCloseReason>(() => {}),
     signalClose: () => {},

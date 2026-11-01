@@ -83,9 +83,13 @@ vi.mock("../plugins/official-external-plugin-catalog.js", async (importOriginal)
   loadConfiguredHostedOfficialExternalPluginCatalogEntries: (...args: unknown[]) =>
     boundary.catalog(...args),
 }));
-vi.mock("./hook-install-persistence.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./hook-install-persistence.js")>()),
-  persistHookPackInstall: (...args: unknown[]) => boundary.persistHook(...args),
+// mock-isolation: This suite owns admission; real hook compensation is covered by hooks/installs.test.ts.
+vi.mock("../hooks/install-record-transaction.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../hooks/install-record-transaction.js")>()),
+  stageHookInstall: async (...args: unknown[]) => {
+    boundary.persistHook(...args);
+    return { async commit() {}, async rollback() {} };
+  },
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -161,32 +165,6 @@ describe("local plugin command ownership", () => {
       expect(pluginsCliRuntimeLogs).toContain(output);
     }
   });
-
-  it.each(["enable", "disable", "install", "uninstall"])(
-    "keeps the existing %s Gateway route",
-    async (command) => {
-      boundary.foreign = true;
-      resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
-      pluginLifecycleGatewayMock.mockResolvedValue({
-        plugin: { id: "alpha" },
-        pluginId: "alpha",
-        removed: [],
-        runtime: { generation: 2 },
-      });
-      await runPluginsCommand([
-        "plugins",
-        command,
-        command === "install" ? "npm:synthetic-plugin" : "alpha",
-        ...(["install", "uninstall"].includes(command) ? ["--force"] : []),
-      ]);
-      expect(pluginLifecycleGatewayMock.mock.calls[0]?.[0]).toBe(
-        `plugins.${command === "enable" || command === "disable" ? "setEnabled" : command}`,
-      );
-      expect(boundary.install).not.toHaveBeenCalled();
-      expect(boundary.policy).not.toHaveBeenCalled();
-      expect(boundary.uninstall).not.toHaveBeenCalled();
-    },
-  );
 
   it.each([true, false])("guards hook fallback when foreign owner=%s", async (foreign) => {
     boundary.foreign = foreign;

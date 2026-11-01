@@ -1,97 +1,89 @@
-// Memory Core tests cover manager sync control plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { MemorySyncParams } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { MemoryTargetedSessionSyncQueue } from "./manager-sync-control.js";
 
-function createQueuedSyncHarness(params: { syncing: Promise<void>; archiveFiles?: string[] }) {
-  let closed = false;
-  const sync = vi.fn(async (_params?: MemorySyncParams) => {});
-  const queue = new MemoryTargetedSessionSyncQueue({
+let active: ReturnType<typeof createDeferred<void>>;
+let closed: boolean;
+let sync: Mock<(params?: MemorySyncParams) => Promise<void>>;
+let queue: MemoryTargetedSessionSyncQueue;
+beforeEach(() => {
+  active = createDeferred<void>();
+  closed = false;
+  sync = vi.fn(async (_params?: MemorySyncParams) => {});
+  queue = new MemoryTargetedSessionSyncQueue({
     isClosed: () => closed,
-    getSyncing: () => params.syncing,
+    getSyncing: () => active.promise,
     sync,
   });
-  for (const file of params.archiveFiles ?? []) {
-    queue.archiveFiles.add(file);
-  }
-  return {
-    queue,
-    setClosed(value: boolean) {
-      closed = value;
-    },
-    sync,
-  };
+});
+
+const session = (sessionId: string) => ({
+  agentId: "main",
+  sessionId,
+  sessionKey: `agent:main:${sessionId}`,
+});
+const archives = (...ids: string[]) => ids.map((id) => `/tmp/${id}.jsonl`);
+const targets = (...ids: string[]) => ({
+  sessions: ids.map(session),
+  archiveFiles: archives(...ids),
+});
+function expectCleared() {
+  expect(queue).toMatchObject({
+    archiveFiles: { size: 0 },
+    sessions: { size: 0 },
+    progressCallbacks: { size: 0 },
+    force: false,
+    pending: null,
+  });
 }
 
 describe("memory manager sync control", () => {
   it("merges repeated queued requests while the active sync is still running", async () => {
-    let releaseSync = () => {};
-    const pendingSync = new Promise<void>((resolve) => {
-      releaseSync = resolve;
-    });
-    const harness = createQueuedSyncHarness({ syncing: pendingSync });
-
-    const first = harness.queue.enqueue({
-      archiveFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl"],
-    });
-    const second = harness.queue.enqueue({
-      archiveFiles: ["/tmp/second.jsonl", "/tmp/third.jsonl"],
-    });
+    const first = queue.enqueue({ archiveFiles: archives("first", "second") });
+    const second = queue.enqueue({ archiveFiles: archives("second", "third") });
 
     expect(first).toBe(second);
-    releaseSync();
+    active.resolve();
     await second;
 
-    expect(harness.sync).toHaveBeenCalledTimes(1);
-    expect(harness.sync).toHaveBeenCalledWith({
+    const expected = {
       reason: "queued-sessions",
       sessions: [],
-      archiveFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl", "/tmp/third.jsonl"],
-    });
+      archiveFiles: archives("first", "second", "third"),
+    };
+    expect(sync.mock.calls).toEqual([[expected]]);
   });
 
   it("falls back to the active sync when no usable session files were queued", async () => {
-    let releaseSync = () => {};
-    const pendingSync = new Promise<void>((resolve) => {
-      releaseSync = resolve;
-    });
-    const harness = createQueuedSyncHarness({ syncing: pendingSync });
+    const queued = queue.enqueue({ archiveFiles: ["", "   "] });
 
-    const queued = harness.queue.enqueue({
-      archiveFiles: ["", "   "],
-    });
-
-    expect(queued).toBe(pendingSync);
-    releaseSync();
+    expect(queued).toBe(active.promise);
+    active.resolve();
     await queued;
-    expect(harness.sync).not.toHaveBeenCalled();
+    expect(sync).not.toHaveBeenCalled();
   });
 
   it("queues identity session targets while a sync is already running", async () => {
-    let releaseSync = () => {};
-    const pendingSync = new Promise<void>((resolve) => {
-      releaseSync = resolve;
-    });
-    const harness = createQueuedSyncHarness({ syncing: pendingSync });
     const progressUpdate = { completed: 1, total: 2, label: "queued" };
     const progress = vi.fn();
-    harness.sync.mockImplementationOnce(async (params) => {
+    sync.mockImplementationOnce(async (params) => {
       params?.progress?.(progressUpdate);
     });
 
-    const queued = harness.queue.enqueue({
-      sessions: [{ agentId: "main", sessionId: "targeted", sessionKey: "agent:main:targeted" }],
+    const queued = queue.enqueue({
+      sessions: [session("targeted")],
       force: true,
       progress,
     });
 
-    releaseSync();
+    active.resolve();
     await queued;
 
-    expect(harness.sync).toHaveBeenCalledWith({
+    expect(sync).toHaveBeenCalledWith({
       reason: "queued-sessions",
       force: true,
-      sessions: [{ agentId: "main", sessionId: "targeted", sessionKey: "agent:main:targeted" }],
+      sessions: [session("targeted")],
       archiveFiles: [],
       progress: expect.any(Function),
     });
@@ -99,95 +91,47 @@ describe("memory manager sync control", () => {
   });
 
   it("keeps failed queued targets for a later retry", async () => {
-    let releaseSync = () => {};
-    const pendingSync = new Promise<void>((resolve) => {
-      releaseSync = resolve;
-    });
-    let rejectQueuedSync: ((error: Error) => void) | undefined;
-    const queuedSync = new Promise<void>((_resolve, reject) => {
-      rejectQueuedSync = reject;
-    });
-    const harness = createQueuedSyncHarness({ syncing: pendingSync });
-    harness.sync.mockReturnValueOnce(queuedSync).mockResolvedValueOnce(undefined);
+    const queuedSync = createDeferred<void>();
+    sync.mockReturnValueOnce(queuedSync.promise).mockResolvedValueOnce(undefined);
 
-    const firstProgress = vi.fn();
-    const first = harness.queue.enqueue({
-      sessions: [{ agentId: "main", sessionId: "first", sessionKey: "agent:main:first" }],
-      archiveFiles: ["/tmp/first.jsonl"],
-      force: true,
-      progress: firstProgress,
-    });
+    const first = queue.enqueue({ ...targets("first"), force: true, progress: vi.fn() });
     const firstRejection = expect(first).rejects.toThrow("transient sqlite failure");
 
-    releaseSync();
+    active.resolve();
     await vi.waitFor(() => {
-      expect(harness.sync).toHaveBeenCalledTimes(1);
+      expect(sync).toHaveBeenCalledTimes(1);
     });
 
-    const concurrentProgress = vi.fn();
-    const concurrent = harness.queue.enqueue({
-      sessions: [{ agentId: "main", sessionId: "second", sessionKey: "agent:main:second" }],
-      archiveFiles: ["/tmp/second.jsonl"],
-      progress: concurrentProgress,
-    });
+    const concurrent = queue.enqueue({ ...targets("second"), progress: vi.fn() });
     expect(concurrent).toBe(first);
 
-    rejectQueuedSync?.(new Error("transient sqlite failure"));
+    queuedSync.reject(new Error("transient sqlite failure"));
     await firstRejection;
 
-    expect(harness.queue.archiveFiles).toEqual(new Set(["/tmp/second.jsonl", "/tmp/first.jsonl"]));
-    expect(Array.from(harness.queue.sessions.values())).toEqual([
-      { agentId: "main", sessionId: "second", sessionKey: "agent:main:second" },
-      { agentId: "main", sessionId: "first", sessionKey: "agent:main:first" },
-    ]);
-    expect(harness.queue.pending).toBeNull();
-    expect(harness.queue.progressCallbacks.size).toBe(0);
-    expect(harness.queue.force).toBe(true);
+    expect(queue.archiveFiles).toEqual(new Set(["/tmp/second.jsonl", "/tmp/first.jsonl"]));
+    expect(Array.from(queue.sessions.values())).toEqual([session("second"), session("first")]);
+    expect(queue).toMatchObject({ pending: null, progressCallbacks: { size: 0 }, force: true });
 
-    await harness.queue.enqueue();
+    await queue.enqueue();
 
-    expect(harness.sync).toHaveBeenCalledTimes(2);
-    expect(harness.sync).toHaveBeenLastCalledWith({
+    expect(sync).toHaveBeenCalledTimes(2);
+    expect(sync).toHaveBeenLastCalledWith({
       reason: "queued-sessions",
       force: true,
-      sessions: [
-        { agentId: "main", sessionId: "second", sessionKey: "agent:main:second" },
-        { agentId: "main", sessionId: "first", sessionKey: "agent:main:first" },
-      ],
-      archiveFiles: ["/tmp/second.jsonl", "/tmp/first.jsonl"],
+      ...targets("second", "first"),
     });
-    expect(harness.queue.archiveFiles.size).toBe(0);
-    expect(harness.queue.sessions.size).toBe(0);
-    expect(harness.queue.pending).toBeNull();
-    expect(harness.queue.force).toBe(false);
+    expectCleared();
   });
 
   it("clears queued state when the manager closes while the queue waits", async () => {
-    let releaseSync = () => {};
-    const pendingSync = new Promise<void>((resolve) => {
-      releaseSync = resolve;
-    });
-    const harness = createQueuedSyncHarness({
-      syncing: pendingSync,
-      archiveFiles: ["/tmp/close-retained.jsonl"],
-    });
-    const progress = vi.fn();
+    queue.archiveFiles.add("/tmp/close-retained.jsonl");
+    const queued = queue.enqueue({ sessions: [session("close")], force: true, progress: vi.fn() });
 
-    const queued = harness.queue.enqueue({
-      sessions: [{ agentId: "main", sessionId: "close", sessionKey: "agent:main:close" }],
-      force: true,
-      progress,
-    });
-
-    harness.setClosed(true);
-    releaseSync();
+    closed = true;
+    active.resolve();
     await queued;
 
-    expect(harness.sync).not.toHaveBeenCalled();
-    expect(harness.queue.archiveFiles.size).toBe(0);
-    expect(harness.queue.sessions.size).toBe(0);
-    expect(harness.queue.progressCallbacks.size).toBe(0);
-    expect(harness.queue.force).toBe(false);
-    expect(harness.queue.pending).toBeNull();
+    expect(sync).not.toHaveBeenCalled();
+    expectCleared();
   });
 });

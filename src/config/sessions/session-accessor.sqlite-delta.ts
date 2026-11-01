@@ -1,4 +1,4 @@
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
@@ -55,7 +55,7 @@ export function readTranscriptRawDeltaInDatabase(
   };
   return database.db.isTransaction
     ? readSnapshot()
-    : runSqliteDeferredTransactionSync(database.db, readSnapshot, {
+    : runSqliteReadSnapshotSync(database.db, readSnapshot, {
         databaseLabel: database.path,
         operationLabel: "session transcript raw delta",
       });

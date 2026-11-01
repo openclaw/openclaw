@@ -11,8 +11,11 @@ read_when:
 Dreaming is the background memory consolidation system in `memory-core`. It moves strong short-term signals into durable memory while keeping the process explainable and reviewable.
 
 <Note>
-Dreaming is enabled by default. Set
+Dreaming is enabled by default. Memory CLI commands use the built-in path: set
 `plugins.entries.memory-core.config.dreaming.enabled: false` to disable it.
+The managed Gateway sidecar instead reads
+`plugins.entries.<memory-slot-owner>.config.dreaming` when the selected memory
+plugin exposes those settings.
 Disabled dreaming does not inspect heartbeat system-event queues.
 </Note>
 
@@ -32,6 +35,10 @@ its stable declaration key in the active cron store.
 - **Machine state** in SQLite-backed plugin state (recall store, phase signals, ingestion checkpoints, locks).
 - **Rewrite preimages** in SQLite-backed plugin state before an accepted `MEMORY.md` rewrite.
 - **Human-readable output** in `DREAMS.md` (or an existing `dreams.md`) and optional phase report files under `memory/dreaming/<phase>/YYYY-MM-DD.md`.
+
+Dreaming preserves existing workspace directory permissions without attempting
+to change their modes. Missing output directories are created with mode `0700`;
+existing output files retain their permissions.
 
 The built-in SQLite store reads only the selected workspace's state for lookups
 and cleanup. Corrupt JSON in another workspace does not block these operations;
@@ -101,6 +108,9 @@ Dreaming runs three cooperative phases per sweep, in order: light -> REM -> deep
 
 Dreaming can ingest session transcripts into the dreaming corpus. Only interactive sessions are eligible. Cron, heartbeat, subagent, and unknown sessions stay out of durable candidate ingestion. Transcript text is not secret-masked before ingestion. Runtime-marked recalled context is removed so recalled snippets cannot be learned again as new memory.
 
+Discovery skips unused transcript revisions. Freshness is checked when each
+transcript is scanned, so later appends remain eligible for ingestion.
+
 Two operator controls exclude sessions from automatic ingestion, each with a recorded reason: the [memory admission policy](/concepts/memory-provenance#admission-keeping-sources-out-of-memory) matches retained hook-source, channel, or chat-type metadata, and [`memory forget`](/cli/memory#memory-forget) records selected session IDs as `forgotten` for future scans. Policy changes do not erase existing candidates or prevent direct file writes. Manual session backfill applies both controls in preview, REM, and apply modes, and preserves source-session origins when staging candidates.
 
 ## Consolidation safety
@@ -136,7 +146,12 @@ memory framing in the Generative Agents research.
 
 Dreaming keeps a narrative **Dream Diary** in `DREAMS.md`. Each sweep with useful material combines its Light, REM, and successfully promoted Deep inputs into one short diary entry, including when nothing qualifies for durable promotion. The tool-free background completion uses the workspace agent's default model unless `dreaming.model` is configured. If the configured model is unavailable, the diary run retries once with that agent's default model. Trust or allowlist failures are not retried.
 
+Diary updates require valid UTF-8 and leave malformed `DREAMS.md` files unchanged.
+Preserve the original and convert a copy to UTF-8 before retrying. A malformed
+diary is omitted from optional context so other dreaming work can continue.
+
 Diary and consolidation completions use fresh contexts without retaining conversation sessions or delivering chat replies. Failed or empty diary generation writes a local fallback entry and reports a degraded outcome, so missing model output leaves a visible trace.
+Fallback placeholders remain in the diary but are excluded from recent continuity context, leaving those slots available for useful entries.
 
 Diary generation uses the existing agent run budget, `agents.defaults.timeoutSeconds`,
 instead of a separate one-minute deadline. It inherits the same 48-hour default and
@@ -200,6 +215,9 @@ When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep,
 Startup reconciles that job in the background so Gateway connections do not wait
 for the cron store. Failures are logged and retried by runtime reconciliation.
 Stopping or replacing the plugin waits for pending reconciliation to settle.
+Reconciliation preserves a job paused by the operator or auto-disabled by cron,
+including its failure history. Use `openclaw cron enable <job-id>` to resume it;
+schedule and payload repairs still apply while it is stopped.
 
 Plugin reloads preserve the managed schedule. The previous instance stops its
 background callbacks and settles pending diary publication before its replacement
@@ -229,7 +247,7 @@ a repair warning and remain in place.
 
 Dreaming completions use the [subagent queue](/concepts/queue#background-work) at background priority and honor `agents.defaults.subagents.maxConcurrent`. Setting this existing limit to `1` serializes diary and consolidation completions across workspaces and plugins. The sweep coordinator does not consume a completion slot while it waits for phase work. System busyness shows these completions in the `subagent` row.
 
-An explicit multi-agent fleet needs an [ambient system owner](/gateway/config-agents/heartbeat-compaction-and-streaming#agents.defaults.systemagent) for this job. If logs report `Agent-less cron job has no resolvable owner`, choose an existing agent to own the sweep. For example, if that agent is `ops`:
+An explicit multi-agent fleet needs an [ambient system owner](/gateway/config-agents/heartbeat-compaction-and-streaming#agents.defaults.systemagent) to create this job. Without one, reconciliation skips creation and warns once while ownership remains unresolved. Choose an existing agent to own the sweep; reconciliation resumes automatically when the owner is configured. Existing managed jobs keep their current reconciliation behavior. For example, if the owner is `ops`:
 
 ```bash
 openclaw config set agents.defaults.systemAgent.agentId ops
@@ -330,7 +348,11 @@ This selects the execution owner; it does not change any agent's workspace or li
 
 ## Key defaults
 
-All settings live under `plugins.entries.memory-core.config.dreaming`.
+For the built-in `memory-core` memory slot (the default), dreaming settings live under `plugins.entries.memory-core.config.dreaming`.
+
+The defaults below document the built-in `memory-core` path used by Memory CLI commands such as `openclaw memory status`, promote, and REM helpers.
+
+Separately, the managed Gateway dreaming sidecar may read dreaming **settings** from the selected memory-slot owner when that plugin exposes them. That Gateway path does not mean every vector-backed memory plugin implements the built-in Light / REM / Deep dreaming pipeline — see [LanceDB and dreaming](#lancedb-and-dreaming).
 
 <ParamField path="enabled" type="boolean" default="true">
   Enable or disable the dreaming sweep.
@@ -379,6 +401,12 @@ Diary view gains two more sub-tabs next to Dreams:
   full-vault breakdown, and inline page previews
 
 Both sub-tabs show an enable hint instead when `memory-wiki` is off.
+
+## LanceDB and dreaming
+
+The managed Gateway dreaming sidecar may read dreaming **settings** from the selected `plugins.slots.memory` owner when that plugin exposes them. Memory CLI status / promote / REM helpers still follow the built-in `memory-core` config path above.
+
+Slot-owned Gateway settings are separate from consolidating a LanceDB (or other vector) index with a full Light / REM / Deep pipeline and narrative output. The built-in `memory-core` dreaming pipeline remains the documented default. For third-party **vector-native** dreaming implementations, browse community plugins on [ClawHub](https://clawhub.ai/).
 
 ## Related
 

@@ -1,6 +1,7 @@
 import { createDeferredCore } from "../shared/deferred.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 import type {
+  PreparedSqliteWorkerOpen,
   SqliteWorkerInputPreparation,
   SqliteWorkerInputRetention,
 } from "./sqlite-worker-broker.types.js";
@@ -44,7 +45,7 @@ export class SqliteWorkerInputAdmission {
     dispatch: () => Promise<T>,
     signal?: AbortSignal,
     reuse?: () => Promise<T | undefined>,
-    sharedState = false,
+    carrierClass?: PreparedSqliteWorkerOpen["carrierClass"],
   ): Promise<T> {
     if (
       this.opens.size >= this.owner.maxPendingOpens ||
@@ -58,11 +59,11 @@ export class SqliteWorkerInputAdmission {
     const settled = createDeferredCore();
     this.opens.add(settled.promise);
     const release = this.retain(bytes);
-    // Serialize aliases within each owner class without holding shared state behind agent scans.
+    // Serialize aliases within each owner class without holding unrelated stores behind agent scans.
     const enqueue = () =>
       runQueuedStoreWrite({
         queues: this.openQueue,
-        storePath: sharedState ? "sqlite-shared-state-open" : "sqlite-open",
+        storePath: carrierClass ?? "generic",
         label: "SQLite worker open",
         fn: dispatch,
         signal,
@@ -127,14 +128,9 @@ export class SqliteWorkerInputAdmission {
     return {
       assertCurrent,
       handoff: (dispatch) => {
-        try {
-          if (!this.inputPreparations.has(settled.promise)) {
-            throw new SqliteWorkerError("SQLite worker input preparation is closed", "closed");
-          }
-          assertCurrent();
-        } catch (error) {
+        if (!this.inputPreparations.has(settled.promise) || this.owner.isClosing()) {
           release();
-          throw error;
+          throw new SqliteWorkerError("SQLite worker input preparation is closed", "closed");
         }
         // Enqueue takes custody in this same synchronous turn, including its oversized checks.
         handedOff = true;

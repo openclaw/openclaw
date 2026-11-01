@@ -13,7 +13,7 @@ import type {
   CodexBundleMcpThreadConfig,
   LoadCodexBundleMcpThreadConfigParams,
 } from "../agents/codex-mcp-config.types.js";
-import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
+import { log as runnerLog } from "../agents/embedded-agent-runner/logger.js";
 import type {
   EmbeddedRunAttemptParams as CoreEmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -21,11 +21,11 @@ import type {
 import {
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
-  clearActiveEmbeddedRun,
-  queueEmbeddedAgentMessageWithOutcome,
-  setActiveEmbeddedRun,
+  detachActiveEmbeddedRun,
+  attachActiveEmbeddedRun,
   type EmbeddedAgentQueueMessageOptions,
 } from "../agents/embedded-agent-runner/runs.js";
+import { queueDetachedEmbeddedAgentMessage } from "../agents/embedded-agent-runner/runs.message-injection.js";
 import { runStructuredInput } from "../agents/harness/structured-input-execution.js";
 import {
   compileStructuredInputForm,
@@ -35,6 +35,10 @@ import {
   snapshotStructuredInput,
 } from "../agents/harness/structured-input.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
+import {
+  buildSkillWorkshopPromptSection as buildCoreSkillWorkshopPromptSection,
+  SKILL_WORKSHOP_TOOL_NAME as CORE_SKILL_WORKSHOP_TOOL_NAME,
+} from "../agents/skill-workshop-prompt.js";
 import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
 import { expandToolGroups } from "../agents/tool-policy-shared.js";
 import {
@@ -43,11 +47,21 @@ import {
   prepareWatchedSessionsPromptAsync,
 } from "../agents/watched-sessions-prompt.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage as formatError } from "../infra/errors.js";
 import { resolveExecModePolicy } from "../infra/exec-approvals-core.js";
 import { maxAsk, minSecurity } from "../infra/exec-approvals-policy.js";
 import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
+import {
+  canInjectReplyMessageTarget,
+  captureReplyMessageInjectionTarget,
+} from "../sessions/session-controller.message-injection.js";
+import {
+  resolveActiveReplyOperationForSessionId,
+  resolveActiveSessionRunId as resolveActiveEmbeddedRunSessionId,
+} from "../sessions/session-controller.queries.js";
+import { steerSessionControllerOperation } from "../sessions/session-controller.steer.js";
 
 export type {
   AgentExecutorBinding,
@@ -113,6 +127,7 @@ export { projectProgressCardChannelUpdate } from "../session-cards/progress-card
 export {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
+  resolveMessageToolSourceReplyFinal,
 } from "../agents/embedded-agent-message-tool-source-reply.js";
 export { formatFastModeAutoProgressText, resolveFastModeForElapsed } from "../shared/fast-mode.js";
 export type { AgentMessage } from "../agents/runtime/index.js";
@@ -161,6 +176,7 @@ export const agentHarnessAttemptTerminal = {
 };
 export { projectAgentHarnessTranscriptMessageForDisplay } from "../agents/harness/transcript-visibility.js";
 export { isOpenClawRuntimeContextCustomMessage } from "../agents/internal-runtime-context.js";
+export { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 export { restorePreparedUserTurnOperationalMetaForRuntime } from "../sessions/user-turn-transcript.metadata.js";
 export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
 export type {
@@ -176,6 +192,7 @@ type EmbeddedRunAttemptParamsBase = Omit<
   | "admittedRunContext"
   | "disableToolSearch"
   | "sessionReadScopeKey"
+  | "blindPrompt"
   | "authoredContextTokenCap"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
@@ -212,7 +229,6 @@ export type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../agents/embedded-agent-messaging.types.js";
-export type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 export type { AgentApprovalEventData, AgentEventPayload } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 /**
@@ -273,10 +289,6 @@ export {
   selectDefaultNodeFromList,
 } from "../agents/tools/nodes-utils.js";
 export { formatToolAggregate } from "../auto-reply/tool-meta.js";
-export {
-  HEARTBEAT_RESPONSE_TOOL_NAME,
-  normalizeHeartbeatToolResponse,
-} from "../auto-reply/heartbeat-tool-response.js";
 export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-agent-messaging.js";
 export {
   projectPluginMessageDeliveryFact,
@@ -333,10 +345,17 @@ export const agentHarnessStructuredInput = Object.freeze({
   run: runStructuredInput,
   snapshot: snapshotStructuredInput,
 });
-export {
-  buildSkillWorkshopPromptSection,
-  SKILL_WORKSHOP_TOOL_NAME,
-} from "../agents/skill-workshop-prompt.js";
+export { listToolPromptGuidance } from "../agents/tool-prompt-guidance.js";
+/**
+ * @deprecated Pass the run's callable tool names to listToolPromptGuidance; it includes
+ * this section while `skill_workshop` is callable.
+ */
+export const SKILL_WORKSHOP_TOOL_NAME = CORE_SKILL_WORKSHOP_TOOL_NAME;
+/**
+ * @deprecated Pass the run's callable tool names to listToolPromptGuidance; it includes
+ * this section while `skill_workshop` is callable.
+ */
+export const buildSkillWorkshopPromptSection = buildCoreSkillWorkshopPromptSection;
 export {
   buildDelegationGuidanceSection,
   resolveMainSessionDelegationMode,
@@ -360,23 +379,80 @@ export {
 export {
   abortAndDrainEmbeddedAgentRun as abortAndDrainAgentHarnessRun,
   abortEmbeddedAgentRun as abortAgentHarnessRun,
-  clearActiveEmbeddedRun,
   resolveActiveEmbeddedRunSessionId,
-  setActiveEmbeddedRun,
 };
+
+type AgentHarnessActiveRunHandle = Omit<Parameters<typeof attachActiveEmbeddedRun>[1], symbol>;
+
+/** Registers within the host-bound attempt and returns cleanup for this exact native run. */
+export function setActiveEmbeddedRun(
+  sessionId: string,
+  handle: AgentHarnessActiveRunHandle,
+  sessionKey?: string,
+  sessionFile?: string,
+  agentId?: string,
+): ((reason?: string) => void) | undefined {
+  const attachment = attachActiveEmbeddedRun(sessionId, handle, sessionKey, sessionFile, agentId);
+  if (!attachment) {
+    return undefined;
+  }
+  return (reason) =>
+    detachActiveEmbeddedRun(sessionId, handle, sessionKey, sessionFile, reason, attachment);
+}
+
+/** A retained cleanup closes only its captured run, including after a successor registers. */
+export function clearActiveEmbeddedRun(
+  sessionId: string,
+  handle: AgentHarnessActiveRunHandle,
+  sessionKey?: string,
+  sessionFile?: string,
+  reason = "run_completed",
+  cleanup?: ReturnType<typeof setActiveEmbeddedRun>,
+): void {
+  if (cleanup) {
+    cleanup(reason);
+  } else {
+    detachActiveEmbeddedRun(sessionId, handle, sessionKey, sessionFile, reason);
+  }
+}
 
 /**
  * @deprecated Active-run queueing is an internal runtime concern. This legacy
- * boolean API only reports immediate queue eligibility and cannot observe async
- * runtime rejection; runtime-owned delivery paths should use acceptance-aware
- * steering instead of public SDK queueing.
+ * boolean API reports whether the active turn or sessionless native sink could
+ * take input now; it cannot observe the later outcome and never retries a refusal.
  */
 export function queueAgentHarnessMessage(
   sessionId: string,
   text: string,
   options?: EmbeddedAgentQueueMessageOptions,
 ): boolean {
-  return queueEmbeddedAgentMessageWithOutcome(sessionId, text, options).queued;
+  const operation = resolveActiveReplyOperationForSessionId(sessionId);
+  if (!operation) {
+    return queueDetachedEmbeddedAgentMessage(sessionId, text, options);
+  }
+  const target = captureReplyMessageInjectionTarget(operation);
+  if (!target || !canInjectReplyMessageTarget(target, options)) {
+    return false;
+  }
+  void steerSessionControllerOperation({
+    operation,
+    text,
+    options: options ?? { steeringMode: "all" },
+    abortOnUnconfirmedTranscript: false,
+  }).then(
+    (steer) => {
+      if (steer.status === "indeterminate") {
+        runnerLog.warn(
+          `queue message outcome unconfirmed: sessionId=${sessionId}; inspect the conversation before retrying`,
+        );
+      } else if (steer.status !== "accepted") {
+        runnerLog.warn(`queue message not accepted: sessionId=${sessionId} status=${steer.status}`);
+      }
+    },
+    (error: unknown) =>
+      runnerLog.warn(`queue message rejected: sessionId=${sessionId} err=${formatError(error)}`),
+  );
+  return true;
 }
 export { finalizeAgentToolAvailability } from "../agents/agent-tool-availability.js";
 export { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
@@ -555,8 +631,8 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
   return materialize(params);
 }
 
-export { resolveSandboxContext } from "../agents/sandbox.js";
-export type { SandboxContext, SandboxWorkspaceAccess } from "../agents/sandbox.js";
+export { resolveSandboxContext } from "../agents/sandbox/context.js";
+export type { SandboxContext, SandboxWorkspaceAccess } from "../agents/sandbox/types.js";
 export { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 export {
   hasSandboxBindContainerPathAliases,

@@ -1,5 +1,7 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { Errored, For, Loading, Show, createMemo, createSignal, latest } from "solid-js";
 import { SESSION_COMMUNICATION_MODES } from "../../../packages/gateway-protocol/src/session-communication.js";
+import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
+import { registerSessionPeopleEnglish } from "../i18n/locales/en-session-people.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
@@ -8,14 +10,19 @@ import type {
   SessionManagementActionKind,
   SessionMenuActionsState as MenuState,
 } from "./session-menu-actions.ts";
+import { HeaderSearch } from "./solid/header-search.tsx";
 import { Icon } from "./solid/icon.tsx";
-import type { MenuEntry } from "./solid/menu.tsx";
+import type { MenuControls, MenuEntry } from "./solid/menu.tsx";
 import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
+
+registerSessionMenuEnglish();
+registerSessionPeopleEnglish();
 
 export function useSessionMenuDetails(
   actions: SessionMenuActions,
   readState: () => MenuState,
   disabled: (kind: SessionManagementActionKind) => boolean,
+  controls?: MenuControls,
 ) {
   const ownerSnapshot = actions.ownerMenu.snapshot;
   const ownerStatus = (): MenuEntry[] => {
@@ -51,6 +58,10 @@ export function useSessionMenuDetails(
     searchGeneration();
     return "";
   });
+  const [searching, setSearching] = createSignal(() => {
+    searchGeneration();
+    return false;
+  });
   const owners = createMemo(() => {
     const state = ownerSnapshot();
     const options = [...state.owners];
@@ -78,9 +89,6 @@ export function useSessionMenuDetails(
       ),
     );
   });
-  const ownersByKey = createMemo(
-    () => new Map(owners().map((owner) => [`${owner.type}:${owner.id}`, owner])),
-  );
   const ownerSearchEntry: MenuEntry = {
     kind: "content",
     id: "owners-search",
@@ -89,15 +97,15 @@ export function useSessionMenuDetails(
         class="people-menu__search"
         ref={nativeListener("click", (event) => event.stopPropagation())}
       >
-        <input
-          type="search"
-          data-search
-          data-form-control
-          autocomplete="off"
-          aria-label={t("sessionsView.searchPeople")}
-          placeholder={t("sessionsView.searchPeople")}
-          value={query()}
-          onInput={(event) => setQuery(event.currentTarget.value)}
+        <HeaderSearch
+          title={t("sessionsView.assignTo")}
+          label={t("sessionsView.searchPeople")}
+          query={query()}
+          open={searching()}
+          controlRef={() => controls?.ref()}
+          inputProps={{ "data-search": "", "data-form-control": "" }}
+          onOpenChange={setSearching}
+          onQueryChange={setQuery}
         />
       </div>
     ),
@@ -120,37 +128,17 @@ export function useSessionMenuDetails(
           checked,
           disabled: actions.actionDisabled("assign-owner") || checked,
           attributes: { title: readState().actionDisabledReasons["assign-owner"] },
-          render: (attributes) => (
-            <button
-              {...attributes}
-              type="button"
-              value={`assign-owner:${owner.type}:${encodeURIComponent(owner.id)}`}
-              class="oc-menu-item session-menu__item"
-              disabled={attributes["aria-disabled"] === "true"}
-              title={readState().actionDisabledReasons["assign-owner"]}
-            >
-              <span class="oc-menu-item__check" aria-hidden="true">
-                {attributes["aria-checked"] === "true" ? "✓" : ""}
-              </span>
-              <span class="oc-menu-item__icon">
-                <span class="session-menu__avatar" aria-hidden="true">
-                  <SessionOwnerAvatar
-                    owner={ownersByKey().get(`${owner.type}:${owner.id}`) ?? owner}
-                  />
-                </span>
-              </span>
-              <span class="oc-menu-item__label">
-                <span class="session-menu__text">{attributes["aria-label"]}</span>
-              </span>
-              <Show when={attributes["aria-checked"] === "true"}>
-                <span class="oc-menu-item__details">
-                  <span class="session-menu__check" aria-hidden="true">
-                    <Icon name="check" />
-                  </span>
-                </span>
-              </Show>
-            </button>
+          icon: (
+            <span class="session-menu__avatar" aria-hidden="true">
+              <SessionOwnerAvatar owner={owner} />
+            </span>
           ),
+          content: <span class="session-menu__text">{label}</span>,
+          details: checked ? (
+            <span class="session-menu__check" aria-hidden="true">
+              <Icon name="check" />
+            </span>
+          ) : undefined,
         };
       }),
       ...(options.length === 0
@@ -213,10 +201,7 @@ export function useSessionMenuDetails(
                             ? t("sessionsView.communication.default")
                             : undefined)
                         }
-                        ref={(element) => {
-                          click(element);
-                          keydown(element);
-                        }}
+                        ref={[controls?.ref(), click, keydown]}
                       >
                         {t(
                           mode === "always"
@@ -236,18 +221,7 @@ export function useSessionMenuDetails(
       </For>
     </div>
   );
-  const communicationStart: MenuEntry = {
-    kind: "content",
-    id: "communication-start",
-    content: <div class="session-menu__separator" role="separator" />,
-  };
-  const communicationEnd: MenuEntry = {
-    kind: "content",
-    id: "communication-end",
-    content: <div class="session-menu__separator" role="separator" />,
-  };
   const communication = (): MenuEntry[] => [
-    communicationStart,
     { kind: "content", id: "communication-controls", content: communicationControls },
     ...(policy()?.send !== undefined || policy()?.receive !== undefined
       ? [
@@ -261,8 +235,40 @@ export function useSessionMenuDetails(
           },
         ]
       : []),
-    communicationEnd,
   ];
-  const error = () => actions.advanced.error;
-  return { ownerStatus, ownerOptions, communication, error };
+  const ReadStatus = () => {
+    return <>{(latest(actions.advanced.read), null)}</>;
+  };
+  const readStatus: MenuEntry = {
+    id: "reload-settings",
+    get label() {
+      return t("common.retry");
+    },
+    render: (attributes) => (
+      <Show when={actions.advanced.readKey()} keyed>
+        <Errored
+          fallback={(error) => (
+            <>
+              <div class="session-menu__info" role="alert">
+                {formatUiError(error())}
+              </div>
+              <button
+                {...attributes}
+                class="oc-menu-item session-menu__item"
+                type="button"
+                value="reload-settings"
+              >
+                {t("common.retry")}
+              </button>
+            </>
+          )}
+        >
+          <Loading fallback={null} on={actions.advanced.readKey()}>
+            <ReadStatus />
+          </Loading>
+        </Errored>
+      </Show>
+    ),
+  };
+  return { ownerStatus, ownerOptions, communication, readStatus };
 }

@@ -120,7 +120,6 @@ function advance(
   } else if (closed.kind !== "projection-unavailable") {
     writePayload(context, filter, {
       boundary: payload.boundary,
-      isHeartbeat: payload.isHeartbeat,
       state: "blocked",
       failure: closed.kind,
     });
@@ -152,14 +151,12 @@ export function mutateSessionActorMemoryOutbox(
     case "session.outbox.enqueueIntent":
       writePayload(context, command.input, {
         admission: command.input.admission,
-        isHeartbeat: command.input.isHeartbeat,
         state: "admitted",
       });
       return undefined;
     case "session.outbox.acceptIntent":
       writePayload(context, command.input, {
         boundary: command.input.boundary,
-        isHeartbeat: command.input.isHeartbeat,
         runtimeContext: command.input.runtimeContext,
         state: "accepted",
       });
@@ -170,7 +167,6 @@ export function mutateSessionActorMemoryOutbox(
         command.input,
         {
           boundary: command.input.boundary,
-          isHeartbeat: command.input.isHeartbeat,
           runtimeContext: command.input.runtimeContext,
         },
         command.input,
@@ -221,7 +217,6 @@ export function mutateSessionActorMemoryOutbox(
       }
       writePayload(context, command.input, {
         admission: command.input.admission,
-        isHeartbeat: command.input.isHeartbeat,
         state: "admitted",
       });
       return { warnings, pending, admitted: true };

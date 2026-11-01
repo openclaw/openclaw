@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getImageMetadata } from "../../media/image-ops.js";
 import { createSolidPngBuffer } from "../../plugin-sdk/test-helpers/image-fixtures.js";
-import { projectScreenshotResult } from "./computer-tool-result.js";
+import { createComputerTool } from "./computer-tool.js";
 
 describe("computer screenshot dimensions", () => {
   it.each([
@@ -13,17 +13,23 @@ describe("computer screenshot dimensions", () => {
   ] as const)(
     "reports %dx%d at cap %d as the delivered %dx%d image",
     async (width, height, referenceWidth, deliveredWidth, deliveredHeight) => {
-      const { result } = await projectScreenshotResult({
-        capture: {
-          base64: createSolidPngBuffer(width, height, { r: 70, g: 125, b: 180 }).toString("base64"),
-          mimeType: "image/png",
-          displayFrameId: "display-frame",
+      const tool = createComputerTool({
+        config: { agents: { defaults: { imageMaxDimensionPx: referenceWidth } } },
+        transport: {
+          resolveNode: async () => ({ nodeId: "desktop-node" }),
+          invoke: async () => ({
+            base64: createSolidPngBuffer(width, height, { r: 70, g: 125, b: 180 }).toString(
+              "base64",
+            ),
+            format: "png",
+            displayFrameId: "display-frame",
+            width,
+            height,
+            screenIndex: 0,
+          }),
         },
-        target: { host: "node", nodeId: "desktop-node", screenIndex: 0 },
-        action: "screenshot",
-        noteLines: [],
-        referenceWidth,
       });
+      const result = await tool.execute("observe", { action: "screenshot" });
       const image = result.content.find((block) => block.type === "image");
       if (!image) {
         throw new Error("The screenshot image is missing");

@@ -1,13 +1,13 @@
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeEach, describe, expect, it, vi, assert } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { resolvePreparedRunAdmission } from "../../agents/admitted-run-context.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { createAttemptNestedToolActivityState } from "../../agents/embedded-agent-runner/run/attempt-nested-tool-activity.js";
 import { prepareEmbeddedAttemptStream } from "../../agents/embedded-agent-runner/run/attempt-stream-prepare.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
-import { clearActiveEmbeddedRun } from "../../agents/embedded-agent-runner/runs.js";
+import { clearTestEmbeddedRun as clearActiveEmbeddedRun } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { createStubSessionHarness } from "../../agents/embedded-agent-subscribe.e2e-harness.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
@@ -35,10 +35,11 @@ import { createDiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-a
 import * as diagnostic from "../../logging/diagnostic.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
-  interruptSessionWorkAdmissions,
-  isSessionWorkAdmissionActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../../sessions/session-lifecycle-admission.js";
+  getCurrentSessionControllerOwner,
+  interruptSessionControllerEffects,
+  isSessionControllerWorkActive,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
@@ -145,6 +146,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentParamsFixture({
         agentId: "main",
+        cfg: { session: { store: storePath } },
         sessionKey: `cron:${jobId}`,
         job: makeIsolatedAgentJobFixture({
           id: jobId,
@@ -242,12 +244,14 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       );
       const controller = new AbortController();
       let interrupted = false;
+      let cliReturned = false;
       const interrupt = () => {
         interrupted = true;
         controller.abort(new Error("Synthetic binding commit interruption"));
       };
       runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
         expect(params.cliSessionId).toBe(previousBinding.sessionId);
+        cliReturned = true;
         return {
           payloads: [{ text: "Synthetic cron answer" }],
           meta: {
@@ -269,7 +273,8 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
                   ...options?.workerGuard,
                   assertCurrent: () => {
                     const isBase = scope.sessionKey === target.sessionKey;
-                    if ((failurePoint !== "continuation") === isBase) {
+                    // Preparation now uses guarded writes too; interrupt only CLI settlement.
+                    if (cliReturned && (failurePoint !== "continuation") === isBase) {
                       interrupt();
                     }
                     assertCommitAllowed();
@@ -284,6 +289,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       const result = await runCronIsolatedAgentTurn(
         makeIsolatedAgentParamsFixture({
           agentId: "main",
+          cfg: { session: { store: target.storePath } },
           // The scheduler's cron key enables the hidden exact-run continuation.
           sessionKey: "cron:binding-settlement",
           job: makeIsolatedAgentJobFixture({
@@ -352,7 +358,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       }),
     );
     await preflightStarted.promise;
-    const sessionIsProtectedDuringPreflight = isSessionWorkAdmissionActive(inMemoryStorePath, [
+    const sessionIsProtectedDuringPreflight = isSessionControllerWorkActive(inMemoryStorePath, [
       sessionKey,
       "previous-session",
       "isolated-session",
@@ -398,12 +404,16 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     );
 
     const run = runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey));
-    await runnerStarted.promise;
+    await awaitGateBeforeSettlement(
+      runnerStarted.promise,
+      run,
+      "Cron settled before the persistent runner started",
+    );
     let mutationCommitted = false;
-    const mutation = runExclusiveSessionLifecycleMutation("patch", {
+    const mutation = runSessionMutation({
       ...admissionScope,
       prepare: async () => {
-        await interruptSessionWorkAdmissions(admissionScope);
+        await interruptSessionControllerEffects(admissionScope);
       },
       run: async () => {
         mutationCommitted = true;
@@ -442,7 +452,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       await expect(runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey))).rejects.toThrow(
         "simulated final lifecycle failure",
       );
-      expect(isSessionWorkAdmissionActive(inMemoryStorePath, [sessionKey, sessionId])).toBe(false);
+      expect(isSessionControllerWorkActive(inMemoryStorePath, [sessionKey, sessionId])).toBe(false);
     } finally {
       logSessionStateChangeSpy.mockRestore();
     }
@@ -451,6 +461,10 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
   it.each(["silent", "best-effort", "execution error", "presentation warning"])(
     "settles isolated %s cleanup after releasing its lease",
     async (outcome) => {
+      using preparation = vi.spyOn(
+        await import("./run-session-state.js"),
+        "beginCronPreparationEffect",
+      );
       dispatchCronDeliveryMock.mockImplementationOnce(
         (await vi.importActual<typeof import("./delivery-dispatch.js")>("./delivery-dispatch.js"))
           .dispatchCronDelivery,
@@ -503,10 +517,9 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       );
       let admissionActiveDuringDelete = true;
       callGatewayMock.mockImplementationOnce(async () => {
-        admissionActiveDuringDelete = isSessionWorkAdmissionActive(storePath, [
-          sessionKey,
-          sessionId,
-        ]);
+        const effect = await preparation.mock.results[0]?.value;
+        assert(effect);
+        admissionActiveDuringDelete = effect.isActive();
         return { ok: true, deleted: true };
       });
 
@@ -526,7 +539,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       if (!failed) {
         expect(admissionActiveDuringDelete).toBe(false);
       }
-      expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(false);
+      expect(isSessionControllerWorkActive(storePath, [sessionKey, sessionId])).toBe(false);
     },
   );
 });
@@ -586,6 +599,8 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
       const releaseFirst = createDeferred();
       const secondPreparing = createDeferred();
       const releaseSecond = createDeferred();
+      const secondStarted = createDeferred();
+      const releaseCancellation = createDeferred();
       const postExecutionWriteStarted = createDeferred();
       const releasePostExecutionWrite = createDeferred();
       const controller = new AbortController();
@@ -681,6 +696,8 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
             trigger: runParams.trigger,
             abortSignal: runParams.abortSignal,
             deferTerminalLifecycle: runParams.deferTerminalLifecycle,
+            // The real native runner borrows the admitted cron turn before registration.
+            replyOperation: getCurrentSessionControllerOwner(),
             onAgentEvent: runParams.onAgentEvent,
             admittedRunContext,
             provider,
@@ -775,6 +792,8 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
             throw new FailoverError("429 rate limit", { reason: "rate_limit", provider, model });
           }
           if (outcome === "cancelled") {
+            secondStarted.resolve();
+            await releaseCancellation.promise;
             emitAssistantEnd({ stopReason: "aborted", content: [] });
             return { payloads: [], meta: { aborted: true, stopReason: "aborted", agentMeta: {} } };
           }
@@ -831,10 +850,12 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         expect(runIds.size).toBe(1);
         expect(getAgentRunContextOwnership(runId)?.clearRequested).toBe(false);
         expect(clearTrackedActiveRun).not.toHaveBeenCalled();
-        if (cancelled) {
-          controller.abort();
-        }
         releaseSecond.resolve();
+        if (cancelled) {
+          await Promise.race([secondStarted.promise, exited]);
+          controller.abort();
+          releaseCancellation.resolve();
+        }
         if (outcome === "post-execution-abort") {
           await Promise.race([postExecutionWriteStarted.promise, exited]);
           controller.abort(new Error("post-execution abort"));
@@ -892,6 +913,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
       } finally {
         releaseFirst.resolve();
         releaseSecond.resolve();
+        releaseCancellation.resolve();
         releasePostExecutionWrite.resolve();
         await run.catch(() => {});
         await unsubscribe();

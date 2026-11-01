@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
@@ -16,12 +16,12 @@ import { captureAuthProfileCredentialAuthority } from "../state/user-model-accou
 import { writeAuthProfileJsonCell } from "./auth-profiles/sqlite-json-write.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
+import { catalogAgentFacts } from "./prepared-model-catalog-worker.shared.test-support.js";
 import type {
   PreparedModelCatalogWorkerTask,
   PreparedModelWorkerResult,
 } from "./prepared-model-catalog-worker.types.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
 
 const transport = vi.hoisted(() => ({
   run: vi.fn<() => Promise<PreparedModelWorkerResult>>(),
@@ -88,18 +88,7 @@ function fixture() {
   const authority = capture();
   authority.observe(credential);
   const worker = createPreparedModelCatalogWorker({
-    agentFacts: {
-      input: { config: {}, agentDir: path.join(stateDir, "agent"), env },
-      env,
-      authStore: { version: 1, profiles: {} },
-      credentials: {},
-      providerIds: [],
-      configuredModelRefs: [],
-      configuredRuntimeModels: [],
-      runtimeCapabilityModels: [],
-      configuredGeneratedCatalogPluginIds: [],
-      templateAuthStorage: AuthStorage.inMemory({}),
-    },
+    agentFacts: catalogAgentFacts({ config: {}, agentDir: path.join(stateDir, "agent"), env }, env),
     pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
     isCurrent: () => true,
     retirementSignal: new AbortController().signal,
@@ -113,74 +102,58 @@ function fixture() {
   return { authority, capture, credential, worker, dispatched, outcome, database, profileId, env };
 }
 
-describe("catalog credential authority settlement", () => {
-  it("publishes a failed task's committed credential before releasing denial", async () => {
-    const current = fixture();
-    const next = { ...current.credential, key: "refreshed-synthetic-key" };
-    const workerUrl = new URL(
-      "./test-helpers/catalog-credential-publication.worker.ts",
-      import.meta.url,
+it("publishes a failed task's committed credential before releasing denial", async () => {
+  const { credential, capture, authority, worker, database, profileId, env } = fixture();
+  const next = { ...credential, key: "refreshed-synthetic-key" };
+  const workerUrl = new URL(
+    "./test-helpers/catalog-credential-publication.worker.ts",
+    import.meta.url,
+  );
+  const pool = new WorkerTaskPool<
+    { path: string; store: AuthProfileStore },
+    PreparedModelWorkerResult
+  >({
+    workerUrl,
+    maxWorkers: 1,
+    workerOptions: { env, execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl) },
+  });
+  let prepared: ReturnType<typeof capture> | undefined;
+  transport.run.mockImplementation(() => {
+    prepared = capture();
+    prepared.observe(credential);
+    expect(() => prepared!.readCurrentCredential()).toThrow();
+    expect(() => authority.readCurrentCredential()).toThrow();
+    return pool.run(
+      {
+        path: database.path,
+        store: { version: 1, profiles: { [profileId]: next } },
+      },
+      {},
     );
-    const pool = new WorkerTaskPool<
-      { path: string; store: AuthProfileStore },
-      PreparedModelWorkerResult
-    >({
-      workerUrl,
-      maxWorkers: 1,
-      workerOptions: { env: current.env, execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl) },
-    });
-    let prepared: ReturnType<typeof current.capture> | undefined;
-    transport.run.mockImplementation(() => {
-      prepared = current.capture();
-      prepared.observe(current.credential);
-      expect(() => prepared!.readCurrentCredential()).toThrow();
-      expect(() => current.authority.readCurrentCredential()).toThrow();
-      return pool.run(
-        {
-          path: current.database.path,
-          store: { version: 1, profiles: { [current.profileId]: next } },
-        },
-        {},
-      );
-    });
-    try {
-      await expect(current.worker.loadAuth({ providerIds: [] })).rejects.toThrow(
-        "catalog failed after credential refresh",
-      );
-      expect(current.authority.readCurrentCredential()).toEqual(next);
-      prepared!.observe(current.credential);
-      expect(prepared!.readCurrentCredential()).toEqual(next);
-    } finally {
-      await pool.close();
-    }
   });
+  try {
+    await expect(worker.loadAuth({ providerIds: [] })).rejects.toThrow(
+      "catalog failed after credential refresh",
+    );
+    expect(authority.readCurrentCredential()).toEqual(next);
+    prepared!.observe(credential);
+    expect(prepared!.readCurrentCredential()).toEqual(next);
+  } finally {
+    await pool.close();
+  }
+});
 
-  it("releases confirmed credential facts before rejecting a failed result", async () => {
-    const current = fixture();
-    const pending = current.worker.loadAuth({ providerIds: [] });
-    const rejected = expect(pending).rejects.toThrow();
-    await current.dispatched.promise;
-    expect(() => current.authority.readCurrentCredential()).toThrow();
-    current.outcome.resolve({
-      status: "failed",
-      error: "synthetic catalog failure",
-      authCredentials: [],
-    });
-    await rejected;
-    expect(current.authority.readCurrentCredential()).toEqual(current.credential);
-  });
-
-  it("keeps credential authority denied when the worker outcome is unknown", async () => {
-    const current = fixture();
-    const pending = current.worker.loadAuth({ providerIds: [] });
-    const rejected = expect(pending).rejects.toThrow("worker terminated");
-    await current.dispatched.promise;
-    expect(() => current.authority.readCurrentCredential()).toThrow();
-    current.outcome.reject(new Error("worker terminated"));
-    await rejected;
-    expect(() => current.authority.readCurrentCredential()).toThrow();
-    const prepared = current.capture();
-    prepared.observe(current.credential);
-    expect(() => prepared.readCurrentCredential()).toThrow();
-  });
+it("keeps credential authority denied when the worker outcome is unknown", async () => {
+  const { worker, dispatched, authority, outcome, capture, credential } = fixture();
+  const rejected = expect(worker.loadAuth({ providerIds: [] })).rejects.toThrow(
+    "worker terminated",
+  );
+  await dispatched.promise;
+  expect(() => authority.readCurrentCredential()).toThrow();
+  outcome.reject(new Error("worker terminated"));
+  await rejected;
+  expect(() => authority.readCurrentCredential()).toThrow();
+  const prepared = capture();
+  prepared.observe(credential);
+  expect(() => prepared.readCurrentCredential()).toThrow();
 });

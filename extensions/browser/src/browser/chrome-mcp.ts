@@ -2,7 +2,6 @@ export { ChromeMcpDocumentUnavailableError } from "./chrome-mcp-contracts.js";
 export type { ChromeMcpOperationOptions, ChromeMcpProfileOptions } from "./chrome-mcp-contracts.js";
 export { closeChromeMcpSession, getChromeMcpPid } from "./chrome-mcp-session.js";
 export {
-  countChromeMcpTabs,
   ensureChromeMcpAvailable,
   listChromeMcpTabs,
   openChromeMcpTab,

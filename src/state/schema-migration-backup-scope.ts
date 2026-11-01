@@ -40,5 +40,13 @@ export function resolveSchemaMigrationIntegrityCheck(
   if (check === "full") {
     return { check: "full" };
   }
-  return { check, tables: resolveSchemaMigrationIntegrityTables(migration) };
+  return {
+    check,
+    tables: resolveSchemaMigrationIntegrityTables(migration),
+    ...(migration.kind === "agent" &&
+    migration.foundVersion === 38 &&
+    migration.supportedVersion === 39
+      ? { schemaOnly: true as const }
+      : {}),
+  };
 }

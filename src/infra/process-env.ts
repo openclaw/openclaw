@@ -1,3 +1,15 @@
+/** Apply captured values to caller-owned environment keys, including absent values. */
+export function applyProcessEnvKeys(keys: Iterable<string>, values: NodeJS.ProcessEnv): void {
+  for (const key of keys) {
+    const value = values[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}
+
 /** Read one environment value using the same Windows key precedence as child_process. */
 export function resolveEnvironmentValue(
   env: NodeJS.ProcessEnv | undefined,

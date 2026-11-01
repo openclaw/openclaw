@@ -24,15 +24,12 @@ export function startCodexComputerUseHealthMonitor(params: {
   client: CodexAppServerClient;
   config: ResolvedCodexComputerUseConfig;
   tools?: readonly string[];
-}): { started: boolean; intervalMs?: number; reason?: string } {
+}): void {
   const state = getComputerUseHealthMonitorState();
   const existing = state.monitors.get(params.client);
   if (!params.config.enabled || !params.config.healthCheckEnabled) {
     clearComputerUseHealthMonitor(params.client, existing);
-    return {
-      started: false,
-      reason: params.config.enabled ? "health_disabled" : "disabled",
-    };
+    return;
   }
   const fingerprint = JSON.stringify({
     autoRepair: params.config.autoRepair,
@@ -44,7 +41,7 @@ export function startCodexComputerUseHealthMonitor(params: {
   });
   const intervalMs = params.config.healthCheckIntervalMinutes * 60_000;
   if (existing?.fingerprint === fingerprint) {
-    return { started: false, intervalMs, reason: "already_started" };
+    return;
   }
   clearComputerUseHealthMonitor(params.client, existing);
   const monitor: ComputerUseHealthMonitor = {
@@ -60,7 +57,6 @@ export function startCodexComputerUseHealthMonitor(params: {
     clearComputerUseHealthMonitor(client, state.monitors.get(client));
   });
   state.monitors.set(params.client, monitor);
-  return { started: true, intervalMs };
 }
 
 async function runCodexComputerUseHealthProbe(

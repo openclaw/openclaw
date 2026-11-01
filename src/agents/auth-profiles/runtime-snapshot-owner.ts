@@ -353,7 +353,10 @@ export function runtimeAuthSharedOwnerRebound(
 }
 
 /** Model metadata follows credentials and availability, never rotation bookkeeping. */
-export function runtimeAuthMetadataState(store: RuntimeAuthProfileStore) {
+export function runtimeAuthMetadataState(
+  store: RuntimeAuthProfileStore,
+  includeAvailability = true,
+) {
   return {
     order: store.order,
     profiles: store.profiles,
@@ -362,27 +365,52 @@ export function runtimeAuthMetadataState(store: RuntimeAuthProfileStore) {
     runtimeExternalProfileIdsAuthoritative: store.runtimeExternalProfileIdsAuthoritative,
     runtimeLocalProfileIds: store.runtimeLocalProfileIds,
     runtimeLocalOrderProviderIds: store.runtimeLocalOrderProviderIds,
-    availability: Object.fromEntries(
-      Object.entries(store.usageStats ?? {}).flatMap(([profileId, stats]) => {
-        if (!store.profiles[profileId] && !profileId.startsWith("inline-api-key:")) {
-          return [];
-        }
-        const availability = {
-          blockedUntil: stats.blockedUntil,
-          blockedModel: stats.blockedModel,
-          blockedScope: stats.blockedScope,
-          cooldownUntil: stats.cooldownUntil,
-          cooldownReason: stats.cooldownReason,
-          cooldownModel: stats.cooldownModel,
-          disabledUntil: stats.disabledUntil,
-          disabledReason: stats.disabledReason,
-        };
-        return Object.values(availability).some((value) => value !== undefined)
-          ? [[profileId, availability] as const]
-          : [];
-      }),
-    ),
+    availability: includeAvailability
+      ? Object.fromEntries(
+          Object.entries(store.usageStats ?? {}).flatMap(([profileId, stats]) => {
+            if (!store.profiles[profileId] && !profileId.startsWith("inline-api-key:")) {
+              return [];
+            }
+            const availability = {
+              blockedUntil: stats.blockedUntil,
+              blockedModel: stats.blockedModel,
+              blockedScope: stats.blockedScope,
+              cooldownUntil: stats.cooldownUntil,
+              cooldownReason: stats.cooldownReason,
+              cooldownModel: stats.cooldownModel,
+              disabledUntil: stats.disabledUntil,
+              disabledReason: stats.disabledReason,
+            };
+            return Object.values(availability).some((value) => value !== undefined)
+              ? [[profileId, availability] as const]
+              : [];
+          }),
+        )
+      : undefined,
   };
+}
+
+/** Composed ownership and catalog facts must match before a mutation can preserve plugins. */
+export function classifyRuntimeAuthProfileSnapshotChange(
+  previous:
+    | Pick<OwnedRuntimeAuthProfileStoreSnapshotEntry, "store" | "owner" | "legacyCandidates">
+    | undefined,
+  next:
+    | Pick<OwnedRuntimeAuthProfileStoreSnapshotEntry, "store" | "owner" | "legacyCandidates">
+    | undefined,
+): "unchanged" | "availability" | "catalog" {
+  const metadata = (entry: typeof previous, includeAvailability = true) =>
+    entry && {
+      state: runtimeAuthMetadataState(entry.store, includeAvailability),
+      owner: entry.owner,
+      legacyCandidates: entry.legacyCandidates,
+    };
+  if (isDeepStrictEqual(metadata(previous), metadata(next))) {
+    return "unchanged";
+  }
+  return isDeepStrictEqual(metadata(previous, false), metadata(next, false))
+    ? "availability"
+    : "catalog";
 }
 
 export function pruneAuthProfileStoreReferences(

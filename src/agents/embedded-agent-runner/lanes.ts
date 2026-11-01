@@ -4,11 +4,6 @@ import {
   type CommandLaneConfiguration,
 } from "../../process/lanes.js";
 
-export function resolveSessionLane(key: string) {
-  const cleaned = key.trim() || CommandLane.Main;
-  return cleaned.startsWith("session:") ? cleaned : `session:${cleaned}`;
-}
-
 export function resolveGlobalLane(
   lane?: string,
   context?: {
@@ -39,5 +34,3 @@ export function resolveGlobalLane(
   }
   return cleaned ? cleaned : CommandLane.Main;
 }
-
-export { resolveSessionLane as resolveEmbeddedSessionLane };

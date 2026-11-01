@@ -5,6 +5,7 @@ import {
   DEFAULT_WORKER_PENDING_TASKS,
 } from "../infra/worker-task-capacity.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { yieldSessionListWork } from "./session-projection-work.js";
 import { withSessionRowDatabaseFacts } from "./session-row-database-facts.js";
@@ -33,7 +34,13 @@ export function createSessionRowRefresh(
     lookup: (query: records.Lookup) => records.Row | undefined;
     prepareRegistryFacts: () => Promise<void> | undefined;
     topology: () => Promise<void>;
-    catalog: { needsInitialRead: boolean; isRefreshing: boolean; refresh: () => Promise<unknown> };
+    catalog: {
+      needsInitialRead: boolean;
+      needsCurrentRead: boolean;
+      isRefreshing: boolean;
+      refresh: () => Promise<unknown>;
+      prepareCurrent: (signal?: AbortSignal) => Promise<void>;
+    };
     placementFacts: { prepare: () => Promise<void>; needsPreparation: boolean };
     membership: { prepare: () => Promise<void>; needsPreparation: boolean };
     metadataReady: () => boolean;
@@ -70,8 +77,29 @@ export function createSessionRowRefresh(
         );
         if (selected.size > 0) {
           await owner.runAsOwner(() => readRows(selected, { materializeCold: true }));
-          // Retained facts can finish through microtasks; let the loop run between row slices.
-          await yieldSessionListWork();
+          for (;;) {
+            // Wake each key once its accepted slice finishes, not every page after every slice.
+            for (const [id, read] of batch) {
+              if (!owner.rows.get(id)?.pendingDatabaseFacts) {
+                releaseExactRead(id, read);
+                batch.delete(id);
+                read.completion.resolve();
+              }
+            }
+            await yieldSessionListWork();
+            const state = owner.state();
+            if (
+              state.disposed ||
+              state.topologyDirty ||
+              !state.registryPrepared ||
+              owner.catalog.needsInitialRead ||
+              owner.placementFacts.needsPreparation ||
+              owner.membership.needsPreparation ||
+              !owner.runAsOwner(() => materializer.refreshPending([...batch.keys()]))
+            ) {
+              break;
+            }
+          }
         }
       }
       for (const read of batch.values()) {
@@ -106,30 +134,43 @@ export function createSessionRowRefresh(
       void readExactBatch(batch);
     }
   }
-  function pendingExactRows(queries: readonly records.Lookup[]) {
+  function pendingExactRows(
+    queries: readonly records.Lookup[],
+    fromSelection: boolean,
+    selectedRows?: readonly (records.Row | undefined)[],
+  ) {
     const { cfg } = owner.state();
     const selected = new Set<string>();
-    for (const query of queries) {
-      const key = resolveStoredSessionKeyForAgentStore({
-        cfg,
-        sessionKey: query.key,
-        agentId: query.agentId,
-      });
-      if (isIncognitoSessionKey(key)) {
+    for (let index = 0; index < queries.length; index++) {
+      const query = queries[index]!;
+      if (
+        !fromSelection &&
+        isIncognitoSessionKey(
+          resolveStoredSessionKeyForAgentStore({
+            cfg,
+            sessionKey: query.key,
+            agentId: query.agentId,
+          }),
+        )
+      ) {
         continue;
       }
-      const row = owner.lookup(query);
+      const row = selectedRows ? selectedRows[index] : owner.lookup(query);
       if (row && (owner.dirty.has(records.identity(row)) || !records.ready(row))) {
         selected.add(records.identity(row));
       }
     }
     return selected;
   }
-  function prepareExactRows(queries: readonly records.Lookup[]): Promise<void> | undefined {
+  function prepareExactRows(
+    queries: readonly records.Lookup[],
+    fromSelection = false,
+    selectedRows?: readonly (records.Row | undefined)[],
+  ): Promise<void> | undefined {
     if (owner.state().disposed) {
       return undefined;
     }
-    const selected = pendingExactRows(queries);
+    const selected = pendingExactRows(queries, fromSelection, selectedRows);
     if (selected.size === 0) {
       return undefined;
     }
@@ -167,7 +208,7 @@ export function createSessionRowRefresh(
       return exact.then(() => undefined);
     }
     // The bulk read may reject its facts; recheck the rows once it settles.
-    return Promise.all([exact, ...joined]).then(() => prepareExactRows(queries));
+    return Promise.all([exact, ...joined]).then(() => prepareExactRows(queries, fromSelection));
   }
   function readRows(
     selected: ReadonlySet<string>,
@@ -203,6 +244,7 @@ export function createSessionRowRefresh(
       state.topologyDirty ||
       !state.registryPrepared ||
       (includeCatalog && owner.catalog.needsInitialRead) ||
+      (options.requireCurrentCatalog && owner.catalog.needsCurrentRead) ||
       owner.membership.needsPreparation
     ) {
       return true;
@@ -255,13 +297,23 @@ export function createSessionRowRefresh(
   ): Promise<void> | undefined {
     const metadataOnly = options.metadataOnly === true;
     const includeCatalog = !metadataOnly || options.includeCatalog === true;
+    if (options.requireCurrentCatalog && owner.catalog.needsCurrentRead) {
+      const scopeSignal = getAsyncWorkSignal();
+      const signal =
+        scopeSignal && options.catalogSignal
+          ? AbortSignal.any([scopeSignal, options.catalogSignal])
+          : (scopeSignal ?? options.catalogSignal);
+      return owner
+        .runAsOwner(() => owner.catalog.prepareCurrent(signal))
+        .then(() => prepareSelection(options, candidateIds));
+    }
     if (includeCatalog && !owner.state().disposed && !owner.catalog.needsInitialRead) {
       void owner.runAsOwner(() => owner.catalog.refresh());
     }
     if (options.yieldForCatalog && owner.catalog.isRefreshing) {
       // Adopt completed catalog publications without waiting for a pending renewal.
       return yieldSessionListWork().then(() =>
-        prepareSelection({ metadataOnly, includeCatalog }, candidateIds),
+        prepareSelection({ ...options, yieldForCatalog: false }, candidateIds),
       );
     }
     // Committed metadata can serve a picker while full-row readiness is still pending.
@@ -388,26 +440,6 @@ export function createSessionRowRefresh(
       pending && !owner.state().disposed;
       pending = exactPreparationsIdle
     ) {
-      const state = owner.state();
-      if (
-        !state.topologyDirty &&
-        state.registryPrepared &&
-        !owner.catalog.needsInitialRead &&
-        !owner.placementFacts.needsPreparation &&
-        !owner.membership.needsPreparation
-      ) {
-        // Accepted exact facts need no worker read and may finish while their page remains pinned.
-        const ids: string[] = [];
-        for (const id of exactReads.keys()) {
-          ids.push(id);
-          if (ids.length === MAX_CONCURRENT_EXACT_ROW_READS * MAX_SESSION_ROW_FACTS_KEYS) {
-            break;
-          }
-        }
-        if (materializer.refreshPending(ids)) {
-          return;
-        }
-      }
       await pending.promise;
     }
     for (

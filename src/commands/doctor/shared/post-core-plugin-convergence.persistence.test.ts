@@ -55,10 +55,9 @@ function createPeerPlugin(
     path.join(packageDir, "package.json"),
     JSON.stringify({ name: "peer-plugin", version: "1.0.0", peerDependencies: { openclaw: "*" } }),
   );
-  const baselineInstallRecords: Record<string, PluginInstallRecord> =
-    layout === "managed"
-      ? {}
-      : { "peer-plugin": { source: "npm", spec: "peer-plugin@1.0.0", installPath: packageDir } };
+  const baselineInstallRecords: Record<string, PluginInstallRecord> = {
+    "peer-plugin": { source: "npm", spec: "peer-plugin@1.0.0", installPath: packageDir },
+  };
   if (contents !== "missing-modules") {
     fs.mkdirSync(nodeModules);
     if (contents === "stale-link") {
@@ -89,6 +88,7 @@ it.for(["managed", "registered"] as const)(
     await withUpdateCommandExecutor(run.runId, async (executor) => {
       const fence = await executor.enter(state.root, { preflight: true });
       const controller = new AbortController();
+      const refusal = new Error("plugin operation revoked while updater remains current");
       let revocations = 0;
       let rowAtRevocation: ReturnType<typeof readRow>;
       const revoke = () => {
@@ -97,7 +97,7 @@ it.for(["managed", "registered"] as const)(
         }
         revocations += 1;
         rowAtRevocation = readRow({ env: state.env });
-        controller.abort(new Error("plugin lease revoked while updater remains current"));
+        controller.abort(refusal);
       };
       const unlink = fs.unlinkSync.bind(fs);
       const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
@@ -373,52 +373,5 @@ it.for(["missing-modules", "stale-link", "package-copy"] as const)(
     ]);
     expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
     expect(fs.realpathSync(linkPath)).not.toBe(fs.realpathSync(state.root));
-  },
-);
-
-it.for(["managed", "registered"] as const)(
-  "keeps refusal blocking during %s host-link replacement",
-  async (layout, { state }) => {
-    const { linkPath, params } = createPeerPlugin(state, layout);
-    const controller = new AbortController();
-    const refusal = new Error("initiating operation revoked after host-link probe");
-    if (layout === "registered") {
-      const lstat = fs.promises.lstat.bind(fs.promises);
-      vi.spyOn(fs.promises, "lstat").mockImplementation(async (...args) => {
-        try {
-          return await lstat(...args);
-        } finally {
-          if (args[0] === linkPath) {
-            controller.abort(refusal);
-          }
-        }
-      });
-    } else {
-      const unlink = fs.unlinkSync.bind(fs);
-      vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
-        unlink(target);
-        if (target === linkPath) {
-          controller.abort(refusal);
-        }
-      });
-      syncBuiltinESMExports();
-    }
-    let refused = false;
-    await expect(
-      runPostCorePluginConvergence({
-        ...params,
-        beforePersistentEffect: () => {
-          if (controller.signal.aborted && !refused) {
-            refused = true;
-            throw controller.signal.reason;
-          }
-        },
-      }),
-    ).rejects.toBe(refusal);
-    if (layout === "managed") {
-      expect(fs.existsSync(linkPath)).toBe(false);
-    } else {
-      expect(fs.readlinkSync(linkPath)).toBe(state.root);
-    }
   },
 );

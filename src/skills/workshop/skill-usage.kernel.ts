@@ -1,3 +1,4 @@
+import { engineGreatest, engineLeast } from "../../infra/database-engine/scalar.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -60,14 +61,20 @@ export function recordSkillUsageInDatabase(
           skill_key: event.skillKey,
           skill_name: event.skillName,
           skill_source: event.skillSource,
-          first_used_at_ms: eb.fn<number>("min", [eb.ref("first_used_at_ms"), eb.val(event.ts)]),
-          last_used_at_ms: eb.fn<number>("max", [eb.ref("last_used_at_ms"), eb.val(event.ts)]),
-          use_count: eb("use_count", "+", 1),
+          first_used_at_ms: engineLeast(database.db, [
+            eb.ref("skill_usage.first_used_at_ms"),
+            eb.val(event.ts),
+          ]),
+          last_used_at_ms: engineGreatest(database.db, [
+            eb.ref("skill_usage.last_used_at_ms"),
+            eb.val(event.ts),
+          ]),
+          use_count: eb("skill_usage.use_count", "+", 1),
           last_agent_id: eb
             .case()
-            .when("last_used_at_ms", "<=", event.ts)
+            .when("skill_usage.last_used_at_ms", "<=", event.ts)
             .then(event.agentId ?? null)
-            .else(eb.ref("last_agent_id"))
+            .else(eb.ref("skill_usage.last_agent_id"))
             .end(),
         })),
       ),

@@ -21,8 +21,8 @@ import { parseReleaseVersion } from "./lib/release-version.mjs";
 import { resolveFullReleaseNpmPreflight } from "./npm-preflight-tooling-identity.mjs";
 import {
   QUALIFIED_NPM_PREFLIGHT_SCHEMA,
-  validatePreparedNpmBundleDescriptor,
   sameJobExecution,
+  validatePreparedNpmBundleDescriptor,
   verifyNpmBundleProducer,
 } from "./npm-prepared-bundle.mjs";
 import { runReleaseToolingGh } from "./release-tooling-identity.mjs";
@@ -405,7 +405,7 @@ async function reusePublicationArtifacts(env) {
     evidence.schema === "openclaw.release-validation-evidence/v4" &&
       evidence.valid === true &&
       evidence.directRoot === true &&
-      evidence.conclusions?.allRequiredSucceeded === true &&
+      evidence.current?.conclusion === "success" &&
       evidence.root?.runId === env.EVIDENCE_ROOT_RUN_ID &&
       evidence.root.targetSha === env.TARGET_SHA &&
       root?.workflowSha === env.PARENT_WORKFLOW_SHA,
@@ -668,7 +668,7 @@ async function resolveProducer(request, env) {
     );
   }
   const run = readArtifactRun(request, record.runId, record.runAttempt, {
-    allowNewerAttempts: request.stage === "npm",
+    allowNewerAttempts: request.stage === "npm" || request.stage === "docker",
   });
   output({
     run_id: record.runId,
@@ -719,35 +719,77 @@ function artifactAttemptJobs(request, runId, attempt, run) {
   return jobs;
 }
 
-// Retried checks may reuse bytes, but cannot replace bytes already consumed by
-// the immutable candidate and its successful diagnostic children.
-function effectiveNpmPreparationAttempt(request, runId, runAttempt) {
+// GitHub reruns carry successful jobs forward. The prepared descriptor artifact
+// is the durable producer identity; display names are presentation only.
+async function effectiveNpmPreparationAttempt(request, runId, runAttempt) {
   readArtifactRun(request, runId, runAttempt);
   requireValue(BigInt(runAttempt) <= 100n, "Artifact producer attempt history exceeds its limit.");
-  let selected;
+  const successfulAttempts = [];
   for (let attempt = 1; attempt <= Number(runAttempt); attempt += 1) {
-    const matches = artifactAttemptJobs(request, runId, attempt).filter(
-      (job) => job.name === "Prepare npm artifacts / Prepare publishable npm package",
-    );
-    requireValue(matches.length <= 1, "Artifact preparation job is ambiguous.");
-    if (!matches.length) {
+    const name = `openclaw-npm-package-descriptor-${runId}-${attempt}`;
+    if (!findArtifact(request, runId, name)) {
       continue;
     }
-    // A carried-forward copy of the successful job keeps its frozen bytes.
-    if (selected?.conclusion === "success" && sameJobExecution(selected, matches[0])) {
-      continue;
-    }
+    const descriptor = (await readArtifact(request, runId, name, "prepared-npm-bundle.json"))
+      ?.value;
+    validatePreparedNpmBundleDescriptor({
+      descriptor,
+      repository: request.repository,
+      sourceSha: request.sourceSha,
+      toolingSha: request.toolingSha,
+    });
     requireValue(
-      !selected || selected.conclusion !== "success",
-      "Successful npm preparation was replaced; its frozen bytes cannot be adopted.",
+      descriptor.producer.runId === String(runId) &&
+        descriptor.producer.runAttempt === String(attempt),
+      "Raw npm producer identity changed.",
     );
-    selected = matches[0];
+    const matches = artifactAttemptJobs(request, runId, attempt).filter(
+      (job) =>
+        String(job.id) === descriptor.producer.jobId && job.name === descriptor.producer.jobName,
+    );
+    requireValue(matches.length === 1, "Raw npm bundle requires its unique exact producer job.");
+    if (matches[0].status === "completed" && matches[0].conclusion === "success") {
+      successfulAttempts.push(String(attempt));
+    }
   }
   requireValue(
-    selected && (selected.status !== "completed" || selected.conclusion === "success"),
+    successfulAttempts.length <= 1,
+    "Successful npm preparation was replaced; its frozen bytes cannot be adopted.",
+  );
+  return successfulAttempts[0] ?? String(runAttempt);
+}
+
+function assertNpmPreparationExecutionPreserved(request, runId, runAttempt, producer) {
+  const sourceAttempt = Number(producer.runAttempt);
+  let sourceJobs;
+  try {
+    sourceJobs = artifactAttemptJobs(request, runId, sourceAttempt);
+  } catch {
+    throw new Error("Raw npm bundle requires its unique exact completed producer job.");
+  }
+  const sourceMatches = sourceJobs.filter(
+    (job) => String(job.id) === producer.jobId && job.name === producer.jobName,
+  );
+  requireValue(
+    sourceMatches.length === 1 &&
+      sourceMatches[0].status === "completed" &&
+      sourceMatches[0].conclusion === "success",
     "Raw npm bundle requires its unique exact completed producer job.",
   );
-  return String(selected.run_attempt);
+  for (let attempt = sourceAttempt + 1; attempt <= Number(runAttempt); attempt += 1) {
+    const matches = artifactAttemptJobs(request, runId, attempt).filter(
+      (job) => job.name === producer.jobName,
+    );
+    requireValue(matches.length <= 1, "Artifact preparation job is ambiguous.");
+    if (matches.length === 0 || sameJobExecution(sourceMatches[0], matches[0])) {
+      continue;
+    }
+    if (matches[0].status !== "completed") {
+      return false;
+    }
+    throw new Error("Successful npm preparation was replaced; its frozen bytes cannot be adopted.");
+  }
+  return true;
 }
 
 async function waitForArtifact(request, env) {
@@ -759,7 +801,7 @@ async function waitForArtifact(request, env) {
   const rawAttempt = raw
     ? String(runAttempt) === "1"
       ? "1"
-      : effectiveNpmPreparationAttempt(request, runId, runAttempt)
+      : await effectiveNpmPreparationAttempt(request, runId, runAttempt)
     : undefined;
   const name = raw
     ? `openclaw-npm-package-descriptor-${runId}-${rawAttempt}`
@@ -796,17 +838,20 @@ async function waitForArtifact(request, env) {
             repository: request.repository,
             toolingSha: request.toolingSha,
           });
-          values = { prepared_bundle_json: JSON.stringify(receipt) };
+          if (
+            assertNpmPreparationExecutionPreserved(request, runId, runAttempt, receipt.producer)
+          ) {
+            console.error(
+              `Artifact preparation npm identity: job ${receipt.producer.jobId} (attempt ${receipt.producer.runAttempt})`,
+            );
+            values = { prepared_bundle_json: JSON.stringify(receipt) };
+          }
         }
       } else if (receipt) {
         values = validateArtifactReceipt(receipt, request, runId, runAttempt);
         if (request.stage === "npm") {
           const prepared = JSON.parse(values.prepared_bundle_json);
-          requireValue(
-            prepared.producer.runAttempt ===
-              effectiveNpmPreparationAttempt(request, runId, runAttempt),
-            "Raw npm preparation attempt changed.",
-          );
+          readArtifactRun(request, runId, runAttempt);
           verifyNpmBundleProducer({
             producer: prepared.producer,
             repository: request.repository,
@@ -844,11 +889,11 @@ async function waitForArtifact(request, env) {
     if (run.status !== "completed") {
       const failedJob = artifactAttemptJobs(request, runId, runAttempt, run).find(
         (job) =>
+          (!raw || job.name === "Prepare npm artifacts / Prepare publishable npm package") &&
           job.status === "completed" &&
           ["failure", "cancelled", "timed_out", "action_required", "startup_failure"].includes(
             job.conclusion,
-          ) &&
-          (!raw || job.name === "Prepare npm artifacts / Prepare publishable npm package"),
+          ),
       );
       if (failedJob) {
         readArtifactRun(request, runId, runAttempt);

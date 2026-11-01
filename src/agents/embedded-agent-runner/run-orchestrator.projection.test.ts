@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { getAiTransportHost } from "@openclaw/ai";
-import { streamOpenAIResponses } from "@openclaw/ai/internal/openai";
-import type { Message } from "@openclaw/llm-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { runAgentLoopContinue } from "../../../packages/agent-core/src/agent-loop.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -36,6 +32,7 @@ import {
   buildEmbeddedRunnerAssistant,
   createEmbeddedAgentRunnerOpenAiConfig,
   createResolvedEmbeddedRunnerModel,
+  createMockUsage,
   immediateEnqueue,
   makeEmbeddedRunnerAttempt,
 } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
@@ -44,6 +41,7 @@ import {
   installEmbeddedRunnerBackoffE2eMocks,
   installEmbeddedRunnerFastRunE2eMocks,
 } from "../test-helpers/embedded-agent-runner-e2e-mocks.js";
+import { withTestAdmission } from "./run-orchestrator.test-support.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/types.js";
 
 vi.mock("node:worker_threads", async () =>
@@ -69,19 +67,11 @@ beforeAll(async () => {
   }));
   const { runEmbeddedAgent: run } = await import("./run.js");
   const { prepareSystemAgentRunAdmission } = await import("../admitted-run-context.js");
-  runEmbeddedAgent = async (params) => {
-    const admission = prepareSystemAgentRunAdmission(
-      params.config ?? {},
-      params.runId,
-      params.agentId ?? "main",
-      "retry-projection-test",
-    );
-    try {
-      return await run({ ...params, preparedRunAdmission: admission });
-    } finally {
-      admission.close();
-    }
-  };
+  runEmbeddedAgent = withTestAdmission(
+    run,
+    prepareSystemAgentRunAdmission,
+    "retry-projection-test",
+  );
   // Preserve the embedded project's cold-import budget after moving to host-process tests.
 }, 600_000);
 
@@ -265,7 +255,6 @@ describe("embedded retry transcript ownership", () => {
     ["durable", false, "active", true, "disconnect"],
     ["detached", false, "absent", false, "output-limit"],
     ["durable", false, "active", false, "output-limit"],
-    ["detached", false, "absent", false, "output-limit-repeat"],
     ["detached", false, "absent", false, "output-limit-empty"],
   ] as const)(
     "%s metadata, caller manager=%s, projection=%s, abort=%s, failure=%s",
@@ -283,40 +272,43 @@ describe("embedded retry transcript ownership", () => {
         api: "openai-responses" as const,
         input: ["text" as const],
       };
-      const fetchMock = vi
-        .fn<typeof fetch>()
-        .mockRejectedValue(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }));
-      if (failure.startsWith("output-limit")) {
-        const item = {
-          type: "function_call",
-          id: "fc_unfinished",
-          call_id: "unfinished",
-          name: "exec",
-          arguments: '{"command":',
-          status: "incomplete",
-        };
-        const emptyOutput = failure === "output-limit-empty";
-        const events = [
-          ...(emptyOutput ? [] : [{ type: "response.output_item.added", output_index: 0, item }]),
-          {
-            type: "response.incomplete",
-            response: {
-              id: "response-output-limit",
-              status: "incomplete",
-              incomplete_details: { reason: "max_output_tokens" },
-              output: emptyOutput ? [] : [item],
-              usage: { input_tokens: 440_445, output_tokens: 128_000 },
-            },
-          },
-        ];
-        fetchMock.mockResolvedValueOnce(
-          new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
-            headers: { "content-type": "text/event-stream" },
-          }),
-        );
-      }
-      vi.spyOn(getAiTransportHost().plugin, "resolveTransportTurnState").mockReturnValue(undefined);
-      vi.spyOn(getAiTransportHost(), "buildModelFetch").mockReturnValue(fetchMock);
+      const outputLimited = failure.startsWith("output-limit");
+      const emptyOutput = failure === "output-limit-empty";
+      // Transport terminal normalization is owned by openai-responses-client.terminal-error.test.ts.
+      const erroredAssistant = buildEmbeddedRunnerAssistant({
+        model: model.id,
+        stopReason: emptyOutput ? "length" : "error",
+        ...(outputLimited
+          ? emptyOutput
+            ? {}
+            : {
+                errorCode: "incomplete_tool_call",
+                errorMessage: "Responses stream completed with an incomplete terminal tool call",
+              }
+          : { errorMessage: "socket hang up" }),
+        usage: createMockUsage(outputLimited ? 440_445 : 0, outputLimited ? 128_000 : 0),
+        diagnostics: outputLimited
+          ? [
+              {
+                type: "openai_responses_terminal",
+                timestamp: 1,
+                details: {
+                  eventType: "response.incomplete",
+                  stopReason: "length",
+                  incompleteReason: "max_output_tokens",
+                  ...(!emptyOutput ? { incompleteToolCallId: "unfinished|fc_unfinished" } : {}),
+                },
+              },
+            ]
+          : [
+              {
+                type: "provider_transport_failure",
+                timestamp: 1,
+                error: { message: "socket hang up" },
+                details: { phase: "after_message_stream_start" },
+              },
+            ],
+      });
       const history = [
         { role: "user", content: "Check the results.", timestamp: 1 },
         buildEmbeddedRunnerAssistant({
@@ -333,35 +325,6 @@ describe("embedded retry transcript ownership", () => {
           timestamp: 2,
         })),
       ] satisfies EmbeddedRunAttemptResult["messagesSnapshot"];
-      const responseMessages = await runAgentLoopContinue(
-        { systemPrompt: "", messages: [...history], tools: [] },
-        { model, convertToLlm: (messages) => messages as Message[] },
-        () => {},
-        undefined,
-        (_model, context, options) =>
-          streamOpenAIResponses(model, context, {
-            ...options,
-            apiKey: "synthetic-transport-key",
-          }),
-      );
-      const erroredAssistant = responseMessages.findLast((message) => message.role === "assistant");
-      assert(erroredAssistant, "Expected the AgentCore terminal assistant message");
-      expect(responseMessages.some((message) => message.role === "toolResult")).toBe(false);
-      expect(fetchMock).toHaveBeenCalledOnce();
-      if (failure.startsWith("output-limit")) {
-        expect(erroredAssistant).toMatchObject({
-          ...(failure === "output-limit-empty"
-            ? { stopReason: "length", content: [] }
-            : { errorCode: "incomplete_tool_call" }),
-          usage: { output: 128_000 },
-          diagnostics: [
-            expect.objectContaining({
-              type: "openai_responses_terminal",
-              details: expect.objectContaining({ incompleteReason: "max_output_tokens" }),
-            }),
-          ],
-        });
-      }
       history.push(erroredAssistant);
       const waiting = createDeferred();
       const secondAttempt = createDeferred();
@@ -457,14 +420,6 @@ describe("embedded retry transcript ownership", () => {
           } else {
             expect(resumedHistory).toEqual(history);
           }
-          if (failure === "output-limit-repeat") {
-            return makeEmbeddedRunnerAttempt({
-              sessionIdUsed: target.sessionId,
-              messagesSnapshot: resumedHistory,
-              lastAssistant: erroredAssistant,
-              currentAttemptAssistant: erroredAssistant,
-            });
-          }
           return makeEmbeddedRunnerAttempt({
             sessionIdUsed: target.sessionId,
             assistantTexts: ["Verified."],
@@ -507,18 +462,10 @@ describe("embedded retry transcript ownership", () => {
         }
         await expect(outcome).resolves.toMatchObject({
           result: {
-            payloads: [
-              failure === "output-limit-repeat"
-                ? {
-                    text: "⚠️ The task couldn't finish. Some actions may have completed; check their results before continuing.",
-                    isError: true,
-                  }
-                : { text: "Verified." },
-            ],
+            payloads: [{ text: "Verified." }],
           },
         });
         expect(runAttempt).toHaveBeenCalledTimes(2);
-        expect(fetchMock).toHaveBeenCalledOnce();
         if (projection === "absent") {
           await expect(fs.access(path.join(stateDir, "agents"))).rejects.toThrow();
         }

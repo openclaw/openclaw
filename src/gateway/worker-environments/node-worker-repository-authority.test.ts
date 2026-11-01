@@ -3,12 +3,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import {
   nodeWorkspaceTransferManifestPath,
   nodeWorkspaceTransferReconcilePath,
 } from "../../worker/node-workspace-transfer-protocol.js";
-import { environment } from "./node-worker-tunnel.test-support.js";
-import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
+import {
+  environment,
+  workspaceActions,
+  workspaceCommandResult,
+} from "./node-worker-tunnel.test-support.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
@@ -34,12 +38,9 @@ function repositoryFixture(closeAt?: ClosingBoundary) {
   let closedAtBoundary = false;
   let effectsAfterClosure = 0;
   let downloadStatus: number | undefined;
-  const actions = createNodeWorkerWorkspaceActions({
+  const actions = workspaceActions({
     environmentId: record.environmentId,
     ownerEpoch: record.ownerEpoch,
-    sessionId: "session-1",
-    ownerSignal: new AbortController().signal,
-    isOwnerCurrent: () => true,
     workspaceTransfer: transfer,
     runWorkspaceCommand: async (command) => {
       if (closeAt === "upload" && command.transfer?.direction === "upload") {
@@ -86,15 +87,7 @@ function repositoryFixture(closeAt?: ClosingBoundary) {
         }
         stdout = command.transfer.manifestRef;
       }
-      return {
-        workspaceDir: "/node/workspace",
-        stdout,
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
+      return workspaceCommandResult("/node/workspace", { stdout });
     },
   });
   const authorize = () => {
@@ -132,55 +125,48 @@ function repositoryFixture(closeAt?: ClosingBoundary) {
       authorized = false;
     },
     observed: () => ({ closedAtBoundary, effectsAfterClosure, downloadStatus }),
+    [Symbol.asyncDispose]: () => transfer.closeAll(),
   };
 }
 
 it.each(["seed", "fetch", "author", "setup", "checkpoint"] as const)(
   "binds repository preparation to its initiating turn until %s",
   async (boundary) => {
-    const h = repositoryFixture(boundary);
-    try {
-      await expect(h.sync(boundary === "checkpoint")).rejects.toThrow(
-        /authority closed|turn closed/u,
-      );
-      expect(h.observed()).toMatchObject({ closedAtBoundary: true, effectsAfterClosure: 0 });
-      if (boundary === "checkpoint") {
-        expect(h.observed().downloadStatus).toBe(404);
-      }
-    } finally {
-      await h.transfer.closeAll();
+    await using h = repositoryFixture(boundary);
+    await expect(h.sync(boundary === "checkpoint")).rejects.toThrow(
+      /authority closed|turn closed/u,
+    );
+    expect(h.observed()).toMatchObject({ closedAtBoundary: true, effectsAfterClosure: 0 });
+    if (boundary === "checkpoint") {
+      expect(h.observed().downloadStatus).toBe(404);
     }
   },
 );
 
 it("fences the initial repository checkpoint when dispatch authority closes during node lookup", async () => {
-  const h = repositoryFixture("upload");
-  try {
-    const synced = await h.sync();
-    await expect(
-      h.actions.reconcileWorkspace({
-        remoteWorkspaceDir: synced.remoteWorkspaceDir,
-        baseManifestRef,
-        source: {
-          kind: "repository",
-          authorize: h.authorize,
-          referenceManifestRef: synced.manifestRef,
-          prepareCheckpoint: async () => {
-            throw new Error("Unexpected checkpoint publication");
-          },
+  await using h = repositoryFixture("upload");
+  const synced = await h.sync();
+  await expect(
+    h.actions.reconcileWorkspace({
+      remoteWorkspaceDir: synced.remoteWorkspaceDir,
+      baseManifestRef,
+      source: {
+        kind: "repository",
+        authorize: h.authorize,
+        referenceManifestRef: synced.manifestRef,
+        prepareCheckpoint: async () => {
+          throw new Error("Unexpected checkpoint publication");
         },
-      }),
-    ).rejects.toThrow("Initiating dispatch turn closed");
-    expect(h.observed()).toMatchObject({ closedAtBoundary: true, effectsAfterClosure: 0 });
-  } finally {
-    await h.transfer.closeAll();
-  }
+      },
+    }),
+  ).rejects.toThrow("Initiating dispatch turn closed");
+  expect(h.observed()).toMatchObject({ closedAtBoundary: true, effectsAfterClosure: 0 });
 });
 
 it.each(["before upload", "after upload"])(
   "rejects checkpoint custody closed %s",
   async (closure) => {
-    const h = repositoryFixture();
+    await using h = repositoryFixture();
     const server = await startNodeWorkspaceTransferTestServer(h.transfer);
     try {
       const synced = await h.sync(closure === "after upload");
@@ -207,9 +193,9 @@ it.each(["before upload", "after upload"])(
         return;
       }
       expect(h.observed().downloadStatus).toBe(200);
-      const staged = (await fs.readdir(h.temporaryRoot, { recursive: true })).filter((entry) =>
-        path.basename(entry).startsWith("upload-"),
-      );
+      const staged = (await listDirectoryTreeStrict(h.temporaryRoot))
+        .map((walkEntry) => walkEntry.relativePath)
+        .filter((entry) => path.basename(entry).startsWith("upload-"));
       expect(staged).toHaveLength(1);
       h.closeInvocation();
       expect(() => h.transfer.takeUpload("environment-1", baseManifestRef)).toThrow();
@@ -226,7 +212,6 @@ it.each(["before upload", "after upload"])(
       await h.transfer.revoke("environment-1", retained);
     } finally {
       await server.close();
-      await h.transfer.closeAll();
     }
   },
 );

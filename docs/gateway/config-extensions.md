@@ -82,10 +82,17 @@ requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
   for private endpoints and mutual TLS.
 - `mcp.servers.<name>.toolFilter`: optional per-server tool selection. `include`
   limits the discovered MCP tools to matching names; `exclude` hides matching
-  names. Entries are exact MCP tool names or simple `*` globs. Servers with
-  resources or prompts also generate utility tool names (`resources_list`,
-  `resources_read`, `prompts_list`, `prompts_get`), and those names use the
-  same filter.
+  names. Entries are exact MCP tool names or simple `*` globs. An exact entry
+  that names no advertised raw tool can also be an unambiguous unsuffixed name
+  shown by `openclaw mcp probe` (for example `docs__search`). Exact raw names
+  take precedence, and globs match raw names only. Use raw names for colliding
+  probe names, including names with a collision suffix such as `-2`: in
+  `include` such a name selects nothing, and in `exclude` it hides every tool
+  that could carry it. If `include` is set and the filter leaves none of the
+  advertised tools, OpenClaw logs a warning; an exclude-only filter that hides
+  every tool is treated as intentional. Servers with resources or prompts also
+  generate utility tool names (`resources_list`, `resources_read`,
+  `prompts_list`, `prompts_get`), and those names use the same filter.
 - `mcp.servers.<name>.codex`: optional Codex app-server projection controls.
   This block is OpenClaw metadata for Codex app-server threads only; it does not
   affect ACP sessions, generic Codex harness config, or other runtime adapters.
@@ -105,7 +112,7 @@ requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
   lifetime and retires its runtimes at run end; retained transcripts alone do
   not keep them alive.
 - `mcp.sessionIdleTtlMs`: optional idle eviction in milliseconds. Unset or `0`
-  keeps the session lifetime above. Positive finite values opt into eviction;
+  keeps the session lifetime above unless capacity eviction is needed. Positive finite values opt into TTL eviction;
   fractions round down. For example, `mcp: { sessionIdleTtlMs: 3600000 }` evicts
   after one hour without use. While enabled, a sweep runs once per minute and
   preserves active leases and pending acquisitions. This override does not
@@ -114,8 +121,21 @@ requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
   intended value from your config backup; the deleted value cannot be inferred.
 - Each Gateway admits at most 256 OpenClaw-managed MCP runtimes with server connections across sessions
   and requester partitions, including creation and cleanup in progress. At the
-  limit, existing runtimes stay alive and new admissions fail with a log message
-  directing you to stop or reset unused sessions. A runtime can own multiple
+  limit, the least-recently-used idle runtime is retired and its servers stop;
+  that session reconnects on its next turn. Active runs, leases, app views, and
+  pending acquisitions are preserved. An active turn protects its session runtime;
+  idle requester partitions in that session remain eligible for eviction. If every runtime is in use, the turn
+  continues with a bounded warning once per capacity episode.
+  Waiting for idle cleanup is bounded; unfinished cleanup retains its slot and continues
+  under the lifecycle owner. Usable static or requester connections remain available. Previously advertised
+  tool schemas stay stable; unavailable bindings return an error without contacting MCP.
+  Sign-in tools from a refused connection keep their schemas but cannot start authorization;
+  retry on the next turn.
+  Tool catalogs for up to 256 evicted runtime partitions and advertised requester catalogs
+  for up to 256 evicted sessions are retained in least-recently-used order, in addition
+  to catalogs with live ownership. Session retirement or config reload
+  clears retained catalogs; older evicted sessions rediscover their tools on reconnect.
+  A runtime can own multiple
   configured server connections. Sessions without available MCP servers and
   sign-in-only catalogs do not consume this limit. Native client runtimes manage their own bounds.
 - MCP config changes retire only changed or removed server connections. Unchanged
@@ -288,6 +308,11 @@ conversation bindings, or any non-Codex harness.
   marketplace-qualified. `/codex plugins available` lists discoverable
   identities, and an owner or `operator.admin` can install one with
   `/codex plugins install <plugin>@<marketplace>`.
+- `plugins.entries.codex.config.codexPlugins.plugins.<key>.read_only`: defaults to
+  `false`. When `true`, only connected-app tools explicitly marked read-only
+  and enabled in the current app inventory are available. Unknown tools and
+  stale native tool grants are denied. This restriction applies with every
+  `allow_destructive_actions` value; it does not change that flag when disabled.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.allow_destructive_actions`:
   per-plugin destructive-action override. When omitted, the global
   `allow_destructive_actions` value is used. The per-plugin value accepts the
@@ -367,8 +392,7 @@ See [Plugins](/tools/plugin).
 ```
 
 - `host.enabled` is the single Canvas host switch and defaults to enabled. It
-  gates hosted widget documents under `/__openclaw__/canvas/` and A2UI renderer
-  assets under `/__openclaw__/a2ui/`.
+  gates hosted widget documents under `/__openclaw__/canvas/`.
 - Local-only: keep `gateway.bind: "loopback"` (default).
 - Non-loopback binds: these routes require Gateway auth (token/password/trusted-proxy), same as other Gateway HTTP surfaces.
 - Node WebViews typically don't send auth headers; after a macOS node is paired and connected, the Gateway advertises a node-scoped `pluginSurfaceUrls.canvas` capability URL.

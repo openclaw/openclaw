@@ -1,4 +1,5 @@
 import type { ExpectedWorkerBuild } from "../../worker/worker-build-identity.js";
+import type { TransferArtifact } from "./artifact-transfer-service.js";
 
 export type WorkerBundleArtifact = ExpectedWorkerBuild & {
   install: "bundle";
@@ -20,10 +21,14 @@ export type NodeBootstrapArtifact = Readonly<{
   tarballBytes: number;
   openclawVersion: string;
   buildId: string;
+  manifestSha256?: string;
+  install?: "bundle" | "npm";
   enabledPluginIds: readonly string[];
+  installLock?: TransferArtifact;
 }>;
 
 export type NodeBootstrapArtifactOptions = {
+  install?: "bundle" | "npm";
   packageRoot: string;
   runningBuildId: string | null;
   plugins: readonly { id: string; root: string }[];

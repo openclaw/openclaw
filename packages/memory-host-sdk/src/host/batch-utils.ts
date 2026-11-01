@@ -2,8 +2,6 @@ import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-c
 import type { SsrFPolicy } from "./openclaw-runtime-network.js";
 import type { RemoteEmbeddingRequestAuth } from "./remote-http.js";
 
-// Common HTTP and grouping helpers for remote embedding batch clients.
-
 /** Minimal HTTP client config needed by batch providers. */
 export type BatchHttpClientConfig = {
   baseUrl?: string;
@@ -49,7 +47,9 @@ export function splitBatchRequestsByLimits<T>(
   let current: T[] = [];
   let currentBytes = 0;
   for (const request of requests) {
-    const requestBytes = Buffer.byteLength(JSON.stringify(request) ?? "", "utf8");
+    // A normalized zero is still a byte cap; only an absent cap skips sizing.
+    const requestBytes =
+      maxJsonlBytes === undefined ? 0 : Buffer.byteLength(JSON.stringify(request) ?? "", "utf8");
     const separatorBytes = current.length === 0 ? 0 : 1;
     const wouldExceedRequests = current.length >= maxRequests;
     const wouldExceedBytes =

@@ -12,19 +12,14 @@ function mergeOpenAIUsage(
   );
 }
 
+const week = { windows: [{ label: "Week", usedPercent: 40 }] };
+const shortWindow = { windows: [{ label: "5h", usedPercent: 10 }] };
+const balance = { type: "balance", amount: 12.5, unit: "credits" } as const;
+const spend = { type: "spend", amount: 20, unit: "usd", period: "month" } as const;
+
 describe("mergeUsageSummaries", () => {
   it("preserves OAuth plan and billing when synthetic Codex windows win", () => {
-    const merged = mergeOpenAIUsage(
-      {
-        plan: "Plus",
-        windows: [{ label: "Week", usedPercent: 40 }],
-        billing: [{ type: "balance", amount: 12.5, unit: "credits" }],
-      },
-      {
-        windows: [{ label: "5h", usedPercent: 10 }],
-      },
-    );
-
+    const merged = mergeOpenAIUsage({ ...week, plan: "Plus", billing: [balance] }, shortWindow);
     expect(merged).toEqual({
       updatedAt: 1,
       providers: [
@@ -32,8 +27,8 @@ describe("mergeUsageSummaries", () => {
           provider: "openai",
           displayName: "Codex",
           plan: "Plus",
-          windows: [{ label: "5h", usedPercent: 10 }],
-          billing: [{ type: "balance", amount: 12.5, unit: "credits" }],
+          ...shortWindow,
+          billing: [balance],
           error: undefined,
         },
       ],
@@ -42,59 +37,29 @@ describe("mergeUsageSummaries", () => {
 
   it("lets preferred billing replace duplicate secondary entries without dropping siblings", () => {
     const merged = mergeOpenAIUsage(
-      {
-        windows: [{ label: "Week", usedPercent: 40 }],
-        billing: [
-          { type: "balance", amount: 12.5, unit: "credits" },
-          { type: "spend", amount: 20, unit: "usd", period: "month" },
-        ],
-      },
-      {
-        windows: [{ label: "5h", usedPercent: 10 }],
-        billing: [{ type: "balance", amount: 8, unit: "credits" }],
-      },
+      { ...week, billing: [balance, spend] },
+      { ...shortWindow, billing: [{ ...balance, amount: 8 }] },
     );
-
-    expect(merged.providers[0]?.billing).toEqual([
-      { type: "balance", amount: 8, unit: "credits" },
-      { type: "spend", amount: 20, unit: "usd", period: "month" },
-    ]);
+    expect(merged.providers[0]?.billing).toEqual([{ ...balance, amount: 8 }, spend]);
   });
 
-  it("ranks billing-only snapshots above errors", () => {
-    const merged = mergeOpenAIUsage(
-      {
-        windows: [],
-        billing: [{ type: "balance", amount: 4, unit: "credits" }],
-      },
-      {
-        windows: [],
-        error: "Unavailable",
-      },
-    );
-
-    expect(merged.providers[0]).toMatchObject({
-      displayName: "OpenAI",
-      billing: [{ type: "balance", amount: 4, unit: "credits" }],
-      error: undefined,
-    });
-  });
-
-  it("preserves provider endpoint errors over synthetic fallback errors", () => {
-    const merged = mergeOpenAIUsage(
-      {
-        windows: [],
-        error: "Admin API key required",
-      },
-      {
-        windows: [],
-        error: "Codex account authentication required",
-      },
-    );
-
-    expect(merged.providers[0]).toMatchObject({
-      displayName: "OpenAI",
-      error: "Admin API key required",
-    });
+  it.each([
+    [
+      "billing above errors",
+      { billing: [{ ...balance, amount: 4 }] },
+      "Unavailable",
+      { billing: [{ ...balance, amount: 4 }], error: undefined },
+    ],
+    [
+      "endpoint error above fallback error",
+      { error: "Admin API key required" },
+      "Codex account authentication required",
+      { error: "Admin API key required" },
+    ],
+  ] satisfies Array<
+    [string, Partial<ProviderUsageSnapshot>, string, Partial<ProviderUsageSnapshot>]
+  >)("prefers %s", (_name, base, error, expected) => {
+    const merged = mergeOpenAIUsage({ windows: [], ...base }, { windows: [], error });
+    expect(merged.providers[0]).toMatchObject({ displayName: "OpenAI", ...expected });
   });
 });

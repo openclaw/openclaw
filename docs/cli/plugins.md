@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw plugins` (init, build, validate, list, install, reload, marketplace, uninstall, enable/disable, doctor)"
+summary: "CLI reference for `openclaw plugins` (init, build, validate, lint, list, install, reload, marketplace, uninstall, enable/disable, doctor)"
 read_when:
   - You want to install or manage Gateway plugins or compatible bundles
   - You want to scaffold or validate a simple tool plugin
@@ -36,6 +36,8 @@ when the Gateway is stopped. Reported IDs retain their manifest spelling; plugin
 policy keys in config use the required lowercase form.
 The same policy applies to live activation and the next Gateway start. Runtime
 IDs and Gateway method names retain the plugin's declared spelling.
+`plugins inspect` and its `info` alias try an exact ID, then an exact display name,
+then the canonical ID resolved from case variants or manifest legacy IDs.
 
 <CardGroup cols={2}>
   <Card title="Plugin system" href="/tools/plugin">
@@ -74,6 +76,7 @@ openclaw plugins doctor [--json]
 openclaw plugins init <id> [--name <name>] [--type tool|provider|feature] [--directory <path>]
 openclaw plugins build [--root <path>] [--entry <path>] [--check]
 openclaw plugins validate [--root <path>] [--entry <path>] [--json]
+openclaw plugins lint [--root <path>] [--json]
 openclaw plugins pack [--root <path>] [--out <file.tgz>] [--json]
 openclaw plugins marketplace entries [--offline] [--feed-profile <name>] [--json]
 openclaw plugins marketplace list <source> [--json]
@@ -152,6 +155,7 @@ points at the page that now holds the content.
 
 ## Related
 
+- [Runtime compatibility lint](/plugins/runtime-compatibility)
 - [Building plugins](/plugins/building-plugins)
 - [CLI reference](/cli)
 - [ClawHub](/clawhub)
