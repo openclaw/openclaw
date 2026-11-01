@@ -162,7 +162,6 @@ describe("renderSessionProgressCard", () => {
       sessionStatus: "failed",
       ...runWindow,
       hasActiveRun: false,
-      terminalOutcome: "failed",
       runtime: { known: true, connected: true, hasActiveSubagentRun: false, lastRunError },
     });
     const detail = query(container, ".session-progress-card__runtime-detail")?.textContent ?? "";
