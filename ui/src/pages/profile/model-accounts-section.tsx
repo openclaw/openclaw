@@ -5,6 +5,7 @@ import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { Picker } from "../../components/select-picker.ts";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -489,14 +490,13 @@ export function ModelAccountsSection(props: StateProps & { inventory: JSX.Elemen
               {t("profilePage.modelAccounts.addAccount")}
             </button>
           </Show>
-          <button
-            type="button"
-            class="btn btn--sm profile-auth-accounts-refresh"
-            disabled={!state().connected || state().inventoryLoading}
+          <RefreshButton
+            class="profile-auth-accounts-refresh"
+            label={t("common.refresh")}
+            busy={state().inventoryLoading}
+            disabled={!state().connected}
             onClick={() => void state().loadAccounts()}
-          >
-            {t("common.refresh")}
-          </button>
+          />
         </Show>
       }
     >
