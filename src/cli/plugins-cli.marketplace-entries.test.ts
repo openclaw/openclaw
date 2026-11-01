@@ -4,7 +4,8 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
-import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 import { registerPluginsCli } from "./plugins-cli.js";
 import {
   runPluginMarketplaceEntriesCommand as entries,

@@ -7,7 +7,6 @@ import {
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { model as createModel, row } from "../../agents/model-catalog-fixtures.test-support.js";
 import * as openAIModelRoutes from "../../agents/openai-model-routes.js";
-import { formatCliFailureLines } from "../../cli/failure-output.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/types.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
@@ -399,12 +398,17 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
-  it("rejects a non-integer probe concurrency", async () => {
+  it.each([
+    ["probeConcurrency", "--probe-concurrency", "2.5", "integer"],
+    ["probeTimeout", "--probe-timeout", "abc", "number"],
+  ])("rejects invalid %s", async (key, flag, value, kind) => {
     const localRuntime = createTestRuntime();
-    mocks.runAuthProbes.mockClear();
     await expect(
-      modelsStatusCommand({ json: true, probe: true, probeConcurrency: "2.5" }, localRuntime),
-    ).rejects.toThrow("--probe-concurrency");
+      modelsStatusCommand({ json: true, probe: true, [key]: value }, localRuntime),
+    ).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: `${flag} must be a positive ${kind}.`,
+    });
     expect(mocks.runAuthProbes).not.toHaveBeenCalled();
     expect(localRuntime.log).not.toHaveBeenCalled();
   });
@@ -807,20 +811,6 @@ describe("modelsStatusCommand auth overview", () => {
     });
     expectText(output, "Default (defaults)", `Fallbacks (${fallbacks.length}) (defaults)`);
     expect(mocks.ensureAuthProfileStore).toHaveBeenLastCalledWith("/tmp/openclaw-agent");
-  });
-
-  it("shows the reason when --probe-timeout is invalid", async () => {
-    const error = await jsonStatus({ probe: true, probeTimeout: "abc" }).catch(
-      (caught: unknown) => caught,
-    );
-    expect(
-      formatCliFailureLines({
-        title: "The CLI command failed.",
-        error,
-        argv: ["node", "openclaw", "models", "status", "--probe-timeout", "abc"],
-        env: {},
-      }),
-    ).toEqual(["--probe-timeout must be a positive number."]);
   });
 
   it("exits non-zero when auth is missing", async () => {

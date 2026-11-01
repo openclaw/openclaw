@@ -1,7 +1,7 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { beforeEach, expect, it, vi } from "vitest";
-import { ExpectedCliError } from "../failure-output.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
 import { expectNoCalls } from "./program.test-helpers.js";
 import { registerStatusHealthSessionsCommands } from "./register.status-health-sessions.js";
 

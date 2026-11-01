@@ -19,6 +19,7 @@ import {
 } from "../state/openclaw-update-schema-refusal.js";
 import { formatCliCommand } from "./command-format.js";
 import type { CronCliJobMatch } from "./cron-cli/cron-cli-error.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
 import { exitAfterSignalExitBarriers } from "./signal-exit-barrier.js";
 
@@ -89,33 +90,6 @@ export function recordCliGatewayRunFailure(error: unknown, runId: string | undef
 /** Human diagnostics (agent transport-loss hint) read back the run identity recorded at dispatch. */
 export function readCliGatewayRunFailure(error: unknown): CliGatewayRunFailure | undefined {
   return error instanceof Error ? gatewayRunFailures.get(error) : undefined;
-}
-
-export class ExpectedCliError extends Error {
-  readonly humanOutput: string;
-  readonly humanOutputWritten: boolean;
-  readonly machineOutput: string;
-  readonly matches?: readonly CronCliJobMatch[];
-
-  constructor(params: {
-    message: string;
-    humanOutput: string;
-    humanOutputWritten?: boolean;
-    machineOutput: string;
-    matches?: readonly CronCliJobMatch[];
-    cause?: unknown;
-  }) {
-    super(params.message, params.cause === undefined ? undefined : { cause: params.cause });
-    this.name = "ExpectedCliError";
-    this.humanOutput = params.humanOutput;
-    this.humanOutputWritten = params.humanOutputWritten ?? false;
-    this.machineOutput = params.machineOutput;
-    this.matches = params.matches;
-  }
-}
-
-export function throwExpectedCliError(message: string): never {
-  throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
 }
 
 export function isGatewayCredentialsCliError(

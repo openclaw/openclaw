@@ -1,5 +1,5 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { throwExpectedCliError } from "./failure-output.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 
 export function parseOptionalPositiveInteger(
   raw: unknown,

@@ -1,5 +1,9 @@
 import path from "node:path";
 import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import {
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
@@ -52,6 +56,7 @@ import { resolveModelCatalogIdentityKey } from "../../agents/openai-model-routes
 import { OPENAI_PROVIDER_ID } from "../../agents/openai-routing.js";
 import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { throwExpectedCliError } from "../../cli/expected-cli-error.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { createConfigIO } from "../../config/config.js";
 import {
@@ -82,7 +87,6 @@ import type { runAuthProbes } from "./list.probe.js";
 import { resolveStatusUtilityModel } from "./list.status-utility.js";
 import type { ProviderAuthOverview, StatusRuntimeAuthRoute } from "./list.types.js";
 import { loadModelsConfig } from "./load-config.js";
-import { parseProbeOption } from "./probe-option.js";
 import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
@@ -141,6 +145,23 @@ type StatusModelRouteIssue = {
       authRequirement: ProviderModelRouteCandidate["authRequirement"];
     }
 );
+
+function parseProbeOption(
+  raw: unknown,
+  label: string,
+  fallback: number,
+  kind: "number" | "integer" = "number",
+): number {
+  if (raw === undefined || raw === null) {
+    return fallback;
+  }
+  const parsed =
+    kind === "integer" ? parseStrictPositiveInteger(raw) : parseStrictFiniteNumber(raw);
+  if (parsed === undefined || parsed <= 0) {
+    throwExpectedCliError(`${label} must be a positive ${kind}.`);
+  }
+  return parsed;
+}
 
 function syntheticAuthCredential(
   provider: string,

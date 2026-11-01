@@ -18,7 +18,7 @@ import type {
 } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { defaultRuntime } from "../runtime.js";
-import { throwExpectedCliError } from "./failure-output.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
