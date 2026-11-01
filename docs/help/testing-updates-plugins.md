@@ -182,6 +182,45 @@ Important lanes:
   postinstall must remove package-local debris while update and Doctor preserve
   the shared runtime roots.
 
+### Native systemd update matrix
+
+The maintained Published driver update workflow also runs the survivor harness's
+native `systemd` flow against published `2026.10.9`, reusing its checksum-verified
+candidate tarball. Manual container flows keep their existing migration coverage.
+The native planner accepts exact stable and extended-stable baselines and runs
+them sequentially on one disposable Linux guest:
+
+```bash
+node scripts/e2e/lib/upgrade-survivor/native-systemd.mjs --plan 2026.10.9 2026.9.36
+```
+
+For development, use a Linux Crabbox lease with a running systemd user manager,
+Node, npm, and passwordless sudo. Build once with the canonical
+`node scripts/package-openclaw-for-docker.mjs --allow-unreleased-changelog`
+packager on that guest, then run the synced harness there as root:
+
+```bash
+sudo "$(command -v node)" scripts/e2e/lib/upgrade-survivor/native-systemd.mjs \
+  /tmp/candidate.tgz /tmp/native-systemd-proof 2026.10.9 2026.9.36
+```
+
+Each baseline gets a new guest account and canonical home/state, the published
+package's actual user service, and the shared survivor state and approval seeds.
+The installed baseline's Doctor prepares the legacy seed before service startup.
+Before updating, the flow requires native unit/cgroup ownership, health,
+readiness, and authenticated baseline RPC build identity. It invokes the installed
+updater with restart enabled, selecting `--channel stable` when leaving an
+extended-stable baseline for the stable/main candidate. Success requires the
+updater's terminal success and recorded verification, a changed native MainPID,
+exact candidate RPC build identity, health/readiness, and preserved survivor state.
+The harness never starts the service after invoking update.
+
+The artifact directory retains the plan, package checksum/build identities,
+command outputs, update JSON/history, native unit facts, journal, and failure
+summary. The harness stops each owned service on success or failure. Collect
+artifacts and release the lease after the matrix; never run this root fixture on
+an operator host or against an existing account.
+
 Set `OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS` to a whitespace-separated list of
 model refs to run one `openclaw agent --local` marker turn per model after the
 update. Anthropic uses `ANTHROPIC_API_KEY`, Google uses `GEMINI_API_KEY`, and
