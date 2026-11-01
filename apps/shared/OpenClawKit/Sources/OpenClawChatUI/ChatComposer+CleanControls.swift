@@ -50,7 +50,7 @@ extension OpenClawChatComposer {
                 self.branchMenu
             }
             self.verbosityPicker
-                .disabled(!self.viewModel.composerEffortMutationAvailable)
+                .disabled(!self.viewModel.composerVerboseMutationAvailable)
             self.cleanComposerCapabilityItems
         } label: {
             CompactChatAttachmentLabel()
@@ -92,7 +92,7 @@ extension OpenClawChatComposer {
                 self.branchMenu
             }
             self.verbosityPicker
-                .disabled(!self.viewModel.composerEffortMutationAvailable)
+                .disabled(!self.viewModel.composerVerboseMutationAvailable)
         } label: {
             CompactChatAttachmentLabel(controlSize: self.cleanControlHeight)
         }

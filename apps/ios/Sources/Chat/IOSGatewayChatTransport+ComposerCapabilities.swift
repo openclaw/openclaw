@@ -88,6 +88,9 @@ extension IOSGatewayChatTransport {
             effortMutationAvailable: Self.composerMutationAvailable(
                 methodSupport: patchCapability,
                 allowedByScope: canWrite),
+            verboseMutationAvailable: Self.composerMutationAvailable(
+                methodSupport: patchCapability,
+                allowedByScope: canAdmin),
             webSearchBaseEnabled: config?.runtimeConfig.tools?.web?.search?.enabled != false,
             webSearchAvailable: configSurface.loaded,
             skills: (skillsReport?.skills ?? []).map(Self.composerSkill).sorted { $0.name < $1.name },

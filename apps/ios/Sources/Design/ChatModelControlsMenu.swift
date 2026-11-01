@@ -477,7 +477,8 @@ struct ChatModelControlsMenuItems: View {
                     ChatActionResetButton(accessibilityIdentifier: "chat-verbosity-use-default") {
                         self.viewModel.selectVerboseLevel(OpenClawChatViewModel.inheritedThinkingSelectionID)
                     }
-                    .disabled(self.viewModel.isUpdatingSessionSettings)
+                    .disabled(
+                        self.viewModel.isUpdatingSessionSettings || !self.viewModel.composerVerboseMutationAvailable)
                 }
             }
             VStack(spacing: 0) {
@@ -493,7 +494,7 @@ struct ChatModelControlsMenuItems: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .disabled(self.viewModel.isUpdatingSessionSettings)
+                .disabled(self.viewModel.isUpdatingSessionSettings || !self.viewModel.composerVerboseMutationAvailable)
                 .accessibilityIdentifier("chat-verbosity-control")
             }
             .frame(minHeight: ChatActionMenuMetric.rowHeight)

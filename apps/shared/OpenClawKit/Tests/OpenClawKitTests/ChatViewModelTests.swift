@@ -8424,7 +8424,7 @@ struct ChatViewModelTests {
         #expect(await transport.sessionSettingsPatches().isEmpty)
     }
 
-    @Test func `write scope permits model but keeps effort settings admin only`() async throws {
+    @Test func `effort settings stay unchanged without effort access`() async throws {
         let writeCatalog = OpenClawChatComposerCapabilityCatalog(
             sessionSettingsAvailable: true,
             modelMutationAvailable: true,
@@ -8445,6 +8445,26 @@ struct ChatViewModelTests {
             vm.selectFastMode("on")
             vm.selectVerboseLevel("full")
         }
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(await transport.sessionSettingsPatches().isEmpty)
+    }
+
+    @Test func `write scope permits effort but keeps tool details admin only`() async throws {
+        let writeCatalog = OpenClawChatComposerCapabilityCatalog(
+            sessionSettingsAvailable: true,
+            modelMutationAvailable: true,
+            effortMutationAvailable: true)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: "sess-main")],
+            sessionsResponses: [sessionsResponse([
+                sessionEntry(key: "main", updatedAt: 1, sessionId: "sess-main"),
+            ])],
+            composerCapabilityCatalog: writeCatalog)
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        await vm.loadComposerCapabilities()
+
+        #expect(await MainActor.run { !vm.composerVerboseMutationAvailable })
+        await MainActor.run { vm.selectVerboseLevel("full") }
         try await Task.sleep(for: .milliseconds(20))
         #expect(await transport.sessionSettingsPatches().isEmpty)
     }
