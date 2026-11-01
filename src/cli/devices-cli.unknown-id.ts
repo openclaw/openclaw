@@ -8,7 +8,8 @@ export function isUnknownRequestIdError(
 ): boolean {
   const maybeGatewayError =
     typeof error === "object" && error !== null
-      ? (error as { gatewayCode?: unknown; message?: unknown })
+      ? // SAFETY: non-null object; both fields are re-checked with typeof/!== before use.
+        (error as { gatewayCode?: unknown; message?: unknown })
       : undefined;
   const gatewayCode = maybeGatewayError?.gatewayCode;
   if (gatewayCode !== undefined && gatewayCode !== "INVALID_REQUEST") {
