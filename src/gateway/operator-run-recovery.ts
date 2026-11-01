@@ -3,7 +3,6 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { restoreOperatorModelPolicySnapshot } from "../agents/operator-model-policy.js";
-import { prepareCommandOwnerAuthority } from "../auto-reply/command-auth.js";
 import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-identity.js";
@@ -20,6 +19,7 @@ import {
 } from "../state/user-profile-list.js";
 import { captureGatewayAuthPolicy, isGatewayAuthGrantCurrent } from "./auth-policy.js";
 import type { GatewayAuthPolicy } from "./auth-policy.types.js";
+import { prepareChannelOperatorAuthority } from "./channel-operator-authority.js";
 import {
   captureGatewayDeviceRevocation,
   onGatewayDeviceSourceRevoked,
@@ -406,10 +406,10 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
   }
   const snapshot = source.snapshot;
   const getConfig = params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig;
-  const prepared = await prepareCommandOwnerAuthority(getConfig(), snapshot.reference);
+  const prepared = await prepareChannelOperatorAuthority(getConfig(), snapshot.reference);
   params.assertCurrent();
-  const profile = prepared.operatorProfile;
-  if (!profile || profile.profileId !== snapshot.profileId || !prepared.isCurrent(getConfig())) {
+  const profile = prepared?.operatorProfile;
+  if (!profile || profile.profileId !== snapshot.profileId || !prepared?.isCurrent(getConfig())) {
     throw new Error("Queued channel operator authority changed; submit a new request.");
   }
   let references = 1;

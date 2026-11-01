@@ -33,6 +33,7 @@ export function collectPostCorePluginAdvisories(
         (warning) =>
           warning.reason === "plugin-target-unavailable" ||
           warning.reason === "plugin-operator-managed" ||
+          warning.reason === "plugin-config-conflict" ||
           warning.reason === "doctor-advisory",
       )
       .map((warning) => warning.message),

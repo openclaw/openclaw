@@ -24,6 +24,7 @@ import { withSessionTurn } from "../../sessions/session-controller.admission.js"
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { cronExecutionActor } from "../human-owner.js";
 import { resolveCronRuntimeSessionEntry } from "../inference-binding.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
@@ -239,7 +240,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
     const now = Date.now();
     // A child run never runs looser than its parent.
     const sandbox =
-      resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor }) ??
+      resolveCreatorSandbox(runtimeCfg, { actor: cronExecutionActor(input.job) }) ??
       input.occurrence.childParent?.sandbox;
     const usesExactRunSession = usesDetachedRunSession || baseSessionKey.startsWith("cron:");
     const cronSession = await prepareCronSession({
@@ -314,7 +315,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
       const persistSessionEntry = createPersistCronSessionEntry({
         cronSession,
         agentSessionKey,
-        createdActor: input.job.createdActor,
+        createdActor: cronExecutionActor(input.job),
         sandbox,
         workspaceDir,
         persistSessionEntry: persistCronSessionRow,
@@ -631,7 +632,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           ? createCronRunContinuationSession({
               cronSession,
               runSessionKey,
-              createdActor: input.job.createdActor,
+              createdActor: cronExecutionActor(input.job),
               sandbox,
               thinkingLevel: requestedThinkLevel,
               toolsAllow: agentPayload?.toolsAllow,

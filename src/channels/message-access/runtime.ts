@@ -6,6 +6,7 @@ import {
   isConfiguredCommandOwner,
   prepareCommandOwnerAuthority,
 } from "../../auto-reply/command-auth.js";
+import { prepareChannelOperatorAuthority } from "../../gateway/channel-operator-authority.js";
 import { wrapCurrentPluginInstance } from "../../plugins/plugin-instance-scope.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/account-id.js";
 import { prepareUserChannelIdentityAuthority } from "../../state/user-channel-identity-operations.js";
@@ -404,6 +405,13 @@ async function resolveChannelMessageIngressForOwner(
       })
         ? { channelId, accountId: params.accountId ?? DEFAULT_ACCOUNT_ID, senderId }
         : undefined);
+    const operatorAuthority =
+      verifiedPrincipal && participantGatewayContext
+        ? await prepareChannelOperatorAuthority(participantGatewayContext.getRuntimeConfig(), {
+            identity: verifiedPrincipal,
+            prepared: requester,
+          })
+        : undefined;
     const commandOwnerAuthority =
       commandOwnerPrincipal && participantGatewayContext
         ? await prepareCommandOwnerAuthority(participantGatewayContext.getRuntimeConfig(), {
@@ -439,6 +447,7 @@ async function resolveChannelMessageIngressForOwner(
             isCurrent: requester.isCurrent,
           }
         : undefined,
+      operatorAuthority,
       commandOwnerAuthority,
       commandOwnerPrincipal,
       promptedAt,

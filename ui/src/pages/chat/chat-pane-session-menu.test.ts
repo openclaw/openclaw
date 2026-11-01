@@ -144,6 +144,25 @@ describe("chat pane session menu boundary", () => {
     );
   });
 
+  it("opens a read-only workspace menu without probing branches", async () => {
+    const request = vi.fn(async (_method: string) => ({}));
+    const { pane } = createTestChatPane({
+      client: createGatewayBrowserClientFixture({ request }),
+    });
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["system.info", "worktrees.branches"],
+      ["operator.read"],
+    );
+    await pane.loadHeaderMenuData(
+      { key: "agent:main:current", kind: "direct", spawnedCwd: "/workspace" },
+      "/workspace",
+      true,
+    );
+    expect(request.mock.calls.filter(([method]) => method === "worktrees.branches")).toHaveLength(
+      0,
+    );
+  });
+
   it("discovers nested sessions before the header archive choice", async () => {
     const modal = createModalDialogTestFixture();
     const row: GatewaySessionRow = {

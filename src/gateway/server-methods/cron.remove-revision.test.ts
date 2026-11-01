@@ -30,7 +30,10 @@ describe("cron.remove config revision", () => {
       { context },
     );
 
-    expect(context.cron.remove).toHaveBeenCalledWith(job.id, { expectedConfigRevision });
+    expect(context.cron.remove).toHaveBeenCalledWith(job.id, {
+      expectedConfigRevision,
+      commitGuard: expect.any(Function),
+    });
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
@@ -56,7 +59,10 @@ describe("cron.remove config revision", () => {
       { context },
     );
 
-    expect(context.cron.remove).toHaveBeenCalledWith(job.id, { expectedConfigRevision });
+    expect(context.cron.remove).toHaveBeenCalledWith(job.id, {
+      expectedConfigRevision,
+      commitGuard: expect.any(Function),
+    });
     expect(respond).toHaveBeenCalledWith(true, { ok: true, removed: true }, undefined);
   });
 });

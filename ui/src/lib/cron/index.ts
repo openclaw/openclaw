@@ -310,6 +310,9 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       delivery,
       failureAlert,
     };
+    if (editingJob && form.ownerProfileId && form.ownerProfileId !== editingJob.ownerProfileId) {
+      job.ownerProfileId = form.ownerProfileId;
+    }
     if (schedule) {
       job.schedule = schedule;
     }
