@@ -462,6 +462,74 @@ suite.define(() => {
     await context.close();
   });
 
+  it("shimmers a running purpose and headline only until each call settles", async () => {
+    const { context, page, gateway } = await openChat([
+      narration("Ready for the purpose wave proof.", Date.now()),
+    ]);
+    await page.getByText("Ready for the purpose wave proof.").waitFor();
+    const runId = await sendRun(page, gateway, "find the notes");
+    const emit = agentEvents(gateway, runId);
+    let seq = 0;
+    // Same order as the runner: the item opens a call, and the tool result closes it first.
+    const progress = async (id: string, title: string, status: "running" | "completed") => {
+      const running = status === "running";
+      const item = {
+        itemId: `tool:${id}`,
+        toolCallId: id,
+        kind: "tool",
+        name: "exec",
+        title,
+        commandBearing: true,
+        phase: running ? "start" : "end",
+        status,
+      };
+      if (running) {
+        await emit(++seq, "item", item);
+        await emit(++seq, "tool", {
+          toolCallId: id,
+          name: "exec",
+          phase: "start",
+          args: { command: "true", title },
+        });
+        return;
+      }
+      await emit(++seq, "tool", {
+        toolCallId: id,
+        name: "exec",
+        phase: "result",
+        result: { text: "done" },
+      });
+      await emit(++seq, "item", item);
+    };
+    const shimmering = () =>
+      page.evaluate(() =>
+        document
+          .getAnimations()
+          .filter((animation) => (animation as CSSAnimation).animationName === "text-shimmer")
+          .map((animation) => ((animation.effect as KeyframeEffect).target as Element).textContent),
+      );
+
+    await progress("first", "Search sessions for release notes", "running");
+    await page.locator(".chat-tool-row--running .chat-tool-row__title").waitFor();
+    await expect.poll(shimmering).toEqual(["Search sessions for release notes"]);
+
+    await progress("first", "Search sessions for release notes", "completed");
+    await expect.poll(shimmering).toEqual([]);
+
+    await progress("second", "Read the matching notes", "running");
+    await page.locator(".chat-activity-group__label--running").waitFor();
+    await expect
+      .poll(() => page.locator(".chat-activity-group__label--running").textContent())
+      .toBe("Read the matching notes…");
+    await expect.poll(shimmering).toEqual(["Read the matching notes…"]);
+    await page.locator(".chat-activity-group__summary").click();
+    await expect.poll(shimmering).toEqual(["Read the matching notes…", "Read the matching notes"]);
+
+    await progress("second", "Read the matching notes", "completed");
+    await expect.poll(shimmering).toEqual([]);
+    await context.close();
+  });
+
   it("stops the active tool wave on failure and keeps diagnostics behind disclosure", async () => {
     const { context, page, gateway } = await openChat([
       narration("Ready for the running tool wave proof.", Date.now()),

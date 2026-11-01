@@ -973,14 +973,6 @@ summary,
   }
 }
 
-/* iOS Safari shows the document canvas around its browser chrome. The system
-   chrome owner selects it where the exposed narrow route canvas or the open
-   navigation drawer's backdrop differs from the page surface. */
-html.control-ui-system-chrome-canvas,
-.control-ui-system-chrome-canvas body {
-  background: var(--control-ui-system-chrome-background, var(--bg));
-}
-
 /* iOS Safari zooms the viewport when a focused text control is under 16px;
    important keeps feature-local typography from silently dropping this floor.
    Controls that manage their own touch size declare it via

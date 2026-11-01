@@ -132,7 +132,7 @@ it checks the selected publisher at the publication boundary. A bot-authored PR
 from another conversation is not eligible for own-PR import just because the
 publisher created it; guests continue in its original publication conversation.
 
-For an open PR originally published from this conversation, `refresh_base`
+For an open PR prepared or originally published from this conversation, `refresh_base`
 selects its current GitHub destination before integrating the base into the
 managed workspace. This includes a base branch changed outside the conversation.
 Ordinary publication then continues the same PR and head branch. The Gateway
@@ -241,6 +241,14 @@ If recovery returns `headChanged: true`, it completed that original accepted
 head while GitHub has since advanced; repeat preparation to integrate the newer
 head. Preparation makes no GitHub writes
 and is not a publication receipt.
+
+After preparation, `refresh_base` integrates the PR's target branch into the saved
+source. It preserves the accepted PR head, original branch, and requester permissions.
+Finish pending `prepare_pr` conflicts before refreshing the base; finish pending
+`refresh_base` conflicts before preparing another head. A retry completes its
+already accepted base first, even if the target advances or changes; refresh again
+to integrate the newer target. Repeating preparation after base integration retains
+the integrated history in the review comparison.
 
 After preparation, ordinary shared publication appends changes to the original
 PR's head repository and branch. It preserves the PR number, author, existing

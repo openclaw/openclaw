@@ -323,13 +323,13 @@ it("reuses palette reads through session publications while retaining retries an
     for (const property of [
       "--shell-viewport-height",
       "--shell-safe-area-bottom",
-      "--control-ui-system-chrome-background",
+      "background-color",
       ...["assistant", "terminal", "browser", "link-reader", "desktop"].flatMap((owner) => [
         `--oc-${owner}-reserve-bottom`,
         `--oc-${owner}-reserve-right`,
       ]),
     ]) {
-      root.style.setProperty(property, "123px");
+      root.style.setProperty(property, property === "background-color" ? "#123456" : "123px");
     }
     await painted();
     expect(styleReads).not.toHaveBeenCalled();

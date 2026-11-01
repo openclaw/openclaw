@@ -94,6 +94,66 @@ fixture.describe("Control UI shimmer", () => {
       });
     },
   );
+  it("shimmers only running tool narration without moving its layout", async () => {
+    const row = (modifier: string, part: string) =>
+      `<div><button class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row ${modifier}"><span class="chat-tool-disclosure__content"><span class="${part} ${modifier ? "text-shimmer" : ""}">Search sessions for release notes</span></span></button></div>`;
+    const headline = (modifier: string) =>
+      `<div><button class="chat-inline-disclosure chat-activity-group__summary"><span class="chat-tool-disclosure__content"><span class="chat-activity-group__label chat-activity-group__label--live ${modifier} ${modifier ? "text-shimmer" : ""}">Search sessions for release notes</span></span></button></div>`;
+    const parts = [
+      "chat-tool-row__title",
+      "chat-tool-msg-summary__label",
+      "chat-tool-msg-summary__names",
+    ];
+    await withBrowserPage(fixture.page({ reducedMotion: "no-preference" }), async (page) => {
+      await page.setContent(
+        styleDocument(
+          readStyles("styles/base", "styles/chat/tool-cards"),
+          [
+            ...parts.flatMap((part) => [row("chat-tool-row--running", part), row("", part)]),
+            headline("chat-activity-group__label--running"),
+            headline(""),
+          ].join(""),
+        ),
+      );
+      const read = () =>
+        page
+          .locator(".chat-tool-disclosure__content > span")
+          .evaluateAll((elements) =>
+            elements.map((element) => [
+              getComputedStyle(element).animationName.includes("text-shimmer"),
+              getComputedStyle(element).webkitTextFillColor === "rgba(0, 0, 0, 0)",
+              element.getBoundingClientRect().width,
+              element.getBoundingClientRect().height,
+            ]),
+          );
+      const active = await read();
+      expect(active.map(([shimmer]) => shimmer)).toEqual([
+        true,
+        false,
+        true,
+        false,
+        true,
+        false,
+        true,
+        false,
+      ]);
+      expect(active.map(([, transparent]) => transparent)).toEqual(
+        active.map(([shimmer]) => shimmer),
+      );
+      const dimensions = active.map((state) => state.slice(2));
+      expect(dimensions.filter((_, index) => index % 2 === 0)).toEqual(
+        dimensions.filter((_, index) => index % 2 === 1),
+      );
+      for (const media of [
+        { reducedMotion: "reduce" },
+        { reducedMotion: "no-preference", forcedColors: "active" },
+      ] as const) {
+        await page.emulateMedia(media);
+        const quiet = await read();
+        expect(quiet.some(([shimmer, transparent]) => shimmer || transparent)).toBe(false);
+      }
+    });
+  });
   it("aligns intrinsic typing stacks and shimmers only active text, including names", async () => {
     await withBrowserPage(fixture.page({ reducedMotion: "no-preference" }), async (page) => {
       for (const count of [1, 2, 5]) {
