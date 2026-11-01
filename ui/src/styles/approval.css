@@ -459,6 +459,43 @@
     justify-content: center;
   }
 
+  /* One surface: the question panel, or the same surface for every state around it. */
+  .question-page .approval-page__card {
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .question-page .approval-page__card::after {
+    display: none;
+  }
+
+  .question-page .approval-page__content {
+    padding: 0;
+  }
+
+  .question-page .approval-page__state {
+    padding: 12px;
+    border: 1px solid var(--chat-composer-hairline, var(--border));
+    border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+    corner-shape: superellipse(1.5);
+    background: var(--chat-composer-surface, var(--popover));
+  }
+
+  :root[data-theme-mode="dark"] .question-page .approval-page__state {
+    border-color: color-mix(in srgb, var(--text-strong) 9%, transparent);
+  }
+
+  :root[data-theme-mode="light"] .question-page .approval-page__state {
+    border-color: transparent;
+    box-shadow:
+      0 0 0 1px rgb(0 0 0 / 6%),
+      0 1px 2px -1px rgb(0 0 0 / 6%),
+      0 2px 4px rgb(0 0 0 / 4%);
+  }
+
   /* The chat dock caps this panel; on its own document the page is the one scroller. */
   .question-page .chat-question-panel:not(.chat-question-panel--collapsed) {
     max-height: none;

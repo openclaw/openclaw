@@ -751,7 +751,7 @@ suite.define(() => {
     const page = await newPage({ height: 844, width: 390 }, true);
     const request = questionRecord("question-long-document", {
       multiSelect: true,
-      options: Array.from({ length: 8 }, (_value, index) => ({
+      options: Array.from({ length: 14 }, (_value, index) => ({
         label: `Rollout option ${index + 1}`,
         description: "Drains the writers, applies the migration and waits for the health check.",
       })),
@@ -775,6 +775,8 @@ suite.define(() => {
         advanceLeft: box(".chat-question-panel__advance").left,
         advanceHeight: box(".chat-question-panel__advance").height,
         skipLeft: box(".chat-question-panel__skip").left,
+        optionWidth: box(".chat-question-panel__option").width,
+        cardBorder: getComputedStyle(element.closest(".approval-page__card")!).borderLeftWidth,
       };
     });
     expect(layout.panelOverflow).toBeLessThanOrEqual(0);
@@ -782,8 +784,10 @@ suite.define(() => {
     expect(layout.documentOverflow).toBeLessThanOrEqual(0);
     expect(layout.advanceLeft).toBeLessThan(layout.skipLeft);
     expect(layout.advanceHeight).toBeGreaterThanOrEqual(44);
+    expect(layout.cardBorder).toBe("0px");
+    expect(layout.optionWidth).toBeGreaterThanOrEqual(340);
 
-    await panel.getByRole("checkbox", { name: /Rollout option 1/ }).tap();
+    await panel.getByRole("checkbox").first().tap();
     const submit = button(panel, "Submit");
     await submit.scrollIntoViewIfNeeded();
     expect(await submit.isEnabled()).toBe(true);
