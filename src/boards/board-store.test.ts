@@ -254,6 +254,32 @@ it("preserves native identity and layout through edits, reopen, and replacement"
   expect(replacement.widgets[2]?.instanceId).not.toBe(instanceId);
 });
 
+it("keeps an updated widget in place when placement names its current tab", async () => {
+  const { put, ops } = fixture();
+  await ops(
+    { kind: "tab_create", tabId: "main", title: "Main" },
+    { kind: "tab_create", tabId: "notes", title: "Notes" },
+  );
+  const putCard = (name: string, tabId: string) =>
+    put({ name, content: pluginContent({ name }), placement: { tabId } });
+  for (const name of ["revenue", "costs", "churn"]) {
+    await putCard(name, "main");
+  }
+  const layout = (snapshot: BoardSnapshot) =>
+    snapshot.widgets.map(({ name, tabId, position }) => `${tabId}/${name}@${position}`);
+
+  expect(layout(await putCard("revenue", "main"))).toEqual([
+    "main/revenue@0",
+    "main/costs@1",
+    "main/churn@2",
+  ]);
+  expect(layout(await putCard("revenue", "notes"))).toEqual([
+    "main/costs@0",
+    "main/churn@1",
+    "notes/revenue@0",
+  ]);
+});
+
 it.each([
   [
     { name: "too-large", content: pluginContent({ value: "x".repeat(8 * 1024) }) },
