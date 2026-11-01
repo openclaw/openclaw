@@ -36,6 +36,7 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import "../../styles/dashboards.css";
+import { DashboardFilterPopover } from "./dashboard-filter-popover.tsx";
 import { DashboardPreview } from "./dashboard-preview.tsx";
 
 registerDashboardsEnglish();
@@ -464,6 +465,11 @@ function DashboardList(props: {
                 }
               />
             </label>
+            <DashboardFilterPopover
+              owners={owners()}
+              filters={props.filters}
+              handlers={props.handlers}
+            />
             <label class="dashboards-select">
               <span>{t("dashboardsPage.authorFilter")}</span>
               <select
@@ -531,6 +537,7 @@ function DashboardGallerySkeleton() {
       <div class="dashboards-loading" aria-hidden="true" inert>
         <div class="dashboards-toolbar">
           <div class="dashboards-search skeleton dashboards-loading__control" />
+          <div class="dashboards-filter skeleton dashboards-loading__filter" />
           <For each={[0, 1]}>
             {() => (
               <div class="dashboards-select dashboards-loading__select">

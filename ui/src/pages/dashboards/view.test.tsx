@@ -90,6 +90,25 @@ it.each([
   }
 });
 
+it.each([
+  [{ ownerId: "", sort: "updated" }, false],
+  [{ ownerId: "peter", sort: "updated" }, true],
+  [{ ownerId: "", sort: "title" }, true],
+] as const)("marks the phone filter trigger for %j", (selected, active) => {
+  const { container } = mountSolid(() => (
+    <DashboardsView
+      data={routeData([dashboard])}
+      readReady={() => undefined}
+      filters={{ query: "", ...selected }}
+      handlers={handlers}
+    />
+  ));
+
+  const trigger = container.querySelector(".dashboards-filter__trigger");
+  expect(trigger?.getAttribute("aria-label")).toBe("Filters");
+  expect(trigger?.classList.contains("active")).toBe(active);
+});
+
 it.each(["", "/openclaw"])("navigates dashboard links with base path %s", (basePath) => {
   const onNavigate = vi.fn();
   const { container } = mountSolid(() => (
