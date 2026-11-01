@@ -36,7 +36,6 @@ export function searchFeishuStickerSet(
   if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 10) {
     throw new Error("Feishu sticker-search limit must be an integer from 1 through 10.");
   }
-  // Compare canonical NFC so NFD input (macOS paste, decomposed umlauts) matches NFC keywords.
   const needle = query.toLowerCase().normalize("NFC");
   const stickers: StickerMatch[] = [];
   for (const [fileId, keywords] of entries) {
