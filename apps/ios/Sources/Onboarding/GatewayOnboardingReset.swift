@@ -145,6 +145,7 @@ enum GatewayOnboardingReset {
         }
 
         if gatewayStableID == nil {
+            appModel.focusChatSession(nil)
             for entry in GatewaySettingsStore.loadGatewayRegistry().entries {
                 GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: entry.stableID, sessionKey: nil)
             }

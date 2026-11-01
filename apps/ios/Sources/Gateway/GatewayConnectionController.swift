@@ -704,6 +704,7 @@ extension GatewayConnectionController {
             } ?? false
             self.appModel?.disconnectForgottenGateway(
                 preservingPendingConnectAttempt: hasDifferentPendingTarget)
+            self.appModel?.focusChatSession(nil)
         }
         if shouldDisconnect, let appModel = self.appModel {
             await appModel.waitForGatewaySessionResetIfNeeded()

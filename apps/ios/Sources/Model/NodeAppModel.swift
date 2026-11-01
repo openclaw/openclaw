@@ -6189,7 +6189,7 @@ extension NodeAppModel {
     }
 
     private func currentWatchChatGatewayStableID() -> String? {
-        GatewayStableIdentifier.exact(self.connectedGatewayID)
+        GatewayStableIdentifier.exact(self.activeGatewayConnectConfig?.effectiveStableID)
     }
 
     private func watchAppCommandTargetsCurrentGatewayIfTagged(_ event: WatchAppCommandEvent) -> Bool {

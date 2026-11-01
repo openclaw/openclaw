@@ -6024,7 +6024,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let gatewayStableID = " gateway-watch-snapshot "
         appModel.gatewayConnected = true
         appModel.setOperatorConnected(true)
-        appModel.connectedGatewayID = gatewayStableID
+        configureMockApprovalRoute(appModel, stableID: gatewayStableID)
         appModel.gatewayStatusText = "Connected"
         appModel.talkMode.setEnabled(true)
         appModel.talkMode.statusText = "Listening"
@@ -6326,11 +6326,68 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(watchService.lastSentAppSnapshot?.sessionKey == "incident-42")
     }
 
+    @Test(arguments: [OpenClawWatchAppCommand.openChat, .startTalk]) @MainActor
+    func `restored startup rejects tagged watch actions until a route is configured`(
+        command: OpenClawWatchAppCommand) async throws
+    {
+        let isolation = await GatewayRegistryTestIsolation()
+        defer { isolation.restore() }
+        let state = try TemporaryOpenClawState(instanceID: "startup-watch-action-\(UUID().uuidString)")
+        defer { state.restore() }
+        let stableID = "startup-watch-action-\(UUID().uuidString)"
+        let savedChat = "agent:main:dashboard:startup-watch-action"
+        defer {
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+            GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        }
+        try #require(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: stableID, kind: .manual, name: "Startup Watch action test",
+            host: "watch-fixture.example.test", port: 443, useTLS: true,
+            contextPath: nil, lastConnectedAtMs: nil), activate: true))
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: "main")
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: savedChat)
+
+        let messaging = MockWatchMessagingService()
+        let model = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: messaging,
+            audioAdmissionInitiallyAllowed: false, restoringSavedGatewayRoute: true)
+        defer { model.voiceWake.stop() }
+        #expect(model.connectedGatewayID == stableID)
+        #expect(model.chatSessionKey == savedChat)
+        #expect(model.activeGatewayConnectConfig == nil)
+        #expect(await model.operatorSession.currentRoute() == nil)
+        model.setTalkEnabled(false)
+        let opened = model.openChatRequestID
+
+        messaging.emitAppCommand(makeWatchAppCommand(
+            "startup-tagged-action", command, session: "watch-requested-session",
+            gateway: stableID, sentAt: 125, transport: "transferUserInfo"))
+        try #require(await waitForMainActorWork { messaging.lastSentAppSnapshot != nil })
+        #expect(model.openChatRequestID == opened)
+        #expect(model.chatSessionKey == savedChat)
+        #expect(!model.talkMode.isEnabled)
+        #expect(messaging.lastSentAppSnapshot?.gatewayStableID == nil)
+
+        // The same tagged target is valid once an actual connection config owns it.
+        configureMockApprovalRoute(model, stableID: stableID)
+        messaging.emitAppCommand(makeWatchAppCommand(
+            "configured-tagged-action", command, session: "watch-requested-session",
+            gateway: stableID, sentAt: 126, transport: "transferUserInfo"))
+        try #require(await waitForMainActorWork {
+            command == .openChat ? model.openChatRequestID == opened + 1 : model.talkMode.isEnabled
+        })
+        if command == .openChat {
+            #expect(model.chatSessionKey == "watch-requested-session")
+        }
+        model.setTalkEnabled(false)
+    }
+
     @Test @MainActor func `watch app commands reject stale gateway targets`() async {
         let watchService = MockWatchMessagingService()
         let talkMode = TalkModeManager(allowSimulatorCapture: true)
         let appModel = NodeAppModel(watchMessagingService: watchService, talkMode: talkMode)
-        appModel.connectedGatewayID = "gateway-current"
+        configureMockApprovalRoute(appModel, stableID: "gateway-current")
         appModel.setTalkEnabled(false)
 
         for command in [OpenClawWatchAppCommand.openChat, .startTalk] {
@@ -9233,7 +9290,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         case "whitespace", "trimmed-is-other": " gateway-\(suffix) "
         default: nil
         }
-        model.connectedGatewayID = currentID
+        configureMockApprovalRoute(model, stableID: currentID)
         model.selectedAgentId = "ui-other"
         model.gatewayDefaultAgentId = "main"
         let databases = try OpenClawClientDatabases(directoryURL: #require(NodeAppModel.chatDatabaseDirectoryURL()))
