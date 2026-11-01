@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, Loading, onSettled } from "solid-js";
+import { createEffect, createMemo, Loading } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
@@ -9,6 +9,7 @@ import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { createCronPage } from "./cron-page-state.ts";
 import { CronRunTranscriptView } from "./run-transcript.tsx";
 import { buildCronViewProps } from "./view-props.ts";
@@ -16,20 +17,11 @@ import { CronView } from "./view.tsx";
 
 const PHONE_LAYOUT_QUERY = "(max-width: 560px)";
 
-function createPhoneLayout() {
-  const query =
-    typeof window.matchMedia === "function" ? window.matchMedia(PHONE_LAYOUT_QUERY) : null;
-  const [matches, setMatches] = createSignal(query?.matches ?? false);
-  onSettled(() => {
-    const sync = () => setMatches(query?.matches ?? false);
-    query?.addEventListener("change", sync);
-    return () => query?.removeEventListener("change", sync);
-  });
-  return matches;
-}
-
 export function CronPageContent(props: { page: ReturnType<typeof createCronPage> }) {
-  const phoneLayout = createPhoneLayout();
+  const phoneLayout = createMediaQuery(
+    PHONE_LAYOUT_QUERY,
+    globalThis.matchMedia?.(PHONE_LAYOUT_QUERY).matches ?? false,
+  );
   const revision = () => i18nRevision() + props.page.revision();
   // Search publications must not invalidate the retained rows' permission branches.
   // Sample values because Gateway auth and identity snapshots can be mutated in place.
