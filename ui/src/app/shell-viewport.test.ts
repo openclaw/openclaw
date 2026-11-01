@@ -147,6 +147,10 @@ describe("shell visual viewport", () => {
     thread.scrollTop = 0;
     expect(drag(message, 40)).toBe(true);
     expect(drag(input, -40, 500)).toBe(false);
+    // Safari panned the header away; dragging down must still bring it back.
+    resize({ height: 440, offsetTop: 70 }, "scroll");
+    expect(drag(input, 40)).toBe(false);
+    expect(drag(input, -40)).toBe(true);
 
     resize({ height: 844 });
     expect(drag(input, -40)).toBe(false);

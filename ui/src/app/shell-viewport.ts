@@ -94,8 +94,10 @@ function consumesVerticalPan(path: readonly EventTarget[], deltaY: number): bool
  * The decision is made once per gesture because WebKit latches the scroller.
  * A drag that starts after a press-and-hold is text selection or the caret
  * loupe, so it stays native; a held drag over bare chrome may still pan.
+ * Safari often pans the header away to reveal the focused editor; a downward
+ * drag pans back toward it and only shrinks the shell, so it stays native.
  */
-function lockKeyboardPan(): () => void {
+function lockKeyboardPan(viewport: VisualViewport): () => void {
   let start: { x: number; y: number; time: number } | null = null;
   let block: boolean | null = null;
   const stops = [
@@ -125,6 +127,7 @@ function lockKeyboardPan(): () => void {
           }
           block =
             event.timeStamp - start.time < PRESS_AND_HOLD_MS &&
+            !(deltaY > 0 && viewport.offsetTop > 0) &&
             !consumesVerticalPan(event.composedPath(), deltaY);
         }
         if (block && event.cancelable) {
@@ -169,7 +172,7 @@ export function connectShellViewport(): () => void {
       Math.max(layoutHeight, focusHeight ?? 0) - viewport.height >= KEYBOARD_MIN_SHRINK;
     if (keyboard) {
       root.style.setProperty("--shell-safe-area-bottom", "0px");
-      unlockPan ??= lockKeyboardPan();
+      unlockPan ??= lockKeyboardPan(viewport);
     } else {
       root.style.removeProperty("--shell-safe-area-bottom");
       unlockPan?.();
