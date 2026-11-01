@@ -1178,6 +1178,16 @@ class Monitor {
 
   private applyNativeReceipts(state: ParentState, runIds: readonly string[]): void {
     this.completionDelivery.applyReceipts(state, runIds, this.childStates);
+    for (const runId of runIds) {
+      const child = this.childStates.get(runId);
+      if (child?.recoverInitialAssignment && child.nativeCompletionDelivered && !child.terminal) {
+        // A restored child can finish without replaying its terminal notification to this client.
+        // Its matched parent receipt triggers a read of the original assignment, never a new turn.
+        void this.recovery.reconcileRegisteredChild(child).catch((error: unknown) => {
+          logRecoveryFailure(child.childThreadId, error);
+        });
+      }
+    }
   }
 
   private resolveChildReceiptOwner(
