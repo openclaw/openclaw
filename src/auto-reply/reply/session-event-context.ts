@@ -29,6 +29,7 @@ import type { SessionEventOptions, SessionEventTarget } from "./session-event-co
 import {
   getSessionEventRuntimeConfig,
   readSessionEventTargetCommandOwner,
+  readSessionEventTargetRetainedRequester,
   readSessionEventTargetEnvironment,
   readSessionEventTargetOperatorAuthority,
   readSessionEventTargetOwnerContinuation,
@@ -297,6 +298,23 @@ export function buildSessionEventContext(params: {
       ) {
         ctx.SenderId = requester.senderId;
         ctx.SenderE164 = requester.senderE164;
+      }
+    } else {
+      // A completion whose originating requester is not a command owner (for example an
+      // owner authorized only via toolsBySender) still continues that requester's own work.
+      // Project the host-trusted retained sender identity so the completion turn revalidates
+      // against the requester's CURRENT sender policy instead of falling to the wildcard.
+      // This grants no owner authority: senderIsOwner stays false and owner-checked effects
+      // still gate on their own authority. Project it only on the requester's own channel
+      // account, never across channels where the same raw ID can name someone else.
+      const retained = readSessionEventTargetRetainedRequester(target);
+      if (
+        retained &&
+        deliveryContext?.channel === retained.channel &&
+        normalizeAccountId(deliveryContext.accountId) === normalizeAccountId(retained.accountId)
+      ) {
+        ctx.SenderId = retained.senderId;
+        ctx.SenderE164 = retained.senderE164;
       }
     }
   }

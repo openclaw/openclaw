@@ -60,6 +60,13 @@ const targetScopes = resolveGlobalSingleton(
         };
         /** A scheduled job's recorded requester; see `requesterOwner` on capture. */
         requesterOwner?: SessionEventRequesterOwner;
+        /**
+         * The host-trusted originating requester retained for a completion (exec, media,
+         * subagent announce). Its sender identity is projected onto the completion turn so
+         * the turn revalidates against the requester's CURRENT sender policy, even when the
+         * requester is not a command owner (e.g. authorized only via toolsBySender).
+         */
+        retainedRequester?: RetainedSessionEventRequester;
         deletion?: { agentId: string; isBlocked: () => boolean };
       }
     >(),
@@ -252,6 +259,16 @@ export async function captureSessionEventTargetForHost(
         : {}),
       ...(options.requesterOwner ? { requesterOwner: options.requesterOwner } : {}),
       ...(operatorAuthority && options.ownerContinuation ? { ownerContinuation: true } : {}),
+      ...(requester?.messageProvider && requester.senderId
+        ? {
+            retainedRequester: Object.freeze({
+              channel: requester.messageProvider,
+              accountId: requester.accountId ?? undefined,
+              senderId: requester.senderId,
+              senderE164: requester.senderE164 ?? undefined,
+            }),
+          }
+        : {}),
       ...(requester?.messageProvider &&
       requester.senderId &&
       commandOwner?.source &&
@@ -456,11 +473,27 @@ export type CommandOwnerRequester = Readonly<{
   senderE164?: string;
 }>;
 
+/**
+ * The host-trusted originating requester retained for a completion. Its sender identity is
+ * projected onto the completion turn so the turn revalidates against the requester's CURRENT
+ * sender policy (toolsBySender), even when the requester is not a command owner. The identity
+ * comes from the host-owned tool caller (never the producer), and projection is gated on the
+ * completion's own delivery route so it never crosses into another channel account.
+ */
+export type RetainedSessionEventRequester = CommandOwnerRequester;
+
 /** The retained owner authority and the host-captured requester it belongs to. */
 export function readSessionEventTargetCommandOwner(
   target: SessionEventTarget,
 ): { authority: PreparedCommandOwnerAuthority; requester: CommandOwnerRequester } | undefined {
   return targetScopes.get(target)?.commandOwner;
+}
+
+/** The host-trusted originating requester retained for a completion's sender-policy revalidation. */
+export function readSessionEventTargetRetainedRequester(
+  target: SessionEventTarget,
+): RetainedSessionEventRequester | undefined {
+  return targetScopes.get(target)?.retainedRequester;
 }
 
 function commandOwnerRequesterKey(target: SessionEventTarget): string | undefined {
