@@ -3,10 +3,12 @@ import { page, userEvent } from "vitest/browser";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { ChatNotice } from "./chat-notice-view.tsx";
-import { CHAT_SEARCH_HIGHLIGHT, syncChatSearchHighlight } from "./chat-search-highlight.ts";
+import { watchChatSearchHighlight } from "./chat-search-highlight.ts";
+import { TranscriptSearchState } from "./chat-transcript-search-state.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/grouped.css";
 
+const CHAT_SEARCH_HIGHLIGHT = "openclaw-chat-search";
 const root = document.documentElement;
 const originalTheme = root.getAttribute("data-theme");
 const originalMode = root.getAttribute("data-theme-mode");
@@ -85,7 +87,10 @@ it("offers notice text to transcript search highlighting", async () => {
     text: "Check the **rollback path** before continuing.",
   };
   const view = mountSolid(() => <ChatNotice item={item} />);
-  syncChatSearchHighlight(view.container, "the rollback");
+  const search = new TranscriptSearchState();
+  const stop = watchChatSearchHighlight(view.container, search);
+  search.toggle();
+  search.setQuery("the rollback");
   try {
     await expect
       .poll(() =>
@@ -95,6 +100,6 @@ it("offers notice text to transcript search highlighting", async () => {
       )
       .toEqual(["the ", "rollback"]);
   } finally {
-    syncChatSearchHighlight(view.container, "");
+    stop();
   }
 });
