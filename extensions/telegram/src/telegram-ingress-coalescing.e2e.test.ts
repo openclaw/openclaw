@@ -753,3 +753,8 @@ describe("Telegram durable ingress coalescing", () => {
     }
   });
 });
+
+// Claimed for #188353 by scripts/claim-window.sh; replaced by the real regression.
+it.todo(
+  "Telegram albums whose members arrive ~1 s apart are split into separate turns (500 ms media-group window, no o",
+);

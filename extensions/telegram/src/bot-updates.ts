@@ -4,11 +4,31 @@ import type { TelegramAmbientTranscriptWatermark } from "./bot-message-context.t
 import type { TelegramContext } from "./bot/types.js";
 
 const MEDIA_GROUP_TIMEOUT_MS = 500;
+// Telegram delivers album members about a second apart; the first member waits this
+// arrival window, and each later member only needs the short quiet window.
+const MEDIA_GROUP_ARRIVAL_WINDOW_MS = 1_500;
 // Starved per-member gaps reached ~1 s; Telegram albums contain at most 10 members.
 const MEDIA_GROUP_MAX_HOLD_MS = 20_000;
 const RECENT_TELEGRAM_UPDATE_TTL_MS = 5 * 60_000;
 const RECENT_TELEGRAM_UPDATE_MAX = 2000;
 
+export { MEDIA_GROUP_ARRIVAL_WINDOW_MS };
+
+/** Album flush delays: the first member waits the arrival window, later ones the quiet window. */
+export function resolveMediaGroupFlushDelays(testTimings?: {
+  mediaGroupFlushMs?: number;
+  mediaGroupArrivalMs?: number;
+}): { flushMs: number; arrivalMs: number } {
+  const ms = (value: number | undefined) =>
+    typeof value === "number" && Number.isFinite(value)
+      ? Math.max(10, Math.floor(value))
+      : undefined;
+  const testFlushMs = ms(testTimings?.mediaGroupFlushMs);
+  const flushMs = testFlushMs ?? MEDIA_GROUP_TIMEOUT_MS;
+  const arrivalMs =
+    ms(testTimings?.mediaGroupArrivalMs) ?? testFlushMs ?? MEDIA_GROUP_ARRIVAL_WINDOW_MS;
+  return { flushMs, arrivalMs };
+}
 export type MediaGroupEntry = {
   messages: Array<{
     msg: Message;

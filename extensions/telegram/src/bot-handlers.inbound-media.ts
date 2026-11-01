@@ -46,7 +46,7 @@ import {
 } from "./bot-processing-outcome.js";
 import {
   MEDIA_GROUP_MAX_HOLD_MS,
-  MEDIA_GROUP_TIMEOUT_MS,
+  resolveMediaGroupFlushDelays,
   type MediaGroupEntry,
 } from "./bot-updates.js";
 import type { TelegramMediaKind } from "./bot/body-helpers.js";
@@ -153,11 +153,9 @@ export function createTelegramInboundMedia({
     resolveTelegramSessionState,
     processMessageWithReplyChain,
   } = message;
-  const timeoutMs =
-    typeof opts.testTimings?.mediaGroupFlushMs === "number" &&
-    Number.isFinite(opts.testTimings.mediaGroupFlushMs)
-      ? Math.max(10, Math.floor(opts.testTimings.mediaGroupFlushMs))
-      : MEDIA_GROUP_TIMEOUT_MS;
+  const { flushMs: timeoutMs, arrivalMs: arrivalWindowMs } = resolveMediaGroupFlushDelays(
+    opts.testTimings,
+  );
   const buffer = new Map<string, BufferedMediaGroupEntry>();
   const queue = new Map<string, Promise<void>>();
   const heads = new Map<string, BufferedMediaGroupEntry>();
@@ -650,7 +648,7 @@ export function createTelegramInboundMedia({
       ),
       timer: setTimeout(() => {
         void settleMediaGroup(key, entry);
-      }, timeoutMs),
+      }, arrivalWindowMs),
     };
     buffer.set(key, entry);
     queueEntry(conversationKey, entry);
