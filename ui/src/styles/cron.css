@@ -1246,7 +1246,7 @@
   }
 
   .cron-run-entry__meta > :has(> .btn),
-  .cron-run-entry__meta > :has(> .btn) + * {
+  .cron-run-entry__meta > :has(> .btn) + .muted {
     margin-top: var(--space-2);
   }
 }
