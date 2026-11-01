@@ -11,6 +11,7 @@ import {
   GatewayDrainingError,
   tryBeginGatewayIndependentRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import type { SessionControllerInput } from "../../sessions/session-controller.mailbox.js";
 import { getRpcSourceLifecycleGeneration } from "../../sessions/session-controller.rpc-sources.js";
@@ -175,6 +176,8 @@ export function createTalkClientAgentConsultRunner(params: {
       throw new Error("Realtime browser voice session is not ready for agent consult");
     }
     let assertRunRegistrationCurrent: (() => void) | undefined;
+    // A finished run keeps completion custody, not active steering authority.
+    let isCompletionCurrent: (() => boolean) | undefined;
     const assertConsultCurrent = () => {
       params.sessionTarget.assertCurrent(getConfig());
       assertCurrent?.();
@@ -257,6 +260,61 @@ export function createTalkClientAgentConsultRunner(params: {
             };
           },
           abortSignal: signal,
+          deliverAnswerMedia: async ({ runId, sessionId, payloads }) => {
+            if (isIncognitoSessionKey(canonicalKey)) {
+              return false;
+            }
+            const [{ createOutboundPayloadPlan }, { finalizeAgentRunMedia }] = await Promise.all([
+              import("../../infra/outbound/payloads.js"),
+              import("../agent-turn/agent-run-final-media.js"),
+            ]);
+            const plan = createOutboundPayloadPlan(payloads).filter(
+              ({ payload }) => payload.sensitiveMedia !== true,
+            );
+            if (!plan.some(({ parts }) => parts.mediaUrls.length > 0)) {
+              return false;
+            }
+            // Same owner as Gateway agent finals: stage managed attachments on the
+            // consult's own transcript message under the session's media access.
+            const lifecycleRevision = (
+              await runtime.session.getSessionEntryAsync({
+                agentId,
+                sessionKey: canonicalKey,
+                storePath,
+                readConsistency: "latest",
+              })
+            )?.lifecycleRevision;
+            await finalizeAgentRunMedia(
+              {
+                options: {},
+                session: {
+                  agentId,
+                  cfg: config,
+                  storePath,
+                  sessionKey: canonicalKey,
+                  sessionLoadOptions: { agentId },
+                },
+                requesterContext: authority.replyCaller,
+                accountId: undefined,
+                getRunId: () => runId,
+                isCurrent: () => {
+                  try {
+                    params.sessionTarget.assertCurrent(getConfig());
+                    assertCurrent?.();
+                    physicalSource?.assertCurrent();
+                    return signal?.aborted !== true && isCompletionCurrent?.() === true;
+                  } catch {
+                    return false;
+                  }
+                },
+                abortSignal: signal,
+                logGateway: params.context.logGateway,
+              },
+              { payloads, sessionId, lifecycleRevision, storePath },
+              plan,
+            );
+            return true;
+          },
           onRunStarted: async ({ runId, sessionId, timeoutMs }) => {
             let registeredRun:
               | {
@@ -319,6 +377,13 @@ export function createTalkClientAgentConsultRunner(params: {
                 throw new Error("The active Talk consult admission is no longer current");
               }
             };
+            isCompletionCurrent = () =>
+              (!owner ||
+                (promptOwner === owner &&
+                  isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration) &&
+                  params.getVoiceSessionId() === voiceSessionId)) &&
+              isChatRegistrationCurrent("completion") &&
+              (registeredRun?.isCurrent("completion") ?? true);
             let releaseVoice: void | (() => void) = undefined;
             try {
               assertRunRegistrationCurrent();

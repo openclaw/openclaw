@@ -36,7 +36,10 @@ import {
 /** Materialize one visible agent final before its Gateway run releases custody. */
 export async function finalizeAgentRunMedia(
   params: Parameters<typeof createAssistantCommentaryMediaCustody>[0] & {
-    options: AgentCommandGatewayIngressOpts;
+    options: Pick<
+      AgentCommandGatewayIngressOpts,
+      "sourceReplyDeliveryMode" | "internalDeliverySuppressErrors"
+    >;
   },
   reply: NonNullable<
     Parameters<NonNullable<AgentCommandGatewayIngressOpts["beforeTerminalDelivery"]>>[0]

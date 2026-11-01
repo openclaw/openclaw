@@ -7,6 +7,7 @@ import {
 } from "../agents/agent-run-terminal-outcome.js";
 import { resolveAgentRunCwd } from "../agents/agent-scope-config.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import type { EmbeddedAgentRunPayload } from "../agents/embedded-agent-runner/result.types.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent-runner/types.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
@@ -19,6 +20,7 @@ import {
 } from "../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeLogger, PluginRuntimeCore } from "../plugins/runtime/types-core.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isModelSelectionLocked, ModelSelectionLockedError } from "../sessions/model-overrides.js";
@@ -43,6 +45,7 @@ export type RealtimeVoiceAgentConsultResult = { text: string; yielded?: true };
 const REALTIME_VOICE_YIELD_ACK_MAX_CHARS = 500;
 const REALTIME_VOICE_YIELD_ACK_FALLBACK =
   "I started that work and will share the result when it is ready.";
+const REALTIME_VOICE_MEDIA_ONLY_ACK = "I shared it in the chat.";
 
 /**
  * Sender-auth contract revision for official realtime voice plugins.
@@ -232,6 +235,15 @@ export async function consultRealtimeVoiceAgent(params: {
   extraSystemPrompt?: string;
   fallbackText?: string;
   abortSignal?: AbortSignal;
+  /**
+   * Chat surfaces deliver the current answer's media while the run is still registered.
+   * Resolves true when the attachments reached the chat, so a media-only answer is spoken.
+   */
+  deliverAnswerMedia?: (reply: {
+    runId: string;
+    sessionId: string;
+    payloads: EmbeddedAgentRunPayload[];
+  }) => Promise<boolean>;
   /** Gateway ingress adapts authenticated policy; channel bridges keep their own authority. */
   prepareToolContext?: (
     sessionEntry: SessionEntry,
@@ -583,13 +595,39 @@ export async function consultRealtimeVoiceAgent(params: {
         }
         throw error;
       }
+      let currentInputPayloads: EmbeddedAgentRunPayload[] = [];
+      let mediaDelivered = false;
       const result = await runPromise
         .catch((error: unknown) => {
           assertRealtimeVoiceConsultNotInterrupted(abortSignal);
           throw error;
         })
+        .then(async (completed) => {
+          assertRealtimeVoiceConsultNotInterrupted(abortSignal, completed.meta);
+          // Earlier input answers remain in history; this completion speaks for the current input.
+          currentInputPayloads = (completed.payloads ?? []).filter(
+            (payload) => getReplyPayloadMetadata(payload)?.precedingInputAnswer !== true,
+          );
+          if (
+            params.deliverAnswerMedia &&
+            completed.meta?.yielded !== true &&
+            currentInputPayloads.some((payload) => payload.mediaUrl || payload.mediaUrls?.length)
+          ) {
+            try {
+              mediaDelivered = await params.deliverAnswerMedia({
+                runId,
+                sessionId,
+                payloads: currentInputPayloads,
+              });
+            } catch (error) {
+              params.logger.warn(
+                `[talk] agent consult media delivery failed: ${formatErrorMessage(error)}`,
+              );
+            }
+          }
+          return completed;
+        })
         .finally(() => runRegistration?.cleanup?.());
-      assertRealtimeVoiceConsultNotInterrupted(abortSignal, result.meta);
 
       if (result.meta?.yielded === true) {
         const acknowledgment =
@@ -604,11 +642,10 @@ export async function consultRealtimeVoiceAgent(params: {
           yielded: true,
         };
       }
-      // Earlier input answers remain in history; this completion speaks for the current input.
-      const currentInputPayloads = (result.payloads ?? []).filter(
-        (payload) => getReplyPayloadMetadata(payload)?.precedingInputAnswer !== true,
-      );
       const text = collectRealtimeVoiceAgentConsultVisibleText(currentInputPayloads);
+      if (!text && mediaDelivered) {
+        return { text: REALTIME_VOICE_MEDIA_ONLY_ACK };
+      }
       if (!text) {
         params.logger.warn(
           "[talk] agent consult produced no answer: agent returned no speakable text",
