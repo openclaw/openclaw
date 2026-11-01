@@ -552,6 +552,12 @@ async function deleteGatewaySessionInScope(
                       agentId: target.agentId,
                       ...(result.deletedSessionId ? { sessionId: result.deletedSessionId } : {}),
                     },
+                    // Deletion can also reclaim older transcripts owned by this conversation.
+                    ...result.archivedTranscripts.map(({ sessionId }) => ({
+                      sessionKey: deletedSessionKey,
+                      agentId: target.agentId,
+                      sessionId,
+                    })),
                   ],
                 });
                 const disabledJobIds = cleanup.disabledBySession.get(deletedSessionKey) ?? [];

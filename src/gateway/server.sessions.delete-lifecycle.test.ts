@@ -220,12 +220,30 @@ test("sessions.delete rejects main and aborts active runs", async () => {
 test("sessions.delete reports bound automation cleanup for both authorized deletion paths", async () => {
   const archivedKey = "agent:main:archived-context";
   const adminKey = "agent:main:admin-context";
+  const retainedKey = "agent:main:retained-context";
   const unrelatedKey = "agent:main:other";
-  await seedSessions(
+  const { storePath } = await seedSessions(
     [archivedKey, "sess-archived", { archivedAt: Date.now() }],
     [adminKey, "sess-admin"],
+    [retainedKey, "sess-retained"],
     [unrelatedKey, "sess-other"],
   );
+  const historicalScopes = [
+    { sessionKey: archivedKey, sessionId: "sess-archived-old", storePath },
+    { sessionKey: adminKey, sessionId: "sess-admin-old", storePath },
+    { sessionKey: retainedKey, sessionId: "sess-retained-old", storePath },
+  ];
+  for (const scope of historicalScopes) {
+    await replaceTranscriptEvents(scope, [
+      { type: "session", id: scope.sessionId },
+      {
+        type: "message",
+        id: "copied-context",
+        message: { role: "user", content: "Synthetic context" },
+      },
+    ]);
+    expect(await loadTranscriptEvents(scope)).toHaveLength(2);
+  }
   const job = (id: string, sessionKey: string, ownerSessionId: string): CronStoredJob => ({
     id,
     name: id,
@@ -242,11 +260,19 @@ test("sessions.delete reports bound automation cleanup for both authorized delet
   });
   const jobs = [
     job("archived-bound", archivedKey, "sess-archived"),
+    job("archived-historical", archivedKey, "sess-archived-old"),
     job("admin-bound", adminKey, "sess-admin"),
-    job("fails", adminKey, "sess-admin"),
+    {
+      ...job("admin-historical", unrelatedKey, "sess-other"),
+      payloadSourceConversation: { sessionKey: adminKey, sessionId: "sess-admin-old" },
+    },
+    job("fails", adminKey, "sess-admin-old"),
+    job("retained-bound", retainedKey, "sess-retained"),
+    job("retained-historical", retainedKey, "sess-retained-old"),
     job("unrelated", unrelatedKey, "sess-other"),
-    job("old-incarnation", adminKey, "sess-old"),
+    job("unremoved-incarnation", adminKey, "sess-old"),
   ];
+  expect(jobs.every(({ enabled }) => enabled)).toBe(true);
   const updateWithPrecondition = vi.fn(
     async (
       id: string,
@@ -281,7 +307,10 @@ test("sessions.delete reports bound automation cleanup for both authorized delet
     ok: true,
     payload: {
       deleted: true,
-      automationCleanup: { disabledJobIds: ["archived-bound"], failures: [] },
+      automationCleanup: {
+        disabledJobIds: ["archived-bound", "archived-historical"],
+        failures: [],
+      },
     },
   });
 
@@ -295,17 +324,31 @@ test("sessions.delete reports bound automation cleanup for both authorized delet
     payload: {
       deleted: true,
       automationCleanup: {
-        disabledJobIds: ["admin-bound"],
+        disabledJobIds: ["admin-bound", "admin-historical"],
         failures: [{ jobId: "fails", message: "synthetic disable failure" }],
       },
     },
   });
+  const retained = await deleteSession({ key: retainedKey, deleteTranscript: false }, { context });
+  expect(retained).toMatchObject({
+    ok: true,
+    payload: { automationCleanup: { disabledJobIds: ["retained-bound"], failures: [] } },
+  });
+  for (const scope of historicalScopes) {
+    expect(await loadTranscriptEvents(scope)).toHaveLength(
+      scope.sessionKey === retainedKey ? 2 : 0,
+    );
+  }
   expect(jobs.map(({ id, enabled }) => ({ id, enabled }))).toEqual([
     { id: "archived-bound", enabled: false },
+    { id: "archived-historical", enabled: false },
     { id: "admin-bound", enabled: false },
+    { id: "admin-historical", enabled: false },
     { id: "fails", enabled: true },
+    { id: "retained-bound", enabled: false },
+    { id: "retained-historical", enabled: true },
     { id: "unrelated", enabled: true },
-    { id: "old-incarnation", enabled: true },
+    { id: "unremoved-incarnation", enabled: true },
   ]);
 });
 
