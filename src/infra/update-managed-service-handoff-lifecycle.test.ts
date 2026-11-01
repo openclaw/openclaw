@@ -545,11 +545,11 @@ describe("managed service update handoff", () => {
       { message: "managed update handoff exited before signaling readiness (code=1, signal=null)" },
     ],
     [
-      "readiness timeout",
+      "readiness timeout after a wall-clock rewind",
       { message: "managed update handoff did not signal readiness within 30 seconds" },
     ],
   ] as const)("rejects %s and cleans up the sensitive handoff", async (failure, expected) => {
-    if (failure === "readiness timeout") {
+    if (failure === "readiness timeout after a wall-clock rewind") {
       vi.useFakeTimers();
     }
     const child = createSpawnMock();
@@ -561,6 +561,7 @@ describe("managed service update handoff", () => {
         } else if (failure === "launcher exit") {
           child.emit("exit", 1, null);
         } else {
+          vi.setSystemTime(Date.now() - 90_000);
           vi.advanceTimersByTime(30_000);
         }
       });
@@ -578,13 +579,12 @@ describe("managed service update handoff", () => {
     expect(spawnMock).toHaveBeenCalledTimes(1);
     const { dir: handoffDir } = handoffArtifacts();
 
-    if (failure === "readiness timeout") {
+    if (failure === "readiness timeout after a wall-clock rewind") {
       expect(forceKillChildProcessTreeMock).toHaveBeenCalledExactlyOnceWith(child);
     }
     expect(child.unref).not.toHaveBeenCalled();
     await expect(pathExists(handoffDir)).resolves.toBe(false);
-    expect(child.listenerCount("exit")).toBe(0);
-    expect(child.listenerCount("error")).toBe(0);
+    expect([child.listenerCount("exit"), child.listenerCount("error")]).toEqual([0, 0]);
     expect(child.stdout.destroyed).toBe(true);
   });
 
