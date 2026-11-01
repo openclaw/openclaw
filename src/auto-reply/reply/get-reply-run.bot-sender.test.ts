@@ -21,7 +21,9 @@ describe("bot-sender reply guidance", () => {
         }),
       );
       expect(prepared.kind).toBe("ready");
-      if (prepared.kind !== "ready") throw new Error("bot turn was discarded");
+      if (prepared.kind !== "ready") {
+        throw new Error("bot turn was discarded");
+      }
       const prompt = prepared.buildPromptBodies({});
       expect(prepared.terminalReplyExpectation).toBe("optional");
       expect(prompt.queuedBody).toBe(body);
@@ -57,7 +59,9 @@ describe("bot-sender reply guidance", () => {
         }),
       );
       expect(prepared.kind).toBe("ready");
-      if (prepared.kind !== "ready") throw new Error("allowed conversation was discarded");
+      if (prepared.kind !== "ready") {
+        throw new Error("allowed conversation was discarded");
+      }
       const prompt = prepared.buildPromptBodies({});
       expect(prompt.queuedBody).toBe(body);
       expect(prompt.currentInboundContext?.text).toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
