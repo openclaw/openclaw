@@ -8,7 +8,6 @@ import "../../components/agent-select-registration.ts";
 import "../../components/modal-dialog.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
-import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
   SettingsPage,
@@ -423,12 +422,13 @@ function IntroSection(props: { view: MemoryImportViewProps }) {
       title={t("memoryImport.title")}
       description={t("memoryImport.subtitle")}
       actions={
-        <RefreshButton
-          label={t("common.refresh")}
-          busy={props.view.loading}
+        <button
+          class="btn btn--sm"
           disabled={!props.view.connected || busy()}
           onClick={() => props.view.onRefresh()}
-        />
+        >
+          {t(props.view.loading ? "common.refreshing" : "common.refresh")}
+        </button>
       }
     >
       <Show when={props.view.agents.length > 1}>

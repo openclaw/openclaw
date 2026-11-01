@@ -69,8 +69,7 @@ export function AdvancedSettings(props: InventoryProps): JSX.Element {
         actions={
           <RefreshButton
             label={t("common.reload")}
-            busy={props.configSchemaLoading}
-            disabled={props.configBusy}
+            busy={props.configBusy || props.configSchemaLoading}
             onClick={() => props.onConfigReload()}
           />
         }

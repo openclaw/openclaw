@@ -1,7 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, isPending, Loading, Show } from "solid-js";
 import type { ChannelAccountSnapshot, ChannelsStatusSnapshot } from "../../api/types.ts";
-import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
   SettingsRow,
@@ -19,6 +18,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { AgentsPageView } from "./agents-page-state.ts";
+import { AgentPanelAction } from "./panel-ui.tsx";
 import { renderAgentContextSection } from "./panels-overview.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
@@ -150,9 +150,9 @@ export function AgentChannels(
             retainedError={params.readState().channelsError}
           >
             {(pending) => (
-              <RefreshButton
-                label={t("common.refresh")}
-                busy={pending}
+              <AgentPanelAction
+                label={pending ? t("common.refreshing") : t("common.refresh")}
+                disabled={pending}
                 onClick={params.onRefresh}
               />
             )}

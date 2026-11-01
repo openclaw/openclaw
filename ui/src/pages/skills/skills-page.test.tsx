@@ -170,7 +170,7 @@ describe("Skills discovery lifecycle", () => {
     );
     const dialog = page.querySelector(".skill-reader-dialog");
     [...page.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.getAttribute("aria-label") === "Refresh")!
+      .find((button) => button.textContent?.trim() === "Refresh")!
       .click();
     await waitForFast(() => expect(verdictRequests).toBe(2));
     await waitForFast(() => expect(dialog?.textContent).toContain("Refreshing"));

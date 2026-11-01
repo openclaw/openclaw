@@ -1305,12 +1305,30 @@ select.settings-select:not([multiple]) {
   animation: btn-spinner-spin 0.9s linear infinite;
 }
 
-@media (pointer: coarse) {
+/* At the end of a row, the glyph's ink lines up with the edge of the card below. */
+openclaw-tooltip:last-child > .btn.refresh-button {
+  margin-inline-end: -10px;
+}
+
+/* The box must not grow a section header past its compact height. */
+@media not all and (max-width: 640px) {
+  .settings-section__actions .btn.refresh-button {
+    margin-block: -2px;
+  }
+}
+
+@media (pointer: coarse), (max-width: 640px) {
   .btn.refresh-button {
     width: 36px;
     min-width: 36px;
     height: 36px;
     min-height: 36px;
+  }
+
+  /* Touch paints no hover box, so the glyph moves inside it and nothing overflows the gutter. */
+  openclaw-tooltip:last-child > .btn.refresh-button {
+    justify-content: flex-end;
+    margin-inline-end: 0;
   }
 }
 
