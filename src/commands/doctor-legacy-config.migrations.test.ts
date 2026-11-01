@@ -620,12 +620,12 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toEqual(["Removed legacy skills.entries.nano-banana-pro."]);
   });
 
-  it("removes nano-banana from skills.allowBundled during migration", () => {
+  it("keeps skills.allowBundled restrictive after removing its only nano-banana entry", () => {
     const res = normalizeCompatibilityConfigValues({
-      skills: { allowBundled: ["peekaboo", "nano-banana-pro"] },
+      skills: { allowBundled: ["nano-banana-pro"] },
     });
 
-    expect(res.config.skills?.allowBundled).toEqual(["peekaboo"]);
+    expect(res.config.skills?.allowBundled).toEqual([]);
     expect(res.changes).toEqual(["Removed nano-banana-pro from skills.allowBundled."]);
   });
 
