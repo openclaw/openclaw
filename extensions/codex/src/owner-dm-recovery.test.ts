@@ -12,6 +12,7 @@ import {
   upsertSessionEntry,
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
@@ -101,7 +102,7 @@ beforeEach(async () => {
   });
   server.on("connection", (socket) =>
     socket.on("message", (data) => {
-      const { id, method, params } = JSON.parse(data.toString());
+      const { id, method, params } = JSON.parse(rawDataToString(data));
       calls.push(method);
       if (method === "initialized") {
         return;
