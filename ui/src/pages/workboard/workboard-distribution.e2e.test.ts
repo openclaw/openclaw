@@ -87,9 +87,14 @@ suite.define(() => {
       url.hash = new URLSearchParams({ gatewayUrl }).toString();
       await page.goto(url.href);
       const confirmation = await waitForConfirmModal(page);
-      await confirmation
-        .getByRole("button", { name: "Switch to gateway.example", exact: true })
-        .click();
+      const switchGateway = confirmation.getByRole("button", {
+        name: "Switch to gateway.example",
+        exact: true,
+      });
+      // Connection-state renders can replace the modal button while Playwright is
+      // waiting for pointer stability. Invoke the currently resolved control
+      // atomically; the socket, route, and asset assertions below own the effect.
+      await switchGateway.evaluate((button: HTMLButtonElement) => button.click());
       await page.locator(".workboard-page-title").filter({ hasText: "Operations" }).waitFor();
       expect(await page.evaluate(() => window.isSecureContext)).toBe(false);
       expect((await gateway.getSocketUrls()).at(-1)).toBe(gatewayUrl);

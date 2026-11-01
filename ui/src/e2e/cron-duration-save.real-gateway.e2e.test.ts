@@ -11,7 +11,10 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { CronJob } from "../api/types.ts";
-import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
+  controlUiE2eWaitTimeoutMs,
+  waitForControlUiGatewayReady,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -125,7 +128,15 @@ catalogSuite.define(() => {
     const commands: unknown[] = [];
     let rejectCatalogReplies = false;
     const rejected = new Set<string>();
+    const configChangedCount = () =>
+      frames.filter((entry) => {
+        const record = requireRecord(entry);
+        return (
+          record.direction === "received" && requireRecord(record.frame).event === "config.changed"
+        );
+      }).length;
     const publish = async (id: string) => {
+      const previousConfigChanges = configChangedCount();
       const args = [
         "config",
         "set",
@@ -137,6 +148,12 @@ catalogSuite.define(() => {
       const result = await owner.cli(args);
       commands.push({ args, ...result });
       expect(result.code, result.stderr).toBe(0);
+      // The CLI commits before the running Gateway observes its atomic config
+      // replacement. Synchronize on the real publication event before asserting
+      // the refreshed picker instead of racing the file watcher.
+      await expect
+        .poll(configChangedCount, { timeout: controlUiE2eWaitTimeoutMs })
+        .toBeGreaterThan(previousConfigChanges);
     };
     try {
       await catalogSuite.withPage(
