@@ -1,0 +1,5 @@
+200
+# LOCAL 2026.11.8 row 153; source 546523f8cfc7bf809d653241658e74ebba86af6d.
+# Only the matching configured SSH route/remote port retains its original wss URL, preserving TLS server identity and pin validation while the existing prepared tunnel provides transport. Overrides/nonmatching routes keep existing behavior; cleanup and local-auth isolation remain unchanged.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.

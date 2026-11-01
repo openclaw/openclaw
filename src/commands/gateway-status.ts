@@ -9,7 +9,10 @@ import { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
 import { withProgress } from "../cli/progress.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
 import { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth } from "../gateway/call.js";
-import { resolveGatewaySshRemotePort } from "../gateway/connection-details.js";
+import {
+  resolveGatewayDeviceAuthRoute,
+  resolveGatewaySshRemotePort,
+} from "../gateway/connection-details.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { probeGateway } from "../gateway/probe.js";
 import { isAbortError } from "../infra/abort-signal.js";
@@ -122,6 +125,20 @@ export async function gatewayStatusCommand(
   }
 
   const sshRouteTarget = sshTarget;
+  const configuredTarget = baseTargets.find((target) => target.kind === "configRemote");
+  const configuredRoute = resolveGatewayDeviceAuthRoute({
+    config: cfg,
+    url: configuredTarget?.url ?? "",
+    remote: true,
+    configuredRemote: true,
+  }).sshTunnel;
+  // Retain TLS identity only for the exact configured SSH route.
+  const sshTlsUrl =
+    configuredTarget?.url.startsWith("wss://") &&
+    sanitizeSshTarget(configuredRoute?.target) === sshRouteTarget &&
+    configuredRoute?.remotePort === remotePort
+      ? configuredTarget.url
+      : undefined;
 
   const localCertificate =
     cfg.gateway?.tls?.enabled === true
@@ -324,7 +341,7 @@ export async function gatewayStatusCommand(
                 {
                   id: "sshTunnel",
                   kind: "sshTunnel",
-                  url: `ws://127.0.0.1:${tunnel.localPort}`,
+                  url: sshTlsUrl ?? `ws://127.0.0.1:${tunnel.localPort}`,
                   active: true,
                   tunnel: {
                     kind: "ssh",
