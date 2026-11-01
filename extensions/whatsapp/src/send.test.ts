@@ -2,8 +2,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createWebSendApi } from "./inbound/send-api.js";
 import { createAcceptedWhatsAppSendResult } from "./inbound/send-result.test-helper.js";
 import type { ActiveWebListener } from "./inbound/types.js";
+import { cacheInboundMessageMeta } from "./quoted-message.js";
 
 const hoisted = vi.hoisted(() => ({
   loadOutboundMediaFromUrl: vi.fn(),
@@ -15,6 +17,7 @@ const loadWebMediaMock = vi.fn();
 let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
 let sendPollWhatsApp: typeof import("./send.js").sendPollWhatsApp;
 let sendReactionWhatsApp: typeof import("./send.js").sendReactionWhatsApp;
+let editMessageWhatsApp: typeof import("./send.js").editMessageWhatsApp;
 let sendTypingWhatsApp: typeof import("./send.js").sendTypingWhatsApp;
 
 const WHATSAPP_TEST_CFG: OpenClawConfig = { channels: { whatsapp: {} } };
@@ -75,8 +78,10 @@ describe("web outbound", () => {
     createAcceptedWhatsAppSendResult("reaction", "reaction123"),
   );
 
+  const editMessage = vi.fn(async () => {});
+
   function listener(overrides: Partial<ActiveWebListener> = {}) {
-    return { sendComposingTo, sendMessage, sendPoll, sendReaction, ...overrides };
+    return { sendComposingTo, sendMessage, sendPoll, sendReaction, editMessage, ...overrides };
   }
   function rejectReachout() {
     const assertSendReady = vi.fn(async () => {
@@ -95,8 +100,13 @@ describe("web outbound", () => {
   }
 
   beforeAll(async () => {
-    ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp, sendTypingWhatsApp } =
-      await import("./send.js"));
+    ({
+      editMessageWhatsApp,
+      sendMessageWhatsApp,
+      sendPollWhatsApp,
+      sendReactionWhatsApp,
+      sendTypingWhatsApp,
+    } = await import("./send.js"));
   });
 
   beforeEach(() => {
@@ -420,5 +430,132 @@ describe("web outbound", () => {
       false,
       undefined,
     );
+  });
+
+  describe("editMessageWhatsApp", () => {
+    const groupJid = "120363000000000000@g.us";
+
+    it("edits on a cache miss, since a restart empties the cache", async () => {
+      await editMessageWhatsApp(groupJid, "uncached", "**updated**", sendOptions());
+      expect(editMessage).toHaveBeenCalledExactlyOnceWith(groupJid, "uncached", "*updated*");
+    });
+
+    it("addresses a phone target as a PN JID", async () => {
+      await editMessageWhatsApp("+1555", "uncached-dm", "updated", sendOptions());
+      expect(editMessage).toHaveBeenCalledExactlyOnceWith(
+        "1555@s.whatsapp.net",
+        "uncached-dm",
+        "updated",
+      );
+    });
+
+    it("targets the stored provider JID of a known own message", async () => {
+      const lidJid = "277038292303944@lid";
+      cacheInboundMessageMeta("default", lidJid, "own-lid", {
+        fromMe: true,
+        participantE164: "+1555",
+      });
+      const assertSendReady = vi.fn(async () => {});
+      hoisted.controllerListeners.set("default", listener({ assertSendReady }));
+      await editMessageWhatsApp("+1555", "own-lid", "updated", sendOptions());
+      expect(assertSendReady).toHaveBeenCalledExactlyOnceWith(lidJid);
+      expect(assertSendReady.mock.invocationCallOrder[0]).toBeLessThan(
+        editMessage.mock.invocationCallOrder[0] ?? 0,
+      );
+      expect(editMessage).toHaveBeenCalledExactlyOnceWith(lidJid, "own-lid", "updated");
+    });
+
+    it("rejects a message the cache records as foreign", async () => {
+      cacheInboundMessageMeta("default", groupJid, "foreign", { fromMe: false });
+      await expect(
+        editMessageWhatsApp(groupJid, "foreign", "updated", sendOptions()),
+      ).rejects.toThrow("WhatsApp edit rejected: message was not sent by this account.");
+      expect(editMessage).not.toHaveBeenCalled();
+    });
+
+    it("rejects a newsletter target", async () => {
+      await expect(
+        editMessageWhatsApp("120363401234567890@newsletter", "post", "updated", sendOptions()),
+      ).rejects.toThrow("WhatsApp edit rejected: newsletter messages cannot be edited.");
+      expect(editMessage).not.toHaveBeenCalled();
+    });
+
+    it("accepts text at the edit limit", async () => {
+      const text = "a".repeat(4_000);
+      await editMessageWhatsApp(groupJid, "limit", text, sendOptions());
+      expect(editMessage).toHaveBeenCalledExactlyOnceWith(groupJid, "limit", text);
+    });
+
+    it("ignores another account's cache entry", async () => {
+      hoisted.controllerListeners.set("work", listener());
+      cacheInboundMessageMeta("default", groupJid, "other-account", { fromMe: false });
+      await editMessageWhatsApp(
+        groupJid,
+        "other-account",
+        "updated",
+        sendOptions({ accountId: "work" }),
+      );
+      expect(editMessage).toHaveBeenCalledOnce();
+    });
+
+    it("formats with the configured table mode", async () => {
+      const sockSendMessage = vi.fn(async () => ({
+        key: { remoteJid: groupJid, id: "envelope", fromMe: true },
+      }));
+      hoisted.controllerListeners.set(
+        "default",
+        createWebSendApi({
+          sock: { sendMessage: sockSendMessage } as never,
+          defaultAccountId: "default",
+        }) as never,
+      );
+      const table = "| a | b |\n|---|---|\n| 1 | 2 |";
+      await editMessageWhatsApp(groupJid, "table", table, {
+        ...sendOptions(),
+        cfg: { channels: { whatsapp: { markdown: { tables: "off" } } } },
+      });
+      expect(sockSendMessage).toHaveBeenCalledExactlyOnceWith(
+        groupJid,
+        expect.objectContaining({ text: table }),
+      );
+    });
+
+    it("rejects an id that could span the cache key separator", async () => {
+      cacheInboundMessageMeta("default", groupJid, "spanned", {
+        fromMe: true,
+        participant: "1555@s.whatsapp.net",
+      });
+      await expect(
+        editMessageWhatsApp("+1555", `${groupJid}:spanned`, "updated", sendOptions()),
+      ).rejects.toThrow("WhatsApp edit rejected: message id is invalid.");
+      expect(editMessage).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["empty", "", "text is empty."],
+      ["blank", "  \n ", "text is empty."],
+      ["too long", "word ".repeat(1_000), "text exceeds 4000 characters after formatting."],
+    ])("rejects %s text before revealing whether an id is foreign", async (_name, text, reason) => {
+      cacheInboundMessageMeta("default", groupJid, "probe", { fromMe: false });
+      await expect(editMessageWhatsApp(groupJid, "probe", text, sendOptions())).rejects.toThrow(
+        `WhatsApp edit rejected: ${reason}`,
+      );
+    });
+
+    it("fails without an active listener", async () => {
+      hoisted.controllerListeners.clear();
+      await expect(
+        editMessageWhatsApp(groupJid, "uncached", "updated", sendOptions()),
+      ).rejects.toThrow(/No active WhatsApp Web listener/);
+    });
+
+    it("does not send when the socket is not ready", async () => {
+      const assertSendReady = rejectReachout();
+      await expect(
+        editMessageWhatsApp(groupJid, "uncached", "updated", sendOptions()),
+      ).rejects.toThrow("WhatsApp reachout timelock is active");
+      expect(assertSendReady).toHaveBeenCalledExactlyOnceWith(groupJid);
+      expect(editMessage).not.toHaveBeenCalled();
+    });
   });
 });

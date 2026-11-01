@@ -41,6 +41,7 @@ export type ActiveWebListener = {
     fromMe: boolean,
     participant?: string,
   ) => Promise<WhatsAppSendResult>;
+  editMessage: (chatJid: string, messageId: string, text: string) => Promise<void>;
   sendComposingTo: (to: string) => Promise<void>;
   close?: () => Promise<void>;
 };

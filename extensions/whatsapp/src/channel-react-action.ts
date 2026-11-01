@@ -55,12 +55,7 @@ function readUploadFileCaptionText(args: Record<string, unknown>): string {
   );
 }
 
-function readWhatsAppActionChatJid(params: WhatsAppMessageActionParams): string | undefined {
-  const explicit =
-    readStringParam(params.params, "chatJid") ?? readStringParam(params.params, "to");
-  if (explicit) {
-    return explicit;
-  }
+function readWhatsAppCurrentChat(params: WhatsAppMessageActionParams): string | undefined {
   if (
     params.toolContext?.currentChannelProvider !== WHATSAPP_CHANNEL ||
     !params.toolContext.currentChannelId
@@ -68,6 +63,29 @@ function readWhatsAppActionChatJid(params: WhatsAppMessageActionParams): string 
     return undefined;
   }
   return normalizeWhatsAppTarget(params.toolContext.currentChannelId) ?? undefined;
+}
+
+function readWhatsAppActionChatJid(params: WhatsAppMessageActionParams): string | undefined {
+  return (
+    readStringParam(params.params, "chatJid") ??
+    readStringParam(params.params, "to") ??
+    readWhatsAppCurrentChat(params)
+  );
+}
+
+async function handleWhatsAppEditAction(params: WhatsAppMessageActionParams) {
+  return await handleWhatsAppAction(
+    {
+      action: "edit",
+      chatJid: readStringParam(params.params, "to") ?? readWhatsAppCurrentChat(params),
+      messageId: readStringParam(params.params, "messageId"),
+      message:
+        readStringParam(params.params, "message", { trim: false, allowEmpty: true }) ??
+        readStringParam(params.params, "content", { trim: false, allowEmpty: true }),
+      accountId: params.accountId ?? undefined,
+    },
+    params.cfg,
+  );
 }
 
 async function handleWhatsAppUploadFileAction(params: WhatsAppMessageActionParams) {
@@ -152,6 +170,9 @@ async function handleWhatsAppUploadFileAction(params: WhatsAppMessageActionParam
 export async function handleWhatsAppMessageAction(params: WhatsAppMessageActionParams) {
   if (params.action === "upload-file") {
     return await handleWhatsAppUploadFileAction(params);
+  }
+  if (params.action === "edit") {
+    return await handleWhatsAppEditAction(params);
   }
   if (params.action !== "react") {
     throw new Error(`Action ${params.action} is not supported for provider ${WHATSAPP_CHANNEL}.`);

@@ -61,6 +61,7 @@ export const WhatsAppConfigSchema = z
         reactions: z.boolean().optional(),
         sendMessage: z.boolean().optional(),
         polls: z.boolean().optional(),
+        editMessage: z.boolean().optional(),
         calls: z.boolean().optional(),
       })
       .optional(),

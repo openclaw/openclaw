@@ -6,6 +6,7 @@ import { handleWhatsAppAction, whatsAppActionRuntime } from "./action-runtime.js
 
 const originalWhatsAppActionRuntime = { ...whatsAppActionRuntime };
 const sendReactionWhatsApp = vi.fn(async () => undefined);
+const editMessageWhatsApp = vi.fn(async () => undefined);
 
 const enabledConfig = {
   channels: { whatsapp: { actions: { reactions: true } } },
@@ -50,6 +51,7 @@ describe("handleWhatsAppAction", () => {
     vi.clearAllMocks();
     Object.assign(whatsAppActionRuntime, originalWhatsAppActionRuntime, {
       sendReactionWhatsApp,
+      editMessageWhatsApp,
     });
   });
 
@@ -209,6 +211,89 @@ describe("handleWhatsAppAction", () => {
       messageId: "msg1",
       emoji: "✅",
       accountId: "work",
+    });
+  });
+
+  describe("edit", () => {
+    const editCfg = { channels: { whatsapp: { allowFrom: ["*"] } } } as OpenClawConfig;
+    const edit = { action: "edit", chatJid: "+123", messageId: "sent-1", message: "updated" };
+
+    it("is enabled by default and reports the edit as submitted, not confirmed", async () => {
+      const result = await handleWhatsAppAction(edit, editCfg);
+      expect(result.details).toEqual({
+        ok: true,
+        submitted: true,
+        confirmed: false,
+        messageId: "sent-1",
+      });
+      expect(editMessageWhatsApp).toHaveBeenCalledExactlyOnceWith("+123", "sent-1", "updated", {
+        accountId: DEFAULT_ACCOUNT_ID,
+        cfg: editCfg,
+      });
+    });
+
+    it.each([
+      ["chatJid", { chatJid: undefined }, "chatJid required"],
+      ["messageId", { messageId: undefined }, "messageId required"],
+      ["a blank messageId", { messageId: "   " }, "messageId required"],
+      ["text", { message: undefined }, "message required"],
+    ])("requires %s", async (_name, override, error) => {
+      await expect(handleWhatsAppAction({ ...edit, ...override }, editCfg)).rejects.toMatchObject({
+        name: "ToolInputError",
+        message: error,
+      });
+      expect(editMessageWhatsApp).not.toHaveBeenCalled();
+    });
+
+    it("leaves empty text for the send helper to reject", async () => {
+      await handleWhatsAppAction({ ...edit, message: "" }, editCfg);
+      expect(editMessageWhatsApp).toHaveBeenCalledExactlyOnceWith(
+        "+123",
+        "sent-1",
+        "",
+        expect.anything(),
+      );
+    });
+
+    it.each([
+      ["gate off", { channels: { whatsapp: { actions: { editMessage: false } } } }],
+      ["WhatsApp unconfigured", {}],
+    ] as const)("is disabled with %s", async (_name, cfg) => {
+      await expect(handleWhatsAppAction(edit, cfg as OpenClawConfig)).rejects.toThrow(
+        "WhatsApp message editing is disabled.",
+      );
+      expect(editMessageWhatsApp).not.toHaveBeenCalled();
+    });
+
+    it("blocks a target outside allowFrom", async () => {
+      const cfg = { channels: { whatsapp: { allowFrom: ["+456"] } } } as OpenClawConfig;
+      await expect(handleWhatsAppAction(edit, cfg)).rejects.toMatchObject({
+        name: "ToolAuthorizationError",
+        status: 403,
+      });
+      expect(editMessageWhatsApp).not.toHaveBeenCalled();
+    });
+
+    it("applies the selected account's allowFrom, not another account's", async () => {
+      const cfg = {
+        channels: {
+          whatsapp: {
+            accounts: { work: { allowFrom: ["+456"] }, home: { allowFrom: ["+123"] } },
+          },
+        },
+      } as OpenClawConfig;
+      await expect(handleWhatsAppAction({ ...edit, accountId: "work" }, cfg)).rejects.toMatchObject(
+        { name: "ToolAuthorizationError" },
+      );
+      expect(editMessageWhatsApp).not.toHaveBeenCalled();
+
+      await handleWhatsAppAction({ ...edit, accountId: "home" }, cfg);
+      expect(editMessageWhatsApp).toHaveBeenCalledExactlyOnceWith(
+        "+123",
+        "sent-1",
+        "updated",
+        expect.objectContaining({ accountId: "home" }),
+      );
     });
   });
 });

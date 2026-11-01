@@ -18,6 +18,7 @@ import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/strin
 
 export type WhatsAppSendKind =
   | "contact"
+  | "edit"
   | "location"
   | "media"
   | "poll"
