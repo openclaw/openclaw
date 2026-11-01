@@ -1,8 +1,23 @@
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
 import { parseLegacyAgentRoster } from "../config/legacy.roster.js";
 import type { ConfigSetOperation } from "./config-cli-input.js";
 import { getAtPath, type PathSegment } from "./config-cli-path.js";
+
+export function resolveAgentEntryPath(root: unknown, path: PathSegment[]): PathSegment[] {
+  const key = path[2];
+  if (path[0] !== "agents" || path[1] !== "entries" || key === undefined) {
+    return path;
+  }
+  const entries = getAtPath(root, ["agents", "entries"]).value;
+  if (!isRecord(entries) || Object.hasOwn(entries, key)) {
+    return path;
+  }
+  const agentId = normalizeAgentId(key);
+  const stored = Object.keys(entries).find((candidate) => normalizeAgentId(candidate) === agentId);
+  return stored === undefined ? path : ["agents", "entries", stored, ...path.slice(3)];
+}
 
 /** Keeps the documented list input and keyed input on one mutable roster. */
 export class ConfigMutationAgentRoster {

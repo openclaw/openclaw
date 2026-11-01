@@ -616,4 +616,21 @@ describe("config cli roster integration", () => {
       expect(errors).toEqual([]);
     });
   });
+
+  it("addresses a mixed-case keyed agent by its canonical id", async () => {
+    const raw = JSON.stringify({
+      agents: { ownership: "explicit", entries: { main: {}, Work: { name: "Work Agent" } } },
+    });
+    await withConfig(raw, async ({ configPath }) => {
+      await invoke(["config", "get", "agents.entries.work.name"]);
+      expect(logs).toEqual(["Work Agent\n"]);
+
+      await set("agents.entries.work.name", '"Renamed"', "--strict-json");
+      expect(load(configPath).agents.entries).toEqual({ main: {}, Work: { name: "Renamed" } });
+
+      await invoke(["config", "unset", "agents.entries.work.name"]);
+      expect(load(configPath).agents.entries).toEqual({ main: {}, Work: {} });
+      expect(errors).toEqual([]);
+    });
+  });
 });

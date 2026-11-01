@@ -229,7 +229,9 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     const uiHints =
       runtimeSchema?.uiHints ??
       (await import("../config/schema-base.js")).computeBaseConfigUiHints();
-    const res = getAtPath(redactConfigObject(snapshot.config, uiHints), parsedPath);
+    const { resolveAgentEntryPath } = await import("./config-cli-roster.js");
+    const redacted = redactConfigObject(snapshot.config, uiHints);
+    const res = getAtPath(redacted, resolveAgentEntryPath(redacted, parsedPath));
     if (!res.found || res.value === undefined) {
       const schema =
         runtimeSchema?.schema ??

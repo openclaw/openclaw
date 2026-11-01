@@ -48,7 +48,7 @@ import {
   type PathSegment,
   unsetAtPath,
 } from "./config-cli-path.js";
-import { ConfigMutationAgentRoster } from "./config-cli-roster.js";
+import { ConfigMutationAgentRoster, resolveAgentEntryPath } from "./config-cli-roster.js";
 import {
   assertStrictConfigForMutation,
   loadValidConfigForWrite,
@@ -247,10 +247,15 @@ export async function runConfigOperations(params: {
     appliedOperations.push({ ...operation, setPath });
     return writePath;
   };
-  for (const operation of operations) {
+  for (const requestedOperation of operations) {
     const merge =
-      operation.mutation === "merge" || (options.merge && operation.mutation !== "replace");
-    roster.prepare(operation, Boolean(merge));
+      requestedOperation.mutation === "merge" ||
+      (options.merge && requestedOperation.mutation !== "replace");
+    roster.prepare(requestedOperation, Boolean(merge));
+    const operation = {
+      ...requestedOperation,
+      setPath: resolveAgentEntryPath(next, requestedOperation.setPath),
+    };
     if (
       currentExpectation &&
       !pathEquals(operation.requestedPath, roster.writePath(operation.setPath))
