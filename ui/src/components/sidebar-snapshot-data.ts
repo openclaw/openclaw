@@ -31,6 +31,7 @@ const childrenState = {
   unreadChildCount: json.optional(json.number),
 };
 const state = json.object({
+  pinnable: json.optional(json.literal(false)),
   unread: json.optional(json.boolean),
   isRunVisuallyActive: json.optional(json.boolean),
   hasAutomation: json.optional(json.boolean),

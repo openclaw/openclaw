@@ -338,7 +338,8 @@ function renderRecentSessionRow(params: RecentSessionParams) {
       </Show>
       <span class="sidebar-recent-session__aside session-row-aside">
         <span class="session-row-actions">
-          <Show when={pinnable()}>
+          {/* Cached pin geometry is display-only; actions still require the live row. */}
+          <Show when={session().snapshot ? session().snapshot?.pinnable !== false : pinnable()}>
             <button
               class="session-action session-action--pin"
               ref={(element) => (controls.pin = element)}
@@ -346,6 +347,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
               type="button"
               title={pinLabel()}
               aria-label={pinLabel()}
+              disabled={!pinnable()}
               onClick={() => host().toggleSessionPin(actionSession())}
             >
               <Icon name="pin" />

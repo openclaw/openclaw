@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { captureBootRoster } from "../lib/sessions/session-boot-roster.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
+import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
 import type { SidebarInboxEntry } from "./sidebar-attention-entries.ts";
 import { inboxMention } from "./sidebar-inbox.test-support.ts";
 import {
@@ -30,6 +31,25 @@ function displayRow(key: string, label: string, pinned = false) {
   );
 }
 const parse = (patch: Record<string, unknown>) => parseSidebarSnapshot({ ...model, ...patch });
+
+it("retains pin action geometry without restoring mutation authority", () => {
+  const rows = [
+    { key: "agent:main:dashboard:root", parentSessionKey: "agent:main:main" },
+    { key: "agent:main:subagent:run", sidebarRoot: true },
+    { key: "agent:main:promoted", spawnedBy: "agent:main:parent" },
+    { key: "agent:main:promoted-root", spawnedBy: "agent:main:parent", sidebarRoot: true },
+  ].map((row) => projectSidebarSession(row));
+  const saved = parse({ pinnedSessions: JSON.parse(JSON.stringify(snapshotSessions(rows))) });
+  expect(saved).not.toBeNull();
+  const restored = saved!.pinnedSessions.map((row) => restoreSnapshotSession(row, ""));
+  expect(restored.map((row) => row.snapshot?.pinnable !== false)).toEqual([
+    true,
+    false,
+    false,
+    true,
+  ]);
+  expect(restored.every((row) => row.pinnable === false)).toBe(true);
+});
 
 it.each(["none", "error"] as const)(
   "restores only own failure attention (%s) from older snapshots",

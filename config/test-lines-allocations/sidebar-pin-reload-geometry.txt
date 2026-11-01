@@ -1,0 +1,2 @@
+34
+# Extend native roster reload proof with cached/live geometry and retain display-only pin facts.

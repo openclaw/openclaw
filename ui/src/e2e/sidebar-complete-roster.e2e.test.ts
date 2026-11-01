@@ -109,7 +109,7 @@ suite.define(() => {
           const sidebar = page.locator("aside.sidebar");
           const viewport = sidebar.locator(".sidebar-shell__body");
           const geometry = () =>
-            sidebar.evaluate((element) => {
+            sidebar.evaluate((element, titleKey) => {
               const scroller = element.querySelector<HTMLElement>(".sidebar-shell__body")!;
               return {
                 scrollTop: scroller.scrollTop,
@@ -121,10 +121,22 @@ suite.define(() => {
                     key: row.getAttribute("data-session-key"),
                     top: row.getBoundingClientRect().top,
                     height: row.getBoundingClientRect().height,
+                    aside: row
+                      .querySelector(".session-row-aside")!
+                      .getBoundingClientRect()
+                      .toJSON(),
+                    // This pin has stable display facts; the selected row gains live viewers.
+                    title:
+                      row.getAttribute("data-session-key") === titleKey
+                        ? row
+                            .querySelector(".sidebar-recent-session__title-row")!
+                            .getBoundingClientRect()
+                            .toJSON()
+                        : undefined,
                   }),
                 ),
               };
-            });
+            }, fixture.pinnedKeys[1]!);
           const capture = async (stage: string) => {
             const frame = await takeControlUiScreenshotFrame(page, sidebar, [sidebar], {
               animations: "disabled",
@@ -177,6 +189,8 @@ suite.define(() => {
           // row to prove the scroll event has published the new visible window.
           await sidebar.locator(`[data-session-key="${fixture.pinnedKeys[1]}"]`).waitFor();
           await sidebar.locator(".session-row-badge--pull-request").nth(6).waitFor();
+          await page.mouse.move(1000, 700);
+          await page.locator("#sidebar-session-owner-title").focus();
           const beforeReload = await geometry();
           const indicators = () =>
             sidebar.locator(".sidebar-recent-session").evaluateAll((rows) =>
