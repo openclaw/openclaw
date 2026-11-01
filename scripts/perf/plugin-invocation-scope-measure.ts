@@ -6,12 +6,7 @@ import fs from "node:fs/promises";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import path from "node:path";
-import {
-  constants,
-  monitorEventLoopDelay,
-  PerformanceObserver,
-  type PerformanceEntry,
-} from "node:perf_hooks";
+import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { mock } from "node:test";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
@@ -20,6 +15,7 @@ import type { ContextEngineFactoryResources } from "../../src/context-engine/reg
 import type { ContextEngine } from "../../src/context-engine/types.js";
 import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { summarizeDurationDistribution } from "../lib/perf-duration-distribution.ts";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -175,17 +171,9 @@ const loop = monitorEventLoopDelay({ resolution: 1 });
 const collections: { kind: number; ms: number }[] = [];
 let measuredStart = Infinity;
 let measuredEnd = Infinity;
-function recordGc(entries: PerformanceEntry[]) {
-  for (const entry of entries) {
-    if (entry.startTime >= measuredStart && entry.startTime < measuredEnd) {
-      collections.push({
-        kind: (entry as PerformanceEntry & { detail: { kind: number } }).detail.kind,
-        ms: entry.duration,
-      });
-    }
-  }
-}
-const observer = new PerformanceObserver((list) => recordGc(list.getEntries()));
+const observer = new PerformanceObserver((list) =>
+  recordGcCollections(list.getEntries(), collections, measuredStart, measuredEnd),
+);
 async function waitForStart(warming = false) {
   const readyFile = values[warming ? "warm-ready-file" : "ready-file"];
   const startFile = values[warming ? "warm-start-file" : "start-file"];
@@ -392,7 +380,7 @@ try {
     marker("diagnostics-stop");
     loop.disable();
     await nextTurn();
-    recordGc(observer.takeRecords());
+    recordGcCollections(observer.takeRecords(), collections, measuredStart, measuredEnd);
     observer.disconnect();
     const gc = (kind?: number) =>
       summarizeDurationDistribution(

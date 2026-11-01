@@ -18,6 +18,7 @@ import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import { executeSessionForkOperation } from "./session-fork-domain.js";
 import { prepareMessageCutLocalWorkspace } from "./session-message-cut-local-workspace.js";
+import { selectSessionMessageCut } from "./session-message-cut-plan.js";
 import type {
   SessionMessageCutCandidate,
   SessionMessageCutIntent,
@@ -25,6 +26,7 @@ import type {
   SessionMessageCutPreconditions,
 } from "./session-message-cut.types.js";
 import { runSessionNativeBindingWorkerOperation } from "./session-native-binding.js";
+import { loadSessionTranscriptEvents } from "./session-transcript-events.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 
 export async function mutateSessionHistoryInWorker(
@@ -97,6 +99,25 @@ export async function mutateSessionHistoryInWorker(
   );
   assertCurrent();
   if (intent.mode !== "fork") {
+    if (preparedEntry.worktree) {
+      const events = await loadSessionTranscriptEvents({
+        agentId: resolved.agentId,
+        env: database.env,
+        storePath: database.path,
+        sessionKey: intent.sourceKey,
+        sessionId: preparedEntry.sessionId,
+      });
+      assertCurrent();
+      const selected = selectSessionMessageCut(
+        preparedEntry,
+        events,
+        preparedIntent,
+        preconditions?.sourceRepositoryWorkspaceId,
+      );
+      if (selected.status !== "selected") {
+        return selected;
+      }
+    }
     preparedIntent.settledLocalWorkspace = await prepareMessageCutLocalWorkspace(
       {
         agentId: resolved.agentId,
