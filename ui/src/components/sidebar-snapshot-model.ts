@@ -81,7 +81,7 @@ export function snapshotSessions(
       ]);
       const display = presentation?.(row);
       const state = {
-        pinnable: row.pinnable ? undefined : false,
+        pinnable: row.snapshot ? row.snapshot.pinnable : row.pinnable ? undefined : false,
         ...snapshotChildren(privateChildren ? undefined : row),
         unread: row.unread || undefined,
         isRunVisuallyActive: (row.isRunVisuallyActive ?? row.hasActiveRun) || undefined,

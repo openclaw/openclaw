@@ -42,13 +42,14 @@ it("retains pin action geometry without restoring mutation authority", () => {
   const saved = parse({ pinnedSessions: JSON.parse(JSON.stringify(snapshotSessions(rows))) });
   expect(saved).not.toBeNull();
   const restored = saved!.pinnedSessions.map((row) => restoreSnapshotSession(row, ""));
-  expect(restored.map((row) => row.snapshot?.pinnable !== false)).toEqual([
+  expect(restored.every((row) => row.pinnable === false)).toBe(true);
+  const recaptured = parse({ pinnedSessions: snapshotSessions(restored) });
+  expect(recaptured!.pinnedSessions.map((row) => row.state?.pinnable !== false)).toEqual([
     true,
     false,
     false,
     true,
   ]);
-  expect(restored.every((row) => row.pinnable === false)).toBe(true);
 });
 
 it.each(["none", "error"] as const)(
