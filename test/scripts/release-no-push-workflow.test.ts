@@ -18,7 +18,11 @@ import { runInNewContext } from "node:vm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { runWorkflowCommand, runWorkflowShellScript } from "./ci-workflow.test-support.js";
+import {
+  evaluateWorkflowCondition,
+  runWorkflowCommand,
+  runWorkflowShellScript,
+} from "./ci-workflow.test-support.js";
 
 const FULL_RELEASE = ".github/workflows/full-release-validation.yml";
 const FULL_RELEASE_ARTIFACTS = ".github/workflows/full-release-artifacts.yml";
@@ -464,6 +468,46 @@ describe("release validation no-push transport", () => {
     expect(
       job(release, "live_repo_e2e_release_checks").with?.use_github_hosted_runners,
     ).toBeUndefined();
+  });
+
+  it("builds the sandbox image only for repo E2E consumers that require it", () => {
+    const live = readWorkflow(LIVE_E2E);
+    const repo = readWorkflow(".github/workflows/openclaw-repo-e2e-reusable.yml");
+    const input = repo.on?.workflow_call?.inputs?.requires_sandbox_image;
+    const image = step(job(repo, "test"), "Build sandbox image");
+    const admitted = (required: unknown, matrix: Record<string, unknown>) =>
+      evaluateWorkflowCondition(image.if ?? "true", {
+        eventName: "workflow_dispatch",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        inputs: { requires_sandbox_image: required ?? input?.default ?? false },
+        matrix,
+      });
+    for (const [name, expected] of [
+      ["validate_repo_e2e_gateway", [true, true, true, true]],
+      ["validate_repo_e2e_runtime", [false, false, false, false, false]],
+    ] as const) {
+      const caller = job(live, name);
+      const suites = JSON.parse(String(caller.with?.suites)) as Record<string, unknown>[];
+      expect(
+        suites.map((suite) => admitted(caller.with?.requires_sandbox_image, suite)),
+        name,
+      ).toEqual(expected);
+    }
+    expect(input).toMatchObject({ type: "boolean", required: false, default: true });
+    for (const [required, expected] of [
+      [undefined, true],
+      [true, true],
+      [false, false],
+    ] as const) {
+      expect(
+        admitted(required, {
+          name: "Custom",
+          command: "custom-e2e",
+          requires_sandbox_image: false,
+        }),
+      ).toBe(expected);
+    }
   });
 
   it.each([

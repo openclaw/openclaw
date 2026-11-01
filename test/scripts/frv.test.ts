@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
@@ -280,6 +280,7 @@ describe("FRV immutable plan eligibility", () => {
       repository: REPOSITORY,
       getRun: async () => structuredClone(active),
       getAttemptJobs: async () => [
+        { ...job("Prepare release npm artifacts", "failure"), run_attempt: attempt },
         {
           ...job("Seal release execution plan"),
           conclusion: null,
@@ -297,6 +298,14 @@ describe("FRV immutable plan eligibility", () => {
     ).resolves.toMatchObject({
       pending: {
         action: "waiting-for-plan",
+        blockers: [
+          {
+            owner: "parent",
+            job: "Prepare release npm artifacts",
+            conclusion: "failure",
+            runAttempt: attempt,
+          },
+        ],
         planAvailability: { runAttempt: attempt, state },
         nextCommand: "pnpm frv watch --run 77",
       },
@@ -2589,37 +2598,66 @@ describe("FRV watch", () => {
     await expect(poll()).resolves.toMatchObject({ complete: true });
   });
 
-  it("labels every failed artifact qualification job as a blocker", async () => {
-    const statePath = path.join(tempDirs.make("frv-producer-blockers-"), "state.json");
-    const messages: string[] = [];
-    const client = {
-      ...unsealedWatcherReads,
-      repository: REPOSITORY,
-      getRun: async (runId: string) =>
-        runId === "77" ? rootRun(1, "failure") : runFor(child("normalCi", "808"), 1, "failure"),
-      getParentJobs: async () => [
-        { ...job("Prepare release npm artifacts"), id: 5, run_attempt: 1 },
-      ],
-      getJobLog: async () =>
-        `Dispatched full-release-artifacts.yml: https://github.com/${REPOSITORY}/actions/runs/808 (attempt 1)`,
-      getAttemptJobs: async () => [
-        job("Prepare npm artifacts / Check npm dependencies", "failure"),
-        job("Prepare npm artifacts / Check npm package contents", "timed_out"),
-      ],
-    };
+  it.each([
+    [1, 1, 1, true],
+    [2, 1, 2, false],
+    [2, 2, 2, true],
+  ])(
+    "labels every failed artifact qualification job as a blocker only for its parent attempt (%s/%s/%s)",
+    async (parentAttempt, dispatchAttempt, childAttempt, blocks) => {
+      const statePath = path.join(tempDirs.make("frv-producer-blockers-"), "state.json");
+      const messages: string[] = [];
+      const client = {
+        ...unsealedWatcherReads,
+        repository: REPOSITORY,
+        getRun: async (runId: string) =>
+          runId === "77"
+            ? rootRun(parentAttempt, "failure")
+            : runFor(child("normalCi", "808"), childAttempt, "failure"),
+        getParentJobs: async () => [
+          { ...job("Resolve target ref"), id: 4, run_attempt: parentAttempt },
+          { ...job("Prepare release npm artifacts"), id: 5, run_attempt: dispatchAttempt },
+        ],
+        getJobLog: async () =>
+          `Dispatched full-release-artifacts.yml: https://github.com/${REPOSITORY}/actions/runs/808 (attempt 1)`,
+        getAttemptJobs: async () => [
+          { ...job("Prepare npm artifacts / Check npm dependencies", "failure"), run_attempt: 1 },
+          {
+            ...job("Prepare npm artifacts / Check npm package contents", "timed_out"),
+            run_attempt: 1,
+          },
+        ],
+      };
 
-    await expect(
-      watchRelease("77", client, {
+      const result = await watchRelease("77", client, {
         statePath,
         once: true,
         emit: (event) => messages.push(event.message),
-      }),
-    ).resolves.toMatchObject({ complete: true });
-    expect(messages.filter((message) => message.includes("blocker"))).toEqual([
-      expect.stringContaining("Check npm dependencies"),
-      expect.stringContaining("Check npm package contents"),
-    ]);
-  });
+      });
+      expect(result).toMatchObject({ complete: true });
+      if (blocks) {
+        expect(result).toMatchObject({
+          complete: true,
+          blockers: [
+            expect.objectContaining({
+              blocker: true,
+              message: expect.stringContaining("Check npm dependencies"),
+            }),
+            expect.objectContaining({
+              blocker: true,
+              message: expect.stringContaining("Check npm package contents"),
+            }),
+          ],
+        });
+      } else {
+        expect(result).not.toHaveProperty("blockers");
+      }
+      expect(messages.filter((message) => message.includes("Check npm"))).toEqual([
+        expect.stringContaining("Check npm dependencies"),
+        expect.stringContaining("Check npm package contents"),
+      ]);
+    },
+  );
 
   it.each([
     "execution plan",
@@ -2863,108 +2901,176 @@ describe("FRV watch", () => {
       "normalCi run 101 attempt 1 completed failure",
       'normalCi job "checks-node-extensions-shard-1" timed_out (attempt 1; runner ubuntu-24.04 / GitHub Actions 1)',
     ]);
+    const saved = JSON.parse(readFileSync(statePath, "utf8"));
+    delete saved.children["101"].parentAttempt;
+    writeFileSync(statePath, JSON.stringify(saved));
     await poll();
     expect(messages.splice(0)).toEqual([]);
+    expect(JSON.parse(readFileSync(statePath, "utf8")).children["101"].parentAttempt).toBe(1);
     parentConclusion = "failure";
     await expect(poll()).resolves.toMatchObject({ complete: true });
     expect(messages).toEqual([
       "parent 77 attempt 1 completed failure",
       "parent 77 and every dispatched child are terminal",
     ]);
-    expect(getJobLog).toHaveBeenCalledExactlyOnceWith(5, expect.anything());
+    expect(getJobLog).toHaveBeenCalledTimes(2);
+    expect(getJobLog).toHaveBeenLastCalledWith(5, expect.anything());
   });
 
-  it("labels carried-forward failures and does not replay them after a rerun", async () => {
-    const statePath = path.join(tempDirs.make("frv-carried-watch-"), "state.json");
-    const resumedStatePath = path.join(tempDirs.make("frv-carried-watch-"), "state.json");
-    const ci = child("normalCi", "101");
-    let attempt = 1;
-    const messages: string[] = [];
-    const client = {
-      ...unsealedWatcherReads,
-      repository: REPOSITORY,
-      getRun: async (runId: string) =>
-        runId === "77" ? rootRun(1, null) : runFor(ci, attempt, "failure"),
-      getParentJobs: async () => [
-        { ...job("Run normal full CI"), id: 5, run_attempt: 1, status: "completed" },
-      ],
-      getJobLog: async () =>
-        `Dispatched ci.yml: https://github.com/${REPOSITORY}/actions/runs/101 (attempt 1)`,
-      getAttemptJobs: async (_runId: string, requestedAttempt: number) => [
-        {
-          ...job("carried failure", "failure"),
-          id: requestedAttempt === 1 ? 900 : 901,
-          run_attempt: 1,
+  it.each(["reported", "restamped", "omitted", "rerun", "recovered"])(
+    "labels carried-forward blockers once per effective attempt across restarts (%s)",
+    async (kind) => {
+      const statePath = path.join(tempDirs.make("frv-carried-watch-"), "state.json");
+      const resumedStatePath = path.join(tempDirs.make("frv-carried-watch-"), "state.json");
+      const ci = child("normalCi", "101");
+      let attempt = 1;
+      const messages: string[] = [];
+      const client = {
+        ...unsealedWatcherReads,
+        repository: REPOSITORY,
+        getRun: async (runId: string) =>
+          runId === "77" ? rootRun(1, null) : runFor(ci, attempt, "failure"),
+        getParentJobs: async () => [
+          { ...job("Run normal full CI"), id: 5, run_attempt: 1, status: "completed" },
+        ],
+        getJobLog: async () =>
+          `Dispatched ci.yml: https://github.com/${REPOSITORY}/actions/runs/101 (attempt 1)`,
+        getAttemptJobs: async (_runId: string, requestedAttempt: number) => {
+          if (requestedAttempt === 2 && kind === "omitted") {
+            return [job("another completed job")];
+          }
+          return [
+            {
+              ...job("carried failure", "failure"),
+              id: requestedAttempt === 1 ? 900 : 901,
+              run_attempt: requestedAttempt === 2 && kind !== "reported" ? 2 : 1,
+              ...(requestedAttempt === 2 && kind === "recovered" ? { conclusion: "success" } : {}),
+              steps: [
+                {
+                  number: 1,
+                  name:
+                    requestedAttempt === 2 && kind === "rerun"
+                      ? "new execution"
+                      : "original execution",
+                  status: "completed",
+                  conclusion: "failure",
+                },
+              ],
+            },
+          ];
         },
-      ],
-    };
-    const poll = (watchStatePath = statePath) =>
-      watchRelease("77", client, {
-        emit: (event: { message: string }) => messages.push(event.message),
-        once: true,
-        statePath: watchStatePath,
-      });
+      };
+      const poll = (watchStatePath = statePath) =>
+        watchRelease("77", client, {
+          emit: (event: { message: string }) => messages.push(event.message),
+          once: true,
+          statePath: watchStatePath,
+        });
 
-    await poll();
-    expect(messages.splice(0)).toContain(
-      'normalCi job "carried failure" failure (attempt 1; runner none)',
-    );
-    attempt = 2;
-    await poll();
-    expect(messages.splice(0)).not.toContainEqual(expect.stringContaining('job "carried failure"'));
+      await poll();
+      expect(messages.splice(0)).toContain(
+        'normalCi job "carried failure" failure (attempt 1; runner none)',
+      );
+      attempt = 2;
+      const result = await poll();
+      const blocks = !["rerun", "recovered"].includes(kind);
+      if (blocks) {
+        expect(result).toMatchObject({ blockers: [expect.objectContaining({ blocker: true })] });
+        expect(messages.splice(0)).toContain(
+          'normalCi job "carried failure" failure (effective attempt 2; carried forward from attempt 1; runner none)',
+        );
+      } else {
+        expect(result).not.toHaveProperty("blockers");
+        expect(messages.splice(0)).not.toContainEqual(expect.stringContaining("carried forward"));
+      }
+      await poll();
+      expect(messages.splice(0)).toEqual([]);
 
-    await poll(resumedStatePath);
-    expect(messages).toContain(
-      'normalCi job "carried failure" failure (effective attempt 2; carried forward from attempt 1; runner none)',
-    );
-  });
-  it("waits for lagging dispatch and job snapshots before declaring the release terminal", async () => {
-    const statePath = path.join(tempDirs.make("frv-watch-"), "state.json");
-    const ci = child("normalCi", "101");
-    let snapshot: "in_progress" | "completed" = "in_progress";
-    const client = {
-      ...unsealedWatcherReads,
-      repository: REPOSITORY,
-      getRun: async (runId: string) =>
-        runId === "77" ? rootRun(1, "failure") : runFor(ci, 1, "failure"),
-      getParentJobs: async (): Promise<Record<string, unknown>[]> => [
-        { conclusion: null, id: 5, name: "Run normal full CI", run_attempt: 1, status: snapshot },
-      ],
-      getJobLog: async () =>
-        `Dispatched ci.yml: https://github.com/${REPOSITORY}/actions/runs/101 (attempt 1)`,
-      getAttemptJobs: async (): Promise<Record<string, unknown>[]> => [
-        { ...job("late"), conclusion: null, id: 7, status: "queued" },
-      ],
-    };
-    const poll = () => watchRelease("77", client, { emit: () => undefined, once: true, statePath });
-    const parentJobs = client.getParentJobs;
-    client.getParentJobs = async () => [];
-    await expect(poll()).resolves.toMatchObject({ complete: false });
-    // A newer parent attempt needs its own jobs in the snapshot.
-    const getRun = client.getRun;
-    client.getRun = async (runId: string) =>
-      runId === "77" ? rootRun(2, "failure") : getRun(runId);
-    client.getParentJobs = async () => [
-      {
-        conclusion: "success",
-        id: 4,
-        name: "Resolve target ref",
-        run_attempt: 1,
-        status: "completed",
-      },
-    ];
-    await expect(poll()).resolves.toMatchObject({ complete: false });
-    client.getRun = getRun;
-    client.getParentJobs = parentJobs;
+      const resumed = await poll(resumedStatePath);
+      if (blocks) {
+        expect(resumed).toMatchObject({ blockers: [expect.objectContaining({ blocker: true })] });
+        expect(messages).toContain(
+          'normalCi job "carried failure" failure (effective attempt 2; carried forward from attempt 1; runner none)',
+        );
+      } else {
+        expect(resumed).not.toHaveProperty("blockers");
+        expect(messages).not.toContainEqual(expect.stringContaining("carried forward"));
+      }
+    },
+  );
+  it.each([false, true])(
+    "waits for lagging dispatch and job snapshots before declaring the release terminal (artifact=%s)",
+    async (artifact) => {
+      const statePath = path.join(tempDirs.make("frv-watch-"), "state.json");
+      const ci = child("normalCi", "101");
+      let snapshot: "in_progress" | "completed" = "in_progress";
+      const client = {
+        ...unsealedWatcherReads,
+        repository: REPOSITORY,
+        getRun: async (runId: string) =>
+          runId === "77" ? rootRun(1, "failure") : runFor(ci, 1, "failure"),
+        getParentJobs: async (): Promise<Record<string, unknown>[]> => [
+          {
+            conclusion: null,
+            id: 5,
+            name: artifact ? "Prepare release npm artifacts" : "Run normal full CI",
+            run_attempt: 1,
+            status: snapshot,
+          },
+        ],
+        getJobLog: async () =>
+          `Dispatched ${artifact ? "full-release-artifacts.yml" : "ci.yml"}: https://github.com/${REPOSITORY}/actions/runs/101 (attempt 1)`,
+        getAttemptJobs: async (): Promise<Record<string, unknown>[]> => [
+          { ...job("late"), conclusion: null, id: 7, status: "queued" },
+        ],
+      };
+      const poll = () =>
+        watchRelease("77", client, { emit: () => undefined, once: true, statePath });
+      const parentJobs = client.getParentJobs;
+      client.getParentJobs = async () => [];
+      await expect(poll()).resolves.toMatchObject({ complete: false });
+      // A newer parent attempt needs its own jobs in the snapshot.
+      const getRun = client.getRun;
+      client.getRun = async (runId: string) =>
+        runId === "77" ? rootRun(2, "failure") : getRun(runId);
+      client.getParentJobs = async () => [
+        {
+          conclusion: "success",
+          id: 4,
+          name: "Resolve target ref",
+          run_attempt: 1,
+          status: "completed",
+        },
+      ];
+      await expect(poll()).resolves.toMatchObject({ complete: false });
+      client.getRun = getRun;
+      client.getParentJobs = parentJobs;
 
-    await expect(poll()).resolves.toMatchObject({ complete: false });
-    snapshot = "completed";
-    await expect(poll()).resolves.toMatchObject({ complete: false });
-    client.getAttemptJobs = async () => [];
-    await expect(poll()).resolves.toMatchObject({ complete: false });
-    client.getAttemptJobs = async () => [{ ...job("late", "failure"), id: 7 }];
-    await expect(poll()).resolves.toMatchObject({ complete: true });
-  });
+      await expect(poll()).resolves.toMatchObject({ complete: false });
+      snapshot = "completed";
+      await expect(poll()).resolves.toMatchObject({ complete: false });
+      client.getAttemptJobs = async () => [];
+      await expect(poll()).resolves.toMatchObject({ complete: false });
+      if (artifact) {
+        client.getAttemptJobs = async () => [
+          { ...job("late", "failure"), id: 7 },
+          { ...job("late"), id: 8, status: "queued", conclusion: null },
+        ];
+        await expect(poll()).resolves.toMatchObject({ complete: false });
+        const saved = JSON.parse(readFileSync(statePath, "utf8"));
+        expect(saved.reported).toContain("job:101:1:late");
+        saved.reported.push("jobs:101:1");
+        writeFileSync(statePath, JSON.stringify(saved));
+      }
+      client.getAttemptJobs = async () => [{ ...job("late", "failure"), id: 7 }];
+      const result = await poll();
+      expect(result).toMatchObject({ complete: true });
+      if (artifact) {
+        expect(result).toMatchObject({ blockers: [expect.objectContaining({ blocker: true })] });
+        await expect(poll()).resolves.not.toHaveProperty("blockers");
+      }
+    },
+  );
 });
 
 describe("FRV client", () => {
