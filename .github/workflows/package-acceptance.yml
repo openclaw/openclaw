@@ -1085,6 +1085,7 @@ jobs:
         id: upload_package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: ${{ env.PACKAGE_ARTIFACT_NAME }}
           path: |
             .artifacts/docker-e2e-package/openclaw-current.tgz
@@ -1097,6 +1098,7 @@ jobs:
         if: steps.resolve.outputs.plugin_registry_manifest_sha256 != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: ${{ env.TELEGRAM_PLUGIN_REGISTRY_ARTIFACT_NAME }}
           path: .artifacts/package-acceptance-telegram-plugin-registry/
           retention-days: 14

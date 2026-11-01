@@ -775,6 +775,7 @@ jobs:
         id: upload_candidate
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: openclaw-cross-os-release-checks-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/package/${{ steps.candidate_metadata.outputs.file_name }}
           if-no-files-found: error
@@ -784,6 +785,7 @@ jobs:
         if: inputs.candidate_artifact_name == '' && steps.provider_requirements.outputs.json != '[]'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: openclaw-cross-os-prepublish-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/plugins/
           if-no-files-found: error
@@ -793,6 +795,7 @@ jobs:
         id: upload_baseline
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: openclaw-cross-os-release-checks-baseline-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/baseline/${{ steps.baseline_metadata.outputs.file_name }}
           if-no-files-found: error
