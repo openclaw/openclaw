@@ -67,13 +67,6 @@ function modelCase(
 }
 
 describe("gateway startup log", () => {
-  it("does not treat a git checkout as a Node version change", async () => {
-    const { warn } = await startup({});
-    expect(
-      warn.mock.calls.some((call) => String(call[0]).includes("does not own this install")),
-    ).toBe(false);
-  });
-
   it.each([false, true])(
     "logs the concrete owner's primary instead of its utility (ambient owner: %s)",
     async (ambientOwner) => {

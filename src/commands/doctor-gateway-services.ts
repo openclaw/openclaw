@@ -46,6 +46,7 @@ import type { HealthFinding } from "../flows/health-checks.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-owner.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { realpathOrResolve } from "../infra/path-existence.js";
 import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sleep } from "../utils/sleep.js";
@@ -430,9 +431,15 @@ export async function maybeRepairGatewayServiceConfig(
     !expectedLayout?.entrypointSourceCheckout &&
     auditUi.hasRepairableServiceDefinitionDrift(audit);
 
+  const repairNodePath = repairPlan.programArguments[0];
+  const plannedNodePath = repairNodePath ? await realpathOrResolve(repairNodePath) : undefined;
   const serviceRewriteBlock = installationDrift
     ? undefined
-    : await resolveSystemdServiceRewriteBlock(command, audit.issues);
+    : await resolveSystemdServiceRewriteBlock(command, audit.issues, {
+        entrypointPath: runtimeLayout?.entrypointReal,
+        plannedNodePath,
+        pinnedRuntimePath: pinSnapshot.pin?.path,
+      });
   if (serviceRewriteBlock) {
     note(serviceRewriteBlock, "Gateway service config");
   }
@@ -537,6 +544,8 @@ export async function maybeRepairGatewayServiceConfig(
       missingSystemNode: needsNodeRuntime && !systemNodePath && !runtimeRepair,
       runtimeIssues: audit.issues,
       definitionDrift: audit.definitionDrift,
+      pinnedRuntimePath: pinSnapshot.pin?.path,
+      plannedNodePath,
     });
   note(preview, "Gateway service repair preview");
   const repair = await prompter.confirmRuntimeRepair({
