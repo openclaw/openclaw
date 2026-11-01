@@ -833,14 +833,41 @@ try {
   if (admission) {
     // Pause peer JavaScript without hiding the pages, which would clear their viewer declarations.
     for (const peer of admission.peerSessions) {
-      for (const routePath of [fixture.chatPath, fixture.dashboardPath]) {
+      for (const [routePath, target] of [
+        [fixture.chatPath, fixture.fixtureSummary.targets[0]!],
+        [fixture.dashboardPath, fixture.fixtureSummary.targets[1]!],
+      ] as const) {
         const context = await browser.newContext({ viewport, colorScheme: "dark" });
         await context.addCookies([peer.cookie]);
         const page = await context.newPage();
         await page.goto(baseUrl);
         await waitForControlUiGatewayReady(page, 60000);
+        // A rendered header can precede the viewer declaration; pause only after its ack.
+        const declared = page.waitForEvent("websocket").then(async (socket) => {
+          const { payload } = await socket.waitForEvent("framesent", {
+            predicate: ({ payload }) => {
+              const frame: { method?: string; params?: { sessionKeys?: string[] } } = JSON.parse(
+                payload.toString(),
+              );
+              return (
+                frame.method === "sessions.viewers.set" &&
+                frame.params?.sessionKeys?.includes(target.key) === true
+              );
+            },
+            timeout: 60000,
+          });
+          const request: { id: string } = JSON.parse(payload.toString());
+          await socket.waitForEvent("framereceived", {
+            predicate: ({ payload }) => {
+              const frame: { id?: string; ok?: boolean } = JSON.parse(payload.toString());
+              return frame.id === request.id && frame.ok === true;
+            },
+            timeout: 60000,
+          });
+        });
         await page.goto(`${baseUrl}${routePath}`);
         await waitForControlUiGatewayReady(page, 60000);
+        await declared;
         await page.locator(".chat-pane__header").first().waitFor({ state: "visible" });
         const cdp = await context.newCDPSession(page);
         await cdp.send("Debugger.enable");
