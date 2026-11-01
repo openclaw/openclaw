@@ -62,7 +62,8 @@ function prepareAgentEnd(params: AgentEndSideEffectsParams): AgentEndSideEffects
       });
     }
   }
-  const iterations = params.event.modelIterations ?? modelIterations;
+  const { modelIterations: reportedIterations, ...reported } = params.event;
+  const iterations = reportedIterations ?? modelIterations;
   const skillsUsed = consumeRunSkillUsage(ctx.runId).map(({ name, source, activation }) => ({
     name,
     source,
@@ -70,7 +71,7 @@ function prepareAgentEnd(params: AgentEndSideEffectsParams): AgentEndSideEffects
   }));
   const loadMessages = takeHookMessageLoader(params.event);
   const event = {
-    ...params.event,
+    ...reported,
     ...(iterations !== undefined ? { modelIterations: iterations } : {}),
     ...(skillsUsed.length > 0 ? { skillsUsed } : {}),
   };

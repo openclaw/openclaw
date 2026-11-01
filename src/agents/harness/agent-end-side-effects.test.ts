@@ -205,6 +205,15 @@ it("gives plugin hooks the run's skills, iterations and tool names, keeping the 
   expect(mockExperienceReview.mock.calls[0]?.[0].event).toBe(hook?.event);
 });
 
+it("leaves an unknown model-call count off the plugin event", async () => {
+  const params = sideEffectParams();
+  params.event = { ...params.event, modelIterations: undefined };
+
+  await awaitAgentEndSideEffects(params);
+
+  expect(mockAwaitAgentEndHook.mock.calls[0]?.[0].event).not.toHaveProperty("modelIterations");
+});
+
 it("maps the retired SDK context fields onto their public replacements", async () => {
   const params = sideEffectParams();
   params.ctx = { ...params.ctx, modelIterations: 4, skillWorkshopAvailable: true };

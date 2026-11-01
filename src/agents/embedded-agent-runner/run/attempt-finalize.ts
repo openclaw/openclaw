@@ -196,7 +196,7 @@ export async function completeEmbeddedAttemptAfterTurn(
   } = input;
   const { withOwnedTranscriptWrite } = input.sessionLock;
   const { effectiveWorkspace, sessionAgentId } = input.setup;
-  const { sessionRuntime, bootstrap, bundleTools, toolBase } = input.prepared;
+  const { sessionRuntime, bootstrap, toolBase, promptToolPolicy } = input.prepared;
   const { sessionManager, cacheTrace, anthropicPayloadLogger } = sessionRuntime;
   if (attempt.inputAlreadyDelivered) {
     return;
@@ -400,7 +400,8 @@ export async function completeEmbeddedAttemptAfterTurn(
           agentDir,
         ),
         authProfileId: attempt.authProfileId,
-        toolNames: bundleTools.uncompactedEffectiveTools.map((tool) => tool.name),
+        // Prompt hooks can narrow the bundle; report the surface the model could call.
+        toolNames: promptToolPolicy.current.uncompactedEffectiveTools.map((tool) => tool.name),
         compacted: compactionOccurredThisAttempt,
         ...(attempt.config ? { config: attempt.config } : {}),
       },

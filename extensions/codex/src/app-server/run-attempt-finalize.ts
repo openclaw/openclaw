@@ -514,7 +514,7 @@ export async function finalizeCodexAttempt(
         success: !finalAborted && !finalPromptError,
         ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
         durationMs: Date.now() - attemptStartedAt,
-        modelIterations: result.modelIterations ?? 0,
+        modelIterations: result.modelIterations,
       },
       ctx: {
         ...hookContext,

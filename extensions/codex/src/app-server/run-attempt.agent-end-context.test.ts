@@ -132,4 +132,52 @@ describe("runCodexAppServerAttempt agent-end context", () => {
       }
     },
   );
+
+  it("leaves the model-call count unknown when Codex reports no responses", async () => {
+    const source = {
+      agentId: "main",
+      sessionId: "session-2",
+      sessionKey: "agent:main:session-2",
+      storePath: path.join(realpathSync(tempDir), "agent-end-unknown-iterations.sqlite"),
+    };
+    const sessionFile = formatSqliteSessionFileMarker(source);
+    await upsertSessionEntry({
+      ...source,
+      entry: { sessionFile, sessionId: source.sessionId, updatedAt: Date.now() },
+    });
+    const harness = createStartedThreadHarness();
+    const runAgentEndSideEffectsAsync = vi
+      .spyOn(agentHarnessRuntime, "runAgentEndSideEffectsAsync")
+      .mockResolvedValue(undefined);
+    const params = createParams(sessionFile, path.join(tempDir, "unknown-iterations-workspace"));
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.sessionTarget = source;
+    params.messageChannel = "discord";
+    const abortController = new AbortController();
+    params.abortSignal = abortController.signal;
+
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const run = runCodexAppServerAttempt(params);
+    try {
+      await run.waitForTurnAccepted();
+      // A resumed thread can complete without per-response notifications.
+      await harness.notify({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", items: [] },
+        },
+      });
+      await run;
+
+      const event = runAgentEndSideEffectsAsync.mock.calls.at(-1)?.[0]?.event;
+      expect(event).toBeDefined();
+      expect(event?.modelIterations).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      abortController.abort("test_cleanup");
+      await run.catch(() => undefined);
+    }
+  });
 });
