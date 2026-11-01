@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveCronJobEffectiveAgentId,
+  resolveCronSessionTargetAgentId,
   tryResolveCronJobEffectiveAgentId,
 } from "../../cron/agent-id.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
@@ -520,7 +521,10 @@ export function applyCronCreateCallerScopeDefault(
   }
   return {
     ...job,
-    agentId: job.agentId?.trim() ? job.agentId : callerScope.agentId,
+    // A caller-less create owns the agent its session target runs in; the caller stays the owner.
+    agentId: job.agentId?.trim()
+      ? job.agentId
+      : (resolveCronSessionTargetAgentId(job.sessionTarget) ?? callerScope.agentId),
     owner: {
       agentId: callerScope.agentId,
       ...(callerScope.sessionKey ? { sessionKey: callerScope.sessionKey } : {}),

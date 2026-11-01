@@ -4,6 +4,7 @@ import type { CronJob } from "../../packages/gateway-protocol/src/schema/cron.ty
 export type CronAgentScope = {
   agentId?: string | null;
   sessionKey?: string | null;
+  sessionTarget?: string | null;
 };
 
 /** Invalid config-backed cron job captured for quarantine instead of runtime load. */

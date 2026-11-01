@@ -13,9 +13,11 @@ import {
   revokeCronCreatorAuthorityRunScope,
 } from "../cron-creator-authority-grant.js";
 import {
+  applyCronCreateCallerScopeDefault,
   cronJobMatchesCallerScope,
   readCronCallerScope,
   resolveCronCreatorAuthorityCapture,
+  type CronCallerScope,
 } from "./cron-caller-scope.js";
 import { createCronCallerClient, createCronJob } from "./cron.validation.test-support.js";
 
@@ -149,4 +151,12 @@ it("uses a scoped session key before the configured default", () => {
       defaultAgentId: "main",
     });
   expect([matches("main"), matches("ops")]).toEqual([false, true]);
+});
+
+it("binds a caller-less create to the agent named by sessionTarget", () => {
+  const scope: CronCallerScope = { kind: "agentTool", agentId: "caller", accountId: "default" };
+  const job = createCronJob({ sessionTarget: "session:agent:other:main", agentId: undefined });
+  const created = applyCronCreateCallerScopeDefault(job, scope);
+  expect(created.agentId).toBe("other");
+  expect(created.owner?.agentId).toBe("caller");
 });
