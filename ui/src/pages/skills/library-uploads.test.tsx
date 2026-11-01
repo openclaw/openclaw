@@ -48,7 +48,7 @@ function mountLibrary(library: SkillLibraryModel, dialogsOnly = false) {
 }
 function buttonIn(container: Element, label: string) {
   return [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent?.trim() === label,
+    (button) => button.textContent?.trim() === label || button.getAttribute("aria-label") === label,
   )!;
 }
 function reconnect(context: Pick<ReturnType<typeof harness>, "library" | "connection">) {

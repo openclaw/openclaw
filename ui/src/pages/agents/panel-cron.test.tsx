@@ -82,7 +82,7 @@ function mount(request: GatewayRequestHandler) {
 }
 function button(container: HTMLElement, label: string) {
   const result = [...container.querySelectorAll("button")].find(
-    (entry) => entry.textContent?.trim() === label,
+    (entry) => entry.textContent?.trim() === label || entry.getAttribute("aria-label") === label,
   );
   if (!result) {
     throw new Error(`Missing button: ${label}`);
@@ -115,7 +115,7 @@ describe("Agent Cron native reads and actions", () => {
     });
     await waitForSolid(() => expect(container.textContent).toContain("Job ready"));
     const row = jobRow(container, "Job ready");
-    expect(button(container, "Refreshing…").disabled).toBe(true);
+    expect(button(container, "Refresh").disabled).toBe(true);
     status.reject(new Error("Synthetic status unavailable"));
     await waitForSolid(() =>
       expect(container.textContent).toContain("Synthetic status unavailable"),
@@ -153,11 +153,11 @@ describe("Agent Cron native reads and actions", () => {
       }
       return pageOf([]);
     });
-    await waitForSolid(() => expect(button(container, "Refreshing…").disabled).toBe(true));
+    await waitForSolid(() => expect(button(container, "Refresh").disabled).toBe(true));
     status.reject(new Error("Synthetic status unavailable"));
     await waitForSolid(() => {
       expect(container.textContent).toContain("Synthetic status unavailable");
-      expect(button(container, "Refreshing…").disabled).toBe(true);
+      expect(button(container, "Refresh").disabled).toBe(true);
     });
     jobs.resolve(pageOf([]));
     await waitForSolid(() => expect(button(container, "Refresh").disabled).toBe(false));

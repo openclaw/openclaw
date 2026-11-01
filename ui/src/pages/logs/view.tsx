@@ -19,6 +19,7 @@ import {
 import type { PanelRefreshStatus as RefreshStatus } from "../../components/panel-refresh-status-state.ts";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
   SettingsRow,
@@ -299,18 +300,20 @@ export function LogsView(props: LogsProps) {
         <div class="settings-section__actions">
           <Loading
             fallback={
-              <button class="btn" disabled>
-                {props.completion?.quiet ? t("common.refresh") : t("common.loading")}
-              </button>
+              <RefreshButton
+                label={t("common.refresh")}
+                busy={!props.completion?.quiet}
+                disabled
+                onClick={() => props.onRefresh()}
+              />
             }
           >
-            <button
-              class="btn"
+            <RefreshButton
+              label={t("common.refresh")}
+              busy={loading()}
               disabled={props.refreshDisabled || isPending(read)}
               onClick={() => props.onRefresh()}
-            >
-              {loading() ? t("common.loading") : t("common.refresh")}
-            </button>
+            />
           </Loading>
           <button
             class="btn"

@@ -384,7 +384,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
    full-size controls that require top alignment. */
 @media not all and (max-width: 640px) {
   .settings-section__header:not(:has(.settings-section__desc)):has(
-      .settings-section__actions .btn--xs.btn--icon
+      .settings-section__actions :is(.btn--xs.btn--icon, .refresh-button)
     ) {
     align-items: center;
   }
