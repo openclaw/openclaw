@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   entries: [] as Array<
@@ -16,6 +16,10 @@ vi.mock("../../sessions/session-controller.rpc-sources.js", () => ({
 }));
 
 const { createOpenClawIdMemberActivity } = await import("./member-activity.js");
+
+const { recordOpenClawIdTunnelConnection, resetOpenClawIdTunnelConnectionsForTest } =
+  await import("./tunnel-connections.js");
+afterEach(resetOpenClawIdTunnelConnectionsForTest);
 
 const BOB = `iroh:${"bb".repeat(32)}`;
 const CAROL = `iroh:${"cc".repeat(32)}`;
@@ -61,6 +65,24 @@ describe("member activity", () => {
         runs: [{ runId: "run-bob", sessionKey: "s-bob" }],
       },
       [CAROL]: { connections: 0, lastSeenAt: null, runs: [] },
+    });
+  });
+
+  it("keeps active runs visible after their initiating tunnel connection closes", () => {
+    const closed = new AbortController();
+    recordOpenClawIdTunnelConnection("c-bob", BOB, closed.signal);
+    closed.abort();
+    mocks.entries = [
+      [
+        "run-bob",
+        { adapter: { requester: { connectionId: "c-bob" } }, active: true, sessionKey: "s-bob" },
+      ],
+    ];
+    const reader = createOpenClawIdMemberActivity({ clients: () => [] });
+    expect(reader.describe([BOB])[BOB]).toEqual({
+      connections: 0,
+      lastSeenAt: null,
+      runs: [{ runId: "run-bob", sessionKey: "s-bob" }],
     });
   });
 

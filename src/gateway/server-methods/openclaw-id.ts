@@ -192,11 +192,20 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
     if (!service) {
       return;
     }
-    if (!(await isOwnerCaller(service, opts))) {
+    const ownerCheck = await service.prepareOwnerClientCheck(
+      resolveOpenClawIdClientChannel(opts.client),
+      resolveOpenClawIdClientPeerKey(opts.client),
+    );
+    if (!ownerCheck()) {
       refuse(opts, { code: "not_owner", detail: "only an owner device of this claw sees people" });
       return;
     }
-    opts.respond(true, { link: await service.linkStatus() });
+    const link = await service.linkStatus();
+    if (!ownerCheck()) {
+      refuse(opts, { code: "not_owner", detail: "only an owner device of this claw sees people" });
+      return;
+    }
+    opts.respond(true, { link });
   },
 
   // Writes to the membership authority, by action:

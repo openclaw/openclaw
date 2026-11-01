@@ -32,11 +32,6 @@ export function createOpenClawIdConnectionAccess(params: {
   enabled: () => boolean;
   getAuthority: () => Promise<OpenClawIdAuthority>;
 }) {
-  const asyncOwnerCheck = async (owner: OpenClawIdAuthority, peerKey: string) => {
-    const allowed = (await owner.resolvePeer(peerKey))?.kind === "owner";
-    return () => allowed;
-  };
-
   // Prepare asynchronous hashing, but recheck live membership/config at the actual send.
   const prepareOwnerClientCheck = async (
     channel: Exclude<Channel, "mailbox"> | undefined,
@@ -49,7 +44,7 @@ export function createOpenClawIdConnectionAccess(params: {
       channel === "local_operator"
         ? () => true
         : channel === "tunnel" && peerKey
-          ? await asyncOwnerCheck(await params.getAuthority(), peerKey)
+          ? await (await params.getAuthority()).prepareOwnerPeerCheck(peerKey)
           : () => false;
     return () => params.enabled() && check();
   };

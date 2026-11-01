@@ -20,6 +20,7 @@ import {
 } from "./config-reload-plan.js";
 import { isCustomPluginUiEnabled } from "./control-ui-plugin-policy.js";
 import { GATEWAY_EVENTS } from "./events.js";
+import { startOpenClawIdPeopleEvents } from "./openclaw-id/people-events.js";
 import {
   indexPluginNodeCapabilitySurfaces,
   reconcileClientPluginNodeCapabilities,
@@ -389,20 +390,27 @@ export async function finishGatewayStartup(params: {
   }
   postAttachRuntimeReturned = true;
   activateScheduledServicesWhenReady();
+  registerGatewayLifetimeSidecars(
+    startOpenClawIdPeopleEvents({
+      clients,
+      service: runtime.openclawIdService,
+      broadcastToConnIds,
+      log,
+    }),
+  );
   runtime.openclawIdService.bindEffects(async () => {
     const [{ createOpenClawIdRemovalEffects }, { createOpenClawIdMemberActivity }] =
       await Promise.all([
         import("./openclaw-id/removal-effects.js"),
         import("./openclaw-id/member-activity.js"),
       ]);
-    const activity = createOpenClawIdMemberActivity({ clients: () => clients.authorityClients });
     return {
       ...createOpenClawIdRemovalEffects({
         clients: () => clients.authorityClients,
         context: () => gatewayRequestContext,
         log,
       }),
-      describeActivity: activity.describe,
+      describeActivity: createOpenClawIdMemberActivity({ clients: () => clients }).describe,
     };
   });
   void runtime.openclawIdService

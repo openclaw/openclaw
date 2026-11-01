@@ -27,6 +27,7 @@ import {
   type OwnerKeyRegenerationPreparation,
   type SignedStatement,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
+import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import type { OpenClawIdAccount } from "./account-sign-in.js";
 import {
   readStoredClaw,
@@ -34,7 +35,7 @@ import {
   type InviteReport,
   type StoredClaw,
 } from "./claw-store.js";
-import { expirePendingRedemptions } from "./invite-expiry.js";
+import { expirePendingRedemptions, nextPeopleExpiry } from "./invite-expiry.js";
 import { listInviteViews } from "./invites-view.js";
 import type { OpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
 
@@ -213,6 +214,7 @@ export function createOpenClawIdAuthority(
 ) {
   let record: StoredClaw | undefined;
   let loaded = false;
+  const peopleListeners = new Set<() => void>();
   // Writes run one at a time so each sees the state the previous one committed.
   let queue: Promise<unknown> = Promise.resolve();
 
@@ -232,12 +234,26 @@ export function createOpenClawIdAuthority(
 
   const commit = async (next: StoredClaw) => {
     await store.write(next);
+    const previous = record;
     record = next;
+    // Publish only committed People/display facts, before any network side effects.
+    if (
+      previous?.authority !== next.authority ||
+      previous?.invite_reports !== next.invite_reports ||
+      previous?.owner_profile !== next.owner_profile ||
+      previous?.discovery.owner_account_id !== next.discovery.owner_account_id
+    ) {
+      notifyListeners(peopleListeners, undefined);
+    }
   };
 
   return {
     /** Loads the record (once); call before reading state synchronously. */
     load,
+
+    /** Observes committed membership and account display changes from every writer. */
+    onPeopleChanged: (listener: () => void): (() => void) =>
+      registerListener(peopleListeners, listener),
 
     /** Persists only a server-verified sign-in; another subject cannot replace a linked owner. */
     recordVerifiedAccount(account: OpenClawIdAccount): Promise<void> {
@@ -252,6 +268,27 @@ export function createOpenClawIdAuthority(
           owner_profile: { sub: account.sub, email: account.email, name: account.name },
         });
       });
+    },
+
+    /** Prepares key hashing once, then checks the current authority synchronously at disclosure. */
+    async prepareOwnerPeerCheck(peerKey: string): Promise<() => boolean> {
+      if (!isIrohEndpointKey(peerKey)) {
+        return () => false;
+      }
+      await load();
+      const peerFp = await fingerprint(peerKey);
+      return () => {
+        const state = record?.authority;
+        return Boolean(
+          state &&
+          !state.revoked.includes(peerFp) &&
+          Object.values(state.owner_devices).some(
+            (device) =>
+              isOwnerDeviceActive(state, device, nowSeconds()) &&
+              device.cert.body.peer_keys.includes(peerKey),
+          ),
+        );
+      };
     },
 
     /** The current record, if loaded. */
@@ -642,13 +679,15 @@ export function createOpenClawIdAuthority(
      * An owner device that is also listed as a member is the owner.
      */
     async resolvePeer(peerKey: string): Promise<OpenClawIdTunnelPrincipal | undefined> {
-      const state = (await load())?.authority;
-      if (!state || !isIrohEndpointKey(peerKey)) {
+      await load();
+      if (!isIrohEndpointKey(peerKey)) {
         return undefined;
       }
-      // Certificate validity is judged now, on every connection and request.
+      const peerFp = await fingerprint(peerKey);
+      const state = record?.authority;
+      // Re-read the owner after hashing; revocation may commit while crypto yields.
       const now = nowSeconds();
-      if (!isAdmitted(state, peerKey, await fingerprint(peerKey), now)) {
+      if (!state || !isAdmitted(state, peerKey, peerFp, now)) {
         return undefined;
       }
       const isOwner = Object.values(state.owner_devices).some(
@@ -673,6 +712,11 @@ export function createOpenClawIdAuthority(
         return { seq: 0, admitted: [] };
       }
       return { seq: state.seq, admitted: await listAdmitted(state, nowSeconds()) };
+    },
+
+    /** Next time-derived People change in the loaded record, even with the tunnel offline. */
+    nextPeopleExpiry(): number | undefined {
+      return nextPeopleExpiry(record?.authority, nowSeconds());
     },
 
     /**

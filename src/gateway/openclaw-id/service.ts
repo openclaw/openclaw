@@ -12,6 +12,7 @@ import type {
   MemberRole,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
+import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import type { OpenClawIdAccount } from "./account-sign-in.js";
 import type {
   AuthorityAccepted,
@@ -130,10 +131,26 @@ export function createOpenClawIdService(params: {
   let status: OpenClawIdStatus = { state: "off" };
   let runtime: TunnelRuntime | undefined;
   let authority: OpenClawIdAuthority | undefined;
+  let loadingAuthority: Promise<OpenClawIdAuthority> | undefined;
   let lastPublish: PublishOutcome | undefined;
   let loadEffects: (() => Promise<OpenClawIdEffects>) | undefined;
   let effectsPromise: Promise<OpenClawIdEffects> | undefined;
   let mailbox: { stop(): void } | undefined;
+  let stopAuthorityChanges: (() => void) | undefined;
+  const peopleListeners = new Set<() => void>();
+  const peopleChanged = () => notifyListeners(peopleListeners, undefined);
+  // Reuse the single-deadline scheduler; expiry is derived from the committed record.
+  const peopleExpiry = createOwnerExpiryTimer({
+    onExpired: async () => {
+      peopleChanged();
+      armPeopleExpiry();
+    },
+  });
+  const armPeopleExpiry = () => {
+    if (isOpenClawIdEnabled(params.getConfig())) {
+      peopleExpiry.arm(authority?.nextPeopleExpiry());
+    }
+  };
   // Serializes start/stop so overlapping config reloads apply in order.
   let queue: Promise<void> = Promise.resolve();
   const ownerExpiry = createOwnerExpiryTimer({
@@ -157,9 +174,24 @@ export function createOpenClawIdService(params: {
 
   const getAuthority = async (): Promise<OpenClawIdAuthority> => {
     if (!authority) {
-      authority = params.createAuthority
-        ? await params.createAuthority()
-        : (await import("./authority.js")).createOpenClawIdAuthority();
+      // Connection and run events can request the owner together during startup.
+      loadingAuthority ??= params.createAuthority
+        ? params.createAuthority()
+        : import("./authority.js").then(({ createOpenClawIdAuthority }) =>
+            createOpenClawIdAuthority(),
+          );
+      authority = await loadingAuthority;
+    }
+    if (!stopAuthorityChanges) {
+      stopAuthorityChanges = authority.onPeopleChanged(() => {
+        peopleChanged();
+        armPeopleExpiry();
+      });
+      const observing = stopAuthorityChanges;
+      await authority.load();
+      if (observing === stopAuthorityChanges) {
+        armPeopleExpiry();
+      }
     }
     return authority;
   };
@@ -168,6 +200,9 @@ export function createOpenClawIdService(params: {
     const current = runtime;
     runtime = undefined;
     ownerExpiry.stop();
+    peopleExpiry.stop();
+    stopAuthorityChanges?.();
+    stopAuthorityChanges = undefined;
     publicationRetry.stop();
     mailbox?.stop();
     mailbox = undefined;
@@ -249,7 +284,7 @@ export function createOpenClawIdService(params: {
       await startMailbox();
       await publicationRetry.start();
     } catch (error) {
-      status = { state: "failed", reason: String((error as Error)?.message ?? error) };
+      status = { state: "failed", reason: error instanceof Error ? error.message : String(error) };
       params.log.warn(`openclaw-id: could not start remote access: ${status.reason}`);
     }
   };
@@ -597,6 +632,10 @@ export function createOpenClawIdService(params: {
   });
 
   return {
+    /** Subscribes to committed People changes and time-derived invite/owner expiry. */
+    onPeopleChanged(listener: () => void): () => void {
+      return registerListener(peopleListeners, listener);
+    },
     ...connectionAccess,
     /** Records display claims produced by the Gateway's verified sign-in flow, never RPC params. */
     async recordVerifiedAccount(account: OpenClawIdAccount): Promise<void> {

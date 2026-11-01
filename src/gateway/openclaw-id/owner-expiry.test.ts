@@ -159,6 +159,8 @@ describe("owner certificate expiry at the Gateway", () => {
     });
     service.bindEffects(async () => effects);
     await service.reconcileRuntimePolicy();
+    const peopleChanged = vi.fn();
+    const stopPeopleChanges = service.onPeopleChanged(peopleChanged);
     try {
       const d2 = await enroll(
         claw,
@@ -170,6 +172,7 @@ describe("owner certificate expiry at the Gateway", () => {
       expect(await service.submitStatement("tunnel", d2.change)).toMatchObject({ ok: true });
       expect(runtime.push).toHaveBeenLastCalledWith(2, [claw.w1, d2.peerKey].toSorted());
       expect(effects.closeConnections).not.toHaveBeenCalled();
+      peopleChanged.mockClear();
 
       await vi.advanceTimersByTimeAsync(59_000);
       expect(effects.closeConnections).not.toHaveBeenCalled();
@@ -179,7 +182,9 @@ describe("owner certificate expiry at the Gateway", () => {
       expect(effects.captureConnections).toHaveBeenCalledWith([d2.peerKey]);
       expect(effects.closeConnections).toHaveBeenCalledWith([`conn-${d2.peerKey}`]);
       expect(runtime.push).toHaveBeenLastCalledWith(2, [claw.w1]);
+      expect(peopleChanged).toHaveBeenCalledOnce();
     } finally {
+      stopPeopleChanges();
       await service.stop();
     }
   });

@@ -9,6 +9,7 @@ import {
   listRpcSourceEntries,
 } from "../../sessions/session-controller.rpc-sources.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
+import { openclawIdTunnelConnectionsOf } from "./tunnel-connections.js";
 
 /** One active run started over a device's relayed connection. */
 export type OpenClawIdPeerRun = { runId: string; sessionKey: string };
@@ -59,6 +60,12 @@ export function createOpenClawIdMemberActivity(params: {
       );
       // Count open connections per key and note which connection belongs to whom.
       const keyOfConnection = new Map<string, string>();
+      // Runs survive a socket close; use the connection owner's retained run custody.
+      for (const key of peerKeys) {
+        for (const connId of openclawIdTunnelConnectionsOf([key])) {
+          keyOfConnection.set(connId, key);
+        }
+      }
       for (const client of params.clients()) {
         const key = client.internal?.openclawIdPeerKey;
         const entry = key ? activity.get(key) : undefined;

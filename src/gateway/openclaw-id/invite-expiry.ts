@@ -4,6 +4,7 @@
 // derives the same answer when it only reads.
 import {
   PENDING_REDEMPTION_TTL_SECONDS,
+  nextOwnerExpiry,
   type AuthorityState,
   type InviteRecord,
   type UnixSeconds,
@@ -37,4 +38,33 @@ export function expirePendingRedemptions(
     invites[inviteId] = { ...invites[inviteId]!, status: "consumed", pending: null };
   }
   return { state: { ...state, invites }, expired };
+}
+
+/** Next visible invite deadline; a one-shot timer, never a polling interval. */
+export function nextInviteExpiry(
+  state: AuthorityState | null | undefined,
+  now: number,
+): number | undefined {
+  const deadlines = Object.values(state?.invites ?? {}).flatMap((invite) => {
+    const deadline =
+      invite.status === "pending" && invite.pending
+        ? invite.pending.requested_at + PENDING_REDEMPTION_TTL_SECONDS
+        : invite.status === "open"
+          ? invite.cap.expires_at
+          : undefined;
+    return deadline !== undefined && deadline > now ? [deadline] : [];
+  });
+  return deadlines.length > 0 ? Math.min(...deadlines) : undefined;
+}
+
+/** Earliest visible invite or owner-device expiry in the loaded authority. */
+export function nextPeopleExpiry(
+  state: AuthorityState | null | undefined,
+  now: number,
+): number | undefined {
+  const deadlines = [
+    nextInviteExpiry(state, now),
+    state ? nextOwnerExpiry(state, now) : undefined,
+  ].filter((value): value is number => value !== undefined && value !== null);
+  return deadlines.length > 0 ? Math.min(...deadlines) : undefined;
 }
