@@ -525,7 +525,7 @@ function validateArtifact(descriptor, metadata, run, jobs) {
     },
     workflowJobs: jobs,
   });
-  const producerInterval = upload ?? (successfulJobWithoutSteps ? job : undefined);
+  const producerInterval = job;
   const created = Date.parse(metadata.created_at);
   requireValue(
     job.conclusion === "success" &&
