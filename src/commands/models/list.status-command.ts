@@ -1,9 +1,5 @@
 import path from "node:path";
 import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import {
-  parseStrictFiniteNumber,
-  parseStrictPositiveInteger,
-} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
@@ -86,6 +82,7 @@ import type { runAuthProbes } from "./list.probe.js";
 import { resolveStatusUtilityModel } from "./list.status-utility.js";
 import type { ProviderAuthOverview, StatusRuntimeAuthRoute } from "./list.types.js";
 import { loadModelsConfig } from "./load-config.js";
+import { parseProbeOption } from "./probe-option.js";
 import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
@@ -144,23 +141,6 @@ type StatusModelRouteIssue = {
       authRequirement: ProviderModelRouteCandidate["authRequirement"];
     }
 );
-
-function parseProbeOption(
-  raw: unknown,
-  label: string,
-  fallback: number,
-  kind: "number" | "integer" = "number",
-): number {
-  if (raw === undefined || raw === null) {
-    return fallback;
-  }
-  const parsed =
-    kind === "integer" ? parseStrictPositiveInteger(raw) : parseStrictFiniteNumber(raw);
-  if (parsed === undefined || parsed <= 0) {
-    throw new Error(`${label} must be a positive ${kind}.`);
-  }
-  return parsed;
-}
 
 function syntheticAuthCredential(
   provider: string,

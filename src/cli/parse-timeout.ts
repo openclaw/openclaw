@@ -1,14 +1,14 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { ExpectedCliError } from "./failure-output.js";
 
 export function parseTimeoutMs(raw: unknown): number | undefined {
   return parseStrictPositiveInteger(typeof raw === "bigint" ? Number(raw) : raw);
 }
 
-function invalidTimeout(flagName: string, value?: string): Error {
+function invalidTimeout(flagName: string, value?: string): ExpectedCliError {
   const suffix = value ? ` Received: "${value}".` : "";
-  return new Error(
-    `Invalid ${flagName}. Use a positive millisecond value, e.g. ${flagName} 30000.${suffix}`,
-  );
+  const message = `Invalid ${flagName}. Use a positive millisecond value, e.g. ${flagName} 30000.${suffix}`;
+  return new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
 }
 
 export function parseTimeoutMsWithFallback(

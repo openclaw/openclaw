@@ -7,6 +7,7 @@ import {
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { model as createModel, row } from "../../agents/model-catalog-fixtures.test-support.js";
 import * as openAIModelRoutes from "../../agents/openai-model-routes.js";
+import { formatCliFailureLines } from "../../cli/failure-output.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/types.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
@@ -806,6 +807,20 @@ describe("modelsStatusCommand auth overview", () => {
     });
     expectText(output, "Default (defaults)", `Fallbacks (${fallbacks.length}) (defaults)`);
     expect(mocks.ensureAuthProfileStore).toHaveBeenLastCalledWith("/tmp/openclaw-agent");
+  });
+
+  it("shows the reason when --probe-timeout is invalid", async () => {
+    const error = await jsonStatus({ probe: true, probeTimeout: "abc" }).catch(
+      (caught: unknown) => caught,
+    );
+    expect(
+      formatCliFailureLines({
+        title: "The CLI command failed.",
+        error,
+        argv: ["node", "openclaw", "models", "status", "--probe-timeout", "abc"],
+        env: {},
+      }),
+    ).toEqual(["--probe-timeout must be a positive number."]);
   });
 
   it("exits non-zero when auth is missing", async () => {
