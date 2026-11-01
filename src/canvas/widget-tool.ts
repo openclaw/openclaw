@@ -336,7 +336,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           unit: "bytes",
         });
         // Untrimmed so reported line/column match the widget_code the model sent.
-        const scriptError = findWidgetScriptSyntaxError(rawWidgetCode);
+        const scriptError = await findWidgetScriptSyntaxError(rawWidgetCode);
         if (scriptError) {
           throw new WidgetHtmlInputError(
             `widget_code has a JavaScript syntax error in inline script ${scriptError.scriptIndex} at line ${scriptError.line}, column ${scriptError.column}: ${scriptError.message}. Offending line: ${scriptError.snippet}. Fix the script and call show_widget again.`,

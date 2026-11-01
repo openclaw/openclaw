@@ -98,6 +98,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     fileToolPlanning: runtimeProcessEntrypoint("agents/sessions/tools/file-tool-planning.worker"),
     fileToolRead: runtimeProcessEntrypoint("agents/sessions/tools/read-file.worker"),
     attachmentProcessor: runtimeProcessEntrypoint("media/attachment-processor.worker"),
+    widgetScriptSyntax: runtimeProcessEntrypoint("canvas/widget-script-syntax.worker"),
     gitOperations: runtimeProcessEntrypoint("infra/git-operation.worker"),
     gitPackCleanup: runtimeProcessEntrypoint("agents/worktrees/git-pack-cleanup.worker"),
     fsSafeCopy: runtimeProcessEntrypoint("infra/fs-safe-copy.worker"),
