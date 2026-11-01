@@ -314,6 +314,7 @@ describe("existing PR preparation through the registered agent action", () => {
       }
       expect(await f.guestGit("rev-parse", "HEAD")).toBe(continuedGuestHead);
       expect(await f.guestGit("symbolic-ref", "HEAD")).toBe(guestBranch);
+      await f.local!.git("-C", f.upstream, "branch", "another-base", f.pr.base.sha);
       for (const advance of [false, true]) {
         if (advance) {
           await f.advanceHead({ "newer-pr.txt": "newer remote PR work\n" });
