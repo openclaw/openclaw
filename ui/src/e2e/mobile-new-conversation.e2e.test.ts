@@ -265,11 +265,8 @@ suite.define(() => {
       const pendingAppearance = await appearance();
       await gateway.resolveDeferred("sessions.create");
       await pending.waitFor({ state: "detached" });
-      // Pending and admitted chat headers present one control; the draft page's
-      // floating header shares its surface and icon in its larger circle.
-      const admitted = await appearance();
-      expect(pendingAppearance).toEqual(admitted);
-      expect([draft[2], draft[3]]).toEqual([admitted[2], admitted[3]]);
+      // Draft topbar, pending header and admitted chat header present one control.
+      expect([draft, pendingAppearance]).toEqual(Array(2).fill(await appearance()));
     });
   });
 

@@ -50,6 +50,8 @@ export function shouldFloatShellHeader(params: {
   return (
     params.mobileNavLayout &&
     !isSessionRouteId(params.routeId) &&
+    // The draft shares chat's drawer button, so opening a session never moves it.
+    params.routeId !== "new-session" &&
     !params.onboarding &&
     !hasNativeShellClass("openclaw-native-desktop") &&
     (globalThis.matchMedia?.(FLOATING_HEADER_MEDIA_QUERY).matches ?? false)
