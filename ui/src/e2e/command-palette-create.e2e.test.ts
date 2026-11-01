@@ -511,9 +511,7 @@ suite.define(() => {
       const retry = await gateway.waitForRequest("sessions.create", { after: 1 });
       expect(retry.params).toMatchObject({ agentId: "main", message: prompt });
       await input.waitFor({ state: "hidden" });
-      // Opened from the retired notice, the launcher has no focus origin to restore.
-      expect(page.url()).toBe(url);
-      expect(await composer.inputValue()).toBe(foregroundDraft);
+      await expectForegroundUnchanged(page, composer, url);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(2);
       expect(await gateway.getRequests("chat.send")).toEqual([]);
     });

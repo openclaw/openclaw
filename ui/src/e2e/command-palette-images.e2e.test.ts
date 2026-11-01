@@ -120,16 +120,20 @@ suite.define(() => {
               message: "",
               attachments,
             });
-            expect(await input.isEditable()).toBe(false);
-            await page.keyboard.press("ControlOrMeta+Enter");
-            expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+            // The launcher closes once create is sent; the failure notice reopens the prompt.
+            await input.waitFor({ state: "hidden" });
             await gateway.rejectDeferred("sessions.create", {
               code: "INVALID_REQUEST",
               message: "Could not create session",
             });
+            const toast = page.locator(".app-toast");
+            await expect.poll(() => toast.textContent()).toContain("Session didn't start");
+            await toast.getByRole("button", { name: "Edit prompt", exact: true }).click();
+            await input.waitFor({ state: "visible" });
             await expect
               .poll(() => palette.getByRole("alert").textContent())
               .toContain("Could not create session");
+            expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
             expect(await images.count()).toBe(2);
             await input.press("Escape");
             await input.waitFor({ state: "hidden" });

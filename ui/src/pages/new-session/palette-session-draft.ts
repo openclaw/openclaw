@@ -1,5 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import type { CommandPaletteOpenInput } from "../../components/command-palette-contract.ts";
 import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
@@ -87,7 +88,7 @@ export class PaletteSessionDraft {
       changed: () => void;
       updateComplete: () => Promise<unknown>;
       onClose: () => void;
-      onOpen: () => void;
+      onOpen: (input: CommandPaletteOpenInput) => void;
       onMessageChange?: (message: string) => void;
       onAttachmentModeChange?: () => void;
     },
@@ -358,11 +359,23 @@ export class PaletteSessionDraft {
     if (!error || this.read().open || this.rejectedOpen) {
       return;
     }
+    // The notice action retires before the palette closes; return to the work it interrupted.
+    const { activeElement } = this.element.ownerDocument;
+    const returnFocus = activeElement instanceof HTMLElement ? activeElement : null;
     showToast({
       fifo: true,
       message: t("palette.startFailed", { error }),
       actionLabel: t("palette.editPrompt"),
-      onAction: () => this.callbacks.onOpen(),
+      onAction: () => {
+        const value = this.message;
+        this.callbacks.onOpen({
+          value,
+          selectionStart: value.length,
+          selectionEnd: value.length,
+          selectionDirection: "none",
+          returnFocus: returnFocus?.isConnected ? returnFocus : undefined,
+        });
+      },
     });
   }
 

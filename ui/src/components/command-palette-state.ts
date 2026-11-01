@@ -169,7 +169,7 @@ export class CommandPaletteState {
         changed: this.changed,
         updateComplete: rendered,
         onClose: () => this.closePalette(),
-        onOpen: () => this.openPalette(),
+        onOpen: (input) => this.openPalette(input),
         onAttachmentModeChange: () => this.scheduleSessionSearch(this.draft.message),
         onMessageChange: (query) => {
           const text = query.trim();
