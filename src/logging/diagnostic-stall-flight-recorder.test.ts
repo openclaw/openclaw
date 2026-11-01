@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import { pbkdf2Sync, scryptSync } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { promisify } from "node:util";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createStallFlightRecorder } from "./diagnostic-stall-flight-recorder.js";
 
@@ -8,6 +10,7 @@ const native = vi.hoisted(() => ({
   versions: { node: "26.6.0", bun: undefined as string | undefined },
   conflict: vi.fn(() => false),
   mainThread: true,
+  kernel: vi.fn(),
 }));
 vi.mock("node:v8", async (original) => ({
   ...(await original<typeof import("node:v8")>()),
@@ -27,6 +30,10 @@ vi.mock("./diagnostic-profile.js", async (original) => ({
   ...(await original<typeof import("./diagnostic-profile.js")>()),
   hasProfilerConflict: native.conflict,
 }));
+vi.mock("./diagnostic-stall-kernel.js", async (original) => ({
+  ...(await original<typeof import("./diagnostic-stall-kernel.js")>()),
+  createStallKernelRecorder: native.kernel,
+}));
 
 const recorders: ReturnType<typeof createStallFlightRecorder>[] = [];
 const getBuiltinModule = process.getBuiltinModule.bind(process);
@@ -41,6 +48,7 @@ beforeEach(() => {
   native.conflict.mockReset().mockReturnValue(false);
   native.versions.node = "26.6.0";
   native.mainThread = true;
+  native.kernel.mockReset();
   vi.spyOn(process, "getBuiltinModule").mockImplementation((id) =>
     id === "inspector"
       ? { url: () => undefined }
@@ -88,6 +96,14 @@ function capture(json: string) {
   const fixtureState = fixture(json);
   return { ...fixtureState, result: fixtureState.sampleAt(1_500) };
 }
+it("keeps live kernel evidence when sampled stacks exhaust the shared report budget", () => {
+  const evidence = ` kernel=${JSON.stringify([{ state: "D", wchan: "filemap_fault", stack: "x".repeat(1_300) }])}`;
+  native.kernel.mockReturnValue({ take: () => evidence, stop: vi.fn() });
+  const { result } = capture(profile(0, "x".repeat(230)));
+  expect(result).toContain(evidence);
+  expect(result).toContain("reportTruncated=true");
+  expect(Buffer.byteLength(result!)).toBeLessThanOrEqual(2_048);
+});
 it("retains the recorded async task when the sampled stack ends in a dependency", () => {
   const dependencyUrl = new URL(
     "../../node_modules/@openclaw/fs-safe/dist/write.js",
@@ -352,5 +368,63 @@ it.each(["runtime", "profiler", "worker"])(
     const { recorder } = fixture();
     expect(recorder.sample({ startedAt: 0, endedAt: 1_500 })).toBeUndefined();
     expect(native.start).not.toHaveBeenCalled();
+  },
+);
+
+it.skipIf(
+  process.platform !== "linux" ||
+    Boolean(process.versions.bun) ||
+    Number(process.versions.node.split(".")[0]) < 26,
+)(
+  "captures the main thread's live futex wait three times within the profile byte cap",
+  async () => {
+    // Vitest runs in a worker; a subprocess exercises the real main-thread recorder.
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      [
+        "--import",
+        import.meta.resolve("tsx"),
+        "--input-type=module",
+        "-e",
+        `
+      import { createStallFlightRecorder } from ${JSON.stringify(new URL("./diagnostic-stall-flight-recorder.ts", import.meta.url).href)};
+      let ready = Promise.resolve();
+      process.once('worker', worker => {
+        worker.ref();
+        ready = new Promise(resolve => worker.once('online', () => { worker.unref(); resolve(); }));
+      });
+      const recorder = createStallFlightRecorder(message => { throw new Error(message); });
+      try {
+        await new Promise(setImmediate);
+        await ready;
+        const startedAt = performance.now();
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3600);
+        const endedAt = performance.now();
+        console.log(recorder.sample({ startedAt, endedAt }));
+      } finally { recorder.stop(); }
+    `,
+      ],
+      { timeout: 12_000 },
+    );
+    const report = stdout.trim();
+    expect(Buffer.byteLength(report)).toBeLessThanOrEqual(2_048);
+    const samples = JSON.parse(report.match(/ kernel=(.*?) inclusive=/)![1]!) as Array<{
+      at: number;
+      state: string;
+      wchan: string;
+      syscall: string;
+      io: number[];
+      ctxt: number[];
+    }>;
+    expect(samples).toHaveLength(3);
+    for (const sample of samples) {
+      expect(sample.state).toBe("S");
+      expect(sample.wchan).toMatch(/futex/);
+      expect(sample.syscall).toBe(process.arch === "arm64" ? "98" : "202");
+      expect(sample.at).toBeGreaterThan(0);
+      expect(sample.at).toBeLessThan(3_600);
+      expect(sample.io).toHaveLength(7);
+      expect(sample.ctxt).toHaveLength(2);
+    }
   },
 );

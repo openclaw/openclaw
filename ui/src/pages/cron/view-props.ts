@@ -7,6 +7,8 @@ import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { hasCronFormErrors } from "../../lib/cron/form.ts";
 import { resolveConfiguredCronModelSuggestions } from "../../lib/cron/model-suggestions.ts";
 import { getCronRunsViewState } from "../../lib/cron/runs.ts";
+import { profileDirectory } from "../../lib/profile-directory.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { resolveTimezoneSuggestions } from "../../lib/timezone-suggestions.ts";
 import type { createCronPage } from "./cron-page-state.ts";
 import { validateCronEventSelection } from "./event-source.ts";
@@ -86,7 +88,23 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     failureAlertToSuggestions = forDeliveryMode(savedDeliveryTargets);
     deliveryToSuggestions = forDeliveryMode(deliveryTargets);
   }
-  const canManage = page.canManageCron();
+  const canManage =
+    cron.cronEditingJob || cron.cronCreateOpen
+      ? page.canManageCron()
+      : page.canCreateCron() || cron.cronJobs.some(page.canManageJob);
+  const directory = profileDirectory(page.context().gateway);
+  const selectedOwner = cron.cronForm.ownerProfileId;
+  const profiles = directory.result?.profiles.filter((profile) => !profile.mergedInto) ?? [];
+  const ownerOptions = profiles.map((profile) => ({
+    value: profile.id,
+    label: profile.displayName || profile.id,
+  }));
+  if (!selectedOwner || !profiles.some((profile) => profile.id === selectedOwner)) {
+    ownerOptions.unshift({
+      value: selectedOwner,
+      label: selectedOwner || t("cron.form.ownerUnassigned"),
+    });
+  }
   const eventSource = page.eventSource.view;
   const fieldErrors = {
     ...page.cron().cronFieldErrors,
@@ -103,6 +121,9 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     listError: page.cron().cronJobsError,
     /** Canonical gateway capability for every mutation-capable cron control. */
     canManage,
+    canManageJob: page.canManageJob,
+    canCreate: page.canCreateCron(),
+    ownerOptions,
     connected: page.cron().connected,
     status: page.cron().cronStatus,
     jobs: page.cron().cronJobs,

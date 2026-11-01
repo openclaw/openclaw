@@ -37,6 +37,7 @@ import {
 import {
   snapshotStoreGeneration,
   sidebarSnapshotInvalidationMatches,
+  sidebarSnapshotDeletedSessionKey,
   subscribeSnapshotInvalidation,
   type SessionSnapshotInvalidationReason,
   type SnapshotInvalidation,
@@ -86,8 +87,8 @@ async function readSnapshotRecord(
     return null;
   }
   if (!record) {
-    debugSnapshotStore("resetting cache after record shape mismatch");
-    await resetSessionSnapshotDatabase();
+    debugSnapshotStore("discarding malformed snapshot record");
+    await deleteStoredChatSnapshot(sessionKey, "cache-eviction");
   }
   return record?.snapshot ?? null;
 }
@@ -336,7 +337,11 @@ export class SessionSnapshotStore implements ChatCacheObserver {
 
   forgetSidebar(invalidation: SnapshotInvalidation): void {
     for (const key of this.readScopes.keys()) {
-      if (key.includes("\u0000sidebar:") && sidebarSnapshotInvalidationMatches(key, invalidation)) {
+      if (
+        key.includes("\u0000sidebar:") &&
+        (sidebarSnapshotInvalidationMatches(key, invalidation) ||
+          sidebarSnapshotDeletedSessionKey(key, invalidation))
+      ) {
         this.forget(key);
       }
     }

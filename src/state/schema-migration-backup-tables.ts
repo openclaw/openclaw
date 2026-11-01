@@ -96,5 +96,6 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
       "sqlite_stat4",
     ],
     37: ["worker_environments"],
+    38: ["session_repository_workspaces", "worker_workspace_pending_results"],
   },
 };
