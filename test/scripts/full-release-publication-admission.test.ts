@@ -438,6 +438,7 @@ async function fixture(
       | "healthy"
       | "npm-empty-history"
       | "npm-error"
+      | "clawhub-error"
       | "prepared-trust"
       | "npm-absent"
       | "clawhub-absent"
@@ -785,6 +786,7 @@ globalThis.fetch = async (input, init = {}) => {
     const versions = ${JSON.stringify(options.registry)} === "npm-empty-history" ? {} : { "2026.9.3": {} };
     return response({ versions, "dist-tags": { latest: url.pathname === "/demo-runtime" ? "1.2.4" : "2026.9.3" } });
   }
+  if (${JSON.stringify(options.registry)} === "clawhub-error") return response("denied", 403);
   if (${JSON.stringify(options.registry)} === "clawhub-absent") return response("", 404);
   if (url.pathname.endsWith("/publication")) {
     const name = decodeURIComponent(url.pathname.split("/")[4]);
@@ -1423,6 +1425,7 @@ describe("FRV required registry admission", () => {
     ["healthy", "normal", stable, "latest", ["normal_ci", "prepare_npm_package"]],
     ["npm-empty-history", "normal", stable, "latest", []],
     ["npm-error", "normal", stable, "latest", []],
+    ["clawhub-error", "normal", stable, "latest", []],
     ["prepared-trust", "prepared", stable, "latest", []],
   ] as const)(
     "keeps selected fanout closed for %s through %s",
@@ -1464,6 +1467,9 @@ describe("FRV required registry admission", () => {
         }
         check(result.firstHopJobs, result.stderr).toEqual(expectedJobs);
         check(result.status, result.stderr).toBe(registry === "healthy" ? 0 : 1);
+        if (registry === "clawhub-error") {
+          check(result.stderr).toContain("required ClawHub observation http-403");
+        }
       },
     ),
   );

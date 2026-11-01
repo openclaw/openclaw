@@ -271,7 +271,9 @@ describe("collectPluginClawHubReleasePlan", () => {
           registryBaseUrl,
           sleep: async () => {},
         }),
-      ).rejects.toThrow(`Failed to query ClawHub package @openclaw/demo-plugin: 503 ${detail}`);
+      ).rejects.toThrow(
+        `Failed to query ClawHub package @openclaw/demo-plugin: HTTP 503 ${detail}`,
+      );
       expect(packageRequests).toBe(5);
     },
   );
