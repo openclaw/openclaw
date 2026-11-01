@@ -891,19 +891,20 @@ if (runCheckPlan && proposedCheckScope?.types) {
   );
   const compilerPaths = resolveChangedCiTsgoInputs(changedPaths, existsSync);
   if (preserveFullChecks && extensionLintMode && !releaseFastLane && compilerPaths) {
-    const { getChangedPathFacts } = await import(
+    const { getChangedPathFacts, isTestLineAllocationPath } = await import(
       fromTarget("./scripts/lib/changed-path-facts.mjs")
     );
-    // Shared test sources retain every guard family. Compiler and lint owners
-    // still discover all consumers and retain their independent full fallbacks.
+    // Shared tests and numeric allocations retain every guard family, including
+    // allocation validation. Compiler/lint owners still discover all consumers.
     preserveFullChecks = !changedPaths.every((file) => {
       const facts = getChangedPathFacts(file);
       return (
         path.posix.normalize(file) === file &&
         !file.includes("\\") &&
-        ["source", "package", "ui", "extension"].includes(facts.surface) &&
-        facts.isTestOnly &&
-        facts.isChangedLaneTest
+        (isTestLineAllocationPath(file) ||
+          (["source", "package", "ui", "extension"].includes(facts.surface) &&
+            facts.isTestOnly &&
+            facts.isChangedLaneTest))
       );
     });
   }
