@@ -116,7 +116,7 @@ it.for(["npm", "pnpm"] as const)(
     expect(rootProbes().map(([name]) => name)).toEqual(
       manager === "npm" ? ["npm"] : ["npm", "pnpm"],
     );
-    expect(mocks.phase).toHaveBeenLastCalledWith("run", {
+    expect(mocks.phase).toHaveBeenLastCalledWith("run", "requested", {
       target: { installationMethod: `${manager}-global` },
       step: { step: "installation-inspection", status: "completed" },
     });
@@ -155,6 +155,7 @@ it("checks native package ownership after successful manager discovery", async (
   expect(mocks.inventory).toHaveBeenCalledOnce();
   expect(mocks.phase).not.toHaveBeenCalledWith(
     "run",
+    "requested",
     expect.objectContaining({
       step: { step: "installation-inspection", status: "completed" },
     }),
