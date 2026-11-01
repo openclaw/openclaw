@@ -638,6 +638,9 @@ describe("buildAgentSystemPrompt", () => {
     const minimal = buildPreferPrompt(["sessions_spawn", "sessions_send"], "minimal");
 
     expect(withSend).toContain("follow up via `sessions_send`");
+    expect(withSend).toContain("continue it with `sessions_send`");
+    expect(withoutSend).toContain("Continue in-scope work; finish only after verifying");
+    expect(withSend).toContain("keep the unfinished objective open");
     expect(withoutSend).not.toContain("follow up via `sessions_send`");
     expect(minimal).not.toContain("## Delegation");
   });

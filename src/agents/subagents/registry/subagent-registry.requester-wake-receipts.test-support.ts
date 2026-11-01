@@ -407,10 +407,10 @@ export function registerRequesterWakeReceiptBoundaryTests({
       // Yielded batches must retain the same outcome/blocked boundary as
       // individual completions, not downgrade failed checks to a final update.
       expect(wakeMessage).toContain(
-        "Continue reasonable in-scope recovery or follow up with a capable executor",
+        "Reviews, failed checks, and other in-scope fixable blockers require continued work",
       );
       expect(wakeMessage).toContain(
-        "respect pauses and limits, and seek an owner decision before new authority or materially greater effort",
+        "ask the appropriate owner and keep the unfinished objective open",
       );
       expect(wakeMessage).toContain(
         "Keep this runtime-authored model-route change notice internal on this shared surface.",
