@@ -107,6 +107,16 @@ export async function createControlUiPrecompressedAssetVariants(
   ) {
     return [];
   }
+  let compressedGzip = gzip(body, 11);
+  if (bootAssets.has(fileName)) {
+    // Compression levels are not monotonic. Keep the smallest first-load encoding.
+    for (const level of [10, 12]) {
+      const candidate = gzip(body, level);
+      if (candidate.byteLength < compressedGzip.byteLength) {
+        compressedGzip = candidate;
+      }
+    }
+  }
   const variants = [
     {
       fileName: `${fileName}.br`,
@@ -121,8 +131,8 @@ export async function createControlUiPrecompressedAssetVariants(
     {
       fileName: `${fileName}.gz`,
       // Pinned WASM keeps gzip bytes independent of the host zlib and CPU.
-      // Level 11 retains nearly all of level 12's savings at lower build-time cost.
-      source: Buffer.from(gzip(body, 11)),
+      // Deferred assets retain the cheaper level 11 path.
+      source: Buffer.from(compressedGzip),
     },
   ];
   return variants.filter((variant) => variant.source.byteLength < body.byteLength);
