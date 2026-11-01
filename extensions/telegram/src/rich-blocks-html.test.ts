@@ -41,6 +41,30 @@ describe("block HTML islands", () => {
     expect(plan.plainText).toBe("Before\nUpdate & status\nAfter");
   });
 
+  it("preserves Markdown links and styles inside HTML headings", () => {
+    const plan = buildTelegramRichMarkdownPlan("<h3><i>**[Docs](https://example.com)**</i></h3>");
+    expect(plan.richMessage.blocks).toEqual([
+      {
+        type: "heading",
+        size: 3,
+        text: {
+          type: "italic",
+          text: { type: "bold", text: { type: "url", url: "https://example.com", text: "Docs" } },
+        },
+      },
+    ]);
+    expect(plan.plainText).toBe("Docs");
+  });
+
+  it("decodes HTML heading entities once and preserves parsed whitespace", () => {
+    const plan = buildTelegramRichMarkdownPlan(
+      "<h3>&amp; &amp;amp; \\&amp; A   B\nC&nbsp;D &lt;b&gt;</h3>",
+    );
+    const text = "& &amp; &amp; A   B\nC\u00a0D <b>";
+    expect(plan.richMessage.blocks).toEqual([{ type: "heading", size: 3, text }]);
+    expect(plan.plainText).toBe(text);
+  });
+
   it.each([
     ["`<h3>Example</h3>`", "<h3>Example</h3>"],
     ["```html\n<h3>Example</h3>\n```", "<h3>Example</h3>"],

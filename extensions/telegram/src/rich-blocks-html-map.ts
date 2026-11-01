@@ -396,13 +396,16 @@ function preToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBloc
 function elementToBlock(
   node: Extract<HtmlNode, { kind: "element" }>,
   renderContent: HtmlContentRenderer,
+  renderText: (start: number, end: number) => RichText,
 ): InputRichBlock | undefined {
   if (!node.closed) {
     return undefined;
   }
   const headingSize = HTML_HEADING_SIZES[node.name];
   if (headingSize) {
-    const text = htmlNodesToRichText(node.children);
+    const start = node.start + node.raw.length;
+    // Heading bodies share the IR renderer's spans, decoded text, and whitespace.
+    const text = renderText(start, node.children.at(-1)?.end ?? start);
     return text === "" ? undefined : { type: "heading", text, size: headingSize };
   }
   switch (node.name) {
@@ -477,11 +480,12 @@ function elementToBlock(
 export function renderTelegramHtmlIsland(
   node: Extract<HtmlNode, { kind: "element" }>,
   renderContent: HtmlContentRenderer,
+  renderText: (start: number, end: number) => RichText,
 ): InputRichBlock[] {
   if (node.name === "p") {
     return renderContent(node.children);
   }
-  const block = elementToBlock(node, renderContent);
+  const block = elementToBlock(node, renderContent, renderText);
   return block ? [block] : [{ type: "paragraph", text: htmlNodesToRichText([node]) }];
 }
 
