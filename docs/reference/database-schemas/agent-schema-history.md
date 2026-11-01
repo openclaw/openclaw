@@ -76,6 +76,35 @@ be verified, follow the explicit agent-restoration instructions it reports, then
 rerun Doctor before upgrading the copy. Schema-8 and later session migrations
 remain supported.
 
+### Session deletion indexes (same-version additive index, lead-approved 2026-10-31)
+
+Agent schema 39 adds nonunique indexes on
+`session_input_completions(session_key)` and
+`conversation_deliveries(source_session_key, operation_id)`. Node deletion uses
+the first index for its cascading foreign key instead of scanning unrelated
+completion history. Delivery cleanup uses the second for both progress-cache
+selection and delivery deletion. Stored rows, constraints, retention, and
+transaction ownership are unchanged; neither schema marker advances.
+
+Fresh databases declare both indexes in the canonical schema. Existing SQLite
+stores install or repair them through the writable admission owner's canonical
+index repair. The optional completion table's first-use owner also declares its
+index and uses idempotent `CREATE INDEX IF NOT EXISTS`; it skips DDL when published
+schema facts already contain the table and index. Delivery storage is eager, so
+its existing database-admission owner installs the index before request access.
+Read-only admission accepts the preceding missing-index shape until that writable
+owner runs. Existing completion tables are not backfilled or rewritten, and absent
+optional tables remain absent until first use.
+
+Older same-version SQLite readers and writers accept the extra indexes, and
+SQLite maintains them transparently during older writes. Downgrade leaves them
+intact. Index construction scans only its owning table and retains one derived
+entry per row; admission retains its integrity checks and transactional rollback.
+PostgreSQL schema 39 keeps its exact preceding generated catalog: these two
+SQLite-only additions are recorded as omissions in the portability report.
+PostgreSQL adoption belongs to the next natural agent migration, including its
+historical catalog and upgrade proof; no existing PostgreSQL seal changes here.
+
 ### Agent schema 39
 
 Schema 39 permits cold transcript payload references in `transcript_events`.
@@ -114,9 +143,14 @@ exceptional imported envelopes whose native interpretation cannot be represented
 by bounded navigation keep their original inline bytes. Restoration still serves
 write-capable continuations, and full-history deletion removes both navigation
 and payload archives. No new retention setting or archive format is introduced.
-SQLite rebuilds the payload constraint without changing existing rows; PostgreSQL
-updates the equivalent constraint. Older builds refuse schema 39. Rollback needs
-the verified pre-upgrade database and archive backup with its matching binary.
+SQLite rewrites the table definition in place in `sqlite_schema`, widening only
+the payload CHECK without rewriting rows or rebuilding indexes and triggers.
+Existing rows already satisfy the stricter predecessor constraint. The backup
+still declares `transcript_events` for rollback, because older builds refuse
+schema 39; planner statistics remain unchanged. Pre-migration integrity
+verification covers schema facts only, because no rows move. PostgreSQL updates
+the equivalent constraint unchanged. Rollback needs the verified pre-upgrade
+database and archive backup with its matching binary.
 
 ### Agent schema 38
 

@@ -66,7 +66,28 @@ Do not write a separate permission store or infer consent from successful login.
 - **Docs.** Add `docs/providers/<id>.md` and list the provider in alphabetical
   order on the provider index.
 - **Proof.** Run a real agent turn on an isolated Gateway with a real key before
-  the PR opens. API calls and mocked transports do not replace it.
+  the PR opens. API calls and mocked transports do not replace it. Make that
+  Gateway look like a real install:
+  - Enable the bundled plugins users run alongside yours, with credentials,
+    not only your provider. Other plugins' hooks only show up when they are
+    configured.
+  - Save the key the way users do (the Control UI provider dialog, or
+    `openclaw models auth paste-api-key`), not only through an environment
+    variable.
+  - Set `OPENCLAW_DEBUG_MODEL_TRANSPORT=1` and check that the
+    `[model-fetch] start provider=<id> … url=` line names your vendor's
+    endpoint.
+- **Stay inside your provider.** Core also runs some hooks for providers you do
+  not own:
+  - `normalizeTransport` receives other providers' transports. Return nothing
+    unless the context names your provider or already targets your endpoint.
+    Core ignores another plugin's change that moves a provider to a different
+    origin, and
+    `src/plugins/contracts/provider-transport-scope.contract.test.ts` fails any
+    bundled hook that rewrites a foreign transport.
+  - `augmentModelCatalog` and `resolveExternalAuthProfiles` run as global
+    discovery. Return only catalog rows and auth profiles for providers your
+    plugin owns.
 - **New model for an existing provider.** Add catalog data, not code. Search
   every provider for the predecessor model ID before adding an exact-ID rule.
 

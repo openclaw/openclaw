@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import {
   executeSqliteQuerySync,
@@ -349,20 +350,23 @@ export function releaseOpenClawAgentDatabaseLease(
   if (maintenance?.databasePath === databasePath) {
     return withExistingAgentLeaseWrite(maintenance.authority, options, release);
   }
-  runOpenClawStateWriteTransaction(
-    (database) => {
-      ensureAgentDatabaseLeaseSchema(database.db);
-      release(database.db);
-    },
-    typeof closeOutcome === "object"
-      ? {
-          ...options,
-          initializationAgentPaths: [
-            ...(options.initializationAgentPaths ?? []),
-            closeOutcome.path,
-          ],
-        }
-      : options,
+  // Native handle disposal releases its lock after boot admission has ended.
+  withEngineStoreAdmission(() =>
+    runOpenClawStateWriteTransaction(
+      (database) => {
+        ensureAgentDatabaseLeaseSchema(database.db);
+        release(database.db);
+      },
+      typeof closeOutcome === "object"
+        ? {
+            ...options,
+            initializationAgentPaths: [
+              ...(options.initializationAgentPaths ?? []),
+              closeOutcome.path,
+            ],
+          }
+        : options,
+    ),
   );
 }
 

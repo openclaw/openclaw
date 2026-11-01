@@ -230,15 +230,17 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
           await input.pressSequentially("/");
           const menu = page.locator(`${pane} .slash-menu`);
           await menu.waitFor({ state: "visible" });
-          await menu.getByRole("option").filter({ hasText: "/review-199" }).waitFor();
+          await menu
+            .locator('[id$="-slash-option-command-review-199"]')
+            .waitFor({ state: "visible" });
           if (cycle === 0) {
-            renderedOptions = await menu.getByRole("option").count();
+            renderedOptions = await menu.locator(".slash-menu-item").count();
             menuSvgNodes = await menu.locator(".slash-menu-icon svg").count();
           }
           await input.press("ArrowDown");
           await input.press("ArrowUp");
           await input.pressSequentially("comp");
-          await menu.getByRole("option").first().waitFor();
+          await menu.locator('[id$="-slash-option-command-compact"]').waitFor({ state: "visible" });
           await input.press("Tab");
           if (!(await input.inputValue()).startsWith("/compact")) {
             throw new Error("Slash completion lost the filtered command");

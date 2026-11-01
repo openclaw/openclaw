@@ -13,6 +13,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
   composeSessionSourceAssertion,
   type PreparedSessionSourceAuthority,
@@ -59,6 +60,15 @@ export async function prepareSkillExperienceReviewCandidate(
   const { mergeAlsoAllowPolicy } = await import("../../agents/tool-policy.js");
   const foreground = candidate.ctx.foregroundPromptContext;
   const sessionKey = candidate.source.sessionKey;
+  // A managed-worktree session records its durable workspace; the throwaway worktree must not
+  // host the review. The session entry owns that fact for every turn entry point.
+  const sourceEntry = await readSessionEntryReadOnlyInWorker({
+    agentId: candidate.source.agentId,
+    sessionKey,
+    storePath: candidate.source.storePath,
+    projection: "list",
+  });
+  const workspaceDir = sourceEntry?.worktree?.canonicalWorkspaceDir ?? candidate.ctx.workspaceDir;
   const capabilityProfile = await prepareConversationCapabilityProfile({
     config,
     sessionKey,
@@ -78,7 +88,7 @@ export async function prepareSkillExperienceReviewCandidate(
     senderIsOwner: foreground.senderIsOwner,
     modelProvider: candidate.ctx.modelProviderId,
     modelId: candidate.ctx.modelId,
-    workspaceDir: candidate.ctx.workspaceDir,
+    workspaceDir,
   });
   const policy = capabilityProfile.policy;
   if (
@@ -97,7 +107,7 @@ export async function prepareSkillExperienceReviewCandidate(
   ) {
     return undefined;
   }
-  return { ...candidate, config };
+  return { ...candidate, ctx: { ...candidate.ctx, workspaceDir }, config };
 }
 
 export async function runSkillExperienceReview(

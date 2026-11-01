@@ -1,3 +1,4 @@
+import type { SandboxConfig } from "../../agents/sandbox/types.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import {
   captureWorktreeRegistryReadGuard,
@@ -15,10 +16,12 @@ import { retainPreparedSessionEntryPredicate } from "../../config/sessions/sessi
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
+import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import { projectionOperations } from "./local-workspace-state.js";
 import { withLocalWorkspaceStore, type LocalWorkspaceStore } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
@@ -34,9 +37,27 @@ type LocalWorkspaceCustody = {
   workerAuthority: WorktreeWorkerAuthority;
 };
 
-const pendingCheckpoints = new Map<string, Promise<void>>();
+type PendingWorkspaceOperation<T> = { result: Promise<T>; signal?: AbortSignal };
+const pendingCheckpoints = new Map<string, PendingWorkspaceOperation<void>>();
+const pendingPreparations = new Map<string, PendingWorkspaceOperation<string>>();
 
-async function joinLocalWorkspaceCheckpoint(
+/** Queued preparations share observation, while each caller retains its own run authority. */
+export function withLocalWorkspacePreparation(
+  owner: LocalWorkspaceOwner,
+  options: { sandbox: SandboxConfig; acceleration: boolean; signal?: AbortSignal },
+  prepare: (beginCapture: () => void) => Promise<string>,
+): Promise<string> {
+  return joinLocalWorkspaceOperation(
+    pendingPreparations,
+    owner,
+    [owner.agentId, owner.sessionKey, owner.sessionId, owner.lifecycleRevision],
+    prepare,
+    options,
+  );
+}
+
+async function joinLocalWorkspaceOperation<T>(
+  pendingOperations: Map<string, PendingWorkspaceOperation<T>>,
   params: {
     worktree: ManagedWorktreeRecord;
     env?: NodeJS.ProcessEnv;
@@ -44,11 +65,17 @@ async function joinLocalWorkspaceCheckpoint(
     workerAuthority?: WorktreeWorkerAuthority;
   },
   session: readonly [string, string, string, string | null] | undefined,
-  run: (beginCapture: () => void) => Promise<void>,
-) {
+  run: (beginCapture: () => void) => Promise<T>,
+  options: { sandbox?: SandboxConfig; acceleration?: boolean; signal?: AbortSignal } = {},
+): Promise<T> {
   const context = captureWorktreeRunEndContext(params.env ?? process.env);
-  params.assertCurrent?.();
-  params.workerAuthority?.assertCurrent?.();
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    options.signal?.throwIfAborted();
+    params.assertCurrent?.();
+    params.workerAuthority?.assertCurrent?.();
+  };
+  assertCurrent();
   const { worktree } = params;
   const key = JSON.stringify([
     context.admission.coordinationKey,
@@ -61,28 +88,49 @@ async function joinLocalWorkspaceCheckpoint(
     worktree.snapshotRef,
     worktree.removedAt,
     session,
+    options.sandbox,
+    options.acceleration,
   ]);
-  let pending = pendingCheckpoints.get(key);
-  if (!pending) {
+  const pending = pendingOperations.get(key);
+  let result: T;
+  if (pending) {
+    try {
+      result = await racePromiseWithAbortSignal(pending.result, options.signal);
+    } catch (error) {
+      assertCurrent();
+      // Retry a stopped producer only after settlement, never an uncertain write
+      // or storage failure that happened to coincide with its cancellation.
+      if (
+        pending.signal?.aborted &&
+        (error === pending.signal.reason ||
+          (error instanceof OpenClawStateLeaseError &&
+            error.code === "OPENCLAW_STATE_LEASE_ABORTED" &&
+            error.cause === pending.signal.reason))
+      ) {
+        return joinLocalWorkspaceOperation(pendingOperations, params, session, run, options);
+      }
+      throw error;
+    }
+  } else {
     const forget = () => {
-      if (pendingCheckpoints.get(key) === pending) {
-        pendingCheckpoints.delete(key);
+      if (pendingOperations.get(key)?.result === resultPromise) {
+        pendingOperations.delete(key);
       }
     };
-    // Join only while waiting for custody/quiescence. A filesystem write after
-    // capture starts has no database revision and needs its own checkpoint.
-    pending = run(forget).finally(forget);
-    pendingCheckpoints.set(key, pending);
+    // Guest writes do not advance a database generation. Requests arriving after
+    // capture starts need their own observation, even while this one is in flight.
+    const resultPromise = run(forget).finally(forget);
+    pendingOperations.set(key, { result: resultPromise, signal: options.signal });
+    result = await resultPromise;
   }
-  await pending;
-  context.admission.assertCurrent();
-  params.assertCurrent?.();
-  params.workerAuthority?.assertCurrent?.();
+  assertCurrent();
+  return result;
 }
 
 /** Checkpoint callers keep their own session authority while sharing queued capture. */
 export function checkpointLocalWorkspace(owner: LocalWorkspaceOwner): Promise<void> {
-  return joinLocalWorkspaceCheckpoint(
+  return joinLocalWorkspaceOperation(
+    pendingCheckpoints,
     owner,
     [owner.agentId, owner.sessionKey, owner.sessionId, owner.lifecycleRevision],
     (beginCapture) =>
@@ -260,7 +308,7 @@ export async function checkpointLocalWorkspacePath(params: {
       return;
     }
     const checkpoint = { worktree, env, assertCurrent: params.assertCurrent };
-    await joinLocalWorkspaceCheckpoint(checkpoint, undefined, (beginCapture) =>
+    await joinLocalWorkspaceOperation(pendingCheckpoints, checkpoint, undefined, (beginCapture) =>
       settleLocalWorkspace(checkpoint, async () => {}, beginCapture),
     );
   }
@@ -283,7 +331,11 @@ export async function withSettledLocalWorkspacePath<T>(
 }
 
 /** An unchanged turn needs no filesystem effects and can leave its runtimes running. */
-export function reuseLocalWorkspaceProjection(owner: LocalWorkspaceOwner, signal?: AbortSignal) {
+export function reuseLocalWorkspaceProjection(
+  owner: LocalWorkspaceOwner,
+  signal?: AbortSignal,
+  beginCapture?: () => void,
+) {
   return withLocalWorkspaceStore(
     { ...owner, worktreeId: owner.worktree.id, signal },
     async (store) => {
@@ -292,6 +344,9 @@ export function reuseLocalWorkspaceProjection(owner: LocalWorkspaceOwner, signal
       );
       try {
         let row = store.get();
+        if (row?.baseline_ref) {
+          beginCapture?.();
+        }
         if (
           row?.baseline_ref &&
           row.tree_root_digest &&

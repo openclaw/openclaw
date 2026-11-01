@@ -114,10 +114,8 @@ suite.define(() => {
           ).toBe(240);
           await waitForChatScrollIdle(page);
           const decoded = await geometry();
-          expect(decoded.imageHeight).toBeCloseTo(200, 1);
-          if (sized) {
-            expect(decoded).toEqual(before);
-          }
+          expect(decoded.imageHeight).toBeCloseTo(sized ? 200 : 400 / 1.5, 1);
+          expect(decoded).toEqual(before);
           const gap = () =>
             image.evaluate((element) => {
               const row = element.closest<HTMLElement>(".chat-virtual-row")!;
@@ -140,11 +138,13 @@ suite.define(() => {
           await thread.hover();
           await page.mouse.wheel(0, -100_000);
           await image.waitFor({ state: "visible" });
-          await expect.poll(async () => (await geometry()).height).toBe(decoded.height);
+          await expect
+            .poll(async () => (await geometry()).height)
+            .toBeCloseTo(decoded.height - decoded.imageHeight + 200, 0);
           await image.evaluate((element) => (element as HTMLImageElement).decode());
           const returned = await geometry();
           expect(returned.imageWidth).toBe(decoded.imageWidth);
-          expect(returned.imageHeight).toBe(decoded.imageHeight);
+          expect(returned.imageHeight).toBeCloseTo(200, 1);
           expect(Math.abs(await gap())).toBeLessThanOrEqual(1);
         },
       );

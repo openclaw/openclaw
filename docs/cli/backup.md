@@ -104,6 +104,33 @@ Existing format-1 SQLite snapshots remain readable. See
 [Database engines](/reference/database-engines#anchors-and-backups) for matched
 restore and update-recovery behavior.
 
+## Local companion checkpoints
+
+Use `openclaw backup create --local-companion --verify` for a local restart
+checkpoint when all portable database families use PostgreSQL. It archives local
+files, fixed-local SQLite databases (including client credentials), and PostgreSQL
+anchors without exporting PostgreSQL rows. Capture still reads PostgreSQL metadata
+to discover registered stores; verification and restore inspect the captured
+anchors offline and do not contact PostgreSQL. `--only-config` cannot be combined
+with this profile.
+
+Use `openclaw backup restore <archive> --target <dir> --local-companion` to require
+this profile and refuse ordinary backups before extraction. The same flag works
+with `--from <location>`. Without the flag, restore still honors the archive
+profile; a companion never imports PostgreSQL rows.
+
+This profile is **not disaster recovery**. Local files roll back, but PostgreSQL
+rows do not. Restore preserves the same store identities and namespaces, and
+rebinds the copied local credentials to the restored shared anchor. Stop the
+Gateway before activating the restored tree, keep the corresponding PostgreSQL
+database available, and run `openclaw doctor` after activation. Do not run the
+original and restored installation concurrently with the same credentials.
+
+Checkpoints refuse remaining legacy audit migration inputs and PostgreSQL export
+directories. Finish the legacy audit migration or move old exports outside the
+backup sources before retrying. Ordinary backups continue to include PostgreSQL
+exports and restore them into fresh namespaces for disaster recovery.
+
 ## Notes
 
 - The archive embeds a schema-version-1 `manifest.json` with the resolved source paths and archive layout. Additive ownership metadata records configured agent ids and roots, including agent roots already covered by another asset; existing archive layout and older archives remain supported. New archives also record the current-layout SQLite snapshots captured at creation; standalone verification rejects missing or mismatched inventory entries. Legacy archives without this inventory remain readable, but verification reports `sqliteInventoryVerified: false` because complete database coverage cannot be established. An empty inventory means no current-layout databases were captured (for example, a config-only export), not a full database recovery point.

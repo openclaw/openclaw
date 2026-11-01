@@ -36,7 +36,7 @@
   display: grid;
   place-items: center;
   overflow: hidden;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
 }
 
 .installed-plugins-card__art {
@@ -132,7 +132,6 @@
 }
 
 .plugins-hub-header .plugins-hub-header__secondary.btn.btn--icon {
-  box-sizing: border-box;
   flex: 0 0 34px;
   width: 34px;
   min-width: 34px;
@@ -386,7 +385,7 @@
 .plugin-catalog-card__skeleton-art {
   width: 40px;
   height: 40px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
 }
 
 .plugin-catalog-card__skeleton-title,
@@ -481,7 +480,6 @@
 
 .plugins-toolbar--fields > .settings-segmented,
 .plugins-toolbar--fields > .btn {
-  box-sizing: border-box;
   height: var(--settings-control-height);
 }
 
@@ -727,11 +725,9 @@
   max-height: min(85vh, 860px);
   gap: var(--space-4);
   overflow-y: auto;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xl);
-  padding: var(--space-5);
-  background: var(--popover);
-  box-shadow: var(--shadow-xl);
+  border: 0;
+  padding: var(--overlay-modal-padding);
+  background: var(--overlay-modal-surface);
 }
 
 .plugins-consent__header {
@@ -950,7 +946,7 @@ openclaw-plugins-page
   width: 112px;
   height: 112px;
   overflow: hidden;
-  border-radius: 20px;
+  border-radius: var(--radius-xl);
   background: var(--bg-elevated);
   color: var(--accent);
 }
@@ -1199,7 +1195,7 @@ openclaw-plugins-page
   width: 100%;
   padding: 12px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text);
   text-align: left;
@@ -1258,7 +1254,7 @@ openclaw-plugins-page
   width: 36px;
   height: 36px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--accent);
 }
 .plugin-capability svg {
@@ -1288,10 +1284,7 @@ openclaw-plugins-page
   grid-template-rows: auto minmax(0, 1fr);
   width: 100%;
   max-height: var(--openclaw-modal-height-limit, calc(100dvh - 48px));
-  padding: 24px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--bg);
+  padding: var(--overlay-modal-padding);
 }
 .plugin-tool-preview header {
   display: flex;

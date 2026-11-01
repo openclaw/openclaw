@@ -10,10 +10,10 @@ if (!unsupportedControlUiBrowser) {
   initializeControlUiDocumentHead();
   const early = startEarlyApplicationGateway(initial);
   // Route hints fetch the renderer while the challenge/signature is pending.
-  // Cold evaluation overlaps the reply; admitted cached views must not wait
-  // for a challenge that might never arrive while the Gateway is unreachable.
+  // Cold chat evaluation overlaps the reply; New and admitted cached views
+  // must not wait for a challenge from an unreachable Gateway.
   void (
-    early && !early.credentials.hasWarmBoot
+    early?.credentials && !early.credentials.hasWarmBoot
       ? early.transport.client.initialConnectSent
       : Promise.resolve()
   )

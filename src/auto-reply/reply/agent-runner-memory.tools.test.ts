@@ -301,7 +301,10 @@ describe("provider-owned memory flush", () => {
 
     const result = await runDefaultMemoryFlush(entry, {
       ...overrides,
-      cfg: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } } },
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } },
+        tools: { sandbox: { tools: { alsoAllow: ["knowledge"] } } },
+      },
     });
 
     expect(result.outcome).toBe("completed");
@@ -418,4 +421,35 @@ describe("provider-owned memory flush", () => {
     expect((await runDefaultMemoryFlush(entry, overrides)).outcome).toBe("skipped");
     expect(loadSessionEntry(overrides)?.memoryFlush).toBeUndefined();
   });
+
+  it.each([
+    { tools: { deny: ["knowledge_save_page"] } },
+    { agents: { defaults: { sandbox: { mode: "all" as const } } } },
+  ])("does not dispatch a provider flush whose persistence tools are denied (%j)", async (cfg) => {
+    const { entry, overrides } = await createToolsFlushFixture();
+    const result = await runDefaultMemoryFlush(entry, {
+      ...overrides,
+      cfg,
+    });
+
+    expect(result.outcome).toBe("skipped");
+    expect(runEmbeddedAgentEntryMock).not.toHaveBeenCalled();
+    expect(loadSessionEntry(overrides)?.memoryFlush).toBeUndefined();
+  });
+
+  it.each([undefined, "node"])(
+    "keeps provider flushes admitted by their manifest tool profile (%s)",
+    async (messageProvider) => {
+      const { entry, overrides } = await createToolsFlushFixture();
+      overrides.followupRun.run.messageProvider = messageProvider;
+      runEmbeddedAgentMock.mockImplementationOnce(persist);
+
+      const result = await runDefaultMemoryFlush(entry, {
+        ...overrides,
+        cfg: { tools: { profile: "coding" } },
+      });
+      expect(result.outcome).toBe("completed");
+      expect(runEmbeddedAgentEntryMock).toHaveBeenCalledOnce();
+    },
+  );
 });

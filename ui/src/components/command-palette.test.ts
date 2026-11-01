@@ -139,6 +139,23 @@ describe("CommandPalette search", () => {
     expect(palette.textContent).not.toContain("Searching commands");
   });
 
+  it("keeps a pending model search when typing refreshes an expired command catalog", async () => {
+    const pending = createDeferred<ReturnType<typeof modelResult>>();
+    const request = vi.fn().mockReturnValue(pending.promise);
+    const { palette } = await mountModels(request);
+    await searchPalette(palette, "needle");
+    expect(request).toHaveBeenCalledOnce();
+
+    vi.setSystemTime(Date.now() + 30_001);
+    setInputValue(paletteInput(palette), "needle model");
+    await settlePalette(palette);
+    expect.soft(request).toHaveBeenCalledOnce();
+
+    pending.resolve(modelResult("needle", "Needle model"));
+    await settlePalette(palette);
+    expect(findPaletteOption(palette, "Needle model")).toBeDefined();
+  });
+
   it("excludes agent primary models when selection is restricted", async () => {
     const { gateway } = modelGateway(() => ({
       models: [],
@@ -190,7 +207,7 @@ describe("CommandPalette search", () => {
       const { context, palette, provider, query } = harness;
       await searchPalette(palette, "needle");
       expect(findPaletteOption(palette, "Needle old")).toBeDefined();
-      harness.emit("config.changed");
+      harness.emit("chat.metadata.changed", { modelCatalogChanged: true });
       await vi.advanceTimersByTimeAsync(200);
       if (replacement === "agent") {
         context.agentSelection.set("reviewer");

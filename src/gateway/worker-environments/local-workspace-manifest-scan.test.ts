@@ -11,6 +11,7 @@ import { requireGit } from "../../agents/worktrees/git.js";
 import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import {
+  decodeLocalWorkspaceTree,
   localWorkspaceDigestBytes,
   prepareLocalWorkspaceTreePacks,
   type LocalWorkspacePreparation,
@@ -151,8 +152,8 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
       beginLocalWorkspaceSweepInDatabase(db);
       const pendingEpoch = beginLocalWorkspaceSweepInDatabase(db);
       expect(readLocalWorkspaceSweepCandidates(db, pendingEpoch).packs).toEqual([]);
-      expect(readLocalWorkspaceTree(db, treeRoot)).toEqual(baseline);
-      expect(readLocalWorkspaceTree(db, nextRoot)).toEqual(expected);
+      expect(decodeLocalWorkspaceTree(readLocalWorkspaceTree(db, treeRoot))).toEqual(baseline);
+      expect(decodeLocalWorkspaceTree(readLocalWorkspaceTree(db, nextRoot))).toEqual(expected);
       revision = 1;
     }
     mutateLocalWorkspaceProjection(db, row.worktree_id, {
@@ -162,7 +163,9 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
       manifest: checkpoint,
     });
     expect(
-      readLocalWorkspaceManifestRows(db, { ...input, revision: revision + 1 }).records,
+      decodeLocalWorkspaceTree(
+        readLocalWorkspaceManifestRows(db, { ...input, revision: revision + 1 }).records,
+      ),
     ).toEqual(expected);
     expect(result.preparations).toHaveLength(1);
     const packs = result.preparations!.flatMap(
@@ -182,7 +185,7 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
     const garbage = readLocalWorkspaceSweepCandidates(db, acceptedEpoch);
     expect(garbage.packs.length).toBeGreaterThan(0);
     deleteLocalWorkspaceSweepBatchInDatabase(db, acceptedEpoch, garbage);
-    expect(readLocalWorkspaceTree(db, nextRoot)).toEqual(expected);
+    expect(decodeLocalWorkspaceTree(readLocalWorkspaceTree(db, nextRoot))).toEqual(expected);
   },
 );
 
@@ -235,7 +238,7 @@ async function repairFixture(historicalCache = false) {
       pending_ref: "refs/openclaw/results/preserved",
       checkpoint_json: null as string | null,
     },
-    records: new Map(),
+    records: [] as string[],
   };
   return { projection, canonical, snapshot, treeRoot, records };
 }
@@ -254,7 +257,7 @@ it.each([
     if (matching === "checkpoint") {
       await fs.writeFile(path.join(canonical, "nested/file.txt"), "pending edit");
       const scan = await executeLocalWorkspaceManifestRead(
-        { ...snapshot, records },
+        { ...snapshot, records: [JSON.stringify([...records.values()])] },
         {
           kind: "scan",
           target: "projection",

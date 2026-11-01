@@ -16,6 +16,7 @@ import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
 import * as catalog from "./catalog-target.ts";
 import type { NewSessionComposerOptions } from "./composer.tsx";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
+import { selectedDraftProjectId } from "./draft-create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import {
   activateDraft,
@@ -403,6 +404,7 @@ export class NewSessionPageOwner {
       context,
       isCatalogTarget,
       draftOwnerKey,
+      commandProjectId: selectedDraftProjectId(place),
       get message() {
         return submission.message;
       },

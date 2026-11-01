@@ -35,7 +35,8 @@ import {
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
-import { refreshChatCommands, refreshPageChat } from "./chat-state-refresh.ts";
+import { refreshChatCommands } from "./chat-session-commands.ts";
+import { refreshPageChat } from "./chat-state-refresh.ts";
 import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import { PaneHeaderView } from "./components/chat-pane-header.tsx";
 import { resetTranscriptTestDom } from "./components/chat-transcript.test-support.ts";

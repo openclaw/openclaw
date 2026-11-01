@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 88830,
-  "reason": "Integrated long-tail candidate measures 88,830 B startup gzip, 46 B above its exact base, with unchanged 277,773 B raw JS, three JS requests and one CSS request. Twenty interleaved pairs reduce Skills desktop visit and filter CPU by about 70%; record the measured candidate after main integration.",
+  "startupJsGzipBytes": 89354,
+  "reason": "New Session socket preconnect: 20 paired observations per profile improve 100 ms RTT composer readiness by 8.1%; accept measured startup 89354 B (+219 B vs exact base), with unchanged request counts and CPU/tail caveats recorded in PR evidence.",
   "updatedAt": "2026-10-31"
 }

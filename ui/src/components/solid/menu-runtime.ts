@@ -15,13 +15,10 @@ import { MENU_FORM_CONTROL_SELECTOR } from "./menu-form-controls.ts";
 
 // Focus events use bubbling DOM names; all other listener names stay canonical.
 const normalize = (props: object) => {
-  const out: Record<string, unknown> = Object.fromEntries(Object.entries(props));
-  for (const [from, to] of [
-    ["onFocus", "onFocusIn"],
-    ["onBlur", "onFocusOut"],
-  ] as const) {
+  const out: Record<string, unknown> = { ...props };
+  for (const from of ["onFocus", "onBlur"] as const) {
     if (from in out) {
-      out[to] = out[from];
+      out[from === "onFocus" ? "onFocusIn" : "onFocusOut"] = out[from];
       delete out[from];
     }
   }
@@ -122,16 +119,15 @@ export function createMenuRuntime(
       revealInScrollRegion(overlay.surface, node);
     }
     const active = service.scope.getActiveElement();
-    if (
-      active instanceof HTMLElement &&
-      active.matches("input, textarea, select") &&
-      !focusFromKeyboard
-    ) {
+    if (!focusFromKeyboard && active?.matches("input, textarea, select")) {
       return;
     }
     if (options.focus !== "retain") {
       for (const item of rows) {
-        item.tabIndex = item === node ? 0 : -1;
+        const tabIndex = item === node ? 0 : -1;
+        if (item.tabIndex !== tabIndex) {
+          item.tabIndex = tabIndex;
+        }
       }
     }
     if (

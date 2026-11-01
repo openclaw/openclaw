@@ -11,12 +11,12 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
   ChannelMessageToolDiscovery,
+  ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
-  defineChannelMessageAdapter,
+  createChannelMessageAdapterFromOutbound,
   createRuntimeOutboundDelegates,
-  type ChannelMessageSendTextContext,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
@@ -109,7 +109,6 @@ import {
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { collectFeishuSecurityAuditFindings } from "./security-audit.js";
 import { withFeishuRequestContext, withFeishuSendContext } from "./send-context.js";
-import { toFeishuMessageSendResult } from "./send-result.js";
 import { resolveFeishuSessionConversation } from "./session-conversation.js";
 import { resolveFeishuOutboundSessionRoute } from "./session-route.js";
 import { feishuSetupContract } from "./setup-core.js";
@@ -274,11 +273,32 @@ const loadFeishuChannelRuntime = createLazyRuntimeNamedExport(
   "feishuChannelRuntime",
 );
 
-async function resolveFeishuMessageSender(kind: "text" | "media") {
-  const unavailableMessage = `Feishu ${kind} sending is not available.`;
+const feishuOutboundAdapter: ChannelOutboundAdapter = {
+  deliveryMode: "direct",
+  chunker: chunkFeishuMarkdown,
+  chunkerMode: "markdown",
+  textChunkLimit: 4000,
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
+  presentationCapabilities: FEISHU_PRESENTATION_CAPABILITIES,
+  ...createRuntimeOutboundDelegates({
+    getRuntime: loadFeishuChannelRuntime,
+    renderPresentation: { resolve: (runtime) => runtime.feishuOutbound.renderPresentation },
+    sendPayload: {
+      resolve: (runtime) => runtime.feishuOutbound.sendPayload,
+      unavailableMessage: "Feishu payload sending is not available.",
+    },
+    sendText: { resolve: (runtime) => runtime.feishuOutbound.sendText },
+    sendMedia: { resolve: (runtime) => runtime.feishuOutbound.sendMedia },
+  }),
+};
+
+async function resolveFeishuMessageSender<Method extends "sendText" | "sendMedia" | "sendPayload">(
+  method: Method,
+) {
+  const unavailableMessage = `Feishu ${method.slice(4).toLowerCase()} sending is not available.`;
   try {
     const runtime = await loadFeishuChannelRuntime();
-    const sender = runtime.feishuOutbound[kind === "text" ? "sendText" : "sendMedia"];
+    const sender = runtime.feishuOutbound[method];
     if (sender) {
       return sender;
     }
@@ -291,47 +311,31 @@ async function resolveFeishuMessageSender(kind: "text" | "media") {
   }
 }
 
-async function sendFeishuAdapterMessage(
-  kind: "text" | "media",
-  ctx: ChannelMessageSendTextContext,
-) {
-  const send = await resolveFeishuMessageSender(kind);
-  const { onDeliveryResult, ...outboundCtx } = ctx;
-  const result = await send({
-    ...outboundCtx,
-    ...(onDeliveryResult
-      ? {
-          onDeliveryResult: async (progress) => {
-            await onDeliveryResult(toFeishuMessageSendResult(progress, kind));
-          },
-        }
-      : {}),
-  });
-  return toFeishuMessageSendResult(result, kind);
-}
-
-const feishuMessageAdapter = defineChannelMessageAdapter({
+const feishuMessageAdapter = createChannelMessageAdapterFromOutbound({
   id: "feishu",
-  durableFinal: {
-    capabilities: {
-      text: true,
-      media: true,
-    },
-  },
-  send: {
-    lifecycle: {
-      // Resolve process-stable runtime methods before core records platform-send start.
-      // Provider invocation stays below so a lost provider result remains ambiguous.
-      beforeSendAttempt: async (ctx) => {
-        if (ctx.kind === "text" || ctx.kind === "media") {
-          await resolveFeishuMessageSender(ctx.kind);
-        }
-      },
-    },
-    text: (ctx) => sendFeishuAdapterMessage("text", ctx),
-    media: (ctx) => sendFeishuAdapterMessage("media", ctx),
+  outbound: feishuOutboundAdapter,
+  capabilities: {
+    text: true,
+    media: true,
+    payload: true,
+    replyTo: true,
+    thread: true,
+    messageSendingHooks: true,
   },
 });
+feishuMessageAdapter.send = {
+  ...feishuMessageAdapter.send,
+  lifecycle: {
+    // Resolve process-stable runtime methods before core records platform-send start.
+    // Provider invocation stays below so a lost provider result remains ambiguous.
+    beforeSendAttempt: async (ctx) => {
+      if (ctx.kind !== "poll") {
+        const method = { text: "sendText", media: "sendMedia", payload: "sendPayload" } as const;
+        await resolveFeishuMessageSender(method[ctx.kind]);
+      }
+    },
+  },
+};
 
 async function createFeishuActionClient(account: ResolvedFeishuAccount) {
   const { createFeishuClient } = await import("./client.js");
@@ -1080,7 +1084,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 });
               } else {
                 const { target, ...delivery } = await (
-                  await resolveFeishuMessageSender("text")
+                  await resolveFeishuMessageSender("sendText")
                 )(outboundContext);
                 result = { ...delivery, chatId: target?.id };
               }
@@ -1586,23 +1590,6 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       },
     },
     threading: feishuThreading,
-    outbound: {
-      deliveryMode: "direct",
-      chunker: chunkFeishuMarkdown,
-      chunkerMode: "markdown",
-      textChunkLimit: 4000,
-      sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
-      presentationCapabilities: FEISHU_PRESENTATION_CAPABILITIES,
-      ...createRuntimeOutboundDelegates({
-        getRuntime: loadFeishuChannelRuntime,
-        renderPresentation: { resolve: (runtime) => runtime.feishuOutbound.renderPresentation },
-        sendPayload: {
-          resolve: (runtime) => runtime.feishuOutbound.sendPayload,
-          unavailableMessage: "Feishu payload sending is not available.",
-        },
-        sendText: { resolve: (runtime) => runtime.feishuOutbound.sendText },
-        sendMedia: { resolve: (runtime) => runtime.feishuOutbound.sendMedia },
-      }),
-    },
+    outbound: feishuOutboundAdapter,
   });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
