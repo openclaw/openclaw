@@ -159,17 +159,13 @@ function filterPluginExecEnv(rawEnv: Record<string, string>): Record<string, str
   return Object.keys(env).length > 0 ? env : undefined;
 }
 
-function resolveNotifyOnExitEmptySuccess(defaults?: ExecToolDefaults): boolean {
-  if (typeof defaults?.notifyOnExitEmptySuccess === "boolean") {
-    return defaults.notifyOnExitEmptySuccess;
-  }
-  return normalizeChatChannelId(defaults?.messageProvider) !== null;
-}
-
 /** Capture notification routing and child identity before process lifetime detaches. */
 export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
   const notifyOnExit = defaults?.notifyOnExit !== false;
-  const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
+  const notifyOnExitEmptySuccess =
+    typeof defaults?.notifyOnExitEmptySuccess === "boolean"
+      ? defaults.notifyOnExitEmptySuccess
+      : normalizeChatChannelId(defaults?.messageProvider) !== null;
   const notifySessionKey = normalizeOptionalString(
     defaults?.notifySessionKey ?? defaults?.runSessionKey ?? defaults?.sessionKey,
   );
@@ -206,7 +202,7 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
     }));
   const notifyDeliveryContext = normalizeDeliveryContext({
     channel: defaults?.messageProvider,
-    to: defaults?.currentChannelId,
+    to: defaults?.currentMessagingTarget ?? defaults?.currentChannelId,
     accountId: defaults?.accountId,
     threadId: defaults?.currentThreadTs,
   });
