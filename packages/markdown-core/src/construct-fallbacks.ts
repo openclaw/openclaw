@@ -69,6 +69,7 @@ function applyTextEdits(ir: MarkdownIR, edits: TextEdit[]): MarkdownIR {
     };
     attachBlockMetadata(
       result,
+      // oxlint-disable-next-line oxc/no-map-spread -- Copy-on-write preserves source block offsets.
       metadataIR.blocks.map((block) => ({
         ...block,
         start: mapOffset(block.start),
