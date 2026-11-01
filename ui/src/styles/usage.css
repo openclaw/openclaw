@@ -222,38 +222,17 @@
 .usage-query-input,
 .usage-filters-inline select,
 .usage-filters-inline input[type="text"] {
-  min-height: 32px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  transition:
-    border-color 0.18s var(--ease-out),
-    box-shadow 0.18s var(--ease-out),
-    background 0.18s var(--ease-out);
+  min-height: var(--settings-control-height);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+  background-color: var(--field-bg);
+  font-size: var(--field-font-size);
 }
 
 .usage-date-input,
 .usage-select {
-  height: 32px;
-  padding: 0 10px;
-}
-
-.usage-date-input:hover,
-.usage-select:hover {
-  border-color: var(--border-strong);
-}
-
-.usage-date-input:focus-visible,
-.usage-select:focus-visible,
-.usage-query-input:focus-visible,
-.usage-filters-inline select:focus-visible,
-.usage-filters-inline input[type="text"]:focus-visible {
-  outline: none;
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent);
+  height: var(--settings-control-height);
+  padding: 0 var(--field-padding-inline);
 }
 
 .usage-separator,
@@ -326,25 +305,13 @@
   gap: 8px;
 }
 
+.usage-select {
+  padding-right: 36px;
+}
+
 .usage-query-input {
   width: 100%;
-  padding: 8px 12px;
-  font-size: 12px;
-}
-
-@media (hover: none) and (pointer: coarse) {
-  .usage-date-input,
-  .usage-select,
-  .usage-query-input,
-  .usage-filters-inline select,
-  .usage-filters-inline input[type="text"] {
-    font-size: 16px;
-  }
-}
-
-.usage-query-input::placeholder {
-  color: var(--muted);
-  opacity: 0.7;
+  padding: 0 var(--field-padding-inline);
 }
 
 .usage-query-actions {
@@ -1548,12 +1515,12 @@
 }
 
 .sessions-sort select {
-  min-height: 34px;
-  padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg);
-  color: var(--text);
+  min-height: var(--settings-control-height);
+  padding: 0 var(--field-padding-inline);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+  background-color: var(--field-bg);
+  font-size: var(--field-font-size);
 }
 
 /* Sessions read as a divided list; the page scrolls, the list does not. */
@@ -1811,7 +1778,7 @@
 
 .usage-filters-inline input[type="text"] {
   flex: 1 1 220px;
-  padding: 9px 10px;
+  padding: 0 var(--field-padding-inline);
 }
 
 .session-log-has-tools {

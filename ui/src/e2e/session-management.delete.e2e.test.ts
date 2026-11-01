@@ -18,57 +18,36 @@ const basicOptions = {
 const desktopOptions = { ...basicOptions, viewport: { height: 900, width: 1280 } };
 
 suite.define(() => {
-  it("does not archive a parent when clicking its removed child disclosure position", () =>
+  it("aligns childless sidebar rows to the disclosure edge", () =>
     suite.withPage(desktopOptions, async ({ page }) => {
       const now = Date.now();
       const main = sessionRow("agent:main:main", "Home", now);
       const parent = sessionRow("agent:main:parent", "Parent conversation", now + 2, {
         childSessions: ["agent:main:child"],
       });
-      const child = sessionRow("agent:main:child", "Child", now + 1, {
-        spawnedBy: parent.key,
-      });
+      const child = sessionRow("agent:main:child", "Child", now + 1, { spawnedBy: parent.key });
+      const plain = sessionRow(
+        "agent:main:plain",
+        "A long conversation title that truncates",
+        now + 3,
+      );
       await seedChatSettings(page, suite.server.baseUrl, { navWidth: 320 });
-      const gateway = await support.installMockGateway(page, {
-        sessions: [main, parent, child],
+      await support.installMockGateway(page, {
+        sessions: [main, parent, child, plain],
         sessionKey: main.key,
-        sessionArchiveFiltering: true,
       });
       await page.goto(support.controlUiSessionUrl(suite.server.baseUrl, main.key));
-      const row = page.locator(`.sidebar-recent-session[data-session-key="${parent.key}"]`);
-      const toggle = row.locator("[data-child-session-toggle]");
+      const toggle = page.locator(`[data-session-key="${parent.key}"] [data-child-session-toggle]`);
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${plain.key}"]`);
       await toggle.waitFor();
-      const bounds = await toggle.boundingBox();
-      const point = { x: bounds!.x + bounds!.width / 2, y: bounds!.y + bounds!.height / 2 };
-      await page.mouse.click(point.x, point.y);
-      await gateway.setSessionsListResponse(
-        support.sessionsListResponse([main, { ...parent, childSessions: [] }]),
-      );
-      await gateway.emitGatewayEvent("sessions.changed", {
-        sessionKey: child.key,
-        sessionId: child.sessionId,
-        agentId: "main",
-        reason: "delete",
-      });
-      await gateway.emitGatewayEvent("sessions.changed", { reason: "delete" });
-      await toggle.waitFor({ state: "detached" });
-      await support.captureUiProof(suite, page, "removed-child-disclosure.png");
-      const archiveAtPoint = await page.evaluate(
-        ({ x, y }) =>
-          Boolean(document.elementFromPoint(x, y)?.closest("[data-sidebar-session-archive]")),
-        point,
-      );
-      await page.mouse.click(point.x, point.y);
-      expect.soft(archiveAtPoint).toBe(false);
-      await expectRequestCountStable(gateway, "sessions.patch", 0, undefined, {
-        key: parent.key,
-        archived: true,
-      });
+      const toggleBox = (await toggle.boundingBox())!;
+      // Rows without children use the disclosure's edge slot instead of reserving it empty.
+      const titleBox = (await row.locator(".sidebar-recent-session__text").boundingBox())!;
+      expect.soft(titleBox.x + titleBox.width).toBeGreaterThan(toggleBox.x);
       await row.hover();
-      await row.locator("[data-sidebar-session-archive]").click();
-      await gateway.waitForRequest("sessions.patch", {
-        match: { key: parent.key, archived: true },
-      });
+      const archiveBox = (await row.locator("[data-sidebar-session-archive]").boundingBox())!;
+      await support.captureUiProof(suite, page, "childless-row-alignment.png");
+      expect(archiveBox.x + archiveBox.width).toBeGreaterThan(toggleBox.x);
     }));
 
   it.each(["delete", "archive"] as const)(

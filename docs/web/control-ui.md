@@ -295,12 +295,12 @@ Dashboard; earlier tool activity remains in the conversation. **Keep commentary*
 the chat view menu controls whether commentary stays visible after the run,
 not whether the active run’s narration survives a history refresh. Completed
 dashboard turns collapse their narration and tool activity under **Worked for …**
-above the answer, with durations such as **Worked for 2 minutes, 3 seconds**.
+above the answer, with durations such as **Worked for 2m 3s**.
 Expanding it restores the sequence with the existing tool-call groups and shows
 the total tool-call count. When no run duration is available, the heading reads
 **Worked** rather than estimating from message timestamps. Failures and other
 non-success outcomes remain visible even when collapsed, such as
-**Worked for 2 minutes, 3 seconds · 2 failed**.
+**Worked for 2m 3s · 2 failed**.
 
 Still-streaming assistant text stays at the bottom of its run, below saved output, and
 takes its transcript position once saved.

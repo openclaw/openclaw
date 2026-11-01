@@ -6023,7 +6023,6 @@
 ["src/security/audit-plugin-readonly-scope.test.ts","../config/plugin-auto-enable.js","3874f661498e5f2e6ecb8154e22c422e8dd103d4b43a5c9862117c00dbef57dd",1]
 ["src/security/audit-plugin-readonly-scope.test.ts","../plugins/runtime/metadata-registry-loader.js","576a182ec3216810e1cae216ddf4d0a042802a2711fd298b5c43462a5de0cb5b",1]
 ["src/security/audit-plugins-trust.test.ts","../channels/read-only-account-inspect.js","da22dcbc59fad6842169541f439e9164593e321709566d54f63e8e87a2ed1b5b",1]
-["src/security/audit-plugins-trust.test.ts","../infra/package-update-utils.js","7f4ecd8641c96c1ac3ea58449cdaea720c8c9f0c2d647cd16f8003fd1b1183b9",1]
 ["src/sessions/provider-review.test.ts","../config/sessions/provider-review-store.js","c522f6274632badbdc40bafbba953f15fdf23403c61e75e6c3fe3eda05d6095a",1]
 ["src/sessions/session-participant-recording.test.ts","../config/sessions/session-accessor.js","c8f0f2e48b9ae2e4d379c50aa11a43a24035772d158b63c239c1974f283d97cd",1]
 ["src/sessions/session-state-events.worker-control.test.ts","../config/io.js","00279b48c7e75babca4aa3e904b1b22e2a02662a00509e223c766132d5d49787",1]

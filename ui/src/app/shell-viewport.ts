@@ -89,6 +89,9 @@ export function connectShellViewport(): () => void {
       nativeScale &&
       focused &&
       Math.max(layoutHeight, focusHeight ?? 0) - viewport.height >= KEYBOARD_MIN_SHRINK;
+    // Pages whose resting layout centers content (New Session) dock it on
+    // the keyboard instead; CSS cannot observe the visual viewport itself.
+    root.toggleAttribute("data-shell-keyboard", keyboard);
     if (keyboard) {
       root.style.setProperty("--shell-safe-area-bottom", "0px");
     } else {
@@ -142,6 +145,7 @@ export function connectShellViewport(): () => void {
     }
     root.style.removeProperty("--shell-viewport-height");
     root.style.removeProperty("--shell-safe-area-bottom");
+    root.removeAttribute("data-shell-keyboard");
     publish(undefined);
   };
 }

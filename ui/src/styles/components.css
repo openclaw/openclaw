@@ -937,40 +937,23 @@ openclaw-toast-host[data-toast-placement="shell"]
 .field textarea,
 .field select,
 .input {
-  border: 1px solid var(--input);
-  background: var(--card);
-  border-radius: var(--radius-md);
-  padding: 8px 12px;
+  border: 1px solid var(--field-border);
+  background: var(--field-bg);
+  border-radius: var(--field-radius);
+  padding: 6px var(--field-padding-inline);
   outline: none;
-  box-shadow: inset 0 1px 0 var(--card-highlight);
-  transition:
-    border-color var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
+  font-size: var(--field-font-size);
 }
 
 .field input:not([type="checkbox"]):not([type="radio"]),
 .field select,
 input.input:not([type="checkbox"]):not([type="radio"]),
 select.input {
-  height: 38px;
+  height: var(--settings-control-height);
 }
 
-@media (hover: none) and (pointer: coarse) {
-  .field input,
-  .field textarea,
-  .field select,
-  .input {
-    font-size: 16px;
-  }
-}
-
-.field input:focus-visible,
-.field textarea:focus-visible,
-.field select:focus-visible,
-.input:focus-visible,
 .oc-sensitive-input:focus-within {
-  border-color: var(--ring);
-  box-shadow: var(--focus-ring);
+  border-color: var(--field-focus-border);
 }
 
 /* Carapace Sensitive Input adapted to the Control UI token contract. */
@@ -981,10 +964,9 @@ select.input {
   min-width: 0;
   min-height: 44px;
   align-items: stretch;
-  border: 1px solid var(--input);
-  border-radius: var(--radius-md);
-  background: var(--card);
-  box-shadow: inset 0 1px 0 var(--card-highlight);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+  background: var(--field-bg);
   transition:
     border-color var(--duration-fast) var(--ease-out),
     box-shadow var(--duration-fast) var(--ease-out);
@@ -1089,6 +1071,8 @@ select.input {
 }
 
 .field select,
+.usage-select,
+.dashboards-select select,
 select.settings-select:not([multiple]) {
   appearance: none;
   padding-right: 36px;
@@ -1102,6 +1086,8 @@ select.settings-select:not([multiple]) {
 
 @media (forced-colors: active) {
   .field select,
+  .usage-select,
+  .dashboards-select select,
   select.settings-select:not([multiple]) {
     appearance: auto;
     padding-inline-end: 10px;
@@ -1244,13 +1230,6 @@ select.settings-select:not([multiple]) {
 .field textarea[aria-invalid="true"],
 .field select[aria-invalid="true"] {
   border-color: var(--danger);
-}
-
-:root[data-theme-mode="light"] .field input,
-:root[data-theme-mode="light"] .field textarea,
-:root[data-theme-mode="light"] .field select {
-  background-color: var(--card);
-  border-color: var(--input);
 }
 
 :root[data-theme-mode="light"] .btn:where(:not(.primary, .danger)) {
@@ -2009,23 +1988,14 @@ select.settings-select:not([multiple]) {
 
 .data-table-search input {
   width: 100%;
-  padding: 6px 10px;
-  font-size: 13px;
+  height: var(--settings-control-height);
+  padding: 0 var(--field-padding-inline);
+  font-size: var(--field-font-size);
   color: var(--text);
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: var(--field-bg);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
   outline: none;
-  transition: border-color var(--duration-fast) ease;
-}
-
-.data-table-search input:focus-visible {
-  border-color: var(--border-strong);
-  box-shadow: var(--focus-ring);
-}
-
-.data-table-search input::placeholder {
-  color: var(--muted);
 }
 
 .data-table-container {
@@ -2443,33 +2413,15 @@ td.data-table-key-col {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 6px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  background: var(--bg-accent);
+  min-height: var(--settings-control-height);
+  padding: 0 var(--field-padding-inline);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+  background: var(--field-bg);
   color: var(--text);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--field-font-size);
   outline: none;
   text-align: left;
-  transition:
-    border-color var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
-}
-
-:root[data-theme-mode="light"] .agent-select__trigger {
-  background: var(--bg-elevated);
-}
-
-.agent-select__trigger:focus-visible {
-  border-color: var(--accent);
-  box-shadow: var(--focus-ring);
-}
-
-.agent-select__trigger:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
 }
 
 .agent-select__trigger > .oc-menu-item__label {
@@ -2506,6 +2458,7 @@ td.data-table-key-col {
 :root[data-theme-mode="light"] .agent-select--compact .agent-select__trigger {
   width: auto;
   height: 26px;
+  min-height: 0;
   padding: 0 10px;
   border: 0;
   border-radius: var(--radius-full);
@@ -3445,4 +3398,63 @@ td.data-table-key-col {
 /* A tighter pair leaves room between its run outline and the title. */
 .sidebar-recent-session .session-owner-stack {
   width: 26px;
+}
+
+/* One hover, disabled and corner treatment for every field and field-like trigger. */
+:where(
+  .field :is(input, textarea, select),
+  .settings-input,
+  select.settings-select,
+  .picker-select__trigger,
+  .agent-select__trigger,
+  .multi-select,
+  .usage-date-input,
+  .usage-select,
+  .usage-query-input,
+  .sessions-sort select,
+  .dashboards-search input,
+  .dashboards-select select,
+  .data-table-search input,
+  .cron-search-box input,
+  .input
+) {
+  corner-shape: superellipse(1.5);
+  transition: border-color var(--duration-fast) var(--ease-out);
+
+  &::placeholder {
+    color: var(--muted);
+  }
+
+  &:focus-visible:focus-visible,
+  &[aria-expanded="true"]:not(.oc-menu-item) {
+    outline: none;
+    border-color: var(--field-focus-border);
+  }
+
+  @media (forced-colors: active) {
+    &:focus-visible:focus-visible,
+    &[aria-expanded="true"]:not(.oc-menu-item) {
+      outline: 2px solid SelectedItem;
+      outline-offset: 2px;
+    }
+  }
+
+  &:hover:not(:disabled, :focus-visible, :focus-within, [aria-expanded="true"], [data-disabled]) {
+    border-color: var(--border-strong);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+/* Ghost triggers have no border to recolor, so focus draws one in the same place. */
+@media not (forced-colors: active) {
+  .agent-select--compact .agent-select__trigger:focus-visible,
+  .sidebar-session-owner-filter .picker-select__trigger:focus-visible,
+  .sidebar-session-filter-panel .picker-select__trigger:focus-visible {
+    outline: 1px solid var(--field-focus-border);
+    outline-offset: -1px;
+  }
 }

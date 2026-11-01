@@ -882,7 +882,6 @@ extensions/zalouser/src/zalo-js.ts	7
 extensions/zalouser/src/zca-client.ts	1
 packages/acp-core/src/runtime/errors.ts	5
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1
-packages/agent-core/src/harness/compaction/compaction.ts	1
 packages/agent-core/src/harness/session/uuid.ts	1
 packages/agent-core/src/harness/utils/truncate.ts	1
 packages/agent-core/src/turn-interruption.ts	1

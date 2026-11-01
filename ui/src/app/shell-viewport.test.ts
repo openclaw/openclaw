@@ -9,6 +9,7 @@ let nextFrame = 0;
 const root = document.documentElement;
 const height = () => root.style.getPropertyValue("--shell-viewport-height");
 const inset = () => root.style.getPropertyValue("--shell-safe-area-bottom");
+const keyboard = () => root.hasAttribute("data-shell-keyboard");
 function flush() {
   const pending = [...frames.values()];
   frames.clear();
@@ -102,11 +103,14 @@ describe("shell visual viewport", () => {
       resize({ height: 480 });
       expect(height()).toBe("480px");
       expect(inset()).toBe("0px");
+      expect(keyboard()).toBe(true);
       resize({ height: 440, offsetTop: 70 }, "scroll");
       expect(height()).toBe("510px");
+      expect(keyboard()).toBe(true);
       resize({ height: 844, offsetTop: 0 });
       expect(height()).toBe("844px");
       expect(inset()).toBe("");
+      expect(keyboard()).toBe(false);
       expect(input.matches(":focus")).toBe(true);
     },
   );
@@ -166,6 +170,7 @@ describe("shell visual viewport", () => {
     expect(frames.size).toBe(0);
     expect(height()).toBe("");
     expect(inset()).toBe("");
+    expect(keyboard()).toBe(false);
     resize({ height: 300 });
     window.dispatchEvent(new Event("orientationchange"));
     document.dispatchEvent(new Event("focusin"));
