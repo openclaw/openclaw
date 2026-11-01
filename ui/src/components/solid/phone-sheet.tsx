@@ -4,13 +4,13 @@ import { bindSheetDismissGesture, slideSheetOut } from "../../lib/motion/sheet-d
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
+import { tabbableElements } from "../focus-navigation.ts";
 import { Icon } from "./icon.tsx";
 import { Popover, type PopoverHandle } from "./popover.tsx";
 import "./phone-sheet.css";
 
 const PHONE_SHEET_QUERY =
   "(max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
-const TABBABLE = "a[href], button, input, select, textarea, [tabindex]";
 
 /** Phone layouts open form-like filters as a sheet; everywhere else they stay popovers. */
 export function createPhoneSheetLayout() {
@@ -80,10 +80,7 @@ export function PhoneSheet(props: {
     if (event.key !== "Tab" || event.defaultPrevented) {
       return;
     }
-    const tabbable = [...panel.querySelectorAll<HTMLElement>(TABBABLE)].filter(
-      (element) =>
-        element.tabIndex >= 0 && !element.matches(":disabled") && element.checkVisibility(),
-    );
+    const tabbable = [...tabbableElements(panel.children)];
     const boundary = event.shiftKey ? tabbable[0] : tabbable.at(-1);
     const target = event.shiftKey ? tabbable.at(-1) : tabbable[0];
     if (!target || panel.ownerDocument.activeElement === boundary) {

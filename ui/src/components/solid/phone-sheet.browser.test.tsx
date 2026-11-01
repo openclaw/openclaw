@@ -27,8 +27,7 @@ function mountSheet(action?: () => JSX.Element) {
   ));
   flush();
   const surface = handle.overlay.surface;
-  const part = <T extends HTMLElement>(name: string) =>
-    surface.querySelector<T>(`.oc-sheet__${name}`)!;
+  const part = (name: string) => surface.querySelector<HTMLElement>(`.oc-sheet__${name}`)!;
   return { view, handle, surface, part };
 }
 
@@ -110,7 +109,7 @@ describe("PhoneSheet", () => {
     const { view, surface, part } = mountSheet();
     await userEvent.click(view.getByRole("button", { name: "Filters" }));
     await phase(surface, "open");
-    const last = view.getByRole("button", { name: "Filter", exact: true });
+    const last = view.getByRole("button", { name: "Filter" });
     last.focus();
     const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
     last.dispatchEvent(tab);
