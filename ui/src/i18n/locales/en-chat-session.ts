@@ -9,6 +9,9 @@ const enChatSession = {
     savedConversation: "Saved conversation · {status}",
     sessionAutomation: {
       everyDuration: "Every {duration}",
+      onceAt: "{day} at {time}",
+      today: "Today",
+      tomorrow: "Tomorrow",
     },
     activityPills: {
       publication: {

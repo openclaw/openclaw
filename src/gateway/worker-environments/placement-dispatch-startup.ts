@@ -1,5 +1,6 @@
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { workerWorkspaceDurabilitySchema } from "../../plugins/worker-retention.js";
 import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
 import {
   sameWorkerBuild,
@@ -486,6 +487,12 @@ export function createWorkerPlacementDispatchStartup(options: {
             to: "active",
             expectedGeneration: startingPlacement.generation,
             patch: { activeOwnerEpoch: ownerEpoch },
+            ...(workerWorkspaceDurabilitySchema
+              .optional()
+              .parse(params.environment.profileSnapshot.workspaceDurability)?.mode ===
+              "retained-disk" && params.workspace.kind === "repository"
+              ? { repositoryDiskWorkspaceId: params.workspace.repository.workspaceId }
+              : {}),
           },
           () => {
             assertActivationCurrent();
@@ -516,7 +523,9 @@ export function createWorkerPlacementDispatchStartup(options: {
         // Maintenance scheduling cannot overturn a durable placement activation.
       }
       try {
-        environments.schedulePreparedRefill(provisioned.environmentId);
+        if (!params.environment.retention) {
+          environments.schedulePreparedRefill(provisioned.environmentId);
+        }
       } catch {
         // Capacity maintenance cannot overturn a durable activation.
       }

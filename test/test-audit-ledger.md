@@ -38,7 +38,7 @@ keeps the current campaign state instead of repeating historical checkpoints.
 
 All landed removal batches completed focused checks, independent review and every removal
 scan phase. Existing Knip findings were attributed, never suppressed; unused-file
-scans were clean; batch189966 records the unchanged release-publication export. PR189313 used the native inherited-failure
+scans were clean or retained attributed inherited findings; batch189966 records the unchanged release-publication export. PR189313 used the native inherited-failure
 route: tested main introduced three unawaited SDK-host closes; the PR's original
 file passes typed lint and the identical tested-main file reproduces all three.
 Its failed CI remains failed; no current-head CI success is claimed. PR189510 retains an inherited local Tlon max-lines failure (1,028→1,024 effective lines); no allowance added, CI passed.
@@ -61,24 +61,57 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [190253](https://github.com/openclaw/openclaw/pull/190253): Path-policy mock setup now runs at file scope. Both selected POSIX cases fail on the old fixture and pass after repair; all19 cases pass before/after/final. Every declaration, input and assertion remains. Focused checks, fresh review and54 CI checks pass; zero net test LOC, production unchanged.
 
+- [190275](https://github.com/openclaw/openclaw/pull/190275): Unsupported bootstrap body literals, two unobserved system builds and exclusive private scenario machinery retired. Both boundary declarations and all real assertions remain; baseline/candidate/final66 cases/two suites pass and actual notice-owner fault is caught. Scoped checks, fresh review and all four removal phases completed with unchanged inherited findings. Native inherited-CI landing attributes the two lint errors to later main and preserves the failed run/attempt. −80 test/helper LOC; production unchanged.
+
+- [190360](https://github.com/openclaw/openclaw/pull/190360): Both structured-output expected states now use independent shallow snapshots. Actual exhausted-counter and pre-persistence error mutations pass the original comparisons and fail all six repaired cases; owners byte-restored. All16 cases/one suite pass on baseline, candidate and final head; scoped checks, fresh review and55 CI checks pass. Every declaration, input, assertion and gate remains; zero net test LOC, production unchanged. Rejected-assertion settlement warning under the intentional fault remains a separate follow-up.
+
+- [190422](https://github.com/openclaw/openclaw/pull/190422): Frame-read responses must now exist inside the transcript prefix before Runtime replay. Actual first-response omission passes the original comparison and fails the repaired membership assertion; bridge byte-restored. Baseline, candidate and published final head pass27 cases/one suite; scoped checks, full-range fresh review and49 CI checks pass. All17 declarations, both read rows and every other assertion/input/fixture remain; zero net test LOC, production unchanged.
+
+- [190455](https://github.com/openclaw/openclaw/pull/190455): Catch the actual credentialed browser rejection instead of fabricating an Error on fulfillment. Actual open-dispatch rejection-to-result fault passes the old case and fails the repaired Error assertion; temporary owner/test bytes restored. Untouched baseline, candidate and published final head pass115 cases/two suites; focused checks, full-range fresh review and47 CI checks pass. All60 physical declarations and every target/URL/assertion/fixture remain; one fewer test line, production unchanged.
+
+- [190492](https://github.com/openclaw/openclaw/pull/190492): Remove five unused search-manager methods and close-all fixture/export/reset; independent zero-access accounting passes both cases. Both complete test bodies remain byte-identical. Dropped-code and bypassed-normalization owner faults each fail their retained keeper; owner bytes restored. Exact one-row mock allowance shrink and documented isolation repair the reproduced guard failure. Focused checks, full-range fresh review, final-head2 cases and52 CI checks pass. Both unused-file phases and script exports pass; dependency/production/full-tree export scans reproduce the same three worker-retention schemas on untouched base, recorded as inherited local failures. Eight fewer test lines and one obsolete baseline row; production unchanged.
+
 ## Current qualification
 
-Pinned main `c3fca6737b29`: retired unsupported bootstrap body-literal
-assertions, two unobserved system-prompt builds and their exclusive scenario/turn
-IDs, selectors and types. The sole fixture consumer now reads explicit bootstrap
-and Discord outputs. Both boundary declarations, all three real bootstrap system
-assertions and every real Discord preparation/input/assertion remain. Production
-is unchanged.
-Untouched baseline and candidate pass 66 cases/two suites: composition two and
-system prompt 64. Omitting the notice input in the actual system-prompt owner
-fails the retained bootstrap case on its missing notice header (one Discord case
-filtered); the owner is restored byte-for-byte before passing proof.
-All four removal phases ran before and after with unchanged diagnostics and no
-suppressions. Existing findings are the unused `assertSafeSqliteRuntime`
-export and `scripts/lib/gateway-bench-heap-profile.mjs` file; all four
-phases exit 1 on the untouched base and candidate. The ordinary runner selects
-unit-fast for composition and agents-core for the system-prompt suite.
-Focused types, lint, format and MDX pass. Fresh review, final-head proof and CI remain pending.
+Pinned main `607220f0aed0`: remove duplicate Memory Core search fixture setup and
+an assertion implied by retained exact-prefix proof. Only the bootstrap helper's
+agent-config reconstruction and project-result length assertion are removed.
+Preserve all six physical declarations/eight cases, every input, plugin isolation,
+ranking/eligibility/cap and partial-publication contracts; production unchanged.
+Full tests, factory, acquisition/registry, orchestration/retrieval and ranking
+owners and relevant history inspected; source/guide parity verified.
+Untouched native baseline and candidate pass eight cases/two suites. Temporary
+independent assertions validate all three factory-config shapes and require the
+FTS bootstrap case to enter; successful JSON report recovered after stdout-only
+collector parsing failed, then source bytes restored. An actual active-project
+cap201 fault fails only the retained exact-prefix equality; owner bytes restored.
+All three scoped removal scans pass: exact two-line-only edit, all declarations,
+rows and keepers retained, and no production/support/export/discovery change.
+Focused type-aware lint, scoped types, format, ledger MDX and diff checks pass.
+Both unused-file phases and script exports pass. Dependency, production-export
+and full-tree-export scans report the unused `retireControlUiSessionPrState`
+Gateway export; both failing surfaces reproduce the same finding on the exact
+untouched base. Candidate bytes are restored and the local failure stays recorded.
+See [PR190553](https://github.com/openclaw/openclaw/pull/190553) for fresh-review,
+published-head verification and merge outcomes. Two fewer test lines; production0.
+
+### Current assertion repair
+
+Pinned main `93925d28f0c5`: strengthen the system-agent chat-secret negative
+assertion against the trimmed synthetic key. All20 physical declarations/21 cases,
+raw-secret proposal identity, approval result and no-execution assertion remain.
+Untouched native baseline passes21; an actual pending-response-builder fault
+echoing only the trimmed key passes the old assertion and fails the strengthened
+assertion at the intended site. The producer is restored byte-for-byte and all21
+candidate cases pass. One expression changed; zero net test LOC, production0.
+Focused type-aware lint, scoped types, format, ledger MDX and whitespace checks
+pass. See [PR190581](https://github.com/openclaw/openclaw/pull/190581) for
+fresh-review, published-head verification and merge outcomes.
+
+Batch [190553](https://github.com/openclaw/openclaw/pull/190553) landed at
+`93d933e8d604`, with50 successful CI checks and no failures. Both unused-file
+phases passed; the same inherited Gateway export was independently reproduced
+on its untouched base and remains explicitly recorded as a local failure.
 
 ## Completed source review
 
@@ -95,10 +128,10 @@ permission to delete without root qualification.
 - Core content/runtime: Templates31/230; logging64/465; meeting bot30/183 direct+inherited; hooks41; TTS23; media-understanding43/241; context/chat/Canvas19/139; generation19/103; web/fetch8/69; status/storage25/207; realtime1/13.
 - Core setup/tools: Bootstrap/provider/interactive/plugin state21/179; daemon127/920; Talk39/250 plus inherited table; wizard30/239; security46/181; model commands35/215; catalog/memory SDK7/71; Doctor118/673.
 - Core entrypoints: Root src25; root docs/scripts21/63; direct channels103; CLI Gateway31/246; admin/share/Bonjour8/41. Deeper nested channel owners remain open.
-- Agent internals: 1,479 unique suites/10,116 physical sites: R10062/F49/C1/D4. All83 registry and 58 sandbox suites are source-closed; tool display/schema and process custody retain their contracts. Separate reply/upstream scopes below. Preserve transport, requester isolation, authority, cancellation, durability and work-count contracts.
+- Agent internals: 1,606 unique suites/11,147 physical sites: R11079/F63/C1/D4. All83 registry and 58 sandbox suites are source-closed; tool display/schema and process custody retain their contracts. Separate reply/upstream scopes below. Preserve transport, requester isolation, authority, cancellation, durability and work-count contracts.
 - Auto-reply: All429 suites plus43 separate upstream suites and invoked local registrars/support classified. Latest54/498: R495/F2/C1; qualified two duplicates landed above. Keep channel persistence, group/native routing, progress suppression and abort cases.
 - CLI: Config/setup24/209; plugin lifecycle25/176; validation22/106; channel/root/message/device/skills/session98/542; execution/reply presentation overlaps the reply aggregate. Only qualified fixture reduction landed above.
-- Control UI: 1,283 unique suites/8,103 physical sites: R6283/F1812/C1/D7. Agents Memory, Memory Import, Workshop, Systems, About and Worktrees retain their contracts; shared `page-request.node.test.ts` counted once. Preserve native geometry, owner replacement, GC retention and conflict/authority contracts. Proof/custody repairs remain pending; other UI remains open.
+- Control UI: 1,415 unique suites/8,987 physical sites: R6861/F2118/C1/D7. Agents Memory, Memory Import, Workshop, Systems, About and Worktrees retain their contracts; shared `page-request.node.test.ts` counted once. Preserve native geometry, owner replacement, GC retention and conflict/authority contracts. Proof/custody repairs remain pending; other UI remains open.
 - Shared native: OpenClawKit209 files/2,528 sites: R2523/F3/C2. NativeState/MLX protocol5/46: R45/F1. Swabble6/12 R; MLX helper1/5 with one pending PCM consolidation.
 - macOS: 304 Swift files/2,653 sites: R2635/F8/C9/D1. Native runtime qualification pending.
 - iOS: 135 files/1,416 sites: R1370/F39/C6/D1; obsolete typography metadata scanner and a migration helper remain candidates. Native qualification pending.
@@ -108,7 +141,7 @@ permission to delete without root qualification.
 - Other audited plugins: Voice-call64/523 R522/F1; Nostr14/112 R; Prometheus7/55 R; IMAP/A2A13/103 R; MXC13/64 R61/F3; DeepInfra17/78 qualified above; MiniMax13/75 R74/F1.
 - Plugin service owners: File Transfer21/162 R161/D1; active-memory11/122 R; Synology10/91 R; OpenShell11/88 R; Diagnostics OTel12/86 R83/F1/C2; AgentsAPI10/96 R; Cua12/83 R. All local support/assets live.
 - Later plugin closures: LanceDB22/109 R; Logbook13/55 R; IRC15/99 R97/F2; Diffs14/58 R56/F1/C1; policy15/301 physical R298/F3; SMS16/158 R; team-reports21/138 R; Twitch15/86 R; TypeSafe10/50 R; X24/149 R148/C1; Zalo25/89 local R87/F2 plus9 inherited R and one duplicate row. Assertion-only candidates below do not remove their declarations.
-- Plugin lane progress: Leaf2,643 suites/138 closed owners plus partial Browser248/280; combined2,717 suites/171 directory owners plus the closed root boundary. Remaining1,590 suites/7 owners, including2 TSX. Slack155/155 is source-closed:1,268 direct sites R1258/F10 and1,828 static invocations R1813/F15; all21 auxiliaries and seven live traces remain. MS Teams107/107 is source-closed. WhatsApp103/103 and Feishu104/104 are source-closed; their authority, timing and custody proof repairs remain follow-ups. OpenAI99/99 is closed:744 direct/support sites R737/F5/C2,1,238 static invocations R1228/F8/C2. Its18 supports and packaged icons remain live. Knowledge59, iMessage60, Workboard65, LINE61, Mattermost56, Signal44, memory-wiki50 and Crabbox53 are closed. Keep identity, transport, cache, compiler, storage, interaction and mutation contracts. Source-only; no runtime verdict.
+- Plugin lane progress: Leaf2,828 suites/139 closed owners plus partial Memory Core153/201; combined2,902 suites/172 directory owners plus the closed root boundary. Remaining1,405 suites/6 owners, including2 TSX. Browser280/280 is source-closed:2,006 physical sites R1764/F242 and3,243 expanded cases R2909/F334; actual runtime qualification remains separate. Slack155/155 is source-closed:1,268 direct sites R1258/F10 and1,828 static invocations R1813/F15; all21 auxiliaries and seven live traces remain. MS Teams107/107 is source-closed. WhatsApp103/103 and Feishu104/104 are source-closed; their authority, timing and custody proof repairs remain follow-ups. OpenAI99/99 is closed:744 direct/support sites R737/F5/C2,1,238 static invocations R1228/F8/C2. Its18 supports and packaged icons remain live. Knowledge59, iMessage60, Workboard65, LINE61, Mattermost56, Signal44, memory-wiki50 and Crabbox53 are closed. Keep identity, transport, cache, compiler, storage, interaction and mutation contracts. Source-only; no runtime verdict.
 
 ## Pending qualification and proof repairs
 

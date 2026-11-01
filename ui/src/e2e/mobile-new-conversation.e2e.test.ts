@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -63,9 +64,17 @@ async function installScenario(page: Page, operatorScopes?: string[], team = fal
 }
 
 suite.define(() => {
-  it("keeps the mobile welcome with its composer across phone and keyboard viewports", async () => {
+  it("docks the mobile New Session composer like the chat composer", async () => {
     await suite.withPage(mobile, async ({ page }) => {
       await installScenario(page, undefined, true);
+      const bottomGap = (selector: string) =>
+        page
+          .locator(selector)
+          .evaluate((element) => window.innerHeight - element.getBoundingClientRect().bottom);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:research:current"));
+      await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+      await waitForLayoutSettled(page, ".chat-footer .agent-chat__composer-shell");
+      const chatGap = await bottomGap(".chat-footer .agent-chat__composer-shell");
       await page.goto(suite.server.baseUrl + "new?agent=research");
       const composer = page.locator(".new-session-page__message");
       await composer.fill("Help me plan the next release.");
@@ -107,11 +116,11 @@ suite.define(() => {
         expect(targetBox).not.toBeNull();
         expect(composerBox).not.toBeNull();
         expect(targetBox!.y - heroBox!.y - heroBox!.height).toBeGreaterThanOrEqual(0);
-        expect(targetBox!.y - heroBox!.y - heroBox!.height).toBeLessThanOrEqual(24);
         expect(heroBox!.y).toBeGreaterThanOrEqual(58);
-        const compositionCenter = (heroBox!.y + composerBox!.y + composerBox!.height) / 2;
-        const contentCenter = 58 + (state.height - 58) / 2;
-        expect(Math.abs(compositionCenter - contentCenter)).toBeLessThanOrEqual(48);
+        expect(
+          Math.abs((await bottomGap(".new-session-page__composer")) - chatGap),
+          state.name,
+        ).toBeLessThanOrEqual(1);
         const local = page.locator("#new-session-where-trigger");
         expect((await local.boundingBox())!.width).toBeLessThanOrEqual(100);
         expect(
@@ -198,14 +207,20 @@ suite.define(() => {
         const frame = await takeControlUiScreenshotFrame(
           page,
           page.locator(".shell"),
-          [page.locator(".chat-pane__header:visible, .header-new-session:visible").first()],
+          [
+            page
+              .locator(
+                ".agent-chat__header--mobile:visible, .header-new-session:visible, .new-session-page__composer:visible",
+              )
+              .first(),
+          ],
           { animations: "disabled" },
         );
         await writeFile(path.join(dir, name + ".png"), frame.png);
       };
       await capture("closed");
       const action = page.getByRole("link", { name: "New conversation", exact: true });
-      expect(await action.count()).toBe(route === "chat" ? 0 : 1);
+      expect(await action.count()).toBe(0);
       // Mouse hover can reveal the sliding drawer's tooltip, which owns the first Escape.
       await navigationDrawerToggle(page).tap();
       await waitForMobileSidebarDrawerOpen(page);
@@ -222,12 +237,17 @@ suite.define(() => {
         await page.locator(".shell-nav:focus, .shell-nav :focus").waitFor();
         await page.keyboard.press("Escape");
         await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+        expect(await page.locator(".new-session-page__message").inputValue()).toBe(draft);
+        // Without a topbar action on New Session, the drawer owns reopening it.
+        await navigationDrawerToggle(page).tap();
+        await waitForMobileSidebarDrawerOpen(page);
       }
       await action.tap();
       await waitForControlUiRoute(page, { routeId: "new-session", search: "?agent=research" });
       const composer = page.locator(".new-session-page__message");
       await composer.waitFor();
-      expect(await page.locator(".topbar .header-new-session").count()).toBe(1);
+      // New Session is the action's destination, so its topbar omits the action.
+      expect(await page.locator(".topbar .header-new-session").count()).toBe(0);
       if (route === "chat") {
         await expect
           .poll(() => composer.evaluate((element) => element === document.activeElement))
@@ -286,7 +306,7 @@ suite.define(() => {
         await page.goto(
           state === "denied"
             ? controlUiSessionUrl(suite.server.baseUrl, "agent:research:current")
-            : suite.server.baseUrl + "new?agent=research",
+            : suite.server.baseUrl + "sessions",
         );
         if (state === "denied") {
           await navigationDrawerToggle(page).tap();

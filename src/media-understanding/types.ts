@@ -12,46 +12,6 @@ export type {
   MediaUnderstandingOutput,
 } from "../../packages/media-understanding-common/src/types.js";
 
-export type MediaUnderstandingModelDecision = {
-  provider?: string;
-  model?: string;
-  requestedBackend?: string;
-  observedBackend?: string;
-  type: "provider" | "cli";
-  outcome: "success" | "skipped" | "failed";
-  reason?: string;
-};
-
-export type MediaAttachmentDisposition =
-  | { kind: "handled" }
-  | { kind: "handed-to-native-vision" }
-  | { kind: "not-selected" }
-  | { kind: "capability-disabled" }
-  | { kind: "no-model" }
-  | { kind: "scope-denied" }
-  | { kind: "failed"; reason?: string };
-
-export type MediaAttachmentProcessing = "completed" | "omitted";
-
-export type MediaUnderstandingDecision = {
-  capability: MediaUnderstandingCapability;
-  outcome: "success" | "failed" | "skipped" | "disabled" | "no-attachment" | "scope-deny";
-  attachments: {
-    attachmentIndex: number;
-    attempts: MediaUnderstandingModelDecision[];
-    chosen?: MediaUnderstandingModelDecision;
-  }[];
-  // Optional on the shipped SDK contract: plugins pass FinalizedMsgContext into
-  // inbound-reply dispatch and may hold legacy decision literals. Core producers
-  // (runner, apply, runtime) always populate it; absence renders no
-  // markers rather than breaking plugin compilation.
-  attachmentDispositions?: Record<number, MediaAttachmentDisposition>;
-  // CLI/provider completion is independent of usable output or a rendered marker.
-  // Optional for shipped SDK decision literals; absence means unknown processing.
-  attachmentProcessing?: Record<number, MediaAttachmentProcessing>;
-  nativeVisionActive?: boolean;
-};
-
 export type MediaUnderstandingProviderRequestAuth =
   | { kind: "api-key"; apiKey: string; source?: string }
   | { kind: "none"; source: string };

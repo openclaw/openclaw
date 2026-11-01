@@ -40,8 +40,7 @@ function sessionPage(face: BoardFace) {
         void import("./components/chat-sidebar-region.runtime.tsx").catch(() => undefined);
         void import("../../components/board/board-view.tsx").catch(() => undefined);
       }
-      const creation = context.chatSubmissions.creation;
-      if (creation && !creation.admitted) {
+      if (context.chatSubmissions.creating) {
         const mainKey = resolveUiConfiguredMainKey({
           agentsList: context.agents.state.agentsList,
           hello: context.gateway.snapshot.hello,
@@ -58,11 +57,12 @@ function sessionPage(face: BoardFace) {
             : target?.kind === "literal"
               ? target.sessionKey
               : undefined;
-        if (target?.namespace === face && sessionKey === creation.sessionKey) {
+        const creation = sessionKey ? context.chatSubmissions.creationFor(sessionKey) : undefined;
+        if (target?.namespace === face && creation && !creation.admitted) {
           options.signal.throwIfAborted();
           const result = {
             kind: "session" as const,
-            sessionKey,
+            sessionKey: creation.sessionKey,
             agentId: target.agentId,
             ...sessionRouteHints(options.location),
             face,
