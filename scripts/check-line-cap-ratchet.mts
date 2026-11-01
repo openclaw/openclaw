@@ -211,7 +211,9 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     // not block a valid repair; partial clones must not fetch unused base blobs.
     const renames = after.size > 0 ? listRatchetRenames(root, base, args.staged, []) : [];
     const oldPaths = new Map(renames.map(({ from, to }) => [to, from]));
-    const basePaths = new Set(gitPaths(root, ["ls-tree", "-r", "--name-only", "-z", base]));
+    const basePaths = new Set(
+      after.size > 0 ? gitPaths(root, ["ls-tree", "-r", "--name-only", "-z", base]) : [],
+    );
     const debtPaths = new Set([...after.keys()].map((file) => oldPaths.get(file) ?? file));
     const before = collectViolations(
       path.join(scratch, "base"),

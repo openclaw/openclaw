@@ -1,5 +1,6 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import childProcess, { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -20,8 +21,23 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
   vi.unstubAllEnvs();
 });
+
+function observeBaseInventories() {
+  const commands = vi.spyOn(childProcess, "execFileSync");
+  syncBuiltinESMExports();
+  return () =>
+    commands.mock.calls.filter(
+      ([command, args]) =>
+        command === "git" &&
+        Array.isArray(args) &&
+        args[0] === "ls-tree" &&
+        args.includes("-r") &&
+        args.includes("--name-only"),
+    );
+}
 
 function git(root: string, ...args: string[]) {
   execFileSync("git", args, {
@@ -104,11 +120,13 @@ it("measures ignored repository-contained scratch while preserving explicit excl
 it("ratchets error diagnostics in JetBrains terminals across renames, staged and untracked sources", () => {
   vi.stubEnv("TERMINAL_EMULATOR", "JetBrains-JediTerm");
   const root = fixture(5, "error");
+  const inventories = observeBaseInventories();
   const scratch = tempDirs.make("openclaw-line-cap-scratch-");
   const scratchAlias = path.join(root, "scratch-alias");
   fs.symlinkSync(scratch, scratchAlias, process.platform === "win32" ? "junction" : "dir");
   vi.stubEnv(process.platform === "win32" ? "TEMP" : "TMPDIR", scratchAlias);
   expectSource(root, source(5) + "// changed comment\n", 0);
+  expect(inventories().length).toBeGreaterThan(0);
   const renamed = "src/renamed space #%.ts";
   git(root, "mv", "src/file.ts", renamed);
   expectSource(root, source(4) + "\n/* comment\n comment */\n", 0, renamed);
@@ -127,8 +145,10 @@ it("handles repaired under-cap head without relaxing the head check", () => {
   write(root, "const duplicate = 1;\nconst duplicate = 2;\n");
   git(root, "add", ".");
   git(root, "commit", "-m", "broken base");
+  const inventories = observeBaseInventories();
   expectSource(root, 3, 0);
   expect(errors).not.toHaveBeenCalled();
+  expect(inventories()).toHaveLength(0);
 });
 
 it("does not hydrate historical blobs for under-cap repairs in a partial clone", () => {
@@ -140,8 +160,10 @@ it("does not hydrate historical blobs for under-cap repairs in a partial clone",
   git(origin, "clone", "--filter=blob:none", pathToFileURL(origin).href, root);
   const packs = path.join(root, ".git", "objects", "pack");
   const before = fs.readdirSync(packs).filter((file) => file.endsWith(".pack"));
+  const inventories = observeBaseInventories();
   expect(main(root, ["--base", "HEAD~"])).toBe(0);
   expect(fs.readdirSync(packs).filter((file) => file.endsWith(".pack"))).toEqual(before);
+  expect(inventories()).toHaveLength(0);
 });
 
 it("counts oxlint-suppressed debt without changing the source", () => {
