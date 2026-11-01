@@ -1146,9 +1146,13 @@ textarea.settings-input {
 .shell--embed-settings {
   --settings-control-height: 44px;
 
-  :is(button, .btn, summary, .settings-toggle, .settings-segmented__btn):where(:not([role="tab"])) {
+  :is(button, .btn, summary, .settings-toggle):where(:not([role="tab"], .settings-segmented__btn)) {
     min-width: 44px;
     min-height: 44px;
+  }
+
+  .settings-segmented > .settings-segmented__btn {
+    min-width: 44px;
   }
 
   :is(input, select, textarea),
@@ -1176,11 +1180,15 @@ textarea.settings-input {
 
     /* The shell topbar keeps one size on every route; resizing it here shifts
        the page when navigation enters or leaves Settings. */
-    :is(button, .btn, summary, .settings-toggle, .settings-segmented__btn):where(
-      :not([role="tab"], .topbar *)
+    :is(button, .btn, summary, .settings-toggle):where(
+      :not([role="tab"], .topbar *, .settings-segmented__btn)
     ) {
       min-width: 44px;
       min-height: 44px;
+    }
+
+    .settings-segmented > .settings-segmented__btn {
+      min-width: 44px;
     }
 
     :is(input, select, textarea),
@@ -1289,10 +1297,9 @@ textarea.settings-input {
       justify-content: flex-end;
     }
 
-    .settings-segmented__btn {
+    .settings-segmented > .settings-segmented__btn {
       max-width: 100%;
       white-space: normal;
-      overflow-wrap: anywhere;
     }
 
     .identity-name-control {
