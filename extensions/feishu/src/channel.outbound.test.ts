@@ -3,9 +3,14 @@ import { feishuPlugin } from "../channel-plugin-api.js";
 
 const renderPresentation = vi.hoisted(() => vi.fn());
 const sendPayload = vi.hoisted(() => vi.fn());
+const sendText = vi.hoisted(() => vi.fn());
+const sendFormattedText = vi.hoisted(() => vi.fn());
 
-vi.mock("./channel.runtime.js", () => ({
-  feishuChannelRuntime: { feishuOutbound: { renderPresentation, sendPayload } },
+vi.mock("./channel.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./channel.runtime.js")>()),
+  feishuChannelRuntime: {
+    feishuOutbound: { renderPresentation, sendPayload, sendText, sendFormattedText },
+  },
 }));
 
 afterAll(() => {
@@ -44,5 +49,23 @@ describe("Feishu public outbound presentation hooks", () => {
     const sendContext = { ...ctx, payload: rendered };
     await expect(feishuPlugin.outbound?.sendPayload?.(sendContext)).resolves.toBe(receipt);
     expect(sendPayload).toHaveBeenCalledExactlyOnceWith(sendContext);
+  });
+
+  it("advertises the formatted sender alongside the per-message one", async () => {
+    const receipts = [{ channel: "feishu", messageId: "om_first" }];
+    sendFormattedText.mockResolvedValueOnce(receipts);
+    expect(typeof feishuPlugin.outbound?.sendFormattedText).toBe("function");
+    expect(typeof feishuPlugin.outbound?.sendText).toBe("function");
+    const formattedContext = {
+      cfg: {},
+      to: "chat:oc_group",
+      accountId: "work",
+      threadId: "om_parent",
+      text: "| a | b |\n| - | - |\n| 1 | 2 |",
+    };
+    await expect(feishuPlugin.outbound?.sendFormattedText?.(formattedContext)).resolves.toBe(
+      receipts,
+    );
+    expect(sendFormattedText).toHaveBeenCalledExactlyOnceWith(formattedContext);
   });
 });

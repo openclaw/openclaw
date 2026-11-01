@@ -1,6 +1,13 @@
 // Feishu tests cover delivery through the comment event handler.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import {
+  createEmptyPluginRegistry,
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { createFeishuTestRoute } from "./bot.test-support.js";
 import { handleFeishuCommentEvent } from "./comment-handler.js";
@@ -76,9 +83,9 @@ describe("Feishu comment event reply delivery", () => {
   };
   let runtime: ReturnType<typeof createPluginRuntimeMock>;
 
-  async function createTestCommentTurn() {
+  async function createTestCommentTurn(turnCfg: ClawdbotConfig = cfg) {
     await handleFeishuCommentEvent({
-      cfg,
+      cfg: turnCfg,
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       accountId: "main",
       event: { event_id: "evt_1" },
@@ -125,7 +132,9 @@ describe("Feishu comment event reply delivery", () => {
         text: {
           resolveTextChunkLimit: vi.fn(() => 4000),
           resolveChunkMode: vi.fn((): "newline" => "newline"),
-          chunkTextWithMode: vi.fn((text: string) => [text]),
+          resolveMarkdownTableMode: vi.fn((): "code" => "code"),
+          convertMarkdownTables: vi.fn((text: string) => text),
+          chunkMarkdownTextWithMode: vi.fn((text: string) => [text]),
         },
       },
     });
@@ -258,9 +267,249 @@ describe("Feishu comment event reply delivery", () => {
     expect(deliverCommentThreadTextMock.mock.calls[0]?.[1]?.content).not.toContain(mediaUrl);
   });
 
+  it("chunks the transformed comment text including attachment links", async () => {
+    const chunkMarkdownTextWithMode = vi
+      .mocked(runtime.channel.text.chunkMarkdownTextWithMode)
+      .mockImplementation((text: string) =>
+        Array.from({ length: Math.ceil(text.length / 12) }, (_value, index) =>
+          text.slice(index * 12, (index + 1) * 12),
+        ),
+      );
+    vi.mocked(runtime.channel.text.resolveTextChunkLimit).mockReturnValue(12);
+    const expected = "caption\n\nhttps://example.com/file.png";
+    const created = await createTestCommentTurn();
+    const result = await created.delivery.deliver(
+      { text: "caption", mediaUrl: "https://example.com/file.png" },
+      { kind: "final" },
+    );
+
+    expect(chunkMarkdownTextWithMode).toHaveBeenCalledWith(expected, 12, "newline");
+    expect(
+      deliverCommentThreadTextMock.mock.calls.every((call) => call[1].content.length <= 12),
+    ).toBe(true);
+    expect(result).toMatchObject({ content: expected, visibleReplySent: true });
+  });
+
+  describe("markdown table modes", () => {
+    const tableMarkdown = "| Name | Role |\n| --- | --- |\n| Ada | Lead |";
+    let actual: typeof import("openclaw/plugin-sdk/markdown-table-runtime");
+    beforeEach(async () => {
+      actual = await vi.importActual<typeof import("openclaw/plugin-sdk/markdown-table-runtime")>(
+        "openclaw/plugin-sdk/markdown-table-runtime",
+      );
+      vi.mocked(runtime.channel.text.resolveMarkdownTableMode).mockImplementation(
+        actual.resolveMarkdownTableMode,
+      );
+      vi.mocked(runtime.channel.text.convertMarkdownTables).mockImplementation(
+        actual.convertMarkdownTables,
+      );
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "feishu",
+            source: "test",
+            plugin: {
+              id: "feishu",
+              meta: { id: "feishu" },
+              messaging: { defaultMarkdownTableMode: "block" },
+            },
+          },
+        ]),
+      );
+    });
+
+    afterEach(() => {
+      resetPluginRuntimeStateForTest();
+      setActivePluginRegistry(createEmptyPluginRegistry());
+    });
+
+    it.each(["bullets", "code", undefined, "off"] as const)(
+      "converts a table before comment delivery in %s mode",
+      async (tables: MarkdownTableMode | undefined) => {
+        const expected =
+          tables === "off"
+            ? tableMarkdown
+            : actual.convertMarkdownTables(
+                tableMarkdown,
+                tables === "bullets" ? "bullets" : "code",
+              );
+        const tableCfg: ClawdbotConfig = {
+          channels: {
+            feishu: {
+              dmPolicy: "open",
+              allowFrom: ["*"],
+              ...(tables ? { markdown: { tables } } : {}),
+            },
+          },
+        };
+        vi.spyOn(runtime.config, "current").mockReturnValue(tableCfg);
+        const created = await createTestCommentTurn(tableCfg);
+        await created.delivery.deliver({ text: tableMarkdown }, { kind: "final" });
+        expect(deliverCommentThreadTextMock.mock.calls[0]?.[1]?.content).toBe(expected);
+      },
+    );
+
+    async function useRealChunking(limit: number, mode: "length" | "newline" = "length") {
+      const chunking = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-chunking")>(
+        "openclaw/plugin-sdk/reply-chunking",
+      );
+      vi.mocked(runtime.channel.text.resolveTextChunkLimit).mockReturnValue(limit);
+      vi.mocked(runtime.channel.text.resolveChunkMode).mockReturnValue(mode);
+      vi.mocked(runtime.channel.text.chunkTextWithMode).mockImplementation(
+        chunking.chunkTextWithMode,
+      );
+      vi.mocked(runtime.channel.text.chunkMarkdownTextWithMode).mockImplementation(
+        chunking.chunkMarkdownTextWithMode,
+      );
+      return chunking;
+    }
+    const deliveredContents = () =>
+      deliverCommentThreadTextMock.mock.calls.map((call) => call[1].content as string);
+
+    it("leaves a comment table unconverted when the limit cannot hold a fence", async () => {
+      await useRealChunking(8);
+      const created = await createTestCommentTurn();
+      await created.delivery.deliver({ text: tableMarkdown }, { kind: "final" });
+      const contents = deliveredContents();
+      const joined = contents.join("");
+      expect(joined).not.toContain("`");
+      for (const cell of ["Name", "Role", "Ada", "Lead"]) {
+        expect(joined).toContain(cell);
+      }
+      for (const content of contents) {
+        expect(content.length).toBeLessThanOrEqual(8);
+      }
+    });
+
+    const fenceShapeTable = (prefix: string, nameCell = "Ada") =>
+      [
+        "Roster",
+        "",
+        ...["| Name | Role |", "| --- | --- |", `| ${nameCell} | \`\`\` |`].map(
+          (line) => `${prefix}${line}`,
+        ),
+      ].join("\n");
+
+    it.each([
+      { shape: "a cell lengthens the marker", authored: fenceShapeTable(""), limit: 10 },
+      { shape: "an indent widens the marker line", authored: fenceShapeTable(" "), limit: 11 },
+      { shape: "a quote prefix hides the marker", authored: fenceShapeTable("> "), limit: 40 },
+      { shape: "the limit cannot carry the marker", authored: fenceShapeTable(""), limit: 2 },
+      {
+        shape: "a surrogate pair outgrows the limit",
+        authored: fenceShapeTable("", "\u{1F600}"),
+        limit: 11,
+      },
+    ])("leaves a comment table unconverted when $shape", async ({ authored, limit }) => {
+      const chunking = await useRealChunking(limit);
+      const created = await createTestCommentTurn();
+      expect(actual.convertMarkdownTables(authored, "code")).toContain("````");
+      await created.delivery.deliver({ text: authored }, { kind: "final" });
+      expect(deliveredContents()).toEqual(
+        chunking.chunkMarkdownTextWithMode(authored, limit, "length"),
+      );
+    });
+
+    const backtickRow = "| Name | Role |\n| --- | --- |\n| Ada | ``` |";
+    const rows = (first: string, rest: string) =>
+      tableMarkdown.split("\n").map((row, index) => (index ? rest : first) + row);
+    it.each([
+      { shape: "a lengthened marker at its floor", authored: backtickRow, limit: 11, markers: [] },
+      {
+        shape: "a lengthened marker above its floor",
+        authored: backtickRow,
+        limit: 13,
+        markers: [],
+      },
+      {
+        shape: "beside an indented code line",
+        authored: `Example:\n\n    \`\`\`\n\n${tableMarkdown}`,
+        markers: ["    ```"],
+      },
+      {
+        shape: "written with CRLF line endings",
+        authored: `${tableMarkdown.split("\n").join("\r\n")}\r\n\r\nAfter the table.`,
+        markers: ["```\r\n"],
+      },
+      {
+        shape: "after a language-tagged code block",
+        authored: `\`\`\`js\nconst x = 1;\n\`\`\`\n\n${tableMarkdown}`,
+        markers: ["```js"],
+      },
+      {
+        shape: "nested in a list inside a quote",
+        authored: `Roster:\n\n${rows("> - ", ">   ").join("\n")}`,
+        markers: ["> - ```\n"],
+        ends: "\n>   ```",
+      },
+      {
+        shape: "nested in a quote inside a list",
+        authored: `Roster:\n\n${rows("- > ", "  > ").join("\n")}`,
+        markers: ["- > ```\n"],
+        ends: "\n  > ```",
+      },
+      {
+        shape: "after a quote whose closer closes inside the list",
+        authored: `- item\n  > \`\`\`\n    > x\n  > \`\`\`\n\n${tableMarkdown}`,
+        markers: [],
+      },
+      {
+        shape: "after a quote whose closer leaves the list",
+        authored: `- item\n  > - \`\`\`\n  >   x\n>   \`\`\`\n\n${tableMarkdown}`,
+        markers: [],
+        unconverted: true,
+      },
+    ])("delivers a comment table $shape as chunked", async (row) => {
+      const limit = row.limit ?? 4000;
+      const chunking = await useRealChunking(limit);
+      const created = await createTestCommentTurn();
+      const converted = actual.convertMarkdownTables(row.authored, "code");
+      expect(converted).not.toBe(row.authored);
+      for (const marker of row.markers) {
+        expect(converted).toContain(marker);
+      }
+      if (row.ends) {
+        expect(converted.endsWith(row.ends)).toBe(true);
+      }
+      await created.delivery.deliver({ text: row.authored }, { kind: "final" });
+      expect(deliveredContents()).toEqual(
+        chunking.chunkMarkdownTextWithMode(
+          row.unconverted ? row.authored : converted,
+          limit,
+          "length",
+        ),
+      );
+    });
+
+    it.each(["length", "newline"] as const)(
+      "balances the fences of an oversized converted table in %s mode",
+      async (chunkMode) => {
+        const limit = 200;
+        const wideTable = [
+          "| Name | Role |",
+          "| --- | --- |",
+          ...Array.from(
+            { length: 14 },
+            (_value, index) => `| Member ${index} | Engineer ${index} |`,
+          ),
+        ].join("\n");
+        await useRealChunking(limit, chunkMode);
+        const created = await createTestCommentTurn();
+        await created.delivery.deliver({ text: wideTable }, { kind: "final" });
+        const contents = deliveredContents();
+        expect(actual.convertMarkdownTables(wideTable, "code").length).toBeGreaterThan(limit);
+        expect(contents.length).toBeGreaterThan(1);
+        for (const content of contents) {
+          expect(content.length).toBeLessThanOrEqual(limit);
+          expect((content.match(/^`{3,}/gm)?.length ?? 0) % 2).toBe(0);
+        }
+      },
+    );
+  });
+
   it("retains the accepted comment reply id and text when a later chunk fails", async () => {
     vi.mocked(runtime.channel.text.resolveTextChunkLimit).mockReturnValue(4);
-    vi.mocked(runtime.channel.text.chunkTextWithMode).mockReturnValue(["first", "second"]);
+    vi.mocked(runtime.channel.text.chunkMarkdownTextWithMode).mockReturnValue(["first", "second"]);
     deliverCommentThreadTextMock
       .mockResolvedValueOnce({ delivery_mode: "reply_comment", reply_id: "reply_native_1" })
       .mockRejectedValueOnce(new Error("second comment send failed"));

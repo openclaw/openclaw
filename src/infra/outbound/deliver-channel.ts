@@ -473,6 +473,13 @@ function createPluginHandler(
             text,
           };
           assertUnknownSendReconciliationKind("text");
+          // This entry bypasses sendMessage, so run the same preflight here: runtime
+          // methods resolve before core records platform-send start.
+          await messageLifecycle?.beforeSendAttempt?.({
+            ...resolveMessageCtx(overrides),
+            kind: "text",
+            text,
+          });
           return await dispatchToAdapter(formattedCtx, () =>
             outbound.sendFormattedText!(formattedCtx),
           );

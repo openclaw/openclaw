@@ -19,6 +19,34 @@ function expectSchemaIssue(value: unknown, issuePath: string) {
   }
 }
 
+describe.each(["root", "account"] as const)("Feishu markdown tables at %s scope", (scope) => {
+  it.each([
+    ...["off", "bullets", "code", "block"].map((tables) => ({
+      entry: { markdown: { tables } },
+      ok: true,
+    })),
+    { entry: { markdown: { tables: "ascii" } }, ok: false },
+    { entry: { markdown: { mode: "escape" } }, ok: true },
+    { entry: { markdown: { tableMode: "ascii" } }, ok: true },
+    { entry: { markdown: { mode: "escape", tableMode: "ascii", tables: "off" } }, ok: true },
+  ])("validates $entry (accepted: $ok)", ({ entry, ok }) => {
+    const value = scope === "root" ? entry : { accounts: { work: entry } };
+    const parsed = FeishuConfigSchema.safeParse(value);
+    expect(parsed.success).toBe(ok);
+    if (parsed.success) {
+      expect(parsed.data).toMatchObject(value);
+    }
+    expect(
+      validateJsonSchemaValue({
+        schema: FeishuChannelConfigSchema.schema,
+        cacheKey: "feishu-markdown-tables-test",
+        value,
+        applyDefaults: true,
+      }).ok,
+    ).toBe(ok);
+  });
+});
+
 describe("FeishuConfigSchema", () => {
   it("normalizes legacy groupPolicy allowall to open", () => {
     expect(FeishuConfigSchema.parse({ groupPolicy: "allowall" }).groupPolicy).toBe("open");
