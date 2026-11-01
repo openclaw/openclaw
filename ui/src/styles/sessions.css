@@ -940,6 +940,10 @@
     margin-inline-end: var(--space-1);
   }
 
+  .sessions-search input::placeholder {
+    text-overflow: ellipsis;
+  }
+
   .sessions-search__icon {
     position: absolute;
     inset-inline-start: 10px;
@@ -1012,6 +1016,62 @@
   .sidebar-session-sort-menu .sessions-filter-popover__panel {
     width: auto;
     padding: var(--space-2) 0 var(--space-3);
+  }
+
+  .sessions-filter-sheet__header {
+    display: grid;
+    flex: none;
+    grid-template-columns: 32px minmax(0, 1fr) 32px;
+    align-items: center;
+    margin-block-start: var(--space-1);
+  }
+
+  .sessions-filter-sheet__title {
+    grid-column: 2;
+    margin: 0;
+    overflow: hidden;
+    color: var(--text-strong);
+    font-size: var(--control-ui-text-md);
+    font-weight: 600;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sessions-filter-sheet .sidebar-session-filter-panel .sessions-filter-sheet__close {
+    display: inline-flex;
+    grid-column: 3;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
+    padding: 0;
+    color: var(--muted);
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-sm);
+  }
+
+  .sessions-filter-sheet__close svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  /* Choice triggers match the Updated within and Limit fields above them. */
+  .sessions-filter-sheet .session-groupby > openclaw-select-picker {
+    flex: 1 1 0;
+  }
+
+  .sessions-filter-sheet .sidebar-session-filter-panel .session-groupby .picker-select__trigger {
+    height: 30px;
+    min-height: 30px;
+    padding-inline: 8px 6px;
+    font-size: var(--control-ui-text-sm);
+    background: var(--bg);
+    border-color: color-mix(in srgb, var(--border) 70%, transparent);
+    border-radius: var(--radius-sm);
   }
 
   .sidebar-session-sort-menu .session-groupby__label {

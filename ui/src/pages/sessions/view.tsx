@@ -134,13 +134,13 @@ export function SessionsView(props: SessionsProps) {
                   type="search"
                   class="settings-input"
                   value={props.searchQuery}
-                  aria-label={t("sessionsView.searchPlaceholder")}
-                  placeholder={t("sessionsView.searchPlaceholder")}
+                  aria-label={t("sessionsView.personalGroupSearch")}
+                  placeholder={t("sessionsView.personalGroupSearch")}
                   onInput={(event) => props.onSearchChange(event.currentTarget.value)}
                 />
               </div>
             </Show>
-            <TranscriptSearchForm {...props} />
+            <TranscriptSearchForm {...props} phoneLayout={phoneLayout()} />
             <button
               class="btn btn--xs btn--icon sessions-toolbar__icon sessions-toolbar__refresh"
               type="button"

@@ -868,7 +868,7 @@ describe("sessions view at phone width", () => {
     expect(onSelectPage).toHaveBeenCalledWith(["agent:main:alpha", "agent:main:beta"]);
 
     const search = getInput(".sessions-search input");
-    expect(search).not.toBeNull();
+    expect(search?.placeholder).toBe("Search sessions");
     search!.value = "alp";
     search!.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("alp");
@@ -886,12 +886,15 @@ describe("sessions view at phone width", () => {
 
     trigger?.click();
     await flush();
-    await vi.waitFor(() => expect(queryAll(".session-groupby select")).toHaveLength(3));
-    const [, sort, direction] = queryAll<HTMLSelectElement>(".session-groupby select");
-    change(sort!, "key");
+    type ChoiceHost = HTMLElement & { params: { onChange: (value: string) => void } };
+    await vi.waitFor(() => expect(queryAll("openclaw-select-picker")).toHaveLength(3));
+    const [, sort, direction] = queryAll<ChoiceHost>("openclaw-select-picker");
+    sort!.params.onChange("key");
     expect(onSortChange).toHaveBeenLastCalledWith("key", "desc");
-    change(direction!, "asc");
+    direction!.params.onChange("asc");
     expect(onSortChange).toHaveBeenLastCalledWith("updated", "asc");
+    expect(text(".sessions-filter-sheet__title")).toBe("Filters");
+    expect(attr(".sessions-filter-sheet__close", "aria-label")).toBe("Close");
 
     disposeSessionViews();
     await renderSettled([createRow("agent:main:alpha", { updatedAt: Date.now() })], {

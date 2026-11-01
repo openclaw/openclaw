@@ -1,10 +1,13 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
+import { isMobileNavLayout } from "../../app/mobile-nav-layout.ts";
 import { hasMenuSurface } from "../../components/menu-surface.ts";
 import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
+import type { PickerFocusHandle } from "../../components/select-picker-types.ts";
 import { SidebarSessionFilterPopover } from "../../components/sidebar-session-filter-popover.tsx";
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { Picker } from "../../components/solid/select-picker.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
@@ -106,6 +109,10 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
       : props.searchQuery.trim() !== "") ||
     props.statusFilter !== "active" ||
     props.groupBy !== "none";
+  const groupByOptions = () =>
+    SESSION_GROUP_MODES.filter((mode) => mode !== "person" || props.personGroupingAvailable).map(
+      (mode) => ({ value: mode, label: t(SESSION_GROUP_MODE_LABELS[mode]) }),
+    );
   const triggerClass = () => [
     "btn btn--xs btn--icon sessions-toolbar__icon sessions-filter-popover__trigger",
     { active: active() },
@@ -117,6 +124,33 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
       sheetControls.add(element);
     }
   };
+  const sheetPickers = new Set<PickerFocusHandle>();
+  // Choices open as pages of the sheet, as in the sidebar's: a trigger button can
+  // match the neighbouring fields' type size, where a native select would need
+  // 16px to stop iOS zooming on focus.
+  function SheetChoice(choice: {
+    label: string;
+    value: string;
+    options: readonly { value: string; label: string }[];
+    onChange: (value: string) => void;
+  }) {
+    return (
+      <div class="session-groupby">
+        <span class="session-groupby__label" aria-hidden="true">
+          {choice.label}
+        </span>
+        <Picker
+          focusRef={(handle) => sheetPickers.add(handle)}
+          label={choice.label}
+          value={choice.value}
+          options={choice.options}
+          sheet={isMobileNavLayout()}
+          showOptionTooltips={false}
+          onChange={(value) => choice.onChange(value)}
+        />
+      </div>
+    );
+  }
   let sheetTrigger!: HTMLButtonElement;
   let sheetInitialFocus: HTMLElement | undefined;
   const [sheetOpen, setSheetOpen] = createSignal(false);
@@ -239,20 +273,30 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
             }}
           </For>
         </div>
-        <label class="session-groupby">
-          <span class="session-groupby__label">{t("sessionsView.groupBy")}</span>
-          <SettingsSelect
-            ref={sheetControl}
-            class="session-groupby__select"
+        <Show
+          when={props.phoneLayout}
+          fallback={
+            <label class="session-groupby">
+              <span class="session-groupby__label">{t("sessionsView.groupBy")}</span>
+              <SettingsSelect
+                ref={sheetControl}
+                class="session-groupby__select"
+                value={props.groupBy}
+                options={groupByOptions()}
+                onChange={(event) =>
+                  props.onGroupByChange(normalizeSessionsGroupBy(event.currentTarget.value))
+                }
+              />
+            </label>
+          }
+        >
+          <SheetChoice
+            label={t("sessionsView.groupBy")}
             value={props.groupBy}
-            options={SESSION_GROUP_MODES.filter(
-              (mode) => mode !== "person" || props.personGroupingAvailable,
-            ).map((mode) => ({ value: mode, label: t(SESSION_GROUP_MODE_LABELS[mode]) }))}
-            onChange={(event) =>
-              props.onGroupByChange(normalizeSessionsGroupBy(event.currentTarget.value))
-            }
+            options={groupByOptions()}
+            onChange={(value) => props.onGroupByChange(normalizeSessionsGroupBy(value))}
           />
-        </label>
+        </Show>
         {props.groupBy === "category" ? (
           <button
             ref={sheetControl}
@@ -265,42 +309,28 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
           </button>
         ) : undefined}
         <Show when={props.phoneLayout}>
-          <label class="session-groupby">
-            <span class="session-groupby__label">{t("cron.jobs.sort")}</span>
-            <SettingsSelect
-              ref={sheetControl}
-              class="session-groupby__select"
-              value={props.sortColumn}
-              options={[
-                { value: "updated", label: t("sessionsView.updated") },
-                { value: "key", label: t("sessionsView.session") },
-              ]}
-              onChange={(event) =>
-                props.onSortChange(
-                  event.currentTarget.value === "key" ? "key" : "updated",
-                  props.sortDir,
-                )
-              }
-            />
-          </label>
-          <label class="session-groupby">
-            <span class="session-groupby__label">{t("cron.jobs.direction")}</span>
-            <SettingsSelect
-              ref={sheetControl}
-              class="session-groupby__select"
-              value={props.sortDir}
-              options={[
-                { value: "desc", label: t("cron.jobs.descending") },
-                { value: "asc", label: t("cron.jobs.ascending") },
-              ]}
-              onChange={(event) =>
-                props.onSortChange(
-                  props.sortColumn,
-                  event.currentTarget.value === "asc" ? "asc" : "desc",
-                )
-              }
-            />
-          </label>
+          <SheetChoice
+            label={t("cron.jobs.sort")}
+            value={props.sortColumn}
+            options={[
+              { value: "updated", label: t("sessionsView.updated") },
+              { value: "key", label: t("sessionsView.session") },
+            ]}
+            onChange={(value) =>
+              props.onSortChange(value === "key" ? "key" : "updated", props.sortDir)
+            }
+          />
+          <SheetChoice
+            label={t("cron.jobs.direction")}
+            value={props.sortDir}
+            options={[
+              { value: "desc", label: t("cron.jobs.descending") },
+              { value: "asc", label: t("cron.jobs.ascending") },
+            ]}
+            onChange={(value) =>
+              props.onSortChange(props.sortColumn, value === "asc" ? "asc" : "desc")
+            }
+          />
         </Show>
         {props.statusFilter === "archived" ? (
           <button
@@ -363,7 +393,25 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
           anchor={sheetTrigger}
           label={t("sessionsView.filters")}
           initialFocus={() => sheetInitialFocus}
-          focusTargets={() => [...sheetControls].filter((element) => element.isConnected)}
+          focusTargets={() =>
+            [...sheetControls, ...[...sheetPickers].flatMap((picker) => picker.elements())].filter(
+              (element) => element.isConnected,
+            )
+          }
+          header={(close) => (
+            <header class="sessions-filter-sheet__header">
+              <h2 class="sessions-filter-sheet__title">{t("sessionsView.filters")}</h2>
+              <button
+                ref={sheetControl}
+                type="button"
+                class="sessions-filter-sheet__close"
+                aria-label={t("common.close")}
+                onClick={close}
+              >
+                <Icon name="x" />
+              </button>
+            </header>
+          )}
           onClose={() => setSheetOpen(false)}
           content={<FilterPanel />}
         />
