@@ -211,6 +211,8 @@ For `artifacts` and `attendance`, `--output <path>` writes the selected format, 
 Document bodies requested with `--include-doc-bodies` remain in `transcript.md`
 when `--no-transcript-entries` is set or only smart notes are available.
 
+If Google repeats a pagination token, collection stops with an error instead of waiting indefinitely. Retry the request later. Smart-note and transcript-entry errors remain partial-retrieval warnings.
+
 For `export`, `--output <dir>` preserves the literal directory name, including leading or trailing spaces; quote such paths in the shell. A missing or all-whitespace value uses the generated default directory.
 
 Agents use the same actions through the `google_meet` tool (`export`, `create` with `accessType`, `end_active_conference`, `test_listen`); see [Tool](/plugins/google-meet/tool-and-modes#tool).

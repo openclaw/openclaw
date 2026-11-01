@@ -36,7 +36,7 @@ import {
   workspaceResultGitCommand,
   WORKSPACE_RESULT_GIT_TIMEOUT_MS,
 } from "./workspace-result-git.js";
-import { workerHistoryNotAdopted } from "./workspace-result-history.js";
+import { repositoryHistoryNote, workerHistoryNotAdopted } from "./workspace-result-history.js";
 import {
   WorkerWorkspaceGitHistorySchema,
   type WorkerWorkspaceGitHistory,
@@ -97,28 +97,6 @@ function assertBase(
     throw new Error("Repository checkpoint does not match its pinned base");
   }
   return workspace.baseCommit;
-}
-
-function repositoryHistoryNote(
-  baseCommit: string,
-  history: RepositoryGitHistory,
-): string | undefined {
-  if (history.gitHistoryNote) {
-    return history.gitHistoryNote;
-  }
-  const gitHistory = history.gitHistory;
-  if (!gitHistory) {
-    return workerHistoryNotAdopted("worker did not provide Git history");
-  }
-  if (gitHistory.baseCommit !== baseCommit) {
-    return workerHistoryNotAdopted("worker history does not descend from the dispatch base");
-  }
-  if (gitHistory.unavailableReason) {
-    return workerHistoryNotAdopted(gitHistory.unavailableReason);
-  }
-  return gitHistory.descendsFromBase
-    ? undefined
-    : workerHistoryNotAdopted("worker history does not descend from the dispatch base");
 }
 
 export async function readSessionRepositoryArtifacts(
@@ -354,7 +332,10 @@ export async function stageSessionRepositoryCheckpoint(
     if (!workspace.checkpointRef || params.baseManifestRef !== workspace.manifestHash) {
       throw new Error("Repository incremental checkpoint has the wrong accepted parent");
     }
-    accepted = await loadStagedWorkspaceManifest(root, checkpointRef(workspace));
+    accepted = await loadStagedWorkspaceManifest(
+      root,
+      checkpointRef(workspace, workspace.checkpointRef),
+    );
     assertBase(workspace, accepted);
     if (
       accepted.currentManifestRef !== workspace.manifestHash ||
@@ -386,7 +367,7 @@ export async function stageSessionRepositoryCheckpoint(
   };
   assertRevision();
   if (workspace.checkpointRef && params.currentManifestRef === workspace.manifestHash) {
-    const acceptedRef = checkpointRef(workspace);
+    const acceptedRef = checkpointRef(workspace, workspace.checkpointRef);
     const companionRef = publicationRef(acceptedRef);
     const objects = await readWorkspaceResultRefObjects(root, [acceptedRef, companionRef]);
     const object = objects.get(acceptedRef);
@@ -662,6 +643,11 @@ export async function forkSessionRepositoryWorkspace(params: {
     params.assertCurrent();
   };
   const source = (await owner({ workspaceId: params.sourceWorkspaceId, store })).workspace;
+  if (source.diskAuthority) {
+    throw new Error(
+      "Fork requires a fresh disk export; Move to Gateway before forking this workspace",
+    );
+  }
   const existing = await store.find(params);
   if (existing !== undefined) {
     throw new Error("Fork session already owns a repository workspace");

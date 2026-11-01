@@ -179,6 +179,20 @@ Once a successful one-shot consumes its scheduled occurrence, its finished event
 
 Control UI run history shows `OK · Error` or `OK · Unknown` when execution succeeded but whole-run completion failed or remains unknown. Its status filter still selects the execution status.
 
+A scheduled run can use the automations tool with `action: "runs"`, its own
+`jobId`, and optional `limit`, `offset`, or `runId` to read its job's recorded
+outcomes. This includes `deliveryStatus`, the recorded channel and target, and
+`delivery.receipts` with message IDs for confirmed scheduler announcements.
+Older records and providers that did not return message IDs may have only the
+status and target. The current run's automatic announcement happens after the
+agent finishes, so its receipt becomes available to later runs.
+
+This access follows the job identity bound to the active scheduled admission,
+including a scheduler-admitted restart continuation. It does not grant another
+job's history, channel history, or transcript access. A different delivery account
+does not change the job's identity. An admitted paced job or one-shot session
+continuation also retains `next_check`; a session key alone cannot restore it.
+
 While a command job runs, its run history shows a **Live output** panel that follows the combined stdout and stderr like `tail -f`, so you can watch a long run before it records anything. Scrolling up pauses following until you choose **Jump to latest**; polling pauses while the browser tab is hidden and resumes from where it stopped. The Gateway keeps only the most recent output of an active run in memory (at most 256 KiB, or `payload.outputMaxBytes` when smaller), applies the same redaction as other diagnostics, and discards it when the run ends. The recorded result then appears in run history as usual, unchanged. Gateway clients read the tail with `cron.liveOutput` (`id`, optional `cursor` and `runAtMs`; `operator.read`): it returns `{ active, runAtMs, cursor, text, reset?, truncated? }`, where `cursor` is the byte offset to send back with the previous `runAtMs`, `reset` means the text replaces what the client holds, and `active: false` means there is no live buffer, either because the command has not started or because it ended. Only complete lines are returned, and a Gateway restart ends the buffer. Agent-turn runs have no live output panel; their transcript is available with **View transcript** after the run is recorded.
 
 Run-history search matches summaries, task names, and execution or delivery errors. You can search the delivery error shown on a run even when its execution status is `ok`.

@@ -15,13 +15,13 @@ export type {
   SpeechProviderOverrides,
   SpeechSynthesisRequest,
   SpeechSynthesisStreamRequest,
-  SpeechSynthesisStreamResult,
   SpeechSynthesisTarget,
   SpeechTelephonySynthesisRequest,
   SpeechVoiceOption,
   TtsDirectiveOverrides,
   TtsDirectiveParseResult,
 } from "../tts/provider-types.js";
+export type { SpeechSynthesisStreamResult } from "../tts/tts-runtime-types.js";
 
 export {
   scheduleCleanup,

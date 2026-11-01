@@ -344,6 +344,7 @@ export async function executeJobCore(
         effectiveJob,
         occurrence,
         abortSignal,
+        assertCurrent,
         options,
       );
       return triggerEval ? { ...result, triggerEval } : result;
@@ -360,6 +361,7 @@ export async function executeJobCore(
         effectiveJob,
         occurrence,
         abortSignal,
+        assertCurrent,
         options,
         sessionPreparation,
       );
@@ -386,6 +388,7 @@ async function executeMainSessionCronJob(
   job: CronStoredJob,
   occurrence: ScheduledOccurrence,
   abortSignal: AbortSignal | undefined,
+  assertCurrent: () => void,
   options?: ExecuteJobCoreOptions,
   sessionPreparation?: CronSessionRunPreparation,
 ): Promise<CronJobExecutionResult> {
@@ -407,13 +410,6 @@ async function executeMainSessionCronJob(
       error: "Session event execution is unavailable; restart the Gateway and retry",
     };
   }
-  const assertCurrent = () => {
-    abortSignal?.throwIfAborted();
-    options?.deliveryAttemptFence?.assertCurrent();
-    if (!isCronActiveJobMarkerCurrent(options?.activeJobMarker)) {
-      throw new Error("Gateway restarting.");
-    }
-  };
   const deliveryContext = await resolveMainSessionCronDeliveryContext(state, job);
   assertCurrent();
   await options?.assertRunCurrent?.();

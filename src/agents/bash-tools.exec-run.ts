@@ -458,7 +458,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           nonInteractiveApproval: defaults?.nonInteractiveApproval,
           approvalFollowupMode: defaults?.approvalFollowupMode,
           turnSourceChannel: defaults?.messageProvider,
-          turnSourceTo: defaults?.currentChannelId,
+          turnSourceTo: defaults?.currentMessagingTarget ?? defaults?.currentChannelId,
           turnSourceAccountId: defaults?.accountId,
           turnSourceThreadId: defaults?.currentThreadTs,
           agentId,

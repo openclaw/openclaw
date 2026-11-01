@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  assertColdTranscriptRows,
   databasePath,
   gatewayCall,
   readColdArchives,
@@ -21,6 +22,8 @@ const context = {
 };
 const stateDir = process.env.OPENCLAW_STATE_DIR;
 const fixturePath = path.join(proofDir, "fixture.json");
+const historyRestoresCold =
+  process.env.OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE === "legacy";
 
 async function patchPolicy(coldStorage) {
   const before = await gatewayCall(context, "config.get", {});
@@ -34,6 +37,11 @@ async function patchPolicy(coldStorage) {
 }
 
 async function assertHistory(session) {
+  const archives = readColdArchives(stateDir);
+  const cold = archives.some((archive) => archive.session_id === session.sessionId);
+  const before = cold
+    ? assertColdTranscriptRows(stateDir, session)
+    : readTranscriptRows(stateDir, session.sessionId);
   const history = await gatewayCall(context, "chat.history", {
     sessionKey: session.sessionKey,
     limit: 100,
@@ -43,11 +51,22 @@ async function assertHistory(session) {
     JSON.stringify(history.messages).includes(session.nonce),
     "history omitted the original recall code",
   );
+  if (cold && historyRestoresCold) {
+    assert.deepEqual(readTranscriptRows(stateDir, session.sessionId), session.rows);
+    assert.deepEqual(
+      readColdArchives(stateDir),
+      archives.filter((archive) => archive.session_id !== session.sessionId),
+    );
+    return;
+  }
   assert.deepEqual(
-    readTranscriptRows(stateDir, session.sessionId),
-    session.rows,
-    "restoration changed original events",
+    cold
+      ? assertColdTranscriptRows(stateDir, session)
+      : readTranscriptRows(stateDir, session.sessionId),
+    before,
+    "history must not rewrite transcript storage",
   );
+  assert.deepEqual(readColdArchives(stateDir), archives, "history must leave payloads archived");
 }
 
 if (phase === "seed") {
@@ -92,11 +111,7 @@ if (phase === "seed") {
   const [old, middle, recent] = sessions;
   if (phase === "exercise") {
     const archives = await waitForArchives(context, [old.sessionId]);
-    assert.deepEqual(
-      readTranscriptRows(stateDir, old.sessionId),
-      [],
-      "archival must remove hot event rows",
-    );
+    assertColdTranscriptRows(stateDir, old);
     for (const session of [middle, recent]) {
       assert.deepEqual(
         readTranscriptRows(stateDir, session.sessionId),
@@ -108,7 +123,7 @@ if (phase === "seed") {
     assert.match(archives[0].archive_name, /^[a-f0-9]{64}\.jsonl\.zst$/);
     await patchPolicy({ afterDays: 7 });
     await waitForArchives(context, [old.sessionId, middle.sessionId]);
-    assert.deepEqual(readTranscriptRows(stateDir, middle.sessionId), []);
+    assertColdTranscriptRows(stateDir, middle);
     assert.deepEqual(readTranscriptRows(stateDir, recent.sessionId), recent.rows);
     await patchPolicy({ enabled: false });
 
@@ -122,6 +137,7 @@ if (phase === "seed") {
     );
     const hiddenPath = `${archivePath}.test-missing`;
     const beforeMissing = readColdArchives(stateDir);
+    const beforeMissingRows = assertColdTranscriptRows(stateDir, old);
     await fs.rename(archivePath, hiddenPath);
     try {
       await assert.rejects(
@@ -146,7 +162,7 @@ if (phase === "seed") {
         beforeMissing,
         "missing file must retain its recovery reference",
       );
-      assert.deepEqual(readTranscriptRows(stateDir, old.sessionId), []);
+      assert.deepEqual(assertColdTranscriptRows(stateDir, old), beforeMissingRows);
     } finally {
       await fs.rename(hiddenPath, archivePath);
     }
@@ -186,10 +202,12 @@ if (phase === "seed") {
     await assertHistory(old);
     assert.deepEqual(
       readColdArchives(stateDir).map((row) => row.session_id),
-      [middle.sessionId],
+      (historyRestoresCold ? [middle.sessionId] : [old.sessionId, middle.sessionId]).toSorted(
+        (a, b) => a.localeCompare(b),
+      ),
     );
     console.log(
-      "Automatic 30/7-day archival, hot reload, missing-file refusal, portable backup and exact history restoration passed",
+      "Automatic 30/7-day archival, hot reload, missing-file refusal, portable backup and cold history reads passed",
     );
   } else if (phase === "restart" || phase === "recovered") {
     const config = await gatewayCall(context, "config.get", {});
@@ -199,10 +217,11 @@ if (phase === "seed") {
       await assert.rejects(fs.stat(path.join(stateDir, "agents", "main", "sessions", "cold")), {
         code: "ENOENT",
       });
-      assert.equal(readColdArchives(stateDir).length, 2);
-    } else {
-      assert.equal(readColdArchives(stateDir).length, 1);
     }
+    assert.equal(
+      readColdArchives(stateDir).length,
+      phase === "restart" && historyRestoresCold ? 1 : 2,
+    );
     const archivesBeforeListing = readColdArchives(stateDir);
     const listingParams = {
       agentId: "main",
@@ -227,18 +246,45 @@ if (phase === "seed") {
       "listing must leave cold payloads archived",
     );
     for (const archive of archivesBeforeListing) {
-      assert.deepEqual(readTranscriptRows(stateDir, archive.session_id), []);
+      assertColdTranscriptRows(
+        stateDir,
+        sessions.find((session) => session.sessionId === archive.session_id),
+      );
     }
     for (const session of sessions) {
       await assertHistory(session);
     }
+    const appendedText = "Cold storage append proof.";
+    for (const session of [old, middle]) {
+      const archives = readColdArchives(stateDir);
+      const appended = await gatewayCall(context, "chat.inject", {
+        sessionKey: session.sessionKey,
+        message: appendedText,
+      });
+      assert.equal(appended.ok, true);
+      assert.equal(typeof appended.messageId, "string");
+      const rows = readTranscriptRows(stateDir, session.sessionId);
+      assert.deepEqual(rows.slice(0, session.rows.length), session.rows);
+      assert.equal(rows.length, session.rows.length + 1);
+      const event = JSON.parse(rows.at(-1).event_json);
+      assert.equal(event.id, appended.messageId);
+      assert.equal(event.parentId, JSON.parse(session.rows.at(-1).event_json).id);
+      assert.equal(event.message.role, "assistant");
+      assert.deepEqual(event.message.content, [{ type: "text", text: appendedText }]);
+      assert.deepEqual(
+        readColdArchives(stateDir),
+        archives.filter((archive) => archive.session_id !== session.sessionId),
+        "append must restore only its own archive",
+      );
+    }
+    assert.deepEqual(readTranscriptRows(stateDir, recent.sessionId), recent.rows);
     assert.deepEqual(readColdArchives(stateDir), []);
     const restoredListing = await gatewayCall(context, "sessions.list", listingParams);
     for (const session of sessions) {
       assert.equal(
         restoredListing.sessions.find((row) => row.key === session.sessionKey)?.lastMessagePreview,
-        "I will remember it.",
-        "Activity must refresh omitted previews after restoration",
+        session === recent ? "I will remember it." : appendedText,
+        "Activity must refresh previews after the restoring append",
       );
     }
     console.log(`${phase}: all transcript bytes survived, with cold storage disabled`);
