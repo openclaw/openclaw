@@ -119,6 +119,10 @@ export function looksLikeEnvelopeSludge(text: string): boolean {
 // Matches injectTimestamp in src/auto-reply/reply/strip-inbound-meta.ts.
 const LEADING_TIMESTAMP_PREFIX_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
 
+export function stripLeadingTimestampPrefix(text: string): string {
+  return text.replace(LEADING_TIMESTAMP_PREFIX_RE, "");
+}
+
 // Group envelopes can name the room in the header and sender in the body
 // ("[Slack #general] Alice: text"). Preserve user labels such as "TODO:" unless
 // the header or a direct/self marker identifies them as transport metadata.

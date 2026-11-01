@@ -32,10 +32,11 @@ import {
   MemoryRecallEmbeddingError,
 } from "./embeddings.js";
 import { MemoryDB, type MemoryEntry } from "./lancedb-store.js";
-import { dropMediaNoteLines, sanitizeForMemoryCapture } from "./memory-capture-sanitization.js";
+import { dropMediaNoteLines } from "./memory-capture-sanitization.js";
 import { registerMemoryCli } from "./memory-cli.js";
 import {
   type AutoCaptureMessageProgress,
+  capturableUserText,
   captureFingerprint,
   cleanMemorySearchResults,
   detectCategory,
@@ -47,7 +48,6 @@ import {
   normalizeRecallQuery,
   prepareAutoCaptureMessages,
   projectMemorySearchResult,
-  shouldCapture,
 } from "./memory-policy.js";
 import {
   createEmbeddingHealthTracker,
@@ -621,14 +621,11 @@ export default definePluginEntry({
                 continue;
               }
               for (const text of extractUserTextContent(message)) {
-                const sanitized = sanitizeForMemoryCapture(text);
-                if (
-                  !sanitized ||
-                  !shouldCapture(sanitized, {
-                    customTriggers: currentCfg.customTriggers,
-                    maxChars: currentCfg.captureMaxChars,
-                  })
-                ) {
+                const sanitized = capturableUserText(text, {
+                  customTriggers: currentCfg.customTriggers,
+                  maxChars: currentCfg.captureMaxChars,
+                });
+                if (!sanitized) {
                   continue;
                 }
                 const textFingerprint = captureFingerprint(sanitized);

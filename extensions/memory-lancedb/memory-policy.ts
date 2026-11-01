@@ -10,7 +10,11 @@ import {
   type MemoryCategory,
 } from "./config.js";
 import type { MemoryDB, MemorySearchResult } from "./lancedb-store.js";
-import { looksLikeEnvelopeSludge } from "./memory-capture-sanitization.js";
+import {
+  looksLikeEnvelopeSludge,
+  sanitizeForMemoryCapture,
+  stripLeadingTimestampPrefix,
+} from "./memory-capture-sanitization.js";
 
 export function extractUserTextContent(message: unknown): string[] {
   const msgObj = asOptionalRecord(message);
@@ -183,7 +187,7 @@ const SYSTEM_TURN_PROMPT_PREFIX = "[System]";
 
 /** True for an OpenClaw-generated system turn, which is not something the user said. */
 export function isSystemTurnPromptText(text: string): boolean {
-  return text.trimStart().startsWith(SYSTEM_TURN_PROMPT_PREFIX);
+  return stripLeadingTimestampPrefix(text.trimStart()).startsWith(SYSTEM_TURN_PROMPT_PREFIX);
 }
 
 // Legacy label-only rows slip past now that header detection keys on the provenance marker, and the
@@ -256,6 +260,19 @@ function matchesCustomTrigger(text: string, customTriggers?: string[]): boolean 
   }
   const lower = text.toLocaleLowerCase();
   return customTriggers.some((trigger) => lower.includes(trigger.toLocaleLowerCase()));
+}
+
+/** The text auto-capture stores for one user text block, or undefined when it must not be stored. */
+export function capturableUserText(
+  text: string,
+  options?: { customTriggers?: string[]; maxChars?: number },
+): string | undefined {
+  // Check the raw turn: sanitizing can drop the marker line along with a quoted context block.
+  if (isSystemTurnPromptText(text)) {
+    return undefined;
+  }
+  const sanitized = sanitizeForMemoryCapture(text);
+  return sanitized && shouldCapture(sanitized, options) ? sanitized : undefined;
 }
 
 export function shouldCapture(

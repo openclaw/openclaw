@@ -6,7 +6,7 @@ scenario:
   coverage:
     secondary:
       - channels.message-final-reply
-  objective: Under messages.visibleReplies=message_tool, a stranded private final gets one OpenClaw-generated [System] retry turn that quotes the agent's own reply. With memory-lancedb autoCapture on, that system turn must not be stored as a user memory, while the user's own message still is.
+  objective: Under messages.visibleReplies=message_tool, a stranded private final gets one OpenClaw-generated [System] retry turn that quotes the agent's own reply. With memory-lancedb autoCapture on, that system turn must not be stored as a user memory, while a later user message still is.
   plugins:
     - memory-lancedb
   gatewayConfigPatch:
@@ -30,7 +30,7 @@ scenario:
               - QA-STRANDED-85714
   successCriteria:
     - The stranded private final gets one recovery retry, and the reply is delivered via message(action=send).
-    - The user's inbound message, which carries the custom capture trigger, is stored as a memory (capture ran).
+    - A later user turn in the same conversation is stored, so capture ran and the retry's capture has settled before the store is read.
     - No stored memory starts with the [System] marker of the retry turn.
   docsRefs:
     - docs/channels/qa-channel.md
@@ -46,11 +46,17 @@ scenario:
       requiredProviderMode: mock-openai
       agentId: qa
       conversationId: qa-stranded-memory-dm
-      # Capturable on its own: "remember" plus the custom trigger, and no tool-call phrasing.
-      prompt: "qa stranded final recovery check. Remember the marker QA-STRANDED-85714."
+      # The capture filter rejects this prompt ("call any tool"), so the [System] retry is the first
+      # capturable text and no earlier row can absorb it through duplicate matching.
+      prompt: "qa stranded final recovery check. Include `QA-STRANDED-85714` in a thorough multi-sentence answer, but do not call any tool yet."
       expectedMarker: QA-STRANDED-85714
+      # Captures for one session run in order, so once this later turn is stored the retry's
+      # capture has finished. A fixed sleep cannot tell "nothing stored" from "not yet". The mock's
+      # 16-dimension embeddings put most English sentences above the 0.95 duplicate threshold;
+      # this text stays far below it against the prompt and the retry turn.
+      barrierPrompt: "QA-MEMORY-BARRIER 記住 1 2 3 4 5 6 7 8 9 0"
       systemTurnFilter: "text LIKE '[System]%'"
-      markerFilter: "text LIKE '%QA-STRANDED-85714%'"
+      barrierFilter: "text LIKE '%QA-MEMORY-BARRIER%'"
 
 flow:
   steps:
@@ -86,26 +92,23 @@ flow:
                 params: [candidate]
                 expr: "candidate.conversation.id === config.conversationId && candidate.conversation.kind === 'direct' && String(candidate.text ?? '').includes(config.expectedMarker)"
             - expr: liveTurnTimeoutMs(env, 180000)
-        - call: sleep
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId:
+              expr: config.conversationId
+            senderName: Alice
+            text:
+              expr: config.barrierPrompt
+        - call: waitForCondition
+          saveAs: barrierRows
           args:
-            - expr: liveTurnTimeoutMs(env, 8000)
-        - call: runQaCli
-          saveAs: markerRows
-          args:
-            - ref: env
-            - - ltm
-              - query
-              - --agent
-              - expr: config.agentId
-              - --filter
-              - expr: config.markerFilter
-              - --cols
-              - text
-              - --limit
-              - "50"
-            - timeoutMs:
-                expr: liveTurnTimeoutMs(env, 60000)
-              json: true
+            - lambda:
+                expr: "(async () => { const rows = await runQaCli(env, ['ltm', 'query', '--agent', config.agentId, '--filter', config.barrierFilter, '--cols', 'text', '--limit', '5'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }); return Array.isArray(rows) && rows.length > 0 ? rows : undefined; })()"
+            - expr: liveTurnTimeoutMs(env, 180000)
+            - 1000
         - call: runQaCli
           saveAs: systemRows
           args:
@@ -124,11 +127,7 @@ flow:
                 expr: liveTurnTimeoutMs(env, 60000)
               json: true
         - assert:
-            expr: "Array.isArray(markerRows) && markerRows.some((row) => !String(row.text ?? '').startsWith('[System]'))"
-            message:
-              expr: "`expected the user's own turn to be captured (capture must have run), saw ${JSON.stringify(markerRows)}`"
-        - assert:
             expr: "Array.isArray(systemRows) && systemRows.length === 0"
             message:
               expr: "`expected no stored [System] turn, saw ${JSON.stringify(systemRows)}`"
-      detailsExpr: "`marker rows=${markerRows.length}; [System] rows=${systemRows.length}; first [System] row: ${JSON.stringify(systemRows[0] ?? null).slice(0, 240)}`"
+      detailsExpr: "`barrier rows=${barrierRows.length}; [System] rows=${systemRows.length}; first [System] row: ${JSON.stringify(systemRows[0] ?? null).slice(0, 240)}`"

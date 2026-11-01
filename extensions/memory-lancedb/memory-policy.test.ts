@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import type { MemorySearchResult } from "./lancedb-store.js";
 import {
+  capturableUserText,
   cleanMemorySearchResults,
   findCleanDuplicateMemory,
   formatRecalledMemoryForModel,
@@ -18,11 +19,12 @@ test("recall escapes markup while preserving whitespace and inert legacy media t
 
 // Exactly what core's stranded-reply retry sends as a user-role turn (stranded-reply-recovery.ts).
 const reply = "Got it, I'll remember that the deploy window is Tuesdays.";
-const strandedRetry =
+const stranded = (finalText: string) =>
   `[System] Your previous reply was not delivered because you did not call message(action=send). ` +
-  `Your reply text was: "${reply}". ` +
+  `Your reply text was: "${finalText}". ` +
   `If the user should see a reply, send it now with message(action=send). ` +
   `If no reply is needed, answer exactly NO_REPLY.`;
+const strandedRetry = stranded(reply);
 // sessions_send prefixes the restart-recovery note to a dispatched message in the same way.
 const restartDispatch =
   "[System] Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on " +
@@ -38,6 +40,18 @@ test("capture skips OpenClaw system turns that quote trigger words", () => {
   expect(shouldCapture(reply)).toBe(true);
   expect(isSystemTurnPromptText(strandedRetry)).toBe(true);
   expect(isSystemTurnPromptText("Note the [System] label in the logs")).toBe(false);
+});
+
+test("auto-capture checks the raw turn before sanitizing can drop the marker line", () => {
+  // A quoted reply that opens with a context block: sanitizing removes the whole first line,
+  // [System] included, and leaves a capturable "Remember ..." sentence behind.
+  const quotesContextBlock = stranded(
+    '⟦openclaw:ctx⟧\n```json\n{"channel":"telegram"}\n```\nRemember the deployment window is Tuesdays.',
+  );
+  expect(capturableUserText(quotesContextBlock)).toBeUndefined();
+  expect(capturableUserText(`[Sat 2026-11-01 01:41 EDT] ${strandedRetry}`)).toBeUndefined();
+  expect(capturableUserText(strandedRetry)).toBeUndefined();
+  expect(capturableUserText(reply)).toBe(reply);
 });
 
 const result = (text: string, id = text): MemorySearchResult => ({
