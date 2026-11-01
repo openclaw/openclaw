@@ -58,4 +58,21 @@ describe("gateway retry owner", () => {
     vi.advanceTimersByTime(1);
     expect(currentRetry).toHaveBeenCalledOnce();
   });
+
+  it("keeps the remaining backoff after a wall-clock jump during pause", () => {
+    // Fake wall clock and timers only; performance.now stays real so a
+    // monotonic deadline is independent of setSystemTime.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const owner = createGatewayRetryOwner();
+    const retry = vi.fn();
+
+    owner.schedule(retry);
+    owner.pause();
+    vi.setSystemTime(Date.now() + 3_600_000);
+    owner.resume();
+    vi.advanceTimersByTime(1);
+    expect(retry).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(30_000);
+    expect(retry).toHaveBeenCalledOnce();
+  });
 });
