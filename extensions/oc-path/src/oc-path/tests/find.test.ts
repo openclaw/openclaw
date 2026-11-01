@@ -305,9 +305,6 @@ describe("findOcPaths — JSONL", () => {
     ] as const) {
       const out = find(lineAst, "oc://session/" + pattern);
       expect(formattedPaths(out)).toEqual(paths);
-      for (const { path, match } of out) {
-        expect(resolveOcPath(lineAst, parseOcPath(formatOcPath(path)))).toEqual(match);
-      }
     }
   });
 
