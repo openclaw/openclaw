@@ -1246,6 +1246,29 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "existing-session-latest-output")
     }
 
+    func testSwitchingChatsOpensAtLatestMessage() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone reader positioning proof only")
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "chat-switch-latest"),
+            additionalArguments: ["--openclaw-chat-switch-fixture", "--openclaw-slow-model-catalog-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let composer = app.otherElements["chat-composer-surface"]
+        XCTAssertTrue(app.staticTexts["OPENCLAW_SWITCH_A_LATEST"].waitForExistence(timeout: 15))
+
+        // The transcript paints while the held model catalog keeps the chat's load running.
+        try self.selectSidebarDestination("Launch plan")
+        let latest = app.staticTexts["OPENCLAW_SWITCH_B_LATEST"]
+        let landedAtLatest = latest.waitForExistence(timeout: 2)
+        self.attachScreenshot(named: "chat-switch-latest")
+        XCTAssertTrue(landedAtLatest, "CHAT_SWITCH_LANDED_AWAY_FROM_LATEST")
+        XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY + 1)
+        let first = app.staticTexts["OPENCLAW_SWITCH_B_FIRST"]
+        XCTAssertFalse(first.exists && first.isHittable)
+    }
+
     func testTaskListLongPressOffersRefreshDismissAndClear() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,

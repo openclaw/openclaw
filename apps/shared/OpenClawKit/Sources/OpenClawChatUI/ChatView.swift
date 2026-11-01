@@ -1209,7 +1209,13 @@ extension OpenClawChatView {
     }
 
     private func handleTimelineChange() {
-        guard self.hasPerformedInitialScroll else { return }
+        guard self.hasPerformedInitialScroll else {
+            // A chat's cached or live rows paint while the rest of its load (sessions, models,
+            // health) is still running. Hold them at the initial position instead of the top;
+            // the load's completion still settles it.
+            if !self.viewModel.messages.isEmpty { self.restoreInitialScrollPosition() }
+            return
+        }
         // A search result is an explicit reading position. Incoming replies
         // must not pull the reader away until they leave Find.
         guard self.searchMessageID == nil else { return }
