@@ -26,7 +26,7 @@ const envEntry = entry("SERVICE_URL", "https://service.test");
 const secretEntry = entry("SERVICE_API_KEY", ["api.example.com"]);
 const longNameSecretEntry = {
   ...secretEntry,
-  name: "REUTERS_OUTLOOK_CALENDAR_ICS_PRODUCTION_ACCESS_TOKEN",
+  name: "EXAMPLE_PARTNER_CALENDAR_ICS_PRODUCTION_ACCESS_TOKEN",
 };
 
 async function tableBodyContrast(page: Page): Promise<number> {
