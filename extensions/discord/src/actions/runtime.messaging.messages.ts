@@ -6,6 +6,8 @@ import {
 } from "openclaw/plugin-sdk/channel-actions";
 import { createChannelProgressDraftCompositor } from "openclaw/plugin-sdk/channel-outbound";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveDiscordAccount } from "../accounts.js";
+import { prepareDiscordOutboundText } from "../outbound-text.js";
 import * as discordMessagingActionRuntime from "../send.js";
 import { buildDiscordTextChunks } from "../send.shared.js";
 import { resolveDiscordChannelId } from "../target-parsing.js";
@@ -132,11 +134,17 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
               maxLinesPerMessage: Number.MAX_SAFE_INTEGER,
             },
           )[0] ?? "")
-        : readStringParam(ctx.params, "content", {
-            required: true,
-            allowEmpty: true,
-            trim: false,
-          });
+        : prepareDiscordOutboundText(
+            readStringParam(ctx.params, "content", {
+              required: true,
+              allowEmpty: true,
+              trim: false,
+            }),
+            {
+              cfg: ctx.cfg,
+              account: resolveDiscordAccount({ cfg: ctx.cfg, accountId: ctx.accountId }),
+            },
+          ).textWithMentions;
       await ctx.assertReadTargetAllowed({ channelId });
       const message = await discordMessagingActionRuntime.editMessageDiscord(
         channelId,

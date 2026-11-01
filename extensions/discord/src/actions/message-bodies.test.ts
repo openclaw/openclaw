@@ -298,6 +298,20 @@ describe("Discord action message bodies", () => {
     },
   );
 
+  it("renders edited content the same way as a send", async () => {
+    const settings = config({ mentionAliases: { alice: "523456789012345678" } });
+    const content = "| svc | state |\n|---|---|\n| api | __up__ |\n\nping @alice";
+    await invoke("send", { to: `channel:${channelId}`, message: content }, { cfg: settings });
+    const sent = writes()[0]?.body.content;
+    expect(sent).toContain("```\n| svc | state |");
+    expect(sent).toContain("ping <@523456789012345678>");
+    requests = [];
+
+    await edit(content, settings);
+
+    expectEdit(channelId, sent);
+  });
+
   it.each([
     ["absent edit content", () => edit(undefined), /required/],
     ["blank message ID", () => edit("caption", cfg, "   "), /required/],
