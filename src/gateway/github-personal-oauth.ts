@@ -57,7 +57,6 @@ import {
 } from "./github-personal-status.js";
 import { warnGitHubPublicationDeprecation } from "./github-publication-deprecation.js";
 export type { PersonalGitHubAction } from "./github-personal-status.js";
-export type PersonalGitHubActionV2 = PersonalGitHubAction & { signal: AbortSignal };
 const profileDir = (profileId: string) =>
   resolveManagedGitHubProfileDir({ agentId: "", scope: "personal", profileId });
 const withProfileLease = <T>(
