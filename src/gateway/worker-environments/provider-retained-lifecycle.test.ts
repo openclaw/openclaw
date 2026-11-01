@@ -5,6 +5,7 @@ import type {
   WorkerRetentionOperation,
 } from "../../plugins/worker-retention.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as support from "./service.test-support.js";
 import { workerReadyPatch } from "./store.test-support.js";
 
@@ -44,7 +45,7 @@ async function seed() {
   });
   return { environmentId, expectedOwnerEpoch: record.ownerEpoch, assertCurrent: () => {} };
 }
-function fixture() {
+function fixture(environmentId = "retained-original") {
   let observation: WorkerRetentionObservation = {
     claimRevision: "revision-initial",
     state: "running",
@@ -67,7 +68,7 @@ function fixture() {
       lease.assertCurrent();
       expect(lease.resourceReceipt).toEqual(receipt);
       expect(lease.retention).toEqual(policy);
-      expect(support.testState.store.get("retained-original")?.retention?.operation).toEqual(
+      expect(support.testState.store.get(environmentId)?.retention?.operation).toEqual(
         lease.operation,
       );
       operations.push(lease.operation);
@@ -113,6 +114,184 @@ function fixture() {
 
 describe("retained lifecycle through the environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
+  it("recovers expired initial provisioning only on a fresh authorized creation retry", async () => {
+    const request = {
+      profileId: "development",
+      idempotencyKey: "initial-retained",
+      retainedPolicy: policy,
+    };
+    const { environmentId } = deriveEnvironmentIntent(request.idempotencyKey);
+    const f = fixture(environmentId);
+    let first = true;
+    const provision = vi.fn<typeof f.provider.provision>(async (_profile, _operation, options) => {
+      await options!.recordResourceReceipt!(receipt);
+      if (first) {
+        first = false;
+        throw new Error("initial provisioning interrupted");
+      }
+      if (f.observation.state !== "running") {
+        throw new Error("explicit lifecycle recovery required");
+      }
+      options!.assertCurrent!();
+      return {
+        leaseId: receipt.leaseId,
+        resourceReceipt: receipt,
+        node: { deviceId: "node-original" },
+        sharedHost: false,
+      };
+    });
+    f.provider.requiresNodeEnrollment = true;
+    f.provider.provision = provision;
+    const service = () =>
+      support.createService(f.provider, {
+        ensureNodeWorkerBundle: f.ensureNodeWorkerBundle,
+        prepareNodeEnrollment: async () => ({
+          mode: "resume",
+          deviceId: "node-original",
+          displayName: "Retained fixture",
+          openclawVersion: "2026.8.1",
+          nodeBootstrap: support.NODE_BOOTSTRAP,
+          waitForDeviceId: async () => "node-original",
+        }),
+      });
+    await expect(service().createWithRequest(request)).rejects.toThrow(
+      "initial provisioning interrupted",
+    );
+    const initial = support.testState.store.get(environmentId)!;
+    expect(initial).toMatchObject({
+      state: "provisioning",
+      ownerEpoch: 0,
+      leaseId: null,
+      nodeDeviceId: null,
+      resourceReceipt: receipt,
+    });
+    f.observation = { ...f.observation, state: "expired", computeExpiresAtMs: 999 };
+    await support.reopenWorkerEnvironmentStore();
+    const restarted = service();
+    await restarted.reconcileOnce();
+    expect(f.operations).toEqual([]);
+    const mutate = f.setRetainedState.getMockImplementation()!;
+    let revoked = false;
+    f.setRetainedState.mockImplementation(async (lease) => {
+      if (lease.operation.action === "resume") {
+        revoked = true;
+        lease.assertCurrent();
+      }
+      return mutate(lease);
+    });
+    await expect(
+      restarted.createWithRequest({
+        ...request,
+        beforeProvision: () => {
+          if (revoked) {
+            throw new Error("retry authority revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("retry authority revoked");
+    const pending = support.testState.store.get(environmentId)!.retention!.operation!;
+    expect(pending.action).toBe("resume");
+    f.setRetainedState.mockImplementation(mutate);
+    await support.reopenWorkerEnvironmentStore();
+    const recovered = service();
+    await recovered.reconcileOnce();
+    expect(f.operations.map(({ action }) => action)).toEqual(["pause"]);
+    await expect(recovered.createWithRequest(request)).resolves.toMatchObject({ state: "ready" });
+    expect(f.operations).toEqual([expect.objectContaining({ action: "pause" }), pending]);
+    expect(recovered.get(environmentId)).toMatchObject({
+      ownerEpoch: 1,
+      leaseId: receipt.leaseId,
+      nodeDeviceId: "node-original",
+      resourceReceipt: receipt,
+      retention: { operation: null, runtimeReady: true },
+    });
+    expect(
+      provision.mock.calls.every(([, operation]) => operation === initial.provisionOperationId),
+    ).toBe(true);
+    expect(f.destroy).not.toHaveBeenCalled();
+  });
+  it("preserves a revoked pending resume until an explicit authorized wake", async () => {
+    const request = await seed();
+    const f = fixture();
+    f.observation = { ...f.observation, state: "suspended" };
+    const mutate = f.setRetainedState.getMockImplementation()!;
+    let revoked = false;
+    f.setRetainedState.mockImplementation(async (lease) => {
+      if (lease.operation.action === "resume") {
+        revoked = true;
+        lease.assertCurrent();
+      }
+      return mutate(lease);
+    });
+    await expect(
+      f.service().ensureRetainedRunning({
+        ...request,
+        assertCurrent: () => {
+          if (revoked) {
+            throw new Error("wake authority revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("wake authority revoked");
+    const resume = support.testState.store.get(request.environmentId)!.retention!.operation!;
+    expect(resume.action).toBe("resume");
+    expect(f.operations.map(({ action }) => action)).toEqual(["pause"]);
+    f.setRetainedState.mockImplementation(mutate);
+    await support.reopenWorkerEnvironmentStore();
+    const restarted = f.service();
+    await restarted.reconcileOnce();
+    expect(f.operations.map(({ action }) => action)).toEqual(["pause"]);
+    expect(restarted.get(request.environmentId)?.retention).toMatchObject({
+      operation: resume,
+      runtimeReady: false,
+    });
+    await expect(restarted.suspendRetained(request)).rejects.toThrow(
+      "An earlier retained lifecycle operation must settle",
+    );
+    expect(f.operations.map(({ action }) => action)).toEqual(["pause"]);
+    expect(restarted.get(request.environmentId)?.retention?.operation).toEqual(resume);
+    await restarted.ensureRetainedRunning(request);
+    expect(f.operations.slice(1)).toEqual([resume]);
+    expect(restarted.get(request.environmentId)?.retention).toMatchObject({
+      operation: null,
+      runtimeReady: true,
+    });
+  });
+
+  it("replays pending pause cleanup and observes completed resume without resubmitting it", async () => {
+    const request = await seed();
+    const f = fixture();
+    const mutate = f.setRetainedState.getMockImplementation()!;
+    f.setRetainedState.mockRejectedValueOnce(new Error("pause not submitted"));
+    await expect(f.service().suspendRetained(request)).rejects.toThrow("pause not submitted");
+    const pause = support.testState.store.get(request.environmentId)!.retention!.operation!;
+    await support.reopenWorkerEnvironmentStore();
+    const restarted = f.service();
+    await restarted.reconcileOnce();
+    expect(f.operations).toEqual([pause]);
+    expect(restarted.get(request.environmentId)?.retention?.operation).toBeNull();
+    f.setRetainedState.mockImplementation(async (lease) => {
+      const observed = await mutate(lease);
+      if (lease.operation.action === "resume") {
+        throw new Error("resume reply lost");
+      }
+      return observed;
+    });
+    await expect(restarted.ensureRetainedRunning(request)).rejects.toThrow("resume reply lost");
+    const resume = support.testState.store.get(request.environmentId)!.retention!.operation!;
+    expect(f.operations.at(-1)).toEqual(resume);
+    f.setRetainedState.mockClear();
+    await support.reopenWorkerEnvironmentStore();
+    const observed = f.service();
+    await observed.reconcileOnce();
+    expect(f.setRetainedState).not.toHaveBeenCalled();
+    expect(observed.get(request.environmentId)?.retention).toMatchObject({
+      operation: null,
+      runtimeReady: false,
+      observation: { state: "running", operation: { ...resume, phase: "observed" } },
+    });
+  });
+
   it("recovers lost pause and resume replies without replacing the disk, and waits for the same node before readiness", async () => {
     const request = await seed();
     const f = fixture();

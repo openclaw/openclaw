@@ -136,6 +136,98 @@ describe("new capture through native private transport", () => {
     await wire.close();
   });
 
+  it("shares a retained capture with requests queued after receipt binding fails", async () => {
+    const f = await openRepositoryCaptureTransport(wire);
+    const checkpointRef = workerWorkspaceResultRef("retained-request");
+    const alias = workerWorkspaceResultRef("queued-after-capture");
+    let current = true;
+    const params = {
+      identity: sessionTarget,
+      repository: f.repository,
+      checkpointRef,
+      purpose: "publication" as const,
+      placements,
+      environments: f.environments,
+      assertCurrent() {
+        if (!current) {
+          throw new Error("retained requester revoked");
+        }
+      },
+    };
+    try {
+      await fs.writeFile(path.join(f.remote, "captured.txt"), "original captured bytes\n");
+      await expect(
+        captureRepositoryDiskCheckpoint(params, async () => {
+          throw new Error("receipt binding lost");
+        }),
+      ).rejects.toThrow("receipt binding lost");
+      const events = [...f.events];
+      await fs.writeFile(path.join(f.remote, "captured.txt"), "later disk bytes\n");
+      const run = processExec.runCommandWithTimeout;
+      const runner = vi
+        .spyOn(processExec, "runCommandWithTimeout")
+        .mockImplementation((argv, options) => {
+          if (
+            argv.includes("update-ref") &&
+            typeof options !== "number" &&
+            options.input?.toString().includes("create " + alias + "\0")
+          ) {
+            const beforeInput = options.beforeInput;
+            assert(beforeInput);
+            return run(argv, {
+              ...options,
+              beforeInput: (...args) => {
+                current = false;
+                beforeInput(...args);
+              },
+            });
+          }
+          return run(argv, options);
+        });
+      try {
+        await expect(
+          captureRepositoryDiskCheckpoint({ ...params, additionalRefs: [alias] }, async () => {}),
+        ).rejects.toThrow("retained requester revoked");
+      } finally {
+        runner.mockRestore();
+        current = true;
+      }
+      expect(
+        await hasWorkerWorkspaceResultRef({
+          root: f.store.artifactPath(f.repository.workspaceId),
+          stagedResultRef: alias,
+        }),
+      ).toBe(false);
+      await captureRepositoryDiskCheckpoint({ ...params, additionalRefs: [alias] }, async () => {});
+      expect(
+        await hasWorkerWorkspaceResultRef({
+          root: f.store.artifactPath(f.repository.workspaceId),
+          stagedResultRef: alias,
+        }),
+      ).toBe(true);
+      await captureRepositoryDiskCheckpoint(
+        { ...params, checkpointRef: alias, additionalRefs: [checkpointRef] },
+        async (snapshot) => {
+          await withSessionRepositoryCheckpoint(
+            { workspaceId: f.repository.workspaceId, checkpointRef: snapshot.checkpointRef },
+            async (payload) => {
+              expect(payload.publicationDigest).toMatch(/^sha256:/);
+              expect(payload.publicationStagingRoot).toBeDefined();
+              expect(
+                await fs.readFile(path.join(payload.stagingRoot, "captured.txt"), "utf8"),
+              ).toBe("original captured bytes\n");
+            },
+          );
+        },
+      );
+      expect(f.events).toEqual(events);
+      expect(f.workspace.quiescence.hasActiveWork()).toBe(false);
+      expect(await f.store.get(f.repository.workspaceId)).toEqual(f.repository);
+    } finally {
+      await f.close();
+    }
+  });
+
   it.for([
     { boundary: "build", change: "disk" },
     { boundary: "build", change: "session" },

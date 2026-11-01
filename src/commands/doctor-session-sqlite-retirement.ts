@@ -193,6 +193,8 @@ export type RecoveryRetirementParams = {
   onProgress?: (progress: RecoveryCleanupProgress) => void;
   /** Automatic retirement leaves historical originals for explicit verified cleanup. */
   verifyHistorical?: boolean;
+  /** A serving Gateway may mutate its owned destination while cleanup runs. */
+  allowOwnedDestinationMutation?: boolean;
   /** Manual per-path consent only; automatic callers must leave this absent. */
   includeUnmanifested?: readonly string[];
 };
@@ -242,8 +244,10 @@ export async function retireOwnedSessionSqliteRecovery(
   await assertRecoveryStateWriteAllowed(report.stateDir, params.env);
   const adoptions = new Map<RecoveryArtifactReference, MigrationArtifact>();
   const verification: MigrationArtifactVerification = new Map();
-  const assertDestinations = createRecoveryDestinationVerifier(report.stateDir, () =>
-    authority.assertCurrent(),
+  const assertDestinations = createRecoveryDestinationVerifier(
+    report.stateDir,
+    () => authority.assertCurrent(),
+    { allowOwnedMutation: params.allowOwnedDestinationMutation },
   );
   const originals = report.artifacts.filter(
     (item) =>

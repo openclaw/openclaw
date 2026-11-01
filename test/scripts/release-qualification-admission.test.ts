@@ -169,6 +169,13 @@ it("accepts GitHub's empty step inventory for a successful exact producer job", 
   expect(() => f.verify()).not.toThrow();
 });
 
+it("accepts an artifact timestamp within the producer job when upload step times cross DST", () => {
+  const f = fixture();
+  expectDefined(f.jobs.jobs[0], "admission job").completed_at = "2026-09-28T01:00:04Z";
+  f.metadata.created_at = "2026-09-28T01:00:02Z";
+  expect(() => f.verify()).not.toThrow();
+});
+
 it("refuses changed archive bytes and UTF-8 archive adapters", () => {
   const f = fixture();
   expect(() => f.verify(f.selected.inputs, () => Buffer.from("not the exact ZIP"))).toThrow(

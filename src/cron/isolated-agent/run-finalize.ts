@@ -148,13 +148,15 @@ export async function finalizeCronRun(params: {
     prepared.cronSession.sessionEntry.contextTokens = contextTokens;
     prepared.cronSession.sessionEntry.contextTokensSource = contextTokensSource;
   }
-  if (hasNonzeroUsage(usage) || hasNonzeroUsage(finalRunResult.meta?.agentMeta?.usage)) {
-    const totalTokens = deriveSessionTotalTokens({
-      usage: lastCallUsage,
-      contextTokens,
-      promptTokens,
-    });
-    if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
+  if (
+    execution.currentContextSnapshot ||
+    hasNonzeroUsage(usage) ||
+    hasNonzeroUsage(finalRunResult.meta?.agentMeta?.usage)
+  ) {
+    const totalTokens = execution.currentContextSnapshot
+      ? execution.currentContextSnapshot.tokens
+      : deriveSessionTotalTokens({ lastCallUsage, contextTokens, promptTokens });
+    if (totalTokens !== undefined) {
       prepared.cronSession.sessionEntry.totalTokens = totalTokens;
       prepared.cronSession.sessionEntry.totalTokensFresh = true;
       prepared.cronSession.sessionEntry.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
@@ -162,6 +164,9 @@ export async function finalizeCronRun(params: {
       prepared.cronSession.sessionEntry.totalTokens = undefined;
       prepared.cronSession.sessionEntry.totalTokensFresh = false;
       prepared.cronSession.sessionEntry.totalTokensVersion = undefined;
+    }
+    if (prepared.runSessionKey === prepared.agentSessionKey) {
+      prepared.cronSession.contextTotalsAccounted = true;
     }
   }
   const telemetry: CronRunTelemetry = {

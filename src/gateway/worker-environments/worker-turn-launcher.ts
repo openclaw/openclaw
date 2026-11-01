@@ -295,6 +295,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             try {
               admitted = await claimWorkerTurn({
                 placements: options.placements,
+                environments: options.environments,
                 identity,
                 placement,
                 runId: claim.runId,

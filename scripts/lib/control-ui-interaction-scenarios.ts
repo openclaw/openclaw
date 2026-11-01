@@ -1504,7 +1504,11 @@ async function inventoryReady(
       .getByText("Interaction 0000", { exact: true })
       .waitFor();
     await page.waitForFunction(
-      () => document.querySelectorAll(".sessions-table tbody .session-data-row").length === 25,
+      () =>
+        Number(
+          document.querySelector(".sessions-table")?.getAttribute("aria-rowcount") ??
+            document.querySelectorAll(".sessions-table tbody .session-data-row").length + 1,
+        ) === 26,
     );
   } else {
     await gateway.waitForRequest("cron.list", { match: { offset: 0 } });
@@ -1550,10 +1554,14 @@ async function prepareSessions(page: Page, gateway: MockGatewayControls) {
   await page.locator(".data-table-pagination__info").getByText(/1000/).waitFor();
   await toggle.click();
   await filters.waitFor({ state: "hidden" });
-  // The owner sorts 1,000 rows, while the product deliberately renders at most 100 per page.
+  // The owner sorts 1,000 rows; the logical page has 100 even when its DOM is windowed.
   await page.locator(".data-table-pagination__size").selectOption("100");
   await page.waitForFunction(
-    () => document.querySelectorAll(".sessions-table tbody .session-data-row").length === 100,
+    () =>
+      Number(
+        document.querySelector(".sessions-table")?.getAttribute("aria-rowcount") ??
+          document.querySelectorAll(".sessions-table tbody .session-data-row").length + 1,
+      ) === 101,
   );
   await frames(page);
 }
@@ -1792,10 +1800,11 @@ async function openProviderModelPicker(page: Page) {
   await providerModelPicker(page).locator(".picker-select__trigger").click();
   await page.waitForFunction((selector) => {
     const picker = document.querySelector(selector);
-    const search = picker?.querySelector(".picker-select__search");
     return (
       picker?.querySelector(".picker-select__trigger")?.getAttribute("aria-expanded") === "true" &&
-      search === document.activeElement &&
+      picker.querySelector(
+        ".picker-select__search:focus, .picker-select__options:focus, .picker-select__back:focus",
+      ) &&
       picker
         .querySelector<HTMLElement>('[role="option"][data-value^="example/model-"]')
         ?.checkVisibility()
@@ -1803,8 +1812,32 @@ async function openProviderModelPicker(page: Page) {
   }, providerModelPickerSelector);
 }
 
+async function focusProviderModelSearch(page: Page) {
+  const picker = providerModelPicker(page);
+  const toggle = picker.locator(".header-search__toggle");
+  // Historical bundles focus search on open; current bundles expose a Search action.
+  if (await toggle.isVisible()) {
+    await toggle.click();
+  }
+  await page.waitForFunction(
+    (selector) =>
+      document.querySelector(selector)?.querySelector(".picker-select__search") ===
+      document.activeElement,
+    providerModelPickerSelector,
+  );
+  return picker.locator(".picker-select__search");
+}
+
 async function closeProviderModelPicker(page: Page) {
-  await providerModelPicker(page).locator(".picker-select__search").press("Escape");
+  const host = providerModelPicker(page);
+  const search = host.locator(".picker-select__search");
+  if (await search.isVisible()) {
+    await search.press("Escape");
+    await search.waitFor({ state: "hidden" });
+  }
+  if ((await host.locator(".picker-select__trigger").getAttribute("aria-expanded")) === "true") {
+    await page.keyboard.press("Escape");
+  }
   await page.waitForFunction((selector) => {
     const picker = document.querySelector(selector);
     const trigger = picker?.querySelector(".picker-select__trigger");
@@ -1823,7 +1856,8 @@ async function prepareProviderModelPicker(page: Page) {
 }
 
 async function searchProviderModels(page: Page) {
-  await providerModelPicker(page).locator(".picker-select__search").pressSequentially(modelQuery);
+  const search = await focusProviderModelSearch(page);
+  await search.pressSequentially(modelQuery);
   await page.waitForFunction(
     ({ selector, value }) => {
       const picker = document.querySelector(selector);
@@ -2421,7 +2455,8 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     run: async (page) => {
       await openProviderModelPicker(page);
       const picker = providerModelPicker(page);
-      await picker.locator(".picker-select__search").fill("model 0998");
+      const search = await focusProviderModelSearch(page);
+      await search.fill("model 0998");
       await picker.locator('[role="option"][data-value="example/model-998"]').waitFor({
         state: "visible",
       });
@@ -2432,7 +2467,7 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     id: "provider-model-picker-first-open",
     route: pathForRoute("model-providers"),
     resourceOnly: true,
-    expected: "The generic model picker loads its first window and focuses search on first open.",
+    expected: "The generic model picker loads visible choices on first open.",
     prepare: prepareProviderUsage,
     run: openProviderModelPicker,
   },
@@ -2440,7 +2475,7 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     id: "provider-model-picker-open",
     route: pathForRoute("model-providers"),
     resourceOnly: true,
-    expected: "The warm generic model picker opens with visible choices and focuses its search.",
+    expected: "The warm generic model picker opens with visible choices.",
     prepare: prepareProviderModelPicker,
     run: openProviderModelPicker,
   },
@@ -2915,10 +2950,15 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     prepare: prepareSessions,
     run: async (page, gateway) => {
       await page.getByRole("button", { name: "Filters", exact: true }).click();
+      const filters = page.locator(".sessions-filter-popover:popover-open");
+      await filters.waitFor({ state: "visible" });
+      const searchToggle = filters.locator(".header-search__toggle");
+      if (await searchToggle.isVisible()) {
+        await searchToggle.click();
+      }
       const after = (await gateway.getRequests("sessions.list", { search: sessionQuery })).length;
-      await page
-        .locator(".sessions-filter-popover:popover-open input")
-        .first()
+      await filters
+        .locator(".sessions-filter-popover__search input")
         .pressSequentially(sessionQuery);
       await gateway.waitForRequest("sessions.list", { after, match: { search: sessionQuery } });
       await page

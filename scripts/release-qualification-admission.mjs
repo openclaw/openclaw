@@ -525,14 +525,16 @@ function validateArtifact(descriptor, metadata, run, jobs) {
     },
     workflowJobs: jobs,
   });
-  const producerInterval = upload ?? (successfulJobWithoutSteps ? job : undefined);
   const created = Date.parse(metadata.created_at);
-  requireValue(
-    job.conclusion === "success" &&
-      producerInterval &&
+  const createdByProducer = [upload, job].some(
+    (interval) =>
+      interval &&
       Number.isFinite(created) &&
-      created >= Date.parse(producerInterval.started_at) &&
-      created <= Date.parse(producerInterval.completed_at),
+      created >= Date.parse(interval.started_at) &&
+      created <= Date.parse(interval.completed_at),
+  );
+  requireValue(
+    job.conclusion === "success" && createdByProducer,
     "Admission artifact was not created by its exact successful upload job",
   );
 }

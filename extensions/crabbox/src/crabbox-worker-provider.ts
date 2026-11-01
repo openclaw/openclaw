@@ -280,10 +280,18 @@ export function createCrabboxWorkerProvider(
         });
         assertCurrent();
         assertCrabboxResourceReceipt(resourceReceipt, observed?.resourceReceipt);
-        if (retention && observed?.retention?.state !== "running") {
-          throw new Error(
-            "Crabbox retained compute needs explicit lifecycle recovery before provisioning replay",
-          );
+        if (retention && observed) {
+          await waitForProvisionReady({
+            ...context,
+            deadline,
+            inspect: observed,
+            resourceReceipt,
+            profile: parsed,
+            stopLease: stopProvisionLease,
+            signal: preparationSignal,
+            assertCurrent,
+          });
+          assertCurrent();
         }
       }
       // Completed setup can survive a crash before its capture requirement returns.
@@ -377,10 +385,7 @@ export function createCrabboxWorkerProvider(
           signal: preparationSignal,
           assertCurrent,
         };
-        if (retention && inspected.retention?.state !== "running") {
-          throw new Error("Crabbox retained compute is unavailable; allocation preserved");
-        }
-        if (isNonRunnableState(inspected.state)) {
+        if (!retention && isNonRunnableState(inspected.state)) {
           return await failProvisionAfterCleanup(
             { ...inspectedParams, id: leaseId },
             new WorkerProviderError(

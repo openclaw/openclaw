@@ -63,6 +63,8 @@ function streamScenario(options: {
     id: options.id,
     route: controlUiSessionPath(sessionKey),
     explicitOnly: options.id !== "streaming-645-deltas",
+    // Narrow layouts present only the active pane, so simultaneous input needs desktop.
+    viewports: streams.length === 2 ? ["desktop"] : undefined,
     expected: `${streams.length} pane(s) retain native input, the complete ${reply.deltas.length}-delta reply, and tail follow over ${messages} messages at ${reply.deltasPerSecond} Hz.`,
     initScript: `${engineProbeInitScript(true)};(${installStreamingWorkCounters.toString()})();`,
     fixtureOverrides: (_sandbox, base) => ({

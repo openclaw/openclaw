@@ -11,6 +11,7 @@ import {
   gateAgentToolExecution,
 } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
+import { isCodeModeControlTool } from "../../code-mode-control-tools.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../../code-mode.js";
 import {
   logAgentRuntimeToolDiagnostics,
@@ -46,22 +47,6 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PreparedToolBase = Awaited<ReturnType<typeof prepareEmbeddedAttemptToolBase>>;
 type PreparedBundleTools = Awaited<ReturnType<typeof prepareEmbeddedAttemptBundleTools>>;
-
-function hasExplicitlyAllowedClientTool(params: {
-  clientTools?: PreparedBundleTools["clientTools"];
-  explicitAllowlistSources: Array<{ entries: string[] }>;
-}): boolean {
-  const names = (params.clientTools ?? [])
-    .map((tool) => tool.function?.name)
-    .filter((name): name is string => Boolean(name?.trim()));
-  if (names.length === 0) {
-    return false;
-  }
-  const matchers = params.explicitAllowlistSources.map((source) =>
-    createToolPolicyMatcher({ allow: source.entries }),
-  );
-  return names.some((name) => matchers.some((matches) => matches(name)));
-}
 
 export async function prepareEmbeddedAttemptToolCatalog(input: {
   attempt: EmbeddedRunAttemptParams;
@@ -247,24 +232,31 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
         source.entries.map((entry) => normalizeToolPolicyName(entry)),
       ),
     );
-    const autoAddedControlNames = new Set(
+    const nonTaskControlNames = new Set(
       (controlsEnabled ? controlNames : []).filter(
         (controlName) => !explicitControlAllowlistNames.has(normalizeToolPolicyName(controlName)),
       ),
     );
-    const explicitlyAllowedClientTool = hasExplicitlyAllowedClientTool({
-      clientTools,
-      explicitAllowlistSources: explicitToolAllowlistSources,
-    });
+    // Explicit shell exec grants do not make an empty Code Mode bridge a task tool.
+    for (const tool of effectiveTools.filter(isCodeModeControlTool)) {
+      nonTaskControlNames.add(normalizeToolPolicyName(tool.name));
+    }
+    const clientToolMatchers = explicitToolAllowlistSources.map((source) =>
+      createToolPolicyMatcher({ allow: source.entries }),
+    );
+    const explicitlyAllowedClientTool = (clientTools ?? []).some(({ function: fn }) =>
+      Boolean(fn?.name?.trim() && clientToolMatchers.some((matches) => matches(fn.name))),
+    );
     const emptyAllowlistVisibleToolNames = deferredDirectoryToolsCallable
       ? collectAllowedToolNames({ tools: effectiveTools })
       : visibleAllowedToolNames;
     // Auto-added controls cannot conceal an explicit allowlist that matched nothing.
     const hasCallableTools =
+      preparedToolBase.hasNativeWebSearch ||
       toolSearch.catalogToolCount > 0 ||
       ((catalogedClientToolNames.size > 0 || deferredDirectoryToolsCallable) &&
         explicitlyAllowedClientTool) ||
-      [...emptyAllowlistVisibleToolNames].some((toolName) => !autoAddedControlNames.has(toolName));
+      [...emptyAllowlistVisibleToolNames].some((toolName) => !nonTaskControlNames.has(toolName));
     const toolSearchRunPlan = {
       visibleAllowedToolNames,
       replayAllowedToolNames,

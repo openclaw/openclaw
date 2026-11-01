@@ -2,6 +2,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { extractEmbeddingUsage } from "../../packages/llm-core/src/usage-cost.js";
 import { resolveAzureApiVersionRequestTarget } from "../../packages/memory-host-sdk/src/host/azure-api-version-request.js";
 import { readEmbeddingVectors } from "../../packages/memory-host-sdk/src/host/embedding-vectors.js";
 import {
@@ -9,7 +10,6 @@ import {
   debugEmbeddingsLog,
   embeddingResponseLogMeta,
 } from "../../packages/memory-host-sdk/src/host/embeddings-debug.js";
-import { extractEmbeddingUsage } from "../../packages/memory-host-sdk/src/host/embeddings-remote-fetch.js";
 import { withRemoteHttpResponse } from "../../packages/memory-host-sdk/src/host/remote-http.js";
 import {
   createProviderHttpError,

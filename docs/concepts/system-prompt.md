@@ -223,6 +223,15 @@ See [Timezones](/concepts/timezone) and [Date & Time](/date-time) for full behav
 
 When eligible skills exist, OpenClaw injects a compact `<available_skills>` list (`formatSkillsForPrompt`) with the **file path** for each skill. The prompt instructs the model to use `read` to load the SKILL.md at the listed location (workspace, managed, or bundled). If no skills are eligible, the Skills section is omitted.
 
+In Code Mode, when installed skill search and reading are both available, the
+prompt keeps discovery instructions and omits the static catalog. The agent uses
+`skills.search(query)` for an unfamiliar workflow or `skills.read(name)` for a
+known skill. This preserves the eligible catalog and complete instruction reads
+while avoiding repeated catalog text. Without search, Code Mode retains the
+listing. A new workflow may require a discovery call; known names need no search.
+Existing pinned conversation prefixes remain intact; the full size reduction
+appears when a new session or compaction starts a fresh prompt series.
+
 Managed native Codex turns receive this list through parent-local model request instructions instead of per-turn user input, except lightweight cron turns that preserve the exact scheduled prompt. Connections without that relay use thread developer instructions so model-owned collaboration instructions cannot replace the catalog. Other harnesses keep the normal prompt section.
 
 The location can point at a nested skill, such as `skills/personal/foo/SKILL.md`. Nesting is only organizational; the prompt uses the flat skill name from `SKILL.md` frontmatter.

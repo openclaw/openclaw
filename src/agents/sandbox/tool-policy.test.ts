@@ -10,6 +10,7 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   formatSandboxToolPolicyBlockedMessage as formatSandboxToolPolicyBlockedMessageBase,
+  resolveOwnedSessionSandboxRuntimeStatus,
   resolvePreparedSandboxRuntimeStatus,
   resolveSandboxRuntimeStatusAsync,
 } from "./runtime-status.js";
@@ -298,6 +299,36 @@ describe("sandbox/tool-policy", () => {
       ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
     },
   );
+
+  it("preserves physical legacy ownership and global-mode semantics for prepared rows", () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "main" } },
+        entries: { main: {}, work: { sandbox: { mode: "non-main" } } },
+      },
+      session: { scope: "global", store: path.join(sessionDirs.make(), "sessions.json") },
+    } satisfies OpenClawConfig;
+    const params = { cfg, agentId: "work", sessionKey: "global", preparedSessionEntry: {} };
+    expect(resolveOwnedSessionSandboxRuntimeStatus(params)).toMatchObject({
+      agentId: "work",
+      classificationAgentId: "work",
+      classificationSessionKey: "global",
+      sandboxed: false,
+    });
+    expect(
+      resolveOwnedSessionSandboxRuntimeStatus({ ...params, sessionKey: "unknown" }).sandboxed,
+    ).toBe(true);
+    expect(
+      resolveOwnedSessionSandboxRuntimeStatus({
+        ...params,
+        preparedSessionEntry: { sandbox: "required" },
+      }).sandboxed,
+    ).toBe(true);
+    expect(() => resolvePreparedSandboxRuntimeStatus(params)).toThrowError(
+      expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
+    );
+  });
 
   it("keeps explicit sandbox deny precedence over allow and alsoAllow", () => {
     const cfg = policyConfig({

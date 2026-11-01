@@ -206,6 +206,8 @@ export type WorkerWorkspaceReconcileRequest = {
         authorize?: () => void;
         markPhase?: (phase: string) => void;
         referenceManifestRef: string;
+        /** Last durably accepted checkpoint, independent of placement/startup captures. */
+        acceptedManifestRef?: string;
         prepareCheckpoint(
           payload: WorkerRepositoryCheckpointPayload,
         ): Promise<WorkerRepositoryCheckpointPreparation>;

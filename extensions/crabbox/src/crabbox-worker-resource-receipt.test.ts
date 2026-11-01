@@ -313,7 +313,7 @@ describe("retained session disk lifecycle", () => {
       },
     };
   }
-  function retainedScenario() {
+  function retainedScenario(inspectReady?: () => boolean) {
     const document = view();
     let loseReply = false;
     let deleted = false;
@@ -324,6 +324,9 @@ describe("retained session disk lifecycle", () => {
         return jsonResult(catalog);
       }
       if (argv[1] === "inspect") {
+        if (inspectReady) {
+          document.ready = inspectReady();
+        }
         return deleted
           ? commandResult({ code: 4, stderr: "Lease " + LEASE_ID + " not found" })
           : jsonResult(document);
@@ -399,6 +402,29 @@ describe("retained session disk lifecycle", () => {
   beforeEach(() => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
   });
+
+  it.each([false, true])(
+    "polls pending readiness without reopening compute on provisioning replay=%s",
+    async (replay) => {
+      let inspections = 0;
+      const s = retainedScenario(() => ++inspections > 1);
+      const result = await provisionWarmProfile(s.provider, retainedProfile, undefined, undefined, {
+        retention: policy,
+        ...(replay ? { resourceReceipt: retainedReceipt } : {}),
+        recordResourceReceipt: async () => {},
+        assertCurrent: () => {
+          if (s.calls.some(({ argv }) => argv[1] === "run")) {
+            expect(inspections).toBeGreaterThan(1);
+          }
+        },
+      });
+      expect(result.resourceReceipt).toEqual(retainedReceipt);
+      expect(inspections).toBeGreaterThan(1);
+      expect(
+        s.calls.some(({ argv }) => ["resume", "pause", "heartbeat", "stop"].includes(argv[1]!)),
+      ).toBe(false);
+    },
+  );
 
   it("replays exact retained deletion even when live inspection no longer recognizes the lease", async () => {
     const s = retainedScenario();

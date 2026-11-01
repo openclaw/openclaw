@@ -42,6 +42,7 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   routeOutlet?: ControlUiReadinessOutlet;
   terminalPanel?: HTMLElement & { readonly available?: boolean };
   readonly shellRevision: () => number;
+  readonly navigationRevision: () => number;
   readonly runtime: ApplicationRuntime | undefined;
   readonly activeSessionKey: string;
   readonly custodianMinimizeRequestId: number;
@@ -66,6 +67,8 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   resizeNavigation(splitRatio: number): void;
   readonly toggleNavigationSurface: (trigger?: HTMLElement) => void;
 }
+
+export type ShellView = ReturnType<typeof readShellView>;
 
 export function readShellView(host: ShellViewHost) {
   const context = host.context;
@@ -117,7 +120,7 @@ export function readShellView(host: ShellViewHost) {
         )
       : null;
   // Onboarding renders without any navigation chrome, so the settings takeover
-  // must not reserve its fixed sidebar column (the grid would stay off-center).
+  // must not reserve its sidebar column (the grid would stay off-center).
   const nativeEmbed = isNativeEmbedHost();
   const embedSettingsRoot = nativeEmbed && activeRoute === "settings";
   const embedSettings =
@@ -129,7 +132,11 @@ export function readShellView(host: ShellViewHost) {
   const settingsTakeover = isSettingsTakeover(activeRoute) && !host.onboardingMode && !nativeEmbed;
   const onboarding = host.onboardingMode;
   const memoryImportActive = onboarding && activeRoute !== "custodian";
-  const navDrawerOpen = host.navDrawerOpen && !onboarding && !nativeEmbed;
+  // Drawer motion invalidates only the bindings that read its presentation.
+  const navDrawerOpen = () => {
+    host.navigationRevision();
+    return host.navDrawerOpen && !onboarding && !nativeEmbed;
+  };
   const mobileNavLayout = isMobileNavLayout();
   const nativeWebChrome = isNativeWebChromeHost() && !nativeEmbed;
   const mergedChatChrome = shouldMergeChatChrome({
@@ -139,27 +146,31 @@ export function readShellView(host: ShellViewHost) {
   });
   // Drawer navigation always opens expanded; the tab's desktop collapse state
   // stays in memory for when the viewport returns to the desktop layout.
-  // The settings sidebar has a fixed width, so the collapse state pauses too.
-  const navCollapsed =
+  // Settings needs expanded navigation, so the collapse state pauses there too.
+  const navCollapsed = () =>
     !nativeEmbed &&
     navigationSnapshot.navCollapsed &&
     !host.desktopNavigationExpanded &&
-    !navDrawerOpen &&
+    !navDrawerOpen() &&
     !settingsTakeover;
   const railAvailable = !nativeEmbed && !settingsTakeover && !onboarding;
   const railWidth = railAvailable ? NAVIGATION_RAIL_WIDTH : 0;
-  const expandedNavWidth = navigationSnapshot.navWidth + railWidth;
-  const navigationSurfaceHidden = navigationSurfaceIsHidden({
-    onboarding,
-    navCollapsed,
-    navDrawerOpen,
-    mobileNavLayout,
-    railAvailable,
-  });
-  const floatingAttentionVisible =
+  // Settings replaces the rail and sidebar without moving the desktop reading surface.
+  const expandedNavWidth =
+    navigationSnapshot.navWidth +
+    (settingsTakeover && !mobileNavLayout ? NAVIGATION_RAIL_WIDTH : railWidth);
+  const navigationSurfaceHidden = () =>
+    navigationSurfaceIsHidden({
+      onboarding,
+      navCollapsed: navCollapsed(),
+      navDrawerOpen: navDrawerOpen(),
+      mobileNavLayout,
+      railAvailable,
+    });
+  const floatingAttentionVisible = () =>
     !nativeEmbed &&
     floatingSidebarAttentionVisible({
-      navigationSurfaceHidden,
+      navigationSurfaceHidden: navigationSurfaceHidden(),
       mobileNavLayout,
       onboarding,
       compact: mergedChatChrome,
@@ -212,8 +223,12 @@ export function readShellView(host: ShellViewHost) {
     catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),
     canPairDevice: gatewayConnected && operatorAccess.canAdmin,
     sidebarEntries: navigationSnapshot.sidebarEntries,
-    navigationVisible: !navigationSurfaceHidden,
-    navigationCollapsed: navCollapsed,
+    get navigationVisible() {
+      return !navigationSurfaceHidden();
+    },
+    get navigationCollapsed() {
+      return navCollapsed();
+    },
     sidebarAgentsMode: uiSettings.sidebarAgentsMode ?? "chip",
     sidebarLiveActivity: uiSettings.sidebarLiveActivity !== false,
     pinnedAgentIds: navigationSnapshot.pinnedAgentIds,
@@ -231,8 +246,8 @@ export function readShellView(host: ShellViewHost) {
   };
   const embedNavigation =
     nativeEmbed && !(nativeEmbedHost()?.surface === "conversation" && activeRoute === "chat");
-  const collapsedControls =
-    !nativeEmbed && navCollapsed && !onboarding && !settingsTakeover && !mobileNavLayout;
+  const collapsedControls = () =>
+    !nativeEmbed && navCollapsed() && !onboarding && !settingsTakeover && !mobileNavLayout;
   const shellConnectionStatus = !nativeEmbed && !initialConnection ? connectionStatus : null;
   const gatewayStatus: GatewayStatusProps = {
     kind: shellConnectionStatus ?? (!nativeEmbed && gatewayConnected ? "connected" : null),
@@ -242,10 +257,12 @@ export function readShellView(host: ShellViewHost) {
       : 0,
     onRetry: callbacks.retryGateway,
   };
-  const mobileGatewayStatus =
-    mobileNavLayout && !navDrawerOpen && !nativeEmbed ? gatewayStatus : null;
+  const mobileGatewayStatus = () =>
+    mobileNavLayout && !navDrawerOpen() && !nativeEmbed ? gatewayStatus : null;
   const floatingUpdateCard = {
-    navigationSurfaceHidden,
+    get navigationSurfaceHidden() {
+      return navigationSurfaceHidden();
+    },
     mobileNavLayout,
     onboarding,
     compact: mergedChatChrome && !controlUiRefreshRequired,
@@ -302,16 +319,24 @@ export function readShellView(host: ShellViewHost) {
     settingsTakeover,
     onboarding,
     memoryImportActive,
-    navDrawerOpen,
+    get navDrawerOpen() {
+      return navDrawerOpen();
+    },
     mobileNavLayout,
     nativeWebChrome,
     mergedChatChrome,
-    navCollapsed,
+    get navCollapsed() {
+      return navCollapsed();
+    },
     railAvailable,
     railWidth,
     expandedNavWidth,
-    navigationSurfaceHidden,
-    floatingAttentionVisible,
+    get navigationSurfaceHidden() {
+      return navigationSurfaceHidden();
+    },
+    get floatingAttentionVisible() {
+      return floatingAttentionVisible();
+    },
     // Only the visible desktop divider needs viewport geometry.
     get shellWidth() {
       return Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
@@ -324,10 +349,14 @@ export function readShellView(host: ShellViewHost) {
     chatLikeRoute,
     sidebarProperties,
     embedNavigation,
-    collapsedControls,
+    get collapsedControls() {
+      return collapsedControls();
+    },
     shellConnectionStatus,
     gatewayStatus,
-    mobileGatewayStatus,
+    get mobileGatewayStatus() {
+      return mobileGatewayStatus();
+    },
     connectionRecovery: host.connectionRecovery,
     floatingUpdateCard,
     settingsSidebarProps,

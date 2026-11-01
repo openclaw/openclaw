@@ -125,7 +125,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   const opened = () =>
     isPresented() &&
     (props.mobileHost
-      ? props.mobileHost.open &&
+      ? (props.mobileHost.open || props.mobileHost.exiting) &&
         !props.mobileHost.suspended &&
         props.mobileHost.destination.area === "details" &&
         (!props.mobileHost.destination.page || Boolean(props.mobileHost.destination.page.details))

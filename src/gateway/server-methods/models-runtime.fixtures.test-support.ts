@@ -43,3 +43,14 @@ export const EXPECTED_IMPLICIT_OPENCLAW_RUNTIME: GatewayAgentRuntime = {
   devicePlacementSupported: true,
   source: "implicit",
 };
+
+/** Every row states its runtime; literal rows use the implicit built-in runtime unless they say otherwise. */
+export function withStatedRuntime(models: unknown): unknown {
+  return Array.isArray(models)
+    ? models.map((model: Record<string, unknown>) =>
+        typeof model.asymmetricMatch === "function"
+          ? model
+          : { agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME, ...model },
+      )
+    : models;
+}

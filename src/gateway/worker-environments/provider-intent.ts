@@ -38,6 +38,7 @@ type WorkerProviderIntentOptions = Pick<
     retainProviderSettlement?: (settled: Promise<void>) => void,
     beforeProvision?: () => void,
     repositorySource?: WorkerProviderRepositorySource,
+    wakeRetained?: () => void,
   ) => Promise<WorkerEnvironmentRecord>;
 };
 
@@ -672,6 +673,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
             undefined,
             beforeProvision(requested),
             requested ? preparedIntents.get(requested)?.repository : undefined,
+            existing.retention ? beforeProvision(requested) : undefined,
           );
         }
         return existing;

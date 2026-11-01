@@ -6,6 +6,7 @@ import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { isExactAttachedEnvironment } from "./placement-target.js";
 import { isWorkerRetainedWindowOpen } from "./retained-work-window.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { aliasSessionRepositoryCheckpoint } from "./session-repository-checkpoint-refs.js";
 import {
   readSessionRepositoryArtifacts,
   stageSessionRepositoryCheckpoint,
@@ -55,6 +56,15 @@ export async function captureRepositoryDiskCheckpoint<T>(
       checkpointRef,
       assertCurrent: params.assertCurrent,
     });
+    if (params.additionalRefs?.length) {
+      await aliasSessionRepositoryCheckpoint({
+        root: store.artifactPath(repository.workspaceId),
+        workspace: repository,
+        checkpointRef,
+        aliases: params.additionalRefs,
+        assertCurrent: params.assertCurrent,
+      });
+    }
     params.assertCurrent();
     return await use({ checkpointRef, manifestHash: retained.currentManifestRef }, async () =>
       params.assertCurrent(),
