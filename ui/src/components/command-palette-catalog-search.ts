@@ -296,6 +296,7 @@ export async function loadCommandPaletteCatalogItems(params: {
       icon: "calendarClock" as const,
       category: "automations" as const,
       action: "nav:cron",
+      search: `?job=${encodeURIComponent(job.id)}`,
       searchText: [job.id, job.declarationKey, job.name, job.agentId].filter(Boolean).join(" "),
     })),
     ...(skills?.skills ?? []).map((skill) => ({
