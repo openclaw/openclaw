@@ -432,6 +432,16 @@ openclaw gateway call health --port 18999
 openclaw gateway call logs.tail --params '{"limit": 200}'
 ```
 
+To inspect the cached SQLite WAL observation without preparing general status,
+use `openclaw gateway call status.sqliteWal --params '{}'`. This requires an
+authenticated operator connection with `operator.read` scope. It reads only the
+canonical shared-state cache: it does not open a database, refresh health,
+checkpoint WAL, or prepare sessions or desktop status. `available: false` means
+no cached observation is currently available; `observedAtMs` identifies the observation time
+and does not imply freshness or successful maintenance. The CLI checks that the
+Gateway advertises this method before sending it and fails on older Gateways
+without falling back to `status`.
+
 To add an existing checkout to the Control UI's Place picker, use the
 [project registration and listing examples](/web/control-ui/sessions-and-sidebar#register-an-existing-repository).
 

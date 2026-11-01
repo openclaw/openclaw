@@ -222,6 +222,11 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   sessionMutationAuthorization?: SessionMutationAuthorization;
   sessionAccessAuthority?: GatewaySessionAccessAuthority;
 }> {
+  if (params.method === "status.sqliteWal" && !params.client?.connect) {
+    return {
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "authenticated operator connection required"),
+    };
+  }
   const assertPreparationCurrent =
     params.assertPreparationCurrent ?? params.assertInvocationCurrent;
   const signal = params.methodRegistry.isObservation(params.method)
@@ -231,7 +236,8 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   let startupReadDeadline: number | undefined;
   let startupReadResult: { cfg: OpenClawConfig; agents?: string[]; timedOut: boolean } | undefined;
   signal?.throwIfAborted();
-  if (params.context.ensureSessionRowProjection) {
+  // This cached diagnostic has no session targets; all authorization below still applies.
+  if (params.method !== "status.sqliteWal" && params.context.ensureSessionRowProjection) {
     params.markSessionSubscribePhase?.("projectionReadiness");
     await params.context.ensureSessionRowProjection();
   }
