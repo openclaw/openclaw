@@ -41,8 +41,7 @@ it.each([undefined, 128, 256, 512])("bounds display output without splitting pai
         ? sanitizeExecApprovalDisplayText(command)
         : boundExecApprovalVisibleText(command, cap);
     expect(result.length).toBeLessThan(command.length);
-    if (cap === undefined) expect(result).toContain("[truncated]");
-    else expect(result.length).toBeLessThanOrEqual(cap);
+    expect(cap === undefined ? result.includes("[truncated]") : result.length <= cap).toBe(true);
     expect(result.isWellFormed()).toBe(true);
     expect(() => encodeURIComponent(result)).not.toThrow();
   }
