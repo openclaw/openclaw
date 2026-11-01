@@ -1602,6 +1602,14 @@ span.new-session-page__select {
   align-items: center;
 }
 
+/* Tooltips add no box, so a row's gap lands on the box inside them. */
+.new-session-page__environment-details + .session-menu__item,
+:is(.session-menu__item, .new-session-page__environment-details)
+  + .new-session-page__environment-details
+  > :is(.session-menu__item, .new-session-page__environment-detail-trigger) {
+  margin-block-start: var(--menu-item-gap);
+}
+
 .new-session-page__environment-detail-trigger > .session-menu__item {
   flex: 1;
   min-width: 0;

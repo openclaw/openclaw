@@ -392,7 +392,14 @@
   --menu-item-radius: var(--radius-menu-item);
   --menu-item-height: 28px;
   --menu-padding: 4px;
+  --menu-item-gap: 2px;
   --menu-selected: var(--surface-selected);
+  /* Half the selected fill: an unchosen choice row must not read as the chosen one. */
+  --menu-hover: color-mix(
+    in srgb,
+    var(--text) calc(var(--surface-selected-amount) / 2),
+    transparent
+  );
   --menu-surface: color-mix(in srgb, var(--popover) 90%, transparent);
   --menu-backdrop: blur(8px);
   /* Hairlines are spread shadows so they never consume the panel's box. */

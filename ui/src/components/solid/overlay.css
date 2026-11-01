@@ -302,15 +302,43 @@
   cursor: var(--cursor-action);
 }
 
+/* Adjacent fills stay apart. Submenu rows and groups sit inside wrappers of their own;
+   zero specificity lets a row's own margin win. */
+:where(.oc-menu-item, :has(> .oc-menu-item--submenu, > .oc-menu-item:last-child))
+  + :where(.oc-menu-item, :has(> .oc-menu-item:first-child):not(.oc-overlay)) {
+  margin-block-start: var(--menu-item-gap);
+}
+
 a.oc-menu-item[href] {
   cursor: pointer;
 }
 
-/* Hover, focus and an open submenu parent read as one state; the check alone marks selection. */
+/* Hover, focus and an open submenu parent read as one state. */
 .oc-menu-item:is(:hover, :focus-visible, [aria-expanded="true"]):not(:disabled):not(
     [aria-disabled="true"]
   ) {
   background: var(--surface-hover);
+}
+
+/* A chosen row carries its own fill; a row whose switch shows the state opts out. */
+.oc-menu-item[aria-checked="false"]:not(.oc-menu-item--switch):is(
+    :hover,
+    :focus-visible,
+    [aria-expanded="true"]
+  ):not(:disabled):not([aria-disabled="true"]) {
+  background: var(--menu-hover);
+}
+
+.oc-menu-item[aria-checked="true"]:not(.oc-menu-item--switch) {
+  background: var(--menu-selected);
+}
+
+.oc-menu-item[aria-checked="true"]:not(.oc-menu-item--switch):is(
+    :hover,
+    :focus-visible,
+    [aria-expanded="true"]
+  ):not(:disabled):not([aria-disabled="true"]) {
+  background: var(--surface-selected-hover);
 }
 
 .oc-menu-item:focus-visible {

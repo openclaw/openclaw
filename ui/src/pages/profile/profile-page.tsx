@@ -195,6 +195,10 @@ export function ProfilePage() {
   const connected = () => view().connected && view().client !== null;
   const hasPresentation = () =>
     connected() || view().connectionScopes !== null || view().selfUser !== null;
+  // Reveal the lower sections with the profile, before its preferences finish loading.
+  const initialIdentityPending = () =>
+    view().ownProfile === null &&
+    (view().identityLoading || (view().connected && !view().identityReady));
   const agent = () => {
     const list = agents.read();
     const id = list?.defaultId ?? "main";
@@ -475,10 +479,14 @@ export function ProfilePage() {
           <Show when={view().connected}>
             <button
               class="btn profile-refresh"
+              data-refresh-label={t("common.refresh")}
+              data-refreshing-label={t("common.refreshing")}
               disabled={!view().identityReady || view().identityLoading || identityBusy() !== null}
               onClick={() => state.refreshManually()}
             >
-              {view().identityLoading ? t("common.refreshing") : t("common.refresh")}
+              <Show when={view().identityLoading} fallback={<span>{t("common.refresh")}</span>}>
+                <span>{t("common.refreshing")}</span>
+              </Show>
             </button>
           </Show>
         </section>
@@ -570,39 +578,42 @@ export function ProfilePage() {
                 </details>
               </SettingsSection>
             </div>
-            <Errored
-              fallback={(error, reset) => (
-                <>
-                  <div class="callout danger" role="alert">
-                    {formatUiError(error())}{" "}
-                    <button
-                      class="btn btn--sm"
-                      onClick={() => {
-                        state.refreshManually();
-                        reset();
-                      }}
-                    >
-                      {t("common.retry")}
-                    </button>
-                  </div>
-                  <IdentityContent pending={false} />
-                </>
-              )}
-            >
-              <Loading on={latest(identityScope)} fallback={<IdentityContent pending={true} />}>
-                {(latest(identityRead), null)}
-                <IdentityContent pending={isPending(identityRead)} />
-              </Loading>
-            </Errored>
+            <Show when={!initialIdentityPending()} fallback={<IdentityContent pending={true} />}>
+              <Errored
+                fallback={(error, reset) => (
+                  <>
+                    <div class="callout danger" role="alert">
+                      {formatUiError(error())}{" "}
+                      <button
+                        class="btn btn--sm"
+                        onClick={() => {
+                          state.refreshManually();
+                          reset();
+                        }}
+                      >
+                        {t("common.retry")}
+                      </button>
+                    </div>
+                    <IdentityContent pending={false} />
+                  </>
+                )}
+              >
+                <Loading on={latest(identityScope)} fallback={<IdentityContent pending={true} />}>
+                  {(latest(identityRead), null)}
+                  <IdentityContent pending={isPending(identityRead)} />
+                </Loading>
+              </Errored>
+            </Show>
           </Show>
           <PersonalInstructions
             hidden={
+              initialIdentityPending() ||
               !hasPresentation() ||
               view().context.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities !==
                 true
             }
           />
-          <Show when={hasPresentation()}>
+          <Show when={hasPresentation() && !initialIdentityPending()}>
             <ModelAccounts
               target={state.modelAccountsTarget}
               personLabel={
