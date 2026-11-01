@@ -347,6 +347,22 @@ describe("assertRequiredParams", () => {
     expect(execute).toHaveBeenCalledWith("id", { path: "notes.docx", edits }, undefined, undefined);
   });
 
+  it("passes whitespace-only edit oldText through to the edit implementation", async () => {
+    const execute = vi.fn(async (_id, args) => args);
+    const tool = makeValidatedFileTool("edit", execute);
+
+    const edits = [
+      { oldText: "\n\n\n\n", newText: "\n\n" },
+      { oldText: "  \n", newText: "\n" },
+    ];
+    await tool.execute("id", { path: "notes.txt", edits });
+
+    expect(execute).toHaveBeenCalledWith("id", { path: "notes.txt", edits }, undefined, undefined);
+    await expect(
+      tool.execute("id-empty", { path: "notes.txt", edits: [{ oldText: "", newText: "x" }] }),
+    ).rejects.toThrow("Missing required parameter: edits");
+  });
+
   it("enforces canonical path/content at runtime", async () => {
     const execute = vi.fn(async (_id, args) => args);
     const tool = makeValidatedFileTool("write", execute);
