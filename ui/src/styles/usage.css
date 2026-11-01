@@ -757,7 +757,7 @@
 }
 
 /* Identities may be long keys; numbers never break mid-value. */
-.usage-creators-table td:first-child {
+.usage-creators-table tbody th:first-child {
   overflow-wrap: anywhere;
   white-space: normal;
 }
@@ -793,6 +793,7 @@
 
 .usage-creator-select {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   width: 100%;
   gap: 7px;
   padding: 4px 0;
@@ -1931,12 +1932,10 @@
 
   .usage-creators-table th:first-child {
     width: auto;
-    overflow-wrap: anywhere;
-    white-space: normal;
   }
 
-  .usage-creator-select {
-    grid-template-columns: minmax(0, 1fr);
+  .usage-creators-table tbody tr {
+    border-top: 0;
   }
 
   .usage-controls,
