@@ -314,14 +314,13 @@ extension StatusMenuSessions {
         menu.showsStateColumn = true
         menu.delegate = StatusMenuHighlightDelegate.shared
         StatusMenuAppearance.pin(menu)
-        let selected = levels.contains(current ?? "") ? current ?? "off" : "off"
 
         for level in levels {
             let item = self.makeActionItem(
                 title: self.preferenceTitle(for: level),
                 action: action,
                 payload: ["key": key, "value": level])
-            item.state = selected == level ? .on : .off
+            item.state = current == level ? .on : .off
             menu.addItem(item)
         }
 
@@ -342,13 +341,10 @@ extension StatusMenuSessions {
 
     private func updatePreferenceMenu(_ menu: NSMenu?, current: String?) {
         guard let menu else { return }
-        let selected = menu.items.contains {
-            ($0.representedObject as? [String: String])?["value"] == current
-        } ? current : "off"
 
         for item in menu.items {
             let value = (item.representedObject as? [String: String])?["value"]
-            item.state = value == selected ? .on : .off
+            item.state = value == current ? .on : .off
         }
     }
 
