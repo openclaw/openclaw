@@ -504,10 +504,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             closed = await streamingToClose.closeWithResult(cardText, { note: finalNote });
           }
         } catch (error: unknown) {
-          if (!isChannelPartialDeliveryError(error)) {
+          // A card that keeps the opening prose must still settle the rest, so its close
+          // failure is held here even when it reports nothing about the card.
+          const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
+          if (!partial && !leading) {
             throw error;
           }
-          closed = error.deliveryResult;
+          closed = partial ?? noVisibleFeishuReplyDelivery;
           finalizationError = error;
         }
         // A failed discard reports its rejected empty clear, not the answer. The card keeps the
@@ -522,8 +525,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         };
         // A failed removal can leave the card visible, so only a clean discard hands
         // the text to a post instead.
+        let closeError: unknown;
         if (leading) {
-          ({ result, error: finalizationError } = await leading.settle(result, finalizationError));
+          ({ result, closeError } = await leading.settle(result, finalizationError));
+          finalizationError = undefined;
         }
         if (closeNeedsPost && finalizationError === undefined) {
           // This post stands in for the final, and the matching final is then skipped as a
@@ -542,6 +547,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 : formatReasoningPrefix(finalizedReasoningText),
             },
           );
+        }
+        if (closeError !== undefined) {
+          finalizationError = createFeishuPartialReplyDeliveryError(closeError, result);
         }
         if (result.visibleReplySent) {
           visibleReplySent = true;
@@ -696,10 +704,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     tableNeedsPostPath,
     answerTableNeedsPostPath,
     resolveCardChrome,
-    waitForStreamingStart: async () => {
-      await streamingStartPromise;
-      return streaming?.isActive() === true;
-    },
+    isStreamingActive: () => streaming?.isActive() === true,
     readIdleSideEffects: () => idleSideEffectsPromise,
     readVisibleReplySent: () => visibleReplySent,
     readReplyOutcome: () => replyOutcome,
@@ -1313,9 +1318,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             withinCardTableLimit(text) &&
             cardKeepsTableWhole);
         if (useFallbackCard) {
-          deliveredResults.push(
-            await sendChunkedTextReply({ text, useCard: true, infoKind: info?.kind }),
-          );
+          const card = sendChunkedTextReply({ text, useCard: true, infoKind: info?.kind });
+          if (info?.kind === "block") {
+            // This card is the block's delivery, so a later post or final walks past it.
+            blockPostDeliveries.push([text, card]);
+            void card.catch(() => undefined);
+          }
+          deliveredResults.push(await card);
         } else {
           const firstChunkMentions =
             info?.kind === "final" && mentionTargets?.length ? mentionTargets : undefined;

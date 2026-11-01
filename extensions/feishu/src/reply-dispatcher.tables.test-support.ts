@@ -305,6 +305,55 @@ export function requireStreamingInstance(instanceIndex = 0): StreamingSessionStu
   return instance;
 }
 
+export type ChatEntry = { id: string; text: string; mentions?: unknown; removed?: boolean };
+
+/** Records every send in creation order; the streaming card is entered when its startup completes. */
+export function trackChat(startup: "ready" | "delayed" | "rejected" = "ready") {
+  const chat: ChatEntry[] = [];
+  const cardEntry: ChatEntry = { id: "om_stream", text: "", removed: false };
+  const gate = Promise.withResolvers<void>();
+  mocks.streamingStart.mockImplementation(() => {
+    if (startup === "rejected") {
+      return Promise.reject(new Error("start rejected"));
+    }
+    if (startup === "delayed") {
+      return gate.promise.then(() => {
+        chat.push(cardEntry);
+      });
+    }
+    chat.push(cardEntry);
+    return undefined;
+  });
+  const record = (prefix: string) => {
+    let next = 0;
+    return async ({ text, mentions }: { text: string; mentions?: unknown }) => {
+      const id = `${prefix}-${++next}`;
+      chat.push({ id, text, mentions });
+      return { messageId: id };
+    };
+  };
+  mocks.sendMessageFeishu.mockImplementation(record("om"));
+  mocks.sendStructuredCardFeishu.mockImplementation(record("oc"));
+  const watch = () => {
+    const card = mocks.streamingInstances[0];
+    if (!card) {
+      return undefined;
+    }
+    const close = card.closeWithResult.getMockImplementation()!;
+    card.closeWithResult.mockImplementation(async (text, options) => {
+      cardEntry.text = text ?? "";
+      return close(text, options);
+    });
+    const discard = card.discard.getMockImplementation()!;
+    card.discard.mockImplementation(async () => {
+      cardEntry.removed = true;
+      return discard();
+    });
+    return card;
+  };
+  return { cardEntry, gate, watch, visible: () => chat.filter((entry) => !entry.removed) };
+}
+
 export function streamingUpdateTexts(instanceIndex = 0): string[] {
   return requireStreamingInstance(instanceIndex).update.mock.calls.map((call: unknown[]) =>
     typeof call[0] === "string" ? call[0] : "",

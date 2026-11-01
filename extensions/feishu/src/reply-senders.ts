@@ -55,7 +55,7 @@ type FeishuReplySenderContext = {
   tableNeedsPostPath: (value: string) => boolean;
   answerTableNeedsPostPath: (value: string) => boolean;
   resolveCardChrome: () => { header?: CardHeaderConfig; note?: string };
-  waitForStreamingStart: () => Promise<boolean>;
+  isStreamingActive: () => boolean;
   readIdleSideEffects: () => Promise<void>;
   readVisibleReplySent: () => boolean;
   readReplyOutcome: () => { kind: string; reason?: string } | undefined;
@@ -360,36 +360,31 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
       text,
       cardText: keepsReasoning ? combined : text,
       supplementalReasoningText: keepsReasoning ? undefined : formatReasoningPrefix(reasoning),
+      // The card is the prose's receipt whenever it shows accepted content, and a close
+      // that failed around that content is reported after the rest of the answer went
+      // out. A card that shows nothing it can vouch for hands the prose to a card of
+      // its own at the head of the receipts, which can repeat what the card still shows.
       settle: async (result: FeishuReplyDeliveryResult, error?: unknown) => {
-        if (error === undefined && result.visibleReplySent && result.finalTextAccepted !== false) {
+        if (result.visibleReplySent && result.finalTextAccepted !== false) {
           blockPostDeliveries.unshift([text, Promise.resolve(result)]);
-          return { result, error };
+          return { result, closeError: error };
         }
-        const posts = await Promise.allSettled(blockPostDeliveries.map(([, pending]) => pending));
-        const retained = mergeFeishuReplyDeliveryResults([
-          result,
-          ...posts.flatMap<FeishuReplyDeliveryResult>((post) =>
-            post.status === "fulfilled"
-              ? [post.value]
-              : isChannelPartialDeliveryError(post.reason)
-                ? [post.reason.deliveryResult]
-                : [],
-          ),
-        ]);
+        const recovered = sendChunkedTextReply({ text, useCard: true, infoKind: "block" }).then(
+          (card) => mergeFeishuReplyDeliveryResults([result, card]),
+        );
+        blockPostDeliveries.unshift([text, recovered]);
+        void recovered.catch(() => undefined);
         return {
-          result: retained,
-          error: createFeishuPartialReplyDeliveryError(
-            error ?? new Error("Opening preview prose was not accepted"),
-            retained,
-          ),
+          result: await recovered,
+          closeError: error ?? new Error("Opening preview prose was not accepted"),
         };
       },
     };
   };
 
   const prepareBlockPost = async (preview: string, text: string) => {
-    // The opening prose can stay above the posts only if the card exists first.
-    const active = await ctx.waitForStreamingStart();
+    // The opening prose can stay above the posts only if the card already exists.
+    const active = ctx.isStreamingActive();
     let remaining = preview;
     const leading = leadingBlockProse(preview);
     if (leading) {

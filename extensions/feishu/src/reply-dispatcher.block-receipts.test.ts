@@ -18,12 +18,17 @@ const {
   sendCardFeishuMock,
   sendStructuredCardFeishuMock,
   streamingInstances,
-  streamingStartMock,
+  streamingUpdateTexts,
   tableCfg,
   tableMarkdown,
+  trackChat,
   useRealMarkdownChunker,
 } = await import("./reply-dispatcher.tables.test-support.js");
+const { streamingStartBackoffUntilByAccount } = await import("./reply-dispatcher-state.js");
 type StreamingCloseResult = Awaited<ReturnType<FeishuStreamingSession["closeWithResult"]>>;
+const readerMentions = [{ openId: "ou_reader", name: "Reader", key: "@reader" }];
+const openingProse = "Here is the roster for the team.";
+const tailProse = "Roster complete.";
 
 describe("createFeishuReplyDispatcher block table receipts", () => {
   installTableDispatcherHarness();
@@ -182,64 +187,43 @@ describe("createFeishuReplyDispatcher block table receipts", () => {
     { between: false, settle: "final", startup: "ready", reasoning: true },
     { between: true, settle: "idle", startup: "ready", reasoning: true },
     { between: true, settle: "final", startup: "ready", reasoning: false },
-    { between: false, settle: "final", startup: "delayed", reasoning: true },
-    { between: false, settle: "idle", startup: "rejected", reasoning: false },
-  ])(
+    { between: false, settle: "idle", startup: "delayed", reasoning: false },
+    { between: false, settle: "final", startup: "delayed", reasoning: false },
+    { between: false, settle: "final", startup: "rejected", reasoning: false },
+    { between: false, settle: "final", startup: "backoff", reasoning: false },
+    { between: true, settle: "final", startup: "backoff", reasoning: false },
+  ] as const)(
     "settles each part once in reading order, between=$between, $settle, startup=$startup",
     async ({ between, settle, startup, reasoning }) => {
       createBlockTableHarness(tableCfg("off"));
-      const mentions = [{ openId: "ou_reader", name: "Reader", key: "@reader" }];
+      if (startup === "backoff") {
+        streamingStartBackoffUntilByAccount.set("main", Date.now() + 60_000);
+      }
+      const { gate, watch, visible } = trackChat(startup === "backoff" ? "ready" : startup);
       const { result, options } = createDispatcherHarness({
         accountId: "main",
         cfg: tableCfg("off"),
-        mentionTargets: mentions,
+        mentionTargets: readerMentions,
         allowReasoningPreview: true,
       });
-      const chat: { id: string; text: string; mentions?: unknown; removed?: boolean }[] = [];
-      const cardEntry = { id: "om_stream", text: "", removed: false };
-      const gate = Promise.withResolvers<void>();
-      streamingStartMock.mockImplementation(() => {
-        if (startup === "rejected") {
-          return Promise.reject(new Error("start rejected"));
-        }
-        if (startup === "delayed") {
-          return gate.promise.then(() => {
-            chat.push(cardEntry);
-          });
-        }
-        chat.push(cardEntry);
-        return undefined;
-      });
-      let next = 0;
-      sendMessageFeishuMock.mockImplementation(async ({ text, mentions: recipients }) => {
-        const id = `om-${++next}`;
-        chat.push({ id, text, mentions: recipients });
-        return { messageId: id };
-      });
-      const prose = "Here is the roster for the team.";
-      const tail = "Roster complete.";
       const second = tableMarkdown.replace("Ada", "Grace");
-      const parts = between ? [tableMarkdown, prose, second, tail] : [prose, tableMarkdown, tail];
+      const parts = between
+        ? [tableMarkdown, openingProse, second, tailProse]
+        : [openingProse, tableMarkdown, tailProse];
+      const answer = parts.join("\n\n");
       result.replyOptions.onPartialReply?.({ text: parts[0] });
-      const card = requireStreamingInstance();
-      const close = card.closeWithResult.getMockImplementation()!;
-      card.closeWithResult.mockImplementation(async (text, opts) => {
-        cardEntry.text = text ?? "";
-        return close(text, opts);
-      });
-      const discard = card.discard.getMockImplementation()!;
-      card.discard.mockImplementation(async () => {
-        cardEntry.removed = true;
-        return discard();
-      });
+      watch();
       const completions: Promise<unknown>[] = [];
       for (const [index, text] of parts.slice(0, -1).entries()) {
-        if (startup !== "ready" && index === 0) {
+        // A pending startup races the first table block, with the prose only previewed.
+        if (startup === "delayed" && index === 0) {
           continue;
         }
         result.replyOptions.onPartialReply?.({ text: parts.slice(0, index + 1).join("\n\n") });
         const pending = options.deliver({ text }, { kind: "block" });
         if (startup === "delayed") {
+          // The tail streams while startup is still pending, and the card is created after.
+          result.replyOptions.onPartialReply?.({ text: answer });
           await new Promise<void>((resolve) => {
             setImmediate(resolve);
           });
@@ -253,39 +237,53 @@ describe("createFeishuReplyDispatcher block table receipts", () => {
       if (reasoning) {
         result.replyOptions.onReasoningStream?.({ text: "Check the team roster." });
       }
-      const answer = parts.join("\n\n");
       result.replyOptions.onPartialReply?.({ text: answer });
+      const thinking = "> 💭 **Thinking**  \n> Check the team roster.";
+      const fallback = startup === "rejected" || startup === "backoff";
+      const expected = between
+        ? [
+            [tableMarkdown, readerMentions],
+            ...(fallback
+              ? [
+                  [openingProse, undefined],
+                  [second, undefined],
+                ]
+              : [[openingProse + "\n\n" + second, undefined]]),
+            [tailProse, readerMentions],
+            ...(reasoning ? [[thinking, undefined]] : []),
+          ]
+        : fallback
+          ? [
+              [openingProse, undefined],
+              [tableMarkdown, readerMentions],
+              [tailProse, readerMentions],
+            ]
+          : startup === "delayed"
+            ? [
+                [openingProse + "\n\n" + tableMarkdown, readerMentions],
+                [tailProse, readerMentions],
+              ]
+            : [
+                [
+                  (reasoning ? "> 💭 **Thinking**\n> Check the team roster.\n\n---\n\n" : "") +
+                    openingProse,
+                  undefined,
+                ],
+                [tableMarkdown, readerMentions],
+                [tailProse, readerMentions],
+              ];
       if (settle === "idle") {
         await options.onIdle?.();
+        // Idle settles the whole answer on its own; the final below then adds nothing.
+        expect(visible().map((entry) => [entry.text, entry.mentions])).toEqual(expected);
       }
       const final = await options.deliver({ text: answer }, { kind: "final" });
       await options.onIdle?.();
       await Promise.all(completions);
-      const thinking = "> 💭 **Thinking**  \n> Check the team roster.";
-      const visible = chat.filter((entry) => !entry.removed);
-      const expected = between
-        ? [
-            [tableMarkdown, mentions],
-            [prose + "\n\n" + second, undefined],
-            [tail, mentions],
-            ...(reasoning ? [[thinking, undefined]] : []),
-          ]
-        : startup === "rejected"
-          ? [
-              [prose + "\n\n" + tableMarkdown, mentions],
-              [tail, mentions],
-            ]
-          : [
-              [
-                (reasoning ? "> 💭 **Thinking**\n> Check the team roster.\n\n---\n\n" : "") + prose,
-                undefined,
-              ],
-              [tableMarkdown, mentions],
-              [tail, mentions],
-            ];
-      expect(visible.map((entry) => [entry.text, entry.mentions])).toEqual(expected);
-      expect(final?.messageIds).toEqual(visible.map((entry) => entry.id));
-      const body = visible.map((entry) => entry.text).join("\n\n");
+      const seen = visible();
+      expect(seen.map((entry) => [entry.text, entry.mentions])).toEqual(expected);
+      expect(final?.messageIds).toEqual(seen.map((entry) => entry.id));
+      const body = seen.map((entry) => entry.text).join("\n\n");
       let cursor = 0;
       for (const part of parts) {
         expect(body.split(part)).toHaveLength(2);
@@ -296,7 +294,85 @@ describe("createFeishuReplyDispatcher block table receipts", () => {
     },
   );
 
-  it("keeps the table receipt when retaining opening prose fails to finalize", async () => {
+  it.each([undefined, "settings", "write", "throw"] as const)(
+    "delivers the rest once around a prose card close that fails with %s",
+    async (fail) => {
+      const { createFeishuPartialReplyDeliveryError, createFeishuReplyDeliveryResult } =
+        await import("./reply-delivery-result.js");
+      createBlockTableHarness(tableCfg("off"));
+      const { cardEntry, watch, visible } = trackChat();
+      const { result, options } = createDispatcherHarness({
+        accountId: "main",
+        cfg: tableCfg("off"),
+        mentionTargets: readerMentions,
+      });
+      const parts = [openingProse, tableMarkdown, tailProse];
+      const blocks: Promise<unknown>[] = [];
+      for (const [index, text] of parts.entries()) {
+        result.replyOptions.onPartialReply?.({ text: parts.slice(0, index + 1).join("\n\n") });
+        const delivery = await options.deliver({ text }, { kind: "block" });
+        blocks.push(Promise.resolve(delivery?.finalization).catch((error: unknown) => error));
+      }
+      const card = watch()!;
+      const close = card.closeWithResult.getMockImplementation()!;
+      card.closeWithResult.mockImplementation(async (text, opts) => {
+        const stale = streamingUpdateTexts().at(-1) ?? "";
+        const closed = await close(text, opts);
+        if (fail === "settings") {
+          throw createFeishuPartialReplyDeliveryError(new Error(fail), closed);
+        }
+        if (fail === "write") {
+          cardEntry.text = stale;
+          throw createFeishuPartialReplyDeliveryError(new Error(fail), {
+            ...createFeishuReplyDeliveryResult({
+              results: [{ messageId: "om_stream" }],
+              visibleReplySent: true,
+              content: stale,
+              kind: "card",
+            }),
+            finalTextAccepted: false,
+          });
+        }
+        if (fail === "throw") {
+          cardEntry.text = stale;
+          throw new Error(fail);
+        }
+        return closed;
+      });
+      const idle: unknown = await Promise.resolve(options.onIdle?.()).catch(
+        (error: unknown) => error,
+      );
+      // Core sends no final after streamed blocks; one after a failed close must add nothing.
+      const final: unknown = fail
+        ? await options
+            .deliver({ text: parts.join("\n\n") }, { kind: "final" })
+            .catch((error: unknown) => error)
+        : undefined;
+      const [opening, , closing] = await Promise.all(blocks);
+      const stale = fail === "write" || fail === "throw";
+      expect(visible().map((entry) => [entry.text, entry.mentions])).toEqual([
+        [stale ? streamingUpdateTexts().at(-1) : openingProse, undefined],
+        [tableMarkdown, readerMentions],
+        ...(fail === "throw" ? [[openingProse, undefined]] : []),
+        [tailProse, readerMentions],
+      ]);
+      // A plain throw leaves the card's own message unnamed; the recovered prose leads the receipt.
+      const ids = fail === "throw" ? ["oc-1", "om-1", "om-2"] : visible().map((entry) => entry.id);
+      for (const outcome of fail ? [idle, final, opening, closing] : [opening, closing]) {
+        if (fail) {
+          expect(isChannelPartialDeliveryError(outcome)).toBe(true);
+        }
+        expect(outcome).toMatchObject(
+          fail ? { deliveryResult: { messageIds: ids } } : { messageIds: ids },
+        );
+      }
+      if (!fail) {
+        expect(idle).toBeUndefined();
+      }
+    },
+  );
+
+  it("posts the remainder when retaining opening prose fails to finalize", async () => {
     const { createFeishuPartialReplyDeliveryError, createFeishuReplyDeliveryResult } =
       await import("./reply-delivery-result.js");
     const { result, options } = createBlockTableHarness(tableCfg("off"));
@@ -304,7 +380,9 @@ describe("createFeishuReplyDispatcher block table receipts", () => {
     result.replyOptions.onPartialReply?.({ text: prose });
     const deferred = await options.deliver({ text: prose }, { kind: "block" });
     const completion = deferred?.finalization?.catch((error: unknown) => error);
-    sendMessageFeishuMock.mockResolvedValue({ messageId: "om-block" });
+    sendMessageFeishuMock
+      .mockResolvedValueOnce({ messageId: "om-block" })
+      .mockResolvedValueOnce({ messageId: "om-done" });
     result.replyOptions.onPartialReply?.({ text: prose + "\n\n" + tableMarkdown });
     await options.deliver({ text: tableMarkdown }, { kind: "block" });
     requireStreamingInstance().closeWithResult.mockImplementationOnce(async (text) => {
@@ -324,8 +402,13 @@ describe("createFeishuReplyDispatcher block table receipts", () => {
     await Promise.resolve(options.onIdle?.()).catch(() => undefined);
     await completion;
     expect(isChannelPartialDeliveryError(failed)).toBe(true);
-    expect(failed).toMatchObject({ deliveryResult: { messageIds: ["om_stream", "om-block"] } });
-    expect(sendMessageFeishuMock.mock.calls.map(([call]) => call.text)).toEqual([tableMarkdown]);
+    expect(failed).toMatchObject({
+      deliveryResult: { messageIds: ["om_stream", "om-block", "om-done"] },
+    });
+    expect(sendMessageFeishuMock.mock.calls.map(([call]) => call.text)).toEqual([
+      tableMarkdown,
+      "Done.",
+    ]);
   });
 
   it.each(["voice", "presentation"] as const)(
