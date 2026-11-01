@@ -940,6 +940,12 @@
     margin-inline-end: var(--space-1);
   }
 
+  /* Safari collapses an unsized svg in the picker's inline-flex chevron rail. */
+  .sessions-filter-sheet .session-groupby .picker-select__chevron svg {
+    width: 16px;
+    height: 16px;
+  }
+
   .sessions-search input::placeholder {
     text-overflow: ellipsis;
   }
@@ -993,7 +999,10 @@
 
   openclaw-sessions-page
     .settings-section__actions
-    .sessions-filter-popover__trigger.btn--icon.btn--xs {
+    .sessions-filter-popover__trigger.btn--icon.btn--xs,
+  openclaw-sessions-page
+    .settings-section__actions
+    .sessions-filter-popover__trigger.btn--icon.btn--xs:hover {
     width: var(--settings-control-height);
     min-width: var(--settings-control-height);
     height: var(--settings-control-height);
@@ -1005,7 +1014,10 @@
 
   openclaw-sessions-page
     .settings-section__actions
-    .sessions-filter-popover__trigger.btn--icon.btn--xs.active {
+    .sessions-filter-popover__trigger.btn--icon.btn--xs.active,
+  openclaw-sessions-page
+    .settings-section__actions
+    .sessions-filter-popover__trigger.btn--icon.btn--xs.active:hover {
     color: var(--accent);
   }
 
