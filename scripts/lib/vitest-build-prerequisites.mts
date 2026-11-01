@@ -282,6 +282,7 @@ const runtimeConsumers = [
     "src/cli/update-cli/update-command-post-update-recovery.test.ts",
     "src/cli/update-cli/update-command-post-update-repair.test.ts",
     "src/cli/update-cli/update-command-service.integration.test.ts",
+    "src/cli/update-cli/update-command-preflight.integration.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.cli-process.config.ts"],
