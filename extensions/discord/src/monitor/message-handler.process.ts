@@ -145,30 +145,11 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   }
   const { ctxPayload, persistedSessionKey, record, replyPlan } = processContext;
   let deliverTarget = replyPlan.deliverTarget;
-  const sourceMessageId = ctx.canonicalMessageId ?? message.id;
   const sourceReplyReference = replyPlan.replyReference;
   let adoptedThreadId: string | undefined;
   // Delivery is dispatch-scoped: the model may continue after the message tool
   // returns, but that continuation cannot undo the visible thread reply.
   let threadReplyDelivered = false;
-  let onThreadAdopted: ((threadId: string) => Promise<void>) | undefined = undefined;
-  const endActiveThreadRoute = beginDiscordActiveTurnThreadRoute(ctxPayload.SessionKey, {
-    accountId,
-    sourceChannelId: messageChannelId,
-    sourceMessageId,
-    onThreadAdopted: async (threadId) => {
-      // Route identity must change before migration so a successful thread
-      // reply remains current-source even when moving the draft later fails.
-      adoptedThreadId = threadId;
-      await onThreadAdopted?.(threadId);
-    },
-    onThreadReplyDelivered: () => {
-      threadReplyDelivered = true;
-    },
-    onThreadAdoptionError: (error) => {
-      logVerbose(`discord: failed to move active progress into adopted thread (${String(error)})`);
-    },
-  });
   const replyReference = {
     peek: () => (adoptedThreadId ? undefined : sourceReplyReference.peek()),
     use: () => (adoptedThreadId ? undefined : sourceReplyReference.use()),
@@ -196,10 +177,28 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     feedbackRest: reactions.feedbackRest,
     deliveryRest: reactions.deliveryRest,
   });
-  onThreadAdopted = async (threadId) => {
-    deliverTarget = `channel:${threadId}`;
-    await draftPreview.retarget(threadId);
-  };
+  const beginActiveThreadRoute = () =>
+    beginDiscordActiveTurnThreadRoute(ctxPayload.SessionKey, {
+      accountId,
+      sourceChannelId: messageChannelId,
+      sourceMessageId: ctx.canonicalMessageId ?? message.id,
+      onThreadAdopted: async (threadId) => {
+        // Route identity must change before migration so a successful thread
+        // reply remains current-source even when moving the draft later fails.
+        adoptedThreadId = threadId;
+        deliverTarget = `channel:${threadId}`;
+        await draftPreview.retarget(threadId);
+      },
+      onThreadReplyDelivered: () => {
+        threadReplyDelivered = true;
+      },
+      onThreadAdoptionError: (error) => {
+        logVerbose(
+          `discord: failed to move active progress into adopted thread (${String(error)})`,
+        );
+      },
+    });
+  const endActiveThreadRoute = beginActiveThreadRoute();
   const { lifecycle } = draftPreview;
   const hasCompletedFinalReply = () => lifecycle.finalSucceeded || lifecycle.previewFinalized;
   const observeFinalDelivery = async () => {
@@ -224,14 +223,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         deliverySession: ReturnType<typeof getGroupThreadDeliverySession>;
       }
     | undefined;
-  const progressSessionKey = ctxPayload.SessionKey;
   // Reasoning delivery follows the session /reasoning level, not streaming config.
   const reasoningLevel = await (async (): Promise<"on" | "stream" | "off"> => {
     const agentEntryDefault = resolveAgentConfig(cfg, route.agentId ?? "main")?.reasoningDefault;
     const cfgDefault = agentEntryDefault ?? cfg.agents?.defaults?.reasoningDefault;
     const configDefault: "on" | "stream" | "off" =
       cfgDefault === "on" || cfgDefault === "stream" ? cfgDefault : "off";
-    if (!progressSessionKey) {
+    if (!ctxPayload.SessionKey) {
       return configDefault;
     }
     try {
@@ -239,7 +237,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       const level = (
         await getSessionEntryAsync({
           agentId: route.agentId,
-          sessionKey: progressSessionKey,
+          sessionKey: ctxPayload.SessionKey,
           storePath,
         })
       )?.reasoningLevel;
@@ -251,7 +249,6 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     }
     return configDefault;
   })();
-  const reasoningDurableEnabled = reasoningLevel === "on";
   const reasoningWindowEnabled = reasoningLevel === "stream";
   // The durable verbose lane mirrors commentary, not tool lifecycle rows.
   // Yield only the draft content that has a durable counterpart.
@@ -300,7 +297,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       draftPreview.isProgressMode && draftPreview.commentaryProgressEnabled
         ? () => turnCommentaryVisible
         : undefined,
-    reasoningPayloadsEnabled: reasoningDurableEnabled,
+    reasoningPayloadsEnabled: reasoningLevel === "on",
     onVerboseProgressVisibilityAsync: async (isActive) => {
       shouldYieldDraftCommentary = isActive;
       turnCommentaryVisible = await isActive();
@@ -650,9 +647,16 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         typingKeepalive: shouldDisableCoreTypingKeepalive ? false : undefined,
         // The primary turn already owns one correlation; each queued followup
         // needs a fresh owner so its eventual delivery clears room history.
-        queuedDeliveryCorrelations: isRoomEvent
-          ? [{ begin: beginQueuedDeliveryCorrelation }]
-          : undefined,
+        queuedDeliveryCorrelations: [
+          ...(isRoomEvent ? [{ begin: beginQueuedDeliveryCorrelation }] : []),
+          {
+            begin: () => {
+              // Transfer the route before queued execution, even if dispatch is still closing.
+              endActiveThreadRoute();
+              return beginActiveThreadRoute();
+            },
+          },
+        ],
         suppressTyping: isRoomEvent ? true : undefined,
         allowProgressCallbacksWhenSourceDeliverySuppressed:
           sourceRepliesAreToolOnly && draftPreview.draftStream && draftPreview.isProgressMode
