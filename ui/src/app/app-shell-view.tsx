@@ -27,6 +27,7 @@ import { DevicePairSetup } from "./app-shell-device-pair-setup.tsx";
 import { ShellDocks } from "./app-shell-docks.tsx";
 import { ShellLazyOverlays, type ShellElementAttributes } from "./app-shell-lazy-view.tsx";
 import { readShellView, type ShellView, type ShellViewHost } from "./app-shell-view-state.ts";
+import { topbarHostsPageActions } from "./mobile-nav-layout.ts";
 import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
 import { floatingSidebarAttentionVisible } from "./navigation-surface.ts";
@@ -189,6 +190,9 @@ export function ApplicationShell(props: {
             prop:environment={view().config.environment}
             prop:navDrawerOpen={view().navDrawerOpen}
             prop:gatewayStatus={view().mobileGatewayStatus}
+            prop:registerPageActions={
+              topbarHostsPageActions() ? props.host.shellLayout.registerHeaderActions : undefined
+            }
             prop:newSessionAction={() => (
               <Show
                 when={

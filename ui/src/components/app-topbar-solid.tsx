@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { Show } from "solid-js";
+import { onSettled, Show } from "solid-js";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
@@ -20,7 +20,14 @@ type Props = {
   environment: ControlUiEnvironment | null;
   onToggleDrawer: ((trigger: HTMLElement) => void) | undefined;
   onOpenPalette: (() => void) | undefined;
+  registerPageActions: ((slot: HTMLElement) => () => void) | undefined;
 };
+
+function PageActionsSlot(props: { register: (slot: HTMLElement) => () => void }) {
+  let slot!: HTMLDivElement;
+  onSettled(() => props.register(slot));
+  return <div ref={(element) => (slot = element)} class="topnav-shell__page-actions" />;
+}
 
 /** Narrow-viewport header; the desktop sidebar owns navigation. */
 defineSolidBridge<Props>(
@@ -63,6 +70,9 @@ defineSolidBridge<Props>(
             </div>
           </div>
           <div class="topnav-shell__actions">
+            <Show when={props.registerPageActions}>
+              {(register) => <PageActionsSlot register={register()} />}
+            </Show>
             {props.newSessionAction?.()}
             <openclaw-tooltip prop:content={t("chat.commandPaletteTitle")}>
               <span slot="content">
@@ -94,6 +104,7 @@ defineSolidBridge<Props>(
       environment: { default: null, attribute: false },
       onToggleDrawer: { default: undefined, attribute: false },
       onOpenPalette: { default: undefined, attribute: false },
+      registerPageActions: { default: undefined, attribute: false },
     },
   },
 );

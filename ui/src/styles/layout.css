@@ -614,6 +614,10 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   flex-shrink: 0;
 }
 
+.topnav-shell__page-actions {
+  display: contents;
+}
+
 .topnav-shell__content {
   min-width: 0;
   flex: 1;

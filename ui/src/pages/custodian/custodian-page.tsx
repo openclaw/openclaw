@@ -1,4 +1,5 @@
 import type { SystemChangesListResult } from "@openclaw/gateway-protocol";
+import { Portal } from "@solidjs/web";
 import {
   createMemo,
   createSignal,
@@ -10,9 +11,13 @@ import {
   onSettled,
   Show,
 } from "solid-js";
+import { PHONE_MEDIA_QUERY } from "../../app/mobile-nav-layout.ts";
+import { type ShellLayoutOwner, shellLayoutOwnerForHost } from "../../app/shell-layout-owner.ts";
 import "../../components/openclaw-mascot.tsx";
 import type { SidebarAttentionElementAttributes } from "../../components/sidebar-attention-element.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
+import "../../components/tooltip.ts";
 import {
   channelSnapshotHasActiveChannel,
   createChannelCapability,
@@ -23,6 +28,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectChannels } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import "../../styles/custodian.css";
@@ -79,6 +85,22 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
     historyOwner();
     return null;
   });
+  // Setup mode keeps its row for Exit setup, so History stays beside it.
+  const phone = createMediaQuery(
+    PHONE_MEDIA_QUERY,
+    globalThis.matchMedia?.(PHONE_MEDIA_QUERY).matches ?? false,
+  );
+  const [shellLayout, setShellLayout] = createSignal<ShellLayoutOwner>();
+  const topbarSlot = createMemo(() =>
+    phone() && !props.onboarding ? shellLayout()?.headerActionsSlot() : undefined,
+  );
+  function toggleHistory() {
+    const open = !historyOpen();
+    setHistoryOpen(open);
+    if (open && !historyOwner().busy) {
+      loadHistory(true);
+    }
+  }
   let disposed = false;
   function refreshChannelInventory() {
     const state = channelCapability.state;
@@ -94,6 +116,7 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
     }
   }
   onSettled(() => {
+    setShellLayout(() => shellLayoutOwnerForHost(host));
     propertyReceipts.set(host, (key) => {
       presentation.retire();
       if (key === "store") {
@@ -237,7 +260,10 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
     <section
       class={[
         "custodian custodian--page",
-        { "custodian--setup-required": store.read().setupRequired },
+        {
+          "custodian--setup-required": store.read().setupRequired,
+          "custodian--actions-in-topbar": topbarSlot() !== undefined,
+        },
       ]}
     >
       <header
@@ -267,18 +293,12 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
               </Loading>
             </Errored>
           </Show>
-          <Show when={historyAvailable()}>
+          <Show when={historyAvailable() && !topbarSlot()}>
             <button
               class="btn btn--ghost custodian__history-toggle"
               type="button"
               aria-expanded={historyOpen() ? "true" : "false"}
-              onClick={() => {
-                const open = !historyOpen();
-                setHistoryOpen(open);
-                if (open && !historyOwner().busy) {
-                  loadHistory(true);
-                }
-              }}
+              onClick={toggleHistory}
             >
               {t("custodian.history.button")}
             </button>
@@ -290,6 +310,23 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
           </Show>
         </div>
       </header>
+      <Show when={historyAvailable() ? topbarSlot() : undefined}>
+        {(slot) => (
+          <Portal mount={slot()}>
+            <openclaw-tooltip prop:content={t("custodian.history.button")}>
+              <button
+                class="custodian__history-toggle custodian__history-toggle--topbar"
+                type="button"
+                aria-label={t("custodian.history.button")}
+                aria-expanded={historyOpen() ? "true" : "false"}
+                onClick={toggleHistory}
+              >
+                <Icon name="history" />
+              </button>
+            </openclaw-tooltip>
+          </Portal>
+        )}
+      </Show>
       <CustodianSurface
         class="custodian__column"
         store={props.store}
