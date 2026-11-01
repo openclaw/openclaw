@@ -432,6 +432,22 @@
   font-size: 16px;
 }
 
+/* The calendar reads like a select's chevron: same color, stroke, size and inset. */
+.transcripts-filter-popover input[type="date"] {
+  padding-inline-end: 10px;
+}
+
+.transcripts-filter-popover input[type="date"]::-webkit-calendar-picker-indicator {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  background: var(--text-tertiary);
+  opacity: 1;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 2v4'/%3E%3Cpath d='M16 2v4'/%3E%3Crect width='18' height='18' x='3' y='4' rx='2'/%3E%3Cpath d='M3 10h18'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+
 .transcripts-filter-popover .transcripts-caption {
   margin: 0;
 }
