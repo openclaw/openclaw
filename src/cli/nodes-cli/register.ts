@@ -250,7 +250,15 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
           );
 
           const payload = asRecord(asRecord(raw).payload);
-          const devices = Array.isArray(payload.devices) ? payload.devices.filter(isRecord) : [];
+          const devices = Array.isArray(payload.devices)
+            ? payload.devices.filter(isRecord)
+            : Array.isArray(payload.cameras)
+              ? payload.cameras
+                  .filter(isRecord)
+                  .map(({ DeviceId: id, Name: name, ...device }) =>
+                    Object.assign({ id, name }, device),
+                  )
+              : [];
 
           if (opts.json) {
             defaultRuntime.writeJson(devices);
