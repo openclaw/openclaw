@@ -192,15 +192,7 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
     ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, abortSignal))
     : withHooks;
   options.recordToolPrepStage?.("abort-wrappers");
-  const finalized = applyToolAvailabilityDescriptions(withAbort).map((tool) => {
-    const parameters = memo.published.get(tool.parameters)?.parameters ?? tool.parameters;
-    const outputSchema = tool.outputSchema
-      ? (memo.published.get(tool.outputSchema)?.parameters ?? tool.outputSchema)
-      : undefined;
-    return parameters === tool.parameters && outputSchema === tool.outputSchema
-      ? tool
-      : copyAgentToolMetadata(tool, { ...tool, parameters, outputSchema });
-  });
+  const finalized = applyToolAvailabilityDescriptions(withAbort);
   options.recordToolPrepStage?.("deferred-followup-descriptions");
   // Settlement retains metadata only, never executable closures or the plugin snapshot.
   const pending = finalized.map(({ name, parameters, outputSchema }, index) => ({
@@ -237,5 +229,13 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
   } else {
     publish();
   }
-  return finalized;
+  return finalized.map((tool) => {
+    const parameters = memo.published.get(tool.parameters)?.parameters ?? tool.parameters;
+    const outputSchema = tool.outputSchema
+      ? (memo.published.get(tool.outputSchema)?.parameters ?? tool.outputSchema)
+      : undefined;
+    return parameters === tool.parameters && outputSchema === tool.outputSchema
+      ? tool
+      : copyAgentToolMetadata(tool, { ...tool, parameters, outputSchema });
+  });
 }
