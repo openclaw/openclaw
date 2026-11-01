@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { REDACTED_SENTINEL, restoreRedactedValues } from "../config/redact-snapshot.js";
 import { makeSnapshot } from "../config/redact-snapshot.test-helpers.js";
 import { buildRuntimeConfigSchemaFromRegistry } from "../config/runtime-schema.js";
+import { buildConfigSchemaCore } from "../config/schema.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
@@ -64,6 +65,20 @@ afterEach(() => {
 });
 
 describe("config.get response cache", () => {
+  it("redacts inline environment values in cold and cached config reads", async () => {
+    const config = { env: { vars: { REDACTION_TEST_INLINE: "synthetic-inline-credential" } } };
+    mocks.readConfigFileSnapshot.mockResolvedValue(makeSnapshot(config));
+    const hints = buildConfigSchemaCore().uiHints;
+    for (const getHotReloadStatus of [activeWatcher, activeWatcher, disabledWatcher]) {
+      const response = await readConfigGetResponse({
+        getHotReloadStatus,
+        loadUiHints: () => hints,
+      });
+      expect(response.config.env?.vars?.REDACTION_TEST_INLINE).toBe(REDACTED_SENTINEL);
+      expect(JSON.stringify(response)).not.toContain("synthetic-inline-credential");
+    }
+  });
+
   it.each([true, false])(
     "omits private provenance from cold, cached, and uncached responses (valid=%s)",
     async (valid) => {
