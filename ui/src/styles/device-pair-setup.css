@@ -9,7 +9,7 @@
   height: 44px;
   place-items: center;
   border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--accent-subtle);
   color: var(--accent);
 }
@@ -261,7 +261,7 @@
   height: 48px;
   place-items: center;
   border: 1px solid var(--border-strong);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: var(--bg-elevated);
   color: var(--muted);
 }

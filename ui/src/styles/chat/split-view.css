@@ -395,7 +395,7 @@
   max-width: 320px;
   padding: 2px 6px;
   border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--warn-subtle);
   color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
   font-size: 11px;
@@ -453,7 +453,7 @@
   width: min(300px, calc(100vw - 24px));
   margin-inline: 12px;
   padding: 8px;
-  border-radius: 12px;
+  border-radius: var(--menu-radius);
 }
 
 .chat-pane__branch-item {

@@ -310,8 +310,8 @@ describe("CommandPalette search", () => {
     await searchPalette(palette, "n");
 
     expect(list).not.toHaveBeenCalled();
-    expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
-    expect(query('[role="listbox"]')?.getAttribute("aria-label")).toBe(
+    expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
+    expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-label")).toBe(
       query("textarea")?.getAttribute("aria-label"),
     );
     expect(palette.textContent).not.toContain("Searching sessions");

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it as baseIt, vi } from "vitest";
 import type { RunEmbeddedAgentInternalParams as AgentRequest } from "../agents/embedded-agent-runner/run/internal-params.js";
+import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
@@ -32,6 +33,7 @@ import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.j
 import type { CronJob, CronStoredJob } from "./types.js";
 
 setupRunCronIsolatedAgentTurnSuite();
+const embeddedAgentMock = vi.mocked(runEmbeddedAgent);
 const prepareProfiles = useUserProfileCatalogForTest();
 const it = baseIt.extend<{ home: string }>({
   home: async ({ task: _task }, use) => {
@@ -52,10 +54,14 @@ async function useRealCronSessionState(): Promise<void> {
 }
 
 function lastEmbeddedAgentCall(): AgentRequest {
-  return h.runEmbeddedAgentMock.mock.calls.at(-1)?.[0];
+  const call = embeddedAgentMock.mock.calls.at(-1)?.[0];
+  if (!call) {
+    throw new Error("Cron did not invoke its embedded runner");
+  }
+  return call;
 }
 
-function embeddedResult(sessionId: string | undefined, extra = {}) {
+function embeddedResult(sessionId: string, extra = {}) {
   return {
     payloads: [{ text: "ok" }],
     meta: {
@@ -96,13 +102,14 @@ function runSessionTurn(
 describe("runCronIsolatedAgentTurn session identity", () => {
   beforeEach(() => {
     h.mockRunCronFallbackPassthrough();
+    embeddedAgentMock.mockReset();
+    mockEmbeddedOk();
   });
 
   it("uses agentId for workspace, session key, and store paths", async ({ home }) => {
     const agentId = "ops";
     const sessionKey = "cron:job-ops";
     const workspaceDir = path.join(home, `${agentId}-workspace`);
-    mockEmbeddedOk();
 
     const cfg = f.makeCfg(
       home,
@@ -148,7 +155,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       const cfg = f.makeCfg(home, storePath, {
         gateway: { roles: { default: "guest", definitions: { guest } } },
       });
-      h.runEmbeddedAgentMock.mockImplementationOnce(async (input: AgentRequest) => {
+      embeddedAgentMock.mockImplementationOnce(async (input: AgentRequest) => {
         const sessionKey = input.sessionKey ?? "";
         expect(sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
         for (const key of ["agent:main:cron:job-1", sessionKey]) {
@@ -163,7 +170,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       });
       const res = await runSessionTurn(cfg, job);
       expect(res.status, res.status === "error" ? res.error : undefined).toBe("ok");
-      expect(h.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(embeddedAgentMock).toHaveBeenCalledOnce();
       const entry = await readCronSessionEntry(storePath, "agent:main:cron:job-1");
       expect(entry).toMatchObject({ createdActor, sandbox: "required" });
       await expect(readCronSessionEntry(storePath, res.sessionKey!)).resolves.toBeUndefined();
@@ -188,7 +195,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       sessionContext: { sessionKey: boundSessionKey },
     }) as CronJob;
     const executionSessionKey = `agent:main:cron:${currentBoundJob.id}`;
-    h.runEmbeddedAgentMock.mockImplementationOnce(async (input: AgentRequest) => {
+    embeddedAgentMock.mockImplementationOnce(async (input: AgentRequest) => {
       const { agentId = "main", sessionId, sessionKey = "" } = input;
       const target = { agentId, sessionId, sessionKey, storePath };
       const manager = SessionManager.open(target, input.workspaceDir);
@@ -244,7 +251,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       trigger: "cron",
     });
     let seen: Record<string, unknown> | undefined;
-    h.runEmbeddedAgentMock.mockImplementationOnce(async (input: AgentRequest) => {
+    embeddedAgentMock.mockImplementationOnce(async (input: AgentRequest) => {
       const admitted = await input.preparedRunAdmission!.admit("gateway", input.runId);
       seen = {
         sessionKey: input.sessionKey,

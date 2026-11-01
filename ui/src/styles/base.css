@@ -405,6 +405,18 @@
   --duration-fast: 100ms;
   --duration-normal: 180ms;
   --duration-slow: 300ms;
+  /* Loading placeholder sweep: `.skeleton::after`. */
+  --skeleton-duration: 2s;
+  --skeleton-easing: ease-in-out;
+  --skeleton-highlight-strength: 12%;
+  --skeleton-sweep-width: 50%;
+  /* Sits past the surface in both modes, so the sweep never passes through the surface color. */
+  --skeleton-base-raised: color-mix(in srgb, var(--muted) 15%, transparent);
+  /* Running label sweep: `.text-shimmer`. */
+  --text-shimmer-duration: 2.4s;
+  --text-shimmer-easing: ease-in-out;
+  --text-shimmer-highlight-strength: 100%;
+  --text-shimmer-sweep-width: 30%;
   /* Sheet spring from ui/src/lib/motion/spring.ts (SwiftUI duration/bounce model:
      0.3 s, no bounce, fitted to the iOS sheet curve). spring.test.ts keeps it in sync. */
   --motion-sheet-duration: 441ms;
@@ -1205,14 +1217,39 @@ textarea,
 }
 
 /* Sweep a 200%-wide text-clipped gradient with matching end stops one full
-   period per cycle so the loop wraps seamlessly. Consumers set the gradient,
-   duration, and easing. */
+   period per cycle so the loop wraps seamlessly. `.text-shimmer` owns the
+   gradient, duration, and easing. */
 @keyframes text-shimmer {
   from {
     background-position: 100% 0;
   }
   to {
     background-position: -100% 0;
+  }
+}
+
+/* Running labels. Add the class only while the work is active. Accessibility modes
+   and browsers without text clipping keep the element's own static text. */
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+    /* Doubled so a surface's own `background` reset cannot leave transparent text unpainted. */
+    .text-shimmer.text-shimmer {
+      background-image: linear-gradient(
+        90deg,
+        var(--muted) 0%,
+        var(--muted) calc(50% - var(--text-shimmer-sweep-width) / 2),
+        color-mix(in srgb, var(--text) var(--text-shimmer-highlight-strength), var(--muted)) 50%,
+        var(--muted) calc(50% + var(--text-shimmer-sweep-width) / 2),
+        var(--muted) 100%
+      );
+      background-size: 200% 100%;
+      background-repeat: repeat-x;
+      -webkit-background-clip: text;
+      background-clip: text;
+      /* Inherited, so nested syntax tokens and names paint through the gradient too. */
+      -webkit-text-fill-color: transparent;
+      animation: text-shimmer var(--text-shimmer-duration) var(--text-shimmer-easing) infinite;
+    }
   }
 }
 
@@ -1228,14 +1265,14 @@ textarea,
   inset: 0;
   background: linear-gradient(
     90deg,
-    transparent 25%,
-    var(--skeleton-highlight, var(--bg-hover)) 50%,
-    transparent 75%
+    transparent calc(50% - var(--skeleton-sweep-width) / 2),
+    color-mix(in srgb, var(--text) var(--skeleton-highlight-strength), transparent) 50%,
+    transparent calc(50% + var(--skeleton-sweep-width) / 2)
   );
   content: "";
-  /* Keep the highlight offscreen when reduced motion disables the sweep. */
+  /* Keep the highlight offscreen when accessibility modes disable the sweep. */
   transform: translateX(-100%);
-  animation: shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
+  animation: shimmer var(--skeleton-duration) var(--skeleton-easing) infinite;
   will-change: transform;
 }
 
@@ -1262,11 +1299,13 @@ textarea,
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
+@media (prefers-reduced-motion: reduce), (forced-colors: active) {
   .skeleton::after {
     animation: none !important;
   }
+}
 
+@media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {

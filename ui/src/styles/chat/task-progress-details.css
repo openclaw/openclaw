@@ -221,7 +221,7 @@
   padding: 4px;
   place-items: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   corner-shape: superellipse(7.5);
   background: transparent;
   color: var(--muted);
@@ -393,7 +393,7 @@
   min-height: 24px;
   padding: 2px 8px;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--bg-hover);
   color: var(--muted);
   font-size: 12px;
@@ -431,7 +431,7 @@
   margin-block-end: 16px;
   padding: 12px;
   border: 0;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--card);
   font-size: 13px;
   line-height: 18px;

@@ -583,7 +583,7 @@
 
 .provider-row__summary {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto minmax(6.5rem, auto) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(9.5rem, auto) auto;
   align-items: center;
   gap: var(--space-3);
   inline-size: 100%;
@@ -632,6 +632,7 @@
 .provider-row__plan {
   padding: 0 var(--oc-space-1);
   border: 1px solid var(--oc-border-subtle);
+  background: var(--surface-hover);
   border-radius: var(--oc-radius-control);
   color: var(--oc-text-secondary);
   font-family: var(--oc-font-mono);

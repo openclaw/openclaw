@@ -18,6 +18,7 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import type { CronJob } from "../cron/types.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -50,10 +51,14 @@ import {
 } from "./session-utils-store.js";
 import { withAgentPermissionState } from "./session-utils.permissions.test-support.js";
 import {
+  agentStore,
   closeSessionSqliteDatabasesForTest,
   createModelDefaultsConfig,
   createSingleAgentAvatarConfig,
+  makeSession,
+  seedDeletedMainStores,
   seedSessionEntries,
+  storeConfig,
   useSessionStoreFixture,
   withStateDirEnv,
 } from "./session-utils.test-support.js";
@@ -62,35 +67,6 @@ import { applySessionContextWindowPatch } from "./sessions-patch-context-window.
 const { getSessionProviderArtifactMocks, resetSessionProviderArtifacts } =
   await import("./session-utils-provider.test-support.js");
 const providerArtifactMocks = getSessionProviderArtifactMocks();
-
-function makeSession(sessionId: string, fields: Partial<InternalSessionEntry> = {}) {
-  return { sessionId, updatedAt: 1, ...fields };
-}
-
-function storeConfig(
-  store: string,
-  entries: NonNullable<OpenClawConfig["agents"]>["entries"] = { main: {} },
-): OpenClawConfig {
-  return { session: { mainKey: "main", store }, agents: { entries } };
-}
-
-const agentStore = (root: string, agentId = "{agentId}") =>
-  path.join(root, "agents", agentId, "sessions", "sessions.json");
-
-function seedDeletedMainStores(stateDir: string, mainKey = "main") {
-  const deletedStorePath = agentStore(stateDir, "main");
-  const liveStorePath = agentStore(stateDir, "ops");
-  for (const storePath of [liveStorePath, deletedStorePath]) {
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  }
-  seedSessionEntries(liveStorePath, {
-    [`agent:ops:${mainKey}`]: makeSession("sess-live-default", { updatedAt: 10 }),
-  });
-  seedSessionEntries(deletedStorePath, {
-    "agent:main:main": makeSession("sess-deleted-main", { updatedAt: 20 }),
-  });
-  return { deletedStorePath, storeTemplate: agentStore(stateDir) };
-}
 
 function catalogModel(
   provider: string,
@@ -783,7 +759,7 @@ describe("gateway session utils", () => {
       entry: makeSession("fresh-zero-token-session", {
         totalTokens: 0,
         totalTokensFresh: true,
-        totalTokensVersion: 1,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       }),
     });
     expect(row).toMatchObject({ totalTokens: 0, totalTokensFresh: true });

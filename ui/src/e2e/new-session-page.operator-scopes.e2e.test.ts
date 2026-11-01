@@ -19,6 +19,7 @@ import {
   installMockGateway,
   pollLocatorText,
   captureUiProof,
+  captureUiProofEnabled,
   controlUiSessionUrl,
 } from "./new-session-page.test-support.ts";
 
@@ -132,9 +133,19 @@ suite.define(() => {
   it("keeps session-only browsing free of forbidden optional discovery", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const key = "agent:main:scoped-reader";
-      const forbidden = ["sessions.catalog.list", "plugins.list", "sessions.usage"];
+      const forbidden = [
+        "sessions.catalog.list",
+        "plugins.list",
+        "sessions.usage",
+        "worktrees.branches",
+        "users.background.get",
+        "cron.list",
+      ];
       const gateway = await installMockGateway(page, {
         operatorScopes: ["operator.sessions.read"],
+        workspace: "/workspace/scoped-project",
+        workspaceGit: true,
+        presenceUsers: [{ id: "scoped-reader", name: "Scoped reader", self: true }],
         featureMethods: [...chatMethods, ...forbidden, "sessions.create", "tools.effective"],
         sessionKey: key,
         sessions: [
@@ -148,6 +159,7 @@ suite.define(() => {
             contextTokens: 100000,
             totalTokens: 50000,
             totalTokensFresh: true,
+            spawnedCwd: "/workspace/scoped-project",
           },
         ],
         agentModel: "example/demo",
@@ -185,11 +197,22 @@ suite.define(() => {
       await page.locator(".chat-controls__model-search").waitFor();
       expect(await page.locator('[data-chat-model-target-group="cliAgents"]').count()).toBe(0);
       await page.keyboard.press("Escape");
+      expect(await page.locator("#new-session-checkout-trigger").count()).toBe(0);
+      await captureUiProof(suite, page, "scoped-reader-new-session.png");
+      if (captureUiProofEnabled) {
+        console.info(
+          "Scoped new-session forbidden calls",
+          (await gateway.getRequests("worktrees.branches")).length,
+        );
+      }
       for (const method of [...forbidden, "sessions.create"]) {
-        expect(await gateway.getRequests(method), method).toHaveLength(0);
+        expect.soft(await gateway.getRequests(method), method).toHaveLength(0);
       }
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
       await page.getByText("The scoped conversation remains readable.", { exact: true }).waitFor();
+      await page.locator(".chat-header-session-menu__trigger").filter({ visible: true }).click();
+      expect(await page.locator('[data-value="copy-branch"]').count()).toBe(0);
+      await page.keyboard.press("Escape");
       await page.locator(".context-ring").filter({ visible: true }).click();
       const summary = page.locator(".context-usage__popover").filter({ visible: true });
       await summary.getByRole("meter").waitFor();
@@ -199,13 +222,32 @@ suite.define(() => {
       await panel.getByText(/Ask the person who manages OpenClaw for access/).waitFor();
       expect(await panel.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
       for (const method of [...forbidden, "sessions.create"]) {
-        expect(await gateway.getRequests(method), method).toHaveLength(0);
+        expect.soft(await gateway.getRequests(method), method).toHaveLength(0);
       }
       await captureUiProof(suite, page, "scoped-reader-context.png");
       await page.goto(`${suite.server.baseUrl}usage`);
       await page.getByText(/Ask the person who manages OpenClaw for access/).waitFor();
       for (const method of ["sessions.usage", "usage.status"]) {
-        expect(await gateway.getRequests(method), method).toHaveLength(0);
+        expect.soft(await gateway.getRequests(method), method).toHaveLength(0);
+      }
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await page.locator("#settings-appearance-background").scrollIntoViewIfNeeded();
+      expect(await page.locator("[data-background-upload]").isDisabled()).toBe(true);
+      await page
+        .getByText("Image uploads require permission to edit your profile.", { exact: true })
+        .waitFor();
+      await captureUiProof(suite, page, "scoped-reader-background.png");
+      if (captureUiProofEnabled) {
+        console.info(
+          "Scoped background forbidden calls",
+          (await gateway.getRequests("users.background.get")).length,
+        );
+      }
+      expect.soft(await gateway.getRequests("users.background.get")).toHaveLength(0);
+      await page.goto(`${suite.server.baseUrl}automations`);
+      await page.getByText(/Ask the person who manages OpenClaw for access/).waitFor();
+      for (const method of forbidden) {
+        expect.soft(await gateway.getRequests(method), method).toHaveLength(0);
       }
     });
   });

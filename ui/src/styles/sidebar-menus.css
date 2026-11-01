@@ -224,7 +224,7 @@
   gap: 10px;
   padding: 10px 12px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text);
   text-align: start;
@@ -274,7 +274,7 @@
   gap: 8px;
   min-height: 44px;
   padding: 0 12px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--bg-hover);
   color: var(--muted);
 }
@@ -299,7 +299,7 @@
 
 .session-actions-page__group {
   overflow: hidden;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--bg-hover);
 }
 
@@ -337,7 +337,7 @@
 .session-actions-page .session-menu__color-choice {
   min-height: 44px;
   width: 100%;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   border: 1px solid transparent;
 }
 

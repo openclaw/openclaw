@@ -223,6 +223,7 @@
 }
 
 .cron-table__head {
+  padding-block: var(--space-2);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   font-weight: 600;
@@ -380,7 +381,7 @@
 }
 
 .cron-table__last-run {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 7px;
   min-width: 0;
@@ -755,13 +756,20 @@
 
 .cron-job-menu {
   position: relative;
+  display: flex;
 }
 
 .cron-job-menu__trigger {
   list-style: none;
   width: 30px;
+  height: 26px;
   justify-content: center;
   padding: 0;
+}
+
+.cron-job-menu__trigger > .oc-menu-item__label {
+  display: flex;
+  justify-content: center;
 }
 
 .cron-job-menu__item {

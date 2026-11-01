@@ -1,5 +1,9 @@
 import { resolveCompactionReplayPressure } from "@openclaw/ai/transports";
 import type { Model } from "@openclaw/llm-core";
+import {
+  CHARS_PER_TOKEN_ESTIMATE,
+  estimateStringTokenPressure,
+} from "@openclaw/normalization-core/cjk-chars";
 import type { SessionContextBudgetStatus } from "../../../config/sessions.js";
 import { resolveEffectiveCompactionReserveTokens } from "../../agent-compaction-constants.js";
 import { SAFETY_MARGIN } from "../../compaction-planning.js";
@@ -7,8 +11,6 @@ import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import { calculateContextTokens, IMAGE_BLOCK_TOKENS } from "../../runtime/index.js";
 import {
   createFreshLlmBoundaryTokenEstimator,
-  ESTIMATED_CHARS_PER_TOKEN,
-  estimateStringTokenPressure,
   estimateJsonPayloadTokenPressure,
   estimateMessageTokenPressure,
   estimateRenderedPromptTokens,
@@ -16,7 +18,6 @@ import {
 } from "../../sessions/context-token-pressure.js";
 import type { MeasuredRequestContext } from "../prompt-cache-request-observer.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
-import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
 export const PREEMPTIVE_OVERFLOW_ERROR_TEXT =
@@ -112,8 +113,7 @@ function estimateTranscriptBoundaryTokenPressure(
           text: estimateStringTokenPressure,
           image: () => IMAGE_BLOCK_TOKENS,
           json: estimateJsonPayloadTokenPressure,
-          toolResult: (value) =>
-            estimateStringTokenPressure(value, ESTIMATED_CHARS_PER_TOKEN, "tool-result"),
+          toolResult: estimateStringTokenPressure,
         },
         params.systemPrompt,
       )
@@ -275,9 +275,11 @@ export function estimateProjectedRequestTokenPressure(params: {
             ),
         )
     : messages;
-  const estimate = createFreshLlmBoundaryTokenEstimator(
-    anchor ? {} : { ...context, retainCompletionUsage: true },
-  );
+  const estimate = createFreshLlmBoundaryTokenEstimator({
+    ...(anchor ? {} : { ...context, retainCompletionUsage: true }),
+    // Maintenance owns headroom; hard admission prices the request itself.
+    safetyMargin: 1,
+  });
   return {
     estimatedPromptTokens:
       (anchor?.contextTokens ?? 0) + estimate({ messages: appended, prompt: "" }),
@@ -300,27 +302,14 @@ export function resolveProjectedRequestPressure(params: {
     ...params,
     messages: context.messages,
     systemPrompt: context.systemPrompt,
-    toolSchemaTokens: estimateToolSchemaTokenPressure(context.tools),
+    toolSchemaTokens:
+      params.replay && !anchor ? estimateToolSchemaTokenPressure(context.tools) : undefined,
     prompt: "",
     // A current-run anchor already includes any provider-owned compaction prefix.
     replay: anchor ? undefined : params.replay,
     llmBoundaryTokenPressure: estimateProjectedRequestTokenPressure(params),
   });
   return precheck.compactionReplay ?? precheck;
-}
-
-/** Stop before a projected foreground request that no longer fits its budget. */
-export function checkMidTurnPrecheck(
-  params: Parameters<typeof resolveProjectedRequestPressure>[0] & {
-    onPrecheck: (request: MidTurnPrecheckRequest) => void;
-  },
-): void {
-  const decision = resolveProjectedRequestPressure(params);
-  if (decision.route !== "fits") {
-    const request = { ...decision, route: decision.route };
-    params.onPrecheck(request);
-    throw new MidTurnPrecheckSignal(request);
-  }
 }
 
 function resolveCompactionPressureDecision(
@@ -337,18 +326,20 @@ function resolveCompactionPressureDecision(
   });
   const promptBudgetBeforeReserve = Math.max(1, contextTokenBudget - effectiveReserveTokens);
   const overflowTokens = Math.max(0, estimatedPromptTokens - promptBudgetBeforeReserve);
-  const toolResultPotential = estimateToolResultReductionPotential({
-    messages: pressure.messages,
-    contextWindowTokens: params.contextTokenBudget,
-    maxCharsOverride: params.toolResultMaxChars,
-  });
-  const overflowChars = overflowTokens * ESTIMATED_CHARS_PER_TOKEN;
-  const truncationBufferChars = TRUNCATION_ROUTE_BUFFER_TOKENS * ESTIMATED_CHARS_PER_TOKEN;
+  const toolResultReducibleChars =
+    overflowTokens > 0
+      ? estimateToolResultReductionPotential({
+          messages: pressure.messages,
+          contextWindowTokens: params.contextTokenBudget,
+          maxCharsOverride: params.toolResultMaxChars,
+        }).maxReducibleChars
+      : 0;
+  const overflowChars = overflowTokens * CHARS_PER_TOKEN_ESTIMATE;
+  const truncationBufferChars = TRUNCATION_ROUTE_BUFFER_TOKENS * CHARS_PER_TOKEN_ESTIMATE;
   const truncateOnlyThresholdChars = Math.max(
     overflowChars + truncationBufferChars,
     Math.ceil(overflowChars * 1.5),
   );
-  const toolResultReducibleChars = toolResultPotential.maxReducibleChars;
 
   // Choose truncate-only only when available reduction comfortably exceeds the overflow.
   const route: PreemptiveCompactionRoute =

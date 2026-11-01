@@ -399,6 +399,12 @@ synchronous and opaque transaction callback forms remain deprecated through
 2026-12-31, with removal in the first January 2027 stable release. See [session entry migration](/plugins/sdk-migration/how-to-migrate#prepare-session-entry-changes)
 and [transcript migration](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation).
 
+To post a notice into a session's chat without sending it to the model, call
+`appendAssistantMirrorMessageByIdentity` with `text` and
+`deliveryMirror: { kind: "plugin-notice", pluginId, type, data }`. Every client
+shows the text. `data` is JSON that a client can use to render a richer row for a
+notice type it knows. The row is never replayed to the model.
+
 For ordinary session preparation, await `getSessionEntryAsync`,
 `readSessionUpdatedAtAsync`, `getConversationSessionAsync`, or
 `readAmbientTranscriptWatermarkAsync` from `session-store-runtime`. Native command

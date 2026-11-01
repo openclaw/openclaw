@@ -1,8 +1,5 @@
 import type { Model, ModelRequestHeaders, StreamFn, Usage } from "@openclaw/llm-core";
-import {
-  CHARS_PER_TOKEN_ESTIMATE,
-  estimateStringChars,
-} from "@openclaw/normalization-core/cjk-chars";
+import { estimateStringTokenPressure } from "@openclaw/normalization-core/cjk-chars";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentCoreCompletionRuntimeDeps } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
@@ -20,6 +17,7 @@ import {
   MAX_LATEST_USER_REQUEST_CHARS,
   parseCompactionDetails,
 } from "./compaction-details.js";
+import { resolveCompactionThreshold } from "./compaction-threshold.js";
 import { runSummarizationCompletion } from "./summarization-completion.js";
 import { buildSummaryCheckpointPrompt } from "./summary-checkpoint-prompt.js";
 import {
@@ -120,8 +118,7 @@ export function fitCompactionSummary<T extends { summary: string }>(
   render: (maxChars: number) => T | undefined,
 ): Result<T, CompactionError> {
   const fits = (candidate: T) =>
-    tokenBudget === undefined ||
-    estimateStringChars(candidate.summary) / CHARS_PER_TOKEN_ESTIMATE <= tokenBudget;
+    tokenBudget === undefined || estimateStringTokenPressure(candidate.summary) <= tokenBudget;
   const full = render(MAX_COMPACTION_SUMMARY_CHARS);
   if (full && fits(full)) {
     return ok(full);
@@ -265,7 +262,13 @@ export function shouldCompact(
   if (!settings.enabled || !Number.isFinite(contextWindow) || contextWindow <= 0) {
     return false;
   }
-  return contextTokens > contextWindow - settings.reserveTokens;
+  return (
+    contextTokens >
+    resolveCompactionThreshold({
+      contextWindowTokens: contextWindow,
+      reserveTokensFloor: settings.reserveTokens,
+    })
+  );
 }
 
 const SUMMARIZATION_PROMPT = buildSummaryCheckpointPrompt({

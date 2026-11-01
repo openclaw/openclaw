@@ -281,10 +281,18 @@ suite.define(() => {
           await changePicker(agent.locator(".agent-select__menu"), "overlay-after-show", () =>
             agent.getByRole("button", { name: /^Agent:/ }).click(),
           );
-          const reviewer = agent.getByRole("menuitemradio", { name: "Reviewer", exact: true });
+          const reviewer = agent.getByRole("option", { name: "Reviewer", exact: true });
           await reviewer.waitFor();
-          await reviewer.focus();
-          await reviewer.press("Enter");
+          await agent.getByRole("listbox").press("End");
+          await expect
+            .poll(() =>
+              reviewer.evaluate(
+                (element) =>
+                  document.activeElement?.getAttribute("aria-activedescendant") === element.id,
+              ),
+            )
+            .toBe(true);
+          await page.keyboard.press("Enter");
           await expect
             .poll(() => agent.getByRole("button", { name: /^Agent:/ }).textContent())
             .toContain("Reviewer");

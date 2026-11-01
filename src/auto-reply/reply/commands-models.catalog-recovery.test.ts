@@ -153,7 +153,7 @@ it("lists bound models as unavailable when the native-auth plugin is disabled de
   const cfg: OpenClawConfig = {
     agents: {
       defaults: {
-        model: { primary: "anthropic/claude-opus-4-5" },
+        model: { primary: "anthropic/claude-sonnet-4-6" },
         modelPolicy: { allow: [] },
         models: {
           "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },

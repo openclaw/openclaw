@@ -4,7 +4,7 @@ import path from "node:path";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import * as tar from "tar";
 import { normalizeArchivePath } from "../infra/backup-archive-path-policy.js";
-import { tryReadDiskSpace } from "../infra/disk-space.js";
+import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { BACKUP_MAX_DECOMPRESSION_RATIO } from "./backup-shared.js";
 import {
@@ -14,8 +14,142 @@ import {
   readBackupManifestEntry,
 } from "./backup-verify-manifest.js";
 
-export const MAX_DATABASE_SNAPSHOT_EXTRACT_BYTES = 64 * 1024 * 1024 * 1024;
-export const DATABASE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
+const MAX_DATABASE_SNAPSHOT_EXTRACT_BYTES = 64 * 1024 * 1024 * 1024;
+const DATABASE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
+
+export function resolveExtractionBytes(
+  entries: NormalizedArchiveEntry[],
+  sqliteSnapshots = false,
+): number {
+  const label = sqliteSnapshots ? "SQLite snapshot" : "Archive";
+  let totalBytes = 0;
+  for (const entry of entries) {
+    if (!sqliteSnapshots && !isRegularArchiveFile(entry.type)) {
+      continue;
+    }
+    if (!Number.isSafeInteger(entry.size) || (entry.size ?? -1) < 0) {
+      throw new Error(
+        sqliteSnapshots
+          ? `SQLite snapshot has an invalid archive size: ${entry.normalized}`
+          : `Archive regular file has an invalid size: ${entry.normalized}`,
+      );
+    }
+    if (sqliteSnapshots && entry.size === 0) {
+      throw new Error(`SQLite snapshot is empty: ${entry.normalized}`);
+    }
+    totalBytes += entry.size ?? 0;
+    if (!Number.isSafeInteger(totalBytes)) {
+      throw new Error(`${label} extraction size exceeds the supported integer range.`);
+    }
+  }
+  return totalBytes;
+}
+
+export async function assertSnapshotExtractionBudget(params: {
+  entries: NormalizedArchiveEntry[];
+  postgres?: boolean;
+  tempRoot: string;
+  spool: BackupArchiveSpool;
+}): Promise<void> {
+  const label = params.postgres ? "PostgreSQL artifacts" : "SQLite snapshots";
+  const totalBytes = resolveExtractionBytes(params.entries, !params.postgres);
+  if (totalBytes > MAX_DATABASE_SNAPSHOT_EXTRACT_BYTES) {
+    throw new Error(
+      `${label} require ${formatDiskSpaceBytes(totalBytes)} of extraction space; the verification limit is ${formatDiskSpaceBytes(MAX_DATABASE_SNAPSHOT_EXTRACT_BYTES)}.`,
+    );
+  }
+
+  const remainingBytes = totalBytes - params.spool.retainedBytes(params.entries);
+  let diskSpace = tryReadDiskSpace(params.tempRoot);
+  if (
+    diskSpace &&
+    remainingBytes + DATABASE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES > diskSpace.availableBytes
+  ) {
+    // Speculative files must not crowd out the artifacts this pass actually needs.
+    await params.spool.discardExcept(params.entries);
+    diskSpace = tryReadDiskSpace(params.tempRoot);
+  }
+  if (
+    diskSpace &&
+    remainingBytes + DATABASE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES > diskSpace.availableBytes
+  ) {
+    throw new Error(
+      `${label} require ${formatDiskSpaceBytes(remainingBytes)} of extraction space, but only ${formatDiskSpaceBytes(diskSpace.availableBytes)} is available near ${params.tempRoot}; verification reserves ${formatDiskSpaceBytes(DATABASE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES)} for the host.`,
+    );
+  }
+}
+
+export async function assertSqliteSnapshotFileShape(
+  extractedPath: string,
+  archivePath: string,
+  expectedSize: number,
+): Promise<void> {
+  const header = Buffer.alloc(100);
+  const handle = await fs.open(extractedPath, "r");
+  try {
+    const { bytesRead } = await handle.read(header, 0, header.byteLength, 0);
+    if (
+      bytesRead !== header.byteLength ||
+      header.subarray(0, 16).toString("utf8") !== "SQLite format 3\u0000"
+    ) {
+      throw new Error(`SQLite snapshot ${archivePath} has an invalid database header.`);
+    }
+  } finally {
+    await handle.close();
+  }
+
+  const encodedPageSize = header.readUInt16BE(16);
+  const pageSize = encodedPageSize === 1 ? 65_536 : encodedPageSize;
+  const validPageSize = pageSize >= 512 && pageSize <= 65_536 && (pageSize & (pageSize - 1)) === 0;
+  if (!validPageSize || expectedSize % pageSize !== 0) {
+    throw new Error(`SQLite snapshot ${archivePath} has an invalid page layout.`);
+  }
+
+  const changeCounter = header.readUInt32BE(24);
+  const declaredPageCount = header.readUInt32BE(28);
+  const versionValidFor = header.readUInt32BE(92);
+  const hasAuthoritativePageCount = declaredPageCount !== 0 && changeCounter === versionValidFor;
+  if (hasAuthoritativePageCount && declaredPageCount !== expectedSize / pageSize) {
+    throw new Error(`SQLite snapshot ${archivePath} has an invalid page layout.`);
+  }
+}
+
+export async function prepareDatabaseArtifacts(
+  archivePath: string,
+  spool: BackupArchiveSpool,
+  entries: NormalizedArchiveEntry[],
+): Promise<string> {
+  const { directory: tempDir, missing } = await spool.materialize(entries);
+  const byRawPath = new Map(missing.map((entry) => [entry.raw, entry]));
+  if (missing.length) {
+    await tar.x({
+      file: archivePath,
+      gzip: true,
+      maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
+      cwd: tempDir,
+      strict: true,
+      preserveOwner: false,
+      filter: (entryPath, archiveEntry) => {
+        const expected = byRawPath.get(entryPath);
+        if (!expected) {
+          return false;
+        }
+        if (archiveEntry.size !== expected.size) {
+          throw new Error(`Database artifact size changed during verification: ${entryPath}`);
+        }
+        return true;
+      },
+    });
+  }
+  spool.recordExtracted(missing, tempDir);
+  for (const entry of entries) {
+    const stat = await fs.lstat(path.join(tempDir, ...entry.normalized.split("/")));
+    if (!stat.isFile() || stat.size !== entry.size) {
+      throw new Error(`Extracted database artifact does not match archive: ${entry.normalized}`);
+    }
+  }
+  return tempDir;
+}
 
 /** Retain possible databases until a trailing manifest and legacy registry establish ownership. */
 export class BackupArchiveSpool {

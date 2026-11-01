@@ -30,7 +30,7 @@
   min-height: var(--details-row-height, 28px);
   padding: var(--details-row-padding-block, 4px) var(--details-row-padding, 0px);
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background: none;
   color: inherit;
   font: inherit;
@@ -54,7 +54,7 @@
   place-items: center;
   width: 20px;
   height: 20px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   color: hsl(var(--subagent-avatar-hue) var(--subagent-avatar-ink, 32% 65%));
   background: hsl(var(--subagent-avatar-hue) var(--subagent-avatar-tint, 22% 30% / 0.35));
 }
@@ -202,7 +202,7 @@
 
 .chat-details-subagents--mobile {
   --details-subagent-surface: var(--bg-elevated);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--details-subagent-surface);
   font-size: var(--control-ui-text-md);
 }
@@ -232,7 +232,7 @@
 .chat-details-subagents--mobile .chat-details-subagents__row {
   min-height: 44px;
   padding: 10px 12px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
 }
 
 .chat-details-subagents--mobile .chat-details-subagents__name {

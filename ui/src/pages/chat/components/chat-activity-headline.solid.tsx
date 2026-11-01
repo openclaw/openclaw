@@ -129,7 +129,9 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
             <span
               class={[
                 "chat-activity-group__label chat-activity-group__label--live",
-                { "chat-activity-group__label--running": shown()?.status === "running" },
+                {
+                  "chat-activity-group__label--running text-shimmer": shown()?.status === "running",
+                },
               ]}
             >
               {title}

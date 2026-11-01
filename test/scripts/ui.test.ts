@@ -32,6 +32,7 @@ import {
 import { withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeFixtureFiles as writeFiles } from "./z0632-fixtures.test-support.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
 const procSafeRoot = fs.realpathSync(
@@ -51,14 +52,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await receipts.close();
 });
-
-function writeFiles(root: string, files: Record<string, string>): void {
-  for (const [file, bytes] of Object.entries(files)) {
-    const destination = path.join(root, file);
-    fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.writeFileSync(destination, bytes);
-  }
-}
 
 let uiFixtureSources: string[] | undefined;
 function copyUiFixture(root: string, extra: string[] = []): void {

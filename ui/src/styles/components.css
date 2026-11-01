@@ -28,8 +28,6 @@ openclaw-session-progress-hovercard-provider {
 
 .loading-skeleton {
   /* Generic lazy views retain their shimmer; the critical connection frame is static. */
-  --skeleton-highlight: color-mix(in srgb, var(--text) 18%, transparent);
-  --skeleton-duration: 2s;
   display: flex;
   flex-direction: column;
   gap: 32px;
@@ -558,7 +556,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   justify-content: center;
   gap: 6px;
   border: 1px solid var(--border);
-  background: var(--bg-elevated);
+  background: var(--btn-bg, var(--bg-elevated));
   padding: 8px 14px;
   border-radius: var(--radius-md);
   font-size: 13px;
@@ -574,7 +572,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 .btn:hover:where(:not(:disabled, [aria-disabled="true"])) {
-  background: var(--bg-hover);
+  background: var(--btn-bg-hover, var(--bg-hover));
   border-color: var(--border-strong);
 }
 
@@ -2435,7 +2433,7 @@ td.data-table-key-col {
 }
 
 @starting-style {
-  .agent-select__menu.oc-menu:popover-open {
+  .agent-select__menu.oc-menu.oc-overlay:popover-open {
     opacity: 1;
   }
 }
@@ -3431,7 +3429,7 @@ td.data-table-key-col {
 .sidebar-child-session-toggle,
 .session-action,
 .sidebar-session-group-actions {
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   corner-shape: superellipse(1.5);
 }
 

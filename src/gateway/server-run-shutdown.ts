@@ -44,9 +44,11 @@ export async function prepareGatewayRunShutdown(
   });
   const effects = captureGatewaySessionWorkAdmissionInterruption(params.resolveGatewayContext);
   const persistence = new AbortController();
-  // Marker writes share the lifecycle owner's deadline, including worker/writer queueing.
+  // Persistence and subagent settlement share the lifecycle owner's deadline.
   const budget = getProcessCleanupBudget();
-  const persistenceMs = budget ? Math.max(0, budget.deadline - performance.now()) : 1_000;
+  const remainingCleanupMs = () =>
+    budget ? Math.max(0, budget.deadline - performance.now()) : 1_000;
+  const persistenceMs = remainingCleanupMs();
   let failure: { error: unknown } | undefined;
   try {
     await raceWithTimeout(
@@ -66,16 +68,18 @@ export async function prepareGatewayRunShutdown(
     shutdownLog.warn(`Restart marker persistence failed: ${String(error)}`);
     failure = { error };
   }
+  const subagentMs = remainingCleanupMs();
   try {
     await raceWithTimeout(
       async () => params.terminateRunningSubagentsForShutdown?.(),
-      1_000,
+      subagentMs,
       () => {
-        throw new Error("Shutdown subagent settlement did not settle within 1000ms");
+        throw new Error(`Shutdown subagent settlement did not settle within ${subagentMs}ms`);
       },
       { ref: false },
     );
   } catch (error) {
+    shutdownLog.warn(`Subagent settlement failed: ${String(error)}`);
     failure ??= { error };
   }
   stopSession({

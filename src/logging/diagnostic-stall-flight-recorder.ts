@@ -8,6 +8,7 @@ import {
   parseNativeCpuProfile,
   sanitizeDiagnosticProfileFrame,
 } from "./diagnostic-profile.js";
+import { createStallKernelRecorder } from "./diagnostic-stall-kernel.js";
 
 const WINDOW_MS = 5_000;
 const SAMPLE_MS = 25;
@@ -48,8 +49,10 @@ function formatStallFrames(
       self.pop();
     } else if ((deepest[0]?.[1].length ?? 0) > 3) {
       deepest[0]![1].splice(1, 2, "[...]");
-    } else {
+    } else if (self.length) {
       self.pop();
+    } else {
+      deepest.pop();
     }
     report = render();
   }
@@ -58,12 +61,14 @@ function formatStallFrames(
 
 /** Two short native profiles retain recent stacks without a listener or on-demand heap scan. */
 export function createStallFlightRecorder(warn: (message: string) => void) {
+  let kernel: ReturnType<typeof createStallKernelRecorder>;
   let active: v8.SyncCPUProfileHandle | undefined;
   let previous: { json: string; endedAt: number } | undefined;
   let startedAt = 0;
   let disabled = !isMainThread || Boolean(versions.bun) || Number(versions.node.split(".")[0]) < 26;
   let packageRoot: string | null = null;
   const stop = () => {
+    kernel?.stop();
     disabled = true;
     previous = undefined;
     const handle = active;
@@ -86,6 +91,7 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
       packageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
       active = start();
       startedAt = performance.now();
+      kernel = createStallKernelRecorder(warn);
     }
   } catch {
     disabled = true;
@@ -93,6 +99,7 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
   }
   return {
     sample(stall?: { startedAt: number; endedAt: number; task?: string }): string | undefined {
+      const kernelSummary = kernel?.take(stall) ?? "";
       if (disabled || !active || (!stall && performance.now() - startedAt < WINDOW_MS)) {
         return undefined;
       }
@@ -215,7 +222,7 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
           }
         }
         return formatStallFrames(
-          `windowMs=${Math.round(stall.endedAt - stall.startedAt)} windowStartMs=${Math.round(performance.timeOrigin + stall.startedAt)} windowEndMs=${Math.round(performance.timeOrigin + stall.endedAt)} reportedAtMs=${Math.round(performance.timeOrigin + performance.now())} samples=${samples} intervalMs=${SAMPLE_MS} truncated=${truncated}`,
+          `windowMs=${Math.round(stall.endedAt - stall.startedAt)} windowStartMs=${Math.round(performance.timeOrigin + stall.startedAt)} windowEndMs=${Math.round(performance.timeOrigin + stall.endedAt)} reportedAtMs=${Math.round(performance.timeOrigin + performance.now())} samples=${samples} intervalMs=${SAMPLE_MS} truncated=${truncated}${kernelSummary}`,
           counts,
           selfFrames,
           stacks,
