@@ -372,7 +372,7 @@ function* adaptRecipeForBaseline(
     if (
       step.id === "skills" &&
       pinnedVersion &&
-      compareReleaseVersions(pinnedVersion, "2026.10.5") >= 0
+      (compareReleaseVersions(pinnedVersion, "2026.10.5") ?? -1) >= 0
     ) {
       yield {
         id: "skill-workshop-settings",
