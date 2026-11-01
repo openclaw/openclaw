@@ -753,9 +753,10 @@ describe("native Talk control admission", () => {
       expect(appendTranscript).not.toHaveBeenCalled();
 
       owner.control.onTranscript?.("assistant", "Hello world", true);
-      const finals = talkEvents.filter((event) => event.type === "output.text.done");
-      expect(finals).toHaveLength(1);
-      expect((finals[0]?.payload as { text: string }).text).toBe("Hello world");
+      const finals = talkEvents
+        .filter((event) => event.type === "output.text.done")
+        .map((event) => (event.payload as { text: string }).text);
+      expect(finals).toEqual(["Hello world"]);
     } finally {
       await owner.close();
     }
