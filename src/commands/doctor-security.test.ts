@@ -27,6 +27,7 @@ const listReadOnlyChannelPluginsForConfigMock = vi.hoisted(() => vi.fn());
 // mock-isolation: Capture Doctor warnings without rendering terminal UI.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
+// mock-isolation: Doctor warnings use fixture registry plugins, not installed plugin discovery.
 vi.mock("../channels/plugins/read-only.js", () => ({
   listReadOnlyChannelPluginsForConfigAsync: listReadOnlyChannelPluginsForConfigMock,
 }));

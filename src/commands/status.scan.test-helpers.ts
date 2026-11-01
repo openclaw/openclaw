@@ -209,6 +209,7 @@ export async function loadStatusScanModuleForTest(
     mocks.resolveMemorySearchConfig ??
     vi.fn(() => ({ store: { databasePath: "/tmp/main.sqlite" } }));
 
+  // mock-isolation: Status scans drive channel presence from the test mocks, not saved plugin state.
   vi.doMock("../plugins/channel-plugin-ids.js", () => ({
     hasConfiguredChannelsForReadOnlyScope: (params: {
       config: OpenClawConfig;

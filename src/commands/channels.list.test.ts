@@ -56,6 +56,7 @@ vi.mock("../cli/command-secret-targets.js", () => ({
   getChannelsCommandSecretTargetIds: () => new Set<string>(),
 }));
 
+// mock-isolation: Supply exact channel plugins without plugin discovery or saved-auth probes.
 vi.mock("../channels/plugins/read-only.js", () => ({
   listReadOnlyChannelPluginsForConfigAsync: mocks.listReadOnlyChannelPluginsForConfig,
 }));
