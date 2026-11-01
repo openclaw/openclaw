@@ -12,6 +12,7 @@ import {
   closeAgentNotification,
   createClient,
   createNativeModelSourceFixture,
+  deliveredNativeCompletion,
   notifyChildStarted,
   successfulSendInputOutput,
   threadRead,
@@ -123,6 +124,49 @@ describe("native pending assignment inventory through registered monitor admissi
       client.close();
     },
   );
+
+  it("settles a restored active child when its parent receives the native completion first", async () => {
+    const { f, client: firstClient, parent: first } = await startAssignment();
+    await first.unregister();
+    first.closeCaller();
+    firstClient.close();
+
+    const client = createClient();
+    const assignment = { agentPath: "/root/worker", turnId: "child-turn" };
+    client.setThreadRead(
+      "child-thread",
+      threadRead({ ...assignment, status: "inProgress", threadStatus: "active" }),
+    );
+    const recovered = await f.register(client);
+    await recovered.ready;
+    recovered.bindTurn("parent-turn");
+    const consumed = createDeferred<void>();
+    const mutate = f.store.mutate.bind(f.store);
+    vi.spyOn(f.store, "mutate").mockImplementation(async (identity, mutation, assertCurrent) => {
+      const applied = await mutate(identity, mutation, assertCurrent);
+      if (applied && mutation.kind === "consume-native-subagent-assignment") {
+        consumed.resolve();
+      }
+      return applied;
+    });
+
+    client.setThreadRead(
+      "child-thread",
+      threadRead({ ...assignment, result: "The build passed.", resultPhase: "final_answer" }),
+    );
+    client.request.mockClear();
+    await client.notify(deliveredNativeCompletion());
+    expect(client.request).toHaveBeenCalledWith(
+      "thread/read",
+      expect.objectContaining({ threadId: "child-thread" }),
+      expect.anything(),
+    );
+    await consumed.promise;
+    await recovered.unregister();
+    expect(f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual([]);
+    expect(f.deliver).not.toHaveBeenCalled();
+    client.close();
+  });
 
   it.each([
     { rotate: false, observeTurn: true },
