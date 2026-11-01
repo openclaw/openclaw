@@ -23,6 +23,38 @@ const requestBilling: PreparedDecisionBillingFacts = {
 const finalize = (rawUsage: unknown, facts: PreparedDecisionBillingFacts | undefined) =>
   finalizePluginModelUsage({ cfg: {}, estimate: "none", target, preparedBilling: facts, rawUsage });
 
+it.each(["direct", "aggregate"] as const)(
+  "estimates %s cost when no billed total is recorded",
+  (estimate) => {
+    const usage = finalizePluginModelUsage({
+      cfg: {
+        models: {
+          providers: {
+            fixture: {
+              baseUrl: "https://fixture.invalid/v1",
+              models: [
+                {
+                  id: "native",
+                  name: "Native",
+                  reasoning: false,
+                  input: ["text"],
+                  contextWindow: 8192,
+                  maxTokens: 1024,
+                  cost: { input: 2, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      },
+      estimate,
+      target,
+      rawUsage: { input: 100 },
+    });
+    expect(usage).toEqual({ inputTokens: 100, costUsd: 0.0002 });
+  },
+);
+
 it.each([
   ["known route", preparedBilling, {}, 0.0002],
   ["provider billed zero", preparedBilling, { costUsd: 0 }, 0],
