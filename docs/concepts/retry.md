@@ -100,6 +100,7 @@ policy does not wrap arbitrary Git commands run by agents or setup scripts.
 - These text sends could create duplicates, so they retry only when Telegram rejects the request with flood control (429) or the transport proves the request did not start. A reset, timeout, or lost response after sending remains ambiguous and is not replayed.
 - Operations safe to repeat, including preview edits, can retry transient network failures and HTTP 5xx responses without replacing the existing message.
 - Uses `retry_after` when available, otherwise exponential backoff.
+- A reply, delete, or reaction held by flood control stops retrying five minutes after its first attempt and reports the 429. Time spent queued or waiting on Telegram's response counts toward those five minutes.
 - HTML/Markdown parse errors are not retried; they fall back to plain text on the first attempt.
 
 ## Configuration
