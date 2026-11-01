@@ -64,7 +64,7 @@ function readPayload(result: unknown): Record<string, unknown> {
 }
 
 describe("workboard tools", () => {
-  it("passes live invocation authority through the default-on Sessions board factory", async () => {
+  it("reuses Sessions board schemas while binding each run's live invocation authority", async () => {
     const store = createWorkboardSqliteTestStore();
     await startEmptySessionsBoardService(store);
     const board = await store.upsertBoard({ id: "sessions", kind: "sessions" });
@@ -77,14 +77,16 @@ describe("workboard tools", () => {
         throw new Error("Caller authority is no longer active.");
       },
     };
-    const tools =
-      typeof factory === "function"
-        ? factory(context)
-        : "create" in factory
-          ? factory.create(context)
-          : undefined;
-    if (!Array.isArray(tools)) {
+    if (typeof factory === "function" || !("create" in factory)) {
+      throw new Error("Expected the registered version-2 Sessions board factory.");
+    }
+    const tools = factory.create(context);
+    const nextTools = factory.create({ assertInvocationCurrent() {} });
+    if (!Array.isArray(tools) || !Array.isArray(nextTools)) {
       throw new Error("Expected Sessions board tools from the registered factory.");
+    }
+    for (const [index, tool] of tools.entries()) {
+      expect(tool.parameters, tool.name).toBe(nextTools[index]?.parameters);
     }
     for (const [name, input] of [
       ["update", { scope: { includeArchived: true } }],
@@ -101,6 +103,9 @@ describe("workboard tools", () => {
     expect(factory).toMatchObject({ contextVersion: 2 });
     expect(await store.getSessionsBoard("sessions")).toEqual(board);
     expect(await store.listSessionPlacements("sessions")).toEqual([]);
+    await expect(
+      expectDefined(nextTools[0], "Current Sessions board read").execute("live", {}),
+    ).resolves.toMatchObject({ details: { board: { id: "sessions" } } });
   });
 
   it("defaults Sessions board tools only when one Sessions board exists", async () => {

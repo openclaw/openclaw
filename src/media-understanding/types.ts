@@ -9,7 +9,6 @@ export type {
   MediaAttachment,
   MediaUnderstandingCapability,
   MediaUnderstandingCapabilityRegistry,
-  MediaUnderstandingOutput,
 } from "../../packages/media-understanding-common/src/types.js";
 
 export type MediaUnderstandingProviderRequestAuth =
