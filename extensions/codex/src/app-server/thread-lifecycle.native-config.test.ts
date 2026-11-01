@@ -112,6 +112,7 @@ describe("Codex native configuration lifecycle", () => {
     "defer change",
     "revocation",
     "pending handoff",
+    "transient with pending handoff",
   ] as const)(
     "retains an immutable local catalog only when its declarations remain allowed (%s)",
     async (change) => {
@@ -137,6 +138,7 @@ describe("Codex native configuration lifecycle", () => {
         "defer change": [one, { ...two, deferLoading: true }],
         revocation: added,
         "pending handoff": added,
+        "transient with pending handoff": [],
       }[change];
       await writeNativeCatalogFixture(rolloutPath, "old-thread", tools);
       const old = threadStartResult("old-thread", { cwd: workspaceDir });
@@ -176,10 +178,11 @@ describe("Codex native configuration lifecycle", () => {
       if (!binding) {
         throw new Error("expected original settled binding");
       }
-      if (change === "pending handoff") {
+      const handoff = { version: 99, turnId: "previous" };
+      if (change === "pending handoff" || change === "transient with pending handoff") {
         await writeCodexAppServerBinding(sessionFile, {
           ...binding,
-          dynamicToolHandoff: { version: 99, turnId: "previous" },
+          dynamicToolHandoff: handoff,
         });
       }
       if (change === "addition") {
@@ -196,11 +199,28 @@ describe("Codex native configuration lifecycle", () => {
       }
       fixture.seed(native, { loaded: false, subscribed: false });
       fixture.request.mockClear();
-      const result = await startOrResumeThread({
+      const next = startOrResumeThread({
         ...common,
         dynamicTools: after,
         availableDynamicTools: change === "revocation" ? [one] : after,
       });
+      if (change === "pending handoff") {
+        await expect(next).rejects.toThrow("The previous Codex task is preserved");
+        expect(fixture.request.mock.calls.some(([name]) => name === "thread/start")).toBe(false);
+        expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+          threadId: "old-thread",
+          dynamicToolHandoff: handoff,
+        });
+        return;
+      }
+      const result = await next;
+      if (change === "transient with pending handoff") {
+        expect(result.lifecycle.preserveExistingBinding).toBe(true);
+        expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+          threadId: "old-thread",
+          dynamicToolHandoff: handoff,
+        });
+      }
       if (change === "addition") {
         expect(result.threadId).toBe("old-thread");
         expect(result.lifecycle.retainedDynamicTools).toEqual(tools);

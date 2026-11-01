@@ -669,7 +669,13 @@ export async function startOrResumeThread(
     assertCodexBindingMayBeReplaced(binding, "starting a fresh native thread", expectedOwnership);
     const requestContext = await prepareRequestContext();
     if (saved) {
-      await assertCodexThreadReplacementSafe(params, saved, requestContext, replacementOperation);
+      await assertCodexThreadReplacementSafe(
+        params,
+        saved,
+        requestContext,
+        replacementOperation,
+        preserveExistingBinding,
+      );
     }
     if (initialBoundThreadId && !preserveExistingBinding && !configuredMcpOwnershipChanged) {
       await releaseRetainedThread(initialBoundThreadId);
