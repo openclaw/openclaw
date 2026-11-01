@@ -2,13 +2,12 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread, threadId } from "node:worker_threads";
 import { normalizeWindowsPathForComparison } from "@openclaw/fs-safe/path";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { SubsystemLogger } from "../logging/subsystem.js";
 import { AsyncContext } from "../shared/async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { readThreadDiskReadBytes } from "./thread-disk-io.js";
 
 const HEAVY_READ_BYTES = 64 * 1024 * 1024;
-const log = createSubsystemLogger("sqlite/transaction");
 
 export type SqliteReaderOwner = {
   operation: string;
@@ -97,15 +96,18 @@ export function withSqliteReaderOwner<T>(
   owner: SqliteReaderOwner,
   operation: () => T,
   holdContext?: SqliteOperationHoldContext,
+  /** Reader workers supply the sink to keep logging out of shared lifecycle imports. */
+  logger?: Pick<SubsystemLogger, "warn">,
 ): T;
 export function withSqliteReaderOwner<T>(
   owner: SqliteReaderOwner,
   operation: () => T | Promise<T>,
   holdContext?: SqliteOperationHoldContext,
+  logger?: Pick<SubsystemLogger, "warn">,
 ): T | Promise<T> {
   const parent = readerOwners.getStore();
   const before =
-    !parent && !isMainThread && owner.ownerKind === "worker"
+    logger && !parent && !isMainThread && owner.ownerKind === "worker"
       ? readThreadDiskReadBytes()
       : undefined;
   const diskRead: { context?: SqliteOperationHoldContext } | undefined =
@@ -125,7 +127,7 @@ export function withSqliteReaderOwner<T>(
       },
     },
     () => {
-      if (before === undefined || !diskRead) {
+      if (before === undefined || !diskRead || !logger) {
         return operation();
       }
       const finish = () => {
@@ -134,7 +136,7 @@ export function withSqliteReaderOwner<T>(
           if (after === undefined || after - before < HEAVY_READ_BYTES) {
             return;
           }
-          log.warn("heavy SQLite reader operation", {
+          logger.warn("heavy SQLite reader operation", {
             operation: boundedOperation(owner.operation),
             readBytes: after - before,
             elapsedMs: Date.now() - startedAtMs,

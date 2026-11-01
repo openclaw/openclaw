@@ -187,17 +187,19 @@ if (isMainThread) {
   assert.equal(evict.status, 0, evict.stderr);
   const cold = new DatabaseSync(workerData.filename, { readOnly: true });
   cold.exec("PRAGMA mmap_size=0; PRAGMA cache_size=-2048");
+  const ownerModule = values["owner-module"] ? await import(values["owner-module"]) : undefined;
   const before = readThreadDiskReadBytes();
   const selected = Math.min(16, workerData.events);
   const read = () =>
     cold
       .prepare("SELECT sum(length(substr(payload,1))) AS bytes FROM events WHERE session_id < ?")
       .get(selected);
-  const result = values["owner-module"]
-    ? (await import(values["owner-module"])).withSqliteReaderOwner(
+  const result = ownerModule
+    ? ownerModule.withSqliteReaderOwner(
         { operation: "synthetic.session-scan", ownerKind: "worker" },
         read,
         { agentId: "synthetic", sessions: selected, rows: Math.ceil(events / sessions) * selected },
+        ownerModule.createSubsystemLogger("sqlite/transaction"),
       )
     : read();
   const after = readThreadDiskReadBytes();

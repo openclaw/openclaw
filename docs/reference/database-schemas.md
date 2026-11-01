@@ -216,7 +216,7 @@ reader stays warm for up to 90 idle seconds to avoid repeated startup work.
 Retirement uses the pool's existing task and native-resource settlement so an
 active read or retained lease is not interrupted.
 
-On Linux, named SQLite worker operations sample `/proc/thread-self/io` at entry
+On Linux, transcript and shared-state SQLite readers sample `/proc/thread-self/io` at entry
 and completion. An operation that incurs at least 64 MiB of kernel-accounted
 storage reads emits one `heavy SQLite reader operation` warning through the
 existing logger, including `operation`, `readBytes`, `elapsedMs`, and worker IDs.

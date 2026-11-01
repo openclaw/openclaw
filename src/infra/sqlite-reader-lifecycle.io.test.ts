@@ -13,13 +13,6 @@ vi.mock("node:worker_threads", async (original) => ({
   ...(await original<typeof import("node:worker_threads")>()),
   isMainThread: false,
 }));
-vi.mock("../logging/subsystem.js", async (original) => {
-  const actual = await original<typeof import("../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (name: string) => ({ ...actual.createSubsystemLogger(name), warn }),
-  };
-});
 const resources = sqliteMaintenanceFixture();
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 beforeEach(() => {
@@ -75,6 +68,7 @@ it.each(["sync", "async", "rejected"])(
               return 42;
             },
         { agentId: "synthetic-agent" },
+        { warn },
       );
     if (kind === "rejected") {
       await expect(run()).rejects.toThrow("original failure");
@@ -106,16 +100,22 @@ it.each([
   [0, new Error("ENOENT")],
 ])("keeps small or unavailable counters silent (%s, %s)", (before, after) => {
   procfs(before, after);
-  expect(withSqliteReaderOwner({ operation: "small", ownerKind: "worker" }, () => 42)).toBe(42);
+  expect(
+    withSqliteReaderOwner({ operation: "small", ownerKind: "worker" }, () => 42, undefined, {
+      warn,
+    }),
+  ).toBe(42);
   expect(warn).not.toHaveBeenCalled();
 });
 
 it("does not read procfs off Linux or for main-thread owners", () => {
   const read = procfs(0, 999999999);
-  withSqliteReaderOwner({ operation: "main", ownerKind: "main" }, () => 42);
+  withSqliteReaderOwner({ operation: "main", ownerKind: "main" }, () => 42, undefined, { warn });
   Object.defineProperty(process, "platform", { value: "darwin" });
   expect(readThreadDiskReadBytes()).toBeUndefined();
-  withSqliteReaderOwner({ operation: "worker", ownerKind: "worker" }, () => 42);
+  withSqliteReaderOwner({ operation: "worker", ownerKind: "worker" }, () => 42, undefined, {
+    warn,
+  });
   expect(read).not.toHaveBeenCalled();
 });
 
@@ -125,8 +125,13 @@ it("preserves the synchronous failure when the heavy-read sink throws", () => {
     throw new Error("sink failed");
   });
   expect(() =>
-    withSqliteReaderOwner({ operation: "failed", ownerKind: "worker" }, () => {
-      throw new Error("original failure");
-    }),
+    withSqliteReaderOwner(
+      { operation: "failed", ownerKind: "worker" },
+      () => {
+        throw new Error("original failure");
+      },
+      undefined,
+      { warn },
+    ),
   ).toThrow("original failure");
 });
