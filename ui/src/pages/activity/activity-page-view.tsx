@@ -470,6 +470,7 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
             >
               <Menu
                 id="activity-live-actions"
+                pointerFocus="trigger"
                 label={t("common.moreActions")}
                 placement="bottom-end"
                 trigger={<Icon name="moreHorizontal" />}
