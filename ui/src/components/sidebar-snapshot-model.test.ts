@@ -52,6 +52,20 @@ it("retains pin action geometry without restoring mutation authority", () => {
   ]);
 });
 
+it("retains a collapsed parent's disclosure without inventing loaded children", () => {
+  const row = projectSidebarSession({
+    key: "agent:main:parent",
+    childSessions: ["agent:main:child", "agent:main:dashboard:incognito-private"],
+  });
+  const saved = parse({ pinnedSessions: JSON.parse(JSON.stringify(snapshotSessions([row]))) });
+  const restored = restoreSnapshotSession(saved!.pinnedSessions[0]!, "");
+  expect(restored.children).toEqual([]);
+  expect(restored.childSessionKeys).toEqual([]);
+  expect(restored.snapshot).toMatchObject({ childCount: 1 });
+  const recaptured = snapshotSessions([restored]);
+  expect(recaptured[0]?.state).toMatchObject({ childCount: 1 });
+});
+
 it.each(["none", "error"] as const)(
   "restores only own failure attention (%s) from older snapshots",
   (ownAttention) => {
