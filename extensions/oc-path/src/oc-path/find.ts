@@ -312,10 +312,9 @@ function dispatchSeg<T extends object, Child extends object>(
 const jsoncOps: WalkOps<JsoncValue> = {
   *enumerate(node, matches) {
     if (node.kind === "object") {
-      const entries = node.entries;
       // Duplicate keys: yield only the last (effective) occurrence of each key.
-      const lastIndex = new Map(entries.map((e, idx) => [e.key, idx]));
-      for (const [idx, e] of entries.entries()) {
+      const lastIndex = new Map(node.entries.map((e, idx) => [e.key, idx]));
+      for (const [idx, e] of node.entries.entries()) {
         if (lastIndex.get(e.key) === idx && (!matches || matches(e.value))) {
           yield { keySub: quoteSeg(e.key), child: e.value };
         }
