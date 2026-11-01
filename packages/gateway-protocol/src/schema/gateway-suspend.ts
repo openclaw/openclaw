@@ -52,6 +52,7 @@ export const GatewaySuspendPrepareParamsSchema = closedObject({
   requestId: SuspensionTokenSchema,
   terminalPolicy: Type.Optional(Type.Union([Type.Literal("preserve"), Type.Literal("terminate")])),
   drain: Type.Optional(Type.Boolean()),
+  plannedDeadlineMs: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
 });
 
 export const GatewaySuspendPrepareBusyResultSchema = closedObject({

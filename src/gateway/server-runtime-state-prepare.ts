@@ -7,6 +7,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { isGatewayWaitingForPlannedRollout } from "../infra/gateway-suspend-coordinator.js";
 import { loadGatewayTlsServerRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
@@ -454,6 +455,7 @@ export async function prepareGatewayKernelState(params: {
   const getReadiness = createReadinessChecker({
     channelManager,
     ...startupCheckerDeps,
+    getPlannedDrain: () => !lifecycle.closePreludeStarted && isGatewayWaitingForPlannedRollout(),
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
     getStateDatabaseFailure: () =>
       openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(resolveDatabasePath()),

@@ -49,6 +49,20 @@ describe("gateway suspension protocol", () => {
     ).toBe(false);
   });
   it("keeps prepare params closed and bounded", () => {
+    expect(
+      validateGatewaySuspendPrepareParams({
+        requestId: "rollout",
+        drain: true,
+        plannedDeadlineMs: 1_800_001,
+      }),
+    ).toBe(true);
+    expect(
+      validateGatewaySuspendPrepareParams({
+        requestId: "rollout",
+        drain: true,
+        plannedDeadlineMs: -1,
+      }),
+    ).toBe(false);
     expect(validateGatewaySuspendPrepareParams({ requestId: "host-request" })).toBe(true);
     expect(
       validateGatewaySuspendPrepareParams({

@@ -67,7 +67,11 @@ export const suspendHandlers: GatewayRequestHandlers = {
     respond(true, result.value);
   },
   "gateway.suspend.prepare": async ({ respond, params, context }) => {
-    if (!validateGatewaySuspendPrepareParams(params)) {
+    if (
+      !validateGatewaySuspendPrepareParams(params) ||
+      (params.plannedDeadlineMs !== undefined &&
+        (params.drain !== true || params.terminalPolicy === "terminate"))
+    ) {
       respond(false, undefined, invalidParams("gateway.suspend.prepare"));
       return;
     }
@@ -76,6 +80,7 @@ export const suspendHandlers: GatewayRequestHandlers = {
       requestId,
       terminalPolicy: params.terminalPolicy ?? "preserve",
       ...(params.drain === true ? { drain: true } : {}),
+      plannedDeadlineMs: params.plannedDeadlineMs,
       pauseScheduling: () => context.cron.pauseScheduling(),
       resumeScheduling: () => context.cron.resumeScheduling(),
       inspect: createGatewayServerActiveWorkInspectors(context),

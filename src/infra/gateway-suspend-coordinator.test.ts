@@ -21,6 +21,7 @@ import {
 import { createGatewayActiveWorkSnapshot } from "./gateway-active-work.js";
 import {
   getGatewaySuspendStatus,
+  isGatewayWaitingForPlannedRollout,
   prepareGatewaySuspend,
   resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
@@ -43,6 +44,36 @@ afterEach(() => {
 });
 
 describe("gateway suspend coordinator", () => {
+  it("reports a planned drain only during the original waiting period", () => {
+    let now = 1_000;
+    const deadline = now + 60_000;
+    const prepare = {
+      requestId: "rollout",
+      drain: true,
+      inspect: inspectors({ getPendingReplies: () => 1 }),
+      nowMs: () => now,
+      createSuspensionId: () => "owned",
+      pauseScheduling: vi.fn(),
+      resumeScheduling: vi.fn(),
+    };
+    expect(prepareGatewaySuspend(prepare).status).toBe("draining");
+    expect(isGatewayWaitingForPlannedRollout()).toBe(false);
+    expect(resumeGatewaySuspend("owned").ok).toBe(true);
+    expect(prepareGatewaySuspend({ ...prepare, plannedDeadlineMs: deadline }).status).toBe(
+      "draining",
+    );
+    expect(isGatewayWaitingForPlannedRollout()).toBe(true);
+    expect(prepareGatewaySuspend({ ...prepare, plannedDeadlineMs: deadline + 1 }).status).toBe(
+      "conflict",
+    );
+    now = deadline;
+    expect(prepareGatewaySuspend({ ...prepare, plannedDeadlineMs: deadline }).status).toBe(
+      "draining",
+    );
+    expect(isGatewayWaitingForPlannedRollout()).toBe(false);
+    expect(resumeGatewaySuspend("owned").ok).toBe(true);
+  });
+
   it.each([false, true])(
     "lifecycle reset resumes a held scheduler before admission is cleared (drain: %s)",
     (drain) => {
