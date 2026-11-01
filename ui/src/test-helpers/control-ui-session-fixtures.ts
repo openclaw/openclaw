@@ -46,6 +46,7 @@ export function createControlUiSessionRow(
       modelProvider: "openai",
       status: "done",
       totalTokens: 0,
+      workspaceReadDisabledReason: null,
       updatedAt,
     },
     options,
@@ -129,6 +130,7 @@ export function createControlUiSessionFixtures(
     records.set(key, {
       row: {
         sessionId: `session:${key}`,
+        workspaceReadDisabledReason: null,
         ...fixture,
         key,
         archivedAt,

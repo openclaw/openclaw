@@ -93,6 +93,9 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey), {
           waitUntil: "domcontentloaded",
         });
+        // Start this handoff check after the static frame moves, so a touch gesture
+        // cannot land on its retired layout before keyboard input begins.
+        await page.locator("#openclaw-boot-shell").waitFor({ state: "detached" });
         const boot = page.locator("#openclaw-boot-composer");
         await boot.waitFor({ state: "visible" });
         // Like the chat composer, it takes focus only from the operator.
@@ -102,6 +105,7 @@ suite.define(() => {
         } else {
           await boot.click();
         }
+        await expect.poll(() => boot.evaluate((el) => el === document.activeElement)).toBe(true);
         const text =
           options.isMobile && options.viewport.width > options.viewport.height
             ? "First line\nSecond line\nThird line\nFourth line"
@@ -128,8 +132,6 @@ suite.define(() => {
               editor.scrollTop,
             ].map(Math.round);
           });
-        // Module startup moves the editor out of the static frame first.
-        await page.locator("#openclaw-boot-shell").waitFor({ state: "detached" });
         const before = await geometry(".loading-skeleton__composer:has(#openclaw-boot-composer)");
         // Every frame keeps one stationary composer, its visible draft and scroll position.
         await page.evaluate(() => {

@@ -3,6 +3,7 @@ import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.j
 import { isCronWithinActiveHours } from "../active-hours.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { resolveCronOwnerTransferRecoveryError } from "../human-owner.js";
 import { readDefaultProactiveJobReceiptsByKeyAsync } from "../proactive-job-receipt.js";
 import { isProactiveJobMigrationPending } from "../proactive-job-receipt.kernel.js";
 import { resolveCronRunAdmissionSource } from "../run-authority.js";
@@ -54,6 +55,10 @@ export async function executeJobCore(
   });
   if (abortSignal?.aborted) {
     return resolveAbortError();
+  }
+  const ownerTransferError = resolveCronOwnerTransferRecoveryError(job);
+  if (ownerTransferError) {
+    return { status: "error", error: ownerTransferError, executionStarted: false };
   }
   const executionBlockReason = describeCronHostExecutionRestriction(
     job,

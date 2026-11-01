@@ -46,10 +46,6 @@ vi.mock("../../agents/exec-defaults.js", () => ({
     resolve: (file: ExecApprovalsFile) => ({ ...mocks.policy, ...file.defaults }),
   }),
 }));
-// mock-isolation: Prepared session classification is unrelated to this fixture's transport and effect checks.
-vi.mock("../../agents/sandbox/runtime-status.js", () => ({
-  resolveSandboxRuntimeStatus: () => ({}),
-}));
 // mock-isolation: The live reader is injected; worker publication and SQL-free reads have their owning store integration proof.
 vi.mock("../../infra/exec-approvals-store.js", () => ({
   prepareExecApprovalsCurrentRead: async () => () => ({

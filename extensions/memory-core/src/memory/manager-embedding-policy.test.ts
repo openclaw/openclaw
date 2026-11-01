@@ -12,28 +12,26 @@ function expectDelayBetween(delayMs: number | undefined, min: number, max: numbe
   expect(delayMs).toBeLessThanOrEqual(max);
 }
 
-/**
- * Probes the frozen retry-class boundary through the public retry loop:
- * a permanent error stops after one call, a retryable one runs to its
- * class's exhaustion count (3 for transient, 5 for rate-limit).
- */
-async function probeRetryAttempts(
+/** Exercise classification and terminal settlement through the actual retry loop. */
+async function expectRetryAttempts(
   message: string,
+  expectedCalls: number,
   profile: "index" | "query" = "index",
-): Promise<number> {
+): Promise<void> {
+  const failure = new Error(message);
   const run = vi.fn(async () => {
-    throw new Error(message);
+    throw failure;
   });
-  try {
-    await runMemoryEmbeddingRetryLoop({
+  const waitForRetry = vi.fn(async () => {});
+  await expect(
+    runMemoryEmbeddingRetryLoop({
       profile,
       run,
-      waitForRetry: async () => {},
-    });
-  } catch {
-    // Expected: the loop always rejects since `run` never succeeds.
-  }
-  return run.mock.calls.length;
+      waitForRetry,
+    }),
+  ).rejects.toBe(failure);
+  expect(run).toHaveBeenCalledTimes(expectedCalls);
+  expect(waitForRetry).toHaveBeenCalledTimes(expectedCalls - 1);
 }
 
 async function probeBatchSplits(message: string): Promise<boolean> {
@@ -331,25 +329,6 @@ describe("memory embedding policy", () => {
     }
   });
 
-  it("preserves permanent provider error identity without retrying", async () => {
-    const permanentError = new Error("embedding validation failed");
-    const run = vi.fn(async () => {
-      throw permanentError;
-    });
-    const waitForRetry = vi.fn(async () => {});
-
-    await expect(
-      runMemoryEmbeddingRetryLoop({
-        profile: "index",
-        run,
-        waitForRetry,
-      }),
-    ).rejects.toBe(permanentError);
-
-    expect(run).toHaveBeenCalledOnce();
-    expect(waitForRetry).not.toHaveBeenCalled();
-  });
-
   const RETRY_BOUNDARY_FIXTURES: Array<{
     label: string;
     profile?: "index" | "query";
@@ -439,7 +418,7 @@ describe("memory embedding policy", () => {
   it.each(RETRY_BOUNDARY_FIXTURES)(
     "retries $label for $expectedCalls total attempt(s)",
     async ({ profile, message, expectedCalls }) => {
-      expect(await probeRetryAttempts(message, profile)).toBe(expectedCalls);
+      await expectRetryAttempts(message, expectedCalls, profile);
     },
   );
 
@@ -679,27 +658,6 @@ describe("memory embedding policy", () => {
     expect(result).toBe("ok");
     expect(calls).toBe(2);
     expectDelayBetween(waits[0], 4000, 6000);
-  });
-
-  it("stops after the transient attempt budget", async () => {
-    const run = vi.fn(async () => {
-      throw new Error("TypeError: fetch failed | other side closed");
-    });
-    const waits: number[] = [];
-
-    await expect(
-      runMemoryEmbeddingRetryLoop({
-        profile: "index",
-        run,
-        waitForRetry: async (delayMs) => {
-          waits.push(delayMs);
-        },
-      }),
-    ).rejects.toThrow("fetch failed");
-
-    expect(run).toHaveBeenCalledTimes(3);
-    expectDelayBetween(waits[0], 400, 600);
-    expectDelayBetween(waits[1], 800, 1200);
   });
 
   it("splits transport-failed batches after retries are exhausted", async () => {

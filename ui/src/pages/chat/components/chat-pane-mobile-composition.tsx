@@ -508,10 +508,9 @@ export function ChatPaneMobileComposition(props: {
   // One native menu also serves desktop/native-command callers. Its page roots
   // outlive the placement of the trigger in either header.
   const sessionCommandsAvailable = () =>
-    mobile()
-      ? !props.header.gatewayStatus?.kind || props.header.gatewayStatus.kind === "connected"
-      : props.header.gatewayStatus?.kind !== "offline" &&
-        props.header.gatewayStatus?.kind !== "reconnecting";
+    !mobile() ||
+    !props.header.gatewayStatus?.kind ||
+    props.header.gatewayStatus.kind === "connected";
   // Keep the trigger mounted as metadata arrives or the connection changes so keyboard focus survives.
   const sessionMenuAction = () =>
     sessionCommandsAvailable() ? props.header.sessionMenuAction : undefined;
@@ -519,10 +518,9 @@ export function ChatPaneMobileComposition(props: {
     <Show
       when={
         mobile() ||
-        (sessionCommandsAvailable() &&
-          (props.header.sessionMenuAction ||
-            (!props.header.actionsDisabled &&
-              (desktopSessionActions().length > 0 || desktopViewActions().length > 0))))
+        props.header.sessionMenuAction ||
+        (!props.header.actionsDisabled &&
+          (desktopSessionActions().length > 0 || desktopViewActions().length > 0))
       }
     >
       <span>

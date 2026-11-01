@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { inferKind } from "../../dispatch.js";
+import { findOcPaths } from "../../find.js";
 import { parseOcPath } from "../../oc-path.js";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "../../sentinel.js";
 import { resolveOcPath, setOcPath } from "../../universal.js";
 import { insertYamlOcPath, setYamlOcPath } from "../../yaml/edit.js";
 import { parseYaml } from "../../yaml/parse.js";
 
-const LOBSTER = "name: inbox-triage\nsteps:\n  - id: fetch\n  - id: classify\n";
+const LOBSTER = "name: &name inbox-triage\nalias: *name\nsteps:\n  - id: fetch\n  - id: classify\n";
 const MALFORMED = "key: value\n  bad indent: oops\n";
 const path = (address: string) => parseOcPath(`oc://workflow.yaml/${address}`);
 const set = (raw: string, address: string, value: string) =>
@@ -37,12 +38,8 @@ describe("YAML", () => {
   });
 
   it("replaces the selected numeric source even when its rounded value is unchanged", () => {
-    const result = set(
-      "untouched: 9007199254740993\nselected: 1.0000000000000001\n",
-      "selected",
-      "1",
-    );
-    expect(result.raw).toBe("untouched: 9007199254740993\nselected: 1\n");
+    const raw = "untouched: 9007199254740993\nselected: 1.0000000000000001\n";
+    expect(set(raw, "selected", "1").raw).toBe("untouched: 9007199254740993\nselected: 1\n");
   });
   it.each([
     [LOBSTER, "missing", "unresolved"],
@@ -53,19 +50,16 @@ describe("YAML", () => {
   });
 
   it("reports parse-error before inserting into a malformed document", () => {
-    expect(() =>
-      insertYamlOcPath(
-        parseYaml(MALFORMED),
-        parseOcPath("oc://workflow.yaml"),
-        { kind: "keyed", key: "next" },
-        "x",
-      ),
-    ).toThrow(error("parse-error"));
+    const ast = parseYaml(MALFORMED);
+    const root = parseOcPath("oc://workflow.yaml");
+    const insert = () => insertYamlOcPath(ast, root, { kind: "keyed", key: "next" }, "x");
+    expect(insert).toThrow(error("parse-error"));
   });
 
   it.each([
     [LOBSTER, "steps/$first/id", "fetch-renamed", "id: fetch-renamed"],
     [LOBSTER, "steps/$last/id", "classify-renamed", "id: classify-renamed"],
+    [LOBSTER, "alias", "renamed", "alias: renamed"],
     ["config:\n  a: 1\n  b: 2\n  c: 3\n", "config/$first", 99, "a: 99"],
     ["config:\n  a: 1\n  b: 2\n  c: 3\n", "config/$last", 99, "c: 99"],
   ])("edits %s at %s", (raw, address, value, expected) => {
@@ -89,6 +83,7 @@ describe("YAML", () => {
 
   it.each([
     [LOBSTER, "name", { kind: "leaf", valueText: "inbox-triage", leafType: "string" }],
+    [LOBSTER, "alias", { kind: "leaf", valueText: "inbox-triage", leafType: "string" }],
     [LOBSTER, "steps.0", { kind: "node", descriptor: "yaml-map" }],
     ["name: inbox\n", "+owner", { kind: "insertion-point", container: "yaml-map" }],
     ["- a\n", "+", { kind: "insertion-point", container: "yaml-seq" }],
@@ -144,5 +139,10 @@ describe("YAML", () => {
     ["items: []\n", "items/+", `{"${REDACTED_SENTINEL}":"2"}`],
   ])("rejects sentinel-bearing YAML before raw emit: %s at %s", (raw, address, value) => {
     expect(() => set(raw, address, value)).toThrow(OcEmitSentinelError);
+  });
+  it("stops recursive alias cycles without dropping the first edge", () => {
+    const ast = parseYaml("root: &root\n  label: ok\n  self: *root\n");
+    const matches = findOcPaths(ast, path("**/label"));
+    expect(matches.map(({ path: p }) => p.section)).toEqual(["root", "root.self"]);
   });
 });

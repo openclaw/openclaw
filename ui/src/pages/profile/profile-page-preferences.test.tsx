@@ -92,7 +92,13 @@ it.each([
       expect(toggle).toMatchObject({ disabled: false, checked: enabled });
     });
     expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
-      ["users.self", "users.listModelAccounts", "users.prefs.get"].toSorted(),
+      [
+        "users.self",
+        "users.listModelAccounts",
+        "users.prefs.get",
+        "users.channelIdentity",
+        "users.channelIdentity",
+      ].toSorted(),
     );
     expect(page.querySelector(".identity-github-form")).toBeNull();
     if (updated === undefined) {
@@ -105,7 +111,14 @@ it.each([
     );
     await waitForFast(() => expect(toggle?.checked).toBe(updated));
     expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
-      ["users.self", "users.listModelAccounts", "users.prefs.get", "users.prefs.set"].toSorted(),
+      [
+        "users.self",
+        "users.listModelAccounts",
+        "users.prefs.get",
+        "users.prefs.set",
+        "users.channelIdentity",
+        "users.channelIdentity",
+      ].toSorted(),
     );
   },
 );

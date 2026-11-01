@@ -292,7 +292,7 @@ it.each([
 
   mocks.roleScopes = ["operator.approvals"];
   expect(() => read.currentSession()).toThrow(
-    "GitHub requires current operator.sessions.read permission.",
+    "Personal profile requires current operator.sessions.read permission.",
   );
 });
 

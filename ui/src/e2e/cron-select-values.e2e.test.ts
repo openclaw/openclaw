@@ -106,6 +106,14 @@ suite.define(() => {
             await page.locator("#cron-name").fill("Garden keyboard task");
           }
           await page.keyboard.press("Tab");
+          if (mode === "edit") {
+            await page.keyboard.press("Tab");
+            expect(
+              await page
+                .locator("#cron-owner-profile-id")
+                .evaluate((element) => element.matches(":focus")),
+            ).toBe(true);
+          }
           await page.keyboard.press("Tab");
           await page.keyboard.press("Tab");
           const interval = page.locator('[data-test-id="cron-schedule-kind-every"]');

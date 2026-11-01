@@ -477,9 +477,7 @@ export function installEmbeddedAttemptStreamGuards(
         )
           ? previous
           : undefined;
-      if (input.activeContextEngine?.info.ownsCompaction || request.requestIndex > 1) {
-        contextGuards.checkMidTurnPrecheck({ context: args[1], previousRequest });
-      }
+      contextGuards.checkMidTurnPrecheck({ context: args[1], previousRequest });
       if (args[0].api === "openai-completions") {
         measuredRequestPressure.set(
           args[0],

@@ -8,6 +8,9 @@ import { stripNodeTypeScriptTypes } from "../helpers/node-toolchain.js";
 const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
 const adapter = source.match(/^function dispatchFullReleaseUsingHelper\([\s\S]*?^\}/mu)![0];
 const quote = source.match(/^function shellQuote\([\s\S]*?^\}/mu)![0];
+const dispatchSource = stripNodeTypeScriptTypes(
+  adapter + "\n" + quote + "\ndispatchFullReleaseUsingHelper;",
+);
 const candidate = "a".repeat(40);
 const publisher = "b".repeat(40);
 const options = {
@@ -38,22 +41,19 @@ describe("candidate checklist retained dispatch recovery", () => {
         admission: { phase: "observed" },
         run: null,
       };
-      const dispatch = runInNewContext(
-        stripNodeTypeScriptTypes(adapter + "\n" + quote + "\ndispatchFullReleaseUsingHelper;"),
-        {
-          DEFAULT_REPO: "openclaw/openclaw",
-          TOOLING_ROOT: "/trusted/publisher",
-          process: { execPath: "/runtime/node" },
-          existsSync: () => true,
-          resolvePath: resolve,
-          join,
-          releaseBranchForTag: () => "release/2026.9.1",
-          publicationSelectionForChecklist: () => ({ route: "normal", npmDistTag: "latest" }),
-          run,
-          readJson: () => record,
-          isRecord,
-        },
-      ) as (options: object, candidate: string, publisher: string) => string;
+      const dispatch = runInNewContext(dispatchSource, {
+        DEFAULT_REPO: "openclaw/openclaw",
+        TOOLING_ROOT: "/trusted/publisher",
+        process: { execPath: "/runtime/node" },
+        existsSync: () => true,
+        resolvePath: resolve,
+        join,
+        releaseBranchForTag: () => "release/2026.9.1",
+        publicationSelectionForChecklist: () => ({ route: "normal", npmDistTag: "latest" }),
+        run,
+        readJson: () => record,
+        isRecord,
+      }) as (options: object, candidate: string, publisher: string) => string;
       const flag = resumable ? "--resume-request" : "--reconcile-request";
       expect(() => dispatch(options, candidate, publisher)).toThrow(
         "Next: pnpm ci:full-release -- " +

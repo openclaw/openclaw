@@ -27,6 +27,8 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     harness.resolveEffectiveAgentRuntimeMock.mockReturnValue("codex");
 
     const result = await runJob({
+      ownerProfileId: "legacy-owner",
+      createdActor: { type: "human", source: "profile", id: "legacy-owner" },
       runtimeAuthorityRecoveryRequired: true,
       payload: { kind: "agentTurn", message: "use calendar", toolsAllow: ["read"] },
     });
@@ -35,6 +37,18 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     expect(harness.runEmbeddedAgentMock).toHaveBeenCalledWith(
       expect.objectContaining({ scheduledRuntimeAuthorityRecoveryRequired: true }),
     );
+  });
+
+  it("does not reuse ambient credentials after human ownership transfer", async () => {
+    const result = await runJob({
+      ownerProfileId: "new-human-owner",
+      ownerTransferPending: true,
+      runtimeAuthorityRecoveryRequired: true,
+    });
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("fresh execution authority");
+    expect(harness.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(harness.runCliAgentMock).not.toHaveBeenCalled();
   });
 
   it.each([

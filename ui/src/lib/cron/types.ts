@@ -22,6 +22,7 @@ export type CronFormState = {
   name: string;
   description: string;
   agentId: string;
+  ownerProfileId: string;
   sessionKey: string;
   clearAgent: boolean;
   enabled: boolean;

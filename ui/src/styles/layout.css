@@ -1155,7 +1155,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   gap: 8px;
   min-height: 30px;
   padding-inline: calc(var(--sidebar-inset) + 2px) 8px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   corner-shape: superellipse(1.5);
   color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
   transition:
@@ -1641,7 +1641,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   min-height: 28px;
   padding: 0 13px 0 calc(var(--sidebar-session-row-inset) + var(--sidebar-inset));
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   corner-shape: superellipse(1.5);
   background: transparent;
   color: color-mix(in srgb, var(--text) 82%, var(--muted));
@@ -1783,7 +1783,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 /* Inset only the paint: 32px rows carry 30px fills, leaving 2px between neighbors. */
 .sidebar-recent-session.sidebar-recent-session,
 .sidebar-recent-session::after {
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   corner-shape: superellipse(1.5);
 }
 

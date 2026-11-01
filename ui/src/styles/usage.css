@@ -958,6 +958,11 @@
   font-size: var(--control-ui-text-md);
 }
 
+.usage-list-label .agent-row-chip {
+  color: inherit;
+  font: inherit;
+}
+
 .usage-list-bar {
   grid-column: 1 / -1;
   height: 4px;
@@ -1005,7 +1010,6 @@
   padding-bottom: 0;
 }
 
-.usage-list-item:first-child,
 .context-breakdown-item:first-child {
   padding-top: 0;
 }

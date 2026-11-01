@@ -2,8 +2,6 @@ import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
 import { logError } from "openclaw/plugin-sdk/logging-core";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
   normalizeBoundedOptionalString,
@@ -17,7 +15,8 @@ import {
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { WIDGET_CDN_ORIGINS } from "openclaw/plugin-sdk/widget-html";
 import { parseDiscordActivityCustomId } from "../component-custom-id.js";
-import { getDiscordEndpointRuntime, type DiscordEndpointRuntime } from "../endpoint-runtime.js";
+import { getDiscordEndpointRuntime } from "../endpoint-runtime.js";
+import { fetchDiscordJson } from "../oauth-http.js";
 import type { sendDiscordComponentMessage } from "../send.components.js";
 import { buildDiscordPresentationComponents } from "../shared-interactive.js";
 import { resolveDiscordChannelId as resolveDiscordTargetChannelId } from "../target-parsing.js";
@@ -37,77 +36,11 @@ const WIDGET_ID_PATTERN = /^[A-Za-z0-9_-]{22}$/;
 const DOC_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const DISCORD_TOKEN_URL = "https://discord.com/api/oauth2/token";
 const DISCORD_USER_URL = "https://discord.com/api/v10/users/@me";
-const DISCORD_HOST = "discord.com";
-const DISCORD_ACTIVITY_REQUEST_TIMEOUT_MS = 15_000;
-const JSON_MAX_BYTES = 64 * 1024;
 const INSTANCE_ID_MAX_LENGTH = 256;
 
 function normalizeInstanceId(value: string | null): string | undefined {
   const instanceId = normalizeBoundedOptionalString(value, INSTANCE_ID_MAX_LENGTH);
   return instanceId && !containsAsciiControlCharacter(instanceId) ? instanceId : undefined;
-}
-
-async function fetchDiscordJson(params: {
-  fetchImpl?: typeof fetch;
-  url: string;
-  init: RequestInit;
-  auditContext: string;
-  endpointRuntime?: DiscordEndpointRuntime | null;
-}): Promise<{ ok: boolean; body?: Record<string, unknown> }> {
-  const endpoint = Object.hasOwn(params, "endpointRuntime")
-    ? params.endpointRuntime
-    : getDiscordEndpointRuntime();
-  const liveUrl = new URL(params.url);
-  const endpointPath =
-    liveUrl.pathname === "/api/oauth2/token"
-      ? "/oauth2/token"
-      : liveUrl.pathname.startsWith("/api/v10/")
-        ? liveUrl.pathname.slice("/api/v10".length)
-        : undefined;
-  if (endpoint && !endpointPath) {
-    throw new Error("Discord Activity request is outside the configured endpoint routes");
-  }
-  const guarded = endpoint
-    ? {
-        response: await endpoint.fetch(
-          `${endpoint.descriptor.restApiBaseUrl}${endpointPath}${liveUrl.search}`,
-          {
-            ...params.init,
-            signal: params.init.signal
-              ? AbortSignal.any([
-                  params.init.signal,
-                  AbortSignal.timeout(DISCORD_ACTIVITY_REQUEST_TIMEOUT_MS),
-                ])
-              : AbortSignal.timeout(DISCORD_ACTIVITY_REQUEST_TIMEOUT_MS),
-          },
-        ),
-        release: async () => {},
-      }
-    : await fetchWithSsrFGuard({
-        url: params.url,
-        fetchImpl: params.fetchImpl,
-        init: params.init,
-        policy: { allowedHostnames: [DISCORD_HOST] },
-        auditContext: params.auditContext,
-        timeoutMs: DISCORD_ACTIVITY_REQUEST_TIMEOUT_MS,
-      });
-  const { response, release } = guarded;
-  try {
-    if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      return { ok: false };
-    }
-    return {
-      ok: true,
-      body: await readProviderJsonResponse<Record<string, unknown>>(
-        response,
-        "Discord Activity OAuth",
-        { maxBytes: JSON_MAX_BYTES },
-      ),
-    };
-  } finally {
-    await release();
-  }
 }
 
 const DISCORD_ACTIVITY_WIDGET_CSP =

@@ -152,3 +152,41 @@ it.each<[string | undefined, string, boolean, boolean]>([
     expect(openUrl).not.toHaveBeenCalled();
   }
 });
+
+it("requires the initiating browser cookie without consuming another browser's callback", async () => {
+  const opened = createDeferredCore<string>();
+  const session = createSession({
+    openUrl: async (url) => opened.resolve(url),
+    browserBinding: { cookieName: "link-browser", cookieValue: "random-browser-proof" },
+  });
+  const result = session.authorize(authorization);
+  await opened.promise;
+  for (const cookie of [
+    undefined,
+    "link-browser=wrong",
+    "link-browser=random-browser-proof; link-browser=wrong",
+  ]) {
+    const response = createResponse();
+    handleProviderOAuthCallback(
+      createRequest({
+        path: PROVIDER_OAUTH_CALLBACK_PATH + "?state=login-state&code=valid",
+        method: "GET",
+        headers: cookie ? { cookie } : {},
+      }),
+      response.res,
+    );
+    expect(response.res.statusCode).toBe(403);
+  }
+  const response = createResponse();
+  handleProviderOAuthCallback(
+    createRequest({
+      path: PROVIDER_OAUTH_CALLBACK_PATH + "?state=login-state&code=valid",
+      method: "GET",
+      headers: { cookie: "link-browser=random-browser-proof" },
+    }),
+    response.res,
+  );
+  expect(response.res.statusCode).toBe(200);
+  await expect(result).resolves.toMatchObject({ code: "valid" });
+  expect(callback("state=login-state&code=valid").res.statusCode).toBe(410);
+});
