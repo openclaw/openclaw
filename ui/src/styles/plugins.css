@@ -189,7 +189,10 @@
   width: 100%;
   min-height: 44px;
   padding-left: 34px;
-  /* The field radius runs tighter than the control radius in square themes. */
+}
+
+/* The field radius runs tighter than the control radius in square themes. */
+.plugin-catalog-search input.settings-input {
   border-radius: max(var(--field-radius), var(--radius-md));
 }
 
