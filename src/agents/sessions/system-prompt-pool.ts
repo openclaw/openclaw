@@ -1,6 +1,6 @@
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { cloneTranscriptEnvelope } from "../../config/sessions/transcript-json.js";
+import { cloneTranscriptEnvelope } from "../../config/sessions/transcript-payload-ownership.js";
 import { LruCache } from "../../infra/lru-cache.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { FileEntry } from "./session-manager-types.js";

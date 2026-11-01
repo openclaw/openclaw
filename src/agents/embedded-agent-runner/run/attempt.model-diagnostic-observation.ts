@@ -1,7 +1,7 @@
 import type { ProviderAcceptance } from "@openclaw/ai/transports";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isOwnedTranscriptPayload } from "../../../config/sessions/transcript-json.js";
+import { isOwnedTranscriptPayload } from "../../../config/sessions/transcript-payload-ownership.js";
 import type {
   DiagnosticEventInput,
   DiagnosticModelCallContent,

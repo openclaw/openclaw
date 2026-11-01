@@ -1,6 +1,6 @@
 import { isProxy } from "node:util/types";
 import { isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
-import { isOwnedTranscriptPayload } from "./transcript-json.js";
+import { isOwnedTranscriptPayload } from "./transcript-payload-ownership.js";
 
 class NativeCloneRequired extends Error {
   constructor() {

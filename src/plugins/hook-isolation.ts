@@ -1,4 +1,4 @@
-import { isOwnedTranscriptPayload } from "../config/sessions/transcript-json.js";
+import { isOwnedTranscriptPayload } from "../config/sessions/transcript-payload-ownership.js";
 import { projectModelContextMessages } from "../shared/model-context-message.js";
 import type { PluginHookName } from "./types.js";
 

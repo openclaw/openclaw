@@ -1,25 +1,9 @@
 import { isProxy } from "node:util/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-
-// Keep only immutable payload roots across appends, not every retained descendant.
-const ownedTranscriptRoots = new WeakSet<object>();
-
-/** Normalization seals these payload roots before they can be shared across views. */
-export function isOwnedTranscriptPayload(value: object): boolean {
-  return ownedTranscriptRoots.has(value);
-}
-
-/** Keep admitted children shared when replacing an immutable payload's envelope. */
-export function cloneTranscriptEnvelope<T extends object>(value: T): T {
-  if (ownedTranscriptRoots.has(value)) {
-    for (const child of Object.values(value)) {
-      if (child && typeof child === "object") {
-        ownedTranscriptRoots.add(child);
-      }
-    }
-  }
-  return { ...value };
-}
+import {
+  isOwnedTranscriptPayload,
+  markOwnedTranscriptPayload,
+} from "./transcript-payload-ownership.js";
 
 /** Preserve ordinary transcript objects while admitting their JSON storage shape. */
 export function normalizeTranscriptJsonValue(value: unknown, key: string): unknown {
@@ -41,7 +25,7 @@ function requiresNativeJson(value: unknown, ancestors: Set<object>): boolean {
     return typeof value === "bigint" || typeof value === "function";
   }
   // Admission already checked and sealed the entire payload, including its descendants.
-  if (ownedTranscriptRoots.has(value)) {
+  if (isOwnedTranscriptPayload(value)) {
     return false;
   }
   if (isProxy(value)) {
@@ -105,7 +89,7 @@ function normalizePlainJson(
         ? undefined
         : value;
   }
-  if (ownedTranscriptRoots.has(value) || admitted.has(value)) {
+  if (isOwnedTranscriptPayload(value) || admitted.has(value)) {
     return value;
   }
   const array = Array.isArray(value);
@@ -123,7 +107,7 @@ function normalizePlainJson(
       Object.freeze(retained);
       admitted.add(retained);
       if (retainRoots) {
-        ownedTranscriptRoots.add(retained);
+        markOwnedTranscriptPayload(retained);
       }
     }
     // Equal string contents do not imply equal backing-store ownership.

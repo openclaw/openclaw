@@ -1,7 +1,8 @@
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
-import { cloneTranscriptEnvelope, normalizeTranscriptJsonValue } from "./transcript-json.js";
+import { normalizeTranscriptJsonValue } from "./transcript-json.js";
+import { cloneTranscriptEnvelope } from "./transcript-payload-ownership.js";
 
 it.each(["exec", "wait"])("shares admitted %s payloads across envelope copies", (toolName) => {
   const message = {

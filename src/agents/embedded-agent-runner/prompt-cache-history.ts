@@ -1,6 +1,6 @@
 import { hash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
-import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
+import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-payload-ownership.js";
 import type { Message } from "../../llm/types.js";
 import { isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 

@@ -1,5 +1,5 @@
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
-import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
+import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-payload-ownership.js";
 import { withOwnedSessionRestartAbortWrite } from "../../config/sessions/transcript-write-context.js";
 import type { Message } from "../../llm/types.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
