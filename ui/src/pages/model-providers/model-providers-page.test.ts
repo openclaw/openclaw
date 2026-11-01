@@ -603,6 +603,48 @@ describe("ModelProvidersPage agent scope", () => {
     });
   });
 
+  it.each([
+    ["hides every model", [false, false], true],
+    ["allows one model", [false, true], false],
+  ] as const)(
+    "provider-add feedback names the model policy when it %s",
+    async (_case, allowed, warns) => {
+      const { context, runtimeConfig, request } = createHarness("main");
+      const originalRequest = request.getMockImplementation()!;
+      request.mockImplementation(async (method: string, params?: { view?: string }) =>
+        method === "models.list" && params?.view === "all"
+          ? {
+              models: allowed.map((manualSelectionAllowed, index) => ({
+                provider: "anthropic",
+                id: `claude-${index}`,
+                name: `Claude ${index}`,
+                manualSelectionAllowed,
+              })),
+            }
+          : originalRequest(method),
+      );
+      const page = appendPage(context);
+      await waitForProviders(page);
+      await openApiKeyProvider(page, "anthropic");
+      page.view.props.onAddProviderKeyChange("new-provider-key");
+      await page.updateComplete;
+      page.querySelector<HTMLButtonElement>("[data-models-key-dialog] button.primary")!.click();
+      await runtimeConfig.runExternalMutation.mock.results[0]!.value;
+      await drainPageUpdates(page);
+
+      expect(request).toHaveBeenCalledWith(
+        "models.list",
+        expect.objectContaining({ view: "all", provider: "anthropic" }),
+      );
+      expect(page.view.props.addProviderOpen).toBe(warns);
+      expect(page.view.props.messages.add?.warning).toBe(
+        warns
+          ? 'Model policy hides all anthropic models, so they do not show in the model picker. Add "anthropic/*" to agents.entries.main.modelPolicy.allow if this agent sets its own policy, otherwise to agents.defaults.modelPolicy.allow.'
+          : undefined,
+      );
+    },
+  );
+
   it("keeps a newer global-model draft after an agent switch and earlier save", async () => {
     const { settingsAgentSelection, context, notifySelection, runtimeConfig } =
       createHarness("main");

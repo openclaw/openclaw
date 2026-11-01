@@ -253,6 +253,10 @@ depending on the per-kind AST shape.
   Leaf replacement through object-valued mapping keys, such as YAML 1.1
   timestamp keys, is refused with `unresolved` and leaves the file unchanged.
 
+`--value-json` is refused for Markdown and YAML without changing the file.
+Pass a plain `<value>` without that flag to use their existing string/scalar
+write behavior.
+
 Use `--dry-run` before user-visible writes when the exact bytes matter. JSONC
 and YAML edits patch the existing document (via `jsonc-parser` or the `yaml`
 document API); Markdown and JSONL edits preserve untouched source ranges.

@@ -83,6 +83,11 @@ async function materializeCapturedRepositoryWorkspace(
   ) {
     throw new Error("Repository workspace has no pinned source; retry its cloud preparation");
   }
+  if (repository.diskAuthority) {
+    throw new Error(
+      "Moving this repository to the Gateway requires a fresh disk export; preserve the original runner and retry after export support is available.",
+    );
+  }
   const githubHost = resolveConfiguredGitHubHost(params.cfg);
   const remote = parseGitHubRemoteUrl(repository.url, githubHost);
   if (!remote) {

@@ -8,12 +8,12 @@ import {
 } from "@openclaw/model-catalog-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  assembleModelCatalogBundleV2,
+  assembleVersionedModelCatalogBundle,
   parsePublishModelCatalogArgs,
   projectRecommendedModels,
   runPublishModelCatalog,
   serializeModelCatalogBundle,
-  serializeModelCatalogBundleV2,
+  serializeVersionedModelCatalogBundle,
 } from "../../scripts/publish-model-catalog.mts";
 
 const roots: string[] = [];
@@ -390,7 +390,7 @@ describe("publish model catalog v2", () => {
       pricing: { "alpha/extra": { input: 9, output: 9 } },
     };
     const before = serializeModelCatalogBundle(bundle);
-    const v2 = await assembleModelCatalogBundleV2(bundle, new WeakMap());
+    const v2 = await assembleVersionedModelCatalogBundle(bundle, new WeakMap());
     expect(v2.models).toHaveLength(4);
     expect(v2.models[0]).toMatchObject({
       id: "vendor/model",
@@ -412,11 +412,11 @@ describe("publish model catalog v2", () => {
     expect(v2).not.toHaveProperty("pricing");
     expect(v2).not.toHaveProperty("minVersion");
     expect(serializeModelCatalogBundle(bundle)).toBe(before);
-    const serialized = serializeModelCatalogBundleV2(v2);
+    const serialized = serializeVersionedModelCatalogBundle(v2);
     const parsed = parseRemoteModelCatalogBundleV2(JSON.parse(serialized));
     expect(parsed.models).toHaveLength(4);
     expect(Object.keys(JSON.parse(serialized).models[0]).slice(0, 2)).toEqual(["id", "provider"]);
-    expect(serializeModelCatalogBundleV2({ ...v2, models: v2.models.toReversed() })).toBe(
+    expect(serializeVersionedModelCatalogBundle({ ...v2, models: v2.models.toReversed() })).toBe(
       serialized,
     );
   });

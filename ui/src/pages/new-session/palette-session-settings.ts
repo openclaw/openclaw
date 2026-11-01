@@ -105,7 +105,7 @@ export function resolvePaletteSessionSettings(options: SettingsOptions, search: 
       select: () => place.selectCloudProfile(profile.id),
     })),
   ];
-  const query = search.trim().toLocaleLowerCase();
+  const query = search.trim().toLocaleLowerCase().normalize("NFC");
   const groups = machines
     .map((machine) => ({
       machine,
@@ -134,7 +134,8 @@ export function resolvePaletteSessionSettings(options: SettingsOptions, search: 
           ]
       ).filter(
         (choice) =>
-          !query || (machine.label + " " + choice.label).toLocaleLowerCase().includes(query),
+          !query ||
+          (machine.label + " " + choice.label).toLocaleLowerCase().normalize("NFC").includes(query),
       ),
     }))
     .filter((group) => group.choices.length);

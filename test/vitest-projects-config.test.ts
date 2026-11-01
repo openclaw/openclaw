@@ -98,6 +98,32 @@ describe("projects vitest config", () => {
     });
   });
 
+  it("keeps actual full-shard exports aligned with inventory and worker policy", () => {
+    runConfigScript(
+      `
+        import assert from "node:assert/strict";
+        import { pathToFileURL } from "node:url";
+        import { nonIsolatedRunnerPath, sharedVitestConfig } from "./test/vitest/vitest.shared.config.ts";
+        import { fullSuiteVitestShards } from "./test/vitest/vitest.test-shards.mjs";
+        const shards = fullSuiteVitestShards.filter(shard => shard.name !== "core-unit-fast");
+        assert.equal(shards.length, 11);
+        for (const shard of shards) {
+          process.env.OPENCLAW_VITEST_MAX_WORKERS = "8";
+          const { default: config } = await import(pathToFileURL(process.cwd() + "/" + shard.config).href);
+          const tooling = shard.name === "core-tooling";
+          assert.deepEqual(config.test, {
+            ...sharedVitestConfig.test,
+            runner: nonIsolatedRunnerPath,
+            projects: shard.projects,
+            ...(tooling ? { fileParallelism: false, maxWorkers: 1 } : {}),
+          }, shard.config);
+          assert.equal(process.env.OPENCLAW_VITEST_MAX_WORKERS, tooling ? "1" : "8", shard.config);
+          assert.notEqual(config.test.projects, shard.projects, "aggregate must own its project array");
+        }
+      `,
+    );
+  });
+
   it("keeps the resolved root and generated projects in their explicit environments", () => {
     runConfigScript(
       `
