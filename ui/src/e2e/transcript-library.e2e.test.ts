@@ -227,7 +227,8 @@ suite.define(() => {
         await gateway.setMethodResponse("transcripts.list", {
           __mockError: { code: "FORBIDDEN", message: "Shared archive restricted" },
         });
-        await click(page, "Refresh");
+        await click(page, "More actions");
+        await control(page, "menuitem", "Refresh").click();
         await control(page, "heading", "Transcript access is restricted").waitFor();
         expect(await page.locator(".transcripts-list__entry").count()).toBe(0);
       },
