@@ -1100,25 +1100,28 @@ select.settings-select:not([multiple]) {
     .field select:not([multiple], [size]),
     select.settings-select:not([multiple], [size]) {
       appearance: base-select;
-      display: inline-flex;
+      /* The engine's value text ignores text-overflow, so a one-line clamp draws
+         the ellipsis. Breaking anywhere fills the line before it truncates. */
+      display: -webkit-inline-box;
       overflow: hidden;
-      align-items: flex-start;
+      position: relative;
       padding-block: 0;
-      padding-right: 10px;
+      padding-right: calc(26px + 0.5em);
       background-image: none;
-      /* The engine's value text can't shrink unless it may wrap. Each line fills
-         the box, so a long value shows one clipped line and keeps its chevron. */
       line-height: calc(var(--settings-control-height) - 2px);
-      overflow-wrap: anywhere;
       white-space: normal;
+      word-break: break-all;
+      vertical-align: middle;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 1;
 
       &::picker-icon {
         content: "";
-        flex: none;
-        align-self: center;
+        position: absolute;
+        inset-block-start: calc(50% - 8px);
+        inset-inline-end: 10px;
         width: 16px;
         height: 16px;
-        margin-inline-start: auto;
         background: var(--text-tertiary);
         mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
           center / contain no-repeat;
@@ -1127,6 +1130,7 @@ select.settings-select:not([multiple]) {
 
       &::picker(select) {
         appearance: base-select;
+        word-break: normal;
         box-sizing: border-box;
         min-width: anchor-size(width);
         max-width: calc(100dvw - 16px);
@@ -1164,6 +1168,8 @@ select.settings-select:not([multiple]) {
         corner-shape: superellipse(1.5);
         font-size: calc(13px * var(--control-ui-text-scale));
         line-height: calc(1.25 / 0.875);
+        overflow-wrap: anywhere;
+        white-space: normal;
       }
 
       & option + option {

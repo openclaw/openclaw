@@ -645,7 +645,7 @@ openclaw-systems-page {
     display: none;
   }
   .systems-workspace .systems-toolbar > select.systems-mobile-picker {
-    display: inline-flex;
+    display: -webkit-inline-box;
     flex: 1;
     max-width: none;
   }
