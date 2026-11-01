@@ -4352,6 +4352,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
       await toolResultStarted.promise;
 
       await vi.advanceTimersByTimeAsync(elapsedMs);
+      if (!owned) {
+        // Turn cleanup releases the owner after the idle deadline unblocks delivery.
+        await followup;
+      }
       expect(replyRunRegistry.get("main") !== undefined).toBe(owned);
 
       toolResultReleased.resolve();
