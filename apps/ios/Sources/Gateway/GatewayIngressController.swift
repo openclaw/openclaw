@@ -287,6 +287,24 @@ final class GatewayIngressController {
         return origin
     }
 
+    /// Embedded Dashboard reuse of the exact admitted grant; any other revision falls back to native sign-in.
+    func webSessionDecision(
+        authorization: GatewayIngressAuthorization?,
+        pageURL: URL?) -> CloudflareAccessWebSession.Decision
+    {
+        guard let authorization else { return .ordinary }
+        // Read the retirement generation first: a retirement after this point is caught at WebView registration.
+        let generation = CloudflareAccessWebCookieJar.shared.generation(for: authorization.origin)
+        let snapshot = self.sessions.snapshot(for: authorization.origin)
+        return CloudflareAccessWebSession.decision(
+            ingressOrigin: authorization.origin,
+            pageURL: pageURL,
+            session: snapshot?.session,
+            isCurrent: snapshot?.revision == authorization.revision && authorization.isCurrent(),
+            generation: generation,
+            now: self.now())
+    }
+
     func signOut(stableID: String, expectedOrigin: CloudflareAccessOrigin? = nil) async {
         guard let origin = origin(stableID: stableID),
               expectedOrigin == nil || expectedOrigin == origin

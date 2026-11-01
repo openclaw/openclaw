@@ -43,6 +43,9 @@ final class GatewayConnectionController {
     private(set) var pendingTrustPrompt: TrustPrompt?
     let operatorFleet = GatewayOperatorFleet()
     @ObservationIgnored lazy var ingress = GatewayIngressController { [weak self] origin in
+        // Browser copies of the grant retire with native transports. The jar is a singleton, so this
+        // runs for every store retirement, but the store itself only exists while the ingress controller does.
+        await CloudflareAccessWebCookieJar.shared.retire(origin)
         guard let self else { return }
         await self.operatorFleet.retire(origin: origin)
         await self.appModel?.retireGatewayIngress(for: origin)

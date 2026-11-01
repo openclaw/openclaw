@@ -131,6 +131,7 @@ struct SettingsHubScreen: View {
 struct EmbeddedDashboardContent: View {
     @State private var bridge: IOSDeviceSettingsBridge
     private let appModel: NodeAppModel
+    private let gatewayController: GatewayConnectionController
     let embedCompatibility: DashboardEmbedCompatibility?
     let url: URL
     let config: GatewayConnectConfig?
@@ -148,10 +149,11 @@ struct EmbeddedDashboardContent: View {
     {
         self.url = url
         self.appModel = appModel
+        self.gatewayController = gatewayController
         self.config = config
         self.openGateway = openGateway
         self.embedCompatibility = embedCompatibility
-        self._bridge = State(initialValue: IOSDeviceSettingsBridge(
+        _bridge = State(initialValue: IOSDeviceSettingsBridge(
             appModel: appModel,
             appearanceModel: appearanceModel,
             gatewayController: gatewayController,
@@ -163,6 +165,30 @@ struct EmbeddedDashboardContent: View {
 
     var body: some View {
         let storedOperatorToken = AuthenticatedControlUI.storedOperatorToken(config: self.config)
+        let identity = AuthenticatedControlUI.webContentIdentity(
+            config: self.config,
+            storedOperatorToken: storedOperatorToken)
+        AccessGatedControlUI(
+            gatewayController: self.gatewayController,
+            config: self.config,
+            url: self.url,
+            identity: identity,
+            openGateway: self.openGateway)
+        { accessCookie, onAccessSignInRequired in
+            self.dashboard(
+                storedOperatorToken: storedOperatorToken,
+                identity: identity,
+                accessCookie: accessCookie,
+                onAccessSignInRequired: onAccessSignInRequired)
+        }
+    }
+
+    private func dashboard(
+        storedOperatorToken: String?,
+        identity: Int,
+        accessCookie: CloudflareAccessWebCookie?,
+        onAccessSignInRequired: @escaping (CloudflareAccessWebFallbackReason) -> Void) -> some View
+    {
         VStack(spacing: 0) {
             self.gatewayUpgradeBanner
             AuthenticatedControlUIWebView(
@@ -182,16 +208,16 @@ struct EmbeddedDashboardContent: View {
                     storedOperatorToken: storedOperatorToken,
                     appModel: self.appModel),
                 usesNativeEmbed: true,
-                embedCompatibility: self.embedCompatibility)
-                .id(AuthenticatedControlUI.webContentIdentity(
-                    config: self.config,
-                    storedOperatorToken: storedOperatorToken))
+                embedCompatibility: self.embedCompatibility,
+                accessCookie: accessCookie,
+                onAccessSignInRequired: onAccessSignInRequired)
+                .id(identity)
                 .accessibilityIdentifier("SettingsHub.Dashboard")
         }
     }
 
     @ViewBuilder private var gatewayUpgradeBanner: some View {
-        if let openGateway, self.embedCompatibility?.needsGatewayUpgrade == true {
+        if let openGateway, embedCompatibility?.needsGatewayUpgrade == true {
             VStack(alignment: .leading, spacing: 8) {
                 Text("This Gateway's Dashboard is older than the app; update the Gateway to manage app settings here")
                     .font(OpenClawType.footnote)
