@@ -325,18 +325,26 @@ it.each([
       db.prepare(
         "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES ('beta6', 0, ?, 1000)",
       ).run(event);
-      if (scenario === "unknown-column")
+      if (scenario === "unknown-column") {
         db.exec("ALTER TABLE session_nodes ADD COLUMN unknown_column TEXT");
-      if (scenario === "unknown-table") db.exec("CREATE TABLE unknown_table (value TEXT)");
-      if (scenario === "unknown-index")
+      }
+      if (scenario === "unknown-table") {
+        db.exec("CREATE TABLE unknown_table (value TEXT)");
+      }
+      if (scenario === "unknown-index") {
         db.exec("CREATE INDEX unknown_index ON session_nodes(updated_at)");
-      if (scenario === "missing-table") db.exec("DROP TABLE cache_entries");
-      if (scenario === "unique-index")
+      }
+      if (scenario === "missing-table") {
+        db.exec("DROP TABLE cache_entries");
+      }
+      if (scenario === "unique-index") {
         db.exec("CREATE UNIQUE INDEX unknown_unique ON session_nodes(updated_at)");
-      if (scenario === "drifted-trigger")
+      }
+      if (scenario === "drifted-trigger") {
         db.exec(
           `CREATE TRIGGER session_nodes_entry_valid_after_insert AFTER INSERT ON session_nodes BEGIN DELETE FROM session_nodes WHERE session_key = NEW.session_key; END`,
         );
+      }
     }
     registerOpenClawAgentDatabase({ agentId: "main", env, path: dbPath, schemaVersion: 16 });
     const result = await migrateLegacyMediaPersistence({ env });

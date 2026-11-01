@@ -129,7 +129,7 @@ export function repairAndAssertOpenClawAgentV16Validity(
     .iterate()) {
     if (!(row.type === "table" ? tables : indexes).has(String(row.name))) {
       throw new SqliteSchemaMismatchError(
-        `Cannot repair v16 validity triggers for ${pathname}: unexpected ${row.type} ${row.name}. Preserve the database and SQLite sidecars and contact OpenClaw support; the unknown schema needs inspection before migration.`,
+        `Cannot repair v16 validity triggers for ${pathname}: unexpected ${String(row.type)} ${String(row.name)}. Preserve the database and SQLite sidecars and contact OpenClaw support; the unknown schema needs inspection before migration.`,
       );
     }
   }
