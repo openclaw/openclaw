@@ -132,7 +132,8 @@ Options:
                         Ignore an existing exact-range snapshot and rebuild it.
   --main-ref <ref>      Canonical mainline used to replace backport PRs.
   --release-branch <ref>
-                        Ref whose history must contain the generation target.
+                        Canonical branch whose history must contain the generation target.
+                        Unqualified names prefer origin/<ref>, then fall back to a local ref.
   --source-ref <ref>    Read initial notes from an immutable Git commit; read-only.
   --seed-ref <ref>      Use an existing release section as editorial input.
   --shipped-ref <tag>   Exclude PRs already recorded by this shipped tag; repeatable.
@@ -3158,10 +3159,22 @@ function main() {
     gitMergeBase(options.base, options.target);
   }
   const rootDir = process.cwd();
-  if (options.releaseBranch && !gitIsAncestor(options.target, options.releaseBranch)) {
-    fail(
-      `release notes target ${options.target} is not reachable from canonical release branch ${options.releaseBranch}; generate notes from that branch's frozen tip`,
-    );
+  if (options.releaseBranch) {
+    let canonicalReleaseBranch = options.releaseBranch;
+    if (
+      !canonicalReleaseBranch.startsWith("refs/") &&
+      !canonicalReleaseBranch.startsWith("origin/")
+    ) {
+      const remoteRef = `refs/remotes/origin/${canonicalReleaseBranch}`;
+      if (gitCommit(remoteRef)) {
+        canonicalReleaseBranch = remoteRef;
+      }
+    }
+    if (!gitIsAncestor(options.target, canonicalReleaseBranch)) {
+      fail(
+        `release notes target ${options.target} is not reachable from canonical release branch ${options.releaseBranch}; generate notes from that branch's frozen tip`,
+      );
+    }
   }
   if (options.historicalIssueSnapshotPath) {
     const input = realpathSync(options.historicalIssueSnapshotPath);
