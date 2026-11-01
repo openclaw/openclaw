@@ -564,7 +564,7 @@ export async function swapStagedPackageInstall(
             activePackageRoot = params.installTarget.packageRoot;
             assertCurrent();
           },
-          warnings,
+          warn: (message) => warnings.push(message),
         });
       }
     };
@@ -623,7 +623,7 @@ export async function swapStagedPackageInstall(
           await movePackageRoot(targetSwapRoot, backupRoot, {
             operation: "backup",
             assertCaller: assertForwardCurrent,
-            warnings,
+            warn: (message) => warnings.push(message),
             onPublished: () => {
               // A published copy owns compensation even if source cleanup is refused.
               recordPackageBackup();

@@ -114,7 +114,7 @@ it("formats only new rows until the locale or effective timezone changes", async
       id: index,
       time,
       raw: "log entry",
-      message: index === 0 ? "keep initial" : "other entry",
+      message: index === 0 ? "A\u0308 Café initial" : "other entry",
     })),
   });
   const [entries, setEntries] = createSignal(props.entries);
@@ -165,21 +165,21 @@ it("formats only new rows until the locale or effective timezone changes", async
   const appendedTime = "2026-09-22T18:10:00Z";
   setEntries((rows) => [
     ...rows,
-    { id: allTimes.length, time: appendedTime, raw: "keep appended" },
+    { id: allTimes.length, time: appendedTime, raw: "A\u0308 Café appended" },
   ]);
   expectTimes([...allTimes, appendedTime], "en", 1);
 
-  filterInput.value = "keep";
+  filterInput.value = "ä";
   filterInput.dispatchEvent(new Event("input", { bubbles: true }));
   expectTimes([validTimes[0], appendedTime], "en", 0);
 
   timeZone = "America/Los_Angeles";
   const nextTime = "2026-09-22T20:00:00Z";
-  setEntries((rows) => [...rows, { id: allTimes.length + 1, time: nextTime, raw: "keep next" }]);
+  setEntries((rows) => [...rows, { id: allTimes.length + 1, time: nextTime, raw: "Ä Café next" }]);
   expectTimes([validTimes[0], appendedTime, nextTime], "en");
 
   timeZone = "Asia/Tokyo";
-  filterInput.value = "initial";
+  filterInput.value = "cafe\u0301 initial";
   filterInput.dispatchEvent(new Event("input", { bubbles: true }));
   expectTimes([validTimes[0]], "en");
 });

@@ -231,7 +231,6 @@ type EnglishCatalog = TranslationMap & {
       | "workspaceLabel"
       | "branchLabel"
       | "runsOn"
-      | "machineLabel"
       | "machineCpu"
       | "machineMemory"
       | "more"
@@ -513,7 +512,6 @@ const startupEnglish = {
     workspaceLabel: "Workspace",
     branchLabel: "Branch",
     runsOn: "Runs on {providerId} · {profileId}",
-    machineLabel: "Machine",
     machineCpu: "{cpu} vCPU",
     machineMemory: "{memory} GB",
     more: "+{count} more",

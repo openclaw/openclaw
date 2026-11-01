@@ -154,9 +154,17 @@ it.runIf("__vitest_browser__" in globalThis)("inherits theme colors", async () =
     }
     await expect.poll(() => menu.getAttribute("data-phase")).toBe("open");
     expectThemeDefaults();
-    expectColor(find(".sidebar-identity-menu__help .oc-menu-item__submenu-icon"), "muted", theme);
-    expectColor(find('[data-value="command:settings"] .oc-menu-item__details'), "muted", theme);
-    expectColor(menu, "bg-elevated", theme, "backgroundColor");
+    expectColor(
+      find(".sidebar-identity-menu__help .oc-menu-item__submenu-icon"),
+      "text-tertiary",
+      theme,
+    );
+    expectColor(
+      find('[data-value="command:settings"] .oc-menu-item__details'),
+      "text-tertiary",
+      theme,
+    );
+    expectColor(menu, "menu-surface", theme, "backgroundColor");
     expectColor(find("#theme-first-tab"), "text", theme);
     expectColor(find("#theme-first-tab"), "bg-hover", theme, "backgroundColor");
     expectColor(find("#theme-second-tab"), "muted", theme);
@@ -171,7 +179,7 @@ it.runIf("__vitest_browser__" in globalThis)("inherits theme colors", async () =
     await expect
       .poll(() => pickerList.getAttribute("aria-activedescendant"))
       .toBe(currentOption.id);
-    expectColor(pickerMenu, "bg-elevated", theme, "backgroundColor");
+    expectColor(pickerMenu, "menu-surface", theme, "backgroundColor");
     expectColor(find(".picker-select__trigger .picker-select__label"), "text", theme);
     expectColor(find(".picker-select__trigger .picker-select__chevron"), "muted", theme);
     expectColor(currentOption, "text", theme);

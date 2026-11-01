@@ -1,10 +1,6 @@
 import { createEffect, createSignal, onSettled } from "solid-js";
 import type { PluginsUninstallResult } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
-import {
-  pathForRoute,
-  pluginCatalogIdFromPath,
-  pluginSettingsIdFromPath,
-} from "../../app-route-paths.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
@@ -38,7 +34,7 @@ import {
   pluginMutationBlockedReason,
   type PluginMutationAction,
 } from "./plugins-page-model.ts";
-import type { PluginsRouteData } from "./route-data.ts";
+import { pluginIdForRoute, type PluginsRouteData } from "./route-data.ts";
 import type { PluginSettingsEditorProps } from "./settings-editor.tsx";
 import type { PluginSettingsTab } from "./settings-view.tsx";
 import { createPluginPreview } from "./skill-preview.tsx";
@@ -56,6 +52,7 @@ export function createPluginsPage(options: {
   let routeData: PluginsRouteData | undefined;
   let surface: "discovery" | "settings" = "settings";
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  const [renderedIconRevision, setRenderedIconRevision] = createSignal(0);
   const [settingsTab, setSettingsTab] = createSignal<PluginSettingsTab>("installed");
 
   const state = createPluginsPageState();
@@ -111,6 +108,7 @@ export function createPluginsPage(options: {
     onInstalledUrlsChange: (urls) => setState({ iconUrls: urls }),
     onCatalogUrlsChange: (urls) => setState({ catalogIconUrls: urls }),
     onChange: publish,
+    onRenderedChange: () => setRenderedIconRevision((current) => current + 1),
   });
   const gateway = new GatewayPageBinding(publish, {
     getGateway: () => context.gateway,
@@ -271,6 +269,7 @@ export function createPluginsPage(options: {
   createEffect(
     () => {
       revision();
+      renderedIconRevision();
       return icons.rendered();
     },
     (rendered) =>
@@ -499,12 +498,8 @@ export function createPluginsPage(options: {
 
   const loading = () => gateway.connected && (!routeDataConsumed || catalogTask.pending);
 
-  function activeRoutePluginId(): string | null {
-    const pathname = routeData?.location.pathname ?? "";
-    return surface === "settings"
-      ? pluginSettingsIdFromPath(pathname, context.basePath)
-      : pluginCatalogIdFromPath(pathname, context.basePath);
-  }
+  const activeRoutePluginId = () =>
+    pluginIdForRoute(surface, routeData?.location.pathname ?? "", context.basePath);
 
   function uninstallingSelection(): boolean {
     return Boolean(

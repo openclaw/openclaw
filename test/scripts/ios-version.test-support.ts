@@ -1,8 +1,7 @@
 // iOS version test support provides shared fixtures for iOS script tests.
-import fs from "node:fs";
-import path from "node:path";
 import { afterEach } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const tempDirs: string[] = [];
 
@@ -19,12 +18,11 @@ export function writeIosFixture(params: {
   prefix?: string;
 }): string {
   const rootDir = makeTempDir(tempDirs, params.prefix ?? "openclaw-ios-version-");
-  fs.mkdirSync(path.join(rootDir, "apps", "ios"), { recursive: true });
-  fs.writeFileSync(
-    path.join(rootDir, "package.json"),
+  const { write } = fixtureFiles(rootDir);
+  write(
+    "package.json",
     `${JSON.stringify({ version: params.packageVersion ?? params.version ?? "2026.4.6" }, null, 2)}\n`,
-    "utf8",
   );
-  fs.writeFileSync(path.join(rootDir, "apps", "ios", "CHANGELOG.md"), params.changelog, "utf8");
+  write("apps/ios/CHANGELOG.md", params.changelog);
   return rootDir;
 }

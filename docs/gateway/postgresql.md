@@ -342,8 +342,14 @@ the DSN itself in `openclaw.json`:
 Env, file, and exec [SecretRefs](/gateway/secrets/secretref-contract) are qualified.
 A store-backed SecretRef cannot bootstrap the database that holds that secret.
 The host resolves the connection before passing it to workers. Restart after
-changing the connection, prefix, or engine map; these are fixed for the process.
-An all-SQLite configuration does not resolve an unused PostgreSQL connection.
+changing the connection, its environment variable source, prefix, or engine map;
+these are fixed for the process. An all-SQLite configuration does not resolve an
+unused PostgreSQL connection.
+
+When the connection uses an env SecretRef or a whole-value `${NAME}` substitution,
+the Gateway withholds that environment variable from inherited host exec and
+sandbox environments, including custom variable names. Explicit command overrides
+and operator-configured sandbox environment values remain available.
 
 Offline model credential commands, including `models auth paste-api-key`, use the
 configured engine before the Gateway starts. Supply the same DSN SecretRef to
@@ -601,6 +607,54 @@ Do not change a populated family's engine to evade a refusal. Configuration does
 not migrate data.
 
 ## Migrate an existing installation
+
+### Move an exact stopped source between disposable hosts
+
+An ordinary user backup intentionally sanitizes delivery and recovery state. It
+is not an exact migration source. When an external supervisor must retire a
+SQLite host before an offline migration job can run, use the native exact
+migration capture while the original host's filesystem is still available.
+Stop its Gateway and every embedded writer first; stopping the whole replica
+before capture may discard its only local files.
+
+Create a fresh verified filesystem archive for that quiesced installation, then:
+
+```bash
+openclaw database migration-capture capabilities --json
+openclaw database migration-capture create --base-archive /private/filesystem.tar.gz --output /private/migration-capsule --json
+openclaw database migration-capture restore /private/migration-capsule --manifest-sha256 <producer-manifest-digest> --target /private/new-staging --json
+```
+
+Creation requires exclusive offline ownership and an absent output directory
+outside the state/config roots. The private capsule contains the filesystem
+archive, exact native SQLite snapshots, and authored configuration/includes.
+Registered and retained native stores, fixed-local credentials, safety journals
+and daemon intent are discovered through the existing exact recovery owner.
+Codex and other opaque application files remain in the filesystem archive; their
+own processes must already have closed them. PostgreSQL sources and unsupported
+external database/config roots refuse rather than being silently omitted.
+
+Restore requires the producer's manifest digest, the same logical state/config
+paths, and a new empty staging target outside live state. It verifies the bound
+artifacts, extracts the full filesystem archive, then overlays exact native
+database/config images only inside that private staging tree. Shared/local
+credential bindings are re-admitted to the actual new file identities. Captured
+device/inode values are only source-pair evidence, never authority over a new
+host. An invalid capsule cannot publish a successful restore or mutate live
+state. The returned `archiveRoot`/`targetPath` and `exactMigration` receipt let the
+external lifecycle owner perform its existing state/config promotion before
+running the ordinary database porter.
+
+The receipt's exact profile covers the native database/configuration images.
+`verified: true` confirms artifact validation, not temporal consistency of an
+arbitrary base archive. The controller must create the base after the Gateway
+and every embedded or external writer have stopped, and keep them stopped through
+capture; matching `sourceStateDir` alone does not prove a consistent generation.
+Keep the complete capsule private; it includes credentials, claims and completion
+records deliberately absent from portable user backups. An incomplete capture
+is retained for diagnosis and never grants updater rollback or port-resume
+authority. This command does not create an active database-port manifest,
+import PostgreSQL namespaces, start services or enable multiple active Gateways.
 
 ### Prepare and port to PostgreSQL
 

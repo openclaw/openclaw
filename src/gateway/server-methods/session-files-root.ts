@@ -1,4 +1,3 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { SessionEntryReadScope } from "../../config/sessions/session-accessor.types.js";
 import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
@@ -6,7 +5,7 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { prepareSessionFileWorkspace } from "../session-file-workspace.js";
-import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { SessionFileWorkspaceChangedError } from "../session-mutation-authorization-error.js";
 import {
   resolveTranscriptReadTarget,
   toTranscriptReadScope,
@@ -117,9 +116,7 @@ export async function withSessionFileRoot<T>(
     const loaded = await loadSessionFileRoot(session, params.messageEntryId);
     const assertCurrent = () => {
       if (!session.isCurrentAtResponse()) {
-        throw new SessionMutationAuthorizationChangedError(
-          errorShape(ErrorCodes.FORBIDDEN, "Session workspace changed during file access"),
-        );
+        throw new SessionFileWorkspaceChangedError();
       }
       const current = session.readRetainedEntry();
       if (current) {

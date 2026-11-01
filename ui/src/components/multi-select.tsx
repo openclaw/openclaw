@@ -11,6 +11,7 @@ import { MenuNavigationError } from "./solid/menu-navigation-error.tsx";
 import { useOverlayControl } from "./solid/overlay-control.ts";
 import { ProviderBrandIcon } from "./solid/provider-icon.tsx";
 import "./solid/overlay.css";
+import "../styles/select-picker.css";
 import "../styles/multi-select.css";
 
 type MultiSelectProps = {

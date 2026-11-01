@@ -157,3 +157,57 @@ export async function updateWorkspaceResultRefs(
     });
   });
 }
+
+export async function readWorkspaceResultRefObjects(
+  root: string,
+  refs: readonly string[],
+  baseEnv?: NodeJS.ProcessEnv,
+): Promise<Map<string, string>> {
+  const output = await requireWorkspaceResultGit(
+    root,
+    ["for-each-ref", "--format=%(refname) %(objectname)", ...refs],
+    { baseEnv },
+  );
+  const objects = new Map<string, string>();
+  for (const line of output.split("\n")) {
+    const separator = line.indexOf(" ");
+    const ref = line.slice(0, separator);
+    if (refs.includes(ref)) {
+      objects.set(ref, line.slice(separator + 1));
+    }
+  }
+  return objects;
+}
+
+/** Publish immutable result identities idempotently under the existing ref-mutation owner. */
+export async function publishImmutableWorkspaceResultRefs(
+  root: string,
+  targets: readonly (readonly [string, string | undefined])[],
+  assertCurrent: () => void,
+): Promise<void> {
+  await withWorkspaceResultRefMutation(root, async (baseEnv) => {
+    const updates: string[] = [];
+    const objects = await readWorkspaceResultRefObjects(
+      root,
+      targets.map(([target]) => target),
+      baseEnv,
+    );
+    for (const [target, expected] of targets) {
+      const existing = objects.get(target);
+      if (existing !== undefined && existing !== expected) {
+        throw new Error("Repository checkpoint identity already contains a different result");
+      }
+      if (expected !== undefined && existing === undefined) {
+        updates.push(`create ${target}\0${expected}\0`);
+      }
+    }
+    assertCurrent();
+    if (updates.length) {
+      await requireWorkspaceResultGit(root, ["update-ref", "--stdin", "-z"], {
+        input: Buffer.from(updates.join("")),
+        baseEnv,
+        beforeInput: assertCurrent,
+      });
+    }
+  });
+}

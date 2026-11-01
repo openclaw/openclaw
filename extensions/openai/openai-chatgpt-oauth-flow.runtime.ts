@@ -3,7 +3,6 @@ import {
   createOAuthLoginCancelledError,
   createOAuthRefreshError,
   oauthErrorHtml,
-  oauthSuccessHtml,
   parseOAuthAuthorizationInput,
   resolveOpenAICodexAuthIdentity,
   throwIfOAuthLoginAborted,
@@ -115,10 +114,6 @@ export async function loginOpenAICodex(options: {
       expectedState: state,
       bindOnlyHostname: CALLBACK_HOST,
       signal: options.signal,
-      renderSuccess: () => ({
-        body: oauthSuccessHtml("OpenAI authentication completed. You can close this window."),
-        contentType: "text/html; charset=utf-8",
-      }),
       renderError: (message) => ({
         body: oauthErrorHtml(message),
         contentType: "text/html; charset=utf-8",

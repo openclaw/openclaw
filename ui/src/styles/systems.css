@@ -52,7 +52,7 @@ openclaw-systems-page {
   height: 32px;
   padding: 6px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
   flex: 0 0 auto;
@@ -286,7 +286,7 @@ openclaw-systems-page {
   background: transparent;
   border: 1px solid var(--border-strong);
   padding: 8px 12px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   color: var(--text);
   margin-top: 18px;
   font-size: 12px;

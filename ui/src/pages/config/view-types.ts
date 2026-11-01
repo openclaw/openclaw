@@ -102,6 +102,8 @@ type ConfigViewOptions = Partial<
   excludeSections?: readonly string[];
   /** Embedded schema editors can provide their own section chrome. */
   embeddedEditor?: boolean;
+  /** Append Advanced sections without blocking one browser task. */
+  progressive?: boolean;
   sectionPrelude?: JSX.Element;
   renderSection?: (editor: JSX.Element) => JSX.Element;
   settingsLayout?: "tabs" | "accordion";

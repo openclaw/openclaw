@@ -121,6 +121,12 @@ private sandbox file workspaces return `not_git`; their Files browser remains
 available. Existing sharing, agent, and sandbox access rules still apply; no
 general Gateway read grant is needed.
 
+The Control UI waits for the session's projected workspace access before loading
+changes. When the operator role cannot read the host workspace, Review explains
+the restriction without requesting a diff. If the workspace changes during an
+admitted diff read, the Gateway returns retryable `UNAVAILABLE`; refresh Review
+to read the current workspace. Authorization failures remain `FORBIDDEN`.
+
 Session readers can use `sessions.files.list`, `sessions.files.get`, and
 `sessions.files.assets` for files within the workspace admitted to both the
 visible session and the caller. A caller whose role requires a sandbox cannot

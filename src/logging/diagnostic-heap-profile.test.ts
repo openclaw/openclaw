@@ -1,3 +1,4 @@
+import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -107,11 +108,14 @@ describe("diagnostic heap profile owner", () => {
     const { sanitizeDiagnosticHeapProfile } = await import("./diagnostic-heap-profile.js");
     // Recorded on Node 26; only the fixture installation path was normalized.
     // Expected bytes came from the synchronous sanitizer before this change.
+    const split = vi.spyOn(String.prototype, "split");
     const result = await sanitizeDiagnosticHeapProfile(
       recordedProfile.raw,
       recordedProfile.packageRoot,
       { ...recordedProfile.metadata, durationLimitReason: "collected-samples" },
     );
+    expect(split).not.toHaveBeenCalledWith(path.sep);
+    split.mockRestore();
     expect(JSON.stringify(result)).toBe(JSON.stringify(recordedProfile.sanitized));
   });
 
@@ -466,6 +470,65 @@ describe("diagnostic heap profile owner", () => {
     }
     expect(Buffer.byteLength(JSON.stringify(outcome.result))).toBeLessThanOrEqual(1024 * 1024);
   });
+
+  it.each([true, false])(
+    "retains allocation callers beyond recursive=%s dependency stacks",
+    async (recursive) => {
+      const value = profile();
+      // Zero-byte siblings force the public capture into its bounded summary path.
+      value.head.children = Array.from({ length: 9000 }, (_, index) => ({
+        id: index + 2,
+        selfSize: 0,
+        callFrame: frame(),
+        children: [],
+      }));
+      let parent = value.head;
+      const names = [
+        "refreshSchemas",
+        "recreateSchemas",
+        ...Array.from({ length: 40 }, (_, index) =>
+          recursive
+            ? index % 2
+              ? "findChildError"
+              : "findJsonSchemaNodeError"
+            : `dependency${index}`,
+        ),
+        "allocateSchema",
+      ];
+      for (const [index, name] of names.entries()) {
+        const node = {
+          id: 10000 + index,
+          selfSize: 0,
+          callFrame: {
+            ...frame(name),
+            url:
+              index < 2
+                ? "/fixture/openclaw/dist/schemas.js"
+                : "/fixture/openclaw/node_modules/@openclaw/json-schema/index.js",
+          },
+          children: [],
+        };
+        parent.children.push(node);
+        parent = node;
+      }
+      parent.selfSize = 3_880_000;
+      value.samples = [{ nodeId: parent.id, size: parent.selfSize, ordinal: 1 }];
+      native.post.mockResolvedValue({ profile: value });
+      const outcome = await capture();
+      if (outcome.status !== "complete" || !("summary" in outcome.result)) {
+        throw new Error("expected summary");
+      }
+      const allocation = outcome.result.summary.find((row) => row.selfBytes === 3_880_000)!;
+      expect(allocation.count).toBe(1);
+      expect(allocation.stack[0].functionName).toBe("allocateSchema");
+      expect(allocation.stack.map((entry) => entry.functionName)).toEqual(
+        expect.arrayContaining(["recreateSchemas", "refreshSchemas"]),
+      );
+      expect(allocation.stack.length).toBeLessThanOrEqual(8);
+      expect(allocation.stack.some((entry) => entry.functionName.includes("×20"))).toBe(recursive);
+      expect(Buffer.byteLength(JSON.stringify(outcome.result))).toBeLessThanOrEqual(1024 * 1024);
+    },
+  );
 
   it("yields during sanitization while retaining capture ownership and checking revocation", async () => {
     const value = profile();

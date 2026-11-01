@@ -41,12 +41,12 @@ export function renderSidebarHelpMenu(): MenuItem | undefined {
       className: "sidebar-identity-menu__help",
     }),
     trigger: (
-      <span class="sidebar-customize-menu__trigger">
+      <>
         <span class="nav-item__icon" aria-hidden="true">
           <Icon name="circleQuestionMark" />
         </span>
         <span class="sidebar-customize-menu__text">{t("agentChip.help")}</span>
-      </span>
+      </>
     ),
     content: undefined,
     children: IDENTITY_MENU_LINKS.map((link) => ({
