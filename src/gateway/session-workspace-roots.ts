@@ -1,6 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
+import {
+  resolveOwnedSessionSandboxRuntimeStatus,
+  resolveSandboxRuntimeStatus,
+} from "../agents/sandbox/runtime-status.js";
 import { resolveSessionPermissionCoreToolPolicy } from "../agents/session-permission-exec-mode.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../agents/tool-fs-policy.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
@@ -27,6 +30,35 @@ type SessionFileReadContext = {
   fileToolsOnGatewayHost?: boolean;
   requireWorkspaceOnly?: boolean;
 };
+
+export function isUnscopedSessionHostWorkspace(
+  params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    sessionKey: string;
+    entry: Partial<InternalSessionEntry>;
+  },
+  prepared?: { root?: string; sandboxed: boolean },
+): boolean {
+  const { cfg, agentId, sessionKey, entry } = params;
+  if (entry.repositoryWorkspaceId || entry.execNode) {
+    return false;
+  }
+  const root = prepared ? prepared.root : resolveSessionWorkspaceRoots(cfg, agentId, entry).root;
+  return Boolean(
+    root &&
+    (entry.worktree?.id ||
+      !(
+        prepared?.sandboxed ??
+        resolveOwnedSessionSandboxRuntimeStatus({
+          cfg,
+          agentId,
+          sessionKey,
+          preparedSessionEntry: entry,
+        }).sandboxed
+      )),
+  );
+}
 
 function resolveSessionFileReadScope(
   cfg: OpenClawConfig,

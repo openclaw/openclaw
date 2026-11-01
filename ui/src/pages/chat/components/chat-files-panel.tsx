@@ -320,6 +320,22 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
                 rendered();
                 return preview();
               };
+              const browseFiles = () => {
+                if (props.activeId !== entry().id) {
+                  return;
+                }
+                const sessionKey = props.sessionKey;
+                showBrowser();
+                onSettled(() => {
+                  if (
+                    host.isConnected &&
+                    props.sessionKey === sessionKey &&
+                    props.activeId === null
+                  ) {
+                    catalog.focus();
+                  }
+                });
+              };
               const FilePath = () => (
                 <span
                   ref={createTextOverflow(() => entry().label)}
@@ -396,6 +412,11 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
                                 icon={<Icon name="fileText" />}
                                 heading={t("chat.detailPanel.unavailable")}
                                 description={formatUiError(error())}
+                                action={
+                                  <button type="button" class="btn" onClick={browseFiles}>
+                                    {t("chat.workspaceFiles.browseFiles")}
+                                  </button>
+                                }
                               />
                             </div>
                           </section>
@@ -412,22 +433,7 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
                             <Detail
                               content={content()}
                               previewId={entry().id}
-                              onBrowseFiles={() => {
-                                if (props.activeId !== entry().id) {
-                                  return;
-                                }
-                                const sessionKey = props.sessionKey;
-                                showBrowser();
-                                onSettled(() => {
-                                  if (
-                                    host.isConnected &&
-                                    props.sessionKey === sessionKey &&
-                                    props.activeId === null
-                                  ) {
-                                    catalog.focus();
-                                  }
-                                });
-                              }}
+                              onBrowseFiles={browseFiles}
                             />
                           )}
                         </Show>

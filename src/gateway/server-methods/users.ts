@@ -78,7 +78,7 @@ import {
   authenticatedProfileUnavailableError,
   isGatewayClientProfilePending,
 } from "./gateway-client-identity.js";
-import { preparePersonalGitHubActionV2 } from "./github-personal-authorization.js";
+import { preparePersonalProfileAction } from "./personal-profile-authorization.js";
 import { respondError } from "./response.js";
 import type {
   GatewayRequestHandlerOptions,
@@ -88,6 +88,7 @@ import type {
 } from "./types.js";
 import { publishUserPreferencesChanged } from "./user-preference-events.js";
 import { prepareUserBackgroundAction, usersBackgroundHandlers } from "./users-background.js";
+import { usersChannelIdentityHandlers } from "./users-channel-identity.js";
 import { prepareUserModelAccountAction } from "./users-model-account-access.js";
 import { usersPersonalFileHandlers } from "./users-personal-file.js";
 import {
@@ -235,7 +236,7 @@ async function runPersonalGitHub(
       errorShape(ErrorCodes.FORBIDDEN, error instanceof Error ? error.message : fallbackError),
     );
   try {
-    const action = await preparePersonalGitHubActionV2(options);
+    const action = await preparePersonalProfileAction(options);
     const service = options.context.githubOAuthService?.personal;
     if (!service) {
       throw new Error("GitHub connections are unavailable; retry after Gateway startup.");
@@ -374,6 +375,7 @@ export const usersHandlers: GatewayRequestHandlers = {
       }),
   ),
   ...usersPersonalFileHandlers,
+  ...usersChannelIdentityHandlers,
   ...usersBackgroundHandlers,
   "users.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateUsersListParams, "users.list", respond)) {

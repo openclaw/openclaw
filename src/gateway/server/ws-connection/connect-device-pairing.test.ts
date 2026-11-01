@@ -402,7 +402,7 @@ describe("gateway connect pairing exemptions", () => {
           ok: false,
           error: {
             code: "FORBIDDEN",
-            message: "My GitHub requires a current authenticated human Gateway connection.",
+            message: "Personal profile requires a current authenticated human Gateway connection.",
           },
         });
       }

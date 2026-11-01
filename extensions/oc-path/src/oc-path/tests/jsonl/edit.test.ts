@@ -11,9 +11,9 @@ function edit(raw: string, path: string, value: JsoncValue) {
 }
 
 describe("JSONL edits", () => {
-  const log = '{"event":"start"}\n{"event":"step","n":1}\n{"event":"end"}\n';
+  const log = '{"event":"start"}\n{"event":"step","n":1}\n{"event":0,"event":"end"}\n';
 
-  it("resolves $last and edits the most recent value line", () => {
+  it("resolves $last and edits the effective key on the most recent line", () => {
     const r = edit(log, "oc://log/$last/event", { kind: "string", value: "final" });
     expect(r.raw).toBe(log.replace('"end"', '"final"'));
   });

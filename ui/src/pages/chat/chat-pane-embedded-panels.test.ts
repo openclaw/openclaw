@@ -616,8 +616,15 @@ it("retains default Review content and collapsed files while switching tabs, foc
     client: { request },
     connected: true,
     connectionEpoch: 1,
-    hello: { features: { methods: ["sessions.diff"] } },
+    hello: gatewayHelloForMethods(["sessions.diff"]),
     sessionKey: "agent:main:review",
+    sessionsResult: {
+      ts: 1,
+      path: "test",
+      count: 1,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [{ key: "agent:main:review", kind: "direct", workspaceReadDisabledReason: null }],
+    },
     sidebarLayout: { columns: [] },
   });
   let presented = true;

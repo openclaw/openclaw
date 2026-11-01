@@ -68,7 +68,13 @@ export function resolveCronJobGrantDefinitionRevision(job: CronStoredJob): strin
   if (!storedDefinition) {
     throw new Error(`Cannot canonicalize cron job ${job.id} for grant revision`);
   }
-  const { enabled: _enabled, state: _state, ...definition } = storedDefinition;
+  const {
+    enabled: _enabled,
+    state: _state,
+    ownerProfileId: _ownerProfileId,
+    ownerTransferPending: _ownerTransferPending,
+    ...definition
+  } = storedDefinition;
   return hashCronJobDefinition(definition);
 }
 
@@ -79,8 +85,16 @@ export function decodeStoredCronJobConfig(
   const schedule = isRecord(jobJson.schedule) ? jobJson.schedule : undefined;
   const payload = isRecord(jobJson.payload) ? jobJson.payload : undefined;
   const streamSandbox = parseCronStreamSandboxTarget(jobJson.streamSandbox);
+  // Older stores retained the trusted human creator before management ownership was explicit.
+  const actor = isRecord(jobJson.createdActor) ? jobJson.createdActor : undefined;
+  const ownerProfileId =
+    jobJson.ownerProfileId ??
+    (actor?.type === "human" && actor.source === "profile" && typeof actor.id === "string"
+      ? actor.id
+      : undefined);
   return {
     ...decodeDeliveryConfig(jobJson),
+    ...(ownerProfileId ? { ownerProfileId } : {}),
     ...(schedule?.kind === "sandbox-stream" && streamSandbox
       ? { schedule: { ...schedule, kind: "stream" }, streamSandbox }
       : {}),

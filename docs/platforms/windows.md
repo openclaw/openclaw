@@ -320,6 +320,8 @@ Doctor compares task definitions using Task Scheduler's defaults. An omitted
 `Enabled` element means `true` for both the task and its logon trigger, so XML
 export differences do not cause drift warnings or failed refresh verification.
 Explicitly disabled tasks and triggers are still reported.
+Status and Doctor also tolerate a scheduler-injected `UseUnifiedSchedulingEngine=true`.
+Replacement verification still protects that value from being silently discarded.
 
 The task check allows Windows PowerShell to inherit or create a console because
 some PowerShell 5.1 hosts fail inspection when console creation is disabled.

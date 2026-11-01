@@ -19,6 +19,7 @@ type PendingAuthorization = {
   accept: (result: AuthorizationResult) => void;
   reject: (error: Error) => void;
   isCurrent: () => boolean;
+  browserBinding?: { cookieName: string; cookieValue: string };
 };
 
 const pendingAuthorizations = resolveGlobalMap<string, PendingAuthorization>(
@@ -76,6 +77,8 @@ export function createProviderBrowserAuthSession(params: {
   signal?: AbortSignal;
   openUrl: (url: string) => Promise<void>;
   browserOrigin?: GatewayWsBrowserOrigin;
+  /** Bind account-link callbacks to the browser that initiated them. */
+  browserBinding?: { cookieName: string; cookieValue: string };
 }) {
   const lifetime = new AbortController();
   const browserOriginSignal = params.browserOrigin
@@ -143,6 +146,7 @@ export function createProviderBrowserAuthSession(params: {
     const requestSignal = signal;
     const onAbort = () => callback.reject(requestSignal.reason);
     const pending: PendingAuthorization = {
+      browserBinding: params.browserBinding,
       accept: callback.resolve,
       reject: callback.reject,
       isCurrent: () =>
@@ -231,6 +235,17 @@ export function handleProviderOAuthCallback(req: IncomingMessage, res: ServerRes
     respond(res, 410, "This sign-in link expired or was already used.");
     return true;
   }
+  if (pending.browserBinding) {
+    const { cookieName, cookieValue } = pending.browserBinding;
+    const values = (req.headers.cookie ?? "")
+      .split(";")
+      .map((part) => part.trim())
+      .filter((part) => part.startsWith(cookieName + "="));
+    if (values.length !== 1 || values[0] !== cookieName + "=" + cookieValue) {
+      respond(res, 403, "Return to the browser that started account linking.");
+      return true;
+    }
+  }
   const code = url.searchParams.get("code");
   const denied = url.searchParams.has("error");
   if (
@@ -240,6 +255,12 @@ export function handleProviderOAuthCallback(req: IncomingMessage, res: ServerRes
   ) {
     respond(res, 400, "Invalid sign-in response.");
     return true;
+  }
+  if (pending.browserBinding) {
+    res.setHeader(
+      "Set-Cookie",
+      pending.browserBinding.cookieName + "=; Path=/; Max-Age=0; SameSite=Lax",
+    );
   }
   pendingAuthorizations.delete(state);
   if (denied) {
