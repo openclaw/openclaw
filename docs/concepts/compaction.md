@@ -91,6 +91,10 @@ Scheduled turns in an existing session use the same built-in request checks.
 Their context totals update during requests and after completion even when the
 automation preserves the conversation's displayed model and billing snapshot.
 
+Preflight uses published context totals, falling back to a bounded recent usage
+tail or the same bounded context view used by the runtime. Missing usage does not
+trigger a second accounting pass over the entire conversation history.
+
 In the built-in runtime, native ChatGPT sign-in uses V2 compaction at normal
 request boundaries, including between completed tool rounds. It starts when the
 known or projected request occupancy reaches the smaller of the reserve-based

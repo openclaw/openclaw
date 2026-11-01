@@ -878,13 +878,6 @@ textarea.settings-input {
   font-size: var(--control-ui-text-sm);
 }
 
-/* Keep >=16px on touch so focusing an editor does not trigger mobile zoom. */
-@media (hover: none) and (pointer: coarse) {
-  textarea.settings-input {
-    font-size: 16px;
-  }
-}
-
 .settings-status {
   display: inline-flex;
   align-items: center;
@@ -1431,6 +1424,10 @@ textarea.settings-input {
 
 :root[data-theme-mode="light"] .settings-sidebar__agent .agent-select__trigger {
   background: transparent;
+}
+
+.settings-sidebar__agent .agent-select__trigger:focus-visible {
+  border-color: var(--field-focus-border);
 }
 
 .settings-sidebar__agent .agent-select__trigger:hover:not(:disabled),

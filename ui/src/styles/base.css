@@ -304,6 +304,12 @@
   --control-ui-text-md: calc(14px * var(--control-ui-text-scale));
   --control-ui-text-lg: calc(16px * var(--control-ui-text-scale));
   --control-ui-input-text-size: max(16px, calc(14px * var(--control-ui-text-scale)));
+  --field-padding-inline: 10px;
+  --field-radius: calc(10px * var(--openclaw-corner-radius-scale));
+  --field-font-size: var(--control-ui-text-sm);
+  --field-bg: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  --field-border: color-mix(in srgb, var(--border) 70%, transparent);
+  --field-focus-border: color-mix(in srgb, var(--accent) 85%, var(--text));
   --chat-text-size: var(--control-ui-text-md);
   --chat-block-gap: var(--chat-text-size);
 
@@ -525,10 +531,7 @@
   .sidebar-recent-session.sidebar-recent-session,
   .plugin-catalog-detail__security-score.plugin-catalog-detail__security-score,
   .settings-sidebar__item.settings-sidebar__item,
-  .btn.btn,
-  .agent-select__trigger.agent-select__trigger,
-  .settings-input.settings-input,
-  .field.field :is(input, textarea, select) {
+  .btn.btn {
     border-radius: calc(10px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
