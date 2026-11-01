@@ -97,7 +97,7 @@ function createMainRefreshTemplate(directory: string, perWorktreeConfig: boolean
   copyPrWrapperSources(canonical);
   const provisionSource = process.env.OPENCLAW_PR_BOOTSTRAP_PROVISION_SOURCE;
   if (process.env.OPENCLAW_PR_BOOTSTRAP_MEASURE && provisionSource) {
-    cpSync(provisionSource, join(canonical, "scripts/pr-lib/worktree-provision.mts"));
+    cpSync(provisionSource, join(canonical, "scripts/pr-lib"), { recursive: true });
   }
   cpSync(join(process.cwd(), ".github", "workflows"), join(canonical, ".github", "workflows"), {
     recursive: true,

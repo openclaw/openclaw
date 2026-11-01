@@ -6,8 +6,8 @@
  * creation; PR 43 is warm; 44–47 retain sparse-transition correctness coverage.
  * The diagnostic timeout is separate from the unchanged regression-test budget.
  * Add --counts for a separate traced diagnostic run. Timing acceptance is untraced.
- * --provision-ref <commit> substitutes only that committed provisioner before the
- * fixture's trusted source commit. All other source and the harness stay fixed.
+ * --provision-ref <commit> substitutes that committed provisioner and lock owner
+ * before the fixture's trusted commit. Other source and the harness stay fixed.
  * --profile-dir <directory> records separate Node CPU profiles, never timing proof.
  * Git Trace2 counts include the native owner checks, not just useful Git commands.
  * Acceptance: fewer unnecessary launches, lower median cold/warm latency, no
@@ -38,13 +38,16 @@ const provisionRef = execFileSync(
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pr-bootstrap-measure-"));
 const measure = path.join(scratch, "flows.jsonl");
 const load = os.loadavg();
-const provisionSource = path.join(scratch, "worktree-provision.mts");
+const provisionSource = path.join(scratch, "provision-source");
 const profilePreload = path.join(scratch, "profile.mjs");
 try {
-  fs.writeFileSync(
-    provisionSource,
-    execFileSync("git", ["show", `${provisionRef}:scripts/pr-lib/worktree-provision.mts`]),
-  );
+  fs.mkdirSync(provisionSource);
+  for (const file of ["worktree-provision.mts", "operation-lock.sh"]) {
+    fs.writeFileSync(
+      path.join(provisionSource, file),
+      execFileSync("git", ["show", `${provisionRef}:scripts/pr-lib/${file}`]),
+    );
+  }
   if (values["profile-dir"]) {
     const directory = path.resolve(values["profile-dir"]);
     fs.mkdirSync(directory, { recursive: true });
