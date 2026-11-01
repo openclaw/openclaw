@@ -89,6 +89,17 @@ extension DashboardWindowOwnershipTests {
             other?.closeDashboard()
             NSWindow.removeFrame(usingName: otherAutosaveName)
         }
+        let retirement = DashboardRetirementNavigation()
+        if transition == "close" || transition == "replacement" {
+            controller.webView.navigationDelegate = retirement
+        }
+        defer {
+            if transition == "close" || transition == "replacement" {
+                controller.webView.navigationDelegate = nil
+                controller.webView.loadHTMLString("", baseURL: nil)
+            }
+            withExtendedLifetime(retirement) {}
+        }
         switch transition {
         case "revoke-session":
             // Renewal revokes the lease synchronously, before cookie cleanup replaces the document.

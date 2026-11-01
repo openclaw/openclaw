@@ -50,25 +50,19 @@ describe("HandshakeAuthLogLimiter", () => {
 
   it("only rate-limits benign missing-credential startup retries", () => {
     const limiter = new HandshakeAuthLogLimiter();
-    for (const reason of ["token_missing", "password_missing"]) {
-      const client = { reason, authProvided: "none" };
-      expect(limiter.missingCredentialLogSuffix(client, 0)).toBe("");
-      expect(limiter.missingCredentialLogSuffix(client, 1)).toBeUndefined();
-    }
-
-    for (const reason of [
-      "token_mismatch",
-      "password_mismatch",
-      "device_token_mismatch",
-      "rate_limited",
-      "token_missing_config",
+    for (const { reason, authProvided, suppressed } of [
+      { reason: "token_missing", authProvided: "none", suppressed: true },
+      { reason: "password_missing", authProvided: "none", suppressed: true },
+      { reason: "token_mismatch", authProvided: "none", suppressed: false },
+      { reason: "password_mismatch", authProvided: "none", suppressed: false },
+      { reason: "device_token_mismatch", authProvided: "none", suppressed: false },
+      { reason: "rate_limited", authProvided: "none", suppressed: false },
+      { reason: "token_missing_config", authProvided: "none", suppressed: false },
+      { reason: "token_missing", authProvided: "token", suppressed: false },
     ]) {
-      const client = { reason, authProvided: "none" };
+      const client = { reason, authProvided };
       expect(limiter.missingCredentialLogSuffix(client, 0)).toBe("");
-      expect(limiter.missingCredentialLogSuffix(client, 1)).toBe("");
+      expect(limiter.missingCredentialLogSuffix(client, 1)).toBe(suppressed ? undefined : "");
     }
-    const credentialProvided = { reason: "token_missing", authProvided: "token" };
-    expect(limiter.missingCredentialLogSuffix(credentialProvided, 0)).toBe("");
-    expect(limiter.missingCredentialLogSuffix(credentialProvided, 1)).toBe("");
   });
 });
