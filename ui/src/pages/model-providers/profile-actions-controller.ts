@@ -298,6 +298,8 @@ export function createModelProviderProfileActions(options: {
       }
     },
     resetOrders(): void {
+      // Retire queued intent, but keep the active slot until the accepted save's
+      // finally releases it and drains any newer scope's order.
       pendingOrders.clear();
       options.setOrders({});
     },
