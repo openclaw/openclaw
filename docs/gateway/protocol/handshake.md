@@ -124,6 +124,14 @@ reports the negotiated role and the current socket's effective authorization
 scopes even when no device token is issued (shape above). `deviceToken`, when
 present, is the primary reusable credential for the same device and role.
 
+`server.commit` and `server.builtAt` optionally identify the running Gateway
+artifact. They are captured at process startup, not read from a checkout each
+time a client connects. Missing build provenance is omitted rather than replaced
+with the current time. Authenticated members receive these fields alongside
+`server.version` without requiring diagnostic or update scopes. The Control UI
+shows them on **Settings → About**, separately from its frontend build details;
+`system.info` and `update.status` retain their existing access requirements.
+
 Clients that do not use health details at connection time can advertise
 `hello-health-on-demand` in `connect.caps`, as the Control UI does. The Gateway
 then sends `snapshot.health: {}` instead of the cached health details. The

@@ -1,4 +1,5 @@
 import * as childProcess from "node:child_process";
+import path from "node:path";
 import { promisify as promisifyCaptured } from "node:util";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -226,13 +227,15 @@ beforeEach(() => {
     },
   }));
   vi.stubEnv("OPENCLAW_PROFILE", "default");
-  vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/doctor-state");
-  vi.stubEnv("OPENCLAW_CONFIG_PATH", "/synthetic/doctor-state/openclaw.json");
+  const stateDir = tempDirs.make("doctor-settlement-state-");
+  const configPath = path.join(stateDir, "openclaw.json");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
   vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
   vi.spyOn(process, "kill").mockImplementation(boundary.native);
   const serviceEnv = {
-    OPENCLAW_STATE_DIR: "/synthetic/doctor-state",
-    OPENCLAW_CONFIG_PATH: "/synthetic/doctor-state/openclaw.json",
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: configPath,
   };
   const verdict = {
     kind: "owned" as const,

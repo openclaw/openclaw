@@ -1531,5 +1531,78 @@
         }
       }
     }
+  },
+  "ca": {
+    "common": {
+      "cancel": "Cancel·la",
+      "configured": "Configurat",
+      "hideAdvanced": "Amaga les opcions avançades",
+      "importFromRelays": "Importa des de repetidors",
+      "importing": "S'està important…",
+      "lastStart": "Últim inici",
+      "na": "n/d",
+      "no": "No",
+      "publicKey": "Clau pública",
+      "refresh": "Actualitza",
+      "running": "En execució",
+      "saveAndPublish": "Desa i publica",
+      "saving": "S'està desant…",
+      "showAdvanced": "Mostra les opcions avançades",
+      "unsavedChanges": "Tens canvis sense desar",
+      "yes": "Sí"
+    },
+    "channels": {
+      "lastError": "Últim error",
+      "nostr": {
+        "title": "Nostr",
+        "subtitle": "Missatges directes descentralitzats mitjançant repetidors Nostr (NIP-04).",
+        "profile": "Perfil",
+        "editProfile": "Edita el perfil",
+        "profilePicture": "Foto de perfil",
+        "noProfile": "No s'ha configurat cap perfil.",
+        "noProfileHint": "Fes clic a \"Edita el perfil\" per afegir el teu nom, la biografia i l'avatar.",
+        "name": "Nom",
+        "displayName": "Nom visible",
+        "about": "Informació",
+        "advanced": "Opcions avançades",
+        "profilePicturePreview": "Previsualització de la foto de perfil",
+        "account": "Compte",
+        "username": "Nom d'usuari",
+        "usernameHelp": "Nom d'usuari curt (p. ex., satoshi)",
+        "bio": "Biografia",
+        "bioPlaceholder": "Explica qui ets...",
+        "bioHelp": "Una breu biografia o descripció",
+        "displayNameHelp": "El teu nom visible complet",
+        "avatarUrl": "URL de l'avatar",
+        "avatarHelp": "URL HTTPS de la teva foto de perfil",
+        "bannerUrl": "URL de la imatge de capçalera",
+        "bannerHelp": "URL HTTPS d'una imatge de capçalera",
+        "website": "Lloc web",
+        "websiteHelp": "El vostre lloc web personal",
+        "nip05Identifier": "Identificador NIP-05",
+        "nip05Help": "Identificador verificable (p. ex., you@domain.com)",
+        "lightningAddress": "Adreça Lightning",
+        "lightningHelp": "Adreça Lightning per a propines (LUD-16)",
+        "placeholders": {
+          "username": "satoshi",
+          "displayName": "Satoshi Nakamoto",
+          "avatarUrl": "https://example.com/avatar.jpg",
+          "bannerUrl": "https://example.com/banner.jpg",
+          "website": "https://example.com",
+          "nip05": "you@example.com",
+          "lightningAddress": "you@getalby.com"
+        },
+        "notices": {
+          "timeout": "La sol·licitud ha superat el temps d'espera de 30 segons; és possible que el servidor hagi aplicat el canvi igualment — comproveu el perfil abans de tornar-ho a provar.",
+          "operationFailed": "{prefix}: {error}",
+          "updateFailed": "No s'ha pogut actualitzar el perfil",
+          "publishFailed": "No s'ha pogut publicar el perfil en cap servidor de retransmissió.",
+          "published": "Perfil publicat als servidors de retransmissió.",
+          "importFailed": "No s'ha pogut importar el perfil",
+          "importedFromRelays": "Perfil importat dels servidors de retransmissió. Reviseu-lo i publiqueu-lo.",
+          "imported": "S'ha importat el perfil. Revisa'l i publica'l."
+        }
+      }
+    }
   }
 }

@@ -91,6 +91,18 @@ it("defers fixed reports until nearby, then retains their body and current conte
   auto.widget = { ...auto.widget!, heightMode: "fixed", revision: 2, props: cell.widget!.props };
   await waitForSolid(() => expect(autoReport?.textContent).toContain("Updated while hidden"));
   expect(auto.querySelector("openclaw-report-widget")).toBe(autoReport);
+  const pending = mountCell(
+    { ...widget, name: "pending-report", grantState: "pending" },
+    { context },
+  );
+  await waitForSolid(() =>
+    expect(pending.querySelector('[data-test-id="board-pending"]')).not.toBeNull(),
+  );
+  expect(pending.querySelector("openclaw-report-widget")).toBeNull();
+  pending.widget = { ...pending.widget!, grantState: "rejected" };
+  await waitForSolid(() =>
+    expect(pending.querySelector('[data-test-id="board-rejected"]')).not.toBeNull(),
+  );
   cleanupCells();
   await waitForSolid(() => expect(observers.every(({ targets }) => targets.size === 0)).toBe(true));
 });

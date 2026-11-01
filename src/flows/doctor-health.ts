@@ -15,6 +15,7 @@ import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.med
 import { retainUpdateDoctorProcesses } from "../infra/update-doctor-process-custody.js";
 import {
   captureUpdateDoctorConfigWrites,
+  getUpdateDoctorConfigCapture,
   DoctorMaintenanceRefusalError,
   normalizeUpdatePostInstallDoctorWarnings,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
@@ -102,7 +103,7 @@ export async function runDoctorHealthFlow(
       }
       const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
       return withPluginLoadDiagnostics((diagnostics) => {
-        const runDoctor = (capture?: DoctorConfigCapture) =>
+        const runDoctor = (capture = getUpdateDoctorConfigCapture()) =>
           runDoctorHealthFlowWithResult(
             (selectedRuntime, code) => {
               requestedExit = () => startup.exitDoctorHealthFlow(selectedRuntime, code);
@@ -111,7 +112,7 @@ export async function runDoctorHealthFlow(
             options,
             preparedPreflight,
             diagnostics,
-            resultPath && capture ? { resultPath, capture } : undefined,
+            capture ? { resultPath, capture } : undefined,
             writeAuthority,
             resumeCapture,
             preCaptureRehearsalRoot,
@@ -141,7 +142,7 @@ async function runDoctorHealthFlowWithResult(
   options: DoctorOptions,
   databasePreflight: DoctorDatabasePreflight | undefined,
   diagnostics: readonly PluginDiagnostic[],
-  updateResult?: { resultPath: string; capture: DoctorConfigCapture },
+  updateResult?: { resultPath?: string; capture: DoctorConfigCapture },
   writeAuthority?: UpdateDoctorWriteAuthority,
   resumeCapture?: () => void,
   preCaptureRehearsalRoot?: string,
@@ -591,7 +592,7 @@ async function runDoctorHealthFlowWithResult(
           }
         : {}),
     };
-    if (updateResult && doctorResult.status === "advisory") {
+    if (updateResult?.resultPath && doctorResult.status === "advisory") {
       exitCode = UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE;
       return;
     }

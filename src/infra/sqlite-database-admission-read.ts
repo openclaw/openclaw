@@ -63,10 +63,11 @@ export function createSqliteDatabaseAdmissionReader(owner: {
       throw error;
     }
     let released = false;
+    const current = state.registry.prepareLocation(location);
     return {
       location,
-      isCurrent: () => !released && state.registry.forLocation(location) === record,
-      release() {
+      isCurrent: () => !released && current() === record,
+      release(this: void) {
         if (!released) {
           released = true;
           release(record);

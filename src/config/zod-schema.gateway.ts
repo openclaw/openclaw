@@ -192,6 +192,7 @@ export const GatewayConfigSchema = z
       })
       .optional(),
     github: GatewayGitHubEndpointSchema.optional(),
+    repositoryIntegration: z.string().trim().min(1).optional(),
     projects: z
       .strictObject({
         defaultRepository: z

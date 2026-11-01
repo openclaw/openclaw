@@ -95,6 +95,7 @@ async function providerFixture(signal: AbortSignal) {
   const issued = new Set<string>();
   const heldResumes = new Map<number, { response: ServerResponse; ordinal: number }>();
   let finalizer: ServerResponse | undefined;
+  let finalizerAdmission: unknown;
   let ordinal = 0;
   let restarting = false;
   let origin = "";
@@ -114,6 +115,7 @@ async function providerFixture(signal: AbortSignal) {
         failed,
         async (request, response, body) => {
           if (request.url === "/finalize") {
+            finalizerAdmission = body;
             finalizer = response;
             gate("finalize").resolve();
             return;
@@ -295,6 +297,7 @@ async function providerFixture(signal: AbortSignal) {
     baseUrl: `${origin}/v1`,
     finalizerUrl: `${origin}/finalize`,
     timerUrl: `${origin}/timer`,
+    finalizerAdmission: () => finalizerAdmission,
     releaseFinalizer: () => {
       finalizer?.writeHead(204).end();
       finalizer = undefined;
@@ -361,20 +364,27 @@ it.skipIf(process.platform === "win32").for([true, false])(
         configSchema: { type: "object", properties: {} },
       },
       `import { channel } from "node:diagnostics_channel";
+      import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
       export default { id: "slow-finalizer", register(api) {
       channel("openclaw.agent-database.reservation").subscribe((event) => {
         if (event.workerOperations?.includes("session.rowTranscript.backfill"))
           api.logger.info("[close-backfill-proof] " + JSON.stringify(event));
       });
+      const state = api.runtime.state.openKeyedStoreV2({ namespace: "close-proof", maxEntries: 1 }, { assertCurrent() {} });
       api.registerService({ id: "shared-state-timer", start(ctx) {
         ctx.scheduler.schedule({ id: "cron-read", delayMs: 0, everyMs: 1000, async run() {
+          await state.register("ready", true);
           await ctx.getCron().list();
           await fetch(${JSON.stringify(provider.timerUrl)}, { method: "POST", body: "{}" });
         } });
       }, stop() {} });
       api.on("agent_end", async (event, ctx) => {
-        if (!event.success && ctx.sessionKey === ${JSON.stringify(key(0, "stream"))})
-          await fetch(${JSON.stringify(provider.finalizerUrl)}, { method: "POST", body: "{}" });
+        if (!event.success && ctx.sessionKey === ${JSON.stringify(key(0, "stream"))}) {
+          let admission = "accepted", attempts = 0;
+          try { await retryAsync(() => { attempts++; return state.lookup("ready"); }, { attempts: 3, minDelayMs: 0, maxDelayMs: 0 }); }
+          catch (error) { admission = String(error.cause?.code ?? error.code); }
+          await fetch(${JSON.stringify(provider.finalizerUrl)}, { method: "POST", body: JSON.stringify({ admission, attempts }) });
+        }
       });
     } };`,
     );
@@ -631,6 +641,10 @@ it.skipIf(process.platform === "win32").for([true, false])(
               { timeout: 10_000 },
             );
             provider.releaseFinalizer();
+            expect.soft(provider.finalizerAdmission()).toEqual({
+              admission: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+              attempts: 1,
+            });
           }
           await vi.waitFor(() => expect(child.exitCode, instance.logs()).toBe(0), {
             timeout: 10_000,
@@ -642,7 +656,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
           const shutdownMs = Date.now() - started;
           const shutdownLogs = (await readFile(logPath, "utf8")).slice(shutdownLogStart);
           expect(shutdownLogs).not.toMatch(
-            /terminal session persistence failed|input completion persistence failed|failed to settle pending agent input|failed to release worktree run lease/,
+            /terminal session persistence failed|input completion persistence failed|failed to settle pending agent input|failed to release worktree run lease|Shared-state worker is retiring|PLUGIN_STATE_OPEN_FAILED/,
           );
           const markerSummary = shutdownLogs.indexOf("shutdown restart resume:");
           const cleanClose = shutdownLogs.indexOf("agent database clean-close receipt:");

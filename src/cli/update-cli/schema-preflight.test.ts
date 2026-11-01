@@ -144,8 +144,8 @@ describe("target-release database schema preflight", () => {
           : [],
       );
       expect(hasSchemaRefusal(result)).toBe(refusal);
-      expect(fs.readFileSync(agentPath)).toEqual(databaseBefore);
-      expect(fs.readFileSync(`${agentPath}-wal`)).toEqual(walBefore);
+      expect(fs.readFileSync(agentPath).equals(databaseBefore), agentPath).toBe(true);
+      expect(fs.readFileSync(`${agentPath}-wal`).equals(walBefore), `${agentPath}-wal`).toBe(true);
     } finally {
       agent.close();
     }
@@ -228,7 +228,7 @@ describe("target-release database schema preflight", () => {
       expect.objectContaining({ kind: "agent", path: agentPath }),
     ]);
     expect(hasSchemaRefusal(result)).toBe(true);
-    expect(fs.readFileSync(statePath)).toEqual(stateBefore);
+    expect(fs.readFileSync(statePath).equals(stateBefore), statePath).toBe(true);
     const inspectedState = new DatabaseSync(statePath, { readOnly: true });
     try {
       expect(inspectedState.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
@@ -277,13 +277,12 @@ describe("target-release database schema preflight", () => {
     );
     expect(result.indeterminate).toEqual([]);
     expect(hasSchemaRefusal(result)).toBe(true);
-    expect(
-      before.map(({ pathname }) => ({
-        pathname,
-        bytes: fs.readFileSync(pathname),
-        mtimeNs: fs.statSync(pathname, { bigint: true }).mtimeNs,
-      })),
-    ).toEqual(before);
+    for (const { bytes, ...metadata } of before) {
+      const { pathname } = metadata;
+      expect(fs.readFileSync(pathname).equals(bytes), pathname).toBe(true);
+      const current = { pathname, mtimeNs: fs.statSync(pathname, { bigint: true }).mtimeNs };
+      expect(current).toEqual(metadata);
+    }
   });
 
   it("unions custom stores across matching contexts and observes deletion holds at the next checkpoint", async () => {
@@ -344,72 +343,67 @@ describe("target-release database schema preflight", () => {
     const refreshed = await checkTargetDatabaseSchemasForContexts({ state: 1, agent: 1 }, contexts);
     expect(agentPaths(refreshed)).toEqual(customPaths.filter((pathname) => pathname !== held.path));
     expect(refreshed.indeterminate).toEqual([]);
-    expect(fs.readFileSync(held.path)).toEqual(heldBefore);
+    expect(fs.readFileSync(held.path).equals(heldBefore), held.path).toBe(true);
     expect(env).toEqual({ OPENCLAW_STATE_DIR: stateDir });
     expect(contexts[1]?.env).toEqual({ OPENCLAW_STATE_DIR: stateDir, HOME: serviceHome });
   });
 });
 
 describe("planned legacy configuration admission", () => {
-  it.each(["different profile"] as const)(
-    "keeps profile ownership and authored bytes across %s",
-    async (scenario) => {
-      await withTempHome(async (home) => {
-        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-          const configPath = await writeOpenClawConfig(home, {
-            gateway: { $include: "gateway.json" },
-          });
-          const includePath = path.join(path.dirname(configPath), "gateway.json");
-          fs.writeFileSync(includePath, '{"mode":"local","bind":"localhost"}\n');
-          const env = { ...process.env, OPENCLAW_CONFIG_PATH: configPath };
-          const original = fs.readFileSync(configPath);
-          const originalInclude = fs.readFileSync(includePath);
-          const { snapshot, writeOptions } = await createConfigIO({
-            env,
-            observe: false,
-          }).readConfigFileSnapshotForWrite();
-          expect(snapshot.valid).toBe(false);
-          const legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
-          expect(legacyConfigPlan).toBeDefined();
-          await expect(
-            captureTargetDatabaseSchemaContext(env).then(() => true),
-          ).rejects.toMatchObject({
-            reason: "invalid-config",
-            message: expect.stringMatching(/gateway\.bind:[\s\S]*openclaw doctor --fix/),
-          });
-          // Exercise the real caller admission forwarding, without inspecting a live service.
-          const { contexts } = await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, () =>
-            inspectUpdateDatabaseContexts({
-              roots: [],
-              updateInstallKind: "package",
-              shouldRestart: false,
-              jsonMode: true,
-              timeoutMs: 1_000,
-              managedServiceRootRedirect: null,
-              legacyConfigPlan,
-            }),
-          );
-          const context = contexts[0]!;
-          expect(context.config.gateway?.bind).toBe("loopback");
-          expect(context.configSnapshot.valid).toBe(false);
-          expect(context.configSnapshot.raw).toBe(original.toString());
-          expect(fs.readFileSync(configPath)).toEqual(original);
-          expect(fs.readFileSync(includePath)).toEqual(originalInclude);
-          expect(fs.existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
-          if (scenario === "different profile") {
-            const otherPath = path.join(path.dirname(configPath), "other.json");
-            fs.writeFileSync(otherPath, original);
-            await expect(
-              captureTargetDatabaseSchemaContext(
-                { ...env, OPENCLAW_CONFIG_PATH: otherPath },
-                { legacyConfigPlan },
-              ).then(() => true),
-            ).rejects.toMatchObject({ reason: "invalid-config" });
-          }
+  it("keeps profile ownership and authored bytes across different profile", async () => {
+    await withTempHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        const configPath = await writeOpenClawConfig(home, {
+          gateway: { $include: "gateway.json" },
         });
+        const includePath = path.join(path.dirname(configPath), "gateway.json");
+        fs.writeFileSync(includePath, '{"mode":"local","bind":"localhost"}\n');
+        const env = { ...process.env, OPENCLAW_CONFIG_PATH: configPath };
+        const original = fs.readFileSync(configPath);
+        const originalInclude = fs.readFileSync(includePath);
+        const { snapshot, writeOptions } = await createConfigIO({
+          env,
+          observe: false,
+        }).readConfigFileSnapshotForWrite();
+        expect(snapshot.valid).toBe(false);
+        const legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
+        expect(legacyConfigPlan).toBeDefined();
+        await expect(
+          captureTargetDatabaseSchemaContext(env).then(() => true),
+        ).rejects.toMatchObject({
+          reason: "invalid-config",
+          message: expect.stringMatching(/gateway\.bind:[\s\S]*openclaw doctor --fix/),
+        });
+        // Exercise the real caller admission forwarding, without inspecting a live service.
+        const { contexts } = await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, () =>
+          inspectUpdateDatabaseContexts({
+            roots: [],
+            updateInstallKind: "package",
+            shouldRestart: false,
+            jsonMode: true,
+            timeoutMs: 1_000,
+            managedServiceRootRedirect: null,
+            legacyConfigPlan,
+          }),
+        );
+        const context = contexts[0]!;
+        expect(context.config.gateway?.bind).toBe("loopback");
+        expect(context.configSnapshot.valid).toBe(false);
+        expect(context.configSnapshot.raw).toBe(original.toString());
+        expect(fs.readFileSync(configPath)).toEqual(original);
+        expect(fs.readFileSync(includePath)).toEqual(originalInclude);
+        expect(fs.existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
+        const otherPath = path.join(path.dirname(configPath), "other.json");
+        fs.writeFileSync(otherPath, original);
+        await expect(
+          captureTargetDatabaseSchemaContext(
+            { ...env, OPENCLAW_CONFIG_PATH: otherPath },
+            { legacyConfigPlan },
+          ).then(() => true),
+        ).rejects.toMatchObject({ reason: "invalid-config" });
       });
-    },
-  );
+    });
+  });
 });
 
 describe("planned migration managed profile isolation", () => {

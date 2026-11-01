@@ -67,9 +67,9 @@ export type ChatThreadState = Parameters<typeof createAsyncQuestionPresentation>
   search: TranscriptSearchState;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
-    turnVideoMessages?: ReadonlyMap<
+    turnMediaMessages?: ReadonlyMap<
       string,
-      readonly import("./chat-turn-video-gallery.ts").TurnVideoMessage[]
+      readonly import("./chat-turn-media-gallery.ts").TurnMediaMessage[]
     >;
     onSetReply?: (target: MessageReplyTarget) => void;
     onOpenReply?: (replyToId: string) => void;
@@ -94,7 +94,7 @@ export type ChatThreadProps = Omit<
   | "presented"
   | "agentId"
   | "mediaPolicyKey"
-  | "getTurnVideoMessages"
+  | "getTurnMediaMessages"
   | "onOpenWorkspaceFile"
 > &
   Pick<

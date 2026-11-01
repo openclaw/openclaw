@@ -83,7 +83,9 @@ export function LogsView(props: LogsProps) {
     // eslint-disable-next-line solid/no-react-specific-props -- The shared status API calls this prop className.
     <PanelRefreshStatus status={props.status} className="logs-refresh-status" />
   );
-  const needle = createMemo(() => normalizeLowercaseStringOrEmpty(props.filterText));
+  const needle = createMemo(() =>
+    normalizeLowercaseStringOrEmpty(props.filterText).normalize("NFC"),
+  );
   const filtered = createMemo(() => {
     const query = needle();
     const matches =
@@ -94,7 +96,9 @@ export function LogsView(props: LogsProps) {
             (!query ||
               normalizeLowercaseStringOrEmpty(
                 [entry.message, entry.subsystem, entry.raw].filter(Boolean).join(" "),
-              ).includes(query));
+              )
+                .normalize("NFC")
+                .includes(query));
     const rows: LogRow[] = [];
     const byKey = new Map<VirtualItem["key"], number>();
     for (const entry of props.entries) {
@@ -148,6 +152,21 @@ export function LogsView(props: LogsProps) {
   const scrollRequest = {};
   let readerScrollPending = false;
   let synchronizeScrollOffset: ((scrolling: boolean) => void) | undefined;
+  const skipSizeAdjustment = () => false;
+  const updateSizeAdjustment = (
+    instance: Virtualizer<HTMLDivElement, HTMLDivElement>,
+    scrolling: boolean,
+    autoFollow = props.autoFollow,
+  ) => {
+    // Measurement writes interrupt WebKit's wheel travel. Keep idle reader anchoring.
+    const reading = scrolling && !autoFollow;
+    instance.shouldAdjustScrollPositionOnItemSizeChange = reading ? skipSizeAdjustment : undefined;
+    // The end anchor bypasses the size predicate; a negative distance disarms it during travel.
+    const scrollEndThreshold = autoFollow ? 120 : reading ? -1 : 0;
+    if (instance.options.scrollEndThreshold !== scrollEndThreshold) {
+      instance.setOptions({ ...instance.options, scrollEndThreshold });
+    }
+  };
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLDivElement>({
     count: 0,
     getScrollElement: () => stream,
@@ -155,10 +174,14 @@ export function LogsView(props: LogsProps) {
     estimateSize: () => 44,
     observeElementRect,
     observeElementOffset: (instance, notify) => {
-      synchronizeScrollOffset = (scrolling) => notify(stream.scrollTop, scrolling);
+      const updateOffset = (offset: number, scrolling: boolean) => {
+        updateSizeAdjustment(instance, scrolling);
+        notify(offset, scrolling);
+      };
+      synchronizeScrollOffset = (scrolling) => updateOffset(stream.scrollTop, scrolling);
       return observeElementOffset(instance, (offset, scrolling) => {
         readerScrollPending = false;
-        notify(offset, scrolling);
+        updateOffset(offset, scrolling);
       });
     },
     scrollToFn: elementScroll,
@@ -174,6 +197,7 @@ export function LogsView(props: LogsProps) {
     cancelLayout(scrollRequest);
     readerScrollPending = true;
     virtualizer.cancelScroll();
+    updateSizeAdjustment(virtualizer, true);
   };
   onSettled(() => {
     const { _didMount: mountVirtualizer } = virtualizer;
@@ -205,6 +229,7 @@ export function LogsView(props: LogsProps) {
           virtualizer.itemSizeCache.delete(key);
         }
       }
+      updateSizeAdjustment(virtualizer, virtualizer.isScrolling, next.autoFollow);
       virtualizer.setOptions({
         ...virtualizer.options,
         count: next.rows.length,
@@ -246,7 +271,7 @@ export function LogsView(props: LogsProps) {
     return (
       <div
         ref={(node) => (element = node)}
-        class={["log-row", { "log-row--last": rowProps.item.index === rows().length - 1 }]}
+        class="log-row"
         role="listitem"
         aria-posinset={rowProps.item.index + 1}
         aria-setsize={rows().length}
@@ -400,7 +425,15 @@ export function LogsView(props: LogsProps) {
               <Loading fallback={<LoadingState />}>{loading() ? <LoadingState /> : null}</Loading>
             }
           >
-            <div role="list" style={{ position: "relative", height: `${window().height}px` }}>
+            {/* Rows must not extend the native scroll range before their spacer commits. */}
+            <div
+              role="list"
+              style={{
+                position: "relative",
+                height: `${windowHeight()}px`,
+                overflow: windowHeight() > 0 ? "clip" : undefined,
+              }}
+            >
               <For
                 each={rendered()}
                 keyed={(item) => item.row.id}

@@ -227,6 +227,22 @@ describe("handleCompactCommand", () => {
     expect(requireCompactEmbeddedAgentSessionCall().agentHarnessId).toBe("codex");
   });
 
+  it("explains a refusal trim and how to continue after manual compaction", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        tokensBefore: 80_000,
+        tokensAfter: 2_000,
+        details: { readFiles: [], modifiedFiles: [], qualityDegraded: true, summaryRefused: true },
+      },
+    });
+    const result = await handleCompactCommand(compactParams(), true);
+    expect(result?.reply?.text).toContain("Context trimmed because the summarizer refused");
+    expect(result?.reply?.text).toContain("Resend essential older details");
+    expect(result?.sessionCompaction?.compacted).toBe(true);
+  });
+
   it("reports server-side compaction with before and after tokens", async () => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: true,

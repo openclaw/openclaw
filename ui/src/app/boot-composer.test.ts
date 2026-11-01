@@ -45,6 +45,7 @@ describe("boot composer", () => {
       submit: true,
       focused: true,
       selection: [2, 4, "backward"],
+      scroll: [0, 0],
     });
     expect(textarea.isConnected).toBe(false);
     expect(takeBootComposer()).toBeNull();

@@ -100,27 +100,26 @@ export function* decodeSseFrames(limit?: {
         break;
       }
     }
-    const pending = buffer.slice(start);
     // Scan only new text plus the maximum delimiter overlap; scanning an ever-growing
     // concatenated string would flatten/copy the entire pending frame on every read.
     // Keep only trailing newline characters, so UTF-8 length accounting never
     // splits a surrogate pair between a retained fragment and the overlap.
-    let split = pending.length;
-    while (split > 0 && pending.length - split < 3) {
-      const last = pending.charCodeAt(split - 1);
+    let split = buffer.length;
+    while (split > start && buffer.length - split < 3) {
+      const last = buffer.charCodeAt(split - 1);
       if (last !== 10 && last !== 13) {
         break;
       }
       split--;
     }
-    if (split > 0) {
-      const part = pending.slice(0, split);
+    if (split > start) {
+      const part = buffer.slice(start, split);
       parts.push(part);
       if (limit) {
         partsLength += lengthOf(part);
       }
     }
-    tail = pending.slice(split);
+    tail = buffer.slice(split);
     if (limit) {
       assertWithinLimit(partsLength + lengthOf(tail));
     }

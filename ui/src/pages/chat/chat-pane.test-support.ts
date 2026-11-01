@@ -85,7 +85,14 @@ export function mountBoardPanel(
     ...view,
     draw: () => {
       const source = pane.boardPanelSource(pane.resolveBoardView(), layout);
-      setContent(source ? buildChatBoardPanel(source) : null);
+      setContent(
+        source
+          ? buildChatBoardPanel(
+              source,
+              source.board.provider.widgetFrameUrl.bind(source.board.provider),
+            )
+          : null,
+      );
       flush();
     },
   };

@@ -12,6 +12,7 @@ import {
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { createPluginRuntime } from "../plugins/runtime/index.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
@@ -20,7 +21,10 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
+import { consultRealtimeVoiceAgent } from "./agent-consult-runtime.js";
+import { assertClientVoiceSessionOpen } from "./client-voice-session-read.js";
 import { ensureClientVoiceAgentSessionEntry } from "./client-voice-session-write.js";
+import { createOrResumeClientVoiceSession } from "./client-voice-session.js";
 
 const engine = process.argv[2];
 Error.stackTraceLimit = 30;
@@ -35,9 +39,8 @@ installDatabaseEngineSelection({
   effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine } }),
   ...(engine === "postgres" ? { postgres: { connection, schemaPrefix: "talk_entry" } } : {}),
 });
-setRuntimeConfigSnapshot({
-  agents: { ownership: "explicit", entries: { warm: {}, cold: {} } },
-});
+const config = { agents: { ownership: "explicit" as const, entries: { warm: {}, cold: {} } } };
+setRuntimeConfigSnapshot(config);
 
 const agentPaths = ["warm", "cold"].map((agentId) => resolveOpenClawAgentSqlitePath({ agentId }));
 try {
@@ -78,6 +81,39 @@ try {
       sessionId,
     );
     assert.equal(await ensureClientVoiceAgentSessionEntry({ agentId, sessionKey }), sessionId);
+    const voiceSessionId = await createOrResumeClientVoiceSession({
+      agentId,
+      sessionKey,
+      origin: "client",
+      transcriptCapable: true,
+    });
+    assert.equal(
+      await assertClientVoiceSessionOpen({ agentId, sessionKey, voiceSessionId }),
+      "client",
+    );
+    const runs: Array<{ sessionId: string; sessionKey?: string }> = [];
+    const result = await consultRealtimeVoiceAgent({
+      cfg: config,
+      agentRuntime: {
+        ...createPluginRuntime().agent,
+        runEmbeddedAgent: async (request) => {
+          runs.push({ sessionId: request.sessionId, sessionKey: request.sessionKey });
+          return { payloads: [{ text: "Consult answered." }], meta: { durationMs: 1 } };
+        },
+      },
+      logger: { warn: (message) => assert.fail(message) },
+      agentId,
+      sessionKey,
+      messageProvider: "webchat",
+      lane: "talk",
+      runIdPrefix: "talk-consult-regression",
+      args: { question: "What is on my calendar?" },
+      transcript: [{ role: "user", text: "What is on my calendar?" }],
+      surface: "a browser Talk session",
+      userLabel: "User",
+    });
+    assert.deepEqual(result, { text: "Consult answered." });
+    assert.deepEqual(runs, [{ sessionId, sessionKey }]);
     assertSqlBoundary();
   }
   console.log(`Talk entry initialization passed on the Gateway thread: ${engine}`);

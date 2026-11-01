@@ -458,7 +458,9 @@ export async function resumeExistingCodexThread(
       }
       acceptedConfiguration.assertConfigured();
     }
+    // Missing native state cannot authorize discarding acknowledged conversation history.
     if (
+      (!acceptedConfiguration && resumeBinding.historyCoveredThrough !== undefined) ||
       resumeBinding.pendingResumeConfiguration ||
       resumeBinding.preserveNativeModel ||
       resumeBinding.connectionScope === "supervision" ||

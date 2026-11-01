@@ -39,7 +39,7 @@ function candidateFixture(esm = true) {
 async function expectLegacy(f: ReturnType<typeof candidateFixture>) {
   const legacy = await f.load(`dist/${chunk.path}`);
   for (const { exported, origin } of chunk.exports) {
-    expect(legacy[exported]()).toBe(origin.symbol);
+    expect(await legacy[exported]()).toBe(origin.symbol);
   }
 }
 

@@ -249,26 +249,9 @@ async function runCliShimInner(moduleUrl, options, nodeArgs) {
   if (!options.workerRun) {
     return runCliShimProcess(moduleUrl, options, nodeArgs);
   }
-  // The forwarding shim owns its child's artifact loan until managed cleanup joins.
-  const completion = Promise.withResolvers();
-  /** @type {Promise<unknown> | undefined} */
-  let borrower;
-  try {
-    const result = await runCliShimProcess(moduleUrl, options, nodeArgs, (child) => {
-      borrower = options.workerRun.borrow(child, completion.promise);
-    });
-    completion.resolve(process.exitCode ?? 0);
-    return result;
-  } catch (error) {
-    if (borrower) {
-      completion.reject(error);
-    }
-    throw error;
-  } finally {
-    if (borrower) {
-      await borrower;
-    }
-  }
+  return options.workerRun.withBorrower((onReady) =>
+    runCliShimProcess(moduleUrl, options, nodeArgs, onReady),
+  );
 }
 
 async function runCliShim(moduleUrl, options, nodeArgs) {

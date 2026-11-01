@@ -5,6 +5,7 @@ import {
   checkpointLocalWorkspace,
   resolveLocalWorkspaceOwner,
   reuseLocalWorkspaceProjection,
+  withLocalWorkspacePreparation,
   withLocalWorkspaceProjection,
 } from "../../gateway/worker-environments/local-workspace-projection.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
@@ -92,61 +93,76 @@ export async function prepareLocalSandboxWorkspace(params: {
     markManagedWorktreePreparation();
     assertLocalSandboxWorkspaceBackend(params.sandbox.backend);
     phases.mark("attempt.setup.sandbox.workspace_selection.reuse.acquire");
-    const existing = await reuseLocalWorkspaceProjection(executionOwner, params.signal);
-    let workspaceDir: string;
-    if (existing) {
-      setWorktreePreparationTemplate("reused");
-      workspaceDir = existing;
-    } else if (params.cfg.worktreeAcceleration === false) {
-      phases.mark("attempt.setup.sandbox.workspace_selection.prepare.acquire");
-      workspaceDir = await withLocalWorkspaceProjection(
-        executionOwner,
-        async (state) => {
-          phases.mark("attempt.setup.sandbox.workspace_selection.prepare.reconcile");
-          try {
-            return await state.prepare();
-          } finally {
-            phases.mark("attempt.setup.sandbox.workspace_selection.prepare.release");
-          }
-        },
-        { signal: params.signal },
-      );
-    } else {
-      phases.mark("attempt.setup.sandbox.workspace_selection.allocation");
-      const allocated = startWorktreePreparationPhase("allocate");
-      try {
-        workspaceDir = await withWorktreeAllocationLease(
-          {
-            env: owner.env ?? process.env,
-            signal: params.signal,
-            commitGuard: assertCurrent,
-            workerAuthority: executionOwner.workerAuthority,
-          },
-          (allocation) => {
-            allocated();
-            phases.mark("attempt.setup.sandbox.workspace_selection.prepare.acquire");
-            return withLocalWorkspaceProjection(
-              {
-                ...executionOwner,
-                assertCurrent: allocation.commitGuard,
-                workerAuthority: allocation.workerAuthority,
-              },
-              async (state) => {
-                phases.mark("attempt.setup.sandbox.workspace_selection.prepare.reconcile");
-                try {
-                  return await state.prepare({ sandbox: params.sandbox, allocation });
-                } finally {
-                  phases.mark("attempt.setup.sandbox.workspace_selection.prepare.release");
-                }
-              },
-              { signal: params.signal },
-            );
-          },
+    const workspaceDir = await withLocalWorkspacePreparation(
+      executionOwner,
+      {
+        sandbox: params.sandbox,
+        acceleration: params.cfg.worktreeAcceleration !== false,
+        signal: params.signal,
+      },
+      async (beginCapture) => {
+        const existing = await reuseLocalWorkspaceProjection(
+          executionOwner,
+          params.signal,
+          beginCapture,
         );
-      } finally {
-        allocated();
-      }
-    }
+        if (existing) {
+          setWorktreePreparationTemplate("reused");
+          return existing;
+        }
+        if (params.cfg.worktreeAcceleration === false) {
+          phases.mark("attempt.setup.sandbox.workspace_selection.prepare.acquire");
+          return await withLocalWorkspaceProjection(
+            executionOwner,
+            async (state) => {
+              beginCapture();
+              phases.mark("attempt.setup.sandbox.workspace_selection.prepare.reconcile");
+              try {
+                return await state.prepare();
+              } finally {
+                phases.mark("attempt.setup.sandbox.workspace_selection.prepare.release");
+              }
+            },
+            { signal: params.signal },
+          );
+        }
+        phases.mark("attempt.setup.sandbox.workspace_selection.allocation");
+        const allocated = startWorktreePreparationPhase("allocate");
+        try {
+          return await withWorktreeAllocationLease(
+            {
+              env: owner.env ?? process.env,
+              signal: params.signal,
+              commitGuard: assertCurrent,
+              workerAuthority: executionOwner.workerAuthority,
+            },
+            (allocation) => {
+              allocated();
+              phases.mark("attempt.setup.sandbox.workspace_selection.prepare.acquire");
+              return withLocalWorkspaceProjection(
+                {
+                  ...executionOwner,
+                  assertCurrent: allocation.commitGuard,
+                  workerAuthority: allocation.workerAuthority,
+                },
+                async (state) => {
+                  beginCapture();
+                  phases.mark("attempt.setup.sandbox.workspace_selection.prepare.reconcile");
+                  try {
+                    return await state.prepare({ sandbox: params.sandbox, allocation });
+                  } finally {
+                    phases.mark("attempt.setup.sandbox.workspace_selection.prepare.release");
+                  }
+                },
+                { signal: params.signal },
+              );
+            },
+          );
+        } finally {
+          allocated();
+        }
+      },
+    );
     assertCurrent();
     return {
       workspaceDir,

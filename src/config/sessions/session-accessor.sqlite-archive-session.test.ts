@@ -7,6 +7,7 @@ import type { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../../test/helpers/file-snapshots.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -902,7 +903,7 @@ describe("SQLite transcript archive sessions", () => {
         replaced = true;
         release.resolve();
         await expect(deletion).rejects.toThrow(/replaced|file identity changed/);
-        expect(fs.readFileSync(database.path)).toEqual(replacementBytes);
+        expectBytesEqual(fs.readFileSync(database.path), replacementBytes, database.path);
       } finally {
         release.resolve();
         await Promise.allSettled([deletion]);

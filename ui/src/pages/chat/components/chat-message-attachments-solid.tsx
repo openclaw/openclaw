@@ -28,6 +28,7 @@ import {
 import { AssistantAttachmentStatusCard } from "./chat-message-attachment-status-solid.tsx";
 import { attachmentFailureReason } from "./chat-message-attachment-status.ts";
 import { isLocalAssistantAttachmentSource } from "./chat-message-local-media.ts";
+import type { MessageMediaAction } from "./chat-message-media-actions.ts";
 import {
   resolveAttachmentImageKind,
   observeChatMediaResourceSubscriber,
@@ -35,7 +36,6 @@ import {
   type AttachmentItem,
   type AssistantAttachmentItem,
   type ImageRenderOptions,
-  type MessageMediaAction,
 } from "./chat-message-media.ts";
 import { MessageVideoPreview } from "./chat-message-video-preview-solid.tsx";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
@@ -173,6 +173,27 @@ export function AssistantAttachments(
   );
 }
 
+function attachmentFileSearch(
+  item: AssistantAttachmentItem,
+  options: ImageRenderOptions,
+): (() => void) | undefined {
+  if (
+    item.type !== "attachment_error" ||
+    item.attachment.code !== "file-too-large" ||
+    !item.attachment.label.trim() ||
+    !options.sessionKey ||
+    !options.onFindWorkspaceFile
+  ) {
+    return undefined;
+  }
+  return () =>
+    options.onFindWorkspaceFile?.({
+      name: item.attachment.label,
+      sessionKey: options.sessionKey,
+      agentId: options.agentId,
+    });
+}
+
 export function MessageAttachment(props: MessageAttachmentProps): SolidJSX.Element {
   return (
     <Show
@@ -182,6 +203,7 @@ export function MessageAttachment(props: MessageAttachmentProps): SolidJSX.Eleme
           label={props.item.attachment.label}
           mimeType={props.item.attachment.mimeType}
           badge={t("chat.attachments.notSent")}
+          onFindWorkspaceFile={attachmentFileSearch(props.item, props.options)}
           reason={
             props.item.type === "attachment_error"
               ? attachmentFailureReason(props.item.attachment.code)
@@ -532,6 +554,7 @@ export function MessageAttachmentAction(
       when={props.item.type === "attachment" && props.item}
       fallback={props.render(() => ({
         pending: false,
+        onFindWorkspaceFile: attachmentFileSearch(props.item, props.options),
         reason:
           props.item.type === "attachment_error"
             ? attachmentFailureReason(props.item.attachment.code)
