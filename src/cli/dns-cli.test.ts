@@ -18,6 +18,23 @@ vi.mock("node:child_process", async () => {
   );
 });
 
+// The ordinary-path failure switch: set to an error to make the atomic
+// publisher fail exactly as a full disk would (a non-permission failure, so
+// the privileged fallback must not run).
+const fsSafeMock = vi.hoisted(() => ({ failPublication: null as Error | null }));
+vi.mock("@openclaw/fs-safe/atomic", async (original) => {
+  const actual = await original<typeof import("@openclaw/fs-safe/atomic")>();
+  return {
+    ...actual,
+    replaceFileAtomicSync: (options: Parameters<typeof actual.replaceFileAtomicSync>[0]) => {
+      if (fsSafeMock.failPublication) {
+        throw fsSafeMock.failPublication;
+      }
+      return actual.replaceFileAtomicSync(options);
+    },
+  };
+});
+
 // mock-isolation: DNS setup uses only synthetic zone paths and never writes an operator zone.
 vi.mock("../infra/widearea-dns.js", () => ({
   getWideAreaZonePath: () => testState.zonePath,
@@ -44,7 +61,6 @@ vi.mock("../config/config.js", () => ({
 const { spawnSync: actualSpawnSync } =
   await vi.importActual<typeof import("node:child_process")>("node:child_process");
 
-import childProcess from "node:child_process";
 import { Command } from "commander";
 import { replaceWideAreaZoneFile } from "../infra/widearea-dns.js";
 import { defaultRuntime } from "../runtime.js";
@@ -308,6 +324,37 @@ describe("dns-cli probe bounds", () => {
     },
   );
 
+  // An ordinary-path failure that is not a permission error must abort
+  // without routing to the privileged fallback: the operator's file, its
+  // policy and the CoreDNS restart decision all stay untouched.
+  it("aborts an ordinary-path publication without the privileged fallback", async () => {
+    const etcDir = path.join(brewPrefix, "etc", "coredns");
+    const corefilePath = path.join(etcDir, "Corefile");
+    fs.mkdirSync(etcDir, { recursive: true });
+    fs.writeFileSync(corefilePath, ".:53 {\n  errors\n}\n");
+    const original = fs.readFileSync(corefilePath, "utf-8");
+    const fullDisk = Object.assign(new Error("ENOSPC: no space left on device, write"), {
+      code: "ENOSPC",
+    });
+    fsSafeMock.failPublication = fullDisk;
+
+    try {
+      await expect(runDnsSetupApply()).rejects.toBe(fullDisk);
+    } finally {
+      fsSafeMock.failPublication = null;
+    }
+
+    // The operator's file is untouched and no staging sibling was left behind.
+    expect(fs.readFileSync(corefilePath, "utf-8")).toBe(original);
+    expect(fs.readdirSync(etcDir).filter((entry) => entry.startsWith("."))).toEqual([]);
+    // CoreDNS was not restarted.
+    expect(spawnSyncMock).not.toHaveBeenCalledWith(
+      "sudo",
+      ["brew", "services", "restart", "coredns"],
+      expect.anything(),
+    );
+  });
+
   // A capture failure must not silently strip the operator's policy: the
   // publication aborts with the operator's file untouched.
   it.runIf(process.platform === "darwin")(
@@ -323,23 +370,27 @@ describe("dns-cli probe bounds", () => {
         encoding: "utf-8",
       });
       expect(denied.status).toBe(0);
-      const captureFailure = Object.assign(new Error("/bin/ls: capture failed"), {
+      // The production import is the named spawnSync export, which the mock
+      // factory routes through spawnSyncMock; the capture failure has to be
+      // injected at that boundary with a correctly shaped failed result.
+      const failedCapture = {
+        ...spawnOk(),
         status: 1,
-      });
-      const spawnSpy = vi.spyOn(childProcess, "spawnSync").mockImplementation(((
-        command: string,
-        args: string[],
-      ) => {
+        stdout: "",
+        stderr: "/bin/ls: capture failed",
+      };
+      const baseImplementation = spawnSyncMock.getMockImplementation();
+      spawnSyncMock.mockImplementation((command: string, args: string[], opts?: unknown) => {
         if (command === "/bin/ls") {
-          return captureFailure as unknown as ReturnType<typeof childProcess.spawnSync>;
+          return failedCapture;
         }
-        return actualSpawnSync(command, args, { encoding: "utf-8" });
-      }) as typeof childProcess.spawnSync);
+        return baseImplementation?.(command, args, opts);
+      });
 
       try {
         await expect(runDnsSetupApply()).rejects.toThrow(/access policy/);
       } finally {
-        spawnSpy.mockRestore();
+        spawnSyncMock.mockImplementation(baseImplementation);
       }
 
       // The operator's file and its policy are untouched.
