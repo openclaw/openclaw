@@ -22,15 +22,22 @@ suite.define(() => {
         });
         const sessionKey = fixture.selectedSessionKey;
         await page.addInitScript((entries) => {
-          if (window !== window.top || location.protocol === "about:") return;
+          if (window !== window.top || location.protocol === "about:") {
+            return;
+          }
           for (const [key, value] of Object.entries(entries)) {
-            if (localStorage.getItem(key) === null) localStorage.setItem(key, value);
+            if (localStorage.getItem(key) === null) {
+              localStorage.setItem(key, value);
+            }
           }
         }, fixture.paneChromeSettings);
         await page.route("**/__openclaw__/**", async (route) => {
           const asset = fixture.assets.get(new URL(route.request().url()).pathname);
-          if (asset) await route.fulfill({ status: 200, ...asset });
-          else await route.fallback();
+          if (asset) {
+            await route.fulfill({ status: 200, ...asset });
+          } else {
+            await route.fallback();
+          }
         });
         const gateway = await installMockGateway(
           page,
@@ -162,8 +169,9 @@ suite.define(() => {
           );
           expect(boxes.length).toBeGreaterThan(0);
           for (const box of boxes) {
-            for (const axis of [0, 2])
+            for (const axis of [0, 2]) {
               expect(Math.abs(box[axis]! - boxes[0]![axis]!)).toBeLessThanOrEqual(1);
+            }
           }
         }
 
