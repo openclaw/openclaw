@@ -86,41 +86,43 @@ export function LiveOutput(props: { gateway: CronProps["gateway"]; jobId: string
   });
 
   return (
-    <section class="cron-live-output" data-test-id="cron-live-output">
-      <div class="cron-live-output__header">
+    <section class="stack" data-test-id="cron-live-output">
+      <div>
         <div class="settings-row__title">{t("cron.liveOutput.title")}</div>
         <div class="settings-row__desc">{t("cron.liveOutput.hint")}</div>
       </div>
       {view().truncated ? <div class="muted">{t("cron.liveOutput.truncated")}</div> : undefined}
       {error() ? <div class="muted">{error()}</div> : undefined}
       {ended() ? <div class="muted">{t("cron.liveOutput.ended")}</div> : undefined}
-      <div class="cron-live-output__frame">
-        <pre
-          class="code-block cron-live-output__stream"
-          role="log"
-          aria-live="off"
-          tabindex="0"
-          aria-label={t("cron.liveOutput.streamLabel")}
-          ref={(element) => {
-            stream = element;
-          }}
-          onScroll={(event) => {
-            follow.handleScroll(event);
-            setPaused(!isNearStreamEnd(event.currentTarget));
-          }}
-        >
-          {received() ? view().text : t("cron.liveOutput.waiting")}
-        </pre>
-        {paused() ? (
+      <pre
+        class="code-block cron-payload-code"
+        data-test-id="cron-live-output-stream"
+        role="log"
+        aria-live="off"
+        tabindex="0"
+        aria-label={t("cron.liveOutput.streamLabel")}
+        ref={(element) => {
+          stream = element;
+        }}
+        onScroll={(event) => {
+          follow.handleScroll(event);
+          setPaused(!isNearStreamEnd(event.currentTarget));
+        }}
+      >
+        {received() ? view().text : t("cron.liveOutput.waiting")}
+      </pre>
+      {paused() ? (
+        <div class="row">
           <button
             type="button"
-            class="btn btn--sm cron-live-output__jump"
+            class="btn btn--sm"
+            data-test-id="cron-live-output-jump"
             onClick={() => follow.schedule(true)}
           >
             <Icon name="arrowDown" /> {t("cron.liveOutput.jumpToLatest")}
           </button>
-        ) : undefined}
-      </div>
+        </div>
+      ) : undefined}
     </section>
   );
 }

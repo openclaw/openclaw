@@ -63,7 +63,7 @@ async function mountHistory(
 }
 
 const stream = (container: Element) =>
-  container.querySelector<HTMLElement>(".cron-live-output__stream");
+  container.querySelector<HTMLElement>('[data-test-id="cron-live-output-stream"]');
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -170,19 +170,23 @@ it("offers jump-to-latest only after the reader scrolls up", async () => {
   const { gateway } = connectedGateway(request);
   const view = await mountHistory(gateway);
   await tick(0);
-  const pre = getElement(view.container, ".cron-live-output__stream", HTMLElement);
-  expect(view.container.querySelector(".cron-live-output__jump")).toBeNull();
+  const pre = getElement(view.container, '[data-test-id="cron-live-output-stream"]', HTMLElement);
+  expect(view.container.querySelector('[data-test-id="cron-live-output-jump"]')).toBeNull();
   const geometry = { scrollHeight: 2000, clientHeight: 360, scrollTop: 100 };
   for (const [key, value] of Object.entries(geometry)) {
     Object.defineProperty(pre, key, { value, configurable: true, writable: true });
   }
   pre.dispatchEvent(new Event("scroll"));
   flush();
-  const jump = getElement(view.container, ".cron-live-output__jump", HTMLButtonElement);
+  const jump = getElement(
+    view.container,
+    '[data-test-id="cron-live-output-jump"]',
+    HTMLButtonElement,
+  );
   expect(jump.textContent).toContain("Jump to latest");
   // Reaching the end again clears it.
   (pre as unknown as { scrollTop: number }).scrollTop = 1700;
   pre.dispatchEvent(new Event("scroll"));
   flush();
-  expect(view.container.querySelector(".cron-live-output__jump")).toBeNull();
+  expect(view.container.querySelector('[data-test-id="cron-live-output-jump"]')).toBeNull();
 });
