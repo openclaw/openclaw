@@ -1,0 +1,2 @@
+# Regression: ignored native scroll writes must stop requesting transcript commits.
+17

@@ -20,9 +20,9 @@ rename, keeps its error with that action instead of adding a list error.
 On phones, swipe right across the chat to open navigation. A deliberate swipe opens the full drawer while your finger is still down, rather than holding a partly clipped sidebar over the conversation. Short drags and vertical scrolling leave navigation closed. Tap outside the drawer to close it.
 
 To work directly in a folder on a paired device, select that specific device,
-then choose **Existing folder on device** in the workspace picker. Enter an
-absolute path on that device, or, as an admin, choose **Browse folders on**
-_device_ and pick a folder from that device. The option appears only when the
+then choose **Existing folder on** _device_ in the workspace picker. Admins
+pick a folder from that device's folder browser; other operators enter an
+absolute path on that device. The option appears only when the
 connected session host advertises support; **Auto** cannot select an existing
 device folder.
 The session stays bound to that device and displays its folder path. Files stay
@@ -373,8 +373,12 @@ still apply; opening Systems does not grant additional access.
 System details use reported facts. A connected device is not necessarily the
 machine running a session, and unavailable measurements are not shown as zero.
 The telemetry and backup overview reserves its space while those readings load,
-so the desktop stays in place. Scroll that overview when its contents exceed the
-available space; turning off statistics keeps a compact backup area.
+so the desktop and Backups stay in place. It summarizes the three volumes with
+the highest used percentage and reserves unused rows for machines with fewer
+volumes. **+N more volumes in Details** opens every volume and its history.
+**Backup details** opens the complete backup outcomes, schedules, and storage
+locations, even when no machine is selected. The overview does not scroll;
+turning off statistics keeps a compact backup area.
 See [Cloud Worker Desktop](/gateway/cloud-workers/desktop) for worker desktop
 enablement and sizing.
 

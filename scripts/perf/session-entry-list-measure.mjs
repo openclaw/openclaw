@@ -1,5 +1,5 @@
 /**
- * Synthetic selected-list SQL owner benchmark, including its read transaction.
+ * Synthetic session-list SQL owner benchmark, including its read transaction.
  * Seed with session-read-transactions-fixture.mjs. Run timing/allocation separately:
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-entry-list-measure.mjs \
  *   --root .local/lane2035/fixture --output result.json [--baseline frozen-owner.ts]
@@ -8,6 +8,7 @@
  * imports, warmup and explicit GC excluded. CPU/allocation cover the SQL isolate,
  * not Gateway transport or native SQLite allocation. --mode sql records actual queries
  * and plans separately; returned rows count native-to-JS delivery, not VM scan visits.
+ * --all-sessions --projection list exercises participant-free sidebar listings.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -29,6 +30,7 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "5" },
     "session-key": { type: "string" },
     projection: { type: "string", default: "full" },
+    "all-sessions": { type: "boolean" },
   },
 });
 assert(values.root && values.output && global.gc);
@@ -66,7 +68,7 @@ const scope = {
   agentId: "main",
   storePath: database.path,
   sessionKey: "",
-  sessionKeys: [sessionKey],
+  ...(values["all-sessions"] ? {} : { sessionKeys: [sessionKey] }),
   projection: values.projection,
   includeParticipants: false,
   readConsistency: "latest",
@@ -79,8 +81,11 @@ const operations = [baseline, values.control ? baseline : candidate].map(
     ),
 );
 let digest;
+const expectedCount = values["all-sessions"]
+  ? database.db.prepare("SELECT count(*) AS count FROM session_nodes").get().count
+  : 1;
 function check(result) {
-  assert.equal(result.length, 1);
+  assert.equal(result.length, expectedCount);
   assert.equal(result[0].sessionKey, sessionKey);
   const next = createHash("sha256").update(JSON.stringify(result)).digest("hex");
   digest ??= next;
@@ -92,6 +97,7 @@ const evidence = {
   node: process.version,
   load: loadavg(),
   iterations,
+  sessions: expectedCount,
   samples: [],
   sql: [],
 };

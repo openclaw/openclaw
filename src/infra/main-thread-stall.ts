@@ -48,24 +48,28 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
     endedAt: number;
   }[] = [];
   let heartbeat: NodeJS.Timeout | undefined;
-  let heartbeatAt = now();
+  // Closure slots box fractional timestamps on every continuation; reuse unboxed storage.
+  // Every index below is a fixed slot in this never-resized buffer.
+  const timing = new Float64Array(5);
+  const heartbeatAt = 0,
+    delayMaxMs = 1,
+    startedAt = 2,
+    segmentAt = 3,
+    longestMs = 4;
+  timing[heartbeatAt] = now();
   let dropped = 0;
   let unattributedDropped = 0;
-  let delayMaxMs = 0;
   let active = false;
-  let startedAt = 0;
-  let segmentAt = 0;
   let task = "unattributed";
   let phase: string | undefined;
   let longestTask = task;
   let longestPhase: string | undefined;
-  let longestMs = 0;
   let resumedPromise: Promise<unknown> | undefined;
   let stopContinuations: (() => void) | undefined;
   const observeLoop = () => {
     const at = now();
-    const from = heartbeatAt;
-    heartbeatAt = at;
+    const from = timing[heartbeatAt]!;
+    timing[heartbeatAt] = at;
     const elapsedMs = at - from;
     if (
       elapsedMs <= UNATTRIBUTED_STALL_MS ||
@@ -88,32 +92,32 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
     }
   };
   const segment = (at: number) => {
-    const elapsed = at - segmentAt;
-    if (elapsed > longestMs) {
+    const elapsed = at - timing[segmentAt]!;
+    if (elapsed > timing[longestMs]!) {
       longestTask = task;
       longestPhase = phase;
-      longestMs = elapsed;
+      timing[longestMs] = elapsed;
     }
-    segmentAt = at;
+    timing[segmentAt] = at;
   };
   const begin = (name: string, at: number) => {
     active = true;
-    startedAt = segmentAt = at;
+    timing[startedAt] = timing[segmentAt] = at;
     task = longestTask = name;
     phase = longestPhase = undefined;
-    longestMs = 0;
+    timing[longestMs] = 0;
   };
   const finish = (at: number) => {
     active = false;
-    const elapsedMs = at - startedAt;
-    delayMaxMs = Math.max(delayMaxMs, elapsedMs);
+    const elapsedMs = at - timing[startedAt]!;
+    timing[delayMaxMs] = Math.max(timing[delayMaxMs]!, elapsedMs);
     if (elapsedMs >= STALL_MS) {
       if (pending.length < MAX_PENDING_STALLS) {
         pending.push({
           elapsedMs,
           task: longestPhase ? `${longestTask}:${longestPhase}` : longestTask,
-          taskMs: longestMs,
-          startedAt,
+          taskMs: timing[longestMs]!,
+          startedAt: timing[startedAt]!,
           endedAt: at,
         });
       } else {
@@ -155,7 +159,7 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       pending.length = 0;
       dropped = 0;
       unattributedDropped = 0;
-      delayMaxMs = 0;
+      timing[delayMaxMs] = 0;
     },
     run(name, run, taskPhase) {
       const enteredAt = now();
@@ -190,7 +194,7 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       }
       clearInterval(heartbeat);
       // Use a raw heartbeat: scheduler jobs allocate an async work scope per tick.
-      heartbeatAt = now();
+      timing[heartbeatAt] = now();
       heartbeat = enabled
         ? runInDetachedAsyncContext(() => setInterval(observeLoop, HEARTBEAT_MS).unref())
         : undefined;
@@ -216,8 +220,8 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       const omittedUnattributed = unattributedDropped;
       dropped = 0;
       unattributedDropped = 0;
-      const maximum = delayMaxMs;
-      delayMaxMs = 0;
+      const maximum = timing[delayMaxMs]!;
+      timing[delayMaxMs] = 0;
       return {
         stalls,
         dropped: omitted,
@@ -226,13 +230,13 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       };
     },
     reset() {
-      heartbeatAt = now();
+      timing[heartbeatAt] = now();
       pending.length = 0;
       dropped = 0;
       unattributedDropped = 0;
-      delayMaxMs = 0;
-      startedAt = segmentAt = now();
-      longestMs = 0;
+      timing[delayMaxMs] = 0;
+      timing[startedAt] = timing[segmentAt] = now();
+      timing[longestMs] = 0;
       longestTask = task;
       longestPhase = phase;
     },

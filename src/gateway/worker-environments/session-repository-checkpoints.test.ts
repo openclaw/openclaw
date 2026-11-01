@@ -467,6 +467,56 @@ it("reuses accepted blobs while preserving cumulative provenance, deletions and 
   expect(await f.current()).toEqual(accepted);
 });
 
+it("publishes queued aliases and companions from a reused accepted checkpoint with current authority", async () => {
+  const f = await fixture("working tree\r\n");
+  const { sha, input } = await publicationFixture(f.root);
+  const first = await f.stage("accepted-publication", input);
+  const accepted = await first.publish();
+  const guard = authority();
+  const selected = workerWorkspaceResultRef("queued-selected");
+  const alias = workerWorkspaceResultRef("queued-alias");
+  const reused = await f.stage("queued-selected", { ...input, assertCurrent: guard.assertCurrent });
+  expect(reused.checkpointRef).toBe(first.checkpointRef);
+  const beforeRefs = await listRefs(f.artifact, "");
+  const run = processExec.runCommandWithTimeout;
+  const runner = vi
+    .spyOn(processExec, "runCommandWithTimeout")
+    .mockImplementation((argv, options) => {
+      if (
+        argv.includes("update-ref") &&
+        typeof options !== "number" &&
+        options.input?.toString().includes("create " + selected + "\0")
+      ) {
+        guard.current = false;
+      }
+      return run(argv, options);
+    });
+  await expect(reused.publishArtifacts([alias])).rejects.toThrow("checkpoint authority closed");
+  expect(await listRefs(f.artifact, "")).toBe(beforeRefs);
+  runner.mockRestore();
+  guard.current = true;
+  await reused.publishArtifacts([alias, selected, alias]);
+  await reused.publishArtifacts([alias]);
+  expect((await listRefs(f.artifact, "")).split("\n")).toHaveLength(
+    beforeRefs.split("\n").length + 4,
+  );
+  expect(await f.current()).toEqual(accepted);
+  for (const ref of [selected, alias]) {
+    expect(await git(f.artifact, ["rev-parse", ref])).toBe(
+      await git(f.artifact, ["rev-parse", first.checkpointRef]),
+    );
+    await withCheckpoint(f.read(ref), async (snapshot) => {
+      expect(await readText(snapshot.stagingRoot, "edit.txt")).toBe("working tree\r\n");
+      expect(snapshot.publicationDigest).toBe(input.publicationDigest);
+      expect(await readText(snapshot.publicationStagingRoot!, "blobs/" + sha)).toBe(
+        "working tree\n",
+      );
+    });
+  }
+  await reused.discard();
+  expect(await hasRef(f.artifact, first.checkpointRef)).toBe(true);
+});
+
 it("recovers a published artifact after the acceptance transaction fails, without accepting a closed claim", async () => {
   const { database, store, workspace, current, stage, preview } = await fixture("recover me\n");
   const guard = authority("claim closed");

@@ -241,7 +241,7 @@ suite.define(() => {
     },
   );
 
-  it("keeps visible search results and keyboard selection in relevance order", async () => {
+  it.each(["", "/help "])("ranks slash commands and selection (%s)", async (prefix) => {
     await withPage(async ({ page }) => {
       const commands = [
         makeCommand("pair", "Generate setup codes.", "tools"),
@@ -250,7 +250,7 @@ suite.define(() => {
       const gateway = await installCommands(page, commands, "slash-command-ranking-session");
       const composer = await openChat(page, gateway);
       await expect.poll(() => composer.isEnabled()).toBe(true);
-      await composer.fill("/pair");
+      await composer.fill(prefix + "/pair");
 
       const picker = page.locator(".slash-menu[role='listbox']");
       await picker.waitFor({ state: "visible" });
@@ -268,7 +268,7 @@ suite.define(() => {
       await polledText(options.nth(1).locator(".slash-menu-name")).toContain("/pair-device");
 
       await composer.press("Enter");
-      await expect.poll(() => composer.inputValue()).toBe("/pair-device ");
+      await expect.poll(() => composer.inputValue()).toBe(prefix || "/pair-device ");
       await expect.poll(() => picker.count()).toBe(0);
     });
   });

@@ -22,8 +22,7 @@ to chat. OpenClaw receives the browser callback and saves the credential before
 reporting success. Use `/login cancel` to cancel a pending sign-in.
 
 Login saves access without choosing a starter model. If current model restrictions
-hide OpenRouter models, choose **Show all OpenRouter models** or **Keep current
-restrictions**. The credential stays saved either way. In the Control UI, use
+hide every OpenRouter model, login adds `openrouter/*` to them. In the Control UI, use
 **Settings → Models → Connect** for the same credential-only flow, then use the
 model menu to choose a model from the Gateway's catalog.
 

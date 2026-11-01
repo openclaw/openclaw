@@ -369,8 +369,11 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
               ...common,
               cliExecutionProvider: runtime.cliExecutionProvider,
               lifecycleGeneration: params.state.lifecycleGeneration,
-              onSessionWriter: (writer) => {
-                params.state.sessionWriter = writer;
+              onCompactionAccounting: (fact) => {
+                if (fact.kind === "durable") {
+                  params.state.sessionWriter = fact.target;
+                }
+                recordTurnCompaction(params.state.compaction, fact);
               },
             });
           } else {

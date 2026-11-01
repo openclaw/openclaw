@@ -271,7 +271,7 @@ export function LogsView(props: LogsProps) {
     return (
       <div
         ref={(node) => (element = node)}
-        class={["log-row", { "log-row--last": rowProps.item.index === rows().length - 1 }]}
+        class="log-row"
         role="listitem"
         aria-posinset={rowProps.item.index + 1}
         aria-setsize={rows().length}

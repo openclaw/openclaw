@@ -127,7 +127,6 @@
 
 .login-gate__failure-steps .login-gate__command {
   display: inline-flex;
-  box-sizing: border-box;
   max-width: 100%;
   margin: 1px 2px;
   padding: 1px 4px 1px 8px;

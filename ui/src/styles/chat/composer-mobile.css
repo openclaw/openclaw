@@ -157,7 +157,6 @@
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"]
   .agent-chat__composer-combobox
   > :is(textarea, .agent-chat__composer-placeholder, .agent-chat__composer-prediction) {
-  box-sizing: border-box;
   height: 24px;
   min-height: 24px;
   max-height: 24px;

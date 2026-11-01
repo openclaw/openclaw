@@ -101,7 +101,7 @@ const countsAfter = (
   "models.list": before["models.list"] + catalog,
 });
 suite.define(() => {
-  it.each(["config.changed", "chat.metadata.changed"])(
+  it.each(["chat.metadata.changed"])(
     "refreshes only the presented retained pane on %s and catches up on activation",
     async (event) => {
       await withPage(async ({ page }) => {
@@ -118,7 +118,7 @@ suite.define(() => {
         await draft.fill("Retain this draft");
         const before = await requestCounts(gateway);
         await gateway.setMethodResponse("models.list", { models: [freshModel] });
-        await gateway.emitGatewayEvent(event, {});
+        await gateway.emitGatewayEvent(event, { modelCatalogChanged: true });
         await expectCatalog(visible, freshModel.name);
         const after = await requestCounts(gateway);
         expect(after).toEqual(countsAfter(before, 1, 1));

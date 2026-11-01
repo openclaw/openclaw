@@ -224,10 +224,20 @@ async function fetchBranchPullRequests(
   read: ReturnType<typeof prepareSessionPullRequestGitHubRead>,
 ): Promise<BranchPullRequestsSnapshot> {
   const head = `${context.owner}:${context.branch}`;
-  let items = parsePullList(
-    await read.request(pullsByHeadUrl(context.owner, context.repo, head, read.apiBaseUrl)),
-    read.host,
-  ).filter(
+  // GitHub queries by head owner, while candidate admission still matches each repository.
+  const lists = new Map<string, PullListItem[]>();
+  const readHead = async (queryHead: string) => {
+    let items = lists.get(queryHead);
+    if (!items) {
+      items = parsePullList(
+        await read.request(pullsByHeadUrl(context.owner, context.repo, queryHead, read.apiBaseUrl)),
+        read.host,
+      );
+      lists.set(queryHead, items);
+    }
+    return items;
+  };
+  let items = (await readHead(head)).filter(
     (item) =>
       !item.headRepository ||
       item.headRepository.toLowerCase() === `${item.owner}/${item.repo}`.toLowerCase(),
@@ -239,17 +249,9 @@ async function fetchBranchPullRequests(
     // An owner/branch query can return a PR from another repository owned by the
     // same person. Match the actual remote, including renamed forks.
     const repository = `${candidate.owner}/${candidate.repo}`.toLowerCase();
-    items = parsePullList(
-      await read.request(
-        pullsByHeadUrl(
-          context.owner,
-          context.repo,
-          `${candidate.owner}:${context.branch}`,
-          read.apiBaseUrl,
-        ),
-      ),
-      read.host,
-    ).filter((item) => item.headRepository?.toLowerCase() === repository);
+    items = (await readHead(`${candidate.owner}:${context.branch}`)).filter(
+      (item) => item.headRepository?.toLowerCase() === repository,
+    );
   }
   if (items.length === 0) {
     // Fork flow: the branch lives on the fork but PRs open against the parent.

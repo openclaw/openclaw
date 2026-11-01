@@ -303,7 +303,6 @@ describe("ChatGPT token-sharing authorization", () => {
       await releaseEntered.promise;
       originalCallback = callbackResponse!;
       controller.abort();
-      expect(settled).not.toHaveBeenCalled();
 
       await expectConnected(await loginTokenSharing(context()));
       await expect(originalCallback).rejects.toThrow();

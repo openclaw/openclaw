@@ -6,7 +6,12 @@ import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { openChatPanels } from "../test-helpers/chat-layout-menu.ts";
 import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { exactButton, newChatPage, chatMessage } from "./chat-flow.test-support.ts";
+import {
+  exactButton,
+  newChatPage,
+  chatMessage,
+  scrollChatThreadToTop,
+} from "./chat-flow.test-support.ts";
 import { polledAttribute, polledText } from "./chat-presentation.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -47,6 +52,22 @@ const imageDataUrls = (page: Page, sizes: ReadonlyArray<readonly [number, number
       }),
     sizes,
   );
+// Separate turns outgrow one viewport, and transcript rows mount only near it.
+async function revealImage(page: Page, name: string) {
+  const tile = exactButton(page, `Open image ${name}`);
+  await scrollChatThreadToTop(page);
+  await expect
+    .poll(async () => {
+      if ((await tile.count()) > 0) {
+        return true;
+      }
+      await page.mouse.wheel(0, 400);
+      return false;
+    })
+    .toBe(true);
+  await tile.scrollIntoViewIfNeeded();
+  return tile;
+}
 const counterValue = (counter: Locator) =>
   expect.poll(async () => (await counter.textContent())?.trim());
 async function installImageGalleries(page: Page) {
@@ -57,15 +78,19 @@ async function installImageGalleries(page: Page) {
     ),
   );
   const gateway = await installMockGateway(page, {
-    historyMessages: [1, 2, 5].map((count) => ({
-      role: "assistant",
-      content: images.slice(0, count).map((url, index) => ({
-        type: "image",
-        url,
-        alt: `Gallery ${count} image ${index + 1}`,
-      })),
-      timestamp: 1_800_000_000_000 + count,
-    })),
+    // Each gallery is its own turn; turn boundaries end image navigation.
+    historyMessages: [1, 2, 5].flatMap((count) => [
+      chatMessage("user", `Show ${count}`, { timestamp: 1_800_000_000_000 + count * 2 }),
+      {
+        role: "assistant",
+        content: images.slice(0, count).map((url, index) => ({
+          type: "image",
+          url,
+          alt: `Gallery ${count} image ${index + 1}`,
+        })),
+        timestamp: 1_800_000_000_001 + count * 2,
+      },
+    ]),
   });
   await page.goto(`${suite.server.baseUrl}chat`);
   await gateway.waitForRequest("sessions.messages.subscribe");
@@ -415,7 +440,97 @@ suite.define(() => {
     }
   });
 
-  it("navigates only the opened message gallery and restores its original tile focus", async () => {
+  it("navigates every image in the opened turn in transcript order", async () => {
+    const page = await newPage();
+    const [before, after, detail, mobile, separate] = await imageDataUrls(page, [
+      [720, 400],
+      [360, 640],
+      [720, 400],
+      [360, 640],
+      [720, 400],
+    ]);
+    const image = (url: string | undefined, alt: string) => ({ type: "image", url, alt });
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        chatMessage("user", "Show the screenshots.", { timestamp: 1_800_000_000_000 }),
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "**Before**" },
+            image(before, "Turn before"),
+            { type: "text", text: "**After**" },
+            image(after, "Turn after"),
+          ],
+          timestamp: 1_800_000_001_000,
+        },
+        {
+          role: "assistant",
+          content: [image(detail, "Turn detail")],
+          timestamp: 1_800_000_002_000,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "**Mobile**" }, image(mobile, "Turn mobile")],
+          timestamp: 1_800_000_003_000,
+        },
+        chatMessage("user", "A separate turn.", { timestamp: 1_800_000_004_000 }),
+        {
+          role: "assistant",
+          content: [image(separate, "Separate turn")],
+          timestamp: 1_800_000_005_000,
+        },
+      ],
+    });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    await gateway.waitForRequest("sessions.messages.subscribe");
+    const lightbox = page.locator("openclaw-image-lightbox");
+    const counter = lightbox.locator(".gallery-counter");
+    const shown = lightbox.locator(".image");
+    const open = async (name: string) => {
+      const tile = await revealImage(page, name);
+      await tile.click();
+      return tile;
+    };
+    const trigger = await open("Turn after");
+    await lightbox.getByRole("dialog").waitFor({ state: "visible" });
+    await counterValue(counter).toBe("2 / 4");
+    for (const [index, alt] of [
+      [3, "Turn detail"],
+      [4, "Turn mobile"],
+    ] as const) {
+      await page.keyboard.press("ArrowRight");
+      await counterValue(counter).toBe(`${index} / 4`);
+      await polledAttribute(shown, "alt").toBe(alt);
+      await expectLoadedImage(shown);
+    }
+    await page.keyboard.press("ArrowRight");
+    expect((await counter.textContent())?.trim()).toBe("4 / 4");
+    for (const [index, alt] of [
+      [3, "Turn detail"],
+      [2, "Turn after"],
+      [1, "Turn before"],
+    ] as const) {
+      await page.keyboard.press("ArrowLeft");
+      await counterValue(counter).toBe(`${index} / 4`);
+      await polledAttribute(shown, "alt").toBe(alt);
+    }
+    await page.keyboard.press("Escape");
+    await expect.poll(() => lightbox.count()).toBe(0);
+    await expectFocused(trigger);
+
+    await open("Turn detail");
+    await counterValue(counter).toBe("3 / 4");
+    await page.keyboard.press("Escape");
+    await expect.poll(() => lightbox.count()).toBe(0);
+
+    await open("Separate turn");
+    await polledAttribute(shown, "alt").toBe("Separate turn");
+    expect(await counter.count()).toBe(0);
+    await page.keyboard.press("ArrowLeft");
+    expect(await shown.getAttribute("alt")).toBe("Separate turn");
+  });
+
+  it("navigates only the opened turn gallery and restores its original tile focus", async () => {
     const page = await newPage();
     await installImageGalleries(page);
     const lightbox = page.locator("openclaw-image-lightbox");
@@ -425,7 +540,7 @@ suite.define(() => {
     const image = lightbox.locator(".image");
     for (const count of [1, 2, 5]) {
       const openedIndex = count > 1 ? 2 : 1;
-      const trigger = exactButton(page, `Open image Gallery ${count} image ${openedIndex}`);
+      const trigger = await revealImage(page, `Gallery ${count} image ${openedIndex}`);
       await trigger.click();
       await lightbox.getByRole("dialog").waitFor({ state: "visible" });
       await polledAttribute(image, "alt").toBe(`Gallery ${count} image ${openedIndex}`);

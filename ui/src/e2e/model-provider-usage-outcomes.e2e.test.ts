@@ -133,7 +133,7 @@ suite.define(() => {
 
       const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
-      await agentPicker.getByRole("menuitemradio", { name: "Writer", exact: true }).click();
+      await agentPicker.getByRole("option", { name: "Writer", exact: true }).click();
       await expect.poll(credentials).toContain("Credentials for Writer");
       await expect.poll(async () => openaiCard.locator('input[type="password"]').count()).toBe(0);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);

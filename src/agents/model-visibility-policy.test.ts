@@ -32,7 +32,7 @@ function createPolicy(cfg: OpenClawConfig, agentId?: string) {
 }
 
 describe("explicit model visibility policy", () => {
-  it("tracks every exact configured picker ref independently of the allow policy", () => {
+  it("tracks every selected model ref, but not metadata-only map keys, as configured", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -66,10 +66,8 @@ describe("explicit model visibility policy", () => {
     });
 
     const configuredRefs = [
-      "demo/default-alias",
       "demo/default-primary",
       "demo/default-fallback",
-      "demo/agent-alias",
       "demo/agent-utility",
       "demo/image",
       "demo/image-fallback",
@@ -80,6 +78,9 @@ describe("explicit model visibility policy", () => {
     ];
     const configuredKeys = configuredRefs.map((ref) => JSON.stringify(["demo", ref.slice(5)]));
     expect(configuredKeys.filter((key) => !policy.configuredKeys.has(key))).toEqual([]);
+    // Aliases and per-model params are metadata; they do not pin a model in the picker.
+    expect(policy.configuredKeys.has(JSON.stringify(["demo", "default-alias"]))).toBe(false);
+    expect(policy.configuredKeys.has(JSON.stringify(["demo", "agent-alias"]))).toBe(false);
   });
 
   it("keeps overrides open when model entries only configure aliases or params", () => {

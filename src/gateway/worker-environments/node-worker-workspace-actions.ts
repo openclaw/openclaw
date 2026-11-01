@@ -660,11 +660,11 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
         throw error;
       }
     },
-    quiesceWorkspace: (remoteWorkspaceDir: string) => {
+    quiesceWorkspace: (remoteWorkspaceDir: string, authorize?: () => void) => {
       if (deviceFolder !== undefined) {
         return Promise.reject(new Error("Device folders do not support workspace quiescence"));
       }
-      return quiesceWorkspace(remoteWorkspaceDir);
+      return quiesceWorkspace(remoteWorkspaceDir, authorize);
     },
     reconcileWorkspace,
   };

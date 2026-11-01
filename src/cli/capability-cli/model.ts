@@ -17,6 +17,7 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/
 import { normalizeThinkLevel, THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
+import { decodeUtf8Input } from "../../infra/utf8-input.js";
 import { defaultRuntime } from "../../runtime.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -144,6 +145,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .description("Run a one-shot model turn")
     .option("--prompt <text>", "Prompt text")
     .option("--prompt-file <path>", "Prompt file relative to the current directory (max 1 MiB)")
+    .option("--prompt-stdin", "Read a UTF-8 prompt from stdin (max 1 MiB)")
     .option("--file <path>", "Image file", collectOption, [])
     .option("--model <provider/model>", "Model override")
     .option("--thinking <level>", "Thinking level override")
@@ -157,14 +159,25 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .action((opts, command) =>
       runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
         const { resolveCapabilityAgentOption, resolveTransport } = await import("./shared.js");
-        if ((opts.prompt === undefined) === (opts.promptFile === undefined)) {
-          throw new Error("Use exactly one of --prompt or --prompt-file.");
+        if (
+          [opts.prompt, opts.promptFile, opts.promptStdin].filter((value) => value !== undefined)
+            .length !== 1
+        ) {
+          throw new Error("Use exactly one of --prompt, --prompt-file, or --prompt-stdin.");
         }
         let prompt = opts.prompt;
         if (opts.promptFile !== undefined) {
           const { root } = await import("../../infra/fs-safe.js");
           const promptRoot = await root(process.cwd());
           prompt = await promptRoot.readText(opts.promptFile, { maxBytes: 1_048_576 });
+        }
+        if (opts.promptStdin) {
+          const { readByteStreamWithLimit } =
+            await import("@openclaw/media-core/read-byte-stream-with-limit");
+          prompt = decodeUtf8Input(
+            await readByteStreamWithLimit(process.stdin, { maxBytes: 1_048_576 }),
+            "--prompt-stdin",
+          );
         }
         if (normalizeOptionalString(prompt) === undefined) {
           throw new Error("--prompt cannot be empty or whitespace-only.");

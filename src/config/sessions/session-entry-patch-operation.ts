@@ -69,6 +69,8 @@ type SessionEntryPatchStep = (
       sessionKey: string;
       initial?: SessionEntry;
       next: SessionEntry;
+      /** Final run accounting supersedes its own provider-boundary snapshots. */
+      contextTotalsAccounted?: true;
       creation: ReturnType<typeof buildSessionCreationStamp>;
     }
   | {
@@ -133,9 +135,18 @@ export function projectCronSessionEntry(
   ) {
     throw createSessionWorkStartChangedError(operation.sessionKey);
   }
-  return current && initial
-    ? mergeSessionSnapshotChanges({ initial, next, current })
-    : { ...next, ...(!current ? operation.creation : {}) };
+  const merged =
+    current && initial
+      ? mergeSessionSnapshotChanges({ initial, next, current })
+      : { ...next, ...(!current ? operation.creation : {}) };
+  return operation.contextTotalsAccounted
+    ? {
+        ...merged,
+        totalTokens: next.totalTokens,
+        totalTokensFresh: next.totalTokensFresh,
+        totalTokensVersion: next.totalTokensVersion,
+      }
+    : merged;
 }
 
 /** Each reducer observes its predecessor's postimage; callers persist only the result. */
