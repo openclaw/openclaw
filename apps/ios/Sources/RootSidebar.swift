@@ -400,26 +400,31 @@ struct RootSidebar: View {
                     let title = section.id == "recent"
                         ? String(localized: "Sessions")
                         : (section.title ?? String(localized: "Sessions"))
-                    Button {
-                        guard section.id.hasPrefix("group:") else { return }
-                        if !self.collapsedGroups.insert(section.id).inserted {
-                            self.collapsedGroups.remove(section.id)
-                        }
-                        SessionGroupStore.saveCollapsed(self.collapsedGroups)
-                    } label: {
-                        HStack(spacing: 0) {
+                    HStack(spacing: 0) {
+                        if section.id.hasPrefix("group:") {
+                            Button {
+                                if !self.collapsedGroups.insert(section.id).inserted {
+                                    self.collapsedGroups.remove(section.id)
+                                }
+                                SessionGroupStore.saveCollapsed(self.collapsedGroups)
+                            } label: {
+                                HStack(spacing: 0) {
+                                    self.sectionTitle(title)
+                                    Spacer(minLength: 0)
+                                    Image(systemName: self.collapsedGroups.contains(section.id)
+                                        ? "chevron.right" : "chevron.down")
+                                        .font(OpenClawType.captionSemiBold)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        } else {
                             self.sectionTitle(title)
                             Spacer(minLength: 0)
-                            if section.id.hasPrefix("group:") {
-                                Image(systemName: self.collapsedGroups.contains(section.id)
-                                    ? "chevron.right" : "chevron.down")
-                                    .font(OpenClawType.captionSemiBold)
-                            }
-                            self.attentionBadges(
-                                for: Self.flattened(section.nodes).map(\.session), targetID: "section:\(section.id)")
                         }
+                        self.attentionBadges(
+                            for: Self.flattened(section.nodes).map(\.session), targetID: "section:\(section.id)")
                     }
-                    .buttonStyle(.plain)
                     if !self.searchText.isEmpty || !self.collapsedGroups.contains(section.id) {
                         ForEach(self.sessionNodes(for: section)) { row in
                             self.sessionTreeRow(row, rowPass: rowPass)
