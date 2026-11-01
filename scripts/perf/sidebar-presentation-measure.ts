@@ -47,7 +47,7 @@ import type { SessionsListParams } from "../../packages/gateway-protocol/src/ind
 import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
@@ -170,10 +170,7 @@ process.env = {
 const traced = process.execArgv.includes("--trace-gc-nvp");
 const marker = (phase: string, profilePath?: string) => {
   if (traced) {
-    writeSync(
-      1,
-      `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-    );
+    writeGatewayGcTraceMarker(phase, profilePath);
   }
 };
 marker("identify-start");
