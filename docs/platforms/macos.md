@@ -245,6 +245,15 @@ Command-click or Control-click a Gateway to open it in another window, or choose
 **Gateway settings…**. **Set as primary…** appears when the current Gateway can
 be promoted. These controls are available even with only one saved Gateway.
 
+In native chat, the bottom-left Gateway picker also switches the current window.
+The **Gateways** app menu and **Cmd-1** through **Cmd-9** switch the current Gateway
+window too. If no Gateway window is active, they open or focus the selected Gateway.
+Each Gateway retains its own chat and composer while you switch, including unsent
+drafts. Choosing a Gateway here does not change the app's primary Gateway or move
+another open window. Use **New Gateway Window** or **Option-Cmd-1** through
+**Option-Cmd-9** to open an independent window. Gateway entries in the Dock menu
+still open or focus that Gateway's window.
+
 Opening the embedded dashboard at its default Chat landing restores the last
 page you visited, such as **Usage**, for that Gateway origin. Explicit session
 links and navigation requests take precedence over the remembered page, and

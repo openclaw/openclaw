@@ -794,6 +794,7 @@ private struct MacChatSurface: View {
     let windowCommands: OpenClawChatWindowCommands
     let sidebarPresence: MacGatewaySidebarPresence?
     let gatewayTarget: DashboardGatewayTarget?
+    let gatewaySelection: MacGatewaySelectionAction
     @State private var viewModel: OpenClawChatViewModel
     @State private var appState = AppStateStore.shared
     @State private var talkController = TalkModeController.shared
@@ -814,6 +815,7 @@ private struct MacChatSurface: View {
         windowCommands: OpenClawChatWindowCommands,
         sidebarPresence: MacGatewaySidebarPresence?,
         gatewayTarget: DashboardGatewayTarget?,
+        gatewaySelection: MacGatewaySelectionAction,
         conversationController: NativeConversationController?,
         usesPrimaryAppRuntime: Bool,
         approvalQueue: ExecApprovalQueueStore?,
@@ -824,6 +826,7 @@ private struct MacChatSurface: View {
         self.windowCommands = windowCommands
         self.sidebarPresence = sidebarPresence
         self.gatewayTarget = gatewayTarget
+        self.gatewaySelection = gatewaySelection
         self.conversationController = conversationController
         self.usesPrimaryAppRuntime = usesPrimaryAppRuntime
         self.approvalQueue = approvalQueue
@@ -852,7 +855,8 @@ private struct MacChatSurface: View {
             .defaultAppStorage(AppDefaults.standard)
             .environment(\.openClawSidebarPeople, self.sidebarPresence?.people)
             .environment(\.openClawSidebarPeopleActions, self.sidebarPresence?.actions)
-            .modifier(MacSidebarIdentityMenu(target: self.gatewayTarget, healthy: self.viewModel.healthOK))
+            .modifier(MacSidebarIdentityMenu(
+                target: self.gatewayTarget, healthy: self.viewModel.healthOK, selection: self.gatewaySelection))
             .safeAreaInset(edge: .top) {
                 if !self.viewModel.usesWebConversation, let error = self.conversationController?.error {
                     Text(error).font(.callout).foregroundStyle(.secondary).padding(8)
@@ -959,6 +963,7 @@ private final class WebChatSessionKeyRelay {
 @MainActor
 final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
     private let windowCommands = OpenClawChatWindowCommands()
+    let gatewaySelection = MacGatewaySelectionAction()
     private let sidebarPresence: MacGatewaySidebarPresence?
     var onResignedKey: (() -> Void)?
 
@@ -976,7 +981,14 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
     private let contentController: NSHostingController<MacChatSurface>
     private var routingIdentityTask: Task<Void, Never>?
     private var window: ExperienceWindow?
+    private var windowTitle: String
+    private var isClosed = false
     var onBecameKey: (() -> Void)?
+
+    var currentRoute: WebChatRoute {
+        let target = self.viewModel.currentSessionTarget
+        return WebChatRoute(sessionKey: target.sessionKey, agentID: target.agentID)
+    }
 
     var isWindowOpen: Bool {
         guard let window, !window.isHiddenForExperience else { return false }
@@ -997,7 +1009,8 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         gatewayID: String? = nil,
         gatewayTarget: DashboardGatewayTarget = .primary,
         windowTitle: String = "OpenClaw Chat",
-        windowAutosaveName: String = WebChatSwiftUILayout.windowFrameAutosaveName)
+        windowAutosaveName: String = WebChatSwiftUILayout.windowFrameAutosaveName,
+        reusingWindow: ExperienceWindow? = nil)
     {
         // Primary route changes retire the owning window synchronously,
         // so binding the cache identity at construction stays correct. One
@@ -1017,7 +1030,8 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
             cachedRoutingIdentity: context?.routingIdentity,
             store: context?.store,
             windowTitle: windowTitle,
-            windowAutosaveName: windowAutosaveName)
+            windowAutosaveName: windowAutosaveName,
+            reusingWindow: reusingWindow)
     }
 
     convenience init(
@@ -1029,7 +1043,8 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         cachedRoutingIdentity: OpenClawChatSessionRoutingIdentity?,
         store: OpenClawChatSQLiteTranscriptCache?,
         windowTitle: String = "OpenClaw Chat",
-        windowAutosaveName: String = WebChatSwiftUILayout.windowFrameAutosaveName)
+        windowAutosaveName: String = WebChatSwiftUILayout.windowFrameAutosaveName,
+        reusingWindow: ExperienceWindow? = nil)
     {
         let explicitAgentID = WebChatRoute.normalizedAgentID(agentID)
         let effectiveAgentID = Self.effectiveAgentID(
@@ -1049,7 +1064,8 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
             transcriptCache: store,
             outbox: store,
             windowTitle: windowTitle,
-            windowAutosaveName: windowAutosaveName)
+            windowAutosaveName: windowAutosaveName,
+            reusingWindow: reusingWindow)
     }
 
     init(
@@ -1063,7 +1079,8 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         transcriptCache: (any OpenClawChatTranscriptCache)? = nil,
         outbox: (any OpenClawChatCommandOutbox)? = nil,
         windowTitle: String = "OpenClaw Chat",
-        windowAutosaveName: String = WebChatSwiftUILayout.windowFrameAutosaveName)
+        windowAutosaveName: String = WebChatSwiftUILayout.windowFrameAutosaveName,
+        reusingWindow: ExperienceWindow? = nil)
     {
         let initialActiveAgentID = WebChatRoute.normalizedAgentID(initialActiveAgentID)
         let voiceNoteRecorder = OpenClawVoiceNoteRecorder()
@@ -1111,6 +1128,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         }
         vm.enableSidebarData()
         self.viewModel = vm
+        self.windowTitle = windowTitle
         self.conversationController = if let conversationOwner, let gatewayTarget {
             NativeConversationController(
                 owner: conversationOwner,
@@ -1169,6 +1187,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
             windowCommands: self.windowCommands,
             sidebarPresence: self.sidebarPresence,
             gatewayTarget: gatewayTarget,
+            gatewaySelection: self.gatewaySelection,
             conversationController: self.conversationController,
             usesPrimaryAppRuntime: usesPrimaryAppRuntime,
             approvalQueue: gatewayTransport?.connection.approvalQueue,
@@ -1176,14 +1195,15 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
             voiceNoteRecorder: voiceNoteRecorder))
         self.contentController = hosting
         super.init()
-        self.window = Self.makeWindow(
+        self.attachWindow(reusingWindow ?? Self.makeWindow(
             contentViewController: self.contentController,
             title: windowTitle,
             autosaveName: windowAutosaveName,
-            webConversation: conversationOwner)
-        self.window?.delegate = self
+            webConversation: conversationOwner))
         self.conversationController?.onTitleChanged = { [weak self] title in
-            guard let window = self?.window as? WebChatWindow else { return }
+            guard let self else { return }
+            self.windowTitle = title
+            guard let window = self.window as? WebChatWindow else { return }
             window.pinnedTitle = title
             window.title = title
         }
@@ -1301,11 +1321,49 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
     }
 
     func close() {
-        self.window?.close()
+        if let window = self.window {
+            window.close()
+        } else {
+            self.retireContent()
+        }
     }
 
     func windowWillClose(_ notification: Notification) {
         guard notification.object as? NSWindow === self.window else { return }
+        self.retireContent()
+    }
+
+    /// Keep the Gateway's composer and in-flight work bound to its own content
+    /// while another Gateway occupies the same native window.
+    func detachWindowForGatewaySwitch() -> ExperienceWindow? {
+        guard let window else { return nil }
+        self.conversationController?.present(visible: false, active: false)
+        self.onResignedKey?()
+        self.onVisibilityChanged?(false)
+        window.delegate = nil
+        window.contentViewController = nil
+        self.window = nil
+        return window
+    }
+
+    func attachWindow(_ window: ExperienceWindow) {
+        self.window = window
+        let frame = window.frame
+        if let chatWindow = window as? WebChatWindow {
+            chatWindow.pinnedTitle = self.windowTitle
+            chatWindow.webConversation = self.viewModel.webConversation
+        }
+        window.title = self.windowTitle
+        window.contentViewController = self.contentController
+        self.contentController.sceneBridgingOptions = [.toolbars]
+        window.setFrame(frame, display: false)
+        window.delegate = self
+    }
+
+    private func retireContent() {
+        guard !self.isClosed else { return }
+        self.isClosed = true
+        self.gatewaySelection.select = nil
         self.sidebarPresence?.stop()
         self.routingIdentityTask?.cancel()
         self.routingIdentityTask = nil

@@ -334,7 +334,7 @@ struct WebChatSwiftUISmokeTests {
 }
 
 extension MacGatewayConnectionFleet {
-    fileprivate func holdForPendingWindowRegression(
+    func holdForPendingWindowRegression(
         entered: AsyncStream<Void>.Continuation,
         release: DispatchSemaphore) -> Bool
     {

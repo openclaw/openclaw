@@ -73,6 +73,8 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
     }
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "GatewaysMainMenu")
+    private let gatewayEntries: () -> [DashboardGatewayEntry]
+    private let currentWindow: () -> NSWindow?
     var localHealth: DashboardGatewayHealth {
         self.store.facts[.local]?.health ?? .unknown
     }
@@ -94,7 +96,12 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
     private var profiles: [String: MacGatewayCatalogProfile] = [:]
     private var primaryLabels = GatewayMenuEndpointLabels()
 
-    override init() {
+    init(
+        gatewayEntries: @escaping () -> [DashboardGatewayEntry] = { DashboardManager.shared.gatewayEntries },
+        currentWindow: @escaping () -> NSWindow? = { NSApp.keyWindow })
+    {
+        self.gatewayEntries = gatewayEntries
+        self.currentWindow = currentWindow
         super.init()
         self.ownedMenu.delegate = self
         self.ownedMenu.autoenablesItems = false
@@ -146,7 +153,7 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
 
     private func observeGatewayChanges() {
         withObservationTracking {
-            _ = DashboardManager.shared.gatewayEntries
+            _ = self.gatewayEntries()
             _ = AppNavigationActions.selectedGatewayTarget
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
@@ -166,7 +173,7 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
 
     private func rebuildRowsIfNeeded() {
         guard !self.isMenuOpen else { return }
-        let gateways = DashboardGatewayMenuModel.items(from: DashboardManager.shared.gatewayEntries)
+        let gateways = DashboardGatewayMenuModel.items(from: self.gatewayEntries())
         let signature = gateways.map(RowSignature.init)
         guard signature != self.rowSignature else {
             for (index, gateway) in gateways.enumerated() {
@@ -179,7 +186,7 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
         self.rows.removeAll()
         for gateway in gateways {
             let key = gateway.shortcutNumber.map(String.init) ?? ""
-            let item = NSMenuItem(title: gateway.name, action: #selector(self.openGateway(_:)), keyEquivalent: key)
+            let item = NSMenuItem(title: gateway.name, action: #selector(self.selectGateway(_:)), keyEquivalent: key)
             item.target = self
             item.identifier = NSUserInterfaceItemIdentifier(gateway.id)
             item.keyEquivalentModifierMask = [.command]
@@ -304,7 +311,7 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
         let activate = { [weak self, weak item] in
             guard let self, let item else { return }
             item.menu?.cancelTracking()
-            self.openGateway(item)
+            self.selectGateway(item)
         }
         let card = GatewayMenuCard(model: model, now: now)
             .contentShape(Rectangle())
@@ -313,9 +320,11 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
         StatusMenuRenderer.configureHostedView(item, rootView: card, highlights: true)
     }
 
-    @objc private func openGateway(_ sender: NSMenuItem) {
+    @objc private func selectGateway(_ sender: NSMenuItem) {
         guard let id = sender.identifier?.rawValue, let target = DashboardGatewayTarget(bridgeID: id) else { return }
-        self.trackWindowOpen(target: target, task: AppNavigationActions.openGateway(target))
+        if let task = AppNavigationActions.selectGateway(target, in: self.currentWindow()) {
+            self.trackWindowOpen(target: target, task: task)
+        }
     }
 
     @objc private func newGatewayWindow(_ sender: NSMenuItem) {
