@@ -895,3 +895,47 @@ it("keeps the active OAuth connection when saving an explicit backup profile", a
   expect((await readConfig()).models?.providers?.sample).toEqual(provider);
   expect(savedProfile("sample:backup")).toMatchObject({ key: "backup-key" });
 });
+
+it("models.authSetApiKey writes no binding or allowlist once the requester is revoked", async () => {
+  const config: OpenClawConfig = {
+    agents: { defaults: { modelPolicy: { allow: ["other/*"] } }, entries: { writer: {} } },
+  };
+  writeConfig(config);
+  const beforeConfig = configBytes();
+  let authorized = true;
+  const updateConfig = configWriter.updateConfig;
+  vi.spyOn(configWriter, "updateConfig").mockImplementation((mutator, ...options) =>
+    updateConfig(
+      async (...args) => {
+        const next = await mutator(...args);
+        authorized = false;
+        return next;
+      },
+      ...options,
+    ),
+  );
+  const { modelsAuthStatusHandlers } =
+    await import("../../gateway/server-methods/models-auth-status.js");
+  const respond = vi.fn();
+  const params = { provider: "sample", apiKey: "synthetic-revoked-key", agentId: "writer" };
+  await modelsAuthStatusHandlers["models.authSetApiKey"]!({
+    req: { type: "req", id: "revoked-save", method: "models.authSetApiKey", params },
+    params,
+    respond,
+    client: { connect: { scopes: ["operator.admin"] } } as never,
+    hasCurrentClientAuthority: () => authorized,
+    isWebchatConnect: () => false,
+    context: { getRuntimeConfig: () => config } as never,
+  });
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      message: expect.stringContaining("Gateway requester authority changed"),
+    }),
+  );
+  expect(configBytes()).toBe(beforeConfig);
+  expect((await readConfig()).agents?.defaults?.modelPolicy?.allow).toEqual(["other/*"]);
+  // The key committed while the requester was still authorized; only later writes are refused.
+  expect(savedProfile()).toMatchObject({ key: "synthetic-revoked-key" });
+});
