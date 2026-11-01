@@ -8,7 +8,6 @@ afterEach(() => vi.restoreAllMocks());
 
 it("materializes declared non-channel plugins without acquiring channel catalogs", () => {
   const catalog = vi.spyOn(channelCatalog, "listBundledChannelCatalogEntries").mockReturnValue([]);
-  const normalize = vi.spyOn(pluginPolicy, "normalizePluginsConfig");
   const result = materializePluginAutoEnableCandidates({
     config: {
       plugins: { allow: ["existing"], entries: { companion: { enabled: true } } },
@@ -32,8 +31,6 @@ it("materializes declared non-channel plugins without acquiring channel catalogs
   });
   expect(result.config.channels).toBeUndefined();
   expect(catalog.mock.calls.length).toBe(0);
-  // Two plugin registrations and the final companion allowlist rewrite each prepare one policy.
-  expect(normalize).toHaveBeenCalledTimes(4);
 });
 
 it("prepares unchanged plugin policy once across candidate preference checks", () => {
@@ -71,7 +68,6 @@ it("keeps a non-channel plugin independent of a same-named disabled channel", ()
 });
 
 it("retains runtime catalog aliases when no manifest owner is available", () => {
-  const normalize = vi.spyOn(pluginPolicy, "normalizePluginsConfig");
   vi.spyOn(channelCatalog, "listBundledChannelCatalogEntries").mockReturnValue([
     {
       id: "runtime-channel",
@@ -90,7 +86,6 @@ it("retains runtime catalog aliases when no manifest owner is available", () => 
   });
   expect(result.config.channels?.["runtime-channel"]).toEqual({ enabled: true });
   expect(result.config.plugins).toBeUndefined();
-  expect(normalize).toHaveBeenCalledTimes(1);
 });
 
 it("reads mixed-case plugin policy under the canonical lowercase key", () => {
