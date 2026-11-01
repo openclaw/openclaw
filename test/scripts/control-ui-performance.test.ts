@@ -790,12 +790,12 @@ export default {
 
   async function createComparisonRepo(
     command: CommandFixture,
-    { baseOnlyDependency = false, brokenSource = false } = {},
+    { baseOnlyDependency = false, brokenSource = false, specialCharacterRoot = true } = {},
   ) {
     const diagnostics = command.enableDiagnostics("control-ui-performance-base");
     diagnostics.stage("fixture");
     const temporaryRoot = fs.realpathSync(command.createTempDir("ui-budget-proof-"));
-    const root = path.join(temporaryRoot, "repo # space");
+    const root = path.join(temporaryRoot, specialCharacterRoot ? "repo # space" : "repo");
     const at = (...parts: string[]) => path.join(root, ...parts);
     const scratch = path.join(temporaryRoot, "scratch");
     const identityCapture = path.join(temporaryRoot, "build-identities.jsonl");
@@ -1079,7 +1079,8 @@ export default { plugins: [{ name: "signal", buildStart() { process.kill(process
 
   test(
     "reuses identical inputs but rebuilds source-specific Settings changes",
-    {},
+    // Settings preparation uses the test runtime; the other cases cover the preload path.
+    { specialCharacterRoot: false },
     async (repo) => {
       repo.write("ui/src/unused.test.ts", "export const fixture = 1;\n");
       const base = await repo.commit("matching production inputs");
