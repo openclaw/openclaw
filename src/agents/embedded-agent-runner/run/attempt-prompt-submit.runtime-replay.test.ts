@@ -30,6 +30,8 @@ it.each([
   { name: "transient override", api: "openai-completions", override: false, retained: false },
   { name: "retained override", api: "openai-completions", override: true, retained: true },
   { name: "generic completions", api: "openai-completions", retained: true },
+  { name: "generic Responses", api: "openai-responses", retained: true },
+  { name: "Responses override", api: "openai-responses", override: false, retained: false },
   { name: "native Ollama", api: "ollama", retained: true },
   {
     name: "suppress-only synthetic input",
