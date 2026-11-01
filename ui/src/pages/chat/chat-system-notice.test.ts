@@ -299,6 +299,19 @@ describe("skill review notices", () => {
     [{ idempotencyKey: "skill-workshop-notice:review", provider: "model-provider" }, false],
     [{ idempotencyKey: "skill-workshop-notice:review", model: "model-output" }, false],
     [{ idempotencyKey: "skill-workshop-notice:review", role: "user" }, false],
+    // A row written by 2026.10.10 betas, before the plugin-notice marker, stays a text notice.
+    [
+      {
+        idempotencyKey: "skill-workshop-notice:review",
+        openclawDeliveryMirror: {
+          kind: "skill-workshop-change",
+          agentId: "main",
+          runId: "review",
+          skills: [{ name: "deploy-staging", action: "updated" }],
+        },
+      },
+      true,
+    ],
   ])("uses legacy notice provenance, not Learned text: %j", (fields, projected) => {
     const item = {
       kind: "message" as const,

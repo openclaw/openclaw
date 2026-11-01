@@ -156,6 +156,52 @@ describe("channel-final transcript mirrors", () => {
     );
   });
 
+  it("keeps unkeyed plugin notices with the same text as separate rows", async () => {
+    const post = (runId: string) =>
+      appendMirror({
+        ...scope,
+        deliveryMirror: {
+          kind: "plugin-notice",
+          pluginId: "demo",
+          type: "changed",
+          data: { runId },
+        },
+        text: "Review complete",
+        updateMode: "none",
+      });
+    await answer("ordinary-answer", "Review complete");
+
+    const first = await post("review-1");
+    const second = await post("review-2");
+
+    expect(first).toMatchObject({ ok: true });
+    expect(second).toMatchObject({ ok: true });
+    expect(first.ok && second.ok && first.messageId !== second.messageId).toBe(true);
+    const notices = (await entries()).flatMap(
+      (entry) => readPluginNoticeData(entry.message, "demo", "changed") ?? [],
+    );
+    expect(notices).toEqual([{ runId: "review-1" }, { runId: "review-2" }]);
+  });
+
+  it("keeps a 2026.10.10-beta Learned row out of model replay", () => {
+    // Literal row written by 2026.10.10 betas before the plugin-notice marker.
+    const betaRow = {
+      role: "assistant",
+      content: [{ type: "text", text: "💾 Learned: updated `deploy`." }],
+      api: "openai-responses",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      idempotencyKey: "skill-workshop-notice:skill-workshop-review:r1",
+      openclawDeliveryMirror: {
+        kind: "skill-workshop-change",
+        agentId: "main",
+        runId: "skill-workshop-review:r1",
+        skills: [{ name: "deploy", action: "updated" }],
+      },
+    };
+    expect(isTranscriptOnlyOpenClawAssistantMessage(betaRow)).toBe(true);
+  });
+
   it("retains distinct unkeyed media identities and suppresses an exact repeat", async () => {
     const mediaUrls: [string, string] = [
       "https://example.com/one/chart.png",

@@ -466,8 +466,11 @@ export async function appendAssistantMirrorMessageByIdentity(
     if (params.sessionId && currentEntry.sessionId !== params.sessionId) {
       return { ok: false, reason: "session changed", code: "session-rebound" };
     }
+    // A plugin notice is identified by its data, not its text, so it never folds into a match.
     const latestEquivalentAssistantId =
-      !params.idempotencyKey && isDeliveryMirrorAssistantMessage(message)
+      !params.idempotencyKey &&
+      params.deliveryMirror?.kind !== PLUGIN_NOTICE_KIND &&
+      isDeliveryMirrorAssistantMessage(message)
         ? findLatestEquivalentAssistantMessageId(
             selectVisibleTranscriptEvents(await locked.readEvents()),
             message,
