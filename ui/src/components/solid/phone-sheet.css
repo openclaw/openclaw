@@ -1,0 +1,147 @@
+/* A full-viewport top-layer surface holding the backdrop and the bottom-anchored panel. */
+.oc-popover.oc-sheet {
+  --oc-popover-padding: 0;
+
+  position: fixed;
+  position-anchor: auto;
+  position-area: none;
+  inset: 0 !important;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  margin: 0;
+  overflow: hidden;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.oc-popover.oc-sheet:popover-open {
+  opacity: 1;
+  scale: 1;
+}
+
+.oc-sheet__backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: var(--overlay-modal-backdrop);
+  touch-action: none;
+  animation: fade-in var(--motion-sheet);
+}
+
+/* Anchored to the shell canvas, like the sidebar's sheets, so it rides above the keyboard. */
+.oc-sheet__panel {
+  position: absolute;
+  inset: auto var(--safe-area-right) calc(100% - var(--shell-canvas-height)) var(--safe-area-left);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(var(--shell-canvas-height) - var(--safe-area-top) - var(--space-7));
+  padding-block-end: var(--shell-safe-area-bottom);
+  border-radius: var(--overlay-modal-radius) var(--overlay-modal-radius) 0 0;
+  background: var(--popover);
+  box-shadow: var(--overlay-shadow);
+  animation: oc-sheet-in var(--motion-sheet);
+}
+
+.oc-sheet__grabber {
+  position: relative;
+  flex: none;
+  align-self: center;
+  width: 36px;
+  height: 4px;
+  margin-block: 8px 2px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+  /* The grabber swipes the sheet down; its touch target extends past the pill. */
+  touch-action: none;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: -12px -64px;
+  }
+}
+
+.oc-sheet__header {
+  display: grid;
+  flex: none;
+  grid-template-columns: 32px minmax(0, 1fr) 32px;
+  align-items: center;
+  min-height: 44px;
+  padding-inline: var(--space-3);
+}
+
+.oc-sheet__header--custom {
+  grid-template-columns: minmax(0, 1fr) 32px;
+  gap: var(--space-2);
+}
+
+.oc-sheet__header > .header-search {
+  margin: 0;
+  padding-block-end: 0;
+  border: 0;
+}
+
+.oc-sheet__title {
+  grid-column: 2;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-md);
+  font-weight: var(--control-ui-font-weight-semibold);
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.oc-sheet__close {
+  display: inline-flex;
+  grid-column: -2;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.oc-sheet__close svg {
+  width: 16px;
+  height: 16px;
+}
+
+.oc-sheet__body {
+  min-height: 0;
+  padding: var(--space-2) var(--space-4) var(--space-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+@keyframes oc-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oc-sheet__backdrop,
+  .oc-sheet__panel {
+    animation: none;
+  }
+}
+
+@supports (corner-shape: superellipse(1.5)) {
+  .oc-sheet__panel {
+    corner-shape: superellipse(1.5);
+  }
+}

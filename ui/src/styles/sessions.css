@@ -359,6 +359,11 @@
   padding: var(--space-3);
 }
 
+.oc-sheet .sessions-filter-popover__panel {
+  width: auto;
+  padding: 0;
+}
+
 .sessions-filter-popover__fields {
   display: grid;
   gap: var(--space-2);

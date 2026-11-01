@@ -181,6 +181,18 @@
   gap: var(--space-3);
 }
 
+.oc-sheet .cron-filter-popover__panel {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: auto;
+  padding: 0;
+}
+
+/* Sort and Direction read as a pair; Condition and Reset take their own rows. */
+.oc-sheet .cron-filter-popover__panel > :nth-child(3),
+.oc-sheet .cron-filter-popover__panel > .btn {
+  grid-column: 1 / -1;
+}
+
 .cron-error-banner {
   border: 1px solid var(--danger-subtle);
   background: var(--danger-subtle);
