@@ -399,6 +399,12 @@ JSONC edits go through `jsonc-parser`, so comments and whitespace survive a
 `set`. Run with `--dry-run` first to inspect the bytes before committing.
 `.json` files use the same adapter and edit path as `.jsonc`.
 
+For named object keys, JSON, JSONC, and JSONL reads, searches, and replacements
+use the last duplicate occurrence, matching runtime parsing. Replacements preserve
+earlier shadowed copies. Insertion beneath a duplicated parent is refused:
+consolidate the duplicate parents into one, retaining the last effective value,
+then retry.
+
 ### JSONL
 
 ```text
