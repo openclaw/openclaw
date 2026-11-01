@@ -25,6 +25,7 @@ export interface ControlUiMockGatewayScenario
   awaitInitialRoster?: boolean;
   nativePlugins?: readonly NativeControlUiPluginFixture[];
   pluginAssetsRequireAuth?: boolean;
+  pluginSurfaceUrls?: Record<string, string>;
   attachmentMaxBytes?: number;
   agentModel?: string | null;
   assistantAgentId?: string;
@@ -130,13 +131,22 @@ export interface ControlUiMockGatewayScenario
   workspaceGit?: boolean;
 }
 
+type ControlUiPluginHello = Required<
+  Pick<
+    ControlUiMockGatewayScenario,
+    "controlUiTabs" | "controlUiWidgetKinds" | "controlUiLinkReaders" | "pluginSurfaceUrls"
+  >
+>;
+
 export type NormalizedControlUiMockGatewayScenario = Required<
   Omit<
     ControlUiMockGatewayScenario,
-    "nativePlugins" | "awaitInitialRoster" | "bootstrapPreferences"
+    "nativePlugins" | "awaitInitialRoster" | "bootstrapPreferences" | keyof ControlUiPluginHello
   >
 > &
-  Pick<ControlUiMockGatewayScenario, "bootstrapPreferences">;
+  Pick<ControlUiMockGatewayScenario, "bootstrapPreferences"> & {
+    controlUiPluginHello: ControlUiPluginHello;
+  };
 
 const DEFAULT_MOCK_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
 const DEFAULT_MOCK_ATTACHMENT_MAX_BYTES = Math.floor(
@@ -176,9 +186,12 @@ export function normalizeScenario(
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
     assistantName: scenario.assistantName?.trim() || "OpenClaw",
     basePath,
-    controlUiTabs: scenario.controlUiTabs ?? [],
-    controlUiWidgetKinds: scenario.controlUiWidgetKinds ?? [],
-    controlUiLinkReaders: scenario.controlUiLinkReaders ?? [],
+    controlUiPluginHello: {
+      controlUiTabs: scenario.controlUiTabs ?? [],
+      controlUiWidgetKinds: scenario.controlUiWidgetKinds ?? [],
+      controlUiLinkReaders: scenario.controlUiLinkReaders ?? [],
+      pluginSurfaceUrls: scenario.pluginSurfaceUrls ?? {},
+    },
     allowedSessionVisibilities: scenario.allowedSessionVisibilities ?? [
       "shared",
       "read-only",

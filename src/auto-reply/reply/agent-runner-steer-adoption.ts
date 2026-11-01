@@ -424,16 +424,7 @@ export async function runActiveReplySteer(
       shouldAbortOnAdoptionError: isIngressAdoptionLostError,
     });
     if (finalization.status === "rejected") {
-      if (followupRun.controllerInput?.injection?.accepted !== true) {
-        return await fallback(finalization.outcome.reason, injectionAttempt.targetRunId);
-      }
-      // A negative final receipt cannot undo earlier native acceptance.
-      parked.consume("consumed");
-      custodyFinished = true;
-      if (replyOperationRunState) {
-        replyOperationRunState.admission = { status: "accepted", mode: "steer" };
-      }
-      return "handled";
+      return await fallback(finalization.outcome.reason, injectionAttempt.targetRunId);
     }
     // Accepted or indeterminate input cannot be abandoned for replay, even
     // when the source's later adoption callback rejects.
@@ -478,13 +469,17 @@ export async function runActiveReplySteer(
             replayForbidden = true;
           }
         }
-        if (replayForbidden || followupRun.controllerInput?.injection?.accepted === true) {
+        if (replayForbidden) {
           parked.consume("consumed");
         } else {
           try {
             assertReadCurrent();
             parked.fallback();
           } catch {
+            diagnosticLogger.warn("steering followup unavailable: source authority lost", {
+              sessionId: steerSessionId,
+              runId: params.opts?.runId,
+            });
             parked.consume();
           }
         }

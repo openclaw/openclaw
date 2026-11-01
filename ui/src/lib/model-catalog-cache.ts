@@ -30,9 +30,6 @@ export function modelCatalogEventInvalidation(
   event: Pick<GatewayEventFrame, "event" | "payload">,
   scope?: ModelCatalogReadScope,
 ): ModelCatalogInvalidation | undefined {
-  if (event.event === "config.changed") {
-    return "refresh";
-  }
   if (event.event === "chat.metadata.changed") {
     const payload = asNullableRecord(event.payload);
     if (payload?.modelSelectionChanged === true) {

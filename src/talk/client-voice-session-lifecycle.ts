@@ -30,8 +30,8 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
       const remainingMs = budget
         ? Math.max(0, budget.deadline - performance.now())
         : GATEWAY_SHUTDOWN_TIMEOUT_MS;
-      // Grace plus abort settlement uses at most half the remaining shutdown
-      // budget, leaving time for the rest of Gateway teardown.
+      // Embedded close and store retirement use this grace plus abort settlement;
+      // process exit applies its shorter outer prelude deadline.
       return Math.min(30_000, Math.floor(remainingMs / 4));
     },
     reason: "[talk] voice session persistence shutdown grace expired; abort requested",

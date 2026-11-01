@@ -5,6 +5,7 @@ import {
 } from "../agents/embedded-agent-runner/runs.js";
 import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import { MessageInjectionWithdrawnError } from "../auto-reply/reply/message-injection-authority.js";
 import type { AgentHarnessAttemptParams } from "../plugin-sdk/agent-harness-runtime.js";
 import {
   markGatewayRestartDraining,
@@ -708,4 +709,19 @@ describe("steerSessionControllerOperation", () => {
     });
     expectNoInput(input);
   });
+});
+
+it("returns a proven withdrawn accepted steer to runnable followup custody", async () => {
+  const { operation, input } = startTurn({
+    queueMessage: async ({ onQueueAccepted }) => {
+      onQueueAccepted?.(true);
+      throw new MessageInjectionWithdrawnError("exact queued input removed at delivery deadline");
+    },
+  });
+  await expect(steer(input, { waitForTranscriptCommit: true })).resolves.toMatchObject({
+    status: "rejected",
+    reason: "injection_unavailable",
+  });
+  operation.complete();
+  expect(tryClaimSessionControllerTask(input)).toBeDefined();
 });

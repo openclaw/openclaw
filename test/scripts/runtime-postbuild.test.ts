@@ -742,7 +742,7 @@ describe("runtime postbuild static assets", () => {
       for (const chunk of release.chunks) {
         const loaded = await load(rootDir, `dist/${chunk.path}`);
         for (const { exported, origin } of chunk.exports) {
-          expect(loaded[exported](), `${release.version}: ${chunk.path}:${exported}`).toBe(
+          expect(await loaded[exported](), `${release.version}: ${chunk.path}:${exported}`).toBe(
             origin.symbol,
           );
         }

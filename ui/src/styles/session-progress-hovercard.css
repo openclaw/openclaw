@@ -5,8 +5,8 @@
   position: fixed;
   inset: auto;
   z-index: 1990;
-  width: min(296px, calc(100vw - 24px));
-  max-height: min(520px, calc(100vh - 24px));
+  width: min(320px, calc(100vw - 24px));
+  max-height: min(580px, calc(100vh - 24px));
   padding: 0;
   margin: 0;
   overflow: auto;

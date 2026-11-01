@@ -1450,9 +1450,7 @@ function installControlUiMockGateway(
             events: scenario.featureEvents,
             ...(scenario.omitFeatureMethods ? {} : { methods: scenario.featureMethods }),
           },
-          controlUiTabs: scenario.controlUiTabs,
-          controlUiLinkReaders: scenario.controlUiLinkReaders ?? [],
-          controlUiWidgetKinds: scenario.controlUiWidgetKinds,
+          ...scenario.controlUiPluginHello,
           protocol: protocolVersion,
           server: {
             buildId: serverBuildId,

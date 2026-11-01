@@ -51,7 +51,6 @@
     var(--chat-composer-surface)
   );
   --session-hovercard-surface: color-mix(in srgb, var(--card) 94%, black 6%);
-  --session-hovercard-attribution-surface: color-mix(in srgb, var(--text) 6%, transparent);
 
   --panel: #0e1015;
   --panel-strong: #191c24;
@@ -626,7 +625,6 @@
   --popover: #ffffff;
   --popover-foreground: #211e1a;
   --session-hovercard-surface: var(--card);
-  --session-hovercard-attribution-surface: color-mix(in srgb, var(--text) 4%, transparent);
 
   --panel: #faf9f7;
   --panel-strong: #f4f1ec;

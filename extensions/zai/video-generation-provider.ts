@@ -49,12 +49,18 @@ const MODE_CAPABILITIES: VideoGenerationModeCapabilities = {
   providerOptions: { quality: "string", fps: "number" },
 };
 
-function readTaskStatus(payload: Record<string, unknown>): string {
+function isTaskComplete(payload: Record<string, unknown>): boolean {
   const status = normalizeOptionalString(payload.task_status);
   if (status !== "PROCESSING" && status !== "SUCCESS" && status !== "FAIL") {
     throw new Error("Z.AI video status response missing or unknown task_status");
   }
-  return status;
+  if (status === "FAIL") {
+    throw new Error(
+      normalizeOptionalString(isRecord(payload.error) ? payload.error.message : payload.message) ??
+        "Z.AI video generation failed",
+    );
+  }
+  return status === "SUCCESS";
 }
 
 export function buildZaiVideoGenerationProvider(): VideoGenerationProvider {
@@ -190,13 +196,7 @@ export function buildZaiVideoGenerationProvider(): VideoGenerationProvider {
         pollIntervalMs: POLL_INTERVAL_MS,
         requestFailedMessage: "Z.AI video status request failed",
         timeoutMessage: `Z.AI video generation task ${taskId} did not finish in time`,
-        isComplete: (payload) => readTaskStatus(payload) === "SUCCESS",
-        getFailureMessage: (payload) =>
-          readTaskStatus(payload) === "FAIL"
-            ? (normalizeOptionalString(
-                isRecord(payload.error) ? payload.error.message : payload.message,
-              ) ?? "Z.AI video generation failed")
-            : undefined,
+        isComplete: isTaskComplete,
       });
       const output = Array.isArray(completed.video_result) ? completed.video_result[0] : undefined;
       const videoUrl = isRecord(output) ? normalizeOptionalString(output.url) : undefined;
