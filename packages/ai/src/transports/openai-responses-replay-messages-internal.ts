@@ -30,6 +30,7 @@ import {
   isSafeResponsesReplayItemId,
   type OpenAIResponsesReplayMode,
 } from "./openai-responses-compaction-replay.js";
+import { tagResponsesCompactionInput } from "./openai-responses-compaction-window.js";
 import {
   OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
   OPENAI_RESPONSES_REASONING_REPLAY_META_KEY,
@@ -265,7 +266,7 @@ export function buildResponsesInputMessage(
 
 export { createAssistantOutput as createOpenAIResponsesAssistantOutput } from "./assistant-output.js";
 
-type ConvertResponsesMessagesOptions = {
+export type ConvertResponsesMessagesOptions = {
   includeSystemPrompt?: boolean;
   replayResponsesItemIds?: boolean;
   sessionId?: string;
@@ -283,7 +284,7 @@ const responsesMessageProjections = new WeakMap<
 >();
 
 /** Detach hook-editable JSON containers while retaining scalar strings. */
-function cloneResponsesInputForPayloadHook<T>(value: T): T {
+export function cloneResponsesInputForPayloadHook<T>(value: T): T {
   if (!value || typeof value !== "object") {
     return value;
   }
@@ -387,15 +388,14 @@ function convertResponsesMessagesWithStyle(
   // The compact endpoint's output is already canonical provider input, not
   // internal user content to normalize or reinterpret as text/image blocks.
   if (replayPlan.compactedWindow) {
-    messages.push(
-      ...replayPlan.compactedWindow.map((item) => {
-        if (options?.retainUserProvenance && item.type === "message" && item.role === "user") {
-          return Object.assign({}, item, { [RESPONSES_RETAINED_USER]: true });
-        }
-        // SAFETY: Validated window; Responses accepts assistant output_text without an id.
-        return item as ResponseInputItem;
-      }),
-    );
+    const window = replayPlan.compactedWindow.map((item) => {
+      if (options?.retainUserProvenance && item.type === "message" && item.role === "user") {
+        return tagResponsesCompactionInput(item, RESPONSES_RETAINED_USER);
+      }
+      // SAFETY: Validated window; Responses accepts assistant output_text without an id.
+      return item as ResponseInputItem;
+    });
+    messages.push(...(options?.mutableInput ? cloneResponsesInputForPayloadHook(window) : window));
   }
   let replayMessages = replayPlan.compaction
     ? [replayPlan.compaction, ...transformedMessages]
@@ -671,7 +671,7 @@ function convertResponsesMessagesWithStyle(
   ]);
   for (const msg of replayMessages) {
     if (!("role" in msg)) {
-      messages.push(msg);
+      messages.push(...(options?.mutableInput ? cloneResponsesInputForPayloadHook([msg]) : [msg]));
       continue;
     }
     // Prepared suffix results resolve IDs against the current request's call map.

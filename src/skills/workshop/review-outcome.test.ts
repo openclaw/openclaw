@@ -161,13 +161,17 @@ describe("postWorkshopChangeNotice", () => {
     change({ skillName: "notes", createdAtMs: 4, ...lastEdit }),
   ];
   const marker = (includeRelease = false) => ({
-    kind: "skill-workshop-change",
-    agentId: "main",
-    runId,
-    skills: [
-      { name: "budget", action: "updated", summary: "reconciled" },
-      ...(includeRelease ? [{ name: "notes", action: "created", summary: "drafting" }] : []),
-    ],
+    kind: "plugin-notice",
+    pluginId: "skill-workshop",
+    type: "skills-changed",
+    data: {
+      agentId: "main",
+      runId,
+      skills: [
+        { name: "budget", action: "updated", summary: "reconciled" },
+        ...(includeRelease ? [{ name: "notes", action: "created", summary: "drafting" }] : []),
+      ],
+    },
   });
   const expectNoNotice = () => {
     expect(mocks.send).not.toHaveBeenCalled();

@@ -64,6 +64,8 @@ physical shared database's process-owned facts. Journal writers publish pending,
 completed, and removed status at commit through the existing worker fact transport;
 rollback preserves the previous status. Session admission reuses this fact and the
 deletion owner's queue closure instead of reading the journal on every turn.
+Unrelated first-use feature tables do not invalidate these per-agent row facts or
+cancel admitted runs. Journal changes and database retirement still revoke authority.
 Synchronous runtime guards reuse the same committed fact rather than copying the
 shared database for each check. Guards inside a native transaction still read
 that transaction's current journal, including its uncommitted changes.
@@ -213,6 +215,20 @@ When demand returns within five minutes of that retirement, one replacement
 reader stays warm for up to 90 idle seconds to avoid repeated startup work.
 Retirement uses the pool's existing task and native-resource settlement so an
 active read or retained lease is not interrupted.
+
+On Linux, transcript and shared-state SQLite readers sample `/proc/thread-self/io` at entry
+and completion. An operation that incurs at least 64 MiB of kernel-accounted
+storage reads emits one `heavy SQLite reader operation` warning through the
+existing logger, including `operation`, `readBytes`, `elapsedMs`, and worker IDs.
+The context retains the last transaction's existing session/row diagnostics,
+the outer `readerOperation`, and the agent ID for transcript workers. Nested
+owners share the outer measurement rather than counting the bytes twice.
+These are physical reads charged to the executing thread across the whole
+operation (including preparation), not logical SQLite bytes or per-file totals;
+page-cache hits contribute zero. Completed and failed operations are measured;
+a forcibly terminated worker cannot report its unfinished operation. Missing
+procfs accounting and non-Linux platforms leave diagnostics unchanged. No
+configuration, persistent counters, or background summary timer is added.
 
 If a shared-state writer worker is lost, its logical leases retire even while
 idle. Retirement joins dispatched commands but does not wait for external

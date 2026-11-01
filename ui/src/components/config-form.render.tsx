@@ -2,6 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
+import { createProgressiveList } from "../lib/reactive/progressive-list.ts";
 import { SECTION_META } from "./config-form.meta.ts";
 import { ConfigNode } from "./config-form.node.tsx";
 import { matchesConfigSectionSearch, parseConfigSearchQuery } from "./config-form.search.ts";
@@ -300,13 +301,24 @@ export function ConfigForm(props: ConfigFormProps): SolidJSX.Element {
             </Show>
           }
         >
-          <SettingsPage>
-            <For each={visibleSections()} keyed={(section) => section.id}>
-              {(section) => <ConfigSection section={section()} form={props} />}
-            </For>
-          </SettingsPage>
+          <ConfigSections sections={visibleSections()} form={props} />
         </Show>
       </Show>
     </Show>
+  );
+}
+
+function ConfigSections(props: { sections: Section[]; form: ConfigFormProps }): SolidJSX.Element {
+  const visible = createProgressiveList(() => props.sections, {
+    initial: 1,
+    batch: 7,
+    enabled: () => props.form.progressive === true,
+  });
+  return (
+    <SettingsPage busy={visible.pending()}>
+      <For each={visible.items()} keyed={(section) => section.id}>
+        {(section) => <ConfigSection section={section()} form={props.form} />}
+      </For>
+    </SettingsPage>
   );
 }

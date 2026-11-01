@@ -7,6 +7,8 @@ import { expect, it, vi } from "vitest";
 import { collectPackageDistImportErrors } from "../scripts/lib/package-dist-imports.mjs";
 import { createRuntimeDependencyOwnershipBuildPlugin } from "../scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import {
+  collectInstalledBundledExtensionManifestErrors,
+  collectInstalledBundledRuntimeSidecarPaths,
   collectInstalledContextEngineRuntimeErrors as contextErrors,
   collectInstalledRootDependencyManifestErrors as dependencyErrors,
   collectInstalledPackageErrors,
@@ -283,7 +285,7 @@ it("rejects a matching provenance payload when Sigstore cannot verify its bundle
 it("retries incomplete or briefly stale provenance while npm publish propagates", async () => {
   const delays: number[] = [];
   const failures = [
-    "npm provenance attestation does not bind 2026.3.23 to the trusted OpenClaw GitHub release workflow.",
+    "npm registry metadata is incomplete for openclaw@2026.3.23.",
     "npm registry provenance metadata is incomplete for openclaw@2026.3.23.",
   ];
   const read = vi
@@ -299,6 +301,22 @@ it("retries incomplete or briefly stale provenance while npm publish propagates"
   ).resolves.toBe("verified");
   expect(read).toHaveBeenCalledTimes(3);
   expect(delays).toEqual([1000, 2000]);
+});
+
+it.each([
+  "npm provenance attestation does not bind 2026.3.23 to the trusted OpenClaw GitHub release workflow.",
+  "npm registry signature verification timed out after an integrity mismatch.",
+])("does not retry permanent provenance or integrity mismatch: %s", async (message) => {
+  const read = vi.fn<() => Promise<string>>().mockRejectedValue(new Error(message));
+  await expect(
+    retryNpmRegistryProvenanceRead(read, {
+      attempts: 3,
+      delay: async () => {
+        throw new Error("unexpected retry");
+      },
+    }),
+  ).rejects.toThrow(message);
+  expect(read).toHaveBeenCalledOnce();
 });
 
 it("rejects an oversized worker before the full verifier reads its contents", () => {
@@ -325,19 +343,58 @@ it("rejects an oversized worker before the full verifier reads its contents", ()
   );
 });
 
-it("verifies every bundled manifest when the build filter exists before module initialization", () => {
+it("verifies the published bundled inventory instead of the checker checkout", () => {
   const packageRoot = makeInstalledPackageRoot();
-  const errors = withEnv({ OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "ollama" }, () =>
+  const publishedExtensionIds = ["historical-a", "historical-b"];
+  writePackageFile(
+    packageRoot,
+    "dist/postinstall-inventory.json",
+    publishedExtensionIds.flatMap((id) => [
+      `dist/extensions/${id}/openclaw.plugin.json`,
+      `dist/extensions/${id}/package.json`,
+    ]),
+  );
+  const errors: string[] = withEnv({ OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "ollama" }, () =>
     probeVerifier(packageRoot, "collectInstalledBundledExtensionManifestErrors", 30_000),
   );
   expect(errors).toEqual(
     expect.arrayContaining(
-      ["ollama", "lmstudio"].flatMap((id) => [
+      publishedExtensionIds.flatMap((id) => [
         `installed bundled extension manifest missing: ${join(packageRoot, "dist/extensions", id, "package.json")}.`,
         `installed bundled plugin artifact missing: dist/extensions/${id}/openclaw.plugin.json.`,
       ]),
     ),
   );
+  expect(errors.some((error) => error.includes("/ollama/") || error.includes("/lmstudio/"))).toBe(
+    false,
+  );
+});
+
+it("checks installed bundled files against the published inventory", () => {
+  const packageRoot = makeInstalledPackageRoot();
+  writePackageFile(packageRoot, "dist/postinstall-inventory.json", [
+    "dist/extensions/historical/package.json",
+  ]);
+  writePackageFile(packageRoot, "dist/extensions/historical/package.json", {});
+  writePackageFile(packageRoot, "dist/extensions/historical/openclaw.plugin.json", {});
+
+  expect(collectInstalledBundledExtensionManifestErrors(packageRoot)).toContain(
+    "installed bundled plugin artifact omitted from dist inventory: dist/extensions/historical/openclaw.plugin.json.",
+  );
+});
+
+it("derives bundled runtime sidecars from the published inventory", () => {
+  const packageRoot = makeInstalledPackageRoot();
+  writePackageFile(packageRoot, "dist/postinstall-inventory.json", [
+    "dist/extensions/retired/runtime-api.js",
+    "dist/extensions/retired/runtime-setter-api.js",
+    "dist/extensions/retired/worker.js",
+  ]);
+
+  expect(collectInstalledBundledRuntimeSidecarPaths(packageRoot)).toEqual([
+    "dist/extensions/retired/runtime-api.js",
+    "dist/extensions/retired/runtime-setter-api.js",
+  ]);
 });
 
 it.each([

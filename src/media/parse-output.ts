@@ -487,7 +487,10 @@ export function splitMediaOutput(
       codeBlockIndex += 1;
       codeBlock = codeBlocks[codeBlockIndex];
     }
-    if (codeBlock && lineEnd > codeBlock.start) {
+    if (
+      (codeBlock && lineEnd > codeBlock.start) ||
+      (!isMediaDirective && lineImages.length === 0)
+    ) {
       keepLine(line);
       pushTextSegment(line);
       lineOffset += line.length + lineSeparator.length;
@@ -495,91 +498,62 @@ export function splitMediaOutput(
     }
 
     if (!isMediaDirective) {
-      const markdownImageResult = extractMarkdownImages
-        ? ((): {
-            cleanedLine?: string;
-            lineSegments: ParsedMediaOutputSegment[];
-            foundMedia: boolean;
-          } => {
-            const preserveTrailingWhitespace = options.preserveTrailingWhitespace;
-            if (lineImages.length === 0) {
-              return { lineSegments: [], foundMedia: false };
-            }
+      const preserveTrailingWhitespace = options.preserveTrailingWhitespace;
+      const segmentPieces: string[] = [];
+      const visiblePieces: string[] = [];
+      const extractedImages: MarkdownImageMatch[] = [];
+      let cursor = 0;
 
-            const segmentPieces: string[] = [];
-            const visiblePieces: string[] = [];
-            const extractedImages: MarkdownImageMatch[] = [];
-            const lineSegments: ParsedMediaOutputSegment[] = [];
-            let cursor = 0;
+      for (const imageMatch of lineImages) {
+        const before = line.slice(cursor, imageMatch.start);
+        segmentPieces.push(before);
+        visiblePieces.push(before);
 
-            for (const imageMatch of lineImages) {
-              const before = line.slice(cursor, imageMatch.start);
-              segmentPieces.push(before);
-              visiblePieces.push(before);
+        const target = normalizeMediaSource(imageMatch.destination.trim());
+        const selectedTarget = markdownImageAllowlist?.get(target);
+        if (
+          selectedTarget ||
+          (!markdownImageAllowlist && hasHttpUrlPrefix(target) && isValidMedia(target))
+        ) {
+          extractedImages.push(imageMatch);
+          const beforeText = preserveTrailingWhitespace
+            ? segmentPieces.join("")
+            : cleanLineText(segmentPieces.join(""));
+          if (beforeText.trim()) {
+            pushTextSegment(beforeText);
+          }
+          segmentPieces.length = 0;
+          const mediaTarget = selectedTarget ?? target;
+          media.push(mediaTarget);
+          segments.push({ type: "media", url: mediaTarget });
+        } else {
+          const original = line.slice(imageMatch.start, imageMatch.end);
+          segmentPieces.push(original);
+          visiblePieces.push(original);
+        }
+        cursor = imageMatch.end;
+      }
 
-              const target = normalizeMediaSource(imageMatch.destination.trim());
-              const selectedTarget = markdownImageAllowlist?.get(target);
-              if (
-                selectedTarget ||
-                (!markdownImageAllowlist && hasHttpUrlPrefix(target) && isValidMedia(target))
-              ) {
-                extractedImages.push(imageMatch);
-                const beforeText = preserveTrailingWhitespace
-                  ? segmentPieces.join("")
-                  : cleanLineText(segmentPieces.join(""));
-                if (beforeText.trim()) {
-                  lineSegments.push({ type: "text", text: beforeText });
-                }
-                segmentPieces.length = 0;
-                const mediaTarget = selectedTarget ?? target;
-                media.push(mediaTarget);
-                lineSegments.push({ type: "media", url: mediaTarget });
-              } else {
-                const original = line.slice(imageMatch.start, imageMatch.end);
-                segmentPieces.push(original);
-                visiblePieces.push(original);
-              }
-
-              cursor = imageMatch.end;
-            }
-
-            const after = line.slice(cursor);
-            segmentPieces.push(after);
-            visiblePieces.push(after);
-            const trailingText = preserveTrailingWhitespace
-              ? segmentPieces.join("")
-              : cleanLineText(segmentPieces.join(""));
-            if (trailingText.trim()) {
-              lineSegments.push({ type: "text", text: trailingText });
-            }
-            // Prepared projection cleans only gaps attached to removed images, preserving all other source.
-            const cleanedImageLine = preserveTrailingWhitespace
-              ? removeMarkdownImageSpans(line, extractedImages)
-              : cleanLineText(visiblePieces.join(""));
-
-            return {
-              cleanedLine: preserveTrailingWhitespace
-                ? cleanedImageLine
-                : cleanedImageLine || undefined,
-              lineSegments,
-              foundMedia: extractedImages.length > 0,
-            };
-          })()
-        : { lineSegments: [], foundMedia: false };
-      if (!markdownImageResult.foundMedia) {
+      if (extractedImages.length === 0) {
         keepLine(line);
         pushTextSegment(line);
       } else {
         foundMediaToken = true;
-        if (markdownImageResult.cleanedLine !== undefined) {
-          keepLine(markdownImageResult.cleanedLine);
+        const after = line.slice(cursor);
+        segmentPieces.push(after);
+        visiblePieces.push(after);
+        const trailingText = preserveTrailingWhitespace
+          ? segmentPieces.join("")
+          : cleanLineText(segmentPieces.join(""));
+        if (trailingText.trim()) {
+          pushTextSegment(trailingText);
         }
-        for (const segment of markdownImageResult.lineSegments) {
-          if (segment.type === "text") {
-            pushTextSegment(segment.text);
-            continue;
-          }
-          segments.push(segment);
+        // Prepared projection cleans only gaps attached to removed images, preserving all other source.
+        const cleanedLine = preserveTrailingWhitespace
+          ? removeMarkdownImageSpans(line, extractedImages)
+          : cleanLineText(visiblePieces.join(""));
+        if (preserveTrailingWhitespace || cleanedLine) {
+          keepLine(cleanedLine);
         }
       }
       lineOffset += line.length + lineSeparator.length;

@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { githubRepositoryUrl } from "../agents/github-host.js";
 import type { WorktreeGitPolicy } from "../agents/worktrees/checkout-git-config.js";
 import { splitNullBuffer } from "../agents/worktrees/git-path-inventory.js";
@@ -10,17 +9,16 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { gitNullConfigPath, gitReadOnlyEnvironment } from "../infra/git-exec.js";
 import { appendGitConfig, gitMaintenanceEnvironment } from "../infra/git-maintenance-env.js";
 import { retryableGitNetworkOperation, withGitNetworkRetry } from "../infra/git-network-retry.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { createCommandError } from "../process/command-error.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import {
   githubPublicationUnsafeConfigArgs,
   parseGitHubPublicationBaseRef,
 } from "./github-publication-base.js";
+import { createGitHubPublicationGitError } from "./github-publication-git-error.js";
 import {
   hasUnapprovedGitHubPublicationWorkflowChanges,
   isGitHubPublicationWorkflowPath,
@@ -38,6 +36,7 @@ type GitCommandOptions = {
   discardOutput?: { stdout?: boolean };
 };
 type GitCommandResult = { code: number | null; stdout: Buffer };
+const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
 
 export function githubPublicationApiArgs(
   endpoint: string,
@@ -60,7 +59,7 @@ export async function runPublicationCommand(argv: string[], options: GitCommandO
   return await withGitProcessOperation(options.operation ?? "publication", () =>
     withGitNetworkRetry(
       argv[0] === "git" ? retryableGitNetworkOperation(argv.slice(1)) : undefined,
-      { timeoutMs: options.timeoutMs ?? 60_000, beforeRun: options.beforeRun },
+      { timeoutMs: options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS, beforeRun: options.beforeRun },
       (timeoutMs) =>
         runCommandBuffered(argv, {
           ...(options.cwd ? { cwd: options.cwd } : {}),
@@ -94,7 +93,7 @@ export async function requirePublicationCommand(
     throw createCommandError(
       argv[0] ?? "command",
       { ...result, stdout: Buffer.alloc(0) },
-      { timeoutMs: options.timeoutMs ?? 60_000 },
+      { timeoutMs: options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS },
     );
   }
   return result.stdout.toString("utf8").trim();
@@ -186,19 +185,13 @@ export async function requireGitHubPublicationCommit(
       ],
       { cwd, env, ...(missing ? { input: `${missing.join("\n")}\n` } : {}) },
     );
-    if (result.code !== 0) {
-      // This diagnostic reaches both receipt readers and recovery warnings. Remove
-      // whole remote URLs before truncation, including unrecognized query credentials.
-      const detail = truncateUtf8Prefix(
-        redactToolPayloadText(
-          sanitizeForLog(result.stderr.toString("utf8").replace(/[\r\n\t]+/gu, " ")).replace(
-            /\b[a-z][a-z\d+.-]*:\/\/\S+/giu,
-            "[redacted URL]",
-          ),
-        ).trim(),
-        1_024,
+    if (result.code !== 0 || result.error) {
+      throw createGitHubPublicationGitError(
+        failure,
+        missing ? "content fetch" : "commit fetch",
+        result,
+        DEFAULT_COMMAND_TIMEOUT_MS,
       );
-      throw new Error(detail ? `${failure} Git fetch: ${detail}` : failure);
     }
   };
   if (!options.commitPresent) {
@@ -224,7 +217,7 @@ export async function requireGitHubPublicationCommit(
   if (!options.contents) {
     return;
   }
-  const missingObjects = async () => {
+  const missingObjects = async (stage = "content inventory") => {
     const result = await run(
       [
         "git",
@@ -241,8 +234,8 @@ export async function requireGitHubPublicationCommit(
         maxOutputBytes: TREE_LISTING_MAX_OUTPUT_BYTES,
       },
     );
-    if (result.code !== 0) {
-      throw new Error(failure);
+    if (result.code !== 0 || result.error) {
+      throw createGitHubPublicationGitError(failure, stage, result, DEFAULT_COMMAND_TIMEOUT_MS);
     }
     return result.stdout
       .toString("utf8")
@@ -255,8 +248,10 @@ export async function requireGitHubPublicationCommit(
     // A known partial-clone commit can still lack its tree contents after fetch.
     // Hydrate through the selected authenticated URL before any offline snapshots.
     await fetch(missing);
-    if ((await missingObjects()).length) {
-      throw new Error(failure);
+    if ((await missingObjects("content verification")).length) {
+      throw new Error(
+        `${failure} Git content verification failed: required objects are still missing after fetching.`,
+      );
     }
   }
 }

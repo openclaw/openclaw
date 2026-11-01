@@ -80,18 +80,15 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await closeChatDetails(page);
       const sidebarRow = page.locator(`.sidebar-recent-session[data-session-key="${session.key}"]`);
-      expect(await sidebarRow.locator(".session-row-badge--cloud").count()).toBe(0);
+      expect(await sidebarRow.locator(".session-row-badge--cloud").getAttribute("aria-label")).toBe(
+        "machine0 · team · Linux · medium · 4 vCPU · 16 GB · active",
+      );
       await sidebarRow.hover();
       const context = page.locator(
         '.session-hovercard__context-row[aria-label="Runs on machine0 · team"]',
       );
       await context.waitFor({ state: "visible" });
       expect(await context.textContent()).toContain("machine0 · team");
-      const machine = page.locator(".session-hovercard__machine");
-      expect(await machine.getAttribute("aria-label")).toBe(
-        "Machine: Linux · medium · 4 vCPU · 16 GB",
-      );
-      expect(await machine.textContent()).toMatch(/^\s*Linux\s*medium\s*4 vCPU\s*16 GB\s*$/u);
     });
   });
 });

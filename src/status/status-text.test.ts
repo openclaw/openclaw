@@ -24,7 +24,10 @@ import {
   SessionTranscriptStorageUnavailableError,
 } from "../config/sessions/session-transcript-projection-error.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
-import type { InternalSessionEntry as Entry } from "../config/sessions/types.js";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type InternalSessionEntry as Entry,
+} from "../config/sessions/types.js";
 import * as transcriptTail from "../gateway/session-transcript-readers.js";
 import * as transcriptUsage from "../gateway/session-transcript-usage.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
@@ -66,7 +69,7 @@ const modelLimits = (provider: string, id: string, contextWindow?: number) => ({
 const tokenUsage = {
   totalTokens: 45_000,
   totalTokensFresh: true,
-  totalTokensVersion: 1,
+  totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
 } satisfies Partial<Entry>;
 const fallback = "fallback/small-model";
 const fallbackNotice = {

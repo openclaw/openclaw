@@ -437,7 +437,7 @@ describe("Gateway startup lifetime", () => {
   );
 
   it.each(["clean", "failed", "held-process", "held-embedded"] as const)(
-    "releases post-ready work and joins or bounds startup rollback (%s)",
+    "releases post-ready work and joins required startup rollback (%s)",
     async (mode) => {
       const port = await getFreePort();
       await using state = await createStartupTestState("gateway-post-ready-startup-failure");
@@ -507,7 +507,9 @@ describe("Gateway startup lifetime", () => {
           const settled = vi.fn();
           void startupOutcome.then(settled);
           await vi.advanceTimersByTimeAsync(10_000);
-          expect(settled).toHaveBeenCalledTimes(processOwned ? 1 : 0);
+          // Process exit owns the hard deadline; required custody outlives cleanup grace.
+          expect(settled).not.toHaveBeenCalled();
+          expect(kernel?.transportBridge.current()?.httpServer.listening).toBe(true);
           releaseStop.resolve();
           vi.useRealTimers();
         }
@@ -521,11 +523,10 @@ describe("Gateway startup lifetime", () => {
           expect(failure).toBe(startupError);
         }
         expect(resumed).toHaveBeenCalledExactlyOnceWith({ closing: true, listening: true });
-        expect(kernel?.transportBridge.current()?.httpServer.listening).toBe(
-          failCleanup || processOwned,
-        );
+        expect(stop).toHaveBeenCalledOnce();
+        expect(kernel?.transportBridge.current()?.httpServer.listening).toBe(failCleanup);
         expect(getActiveGatewayRootWorkCount()).toBe(0);
-        if (!failCleanup && !processOwned) {
+        if (!failCleanup) {
           expect(getActiveSecretsRuntimeConfigSnapshot()).toBeNull();
         }
       } finally {

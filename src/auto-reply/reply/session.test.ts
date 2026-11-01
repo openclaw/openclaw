@@ -24,6 +24,7 @@ import {
   SESSION_ROLLOVER_LINEAGE_CASES,
 } from "../../config/sessions/session-lineage.test-support.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
 import { resolveWorkerPlacementSessionTarget } from "../../gateway/server-worker-placement-session-target.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "../../gateway/session-utils-store.js";
@@ -70,6 +71,7 @@ import {
 import { resolveReplySessionPreprocessingState } from "./session.js";
 import { expectSessionParticipantInputs } from "./session.participant.test-support.js";
 import {
+  expectEntryFields,
   initSessionState,
   readSessionStore as readSessionStoreFast,
   runExplicitResetCases,
@@ -141,16 +143,6 @@ async function makeStorePath(prefix: string, agentId?: string): Promise<string> 
 }
 
 const TEST_NATIVE_MODEL_PROFILE_ID = "openai:secondary@example.test";
-
-function expectEntryFields(
-  entry: SessionEntry,
-  expected: Record<string, unknown>,
-  label?: string,
-): void {
-  for (const [key, value] of Object.entries(expected)) {
-    expect((entry as unknown as Record<string, unknown>)[key], label ?? key).toEqual(value);
-  }
-}
 
 describe("resolveReplySessionPreprocessingState", () => {
   const sessionKey = "agent:main:harness:codex:supervision:media-preflight";
@@ -656,7 +648,7 @@ describe("initSessionState thread forking", () => {
         updatedAt: Date.now(),
         totalTokens: 170_000,
         totalTokensFresh: true,
-        totalTokensVersion: 1,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       },
     });
 
@@ -2046,6 +2038,8 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         modelOverride: "m2.7",
         verboseLevel: "on",
         category: "Channels",
+        icon: "🦞",
+        color: "blue",
         pinnedAt: 123,
         deviceFolder: { deviceId: "rollover-device", path: "/existing/project" },
         authProfileOverride: "20251001",
@@ -2055,6 +2049,9 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         usageFamilySessionIds: ["ancestor-session", "existing-model-selection"],
       },
       removed: {
+        visibility: "draft",
+        boardFace: "dashboard",
+        boardPresentation: "expanded",
         cliSessionIds: { "claude-cli": "cli-session-123" },
         cliSessionBindings: {
           "claude-cli": { sessionId: "cli-session-123", authProfileId: "anthropic:default" },
@@ -2128,20 +2125,13 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     const expected = {
       ...preserved,
       ...Object.fromEntries(Object.keys(removed).map((key) => [key, undefined])),
+      totalTokens: 0,
+      totalTokensFresh: true,
+      compactionCount: 0,
     };
     for (const { name, result, stored } of cases) {
       expect(result, name).toMatchObject({ isNewSession: true, resetTriggered: true, sessionId });
       expectEntryFields(result.sessionEntry, expected, name);
-      expect(result.sessionEntry).toMatchObject({
-        totalTokens: 0,
-        totalTokensFresh: true,
-        compactionCount: 0,
-      });
-      expect(stored[sessionKey]).toMatchObject({
-        totalTokens: 0,
-        totalTokensFresh: true,
-        compactionCount: 0,
-      });
       expectEntryFields(
         expectDefined(stored[sessionKey], "stored model selection"),
         expected,

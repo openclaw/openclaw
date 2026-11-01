@@ -314,6 +314,9 @@ const catalog = {
       outsideAllowedFolders: "Outside allowed folders",
       unavailable: "Unavailable",
       failureDeliveryFailed: "Delivery failed. Try sending this file again.",
+      failureFileTooLarge: "Too large to attach. Look for this file in Files.",
+      findInFiles: "Find in Files",
+      findInFilesFor: "Find {name} in Files",
       failureInvalidReference:
         "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
       failureFileNotFound: "File not found. Check the path and try again.",

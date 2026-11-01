@@ -6,6 +6,7 @@ import type { CronJob } from "../../cron/types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { cronJobMatchesCallerScope, readCronCallerScope } from "./cron-caller-scope.js";
+import { isHumanCronJobOwner } from "./cron-human-owner.js";
 import { assertCronReadCurrent, respondInvalidCronParams } from "./cron-job-access.js";
 import { startCronListDiagnostics } from "./cron-list-diagnostics.js";
 import { projectCronListJobs } from "./cron-list-projection.js";
@@ -96,7 +97,8 @@ export const cronListHandler = createPreparedReadHandler((options) => {
         const selectedJobIds = new Set<string>();
         const matchesCurrentJob = (job: CronJob) =>
           matchesRequestScope(job) &&
-          cronJobIsVisible(job, visibilityRead.resolve(), context.cron.getDefaultAgentId());
+          (isHumanCronJobOwner(client, job) ||
+            cronJobIsVisible(job, visibilityRead.resolve(), context.cron.getDefaultAgentId()));
         const assertPageCurrent = () => {
           assertCronReadCurrent(options);
           const currentScope = readCronCallerScope(client);

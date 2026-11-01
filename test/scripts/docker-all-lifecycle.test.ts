@@ -35,7 +35,7 @@ beforeEach(async () => {
   handlers.clear();
   const originalOn = process.on.bind(process);
   vi.spyOn(process, "on").mockImplementation((event, listener) => {
-    if (event === "SIGINT" || event === "SIGTERM") {
+    if (event === "SIGINT" || event === "SIGTERM" || event === "SIGHUP") {
       handlers.set(event, listener as () => void);
       return process;
     }
@@ -97,6 +97,20 @@ function start(logFile?: string) {
 }
 
 describe("Docker scheduler Windows child shutdown", () => {
+  it("acknowledges SIGHUP only after observed child completion", async () => {
+    vi.useFakeTimers();
+    const result = start();
+    handlers.get("SIGHUP")!();
+    expect(childKill).toHaveBeenCalledWith("SIGHUP");
+    await vi.advanceTimersByTimeAsync(5);
+    expect(process.exitCode).not.toBe(129);
+    closeChild(child);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await result).toMatchObject({ status: 0, signal: null });
+    expect(process.exitCode).toBe(129);
+    expect(diagnostic).not.toHaveBeenCalled();
+  });
+
   it.each(["observed exit", "still live", "signal failure", "signal after failure"] as const)(
     "requires observed Windows child completion after SIGINT: %s",
     async (completion) => {

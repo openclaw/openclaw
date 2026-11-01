@@ -48,6 +48,7 @@ export const OpenClawSchemaShape = {
         .strictObject({
           modelPolicyAllowlist: z.literal(true).optional(),
           utilityModelSeparation: z.literal(true).optional(),
+          skillWorkshopPlugin: z.literal(true).optional(),
           webhookListeners: z
             .union([z.literal(true), z.record(z.string(), z.array(z.array(z.string())))])
             .optional(),
@@ -63,7 +64,7 @@ export const OpenClawSchemaShape = {
           timeoutMs: z.number().int().nonnegative().optional(),
         })
         .optional(),
-      vars: z.record(z.string(), z.string()).optional(),
+      vars: z.record(z.string(), z.string().register(sensitive)).optional(),
     })
     .optional(),
   wizard: z

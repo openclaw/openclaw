@@ -231,7 +231,7 @@ it.each(["startup", "doctor"] as const)(
         ),
       ).toEqual(
         fixtures.map(({ scope }) =>
-          scope.agentId === "pending"
+          scope.agentId === "pending" && mode === "startup"
             ? expect.objectContaining({ tombstone: expect.any(Object) })
             : undefined,
         ),
@@ -246,7 +246,7 @@ it.each(["startup", "doctor"] as const)(
         );
         expect(Object.keys(stored).filter((key) => key.startsWith("restartRecovery"))).toEqual([]);
         expect(stored).not.toHaveProperty("activeWriterRunId");
-        if (scope.agentId === "pending") {
+        if (scope.agentId === "pending" && mode === "startup") {
           expect(stored.pendingFinalDelivery).toMatchObject({
             kind: "replayable",
             text: "Unsent final",

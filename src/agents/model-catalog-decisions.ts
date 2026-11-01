@@ -374,7 +374,6 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
   const evaluations = new Map<string, ModelAuthAvailabilityEvaluation>();
   const preferredProfileIdForCatalog = params.preferredProfileId || undefined;
   const pinnedProfileIdForCatalog = params.pinnedProfileId || undefined;
-  const runtimeOverride = params.runtimeOverride;
   const normalizeAuthProvider = (provider: string) =>
     resolveProviderIdForAuth(provider, { config: params.cfg, metadataSnapshot });
   const isSelectedProvider = (provider: string) =>
@@ -414,7 +413,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     // New sessions capture personal defaults with the same strength as explicit account pins.
     const pinnedProfileId = pinnedProfileForEntry(entry);
     const requestedRuntimeId =
-      runtimeId ?? (sameProvider && profileProvider ? runtimeOverride : undefined);
+      runtimeId ?? (sameProvider && profileProvider ? params.runtimeOverride : undefined);
     const resolved = {
       ...authResolver.evaluateRuntimeModelAuth(entry.provider, {
         modelId: identity?.id ?? entry.id,
@@ -624,6 +623,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       const candidates = new Set([
         selected?.id ?? "openclaw",
         "openclaw",
+        ...(params.pluginRegistry?.agentHarnesses.map(({ harness }) => harness.id) ?? []),
         ...variants.flatMap((variant) => (variant.nativeRuntime ? [variant.nativeRuntime] : [])),
         ...(initial.routeResolution?.kind === "routes"
           ? initial.routeResolution.routes.flatMap(

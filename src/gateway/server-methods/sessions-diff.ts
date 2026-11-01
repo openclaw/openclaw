@@ -17,6 +17,8 @@ import { startDiffReadTiming, type DiffReadTiming } from "../../infra/diff-read-
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { loadCheckoutDiff } from "../../sessions/session-diff.js";
+import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
+import { SessionFileWorkspaceChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { hasSessionReadAccessChanged } from "../session-sharing-policy.js";
 import { retainGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
@@ -68,11 +70,7 @@ function prepareDiffMetadata(params: SessionsDiffParams, cfg: OpenClawConfig) {
       },
     };
   }
-  let flights = metadataFlights.get(cfg);
-  if (!flights) {
-    flights = new Map();
-    metadataFlights.set(cfg, flights);
-  }
+  const flights = getOrCreateWeakOwnerMap(metadataFlights, cfg);
   const key = JSON.stringify([
     getRuntimeConfigSnapshotMetadata()?.revision,
     params.agentId,
@@ -361,6 +359,17 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
       if (diffTiming) {
         diffTiming.durations.encode = performance.now() - encodeStarted;
       }
+    } catch (error) {
+      if (!(error instanceof SessionFileWorkspaceChangedError)) {
+        throw error;
+      }
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, `${error.message}. Retry the diff.`, {
+          retryable: true,
+        }),
+      );
     } finally {
       read?.release();
       if (!read) {
