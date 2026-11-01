@@ -41,7 +41,7 @@ export function AgentsPageMenu(props: {
       label={t("tabs.agents")}
       placement="bottom-end"
       pointerFocus="trigger"
-      triggerClass="btn btn--sm btn--icon"
+      triggerClass="btn btn--sm agents-page-menu__trigger"
       trigger={<Icon name="moreHorizontal" />}
       items={items()}
       onSelect={(item) => {
