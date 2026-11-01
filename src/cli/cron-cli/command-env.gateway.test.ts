@@ -46,7 +46,7 @@ it("warns only about dropped command environment keys after a successful edit", 
         cronEnabled: false,
       });
       const context = createGatewayRequestContext(contextParams);
-    context.getRuntimeConfig = () => ({});
+      context.getRuntimeConfig = () => ({});
       let rejectUpdate = false;
       mocks.rpc.mockImplementation(async (method: string, _opts: unknown, params = {}) => {
         if (method === "cron.status") {
