@@ -1,0 +1,2 @@
+# Codex compaction with no hook listener skips the history read (no-read assertion in the compaction usage test).
+4
