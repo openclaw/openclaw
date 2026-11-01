@@ -4,6 +4,7 @@ import path from "node:path";
 import { expect, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { requireGit } from "../../agents/worktrees/git.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { prepareSandboxCheckpointFixture } from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
@@ -266,55 +267,53 @@ export async function proveWarmWorkspaceReuseFailure(
   revoke: () => void,
 ) {
   using first = await prepareSandboxCheckpointFixture(owner);
-  const stores = await import("./local-workspace-store.js");
+  const git = await import("../../agents/worktrees/git.js");
   const quiescence = await import("../../agents/sandbox/local-workspace-quiescence.js");
   const quiesce = vi.spyOn(quiescence, "quiesceLocalWorkspace");
-  const withStore = stores.withLocalWorkspaceStore;
   const cancellation = new AbortController();
-  let failed = false;
-  vi.spyOn(stores, "withLocalWorkspaceStore").mockImplementation((params, run) =>
-    withStore(params, (store) =>
-      run({
-        ...store,
-        manifest: async (row, action) => {
-          if (action.kind === "probe" && !failed && failure !== "observation") {
-            failed = true;
-            if (failure === "authority") {
-              revoke();
-            }
-            if (failure === "cancel") {
-              cancellation.abort(new Error("reuse cancelled"));
-            }
-            throw new Error("probe read failed");
-          }
-          return store.manifest(row, action);
-        },
-        accept: async (prepared, authority) => {
-          if (failure === "observation") {
-            failed = true;
-            throw new Error("observation acceptance failed");
-          }
-          return store.accept(prepared, authority);
-        },
-      }),
-    ),
-  );
-  if (failure === "read") {
-    using recovered = await prepareSandboxCheckpointFixture(owner);
-    expect(recovered.workspaceDir).toBe(first.workspaceDir);
-    expect(quiesce).toHaveBeenCalledOnce();
-  } else if (failure === "cancel") {
-    await expect(
-      prepareSandboxCheckpointFixture(owner, undefined, cancellation.signal),
-    ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
-    expect(quiesce).not.toHaveBeenCalled();
+  const deadline = new AbortController();
+  const probing = createDeferred<AbortSignal>();
+  const release = createDeferred();
+  if (failure !== "observation") {
+    vi.spyOn(git, "runGitBuffered").mockImplementationOnce(async (_cwd, _args, options) => {
+      if (failure === "authority") {
+        revoke();
+      } else if (failure === "cancel") {
+        cancellation.abort(new Error("reuse cancelled"));
+      } else {
+        probing.resolve(options!.signal!);
+        await racePromiseWithAbortSignal(release.promise, options?.signal);
+      }
+      throw new Error("probe read failed");
+    });
   } else {
-    await expect(prepareSandboxCheckpointFixture(owner)).rejects.toThrow(
-      failure === "authority" ? "revoked" : "observation acceptance failed",
+    const stores = await import("./local-workspace-store.js");
+    const withStore = stores.withLocalWorkspaceStore;
+    vi.spyOn(stores, "withLocalWorkspaceStore").mockImplementation((params, run) =>
+      withStore(params, (store) => {
+        vi.spyOn(store, "accept").mockRejectedValueOnce(new Error("observation acceptance failed"));
+        return run(store);
+      }),
     );
-    expect(quiesce).not.toHaveBeenCalled();
   }
-  expect(failed).toBe(true);
+  vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+  const preparation = prepareSandboxCheckpointFixture(owner, undefined, cancellation.signal);
+  if (failure === "read") {
+    const signal = await awaitGateBeforeSettlement(probing.promise, preparation, "Probe missing");
+    deadline.abort(new Error("probe deadline"));
+    const aborted = signal.aborted;
+    release.resolve();
+    using recovered = await preparation;
+    expect(aborted).toBe(true);
+    expect(recovered.workspaceDir).toBe(first.workspaceDir);
+  } else {
+    await expect(preparation).rejects.toMatchObject(
+      failure === "cancel"
+        ? { code: "OPENCLAW_STATE_LEASE_ABORTED" }
+        : { message: failure === "authority" ? "revoked" : "observation acceptance failed" },
+    );
+  }
+  expect(quiesce).toHaveBeenCalledTimes(failure === "read" ? 1 : 0);
   await expectText(owner.worktree.path, "source.txt", "original\n");
   await expectText(first.workspaceDir, "source.txt", "original\n");
 }
