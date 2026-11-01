@@ -542,6 +542,35 @@ undo mechanism. Reverse-port before a raw package-manager downgrade. See the
 [port runbook](/reference/database-engines#port-existing-stores) for
 backup contents, interruption recovery, and restart guidance.
 
+### Exact SQLite migration capture
+
+An external controller can capture a running local Gateway only while it holds a
+ready, non-drain suspension with terminal sessions preserved and zero write custody.
+Use the controller's existing request and suspension IDs; this command neither
+creates the initial suspension nor resumes or stops the Gateway.
+
+```bash
+openclaw database migration-capture create --externally-quiesced --request-id <request> --suspension-id <suspension> --output <private-directory> --json
+openclaw database migration-capture restore <capture> --target <empty-staging-directory> --manifest-sha256 <producer-digest> --json
+```
+
+Quiesced capture authenticates to the selected local backend with its shared token
+or password. It creates its own verified filesystem archive and exact SQLite images
+under the same bounded suspension without writing to the source database or journal
+files. The Gateway keeps its live ownership heartbeat: its own lease timestamps can
+advance during suspension. Capture does not stop those renewals or treat a captured
+lease as authority to activate restored state.
+It renews only the supplied controller request and refuses changed owners, expired
+suspensions, pending writes, and PostgreSQL sources. The controller must retain the
+suspension until capture finishes, then decide whether to resume or stop its Gateway.
+
+The output must be outside the source state and configuration roots. Restore only
+extracts into new private staging; it never activates that state. Preserve the
+producer's manifest digest and the same logical source paths. Exact captures contain
+private credentials and retained operational state, unlike sanitized ordinary backups.
+For a stopped source, the existing offline mode instead requires `--base-archive`
+from that same stopped state and does not accept suspension IDs.
+
 ## Chat slash commands
 
 Chat messages support `/...` commands. See [slash commands](/tools/slash-commands).

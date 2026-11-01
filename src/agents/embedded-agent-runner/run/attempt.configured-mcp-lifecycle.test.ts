@@ -111,7 +111,6 @@ it.each([false, true])(
           });
         }),
       attemptOverrides: {
-        contextTokenBudget: 8192,
         runId,
         disableTools: false,
         sessionManager: SessionManager.inMemory(),

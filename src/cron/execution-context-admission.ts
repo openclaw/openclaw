@@ -25,10 +25,12 @@ import {
   buildScheduledExecutionContext,
   classifyScheduledParent,
   resolveScheduledPrincipal,
+  resolveScheduledRequester,
   type ScheduledAdmissionFacts,
   type ScheduledExecutionContextResult,
   type ScheduledRequesterRef,
 } from "./execution-context.js";
+import { cronExecutionActor, hasTransferredCronOwner } from "./human-owner.js";
 import { type ParentResetWatch, watchParentReset } from "./parent-reset-watch.js";
 import {
   failedScheduledExecution,
@@ -233,7 +235,7 @@ export function assembleScheduledAdmissionFacts(
     agentMainSessionKey: resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId }),
     agentSandboxMode: resolveSandboxConfigForAgent(params.cfg, params.agentId).mode,
     ...((params.creatorRoleSandbox ??
-      resolveCreatorSandbox(params.cfg, { actor: params.job.createdActor })) === "required"
+      resolveCreatorSandbox(params.cfg, { actor: cronExecutionActor(params.job) })) === "required"
       ? { creatorRoleSandbox: "required" as const }
       : {}),
     ...(params.toolsAllow ? { resolvedToolsAllow: params.toolsAllow } : {}),
@@ -263,13 +265,19 @@ export async function admitScheduledOccurrence(
   let childParent: ScheduledOccurrence["childParent"];
   let parentWatch: ParentResetWatch | undefined;
   try {
+    if (params.trigger === "cron" && hasTransferredCronOwner(job) && !job.operatorSource) {
+      const requester = resolveScheduledRequester(job);
+      if (requester.kind !== "operator-source") {
+        requesterOwner = await checkRequesterOwner(params.cfg, requester);
+      }
+    }
     if (!("error" in principal) && principal.kind === "parent") {
       const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
         agentId: params.agentId,
       });
       const parent = await readParent(principal.parent.sessionKey, storePath);
       parentRow = parent.row;
-      if (principal.requester.kind !== "operator-source") {
+      if (!requesterOwner && principal.requester.kind !== "operator-source") {
         requesterOwner = await checkRequesterOwner(params.cfg, principal.requester);
       }
       const parentState = classifyScheduledParent(principal.parent, parentRow);

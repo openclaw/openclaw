@@ -255,7 +255,7 @@ function Toolbar(
           >
             <Icon name="refresh" />
           </button>
-          {props.canManage ? (
+          {(props.canCreate ?? props.canManage) ? (
             <button
               type="button"
               class="btn primary btn--sm cron-new-task"
@@ -446,7 +446,8 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
       <JobRow
         job={row.job}
         jobs={props.jobs}
-        canManage={canManage()}
+        canManage={props.canManageJob?.(row.job) ?? canManage()}
+        canCreate={props.canCreate}
         busy={busy()}
         connected={connected()}
         toggleSavingJobId={props.toggleSavingJobId}

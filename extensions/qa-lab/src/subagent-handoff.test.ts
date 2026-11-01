@@ -49,7 +49,7 @@ async function runHandoff({
     : "Workspace check.";
   const reply = {
     role: "assistant",
-    __openclaw: { id: "report" },
+    __openclaw: { id: "report", runId: "requester-run" },
     content: `Delegated task:\n- Check the fixture.\nResult:\n- ${result}\nEvidence:\n- ${evidence}`,
   };
   // The task label matches the usual answer even when the delivered result differs.
@@ -154,8 +154,10 @@ async function runHandoff({
       waitForAgentHistory: forRequester(
         async (select: (history: { messages: unknown[] }) => Promise<string | undefined>) => {
           const visible = hasFault("unrelated public reply")
-            ? { ...reply, __openclaw: { id: "another-report" } }
-            : reply;
+            ? { ...reply, __openclaw: { id: "another-report", runId: "another-run" } }
+            : hasFault("projected reply ID")
+              ? { ...reply, __openclaw: { id: "projected-report", runId: "requester-run" } }
+              : reply;
           const selected = await select({ messages: [visible] });
           if (!selected) {
             throw new Error("no matching delivered reply");
@@ -183,6 +185,9 @@ it.each([
 );
 it("credits a settled result across custom transcript entries", async () => {
   expect((await runHandoff({ withCustomEntries: true })).status).toBe("pass");
+});
+it("credits a settled result when public history projects a different entry ID", async () => {
+  expect((await runHandoff({ fault: "projected reply ID" })).status).toBe("pass");
 });
 it.each([
   { type: "message", message: { role: "user", content: "Start another task." } },

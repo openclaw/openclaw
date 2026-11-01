@@ -5,6 +5,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import type {
   SidebarSessionMutationResult,
   SidebarSessionMutationScope,
@@ -363,7 +364,13 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     const rootMayHaveBranch = knownRoot === agentRoot ? workspaceGit : Boolean(knownRoot);
     // HEAD can move mid-session, so refetch on every open while keeping the
     // last-known branch visible during the refresh to avoid menu flicker.
-    if (!row.worktree && !remote && knownRoot && rootMayHaveBranch) {
+    if (
+      !row.worktree &&
+      !remote &&
+      knownRoot &&
+      rootMayHaveBranch &&
+      hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null)
+    ) {
       const entry = header.branches.get(knownRoot) ?? {};
       header.branches.set(knownRoot, entry);
       if (!entry.loading) {

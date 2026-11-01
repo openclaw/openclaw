@@ -59,15 +59,21 @@ export function resolveConfigFieldMeta(
 }
 
 function defaultTextMatcher(value: string, query: string): boolean {
-  return normalizeLowercaseStringOrEmpty(value).includes(normalizeLowercaseStringOrEmpty(query));
+  return normalizeLowercaseStringOrEmpty(value)
+    .normalize("NFC")
+    .includes(normalizeLowercaseStringOrEmpty(query).normalize("NFC"));
 }
 
 function matchesTags(filterTags: string[], fieldTags: string[]): boolean {
   if (filterTags.length === 0) {
     return true;
   }
-  const normalized = new Set(fieldTags.map((tag) => normalizeLowercaseStringOrEmpty(tag)));
-  return filterTags.every((tag) => normalized.has(tag));
+  const normalized = new Set(
+    fieldTags.map((tag) => normalizeLowercaseStringOrEmpty(tag).normalize("NFC")),
+  );
+  return filterTags.every((tag) =>
+    normalized.has(normalizeLowercaseStringOrEmpty(tag).normalize("NFC")),
+  );
 }
 
 export function matchesNodeSelf(params: {

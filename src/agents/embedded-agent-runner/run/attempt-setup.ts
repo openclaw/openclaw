@@ -40,7 +40,6 @@ import { readModelPromptProjection } from "../../../sessions/user-turn-transcrip
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
-import { DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../agent-settings.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers/context-file.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
@@ -434,22 +433,17 @@ export function installEmbeddedAttemptContextGuards(input: {
       request: Pick<Parameters<typeof checkMidTurnPrecheck>[0], "context" | "previousRequest">,
     ) => {
       // Compaction ownership does not waive host admission at the provider boundary.
-      if (activeSession[agentSessionDeferThresholdCompaction]) {
+      if (
+        activeSession[agentSessionDeferThresholdCompaction] ||
+        (!activeContextEngine?.info.ownsCompaction &&
+          attempt.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled !== true)
+      ) {
         return;
       }
-      const softPrecheckEnabled =
-        activeContextEngine?.info.ownsCompaction ||
-        attempt.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled === true;
-      // A guaranteed overflow must reach the existing recovery owner even when
-      // the earlier, configured pressure threshold is disabled.
-      const reserveTokens = Math.max(
-        DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
-        softPrecheckEnabled ? settingsManager.getCompactionReserveTokens() : 0,
-      );
       checkMidTurnPrecheck({
         ...request,
         contextTokenBudget,
-        reserveTokens,
+        reserveTokens: settingsManager.getCompactionReserveTokens(),
         toolResultMaxChars,
         replay: {
           model: attempt.model,

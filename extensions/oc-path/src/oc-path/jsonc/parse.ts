@@ -13,6 +13,26 @@ export const MAX_JSONC_INPUT_BYTES = 16 * 1024 * 1024;
 
 type LineForOffset = (offset: number) => number;
 
+/** jsonc-parser's findNodeAtLocation picks the first duplicate key; this picks the effective last one. */
+export function findEffectiveJsoncNode(
+  root: JsoncParserNode,
+  path: readonly (string | number)[],
+): JsoncParserNode | undefined {
+  let node: JsoncParserNode | undefined = root;
+  for (const segment of path) {
+    const children: JsoncParserNode[] = node?.children ?? [];
+    if (typeof segment === "number") {
+      node = node?.type === "array" ? children[segment] : undefined;
+    } else {
+      const property = children.findLast(
+        (child) => child.type === "property" && child.children?.[0]?.value === segment,
+      );
+      node = node?.type === "object" ? property?.children?.[1] : undefined;
+    }
+  }
+  return node;
+}
+
 export function parseJsonc(raw: string): JsoncAst & { oversizedInputBytes?: number } {
   const inputBytes = Buffer.byteLength(raw, "utf8");
   if (inputBytes > MAX_JSONC_INPUT_BYTES) {

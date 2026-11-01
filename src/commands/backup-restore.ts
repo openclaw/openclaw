@@ -277,7 +277,13 @@ function formatRestoreResult(result: BackupRestoreResult): string {
 /** Verify first, then extract a whole backup archive into a fresh staging directory. */
 export async function backupRestoreCommand(
   runtime: RuntimeEnv,
-  options: { archive: string; target?: string; json?: boolean; localCompanion?: boolean },
+  options: {
+    archive: string;
+    target?: string;
+    json?: boolean;
+    sourceEngine?: "sqlite";
+    localCompanion?: boolean;
+  },
 ) {
   const targetPath = resolveBackupArchivePath(options.target, "--target");
   await assertTargetOutsideLiveState(targetPath);
@@ -291,6 +297,14 @@ export async function backupRestoreCommand(
     recoveryConfigContextPath,
     manifest,
   } = await prepareBackupArchive(options.archive);
+  if (
+    options.sourceEngine === "sqlite" &&
+    (databaseRestoreCandidates.length > 0 || (manifest.postgresAnchors?.length ?? 0) > 0)
+  ) {
+    throw new Error(
+      "This restore requires a SQLite-only archive; PostgreSQL namespaces were not imported.",
+    );
+  }
   if (options.localCompanion && manifest.profile !== "local-companion") {
     throw new Error(
       "--local-companion requires a local-companion checkpoint; no PostgreSQL data was imported.",

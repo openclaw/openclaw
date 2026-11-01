@@ -435,7 +435,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       let branches = discovery.promise;
       const { context, flow, place } = withMessage({
         scopes:
-          result === "forbidden" || result === "write-denied"
+          result === "write-denied"
             ? ["operator.sessions.read", "operator.sessions.write"]
             : ["operator.read", "operator.write"],
         agents: [agent({ workspaceGit: true, model: { primary: "openai/gpt-5.6-luna" } })],
