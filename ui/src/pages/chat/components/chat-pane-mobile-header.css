@@ -1,11 +1,6 @@
-/* Keep the first message stationary when pending admission becomes a native session. */
-.agent-chat__header--mobile,
-openclaw-pending-session-create .sidebar-region__header .chat-pane__header--mobile {
-  min-height: 54px;
-}
-
 .agent-chat__header--mobile {
   position: relative;
+  min-height: 54px;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -46,11 +41,6 @@ openclaw-pending-session-create .sidebar-region__header .chat-pane__header--mobi
     display: block;
     width: 20px;
     height: 20px;
-  }
-
-  & .mobile-header__navigation {
-    border: 1px solid var(--border-strong);
-    background: var(--bg-hover);
   }
 
   & :is(.mobile-header__incognito, .mobile-header__dashboard),

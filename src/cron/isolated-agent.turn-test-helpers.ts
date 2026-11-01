@@ -29,13 +29,13 @@ export function makeDeps(): CliDeps {
 }
 
 export function mockEmbeddedOk() {
-  vi.mocked(runEmbeddedAgent).mockResolvedValue({
+  vi.mocked(runEmbeddedAgent).mockImplementation(async ({ sessionId }) => ({
     payloads: [{ text: "ok" }],
     meta: {
       durationMs: 5,
-      agentMeta: { sessionId: "s", provider: "p", model: "m" },
+      agentMeta: { sessionId, provider: "p", model: "m" },
     },
-  });
+  }));
 }
 
 export async function readCronSessionEntry(storePath: string, key: string) {

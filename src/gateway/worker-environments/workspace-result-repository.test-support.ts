@@ -12,6 +12,7 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-ag
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
@@ -23,6 +24,7 @@ import { placementTurnOwner } from "./placement-record.js";
 import { createRepositoryWorkspaceMutationService } from "./repository-workspace-mutation.js";
 import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
 import { readSessionRepositoryArtifacts } from "./session-repository-checkpoints.js";
+import { createWorkerEnvironmentStore } from "./store.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   attachedEnvironment,
@@ -248,6 +250,45 @@ export function useRepositoryWorkspaceResultFixture() {
     });
     const operations = { placements, environments, resolveWorkspace, workspaceOperations };
     const mutations = createRepositoryWorkspaceMutationService(operations);
+    async function bindDisk() {
+      const records = await createWorkerEnvironmentStore({ database: openOpenClawStateDatabase() });
+      try {
+        const allocated = records.get(ENVIRONMENT_ID)!;
+        if (!allocated.leaseId) {
+          throw new Error("Fixture requires its allocated disk");
+        }
+        const resourceReceipt = {
+          version: 1 as const,
+          leaseId: allocated.leaseId,
+          identity: { diskId: "repository-original-disk" },
+        };
+        await records.recordResourceReceipt({
+          environmentId: ENVIRONMENT_ID,
+          provisionOperationId: allocated.provisionOperationId,
+          receipt: resourceReceipt,
+          assertCurrent() {},
+        });
+        const attached = attachedEnvironment();
+        if (attached.state !== "attached") {
+          throw new Error("Fixture requires its attached environment");
+        }
+        vi.spyOn(environments, "get").mockReturnValue({
+          ...attached,
+          nodeDeviceId: "repository-node-fixture",
+          leaseId: allocated.leaseId,
+          resourceReceipt,
+        });
+        const current = (await store.get(repository.workspaceId))!;
+        return await store.bindDisk({
+          workspaceId: current.workspaceId,
+          expectedRevision: current.revision,
+          diskAuthority: { environmentId: ENVIRONMENT_ID, resourceReceipt },
+          assertCurrent() {},
+        });
+      } finally {
+        await records.close();
+      }
+    }
     function mutate<T>(
       operation: (assertCurrent: () => void) => Promise<{ changed: boolean; value: T }>,
       assertCurrent = () => {},
@@ -291,6 +332,7 @@ export function useRepositoryWorkspaceResultFixture() {
       beginTurn,
       finishTurn,
       mutations,
+      bindDisk,
       mutate,
       write,
       save,

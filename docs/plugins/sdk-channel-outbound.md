@@ -163,6 +163,10 @@ semantics, unchanged by this budget.
 Optional settings include custom append delays, a `drain` option block for
 advanced drain ordering/concurrency/retry policy, an external `abortSignal`, a
 clock, pump error reporting, a stopped-error factory, and admission policy.
+`drain.prioritizePending(record)` can prefer pending events while preserving
+snapshot order within each priority. It does not preempt active claims or bypass
+lanes blocked by retry backoff. Priority is scheduling only; normal claim and
+delivery validation still apply.
 The returned monitor exposes `admit`, `ensureQueueAvailable`, `start`, `pause`,
 `stop`, `waitForIdle`, `isRunning`, and `isStopped`. Use the
 `ensureQueueAvailable()` check (safe to repeat) when plugin-owned migration or preparation must

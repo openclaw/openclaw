@@ -66,6 +66,8 @@ export type CurrentTranscriptProjection = {
   state: ReadonlyFacts<SessionTranscriptProjectionState>;
   contextMetadata?: ReadonlyFacts<SessionTranscriptContextMetadata>;
   contextStats?: ReadonlyFacts<SessionTranscriptContextStats>;
+  /** Cold payload access lasts only for this admitted read snapshot. */
+  readColdPayload?: (seq: number) => string;
   /** Installed by the history worker; accounting-only snapshots never resolve markers. */
   resolveVisibleHistory?: (projection: CurrentTranscriptProjection) => VisibleHistoryProjection;
 };
@@ -162,7 +164,7 @@ export function readSnapshotEventRows(
     .selectFrom("transcript_events as event")
     .select(["event.seq", "event.event_json", "event.event_zstd", "event.event_utf8_bytes"])
     .where("event.session_id", "=", sessionId);
-  return executeSqliteQuerySync(
+  const rows = executeSqliteQuerySync(
     projection.database.db,
     query.where(
       "event.seq",
@@ -171,6 +173,24 @@ export function readSnapshotEventRows(
       sql<number>`(SELECT CAST(value AS BIGINT) FROM ${jsonArrayElements(projection.database.db, sql.val(JSON.stringify(eventSeqs)))})`,
     ),
   ).rows;
+  if (projection.readColdPayload) {
+    for (const row of rows) {
+      if (row.event_json === null && row.event_zstd === null) {
+        row.event_json = projection.readColdPayload(row.seq);
+      }
+    }
+  }
+  return rows;
+}
+
+export function readProjectionTranscriptPayload(
+  projection: Pick<CurrentTranscriptProjection, "readColdPayload">,
+  row: Pick<TranscriptPayloadRecord, "event_json" | "event_zstd" | "event_utf8_bytes">,
+  eventSeq: number,
+): string {
+  return row.event_json === null && row.event_zstd === null && projection.readColdPayload
+    ? projection.readColdPayload(eventSeq)
+    : readTranscriptPayload(row);
 }
 
 export function parseActiveTranscriptMessageRow(
@@ -178,13 +198,15 @@ export function parseActiveTranscriptMessageRow(
     event_seq: number;
     message_position: number | null;
   },
+  projection: Pick<CurrentTranscriptProjection, "readColdPayload">,
 ): SessionTranscriptMessageEvent {
   if (row.message_position === null) {
     throw new Error("Active transcript message row is missing its message position");
   }
+  const eventJson = readProjectionTranscriptPayload(projection, row, row.event_seq);
   return {
     // SAFETY: The active projection indexes serialized TranscriptEvent rows.
-    event: JSON.parse(readTranscriptPayload(row)) as TranscriptEvent,
+    event: JSON.parse(eventJson) as TranscriptEvent,
     eventSeq: row.event_seq,
     // Gateway cursors use the visible-message ordinal, matching the JSONL index.
     // Raw event seq includes headers/control rows and would make pages overlap.
@@ -450,8 +472,9 @@ function readProjectionSnapshot(database: TranscriptReadDatabase, sessionId: str
 export function readCurrentProjectionSnapshot<T>(
   database: TranscriptReadDatabase,
   resolved: CurrentTranscriptProjection["resolved"],
-  read: (projection: CurrentTranscriptProjection) => T,
+  read: (projection: CurrentTranscriptProjection, cold: boolean) => T,
   prepared?: SessionTranscriptProjectionFacts & { contextStats?: SessionTranscriptContextStats },
+  options: { allowCold?: boolean } = {},
 ) {
   const diagnostics: Record<string, string | number> = { sessionId: resolved.sessionId };
   const readerOperation = captureSqliteReaderOwner()?.operation;
@@ -465,7 +488,15 @@ export function readCurrentProjectionSnapshot<T>(
       diagnostics.activeMessages = snapshot.state.activeMessageCount;
       diagnostics.indexedSeq = snapshot.state.indexedSeq;
     }
-    if (snapshot.cold) {
+    if (
+      snapshot.cold &&
+      (!options.allowCold ||
+        snapshot.latestSeq === null ||
+        !snapshot.state ||
+        snapshot.state.needsRebuild ||
+        snapshot.state.indexedSeq !== snapshot.latestSeq ||
+        snapshot.hasUnclassified)
+    ) {
       throw new SessionTranscriptColdError(resolved.sessionId);
     }
     const version = {
@@ -478,7 +509,7 @@ export function readCurrentProjectionSnapshot<T>(
       resolved.sessionId,
       version,
       getSqliteReadScopeRevision(database.db),
-      false,
+      snapshot.cold,
     );
     const empty = snapshot.latestSeq === null;
     const state = empty ? EMPTY_PROJECTION_STATE : snapshot.state;
@@ -491,17 +522,20 @@ export function readCurrentProjectionSnapshot<T>(
     }
     return {
       kind: "value" as const,
-      value: read({
-        database,
-        generation: snapshot.generation,
-        version,
-        hasUnindexedPrefix: !empty && snapshot.hasUnindexedPrefix,
-        latestIndexedReset: empty ? null : snapshot.latestIndexedReset,
-        resolved,
-        state,
-        contextMetadata: snapshot.contextMetadata,
-        contextStats: snapshot.contextStats,
-      }),
+      value: read(
+        {
+          database,
+          generation: snapshot.generation,
+          version,
+          hasUnindexedPrefix: !empty && snapshot.hasUnindexedPrefix,
+          latestIndexedReset: empty ? null : snapshot.latestIndexedReset,
+          resolved,
+          state,
+          contextMetadata: snapshot.contextMetadata,
+          contextStats: snapshot.contextStats,
+        },
+        snapshot.cold,
+      ),
     };
   };
   return database.db.isTransaction

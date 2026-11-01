@@ -33,6 +33,7 @@ import {
 } from "../system-agent/system-agent.test-helpers.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
+import { getOperatorApprovalDetailed } from "./operator-approval-store.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./server-methods/system-agent.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -102,12 +103,17 @@ export function registerGatewayToolFinalEffectTests() {
       const requested = createDeferred();
       let requestCount = 0;
       const registry = createRequestGatewayMethodRegistry(systemAgentHandlers);
+      const executions: Promise<unknown>[] = [];
       const context = {
         systemAgentSessions: sessions,
         systemAgentApprovalManager: manager,
         getRuntimeConfig: () => cfg,
         getGatewayMethodRegistry: () => registry,
-        trackExecution: <T>(run: () => Promise<T>) => run(),
+        trackExecution: <T>(run: () => Promise<T>) => {
+          const execution = run();
+          executions.push(execution);
+          return execution;
+        },
         broadcast: (event: string) => {
           if (event === "openclaw.approval.requested") {
             requestCount++;
@@ -156,6 +162,8 @@ export function registerGatewayToolFinalEffectTests() {
         stateDir,
         workspaceDir,
         configPath,
+        databasePath,
+        session,
         original,
         image,
         manager,
@@ -169,6 +177,7 @@ export function registerGatewayToolFinalEffectTests() {
             await manager.expire(record.id);
           }
           await manager.drain();
+          await Promise.allSettled(executions);
           await engine.dispose();
           await closeOpenClawStateDatabaseByPathAsync(databasePath);
         },
@@ -215,6 +224,8 @@ export function registerGatewayToolFinalEffectTests() {
           expect(await fs.readFile(f.configPath, "utf8")).toBe(f.original);
           const [record] = await f.manager.listPendingRecords();
           assert(record);
+          const completion = f.session.pendingApproval?.completion;
+          assert(completion);
           // Pause external inference preparation, not the approval owner or persistent sink.
           if (outcome === "precommit-revoked") {
             const execution = f.execution;
@@ -227,7 +238,9 @@ export function registerGatewayToolFinalEffectTests() {
             );
           }
           if (outcome === "tool-cancelled") {
+            expect(f.manager.isPending(record)).toBe(true);
             controller.abort();
+            expect(f.manager.isPending(record)).toBe(false);
           } else if (outcome === "run-revoked") {
             releaseAgentRunDelegatedAuthority(f.authority);
             await f.manager.forceDenyIfRuntimeAuthorityClosed(record.id);
@@ -243,6 +256,13 @@ export function registerGatewayToolFinalEffectTests() {
             (value) => ({ value }),
             (error: unknown) => ({ error }),
           );
+          if (outcome === "tool-cancelled") {
+            expect(result).toMatchObject({
+              error: { message: "agent tool caller authority is no longer active" },
+            });
+          }
+          // A cancelled tool wait can finish before the approval owner's durable handoff.
+          await completion;
           if (outcome === "approve") {
             expect(result).toHaveProperty("value");
             expect(JSON.parse(await fs.readFile(f.configPath, "utf8"))).toMatchObject({
@@ -253,6 +273,15 @@ export function registerGatewayToolFinalEffectTests() {
             expect((await f.manager.getSnapshot(record.id))?.status).toBe(
               outcome === "precommit-revoked" ? "allowed" : "cancelled",
             );
+            expect(
+              await getOperatorApprovalDetailed({
+                id: record.id,
+                databaseOptions: { path: f.databasePath },
+              }),
+            ).toMatchObject({
+              outcome: "found",
+              record: { status: outcome === "precommit-revoked" ? "allowed" : "cancelled" },
+            });
             expect(await f.manager.resolve(record.id, "allow-once", "late-operator")).toBe(false);
             expect(await fs.readFile(f.configPath, "utf8")).toBe(f.original);
           }

@@ -345,9 +345,9 @@ export function registerWorkboardGatewayMethods(params: {
               message: "expectedOwnerId is required",
               details: { mutationAccepted: false },
             });
-          } else {
-            await requestHandler(request);
+            return undefined;
           }
+          await requestHandler(request);
         },
         { scope },
       );

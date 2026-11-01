@@ -4,6 +4,7 @@ import { interruptCanonicalWorkspaceAcceptance, bindFixtureRuntime, fixture, moc
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
 import {
@@ -43,6 +44,7 @@ describe("imported PR source refresh", () => {
       expect(wasInterrupted()).toBe(true);
       expect(f.readSession().worktree?.githubPullRequest).toMatchObject({
         url: f.pr.html_url,
+        origin: "external-pr",
         head: { commit: acceptedHead },
         preparedHeadCommit: f.headCommit,
       });
@@ -118,6 +120,7 @@ describe("imported PR source refresh", () => {
         "remote PR change\nguest saved conflict\n",
       );
       expect(f.readSession().worktree?.githubPullRequest?.preparedHeadCommit).toBe(f.pr.head.sha);
+      expect(f.readSession().worktree?.githubPullRequest?.origin).toBe("external-pr");
       expect(f.writes).toEqual([]);
     },
   );
@@ -186,23 +189,50 @@ describe("imported PR source refresh", () => {
       expect(f.writes).toEqual([]);
     },
   );
-  it("prepares its own unchanged bot-published PR after the base advances", async () => {
-    const { f, published, upstreamGit } = await ownBotPublishedPr();
-    await fs.writeFile(path.join(f.upstream, "base-later.txt"), "newer base\n");
-    await upstreamGit("add", "base-later.txt");
-    await upstreamGit("commit", "-m", "Newer base");
-    f.pr.base.sha = await upstreamGit("rev-parse", "HEAD");
-    expect(await f.invoke()).toMatchObject({
-      status: "prepared",
-      headCommit: published.headCommit,
-      headChanged: false,
-    });
-    expect(f.readSession().worktree?.githubPullRequest).toMatchObject({
-      url: published.url,
-      preparedHeadCommit: published.headCommit,
-    });
-    expect(f.writes).toEqual([]);
-  });
+  it.each([false, true])(
+    "preserves its own bot-published PR through base refresh and restart (legacy=%s)",
+    async (legacy) => {
+      const { f, published, upstreamGit } = await ownBotPublishedPr(false);
+      await fs.writeFile(path.join(f.upstream, "base-later.txt"), "newer base\n");
+      await upstreamGit("add", "base-later.txt");
+      await upstreamGit("commit", "-m", "Newer base");
+      f.pr.base.sha = await upstreamGit("rev-parse", "HEAD");
+      expect(await f.invoke()).toMatchObject({
+        status: "prepared",
+        headCommit: published.headCommit,
+        headChanged: false,
+      });
+      expect(f.readSession().worktree?.githubPullRequest).toMatchObject({
+        url: published.url,
+        origin: "session-publication",
+        preparedHeadCommit: published.headCommit,
+      });
+      if (legacy) {
+        // Supported pre-origin bindings retain their existing missing-field semantics.
+        const entry = f.readSession();
+        const binding = { ...entry.worktree!.githubPullRequest! };
+        delete binding.origin;
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: f.session.sessionKey },
+          { worktree: { ...entry.worktree!, githubPullRequest: binding } },
+        );
+      }
+      await closeOpenClawAgentDatabasesAsync();
+      f.pr.base.ref = "new-destination";
+      expect(await f.invoke()).toMatchObject({
+        status: "prepared",
+        headCommit: published.headCommit,
+      });
+      expect(f.readSession().worktree?.githubPullRequest).toMatchObject({
+        base: { branch: "new-destination" },
+        preparedHeadCommit: published.headCommit,
+      });
+      expect(f.readSession().worktree?.githubPullRequest?.origin).toBe(
+        legacy ? undefined : "session-publication",
+      );
+      expect(f.writes).toEqual([]);
+    },
+  );
   // A maintainer appends to the PR branch outside the session, which holds an unpublished fix.
   async function advancedOwnBotPublishedPr(linked = true) {
     const own = await ownBotPublishedPr(linked);
@@ -280,6 +310,7 @@ describe("imported PR source refresh", () => {
       const { f, published, upstreamGit, advanced } = own;
 
       expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit: advanced });
+      expect(f.readSession().worktree?.githubPullRequest?.origin).toBe("session-publication");
       expect(await fs.readFile(path.join(f.projection, "maintainer.txt"), "utf8")).toBe(
         "maintainer follow-up\n",
       );

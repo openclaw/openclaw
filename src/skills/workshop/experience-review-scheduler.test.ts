@@ -18,19 +18,18 @@ const source = {
   storePath: "/sessions",
   entryId: "entry-1",
 } as TranscriptEntryAnchor;
-const runReview = vi.fn(async (_candidate: ExperienceReviewCandidate) => {});
+const runReview = vi.fn(async (_candidate: ExperienceReviewCandidate, _signal: AbortSignal) => {});
 let scheduler: ReturnType<typeof createSkillExperienceReviewScheduler>;
 let now: number;
 beforeEach(() => {
+  vi.resetAllMocks();
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   now = 1_000;
   vi.spyOn(Date, "now").mockImplementation(() => now);
-  vi.clearAllMocks();
-  runReview.mockReset();
+  vi.spyOn(performance, "now").mockImplementation(() => now);
   scheduler = createSkillExperienceReviewScheduler({ isSystemActive: () => false, runReview });
 });
 afterEach(() => {
-  vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -56,7 +55,7 @@ function turn(
         trigger: "user",
       },
     },
-    config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+    config: {},
     source,
     ...overrides,
   });
@@ -65,12 +64,10 @@ function countedTurn(iterations: number, timers: number, options?: TurnOptions) 
   turn(iterations, options);
   expect(vi.getTimerCount()).toBe(timers);
 }
-async function fireTimers(calls?: number) {
+async function fireTimers(calls = 1) {
   vi.runOnlyPendingTimers();
   await setImmediate();
-  if (calls !== undefined) {
-    expect(runReview).toHaveBeenCalledTimes(calls);
-  }
+  expect(runReview).toHaveBeenCalledTimes(calls);
 }
 
 it("backs off all sessions after a TPM rejection without replaying the failed review", async () => {
@@ -105,57 +102,62 @@ it("defers queued reviews when a foreground turn hits the shared rate limit", as
   await fireTimers(1);
 });
 
-it.each(["reported", "messages"])("accumulates %s iterations despite skill use", async (kind) => {
+it.each(["reported", "messages", "interrupted"])("accumulates %s iterations", async (kind) => {
   const usedSkills = [
     { name: "deploy", source: "workspace", activation: "read", skillFile: "/ws/deploy/SKILL.md" },
   ] as const;
   for (const count of [6, 3, 1]) {
     const messages =
-      kind === "reported"
+      kind !== "messages"
         ? []
         : [
             { role: "assistant" },
             { role: "user" },
             ...Array.from({ length: count }, () => ({ role: "assistant" })),
           ];
-    countedTurn(kind === "reported" ? count : 0, count === 1 ? 1 : 0, {
+    countedTurn(kind !== "messages" ? count : 0, count === 1 ? 1 : 0, {
       usedSkills,
-      event: { messages, success: true },
+      event: { messages, success: kind !== "interrupted" },
     });
   }
   await fireTimers();
   expect(runReview).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({
       source,
-      ctx: expect.objectContaining({ runId: kind === "reported" ? "run-1" : "run-0" }),
+      ctx: expect.objectContaining({ runId: kind !== "messages" ? "run-1" : "run-0" }),
       usedSkills,
     }),
+    expect.any(AbortSignal),
   );
   countedTurn(9, 0);
 });
 
-it.each([8, 10])(
-  "resets %i accumulated iterations and queued work after a Workshop change",
-  async (iterations) => {
+it.each([false, true])("resets review state (Stop=%s)", async (stopped) => {
+  for (const iterations of [8, 10]) {
     countedTurn(iterations, iterations === 10 ? 1 : 0);
-    turn(1, { workshopMutated: true });
+    if (stopped) {
+      scheduler.cancelSession(source);
+      scheduler.suppressRuns(["run-20"]);
+      turn(20, { event: { messages: [], success: false } });
+    } else {
+      turn(1, { workshopMutated: true });
+    }
     await fireTimers(0);
     countedTurn(9, 0);
     countedTurn(1, 1);
-  },
-);
+    turn(1, { workshopMutated: true });
+  }
+});
 
 it("waits for 30 quiet seconds after the session's latest turn", async () => {
   countedTurn(10, 1);
   vi.advanceTimersByTime(29_999);
-  // A later turn restarts the quiet period instead of inheriting the old deadline.
   countedTurn(1, 1);
   vi.advanceTimersByTime(29_999);
   await setImmediate();
   expect(runReview).not.toHaveBeenCalled();
   vi.advanceTimersByTime(1);
-  await setImmediate();
-  expect(runReview).toHaveBeenCalledOnce();
+  await fireTimers();
 });
 
 it("ignores errored turns and sessions while Workshop is off", () => {
@@ -164,11 +166,9 @@ it("ignores errored turns and sessions while Workshop is off", () => {
   turn(20, { config: { skills: { workshop: { autonomous: { mode: "off" } } } } });
   countedTurn(8, 0);
 });
-
 it("still queues reviews while Workshop proposes drafts", () => {
   countedTurn(10, 1, { config: { skills: { workshop: { autonomous: { mode: "propose" } } } } });
 });
-
 it("never reviews ACP child sessions", () => {
   countedTurn(20, 0, { sessionKey: "agent:main:acp:child-1" });
 });

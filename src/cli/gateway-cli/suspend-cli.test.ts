@@ -46,14 +46,14 @@ function mockClock(advance = (delayMs: number) => delayMs) {
 it("prints a ready lease without exposing remote credentials in the resume hint", async () => {
   vi.stubEnv("OPENCLAW_PROFILE", "work");
   vi.stubEnv("OPENCLAW_CONTAINER_HINT", "demo");
-  const rpcOpts = { url: "wss://r.test", token: "secret", localPortOverride: 18999 };
+  const rpcOpts = { url: "wss://u:p@r.test?t=s", token: "secret", localPortOverride: 18999 };
 
   await suspend({ rpcOpts, waitSeconds: 0 });
 
   const requestId = expect.stringMatching(/^cli-[0-9a-f]{8}$/u);
   expect(callGateway.mock.calls[0]?.[2]).toEqual({ requestId });
   expect(runtime.log).toHaveBeenCalledWith(
-    "Resume with: openclaw --container demo gateway resume suspension-1 --port 18999",
+    "To resume this remote Gateway, run openclaw --container demo gateway resume suspension-1 with the same --url and authentication options used for suspend.",
   );
 });
 

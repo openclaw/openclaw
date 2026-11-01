@@ -51,6 +51,7 @@ vi.mock("./prepared-model-runtime.js", async (importOriginal) => ({
   prepareModelRuntimeSnapshot: (input: PreparedModelRuntimeInput) => preparedSnapshotMock(input),
   acquireReadOnlyPreparedModelRuntime: async (input: PreparedModelRuntimeInput) => ({
     snapshot: await acquireSnapshotMock(input),
+    run: <T>(run: () => T): T => run(),
     [Symbol.asyncDispose]: releaseSnapshotMock,
   }),
 }));

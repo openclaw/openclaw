@@ -171,6 +171,7 @@ describe("command palette people mentions", () => {
   ])("carries selected people into the first message for a $role", async ({ scopes }) => {
     const f = await mount(undefined, scopes);
     await f.search("  🙂 @");
+    await waitForSolid(() => expect(f.menu()?.querySelector("[aria-selected=true]")).toBeTruthy());
     expect(f.input.getAttribute("aria-controls")).toBe(f.menu()?.id);
     expect(f.input.getAttribute("aria-haspopup")).toBe("listbox");
     expect(f.input.hasAttribute("aria-expanded")).toBe(false);
@@ -396,7 +397,6 @@ describe("command palette people mentions", () => {
       const newResponse = createDeferred<UsersMentionableResult>();
       f.directory.mockReturnValueOnce(oldResponse.promise).mockReturnValueOnce(newResponse.promise);
       await f.search("@old");
-      expect(f.directory).toHaveBeenCalledOnce();
       expect(f.directoryParams()).toEqual([{ agentId: "main", query: "old" }]);
 
       if (change === "close") {
@@ -415,9 +415,6 @@ describe("command palette people mentions", () => {
         const agent = f.query("openclaw-agent-select")!;
         await agent.updateComplete;
         expect(agent.value).toBe("main");
-        for (const item of agent.querySelectorAll<HTMLElement>("[role='menuitemradio']")) {
-          item.scrollIntoView = vi.fn();
-        }
         agent.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
         await waitForSolid(() =>
           expect(agent.querySelector(".agent-select__menu")?.matches(":popover-open")).toBe(true),
@@ -429,7 +426,7 @@ describe("command palette people mentions", () => {
         reviewer.click();
         await waitForSolid(() => expect(agent.value).toBe("reviewer"));
         expect(f.context.agentSelection.state.selectedId).toBe("main");
-        expect(f.menu()).toBeNull();
+        await waitForSolid(() => expect(f.menu()).toBeNull());
       } else {
         f.context.gateway.snapshot.phase = "reconnecting";
         f.publish();

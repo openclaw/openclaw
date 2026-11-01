@@ -748,9 +748,7 @@ describe("update-cli", () => {
       expect(target).toBe(canonicalRoot);
       return "git";
     });
-    vi.mocked(gitUpdate).mockResolvedValue(
-      cli.makeOkUpdateResult({ mode: "git", root: canonicalRoot }),
-    );
+    cli.mockGitUpdateAfterMutation(cli.makeOkUpdateResult({ mode: "git", root: canonicalRoot }));
     await runUpdate({});
     check.expectUpdateCallChannel("dev");
   });

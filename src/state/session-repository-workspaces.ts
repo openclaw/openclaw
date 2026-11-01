@@ -35,6 +35,7 @@ import type {
   RepositoryWorkspaceBase,
   RepositoryWorkspaceCheckpoint,
   RepositoryWorkspaceCreate,
+  RepositoryWorkspaceDiskBinding,
   RepositoryWorkspaceMutationResult,
   RepositoryWorkspaceOwner,
   SessionRepositoryWorkspaceRecord,
@@ -269,7 +270,7 @@ export function createSessionRepositoryWorkspaceStore(
               const reply = await executeExistingOpenClawStateRead(
                 { path: databasePath, env },
                 { type: "sessionRepositoryWorkspaces.find", owners: [read.owner] },
-                { current: true, context: captured },
+                { current: true, context: captured, preferIndependentWarmRead: true },
               );
               return reply?.workspaces.find((workspace) => workspace.workspaceId === workspaceId);
             })
@@ -290,6 +291,7 @@ export function createSessionRepositoryWorkspaceStore(
               url: input.url,
               requestedRef: input.requestedRef,
               runSetupScript: input.runSetupScript,
+              branchPrefix: input.branchPrefix,
               branch: input.branch,
             },
           },
@@ -307,6 +309,22 @@ export function createSessionRepositoryWorkspaceStore(
               expectedRevision: input.expectedRevision,
               baseCommit: input.baseCommit,
               baseManifestHash: input.baseManifestHash,
+            },
+          },
+          input.assertCurrent,
+        ),
+      );
+    },
+    // Internal prerequisite only: no session/profile selector activates disk authority yet.
+    async bindDisk(input: Guarded<RepositoryWorkspaceDiskBinding>) {
+      return requireWorkspace(
+        await mutate(
+          {
+            type: "repositoryWorkspaces.bindDisk",
+            input: {
+              workspaceId: input.workspaceId,
+              expectedRevision: input.expectedRevision,
+              diskAuthority: input.diskAuthority,
             },
           },
           input.assertCurrent,

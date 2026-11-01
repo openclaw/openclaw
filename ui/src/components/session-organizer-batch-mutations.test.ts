@@ -412,7 +412,6 @@ function withHiddenRun(
     subagentSummary: {
       attention: { kind: "none" },
       runningChildCount: 0,
-      failedChildCount: 0,
       unreadHiddenRuns: [run],
     },
   });

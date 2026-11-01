@@ -17,6 +17,7 @@ import {
   labelForMediaPath,
 } from "../../../lib/media-file-extension.ts";
 import { isCrossOriginHttpSource } from "./chat-attachment-href.ts";
+import type { WorkspaceFileSearchTarget } from "./chat-message-media-actions.ts";
 
 registerChatComposerEnglish();
 
@@ -33,17 +34,6 @@ export type ImageBlock = {
   height?: number;
 } & ({ url: string; artifactId?: string } | { url?: undefined; artifactId: string });
 
-/** Native admission and open actions shared with non-preview catalog rows. */
-export type MessageMediaAction = {
-  onOpen?: () => void;
-  onRetry?: () => void;
-  onAllow?: () => void;
-  onFocus?: () => void;
-  observeElement?: (element: Element | undefined) => void;
-  pending: boolean;
-  reason?: string;
-};
-
 export type ArtifactDownloadResolver = (
   params: {
     sessionKey: string;
@@ -55,7 +45,11 @@ export type ArtifactDownloadResolver = (
 ) => Promise<{ url: string; expiresAt?: string; blob?: Blob } | null>;
 
 export type ImageRenderOptions = {
-  galleryImages?: readonly ImageBlock[];
+  /** Navigation membership for an opened tile; sibling message ids keep their media scope. */
+  galleryImages?: (image: ImageBlock) => {
+    index: number;
+    items: readonly { image: ImageBlock; messageId: string | undefined }[];
+  };
   galleryVideos?: (item: AttachmentItem) => {
     index: number;
     items: readonly (AttachmentItem & { messageId?: string })[];
@@ -77,6 +71,8 @@ export type ImageRenderOptions = {
   onMediaChange?: () => void;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+  /** Filename query only; the Files owner selects and authorizes any eventual file. */
+  onFindWorkspaceFile?: (target: WorkspaceFileSearchTarget) => void;
   resolveArtifactDownload?: ArtifactDownloadResolver;
 };
 

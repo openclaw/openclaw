@@ -9,11 +9,15 @@ import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.j
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type {
-  SkillWorkshopChangeNoticeSkill,
-  SkillWorkshopNoticeAction,
+import type { PluginNotice } from "../../shared/plugin-notice.js";
+import {
+  SKILL_WORKSHOP_CHANGE_NOTICE_TYPE,
+  SKILL_WORKSHOP_PLUGIN_ID,
+  type SkillWorkshopChangeNotice,
+  type SkillWorkshopChangeNoticeSkill,
+  type SkillWorkshopNoticeAction,
 } from "../../shared/skill-workshop-change-notice.js";
-import { SKILL_WORKSHOP_CHANGE_NOTICE_KIND } from "../../shared/transcript-only-openclaw-assistant.js";
+import { PLUGIN_NOTICE_KIND } from "../../shared/transcript-only-openclaw-assistant.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -101,10 +105,17 @@ function formatWorkshopChangeNotice(
         ],
       }
     : undefined;
+  const data: SkillWorkshopChangeNotice = { agentId, runId, skills };
+  const marker: PluginNotice = {
+    kind: PLUGIN_NOTICE_KIND,
+    pluginId: SKILL_WORKSHOP_PLUGIN_ID,
+    type: SKILL_WORKSHOP_CHANGE_NOTICE_TYPE,
+    data,
+  };
   return {
     text,
     presentation,
-    marker: { kind: SKILL_WORKSHOP_CHANGE_NOTICE_KIND, agentId, runId, skills },
+    marker,
     undoContext: `A background skill review just changed your learned skills: ${text} If the user asks to undo or revert it, call ${reverts.join("; then ")}.`,
   };
 }

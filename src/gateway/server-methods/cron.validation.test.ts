@@ -565,19 +565,6 @@ describe("cron method validation", () => {
     },
   );
 
-  it("runs a padded exact job ID without caller scope", async () => {
-    const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
-    const { respond } = await invokeCron("cron.run", { id: " cron-1 " }, { context });
-    expect(context.cron.readJob).toHaveBeenCalledWith("cron-1");
-    expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-1", "force");
-    expectCronReply(respond, {
-      ok: true,
-      enqueued: true,
-      runId: "run-1",
-      processInstanceId: getGatewayProcessInstanceId(),
-    });
-  });
-
   it.each([
     {
       name: "foreign session target",

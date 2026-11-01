@@ -509,6 +509,10 @@ suite.define(() => {
       return route.fulfill({ contentType: "image/png", body: avatarBody });
     });
     await installMockGateway(page, {
+      historyMessages: [chatMessage("assistant", "Ready to help.")],
+      sessions: chatSessionListResponse().sessions.map((row) =>
+        Object.assign(row, { kind: "group" }),
+      ),
       methodResponses: {
         "agent.identity.get": {
           agentId: "main",
@@ -516,7 +520,6 @@ suite.define(() => {
           avatar: "/avatar/main?v=fixture",
           avatarStatus: "local",
         },
-        "sessions.list": chatSessionListResponse(),
       },
       sessionKey: "agent:main:session-a",
     });
@@ -530,7 +533,7 @@ suite.define(() => {
       return marker;
     });
     const avatar = page.locator(
-      'openclaw-chat-pane[aria-hidden="false"] .agent-chat__welcome-avatar img',
+      'openclaw-chat-pane[aria-hidden="false"] .chat-group.assistant img.chat-avatar',
     );
     await avatar.waitFor({ state: "visible" });
     await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);

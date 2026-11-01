@@ -105,7 +105,7 @@ function collectMissingChannelMetaFields(meta?: Partial<ChannelMeta> | null): st
 }
 
 function adaptPluginGatewayMethodHandler(
-  handler: GatewayRequestHandler,
+  handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1],
   mayDispatch: boolean,
 ): GatewayRequestHandler {
   return async (opts) => {
@@ -121,14 +121,12 @@ function adaptPluginGatewayMethodHandler(
     // A declared authenticated-request contract composes RPCs with the exact
     // admitted client, never a synthetic identity or inherited unrelated grant.
     try {
-      const result = (
-        scope
-          ? await withPluginRuntimeGatewayRequestScope(
-              { ...scope, gatewayMethodDispatchAllowed: mayDispatch && scope.client != null },
-              invoke,
-            )
-          : await invoke()
-      ) as unknown;
+      const result = scope
+        ? await withPluginRuntimeGatewayRequestScope(
+            { ...scope, gatewayMethodDispatchAllowed: mayDispatch && scope.client != null },
+            invoke,
+          )
+        : await invoke();
       if (!responded && result !== undefined) {
         respond(true, result);
       }
@@ -162,7 +160,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
   const registerGatewayMethod = (
     record: PluginRecord,
     method: string,
-    handler: GatewayRequestHandler,
+    handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1],
     opts?: {
       scope?: OperatorScope;
       profileAccess?: GatewayMethodProfileAccess;

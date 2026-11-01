@@ -415,11 +415,6 @@
 .usage-export-menu > .oc-menu {
   min-width: 220px;
   max-width: min(320px, calc(100vw - 48px));
-  padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
 }
 
 .usage-filter-option {
@@ -959,9 +954,13 @@
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: baseline;
   gap: 5px var(--space-3);
-  padding: 10px 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
-  font-size: 13px;
+  padding: var(--space-3) 0;
+  font-size: var(--control-ui-text-md);
+}
+
+.usage-list-label .agent-row-chip {
+  color: inherit;
+  font: inherit;
 }
 
 .usage-list-bar {
@@ -1011,7 +1010,6 @@
   padding-bottom: 0;
 }
 
-.usage-list-item:first-child,
 .context-breakdown-item:first-child {
   padding-top: 0;
 }

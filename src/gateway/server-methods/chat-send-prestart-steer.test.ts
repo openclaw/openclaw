@@ -9,6 +9,13 @@ import type {
 import { captureMethodCall } from "../../../test/helpers/capture-method-call.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { steerActiveSessionWithOptionalDeliveryWait } from "../../agents/embedded-agent-runner/run/attempt-queue-message.js";
+import {
+  createTestSession,
+  holdAssistantResponse,
+  registerAgentSessionLoopTestLifecycle,
+  streamMocks,
+} from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import { managedWorktrees, ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import type { executeAgentTurn } from "../../auto-reply/reply/agent-runner-execution.js";
@@ -28,7 +35,11 @@ import {
   captureSessionTarget,
   captureSessionControllerSettlement,
 } from "../../sessions/session-controller.lifecycle.js";
-import { isRpcSourceQueued } from "../../sessions/session-controller.rpc-sources.js";
+import {
+  isRpcSourceQueued,
+  requestRpcSourceCancellation,
+  type RpcSourceRef,
+} from "../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
@@ -46,6 +57,7 @@ import type { GatewayClient } from "./types.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const runtime = vi.hoisted(() => ({ execute: vi.fn<typeof executeAgentTurn>() }));
+registerAgentSessionLoopTestLifecycle();
 
 vi.mock("../../auto-reply/reply/agent-runner-execution.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../auto-reply/reply/agent-runner-execution.js")>()),
@@ -108,7 +120,7 @@ function resetFixture(clients: Set<GatewayClient & { connId: string }>) {
   runtime.execute.mockReset();
 }
 
-test.for(["accepted", "unavailable", "rejected"] as const)(
+test.for(["accepted", "unavailable", "rejected", "withdrawn"] as const)(
   "preserves a prestart steer through workspace preparation when late injection is %s",
   async (injection, { signal }) => {
     const realDispatch = await loadRealChatDispatch();
@@ -129,6 +141,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
     const releaseFollowup = createDeferred();
     const queuedSettled = createDeferred();
     const dispatchSettled = createDeferred();
+    const steeringDispatchFinished = createDeferred();
     const steerRunId = "prestart-steer-input";
     const steerText = "Steer: include the regression proof.";
     const consumed: Array<{ runId: string; text: string }> = [];
@@ -139,6 +152,22 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
     };
     let operation: ReplyOperation | undefined;
     let sessionKey: string | undefined;
+    let steerSource: RpcSourceRef | undefined;
+    let deadline: (() => void) | undefined;
+    let backingRun: Promise<void> | undefined;
+    const provider = holdAssistantResponse("Original work completed.");
+    const nativeSession =
+      injection === "withdrawn" ? (await createTestSession()).session : undefined;
+    const originalSetTimeout = globalThis.setTimeout;
+    const timerSpy =
+      injection === "withdrawn"
+        ? vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+            if (delay === 120_000) {
+              deadline = () => callback(...args);
+            }
+            return originalSetTimeout(callback, delay, ...args);
+          })
+        : undefined;
     let clock = 0;
     const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
     const logGateway = { ...createSubsystemLogger("test/gateway"), info: vi.fn() };
@@ -217,6 +246,11 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
       const runId = expectDefined(opts?.runId, "runtime run ID");
       if (!operation) {
         operation = expectDefined(replyOperation, "initial reply admission");
+        if (nativeSession) {
+          streamMocks.streamSimple.mockImplementation(() => provider.response);
+          backingRun = nativeSession.prompt("Continue the original backing work.");
+          await vi.waitFor(() => expect(streamMocks.streamSimple).toHaveBeenCalledOnce());
+        }
         runtimeStarted.resolve();
         await attachBackend.promise;
         operation.attachBackend({
@@ -236,6 +270,26 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
             },
             queueMessage: async (text, options, assertCurrent) => {
               assertCurrent();
+              if (nativeSession) {
+                return steerActiveSessionWithOptionalDeliveryWait(
+                  nativeSession,
+                  text,
+                  {
+                    ...options,
+                    onQueueAccepted: (accepted) => {
+                      options?.onQueueAccepted?.(accepted);
+                      if (accepted) {
+                        steerAccepted.resolve();
+                      }
+                    },
+                  },
+                  sessionKey,
+                  () => {
+                    assertCurrent();
+                    return true;
+                  },
+                );
+              }
               if (injection === "rejected") {
                 steerDeclined.resolve();
                 throw new Error("Runtime declined late steering");
@@ -279,7 +333,13 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
           queuedSettled.resolve();
         };
       }
-      return realDispatch(params);
+      try {
+        return await realDispatch(params);
+      } finally {
+        if (params.replyOptions?.runId === steerRunId) {
+          steeringDispatchFinished.resolve();
+        }
+      }
     });
     try {
       const created = await directSessionReq<{ key: string; runId: string }>(
@@ -317,6 +377,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         rpcSourceTesting.get(steerRunId),
         "steer source registration",
       );
+      steerSource = steerEntry;
       expect(earlyTerminals).toEqual([]);
       // The source is reserved, but workspace preparation has not deferred it to the queue.
       expect(steerEntry.input.custody.enqueued).not.toBe(true);
@@ -332,7 +393,10 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
       expectUnconsumed();
       await pendingCustody(false, true);
       attachBackend.resolve();
-      await withinTest((injection === "accepted" ? steerAccepted : steerDeclined).promise, signal);
+      await withinTest(
+        (injection === "accepted" || nativeSession ? steerAccepted : steerDeclined).promise,
+        signal,
+      );
       expectUnconsumed();
       expect(rpcSourceTesting.get(steerRunId)).toBe(steerEntry);
       expect(isRpcSourceQueued(steerEntry)).toBe(true);
@@ -347,6 +411,19 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         expect(earlyTerminals).toEqual([false]);
         expect(runtime.execute).toHaveBeenCalledOnce();
       } else {
+        if (nativeSession) {
+          expect(nativeSession.getSteeringMessages()).toHaveLength(1);
+          const settlement = expectDefined(
+            steerEntry.input.injection,
+            "native steer custody",
+          ).settled;
+          clock += 120_000;
+          expectDefined(deadline, "embedded transcript delivery deadline")();
+          expect(await withinTest(settlement, signal)).toBe(false);
+          expect(nativeSession.getSteeringMessages()).toEqual([]);
+          expect(isRpcSourceQueued(rpcSourceTesting.get(steerRunId))).toBe(true);
+          await withinTest(steeringDispatchFinished.promise, signal);
+        }
         // The real dispatch finalizer publishes this change before the parent can reply.
         await withinTest(dispatchSettled.promise, signal);
         const fallback = await pendingCustody(true);
@@ -355,6 +432,8 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         expectUnconsumed();
         // Let the queued input finish its debounce before releasing the active run.
         clock += 500;
+        provider.release();
+        await backingRun;
         expectDefined(operation, "initial run owner").complete();
         releaseRun.resolve();
         await withinTest(followupStarted.promise, signal);
@@ -379,9 +458,21 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
           .map(([message]) => message.match(/stage=(\w+)/)?.[1])
           .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
       ).toEqual(injection === "accepted" ? ["steer"] : ["queued", "startup"]);
+      if (nativeSession) {
+        const { sessionId } = expectDefined(
+          loadSessionEntry({ agentId: "main", sessionKey, storePath }),
+          "withdrawn input session",
+        );
+        expect(logGateway.info).toHaveBeenCalledWith(
+          expect.stringContaining(`stage=queued sessionId=${sessionId} runId=${steerRunId}`),
+        );
+      }
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       expectSingleUserInput(storePath, sessionKey, steerText);
     } finally {
+      if (steerSource) {
+        requestRpcSourceCancellation(steerSource, "test cleanup");
+      }
       const released = captureSessionControllerSettlement({
         scope: storePath,
         identities: [sessionKey],
@@ -390,6 +481,9 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
       attachBackend.resolve();
       releaseSteerCommit.resolve();
       releaseFollowup.resolve();
+      timerSpy?.mockRestore();
+      provider.release();
+      await backingRun;
       clearFixture(storePath, sessionKey);
       operation?.complete();
       releaseRun.resolve();

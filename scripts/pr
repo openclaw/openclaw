@@ -91,7 +91,7 @@ pr_subcommand_classification() {
     ls | workspace | ci-dispatch)
       printf 'advisory\n'
       ;;
-    gc | lock-recover | tooling-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-correction-init | prepare-correction-continue | prepare-correction-review-init | prepare-workflow-successor | prepare-publish-for-proof | prepare-baseline-refresh | prepare-baseline-successor | prepare-baseline-signing-request | prepare-baseline-signing-continue | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
+    gc | lock-recover | tooling-recover | review-transition-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-correction-init | prepare-correction-continue | prepare-correction-review-init | prepare-workflow-successor | prepare-publish-for-proof | prepare-baseline-refresh | prepare-baseline-successor | prepare-baseline-signing-request | prepare-baseline-signing-continue | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
       printf 'landing\n'
       ;;
     *) return 1 ;;
@@ -169,6 +169,16 @@ pr_read_workflow_successor_request "$@" || {
 PR_WORKFLOW_RECOVERY_OUTCOME=""
 PR_WORKFLOW_RECOVERY_HEAD=""
 PR_WORKFLOW_ADMISSION=0
+# Checkout salvage selects current tooling once, never a new workflow binding.
+if [ "$requested_subcommand" = review-transition-recover ]; then
+  [ "$#" -eq 6 ] && [[ "${2-}" =~ ^[1-9][0-9]*$ ]] && [ -n "${3-}" ] &&
+    [ "${4-}" = --plan-sha256 ] && [[ "${5-}" =~ ^[0-9a-f]{64}$ ]] &&
+    [ "${6-}" = --confirmed-operator-recovery ] || {
+      echo "review-transition-recover requires a PR, plan, exact SHA-256 and --confirmed-operator-recovery." >&2
+      exit 2
+    }
+  PR_WORKFLOW_ADMISSION=review-recovery
+fi
 pr_read_current_workflow_request() {
   local argument found=0
   for argument in "$@"; do
@@ -296,6 +306,7 @@ try {
       if (!listing) return null;
       return readAt(listing);
     };
+    const isCurrentAdmission = value => value === "1" || value === "review-recovery";
     const requireSource = (source, anchor = "refs/remotes/origin/main") => {
       if (!oid.test(source)) throw new Error("Invalid workflow source");
       run(["merge-base", "--is-ancestor", source, anchor]);
@@ -432,15 +443,15 @@ try {
       if (successor) {
         if (bootstrap || outcome || admission !== "0") throw new Error("Conflicting workflow successor selection");
         requireSuccessor(source, successor);
-      } else if (admission === "1") requireAdmission(source);
+      } else if (isCurrentAdmission(admission)) requireAdmission(source);
       else if (outcome) requireRecovery(source, outcome, replacementHead);
-      if (!oid.test(source) || (current?.oid ?? "") !== binding || !successor && admission !== "1" && !outcome && !bootstrap && current && current.source !== source ||
+      if (!oid.test(source) || (current?.oid ?? "") !== binding || !successor && !isCurrentAdmission(admission) && !outcome && !bootstrap && current && current.source !== source ||
           !/^[1-9][0-9]*$/.test(creator)) throw new Error("Workflow selection changed before handoff");
       if (bootstrap) {
         if (source !== run(["rev-parse", "--verify", "HEAD^{commit}"])) throw new Error("Canonical bootstrap changed");
       } else requireSource(source);
       process.stdout.write(JSON.stringify({ version: 1, owner, repository: identity, pr: revision, source, binding, creator, bootstrap,
-        ...(outcome ? { recovery: { outcome, replacementHead } } : {}), ...(admission === "1" ? { admission: true } : {}),
+        ...(outcome ? { recovery: { outcome, replacementHead } } : {}), ...(isCurrentAdmission(admission) ? { admission: admission === "1" ? true : admission } : {}),
         ...(successor ? { successor: JSON.parse(successor) } : {}) }));
     } else if (operation === "workflow-context-read") {
       const held = fstatSync(8);
@@ -458,8 +469,8 @@ try {
         }
         requireSuccessor(selection.source, successor);
       }
-      if (admission === "1") {
-        if (selection.admission !== true || selection.bootstrap || outcome) throw new Error("Workflow admission selection changed across handoff");
+      if (isCurrentAdmission(admission)) {
+        if (selection.admission !== (admission === "1" ? true : admission) || selection.bootstrap || outcome) throw new Error("Workflow admission selection changed across handoff");
         requireAdmission(selection.source);
       }
       if (outcome) {
@@ -470,12 +481,12 @@ try {
       }
       const supervised = selection.creator === supervisor && process.env.OPENCLAW_PR_DEDICATED_PROCESS_GROUP === "1" &&
         process.env.OPENCLAW_PR_LOCK_NOTIFY_FD === "3" && process.env.OPENCLAW_PR_LOCK_SUPERVISOR_PID === supervisor;
-      const keys = ["binding", "bootstrap", "creator", "owner", "pr", "repository", "source", "version", ...(outcome ? ["recovery"] : []), ...(admission === "1" ? ["admission"] : []), ...(successor ? ["successor"] : [])].sort();
+      const keys = ["binding", "bootstrap", "creator", "owner", "pr", "repository", "source", "version", ...(outcome ? ["recovery"] : []), ...(isCurrentAdmission(admission) ? ["admission"] : []), ...(successor ? ["successor"] : [])].sort();
       if (JSON.stringify(Object.keys(selection).sort()) !== JSON.stringify(keys) ||
           selection.version !== 1 || selection.owner !== owner || selection.repository !== identity || selection.pr !== revision ||
           typeof selection.bootstrap !== "boolean" ||
           !oid.test(selection.source) || (selection.creator !== creator && !supervised) ||
-          selection.binding !== (current?.oid ?? "") || !successor && admission !== "1" && !outcome && !selection.bootstrap && current && current.source !== selection.source) {
+          selection.binding !== (current?.oid ?? "") || !successor && !isCurrentAdmission(admission) && !outcome && !selection.bootstrap && current && current.source !== selection.source) {
         throw new Error("Workflow selection changed across handoff");
       }
       if (!selection.bootstrap) requireSource(selection.source);
@@ -510,9 +521,9 @@ try {
       if (successor) {
         if (outcome || admission !== "0") throw new Error("Conflicting workflow successor admission");
         requireSuccessor(source, successor, anchor);
-      } else if (admission === "1") requireAdmission(source, anchor);
+      } else if (isCurrentAdmission(admission)) requireAdmission(source, anchor);
       else if (outcome) requireRecovery(source, outcome, replacementHead, anchor);
-      if (!oid.test(source) || (current?.oid ?? "") !== expected || !successor && admission !== "1" && !outcome && current && current.source !== source) {
+      if (!oid.test(source) || (current?.oid ?? "") !== expected || !successor && !isCurrentAdmission(admission) && !outcome && current && current.source !== source) {
         throw new Error("Workflow binding changed before admission");
       }
       requireSource(source, anchor);
@@ -662,9 +673,9 @@ pr_read_workflow_binding() {
       IFS=$'\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION <<< "$binding"
       return 0
     fi
-    if [ -n "$PR_WORKFLOW_RECOVERY_OUTCOME" ] || [ "${PR_WORKFLOW_ADMISSION:-0}" = 1 ]; then
+    if [ -n "$PR_WORKFLOW_RECOVERY_OUTCOME" ] || [ "${PR_WORKFLOW_ADMISSION:-0}" != 0 ]; then
       local selection_mode=workflow-recovery-select
-      [ "${PR_WORKFLOW_ADMISSION:-0}" != 1 ] || selection_mode=workflow-admission-select
+      [ "${PR_WORKFLOW_ADMISSION:-0}" = 0 ] || selection_mode=workflow-admission-select
       binding=$(pr_batch_wrapper_git "$selection_mode" "$canonical_repo_root" "$PR_WORKFLOW_PR" \
         "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD") || return 1
       IFS=$'\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION <<< "$binding"
@@ -728,7 +739,7 @@ admit_pr_workflow_binding() {
   [ -n "$PR_WORKFLOW_PR" ] || return 0
   [ "$PR_WORKFLOW_PR" = "$1" ] && [ -n "$PR_WORKFLOW_SOURCE_REVISION" ] || return 1
   local qualification_ref="" main=""
-  if [ "$PR_WORKFLOW_BOOTSTRAP" = 1 ] || [ -n "$PR_WORKFLOW_RECOVERY_OUTCOME" ] || [ "${PR_WORKFLOW_ADMISSION:-0}" = 1 ] || [ -n "${PR_WORKFLOW_SUCCESSOR:-}" ]; then
+  if [ "$PR_WORKFLOW_BOOTSTRAP" = 1 ] || [ -n "$PR_WORKFLOW_RECOVERY_OUTCOME" ] || [ "${PR_WORKFLOW_ADMISSION:-0}" != 0 ] || [ -n "${PR_WORKFLOW_SUCCESSOR:-}" ]; then
     qualification_ref="refs/openclaw/pr-workflow-qualification/$1/$PR_OPERATION_LOCK_OWNER_OID"
     local ref_status=0 symbolic_status=0 selected
     pr_git -C "$canonical_repo_root" symbolic-ref -q "$qualification_ref" >/dev/null 2>&1 || symbolic_status=$?
@@ -742,7 +753,7 @@ admit_pr_workflow_binding() {
     fi
     main=$(pr_git -C "$canonical_repo_root" rev-parse --verify "$qualification_ref^{commit}") || return 1
     PR_WORKFLOW_TRUST_ANCHOR="$main"
-    if [ -n "$PR_WORKFLOW_RECOVERY_OUTCOME" ] || [ "${PR_WORKFLOW_ADMISSION:-0}" = 1 ] || [ -n "${PR_WORKFLOW_SUCCESSOR:-}" ]; then
+    if [ -n "$PR_WORKFLOW_RECOVERY_OUTCOME" ] || [ "${PR_WORKFLOW_ADMISSION:-0}" != 0 ] || [ -n "${PR_WORKFLOW_SUCCESSOR:-}" ]; then
       # Current main is selected only for this operation. Keep the historical
       # binding intact so normal reconciliation still uses its admitted source.
       verify_pr_workflow_source "$main" "$script_parent_dir/.." || {
@@ -1315,7 +1326,7 @@ is_supervised_pr_process() {
 # The supervisor changes cwd to the canonical repo. Resolve explicit body and
 # evidence paths relative to the operator's caller before crossing that
 # boundary; do not read them.
-if [ "${1-}" = tooling-recover ]; then
+if [ "${1-}" = tooling-recover ] || [ "${1-}" = review-transition-recover ]; then
   [ "$#" -ge 3 ] || { echo "tooling-recover requires a PR and plan" >&2; exit 2; }
   recovery_plan=$(node -e 'process.stdout.write(require("node:path").resolve(process.argv[1]))' -- "$3") || exit 1
   set -- "$1" "$2" "$recovery_plan" "${@:4}"
@@ -1368,6 +1379,9 @@ Usage:
   scripts/pr gc [--pr <number>] [--dry-run]
   scripts/pr lock-recover <PR> <OWNER_OID> --confirmed-no-running-tools
   scripts/pr tooling-recover <PR> <plan> --plan-sha256 <SHA256> --confirmed-quiescent
+  scripts/pr review-transition-recover <PR> <plan> --plan-sha256 <SHA256> --confirmed-operator-recovery
+    Preserve selected unknown file bytes and restore its journaled source; no transition completion or rebind.
+    Requires current official-main tooling and the retained checkout. Exclude other writers until reconciliation.
   scripts/pr review-init <PR>
   scripts/pr review-checkout-main <PR>
   scripts/pr review-checkout-pr <PR>
@@ -1547,9 +1561,11 @@ main() {
         esac
       done
       ;;
-    tooling-recover)
+    tooling-recover | review-transition-recover)
       [ "$#" -eq 5 ] && is_canonical_pr_number "$1" && [ "$3" = --plan-sha256 ] &&
-        [[ "$4" =~ ^[0-9a-f]{64}$ ]] && [ "$5" = --confirmed-quiescent ] || { usage; exit 2; }
+        [[ "$4" =~ ^[0-9a-f]{64}$ ]] &&
+        { { [ "$cmd" = tooling-recover ] && [ "$5" = --confirmed-quiescent ]; } ||
+          { [ "$cmd" = review-transition-recover ] && [ "$5" = --confirmed-operator-recovery ]; }; } || { usage; exit 2; }
       ;;
     review-tests)
       [ "$#" -ge 2 ] || { usage; exit 2; }
@@ -1721,6 +1737,9 @@ main() {
   fi
 
   case "$cmd" in
+    review-transition-recover)
+      review_transition_recover "$1" "$2" "$4"
+      ;;
     tooling-recover)
       mark_pr_operation_side_effects_started
       node "$script_parent_dir/pr-lib/materialize-dependencies.mjs" --recover "$1" "$2" "$4" \

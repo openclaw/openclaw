@@ -265,7 +265,13 @@ export async function settlePendingPackageActivation(
   installKey: string,
   onSettled?: (settlement: PackageActivationSettlement) => void,
   expectedCompleted?: PackageActivationRecord,
-  options?: { automatic?: boolean; dryRun?: boolean; operationId?: string },
+  options?: {
+    automatic?: boolean;
+    dryRun?: boolean;
+    operationId?: string;
+    /** Asserts an exclusive installation claim the caller already holds. */
+    owner?: () => void;
+  },
 ) {
   const anchor = resolvePackageActivationAnchor(installKey);
   if (!expectedCompleted && !fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
@@ -422,11 +428,22 @@ export async function settlePendingPackageActivation(
         ? resolveManagedUpdateLeaseDatabasePath()
         : originalAuthority.databasePath,
     ));
-  return withUpdateCommandExecutor(
-    randomUUID(),
-    async (executor) => {
-      const fence = await executor.enter(installKey);
-      const assertCurrent = retainMutationAuthority(fence.assertCurrent);
+  // Repair's installation claim replaces cancelled custody, which refuses any
+  // fresh executor admission; settlement then runs under that claim instead.
+  const withSettlementOwner = <T>(
+    settle: (assertOwner: () => void) => Promise<T>,
+    executorOptions: Parameters<typeof withUpdateCommandExecutor>[2],
+  ) =>
+    options?.owner
+      ? settle(options.owner)
+      : withUpdateCommandExecutor(
+          randomUUID(),
+          async (executor) => await settle((await executor.enter(installKey)).assertCurrent),
+          executorOptions,
+        );
+  return withSettlementOwner(
+    async (assertOwner) => {
+      const assertCurrent = retainMutationAuthority(assertOwner);
       assertManagedUpdateLeaseDatabaseIdentity(currentDatabase);
       admission?.admit(assertCurrent);
       journal.assertCurrent(initial);

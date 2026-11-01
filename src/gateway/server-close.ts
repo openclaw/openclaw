@@ -284,7 +284,6 @@ export async function prepareGatewayClose(
       prepareGatewayRunShutdown({
         ...params,
         warnings,
-        exitAfterClose,
       }),
     );
     // Start the join immediately, alongside the remaining shutdown hooks.

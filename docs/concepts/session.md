@@ -18,11 +18,22 @@ configured model metadata while other sessions remain available. Native metadata
 is refreshed when that row is next invalidated; an unchanged list read does not
 retry it.
 
+Conversation branch listing (`sessions.branches.list`) has a ten-second request
+deadline, including access checks and cold-transcript restoration. If it expires,
+the Gateway returns a retryable `UNAVAILABLE` error instead of an empty branch
+list. Retry after database preparation finishes. Required integrity checks and
+already-admitted storage cleanup keep their own lifetimes.
+
 To continue the same Gateway-owned session in the Control UI, terminal, or a
 coding harness, see [Session synchronization and attachment](/concepts/session-attachment).
 
 For turn ownership, queueing, stopping, and lifecycle mutation rules, see
 [Session controller](/concepts/session-controller).
+
+Retries with the same input key acknowledge an already committed input even after
+another turn has started. They do not append another user message or generate a
+second reply. Interrupted current turns can still resume; reusing a key for
+conflicting content or sender identity is refused.
 
 For the personal-agent default — one rolling conversation shared by all your
 DM channels, with group activity and background work flowing into it — see
@@ -57,6 +68,9 @@ commands, skills, replies, and background task notifications retain the
 agent selected by the route or explicit request.
 Session lists, model filters, previews, and sharing controls also retain the
 stored conversation's agent, rather than the aggregate view's default agent.
+In the Sessions page, enabling **Unknown** includes authorized unknown sessions
+owned by the selected agent. An agent-qualified key such as `agent:ops:unknown`
+is an ordinary session and remains visible when **Unknown** is off.
 Renaming, pinning, or editing session metadata retains the existing message
 preview without rereading the transcript. New messages, transcript replacements,
 completed transcript repairs, and cold-storage restoration refresh previews; changes to model selection
@@ -290,6 +304,9 @@ session, then aborts work promptly. A root is running when its agent loop, one o
 its descendant sub-agents, or one of its background processes is active. At startup,
 the Gateway clears the marker and sends one ordinary system input asking the agent
 to check current files, processes, sub-agents, and external actions before continuing.
+This includes channel threads and non-default agents; replies retain the session's
+recorded channel and thread. Marker persistence uses the process shutdown deadline.
+Shutdown and startup log per-agent marked/resumed counts and skip reasons.
 
 Running children stop quietly and do not resume independently. Their root requester
 receives the single resume input and can inspect results, send new instructions,

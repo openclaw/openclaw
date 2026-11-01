@@ -207,6 +207,11 @@ unreadable role or recovery records also prevent retirement. Take a verified bac
 when you need a long-term copy. Review and retire superseded captures with
 [`openclaw update cleanup`](#update-cleanup).
 
+If a fresh standalone capture fails before publishing its final manifest, Doctor
+removes that attempt's incomplete copy after owned work settles, while it retains
+live maintenance custody. Existing sealed copies and attempts with uncertain work,
+publication, or ownership remain protected.
+
 On Linux filesystems that reject native no-replace rename, fs-safe uses exclusive
 hard-link publication followed by source removal in native `auto` mode. Existing
 captures are never overwritten; native `require` mode still refuses unsupported
@@ -221,8 +226,9 @@ invalidate those chosen bytes or authorize restoring them over current data.
 The backup's existing database warnings remain available when a stable source
 generation could not be recorded. Unsafe source acquisition or file changes during
 copying can still leave a capture incomplete. Capture is best effort: when it fails,
-the update warns that it continues without the original-state capture, names the
-step and source paths that failed, and proceeds.
+the update reports **NO ORIGINAL-STATE SNAPSHOT** in its warning, retains the
+warning in JSON and the update run record, names the step and source paths that
+failed, and proceeds.
 If measured free space is insufficient, the warning explicitly says **this update
 has no original-state snapshot to restore from**, with needed and available bytes.
 The same warning is retained in JSON and the update run record. The update does
@@ -294,6 +300,26 @@ per database. It streams all retained rows and may take time on large captures.
 It creates no new backup or witness store and does not authorize migration,
 rollback, startup, or activation. Updates retain their existing safety gates;
 automatic migration acceptance is a separate integration.
+
+### Interrupted state restore
+
+Update commands, including `update repair`, refuse with
+`Interrupted shared-database publication left <path>` when a
+`.openclaw-restore-<id>-<n>` directory sits beside the shared state database. A
+state restore moved the original database into that directory and stopped before
+publishing its replacement, so the directory may hold the only copy of your
+original state. OpenClaw does not resume or finish this restore automatically,
+and every update command stays read-only so nothing replaces or retires that copy.
+
+Do not delete, rename, or move the directory. To continue:
+
+1. Stop the Gateway through its service owner and copy the whole state directory,
+   including the `.openclaw-restore-*` directory, to a safe location.
+2. If you have a verified backup, restore it into a fresh directory with
+   `openclaw backup restore <archive.tar.gz> --target <fresh-directory>` and
+   activate it as described in [Restore a full archive](/install/backups#restore-a-full-archive).
+3. Without a verified backup, keep the copy and [get support](/help/support).
+   Include the refusal text and a listing of the directory, not database contents.
 
 ### Retained updater runtime
 
@@ -384,6 +410,14 @@ the Gateway for the same profile/state directory before retrying.
 Repair exits nonzero with the original recovery command when an older package
 journal remains pending and the current CLI cannot settle it. It does not report
 successful repair or continue post-update maintenance while that record remains.
+
+After an interrupted npm-to-Git update, the package directory can be a link to
+the new checkout while plugin recovery still names the original package path.
+Run `openclaw update repair` with a CLI containing this fix and the same state
+and configuration paths. Repair claims both the original package path and the
+checkout before settling that recovery. A changed link or occupied path keeps
+recovery intact; this path does not reclaim cancelled update custody through
+the link.
 
 For private retained package trees, recovery ignores widened group/other permission
 bits while verifying the package, then restores owner-only access and reports one
@@ -555,6 +589,8 @@ retained paths, or a candidate root still block regardless of start time.
 Repair then replaces the custody with
 its own claim in one transaction, records the settled keys in the
 `finalize:handoff-settlement` step, and releases its claim after finalization.
+Package publication recovery left by the cancelled updater settles under that
+claim, so it does not need fresh update admission.
 A failed or deferred repair keeps the original custody record in its claim and
 reports it as retained custody. A later repair resumes that claim once the
 interrupted repair process has exited; the grace still counts from the cancelled
@@ -1164,9 +1200,12 @@ captures through their sealed manifests; it never reads the captured payload:
   update, when a later update succeeded.
 - `candidate` / `unsealed-update-capture`: a capture that never sealed (the
   update reported `Original update capture failed`) from a finished update, when a
-  later update succeeded. Nothing can restore from an unsealed capture.
+  later update succeeded with recorded Gateway readiness verification. The
+  incomplete copy may still contain useful pre-failure bytes until then.
 - `protected` / `awaiting-later-completed-update`: the capture of the latest
   successful update, or of any update that finished after it.
+- `protected` / `awaiting-later-verified-update`: an unsealed capture without
+  a later successful update's recorded Gateway readiness verification.
 - `protected` / `unfinished-update-run` or `pending-update-recovery`: the update is
   still running, or its recorded rollback has not settled.
 - `candidate` / `never-activated-update-capture`: a capture from a failed update
@@ -1181,6 +1220,13 @@ captures through their sealed manifests; it never reads the captured payload:
   is always retained.
 - `protected` / `retained-doctor-capture`: a standalone Doctor copy kept by that
   retention rule. Active recovery references remain `pending-update-recovery`.
+- `protected` / `superseded-unsealed-capture`: a marked historical incomplete
+  capture with no matching update run, including an unsealed standalone Doctor
+  attempt, superseded by a later successful update with recorded Gateway readiness
+  verification. The successor must have started after the capture was written,
+  and no update recovery may remain pending. Select its exact path with
+  `--include-unmanifested <path>` to preview or retire it. Missing run history
+  alone never establishes that the original is safe to retire.
 - `protected` / `orphan-update-capture`: a sealed update capture with no matching
   update run, outside the Doctor namespace. Its creation time appears in the
   detail. Only an explicit `--include-unmanifested <path>` can select it.
@@ -1191,8 +1237,15 @@ captures through their sealed manifests; it never reads the captured payload:
 
 Older `doctor-*` directories classified as `candidate` are also safe to delete by
 hand while OpenClaw is stopped. Keep the newest retained copies and never manually
-delete incomplete, unreadable, or active-recovery-referenced captures. Prefer cleanup
+delete protected incomplete, unreadable, or active-recovery-referenced captures. Prefer cleanup
 so the same protection checks run again under exclusive ownership.
+
+`openclaw update status` consumes this same capture inventory and directs retained
+sets to `openclaw update cleanup --dry-run`, including an exact per-path command
+when explicit orphan selection is required. Preview first; remove `--dry-run`
+to retire eligible sets after confirmation (or use `--yes`). Protected entries
+explain why they remain retained. The candidate CLI must contain this fix;
+upgrading does not change the older installed updater's cleanup behavior.
 
 Retiring a capture deletes its whole directory, including any `candidate` and
 `prepared` recovery generations inside it, under the same exclusive ownership as

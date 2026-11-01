@@ -1,16 +1,22 @@
 import { spawnSync } from "node:child_process";
-import { symlinkSync, writeFileSync } from "node:fs";
+import fs, { symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   findForbiddenChangelogThanks,
   isForbiddenChangelogThanksHandle,
+  main,
   requiresExplicitHumanChangelogThanks,
 } from "../../scripts/check-changelog-attributions.mts";
+import * as directoryWalk from "../../src/infra/directory-walk.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { fixtureGit } from "./release-publish.test-support.js";
 
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  vi.restoreAllMocks();
+  process.exitCode = 0;
+});
 function createRepoWithPrChangelogDiff(entry: string): string {
   const repo = tempRoots.make("openclaw-changelog-credit-");
   const git = fixtureGit(repo, "Test User", "test@example.com");
@@ -30,6 +36,40 @@ function createRepoWithPrChangelogDiff(entry: string): string {
 }
 
 describe("check-changelog-attributions", () => {
+  it.each([false, true])("checks Windows changelog paths (frozen=%s)", async (frozen) => {
+    const repo = tempRoots.make("openclaw-windows-changelog-");
+    const artifact = frozen ? "records/2026.9.4.md" : "2026.9.4.md";
+    fs.mkdirSync(path.dirname(path.join(repo, "CHANGELOG", artifact)), { recursive: true });
+    writeFileSync(path.join(repo, "CHANGELOG.md"), "# Changelog\n");
+    writeFileSync(
+      path.join(repo, "CHANGELOG", artifact),
+      "<!-- openclaw-docs-mirror-v1 -->\n- Fix. Thanks @steipete.\n",
+    );
+    const walk = directoryWalk.listDirectoryTreeStrictSync;
+    vi.spyOn(directoryWalk, "listDirectoryTreeStrictSync").mockImplementation((root) =>
+      walk(root).map((entry) => ({
+        dirent: entry.dirent,
+        relativePath: path.win32.normalize(entry.relativePath),
+      })),
+    );
+    const relative = path.relative;
+    vi.spyOn(path, "relative").mockImplementation((from, to) =>
+      path.win32.normalize(relative(from, to)),
+    );
+    vi.spyOn(process, "cwd").mockReturnValue(repo);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const platform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      await main();
+      expect(process.exitCode ?? 0).toBe(frozen ? 1 : 0);
+      if (frozen) {
+        expect(errors).toHaveBeenCalledWith(`- CHANGELOG/${artifact}:2 uses Thanks @steipete`);
+      }
+    } finally {
+      Object.defineProperty(process, "platform", { value: platform });
+    }
+  });
   it.each([false, true])("rejects forbidden CLI credit through a symlink: %s", (symlink) => {
     const repo = createRepoWithPrChangelogDiff("- Fix. Thanks @codex.");
     const scripts = path.resolve("scripts");
@@ -77,10 +117,10 @@ describe("check-changelog-attributions", () => {
     expect(findForbiddenChangelogThanks(text)).toStrictEqual([]);
   });
 
-  it("preserves strict bot-handle classification", () => {
+  it("preserves bot-handle classification", () => {
     expect(
       ["dependabot[bot]", "human-clawsweeper-fan"].map((handle) =>
-        isForbiddenChangelogThanksHandle(handle, { strictBotHandle: true }),
+        isForbiddenChangelogThanksHandle(handle),
       ),
     ).toEqual([true, false]);
   });

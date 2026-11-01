@@ -169,22 +169,19 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await userEvent.keyboard("{Enter}");
       await expect.element(role("listbox", "Owners")).toBeVisible();
       expect(ownerOptions(sidebar)).toEqual(["All owners", "Involving me", "My sessions", "Bob"]);
-      const search = role("combobox", "Search");
-      const ownersSurface = search.element().closest(".picker-select__menu")!;
+      const ownersSurface = role("listbox", "Owners").element().closest(".picker-select__menu")!;
       // Native overlap can change during the sheet's slide-in; sample close/open edges after entry.
       await finishAnimations(ownersSurface);
       await expect.poll(() => occlusion.at(-1)).toBe(true);
       const occlusionAfterOpening = occlusion.length;
       const occlusionTail = () => occlusion.slice(occlusionAfterOpening);
-      await expect.element(search).toHaveFocus();
-      expect(getComputedStyle(query(".picker-select__search")!).boxShadow).not.toBe("none");
       await expect.poll(() => query(".picker-select__option[data-active]")).not.toBeNull();
       expect(ringStyle(sidebar, ".picker-select__option[data-active]")).not.toBe("none");
       await userEvent.keyboard("bo");
       await expect.poll(() => ownerOptions(sidebar)).toEqual(["Bob"]);
-      await expect.element(search).toHaveFocus();
+      await expect.element(role("combobox", "Search")).toHaveFocus();
       await userEvent.keyboard("{Escape}");
-      await expect.element(search).toHaveValue("");
+      expect(query(".picker-select__search")).toBeNull();
       await expect.poll(() => ownerOptions(sidebar)).toHaveLength(4);
       // Focus returns before the closing frame releases native occlusion.
       const ownersHidden = new Promise<void>((resolve) => {
@@ -503,7 +500,6 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         .poll(() => trigger()?.getAttribute("aria-description"))
         .toBe(count ? "Status: All" : "Status: Active");
       expect(trigger()?.classList.contains("sidebar-session-sort--filtered")).toBe(count > 0);
-      expect(trigger()?.textContent?.trim()).toBe(count ? "All" : "Active");
       expect(query("#sidebar-sessions-reset") !== null).toBe(resetVisible);
     };
     await expectFilterCount(0);

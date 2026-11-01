@@ -1,4 +1,4 @@
-import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { isTransientNetworkError, retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   isRecord,
   normalizeOptionalString as normalizeString,
@@ -102,27 +102,15 @@ export function formatFeishuApiError(
   });
 }
 
-const FEISHU_SEND_MAX_RETRIES = 2;
-const FEISHU_SEND_RETRY_BASE_MS = 500;
 const FEISHU_SEND_RATE_LIMIT_CODES = new Set([230020, 11232]);
 
-function getFeishuSendRateLimitCode(error: unknown): number | undefined {
-  if (!isRecord(error)) {
-    return undefined;
-  }
-  const response = isRecord(error.response) ? error.response : undefined;
-  if (response?.status === 429) {
-    return 429;
-  }
-  return getFeishuSendRateLimitCodeFromResponse(response?.data);
-}
-
-function getFeishuSendRateLimitCodeFromResponse(response: unknown): number | undefined {
-  if (!isRecord(response)) {
-    return undefined;
-  }
-  const code = response.code;
-  return typeof code === "number" && FEISHU_SEND_RATE_LIMIT_CODES.has(code) ? code : undefined;
+function isRetryableFeishuResponse(response: unknown, retryTransient = false): boolean {
+  return (
+    isRecord(response) &&
+    typeof response.code === "number" &&
+    (FEISHU_SEND_RATE_LIMIT_CODES.has(response.code) ||
+      (retryTransient && response.code === 230049))
+  );
 }
 
 export async function requestFeishuApi<T>(
@@ -130,6 +118,8 @@ export async function requestFeishuApi<T>(
   errorPrefix: string,
   options: {
     includeNestedErrorLogId?: boolean;
+    /** Only message requests carrying a stable UUID may replay ambiguous failures. */
+    retryTransient?: boolean;
   } = {},
 ): Promise<T> {
   const assertSendAuthority = captureFeishuSendAuthority();
@@ -138,26 +128,34 @@ export async function requestFeishuApi<T>(
       async () => {
         assertSendAuthority?.();
         const result = await request();
-        // Feishu SDK may fulfill with a rate-limit body (e.g. { code: 11232, ... })
-        // instead of throwing. Rethrow it in the AxiosError response shape so
-        // getFeishuSendRateLimitCode classifies it retryable and exhaustion
-        // wraps it exactly like an SDK throw.
-        const fulfilledRateLimit = getFeishuSendRateLimitCodeFromResponse(result);
-        if (fulfilledRateLimit !== undefined) {
-          throw Object.assign(
-            new Error(`Request fulfilled with rate-limit code ${fulfilledRateLimit}`),
-            { response: { status: 200, data: result } },
-          );
+        // The SDK fulfills business errors; normalize retryable bodies to its rejection shape.
+        if (isRetryableFeishuResponse(result, options.retryTransient)) {
+          throw Object.assign(new Error("Request fulfilled with a retryable Feishu error"), {
+            response: { status: 200, data: result },
+          });
         }
         return result;
       },
       {
-        attempts: FEISHU_SEND_MAX_RETRIES + 1,
-        // With a 2-retry budget the core exponential schedule (1x, 2x base)
-        // matches the previous linear attempt*base backoff exactly; revisit
-        // the delay curve if FEISHU_SEND_MAX_RETRIES grows.
-        minDelayMs: FEISHU_SEND_RETRY_BASE_MS,
-        shouldRetry: (error) => getFeishuSendRateLimitCode(error) !== undefined,
+        // Preserve the existing two retries at 500ms and 1000ms.
+        attempts: 3,
+        minDelayMs: 500,
+        shouldRetry: (error) => {
+          if (!isRecord(error) || error.retryable === false) {
+            return false;
+          }
+          const response = isRecord(error.response) ? error.response : undefined;
+          const status = response?.status;
+          return (
+            status === 429 ||
+            isRetryableFeishuResponse(response?.data, options.retryTransient) ||
+            (options.retryTransient === true &&
+              (isTransientNetworkError(error) ||
+                error.code === "ERR_NETWORK" ||
+                (typeof status === "number" &&
+                  (status === 408 || status === 425 || (status >= 500 && status <= 599)))))
+          );
+        },
       },
     );
   } catch (error) {

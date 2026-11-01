@@ -34,6 +34,11 @@ Doctor names the session and asks the operator to inspect its retained identitie
 and delivery outcome against the transcript before repairing custody. Legacy scalar
 delivery fields can still be normalized without discarding the pending final, so
 ordinary admission no longer depends on the retired tombstone gate.
+For unmatched custody with no live execution owner, `openclaw doctor --fix` backs
+up and retires the legacy recovery fields when the session is terminal or archived,
+preserving its status, archive, current writer identities, and delivery notice
+without resuming it or replaying a pending final; startup reports an aggregate
+count per agent instead of repeating warnings for each such session.
 
 ## What survives a restart
 
@@ -84,15 +89,21 @@ startup's temporary database access or wait for model executions to finish.
 ## Graceful shutdown
 
 Once a stop or restart is committed, the Gateway fences new admission, snapshots
-running sessions, writes their markers, and aborts active runs. It waits only a
-short bounded time for in-flight persistence and gives other resource cleanup a
-bounded grace. A long model stream, tool call, or background process does not get
+running sessions, writes their markers, and aborts active runs. It joins accepted
+persistence before retiring state and gives other resource cleanup a bounded
+grace. A long model stream, tool call, or background process does not get
 a full run-completion drain before shutdown.
 
-After marker persistence and cancellation, process-owned shutdown gives session
-resources five seconds to settle. Leftovers retain their shared databases until
-process exit instead of extending the session-admission wait. Embedded hosts
-still join those resources before reusing the runtime.
+Optional session preview backfill stops scheduling when restart drain begins.
+Queued rows are dropped; an already-admitted database operation settles through
+the existing database drain before retirement. The next Gateway rebuilds any
+missing previews.
+
+After marker persistence and cancellation, process-owned shutdown logs a warning
+when required connection cleanup exceeds five seconds, then keeps joining its
+accepted finalizers before releasing the Gateway lock and state admission. The
+existing process shutdown deadline still bounds this join. Embedded hosts also
+join those resources before reusing the runtime.
 
 A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.
@@ -108,9 +119,16 @@ cleanup deadline, lifetime sidecar, or retained plugin runtime, and returns with
 status `0` unless required persistence failed. A runtime that still owns resources
 is never reused for an in-process restart. Node exits naturally after owned handles
 close; the native shutdown watchdog kills the process if leaked handles keep it
-alive past the deadline. Worker startup consumes that same monotonic deadline
-instead of starting a new delay. That signal exit is accepted, and the supervisor
-starts a fresh Gateway.
+alive two seconds past the shutdown deadline. Its worker and main-thread fallback
+share one monotonic deadline, including worker startup time, and report retained
+cleanup owners before forcing exit. A duplicate `SIGTERM` during shutdown is
+logged once and ignored. That signal exit is accepted, and the supervisor starts
+a fresh Gateway.
+
+A previously recorded supervisor cleanup failure is reported as retained resources
+with its original owner details; it does not fail a later external stop. The Gateway
+still joins the supervisor before retiring database admission, read-only workers,
+and the spawn broker, even when that join rejects.
 
 Reversible suspension and host freeze preparation keep their own semantics. A
 suspension does not mark sessions or abort them. Preparation with `drain: true`

@@ -145,6 +145,15 @@ async function startGatewayServerWithRuntime(
   opts: GatewayServerOptions,
 ): ReturnType<typeof import("./server-start.js").startGatewayServerCore> {
   const startupStartedAt = opts.startupStartedAt ?? Date.now();
+  if (process.platform === "linux") {
+    const [{ initializeGatewayExecCgroup }, { resolveStateDir }, { createSubsystemLogger }] =
+      await Promise.all([
+        import("../process/linux-exec-cgroup-startup.js"),
+        import("../config/paths.js"),
+        import("../logging/subsystem.js"),
+      ]);
+    createSubsystemLogger("gateway").info(await initializeGatewayExecCgroup(resolveStateDir()));
+  }
   let stopDatabaseAdmission: (() => Promise<void>) | undefined;
   const start = async () => {
     const { createSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");
@@ -208,17 +217,42 @@ async function startGatewayServerWithRuntime(
     return await start();
   }
   const closeBroker = async () => {
-    // A failed required core join can stop before the admission sidecar runs.
-    await measureGatewayCloseStep("shutdown.database-admission", () => stopDatabaseAdmission?.());
-    try {
-      const { closeSqliteReadOnlyWorkersForBroker } =
-        await import("../infra/sqlite-readonly-worker.js");
-      await measureGatewayCloseStep("shutdown.broker-read-only-workers", () =>
-        closeSqliteReadOnlyWorkersForBroker(broker),
-      );
-    } finally {
+    // Core can retain connection work before reaching its process join. Keep the
+    // broker alive until command results, output, and service-child cleanup settle.
+    const errors: unknown[] = [];
+    const steps = [
+      [
+        "process-supervisor",
+        async () => {
+          const { shutdownProcessSupervisor } = await import("../process/supervisor/index.js");
+          await shutdownProcessSupervisor();
+        },
+      ],
+      // A failed required core join can stop before the admission sidecar runs.
+      ["database-admission", () => stopDatabaseAdmission?.()],
+      [
+        "broker-read-only-workers",
+        async () => {
+          const { closeSqliteReadOnlyWorkersForBroker } =
+            await import("../infra/sqlite-readonly-worker.js");
+          await closeSqliteReadOnlyWorkersForBroker(broker);
+        },
+      ],
       // Readers that did not close remain attached children for broker termination.
-      await measureGatewayCloseStep("shutdown.spawn-broker", () => broker.close());
+      ["spawn-broker", () => broker.close()],
+    ] as const;
+    for (const [name, close] of steps) {
+      try {
+        await measureGatewayCloseStep(`shutdown.${name}`, close);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, errors.map(formatErrorMessage).join("; "));
     }
   };
   try {

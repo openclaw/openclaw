@@ -189,7 +189,7 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
     filePath: path.join(realRootDir, "package.json"),
     content: `${JSON.stringify(nextPackageManifest, null, 2)}\n`,
     preserveExistingMode: true,
-    dirMode: (await fs.promises.stat(realRootDir)).mode & 0o7777,
+    dirMode: "preserve",
     syncTempFile: true,
     syncParentDir: true,
   });

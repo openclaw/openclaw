@@ -406,6 +406,12 @@ install the **OpenSSH Client** optional feature; Windows places it under
 
 Config defaults (optional): `gateway.remote.sshTarget`, `gateway.remote.sshIdentity`.
 
+When the selected SSH target and remote port match a configured `wss://` SSH
+route, the probe retains that endpoint's TLS identity and path through the tunnel.
+The saved certificate fingerprint is enforced; without a pin, normal certificate
+verification applies. A different SSH target or remote port, or configured
+`direct` transport does not inherit that endpoint's TLS settings.
+
 ### `gateway call <method>`
 
 Low-level RPC helper.
@@ -514,7 +520,9 @@ openclaw gateway suspend --port 18999 --json
 ```
 
 The ready output includes the suspension ID, lease expiry, and the matching
-resume command. Common RPC options such as `--url`, `--token`, `--password`,
+resume guidance. For an explicit `--url`, reuse that URL and the authentication
+options from the suspend command; the guidance does not echo their values.
+Common RPC options such as `--url`, `--token`, `--password`,
 `--timeout`, `--json`, and `--port` are supported.
 
 Suspension blocker messages name active root requests and include run IDs and

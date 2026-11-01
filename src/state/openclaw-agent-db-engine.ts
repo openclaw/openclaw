@@ -17,13 +17,19 @@ import {
 } from "../infra/sql-connection.js";
 import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { VERSION } from "../version.js";
 import {
   agentColdArchiveChunksPostgresMigration,
   withoutAgentPostgresColdArchiveChunks,
 } from "./openclaw-agent-cold-archive-chunks-schema.js";
 import {
+  agentColdNavigationPostgresMigration,
+  withoutAgentPostgresColdNavigation,
+} from "./openclaw-agent-cold-navigation-schema.js";
+import {
   AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION,
+  AGENT_COLD_NAVIGATION_SCHEMA_VERSION,
   AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
   AGENT_MEMORY_REVISION_SCHEMA_VERSION,
   AGENT_VECTOR_DECODER_SCHEMA_VERSION,
@@ -99,7 +105,8 @@ export function admitAgentEngineSearchExtensions(
 }
 
 const agentPostgresSql = `${agentPostgresRuntime.sql}\n${agentSearchPostgresRuntime.sql}`;
-const agentPostgresV36Sql = withoutAgentPostgresColdArchiveChunks(agentPostgresSql);
+const agentPostgresV38Sql = withoutAgentPostgresColdNavigation(agentPostgresSql);
+const agentPostgresV36Sql = withoutAgentPostgresColdArchiveChunks(agentPostgresV38Sql);
 const agentPostgresV35Sql = withLegacyAgentPostgresMemoryPaths(agentPostgresV36Sql);
 const agentPostgresV34Sql = withLegacyPostgresIndexOrdering(
   agentPostgresV35Sql,
@@ -257,11 +264,11 @@ export const agentEngineSchema: StoreSchema = {
         postgresVectorSearchVersion: 2,
       },
       schema: {
-        postgres: agentPostgresSql,
+        postgres: agentPostgresV38Sql,
         postgresVectorDecoderVersion: 2,
         postgresVectorSearchVersion: 2,
       },
-      sql: `${agentColdArchiveChunksPostgresMigration(agentPostgresSql)}
+      sql: `${agentColdArchiveChunksPostgresMigration(agentPostgresV38Sql)}
         UPDATE schema_meta
         SET schema_version = ${AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION},
           app_version = '${VERSION.replaceAll("'", "''")}',
@@ -271,12 +278,12 @@ export const agentEngineSchema: StoreSchema = {
     {
       version: AGENT_TEXT_SEARCH_SCHEMA_VERSION,
       fromSchema: {
-        postgres: agentPostgresSql,
+        postgres: agentPostgresV38Sql,
         postgresVectorDecoderVersion: 2,
         postgresVectorSearchVersion: 2,
       },
       schema: {
-        postgres: agentPostgresSql,
+        postgres: agentPostgresV38Sql,
         postgresVectorDecoderVersion: 2,
         postgresVectorSearchVersion: 2,
         postgresTextSearchVersion: 2,
@@ -284,6 +291,27 @@ export const agentEngineSchema: StoreSchema = {
       sql: `${AGENT_TEXT_SEARCH_POSTGRES_SQL}
         UPDATE schema_meta
         SET schema_version = ${AGENT_TEXT_SEARCH_SCHEMA_VERSION},
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';`,
+    },
+    {
+      version: AGENT_COLD_NAVIGATION_SCHEMA_VERSION,
+      fromSchema: {
+        postgres: agentPostgresV38Sql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+        postgresTextSearchVersion: 2,
+      },
+      schema: {
+        postgres: agentPostgresSql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+        postgresTextSearchVersion: 2,
+      },
+      sql: `${agentColdNavigationPostgresMigration(agentPostgresSql)}
+        UPDATE schema_meta
+        SET schema_version = ${AGENT_COLD_NAVIGATION_SCHEMA_VERSION},
           app_version = '${VERSION.replaceAll("'", "''")}',
           updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
         WHERE meta_key = 'primary';`,
@@ -349,25 +377,34 @@ export function openAgentEngineStore(
   if (agentId === undefined && !existingOnly) {
     throw new Error("Creating an agent database requires an agent owner");
   }
-  return openEngineStore({
-    anchor,
-    schema: agentEngineSchema,
-    input: agentEngineInput(),
-    existingOnly,
-    reusePostgresConnection,
-    closeOnFailure,
-    assertMigrationCurrent: assertAgentDatabaseMaintenanceAuthority,
-    prepareAnchor: () => {},
-    openSqlite: () => {},
-    inspectSqlite: () => {
-      const facts = getAdmittedSqliteSchemaFacts(anchor) ?? captureSqliteSchemaFacts(anchor);
-      return {
-        hasEngineAnchor: facts.tables.has("openclaw_engine_anchor"),
-        hasExistingData: [...facts.tables, ...facts.views, ...facts.triggers.keys()].some(
-          (name) => name !== "openclaw_engine_anchor" && !name.startsWith("sqlite_"),
-        ),
-      };
-    },
-    admitPostgres: (db, fresh) => admitAgentPostgres(db, agentId, pathname, fresh),
-  });
+  const input = agentEngineInput();
+  const inspectSqlite = () => {
+    const facts = getAdmittedSqliteSchemaFacts(anchor) ?? captureSqliteSchemaFacts(anchor);
+    return {
+      hasEngineAnchor: facts.tables.has("openclaw_engine_anchor"),
+      hasExistingData: [...facts.tables, ...facts.views, ...facts.triggers.keys()].some(
+        (name) => name !== "openclaw_engine_anchor" && !name.startsWith("sqlite_"),
+      ),
+    };
+  };
+  const retainedPostgres = Boolean(input && inspectSqlite().hasEngineAnchor);
+  const open = () =>
+    openEngineStore({
+      anchor,
+      schema: agentEngineSchema,
+      input,
+      existingOnly: existingOnly || retainedPostgres,
+      reusePostgresConnection,
+      closeOnFailure,
+      assertMigrationCurrent: assertAgentDatabaseMaintenanceAuthority,
+      prepareAnchor: () => {},
+      openSqlite: () => {},
+      inspectSqlite,
+      admitPostgres: (db, fresh) => admitAgentPostgres(db, agentId, pathname, fresh),
+    });
+  // Publish the anchor only after PostgreSQL commits its schema and agent identity.
+  // A crash between commits can leave an unused initialized namespace, never an incomplete anchor.
+  return input && !existingOnly && !retainedPostgres
+    ? runSqliteImmediateTransactionSync(anchor, open)
+    : open();
 }

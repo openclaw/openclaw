@@ -500,8 +500,11 @@ invalidate the host's exact session projection before the mutation returns;
 cleanup failures do not turn a completed write into a retryable failure.
 Existing-session write preflight, source-handle acquisition,
 schema/bootstrap/migration, and board-presence projection retain their existing
-owners. Reads capture
-their physical store before waiting and join the same per-agent FIFO as writes.
+owners. Reads capture their physical store before waiting. For an admitted database,
+`board.get` serves a committed metadata snapshot without joining the per-agent write queue. A concurrent
+write may supersede that snapshot; document delivery and capability use still
+check the current widget revision and grants through ordered reads.
+Authority-consumer reads join the same per-agent FIFO as writes.
 The read worker retains its admitted read-only connection and reads one coherent
 snapshot without creating missing board tables or opening a writer publication.
 The host checks the captured physical identity, native mutation witness, and
