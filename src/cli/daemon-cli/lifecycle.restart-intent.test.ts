@@ -104,7 +104,12 @@ function publishServingOwner(
     now + 60_000,
     now,
     JSON.stringify({
-      owner: { pid, host, startedAt: 1 },
+      owner: {
+        pid,
+        host,
+        startedAt: 1,
+        processNamespace: { ...readGatewayLockProcessNamespace(), host },
+      },
       port: 18789,
       mode,
       supervisor,
