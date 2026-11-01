@@ -17,6 +17,10 @@ import {
 } from "./github-publication-availability.js";
 import { integrateManagedWorkspaceSource } from "./github-publication-base-refresh.js";
 import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
+import {
+  createGitHubPublicationCommandRunner,
+  readGitHubPublicationBaseSha,
+} from "./github-publication-git-transport.js";
 import { inspectOwnGitHubPullRequest } from "./github-publication-inspect.js";
 import { assertExistingPullRequestWriteAccess } from "./github-publication-pr-preflight.js";
 import {
@@ -428,6 +432,17 @@ export async function performSessionGitHubPreparation(
       assertReserved();
     };
     assertReserved();
+    if (refreshingBase && !pendingBase) {
+      // PR details can retain an older base SHA after the target branch advances.
+      const { run } = createGitHubPublicationCommandRunner(assertReserved);
+      binding.base.commit = await readGitHubPublicationBaseSha(
+        run,
+        binding.base.repository,
+        binding.base.branch,
+        binding.host,
+        identity.env,
+      );
+    }
     const integration = await integrateManagedWorkspaceSource({
       owner,
       identity,
