@@ -1544,8 +1544,14 @@ describe("capability cli", () => {
       "   ",
       "--duration must be a positive duration (1–9007199254740991s after rounding",
     ],
+    [
+      "infer",
+      ["web", "fetch", "--url", "https://example.com", "--max-chars"],
+      "99",
+      "--max-chars must be at least 100",
+    ],
   ] as const)(
-    "rejects blank numeric input before %s %j dispatch",
+    "rejects invalid numeric input before %s %j dispatch",
     async (command, argv, raw, message) => {
       const webSearchRuntime = await import("../web-search/runtime.js");
       vi.mocked(webSearchRuntime.runWebSearch).mockClear();
@@ -2024,9 +2030,9 @@ describe("capability cli", () => {
   });
 
   it.each([
-    { format: undefined, provider: undefined },
-    { format: "text", provider: "firecrawl" },
-  ])("fetches through the default tool with $format output", async ({ format, provider }) => {
+    { format: undefined, provider: undefined, maxChars: undefined },
+    { format: "text", provider: "firecrawl", maxChars: 512 },
+  ])("fetches default $format with budget $maxChars", async ({ format, provider, maxChars }) => {
     const config = { tools: { web: { fetch: { maxChars: 1200 } } } };
     const resolvedConfig = { ...config, resolved: true };
     mocks.loadConfig.mockReturnValue(config);
@@ -2044,20 +2050,19 @@ describe("capability cli", () => {
     const { createWebFetchTool } = await import("../agents/tools/web-fetch.js");
     vi.mocked(createWebFetchTool).mockReturnValueOnce({ execute } as never);
 
-    await runCap(
-      "infer",
-      "web",
-      "fetch",
-      "--url",
-      "https://example.com",
-      ...(format ? ["--format", format] : []),
-      "--json",
-    );
+    const args = cliOptions({
+      url: "https://example.com",
+      format,
+      "max-chars": maxChars,
+      json: true,
+    });
+    await runCap("infer", "web", "fetch", ...args);
 
     expect(createWebFetchTool).toHaveBeenCalledWith({ config: resolvedConfig });
     expect(execute).toHaveBeenCalledExactlyOnceWith("infer-web-fetch", {
       url: "https://example.com",
       extractMode: format,
+      ...(maxChars === undefined ? {} : { maxChars }),
     });
     expect(firstJsonOutput()).toEqual({
       ok: true,
@@ -2074,17 +2079,8 @@ describe("capability cli", () => {
     async (provider) => {
       mocks.loadConfig.mockReturnValue({ tools: { web: { fetch: { enabled: false } } } });
 
-      await expect(
-        runCap(
-          "infer",
-          "web",
-          "fetch",
-          "--url",
-          "https://example.com",
-          ...(provider ? ["--provider", provider] : []),
-          "--json",
-        ),
-      ).rejects.toThrow("exit 1");
+      const args = cliOptions({ url: "https://example.com", provider, json: true });
+      await expect(runCap("infer", "web", "fetch", ...args)).rejects.toThrow("exit 1");
 
       expect(runtimeErrorMessages().join("\n")).toContain("tools.web.fetch.enabled");
       expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
@@ -2100,7 +2096,7 @@ describe("capability cli", () => {
     {
       action: "fetch",
       config: { tools: { web: { fetch: { enabled: true } } } },
-      args: ["--url", "https://example.com", "--format", "text"],
+      args: ["--url", "https://example.com", "--format", "text", "--max-chars", "100"],
     },
   ])(
     "resolves selected web $action provider SecretRefs before execution",
@@ -2153,6 +2149,7 @@ describe("capability cli", () => {
         expect(execute).toHaveBeenCalledExactlyOnceWith({
           url: "https://example.com",
           extractMode: "text",
+          maxChars: 100,
         });
       }
     },

@@ -279,10 +279,16 @@ Search and fetch.
 openclaw infer web search --query "OpenClaw docs" --json
 openclaw infer web search --query "OpenClaw infer web providers" --json
 openclaw infer web fetch --url https://docs.openclaw.ai/cli/infer --json
+openclaw infer web fetch --url https://docs.openclaw.ai/cli/infer --max-chars 1000 --json
 openclaw infer web providers --agent <id> --json
 ```
 
 `web providers` lists available, configured, and selected providers for search and fetch.
+
+`web fetch --max-chars <n>` requests a per-call character budget of at least 100.
+The default fetch path retains `tools.web.fetch.maxCharsCap`. With `--provider`,
+truncation follows the selected provider's semantics and may exclude framing or
+metadata from the budget. Omit the flag to keep the normal defaults.
 
 ## Embedding
 

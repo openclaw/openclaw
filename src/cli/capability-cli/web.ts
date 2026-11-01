@@ -98,12 +98,22 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .requiredOption("--url <url>", "URL")
     .option("--provider <id>", "Provider id")
     .option("--format <format>", "Format hint")
+    .option("--max-chars <n>", "Character budget (minimum: 100)")
     .option("--json", "Output JSON", false)
     .action((opts) =>
       runWebCommand("web.fetch", opts.json, async () => {
         const url = String(opts.url);
         const provider = opts.provider as string | undefined;
         const format = opts.format as string | undefined;
+        const maxChars = parseOptionalPositiveInteger(opts.maxChars, "--max-chars");
+        if (maxChars !== undefined && maxChars < 100) {
+          throw new Error("--max-chars must be at least 100");
+        }
+        const fetchArgs = {
+          url,
+          extractMode: format,
+          ...(maxChars === undefined ? {} : { maxChars }),
+        };
         const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
         const { getCapabilityWebFetchCommandSecretTargets } =
           await import("../command-secret-targets.js");
@@ -125,10 +135,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
           if (!tool) {
             throw new Error(disabledMessage);
           }
-          const { details: result } = await tool.execute("infer-web-fetch", {
-            url,
-            extractMode: format,
-          });
+          const { details: result } = await tool.execute("infer-web-fetch", fetchArgs);
           if (!isRecord(result)) {
             throw new Error("web.fetch returned no structured result.");
           }
@@ -153,10 +160,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
               : `web.fetch provider "${provider}" is not available; check it with \`openclaw infer web providers\`.`,
           );
         }
-        const result = await resolved.definition.execute({
-          url,
-          extractMode: format,
-        });
+        const result = await resolved.definition.execute(fetchArgs);
         return { provider: resolved.provider.id, result };
       }),
     );
