@@ -351,6 +351,14 @@ export class StorageIngestion extends StorageLifecycle {
         }
       }
     }
+    const spaces = path.join(this.config.root, "spaces");
+    if (existsSync(spaces)) {
+      for (const entry of readdirSync(spaces, { withFileTypes: true })) {
+        if (entry.isDirectory() && /^[a-f0-9]{64}$/.test(entry.name)) {
+          found.push({ visibility: "space", spaceId: entry.name });
+        }
+      }
+    }
     return found;
   }
   /**

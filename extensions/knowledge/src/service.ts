@@ -23,10 +23,12 @@ import { buildKnowledgeMemoryFlushPlan } from "./memory-flush.js";
 import { registerMemoryIndexHook } from "./memory-index-hook.js";
 import { buildKnowledgeMemoryPrompt } from "./memory-prompt.js";
 import { createKnowledgeMemoryRuntime } from "./memory-provider.js";
+import { createPersonGrantOperations } from "./person-grants.js";
 import { locatePluginFiles } from "./plugin-files.js";
 import { queryFreshness } from "./query-freshness.js";
 import { searchDetail } from "./search-detail.js";
 import type { StorageOperations } from "./storage-host.js";
+import { scopeKey } from "./storage-types.js";
 import { createStoreOperations } from "./store-assignments.js";
 import type { StoreRuntime } from "./store-runtime.js";
 import { parsePolicy } from "./stores-config.js";
@@ -44,6 +46,8 @@ type StoreHandlers = Omit<
   Handlers,
   | "stores_snapshot"
   | "stores_change"
+  | "person_grants"
+  | "person_grant"
   | "stores_grant"
   | "stores_change_status"
   | "agent_query"
@@ -187,6 +191,7 @@ export function createKnowledgeService(
           write,
           agent ?? stores.defaultAgent(),
           stores.grantFor,
+          stores.personGrantFor,
         ),
         { provision: context.source === "tool" },
         stores.incarnation,
@@ -384,7 +389,7 @@ export function createKnowledgeService(
         await stores.ensure();
         if (
           context.tool.memoryAudience?.kind !== "owner-private" &&
-          !toolGrant(context, stores.grantFor)
+          !toolGrant(context, stores.grantFor, stores.personGrantFor)
         ) {
           throw new Error(
             "Automatic recall approval requires the owner's private memory audience or an owner grant to read and save private knowledge.",
@@ -416,6 +421,7 @@ export function createKnowledgeService(
             false,
             agent ?? stores.defaultAgent(),
             stores.grantFor,
+            stores.personGrantFor,
           ),
           { provision: false },
           stores.incarnation,
@@ -461,9 +467,11 @@ export function createKnowledgeService(
         }
         const { runtime, access } = opened;
         const scope =
-          access.scope.visibility === "conversation"
-            ? `conversation:${access.scope.sessionId}`
-            : "private";
+          access.scope.visibility === "space"
+            ? scopeKey(access.scope)
+            : access.scope.visibility === "conversation"
+              ? `conversation:${access.scope.sessionId}`
+              : "private";
         let catalog;
         try {
           catalog = await runtime.enqueue(access.assertCurrent, () =>
@@ -487,7 +495,8 @@ export function createKnowledgeService(
         }
         const canWrite =
           policy.writesEnabled &&
-          ((context.source === "tool" && toolGrant(context, stores.grantFor) !== "read") ||
+          ((context.source === "tool" &&
+            toolGrant(context, stores.grantFor, stores.personGrantFor) !== "read") ||
             (context.source === "session-action" &&
               Boolean(
                 context.action.client?.scopes.some(
@@ -586,6 +595,7 @@ export function createKnowledgeService(
   return {
     ...defaults,
     ...createStoreOperations(stores),
+    ...createPersonGrantOperations(stores),
     agent_query: proxy("query"),
     agent_action: proxy("action"),
     maintenance_status,

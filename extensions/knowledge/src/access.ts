@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import type { FeatureInvocationContext } from "openclaw/plugin-sdk/feature-plugin";
 import type { MemoryCallerContext } from "./memory-provider-types.js";
 import type { Scope } from "./model.js";
+import type { PersonGrant } from "./person-grants-contract.js";
 import type { GrantAccess } from "./stores-contract.js";
 
 const denied = () =>
@@ -19,7 +21,7 @@ const readOnly = () =>
   new Error(
     "Knowledge is read-only in this conversation: its owner granted it read access to the agent's private knowledge, not saves. Nothing was saved.",
   );
-/** A store partition: the store's private knowledge or one trusted conversation. */
+/** One store-owned private, conversation, or restrictively granted person-space partition. */
 export type Partition = Exclude<Scope, { visibility: "sample" }>;
 /** Who is asking, and for which partition of their effective store. */
 export type Principal = { agentId: string; scope: Partition };
@@ -32,8 +34,9 @@ export type VaultAccess = Principal & {
 type MemoryAudience = NonNullable<
   Extract<MemoryCallerContext["authority"], { kind: "session" }>["audience"]
 >;
-/** Owner grant covering a conversation session key, read live from configuration. */
+/** Owner grant covering a conversation session key, read from published registry state. */
 export type GrantLookup = (sessionKey: string) => GrantAccess | undefined;
+export type PersonGrantLookup = (profileId: string, agent: string) => PersonGrant | undefined;
 /** Provider principals also say whether the lease may release content at all
  * (host readiness checks may not) and whether a session reads the private
  * partition: the owner's own audience, or a conversation the owner granted it to. */
@@ -52,6 +55,7 @@ export function featurePrincipal(
   write: boolean,
   operatorAgent: string | undefined,
   grants: GrantLookup,
+  personGrants: PersonGrantLookup = () => undefined,
 ): () => Principal {
   return () => {
     if (context.source === "session-action") {
@@ -97,7 +101,7 @@ export function featurePrincipal(
     }
     tool.assertInvocationCurrent();
     tool.assertMemoryAudienceCurrent?.();
-    return audiencePrincipal(tool.memoryAudience, grants, write);
+    return audiencePrincipal(tool.memoryAudience, grants, write, personGrants);
   };
 }
 
@@ -105,9 +109,14 @@ export function featurePrincipal(
 export function toolGrant(
   context: FeatureInvocationContext,
   grants: GrantLookup,
+  personGrants: PersonGrantLookup = () => undefined,
 ): GrantAccess | undefined {
   const audience = context.source === "tool" ? context.tool.memoryAudience : undefined;
-  return audience?.kind === "conversation" ? grants(audience.sessionKey) : undefined;
+  return audience?.requesterProfileId
+    ? personGrants(audience.requesterProfileId, audience.agentId)?.access
+    : audience?.kind === "conversation"
+      ? grants(audience.sessionKey)
+      : undefined;
 }
 
 // A conversation reads, or writes, the private partition only when the owner
@@ -118,9 +127,28 @@ function audiencePrincipal(
   audience: MemoryAudience | undefined,
   grants: GrantLookup,
   write: boolean,
+  personGrants: PersonGrantLookup,
 ): Principal {
   if (!audience) {
     throw noAudience();
+  }
+  if (audience.requesterProfileId !== undefined) {
+    const grant = personGrants(audience.requesterProfileId, audience.agentId);
+    if (!grant) {
+      throw new Error(
+        "Knowledge access unavailable: an explicit person/agent grant is required. Ask a Gateway administrator to grant this person access to the agent’s Knowledge space using the operator-only person_grants and person_grant actions. See https://docs.openclaw.ai/plugins/knowledge/stores-and-access.",
+      );
+    }
+    if (write && grant.access !== "read-write") {
+      throw new Error("Knowledge is read-only: this person/agent grant does not allow saves.");
+    }
+    // Person and project names are not filesystem paths. The store-local
+    // partition identity includes the canonical person, so equal project names
+    // belonging to different people never share data.
+    const spaceId = createHash("sha256")
+      .update(JSON.stringify([audience.requesterProfileId, grant.space]))
+      .digest("hex");
+    return { agentId: audience.agentId, scope: { visibility: "space", spaceId } };
   }
   if (audience.kind === "owner-private") {
     return { agentId: audience.agentId, scope: { visibility: "private" } };
@@ -148,6 +176,7 @@ export function memoryPrincipal(
   operatorRead: boolean,
   purpose: "default" | "status" | "cli" | undefined,
   grants: GrantLookup,
+  personGrants: PersonGrantLookup = () => undefined,
 ): () => MemoryPrincipal {
   return () => {
     if (typeof context.assertCurrent !== "function") {
@@ -185,14 +214,14 @@ export function memoryPrincipal(
       throw denied();
     }
     // Provider calls only read.
-    const principal = audiencePrincipal(caller.audience, grants, false);
+    const principal = audiencePrincipal(caller.audience, grants, false, personGrants);
     if (principal.agentId !== requestedAgent) {
       throw denied();
     }
     return {
       ...principal,
       healthOnly: false,
-      sessionPrivate: principal.scope.visibility === "private",
+      sessionPrivate: principal.scope.visibility !== "conversation",
     };
   };
 }

@@ -121,6 +121,10 @@ export const RecordAnnotations = Type.Object(
   { additionalProperties: false },
 );
 export const Scope = Type.Union([
+  Type.Object(
+    { visibility: Type.Literal("space"), spaceId: Type.String({ pattern: "^[a-f0-9]{64}$" }) },
+    { additionalProperties: false },
+  ),
   Type.Object({ visibility: Type.Literal("sample") }, { additionalProperties: false }),
   // Store-owned partitions: the store's private knowledge, or one trusted
   // conversation's knowledge. Writers are recorded in history, not here.

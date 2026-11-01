@@ -9,7 +9,10 @@ import {
 } from "../../../plugins/memory-audience.js";
 import type { MemoryAudience } from "../../../plugins/memory-provider-types.js";
 import { resolveLoadedMemoryProviderKind } from "../../../plugins/memory-state.js";
-import type { AdmittedRunContext } from "../../admitted-run-context.js";
+import {
+  readAdmittedRunOperatorAuthority,
+  type AdmittedRunContext,
+} from "../../admitted-run-context.js";
 import { log } from "../logger.js";
 
 const retainedAudience = () => {};
@@ -58,6 +61,7 @@ export async function resolveEmbeddedAttemptMemoryAudience(params: {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
       senderIsOwner: run.senderIsOwner,
+      requester: readAdmittedRunOperatorAuthority(run.admittedRunContext),
       storePath: params.admission.storePath,
       resolveAgentStorePath: (hopAgentId) =>
         resolveSessionStorePathForScope({ agentId: hopAgentId }, run.config),

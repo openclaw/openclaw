@@ -306,6 +306,8 @@ async function restoreGatewayOperatorSnapshot(params: {
       ...live,
       signal: signal.signal,
       recoverySnapshot: snapshot,
+      // Execution recovery cannot manufacture a requester from an unclassified source.
+      requesterBound: snapshot.requesterBound,
       retain: retainPolicy,
       get modelPolicy() {
         return intersectOperatorRunModelPolicy(originalModels, live.modelPolicy);

@@ -38,6 +38,7 @@ function sameScope(a: unknown, b: Scope): boolean {
   const scope = a;
   return (
     scope.visibility === b.visibility &&
+    (scope.visibility !== "space" || (b.visibility === "space" && scope.spaceId === b.spaceId)) &&
     (scope.visibility !== "conversation" ||
       (b.visibility === "conversation" && scope.sessionId === b.sessionId))
   );

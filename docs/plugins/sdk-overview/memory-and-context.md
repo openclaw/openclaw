@@ -264,10 +264,26 @@ session lineage. Providers and plugin tools consume the resulting host-minted
 value:
 
 ```ts
-type MemoryAudience =
+type MemoryAudience = { requesterProfileId?: string } & (
   | { kind: "owner-private"; agentId: string }
-  | { kind: "conversation"; agentId: string; sessionKey: string; sessionId: string };
+  | { kind: "conversation"; agentId: string; sessionKey: string; sessionId: string }
+);
 ```
+
+The optional requester profile is canonical identity captured from the admitted
+run's host-issued authority, whose owner separately attests an authenticated
+requester or its validated continuation. Execution authority derived from a
+session owner/creator is not requester identity. Authenticated recovery preserves
+this separate provenance; older or execution-only recovery state cannot mint it. It is present only for direct roots,
+including their verified descendants and delegated flushes, and its live source
+assertion participates in the audience guard. It is never inferred from session
+ownership or display labels. Groups and channels never receive the sender's
+person identity. This additive field preserves existing provider source types;
+providers that support person-bound spaces must enforce their own restrictive
+grants rather than treating a profile ID as a grant. Knowledge's
+[person spaces](/plugins/knowledge/stores-and-access#verified-person-spaces)
+select one store-local partition; other providers do not automatically gain
+person isolation.
 
 - A direct turn from the trusted agent owner has `owner-private` audience.
 - A direct turn from another sender, or a group, channel, or thread turn, has

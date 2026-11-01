@@ -58,6 +58,7 @@ import {
   requestId,
 } from "./mutation-contract.js";
 import { HUB_PAGE_BUDGET_CHARS, PAGE_BUDGET_CHARS } from "./page-budget.js";
+import { PersonGrantChangeInput, PersonGrantsSnapshot } from "./person-grants-contract.js";
 import { QueryFreshness } from "./query-freshness.js";
 import { RecentInput, RecentOutput } from "./recent.js";
 import { RelinkInput, RelinkOutput } from "./relink-contract.js";
@@ -564,6 +565,20 @@ export const contract = defineFeatureContract({
       description:
         "Operator settings: change one agent's store assignment (share its store, use a shared store, or use its own). Requires operator admin access and the current settings revision.",
       input: StoresChangeInput,
+      output: StoresChangeOutput,
+    },
+    person_grants: {
+      kind: "query",
+      description:
+        "Operator admin: inspect person/agent space grants. Never available to agent tools.",
+      input: empty,
+      output: PersonGrantsSnapshot,
+    },
+    person_grant: {
+      kind: "action",
+      description:
+        "Operator admin: select or revoke one store-local space for a verified person and agent, against the current person_grants revision.",
+      input: PersonGrantChangeInput,
       output: StoresChangeOutput,
     },
     stores_grant: {

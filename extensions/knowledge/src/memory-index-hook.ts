@@ -86,7 +86,14 @@ export async function readMemoryIndex(
   }
   // Grants live in the registry; the first turn after a restart waits for it.
   await stores.ensure();
-  const principal = memoryPrincipal(context, ctx.agentId, false, "default", stores.grantFor);
+  const principal = memoryPrincipal(
+    context,
+    ctx.agentId,
+    false,
+    "default",
+    stores.grantFor,
+    stores.personGrantFor,
+  );
   // An ungranted conversation gets no index. A grant made or revoked mid-session
   // changes the prompt on the next turn: the owner's change is the invalidation.
   if (!principal().sessionPrivate) {
@@ -100,7 +107,7 @@ export async function readMemoryIndex(
   const { runtime, access, binding } = opened;
   // A grant revoked while the store opened pins a conversation principal; only
   // a principal pinned to the private partition may reuse or render the index.
-  if (access.scope.visibility !== "private") {
+  if (access.scope.visibility === "conversation") {
     return "";
   }
   // A binding can move to a different physical store (share, then use own), so the
@@ -111,6 +118,7 @@ export async function readMemoryIndex(
     ctx.sessionId ?? null,
     binding,
     runtime.vaultId,
+    access.scope,
     asOf,
   ]);
   const pinned = pinnedIndexes.get(key);

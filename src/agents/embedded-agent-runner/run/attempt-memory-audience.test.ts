@@ -94,3 +94,57 @@ it.each(["legacy", "stale", "unverified"] as const)(
     }
   },
 );
+
+it("takes the canonical requester from admitted run authority, not the session owner", async () => {
+  const {
+    createAdmittedRunOperatorAuthority,
+    prepareAgentRunAdmission,
+    createOperationalRunInstanceRef,
+  } = await import("../../admitted-run-context.js");
+  const { withPostAdmissionExecutionOwnerBinding } =
+    await import("../../../audit/execution-owner-binding.js");
+  const { assertMemoryAudienceCurrent } = await import("../../../plugins/memory-audience.js");
+  mocks.native = true;
+  let current = true;
+  const runId = randomUUID();
+  const prepared = withPostAdmissionExecutionOwnerBinding(
+    prepareAgentRunAdmission({
+      cfg: {},
+      facts: {
+        runId,
+        agentId: "main",
+        ingress: { kind: "system", boundary: "test", state: "present" },
+      },
+      operationalRunInstance: createOperationalRunInstanceRef(runId),
+      operatorAuthority: createAdmittedRunOperatorAuthority({
+        profileId: "canonical-person",
+        requesterBound: true,
+        scopes: ["operator.write"],
+        assertCurrent() {
+          if (!current) {
+            throw new Error("profile revoked");
+          }
+        },
+      }),
+    }),
+    () => {},
+  );
+  const row = { ...entry(), chatType: "direct" as const };
+  fakeSessionOwner.rows.set(ROOT_KEY, row);
+  const admittedRunContext = await prepared.admit("embedded");
+  try {
+    const resolved = await resolveEmbeddedAttemptMemoryAudience({
+      agentId: "main",
+      sessionKey: ROOT_KEY,
+      sessionId: row.sessionId,
+      admission: { entry: row, storePath: STORE_PATH },
+      run: { senderIsOwner: false, admittedRunContext },
+    });
+    expect(resolved.memoryAudience?.requesterProfileId).toBe("canonical-person");
+    current = false;
+    expect(() => assertMemoryAudienceCurrent(resolved.memoryAudience!)).toThrow("profile revoked");
+    resolved.release();
+  } finally {
+    prepared.close();
+  }
+});

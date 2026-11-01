@@ -200,6 +200,7 @@ async function prepareSessionPrincipalRunAccess(params: {
     assertCurrent();
     return {
       client,
+      requesterBound: params.sessionPrincipal ? undefined : (true as const),
       assertCurrent,
       signal: access?.signal,
       gatewayAccessGrant: access ? access.gatewayAccessGrant : null,

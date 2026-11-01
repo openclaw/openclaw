@@ -47,6 +47,7 @@ import {
   normalizeGatewayOperatorRecoverySnapshot,
   type OperatorRunRecoverySnapshot,
 } from "./operator-run-recovery-source.codec.js";
+import { isSyntheticGatewayCaller } from "./server-methods/gateway-personal-caller.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 
 type OperatorSource = {
@@ -235,6 +236,7 @@ export function captureChannelOperatorRunAuthority(input: {
   const revocation = createChannelOperatorRevocation(params);
   return createAdmittedRunOperatorAuthority({
     profileId: params.profileId,
+    requesterBound: true,
     channelRecoverySource: params.recoveryReference
       ? { reference: params.recoveryReference, modelPolicy: modelPolicy.original }
       : undefined,
@@ -288,6 +290,8 @@ export async function captureGatewayOperatorRunAuthority(input: {
     assertCurrent: () => void;
     signal?: AbortSignal;
     gatewayAccessGrant?: AdmittedRunOperatorAuthority["gatewayAccessGrant"];
+    /** Explicit accepted-input sender, not a principal resolved from session ownership. */
+    requesterBound?: true;
     /** Transfer the prepared principal/session facts to this admitted lifetime. */
     release?: () => void;
   }> | null;
@@ -576,6 +580,11 @@ export async function captureGatewayOperatorRunAuthority(input: {
     // Pin the grant before source callbacks can mutate their original reference.
     const admission = {
       profileId,
+      requesterBound:
+        params.sourceAuthority?.requesterBound === true ||
+        (client.internal?.authenticatedOperator === true && !isSyntheticGatewayCaller(client))
+          ? (true as const)
+          : undefined,
       scopes,
       gatewayAccessGrant: grant ? Object.freeze({ ...grant }) : grant,
       assertCurrent,
@@ -632,7 +641,7 @@ function captureGatewayOperatorRecoverySnapshot(params: {
   client: GatewayClient;
   authority: Pick<
     AdmittedRunOperatorAuthority,
-    "profileId" | "scopes" | "gatewayAccessGrant" | "assertCurrent"
+    "profileId" | "requesterBound" | "scopes" | "gatewayAccessGrant" | "assertCurrent"
   >;
   modelPolicy: PreparedOperatorModelPolicy | undefined;
   identity: Awaited<ReturnType<typeof prepareUserProfileIdentity>>;
@@ -665,6 +674,7 @@ function captureGatewayOperatorRecoverySnapshot(params: {
   const profile = identity.readCurrentProfile();
   const source = {
     profileId: authority.profileId,
+    requesterBound: authority.requesterBound,
     scopes: [...authority.scopes],
     assignedRole: profile.assignedRole,
     githubLogin: profile.githubLogin ?? null,

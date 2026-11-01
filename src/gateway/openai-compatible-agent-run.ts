@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
@@ -12,6 +13,7 @@ import { isAbortError } from "../infra/abort-signal.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveAssistantResultText } from "./agent-event-assistant-text.js";
+import { usesSharedSecretGatewayMethod } from "./http-auth-user-profile.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { resolveOpenAiCompatError, type OpenAiCompatError } from "./openai-compat-errors.js";
@@ -133,9 +135,14 @@ export async function runOpenAiCompatibleAgentCommand(params: {
     }
   };
   assertSourceCurrent();
+  const sharedOwner =
+    params.requestAuth.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID &&
+    usesSharedSecretGatewayMethod(params.requestAuth.authMethod);
   const client = createSyntheticPluginRuntimeClient({
     authenticatedUserProfile: params.requestAuth.authenticatedUserProfile,
-    operatorRoleActor: params.requestAuth.operatorRoleActor,
+    operatorRoleActor: sharedOwner
+      ? { kind: "operator", profileId: GATEWAY_OWNER_PROFILE_ID }
+      : params.requestAuth.operatorRoleActor,
     scopes: [...params.operatorScopes],
   });
   const operator = resolveGatewayOperatorRoleActor(client)?.kind === "operator";
@@ -143,6 +150,8 @@ export async function runOpenAiCompatibleAgentCommand(params: {
   if (operator && !gatewayContext) {
     throw new Error("OpenAI-compatible operator execution requires a current Gateway context.");
   }
+  const accessAuthority = params.requestAuth.operatorAccessAuthority;
+  const profileCurrent = params.requestAuth.hasCurrentProfileAuthority;
   const captured = gatewayContext
     ? await captureGatewayOperatorRunAuthority({
         client,
@@ -151,7 +160,22 @@ export async function runOpenAiCompatibleAgentCommand(params: {
           getCommittedRuntimeConfig: gatewayContext.getCommittedRuntimeConfig,
           resolveGatewayContext: params.resolveGatewayContext,
         },
-        sourceAuthority: params.requestAuth.operatorAccessAuthority,
+        // This adapter is synthetic, but its input was authenticated by the HTTP
+        // owner. Preserve that requester fact without trusting synthetic clients.
+        sourceAuthority: {
+          ...accessAuthority,
+          gatewayAccessGrant:
+            accessAuthority === null || (accessAuthority === undefined && sharedOwner)
+              ? null
+              : accessAuthority?.gatewayAccessGrant,
+          requesterBound: params.requestAuth.authenticatedUserProfile ? true : undefined,
+          assertCurrent: () => {
+            accessAuthority?.assertCurrent();
+            if (profileCurrent?.() === false) {
+              throw new ToolAuthorizationError("Gateway requester profile changed");
+            }
+          },
+        },
       })
     : undefined;
   try {

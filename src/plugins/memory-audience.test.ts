@@ -569,3 +569,32 @@ it.each(["spawned-parent", "in-session", "other-parent"] as const)(
     capped.release();
   },
 );
+
+it("binds verified direct requester identity and its live source through delegation, never group identity", async () => {
+  const requester = {
+    profileId: "person-p",
+    requesterBound: true as const,
+    current: true,
+    assertCurrent() {
+      if (!this.current) {
+        throw new Error("requester revoked");
+      }
+    },
+  };
+  const root = rootEntry();
+  const grant = requireGrant(await resolveAt(ROOT_KEY, root, true, { requester }));
+  expect(grant.audience.requesterProfileId).toBe("person-p");
+  fakeSessionOwner.rows.set(CHILD_KEY, childEntry(root));
+  const child = await delegate(grant.audience);
+  expect(child.audience.requesterProfileId).toBe("person-p");
+  requester.current = false;
+  expect(() => assertCurrent(grant.audience)).toThrow("requester revoked");
+  expect(() => assertCurrent(child.audience)).toThrow("requester revoked");
+  // Shared roots never receive a sender's person partition, even with verified identity.
+  const group = requireGrant(await resolveAt(ROOT_KEY, rootEntry("group"), true, { requester }));
+  expect(group.audience.requesterProfileId).toBeUndefined();
+  expect(() => assertCurrent(group.audience)).not.toThrow();
+  child.release();
+  grant.release();
+  group.release();
+});

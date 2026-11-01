@@ -145,6 +145,31 @@ async function restoreFixture(fixture: RecoveryFixture) {
 }
 
 describe("scheduled authenticated operator source", () => {
+  it.each([true, false])(
+    "does not invent requester provenance during recovery (attested=%s)",
+    (attested) =>
+      withRecovery(async (fixture) => {
+        const snapshot = {
+          ...expectDefined(fixture.sourceAuthority.recoverySnapshot, "authenticated source"),
+        };
+        expect(snapshot.requesterBound).toBe(true);
+        if (!attested) {
+          // Older or execution-only state proves permissions, not an input requester.
+          delete snapshot.requesterBound;
+        }
+        const restored = await restoreGatewayOperatorSource({
+          snapshot,
+          target: fixture.target,
+          context: fixture.context,
+          assertCurrent() {},
+        });
+        using _ = { [Symbol.dispose]: restored.release };
+        expectCurrent(restored.authority);
+        expect(restored.authority.profileId).toBe(snapshot.profileId);
+        expect(restored.authority.requesterBound).toBe(attested ? true : undefined);
+      }),
+  );
+
   it.each(["pending", "uncertain"] as const)(
     "refuses cached profile facts while their mutation is %s",
     (outcome) =>

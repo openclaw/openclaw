@@ -8,6 +8,7 @@ import {
   type Principal,
   type VaultAccess,
 } from "./access.js";
+import { personGrantKey, type PersonGrant } from "./person-grants-contract.js";
 import { RegistryClient } from "./registry-client.js";
 import { KnowledgeRestartError } from "./restart-error.js";
 import { bindingState, type RegistrySnapshot } from "./store-registry.js";
@@ -108,6 +109,15 @@ export class Stores {
   /** The grant covering a conversation session key (bound for passing as a lookup). */
   readonly grantFor = (sessionKey: string): GrantAccess | undefined =>
     coveringGrant(this.grants().section, sessionKey);
+  /** No identity guessing: callers pass only the host audience's verified profile. */
+  readonly personGrantFor = (profileId: string, agent: string): PersonGrant | undefined => {
+    const grant = this.registry.current?.personGrants[personGrantKey(profileId, agent)];
+    return grant &&
+      this.agents().includes(agent) &&
+      grant.binding === effectiveBinding(this.membership(), agent)
+      ? grant
+      : undefined;
+  };
   /** Physical store currently serving an agent, if any. */
   vaultFor(agentId: string): string | undefined {
     const binding = effectiveBinding(this.membership(), agentId);

@@ -13,7 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import * as profileReader from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   readOpenAiHttpRunTerminal,
@@ -119,6 +119,7 @@ describe("OpenAI-compatible operator run authority", () => {
           const authority = options.operatorAuthority;
           assert(authority, "Expected the original operator authority");
           expect(authority.profileId).toBe(fixture.person.id);
+          expect(authority.requesterBound).toBe(true);
           expect(authority.scopes).toEqual(["operator.sessions.write"]);
           expect(() => authority.assertCurrent()).not.toThrow();
           child = prepareAgentRunAdmission({
@@ -155,11 +156,13 @@ describe("OpenAI-compatible operator run authority", () => {
     },
   );
 
-  it.each(["grant", "role", "host", "committed config"] as const)(
+  it.each(["grant", "profile", "role", "host", "committed config"] as const)(
     "rejects retained effects and late results after the original %s changes",
     async (changed) => {
       await withOpenClawTestState({ label: "compat-run-currentness" }, async () => {
         const fixture = createOperatorRunFixture();
+        let profileCurrent = true;
+        fixture.params.requestAuth.hasCurrentProfileAuthority = () => profileCurrent;
         const context = fixture.host.current;
         assert(context, "Expected the current Gateway context");
         let tentative = fixture.cfg;
@@ -176,6 +179,8 @@ describe("OpenAI-compatible operator run authority", () => {
           if (changed === "grant") {
             fixture.source.abort(new Error("Visitor access ended"));
             expect(options.abortSignal?.aborted).toBe(true);
+          } else if (changed === "profile") {
+            profileCurrent = false;
           } else if (changed === "role") {
             setUserProfileRole(fixture.person.id, "blocked");
             invalidateOperatorRolePolicy(fixture.person.id);
@@ -298,22 +303,46 @@ describe("OpenAI-compatible operator run authority", () => {
     });
   });
 
+  it.each([null, undefined])("preserves the HTTP access dependency %s", async (dependency) => {
+    await withOpenClawTestState({ label: "compat-independent-grant" }, async () => {
+      const fixture = createOperatorRunFixture();
+      fixture.params.requestAuth.operatorAccessAuthority = dependency;
+      vi.mocked(agentCommandFromGatewayIngress).mockImplementation(async (options) => {
+        expect(options.operatorAuthority?.requesterBound).toBe(true);
+        expect(options.operatorAuthority?.gatewayAccessGrant).toBe(dependency);
+        return completedResult;
+      });
+      await runOpenAiCompatibleAgentCommand(fixture.params);
+    });
+  });
+
   it.each(["owner", "system"] as const)(
-    "preserves %s authority without requiring a person-bound Gateway capture",
+    "preserves %s execution while binding only authenticated requesters",
     async (actor) => {
       await withOpenClawTestState({ label: "compat-run-owner" }, async () => {
         const fixture = createOperatorRunFixture();
-        fixture.params.resolveGatewayContext = undefined;
         fixture.params.senderIsOwner = true;
+        if (actor === "system") {
+          fixture.params.resolveGatewayContext = undefined;
+        }
         fixture.params.requestAuth.operatorAccessAuthority = undefined;
         if (actor === "owner") {
+          ensureGatewayOwnerProfile("Synthetic owner");
           fixture.params.requestAuth.authenticatedUserProfile!.profileId = "gateway-owner";
+          fixture.params.requestAuth.authMethod = "token";
+          fixture.params.requestAuth.operatorRoleActor = { kind: "system" };
         } else {
           fixture.params.requestAuth.operatorRoleActor = { kind: "system" };
         }
         vi.mocked(agentCommandFromGatewayIngress).mockImplementation(async (options) => {
-          expect(options.operatorAuthority).toBeUndefined();
-          expect(options.abortSignal).toBe(fixture.request.signal);
+          if (actor === "owner") {
+            expect(options.operatorAuthority?.profileId).toBe("gateway-owner");
+            expect(options.operatorAuthority?.requesterBound).toBe(true);
+            expect(options.operatorAuthority?.gatewayAccessGrant).toBeNull();
+          } else {
+            expect(options.operatorAuthority).toBeUndefined();
+            expect(options.abortSignal).toBe(fixture.request.signal);
+          }
           expect(options.senderIsOwner).toBe(true);
           return completedResult;
         });
