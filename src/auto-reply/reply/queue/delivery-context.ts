@@ -331,7 +331,7 @@ function collectReplyDisposition(
   };
 }
 
-export function collectRuntimeMetadata(items: FollowupRun[], abortSignal?: AbortSignal) {
+export function collectRuntimeMetadata(items: InternalFollowupRun[], abortSignal?: AbortSignal) {
   const currentTurnSource = items.find(
     (item) =>
       item.currentInboundEventKind === "room_event" ||
@@ -346,6 +346,25 @@ export function collectRuntimeMetadata(items: FollowupRun[], abortSignal?: Abort
       ? [item.runObservers.onAgentRunTerminalOutcome]
       : [],
   );
+  const groupParticipation =
+    items.length > 0 && items.every((item) => item.groupParticipation)
+      ? {
+          ...items.at(-1)?.groupParticipation,
+          sources: items.flatMap(
+            (item) =>
+              item.groupParticipation?.sources ??
+              (item.userTurnTranscriptRecorder
+                ? [
+                    {
+                      recorder: item.userTurnTranscriptRecorder,
+                      sourceMessageId: item.messageId,
+                      replyToText: item.groupParticipation?.replyToText,
+                    },
+                  ]
+                : []),
+          ),
+        }
+      : undefined;
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
   const explicitSkillSelections = [
     ...new Map(
@@ -355,6 +374,7 @@ export function collectRuntimeMetadata(items: FollowupRun[], abortSignal?: Abort
     ).values(),
   ];
   return {
+    groupParticipation,
     sourceTurnId: authoritySource?.sourceTurnId,
     createChannelCronAuthority: authoritySource?.createChannelCronAuthority,
     readAdmissionConfig: authoritySource?.readAdmissionConfig,
@@ -422,6 +442,7 @@ export function getFollowupOriginRouting(source: FollowupRun) {
 export function createOverflowSummaryRetrySource(source: InternalFollowupRun): InternalFollowupRun {
   return {
     controllerInput: source.controllerInput,
+    groupParticipation: source.groupParticipation,
     prompt: source.prompt,
     sourceTurnId: source.sourceTurnId,
     createChannelCronAuthority: source.createChannelCronAuthority,

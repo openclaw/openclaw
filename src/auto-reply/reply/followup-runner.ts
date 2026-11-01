@@ -315,7 +315,10 @@ export function createFollowupRunner(
             storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
             sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
             entry: turn.session.current(),
-            writer: execution.execution.outcome.sessionWriter,
+            writer:
+              execution.execution.outcome.kind === "observed"
+                ? undefined
+                : execution.execution.outcome.sessionWriter,
             operation: turn.operation,
             activitySummaryCompletion,
             publish: (entry) => turn.session.publish(entry),

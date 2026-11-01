@@ -3,6 +3,7 @@ import type {
   FollowupRun,
   ReplyOperationRunState,
 } from "../../../sessions/session-controller.contracts.js";
+import type { GroupParticipationContext } from "../group-participation-inputs.js";
 
 export type { FollowupRun } from "../../../sessions/session-controller.contracts.js";
 export type {
@@ -42,6 +43,7 @@ export function bindReplyOperationQueueDisposition(
 
 /** Admission-owned image facts stay out of the public FollowupRun contract. */
 export type InternalFollowupRun = FollowupRun & {
+  groupParticipation?: GroupParticipationContext;
   currentTurnImagesPrepared?: true;
   /** Fact indexes are relative to this run's media array. */
   mediaImageLayout?: MediaImageLayout;

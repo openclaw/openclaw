@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { prepareSessionSystemTurnAuthority } from "../../gateway/session-system-turn-authority.js";
+import { logVerbose } from "../../globals.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { getInProcessGatewayRequestContext } from "../../plugins/runtime/gateway-request-scope.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { assertSessionControllerOperation } from "../../sessions/session-controller.identity.js";
@@ -164,4 +166,26 @@ export async function prepareReplySystemPrincipalAuthority(params: {
     });
   }
   return principal;
+}
+
+/** Keep approved input after failed maintenance without claiming a recovery turn. */
+export async function retainReplySourceAfterFailedPreflight(params: {
+  operation: ReplyOperation;
+  followupRun: FollowupRun;
+}): Promise<void> {
+  const { operation, followupRun } = params;
+  try {
+    await followupRun.userTurnTranscriptRecorder?.persistApproved({
+      expectedSessionId: operation.sessionId,
+      beforeFreshMessageCommit: () => {
+        operation.abortSignal.throwIfAborted();
+        followupRun.operatorAuthority?.assertCurrent();
+        if (operation.lifecycleGeneration) {
+          assertAgentRunLifecycleGenerationCurrent(operation.lifecycleGeneration);
+        }
+      },
+    });
+  } catch (error) {
+    logVerbose(`user turn not kept after failed preflight: ${formatErrorMessage(error)}`);
+  }
 }

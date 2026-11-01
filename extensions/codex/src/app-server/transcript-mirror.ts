@@ -133,6 +133,8 @@ async function mirrorBestEffort(params: {
               settlementWarning: params.settlementWarning,
             },
       prepareAssistantTranscriptMessage: params.params.prepareAssistantTranscriptMessage,
+      suppressTranscriptOnlyAssistantPersistence:
+        params.params.suppressTranscriptOnlyAssistantPersistence,
       config: params.params.config,
     });
     for (const receipt of mirrorResult.userMessageReceipts) {

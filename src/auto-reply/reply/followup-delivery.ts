@@ -109,6 +109,9 @@ export async function resolveFollowupDeliveryDecision(params: {
   ) {
     return { kind: "suppress" as const, reason: "room-event" as const };
   }
+  if (execution.outcome.kind === "observed") {
+    return { kind: "suppress" as const, reason: "silent" as const };
+  }
   const sourcePolicy = resolveSourceReplyVisibilityPolicy({
     cfg: turn.config,
     scheduledAutomation: turn.queued.run.scheduledAutomation !== undefined,

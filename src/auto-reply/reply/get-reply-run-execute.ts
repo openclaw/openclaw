@@ -132,6 +132,7 @@ export async function executePreparedReplyRun(
     shouldInjectGroupIntro,
     typingMode,
     terminalReplyExpectation,
+    groupParticipation,
   } = context;
   const {
     ctx,
@@ -434,6 +435,7 @@ export async function executePreparedReplyRun(
       : undefined;
   const followupRun = {
     createChannelCronAuthority,
+    ...(groupParticipation ? { groupParticipation } : {}),
     prompt: queuedBody,
     readAdmissionConfig,
     sourceTurnId: resolveReplySourceTurnId({

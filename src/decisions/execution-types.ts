@@ -23,6 +23,12 @@ export type DecisionEvaluateOptions = {
   /** Budget includes preparation; provider cleanup remains physically awaited. */
   readonly timeoutMs: number;
   readonly signal: AbortSignal;
+  /**
+   * Synchronous live consumer consent, checked before provider dispatch, at
+   * guarded-fetch request boundaries, and before returning an answer. A false
+   * result permanently disables this evaluation; throws/non-booleans reject.
+   */
+  readonly admit?: () => boolean;
 };
 
 /** Adds only provider-declared reasoning to the established caller contract. */
