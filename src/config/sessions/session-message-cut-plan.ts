@@ -91,6 +91,16 @@ export function planSessionMessageCut(
   }
 
   const nextSessionId = randomUUID();
+  const workspace = params.settledLocalWorkspace;
+  if (
+    workspace &&
+    (params.mode === "fork" ||
+      currentEntry.worktree?.id !== workspace.worktreeId ||
+      currentEntry.sessionId !== workspace.sessionId ||
+      (currentEntry.lifecycleRevision ?? null) !== workspace.lifecycleRevision)
+  ) {
+    return { status: "conflict" };
+  }
   const header = createSessionTranscriptHeader({
     cwd: readTranscriptHeaderCwd(events),
     sessionId: nextSessionId,
@@ -131,6 +141,15 @@ export function planSessionMessageCut(
     ...(forked ? inheritSessionSelection(currentEntry) : currentEntry),
     sessionId: nextSessionId,
     lifecycleRevision: forked ? randomUUID() : currentEntry.lifecycleRevision,
+    localWorkspaceHandoff: workspace
+      ? {
+          worktreeId: workspace.worktreeId,
+          fromSessionId: workspace.sessionId,
+          toSessionId: nextSessionId,
+          lifecycleRevision: workspace.lifecycleRevision,
+          projectionRevision: workspace.projectionRevision,
+        }
+      : undefined,
     updatedAt: Date.now(),
     systemSent: false,
     abortedLastRun: false,

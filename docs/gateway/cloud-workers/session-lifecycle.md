@@ -300,6 +300,37 @@ still follows the existing lifecycle, and Gateway workspace checkpoints remain
 the recovery source. It enables neither retained allocation nor pause/resume nor
 disk-authoritative workspaces.
 
+### Explicit current-disk consumers (not activated)
+
+The repository owner can retain an exact disk binding, but no user-facing selector
+activates it yet. For that binding, active file reads, edits, downloads, and incoming
+attachments use the original attached node. Editor writes settle their existing
+result custody without updating an older Gateway mirror.
+
+Explicit publication captures a fresh immutable snapshot under the existing session
+reservation and node quiescence. All requests selected for the same accepted turn
+reuse that snapshot, including a retry after artifact capture but before receipt
+binding. An already selected publication never includes later disk edits.
+
+Gateway export preparation also requires the original attached disk and a fresh
+snapshot, preserving private Git history and working files. It verifies the source
+again before binding the local worktree. Staged changes and unavailable history
+fail closed rather than silently losing index contents or commits. This preparation
+also serves an explicit **Move to Gateway** for an already-bound, active disk.
+The existing pending-result record retains the immutable export and original
+resource receipt. Only after the verified managed worktree is bound to the session
+does the repository owner retire disk custody; the existing environment owner
+then settles exact-resource cleanup before the placement finishes locally.
+
+An interrupted Move before local binding captures the original disk again rather
+than restoring an old mirror. After local binding, recovery keeps that worktree
+and finishes custody retirement and cleanup without reapplying an export. Missing
+exports, replaced disks, or changed session ownership keep recovery held. Existing
+mirrored pending results keep their original acceptance semantics. This uses the
+existing schema and cleanup owners; it adds no disk-mode selector or activation.
+Paused-disk preparation remains a separate prerequisite. Missing or replaced disks
+never fall back to a stored mirror or source-only reconstruction.
+
 The shared-state schema upgrade preserves old rows with an absent receipt and
 fences older binaries that cannot honor recorded identities. To roll back, first
 settle the new environments and their pending cleanup, then restore the matching

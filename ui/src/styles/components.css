@@ -28,8 +28,6 @@ openclaw-session-progress-hovercard-provider {
 
 .loading-skeleton {
   /* Generic lazy views retain their shimmer; the critical connection frame is static. */
-  --skeleton-highlight: color-mix(in srgb, var(--text) 18%, transparent);
-  --skeleton-duration: 2s;
   display: flex;
   flex-direction: column;
   gap: 32px;

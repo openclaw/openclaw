@@ -336,26 +336,28 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       }
       state.nextChange = Infinity;
     }
-    for (const child of state.dirty) {
-      const entry = latestRunsByChildSessionKey.get(child)!;
-      const previous = state.dynamic.get(child) ?? 0;
-      const next = isRetainedReadRun(entry, clock) ? state.multiplicity.get(child)! : 0;
-      state.count += next - previous;
-      if (hasSubagentRunEnded(entry)) {
-        state.dynamic.delete(child);
-      } else {
-        state.dynamic.set(child, next);
-        state.nextChange = Math.min(state.nextChange, staleBoundary(entry, clock));
-        const current = inMemoryDisplayByChildSessionKey.get(child);
-        if (current && isSameSubagentRun(current, entry)) {
-          state.nextChange = Math.min(state.nextChange, staleBoundary(current, clock));
+    if (state.dirty.size) {
+      for (const child of state.dirty) {
+        const entry = latestRunsByChildSessionKey.get(child)!;
+        const previous = state.dynamic.get(child) ?? 0;
+        const next = isRetainedReadRun(entry, clock) ? state.multiplicity.get(child)! : 0;
+        state.count += next - previous;
+        if (hasSubagentRunEnded(entry)) {
+          state.dynamic.delete(child);
+        } else {
+          state.dynamic.set(child, next);
+          state.nextChange = Math.min(state.nextChange, staleBoundary(entry, clock));
+          const current = inMemoryDisplayByChildSessionKey.get(child);
+          if (current && isSameSubagentRun(current, entry)) {
+            state.nextChange = Math.min(state.nextChange, staleBoundary(current, clock));
+          }
         }
       }
-    }
-    state.dirty.clear();
-    state.hasUnended = state.dynamic.size > 0;
-    if (!state.hasUnended) {
-      state.nextChange = Infinity;
+      state.dirty.clear();
+      state.hasUnended = state.dynamic.size > 0;
+      if (!state.hasUnended) {
+        state.nextChange = Infinity;
+      }
     }
     state.clock = clock;
     state.liveRevision = liveRevision;

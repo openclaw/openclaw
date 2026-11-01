@@ -200,10 +200,6 @@
   border: 1px solid var(--border);
 }
 
-.usage-skeleton-block::after {
-  animation-duration: 1.35s;
-}
-
 .usage-skeleton-block--tall {
   min-height: 128px;
 }

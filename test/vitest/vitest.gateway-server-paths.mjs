@@ -391,6 +391,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/node-workspace-transfer-revocation.test.ts",
   "src/gateway/worker-environments/placement-abandon-lifecycle.test.ts",
   "src/gateway/worker-environments/placement-change-snapshot.test.ts",
+  "src/gateway/worker-environments/placement-disk-gateway-move.test.ts",
   "src/gateway/worker-environments/placement-dispatch-authority.test.ts",
   "src/gateway/worker-environments/placement-dispatch-cleanup.test.ts",
   "src/gateway/worker-environments/placement-dispatch-conflict-lookup.test.ts",
@@ -475,6 +476,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/provider-ssh-identity.test.ts",
   "src/gateway/worker-environments/repository-managed-identity.test.ts",
   "src/gateway/worker-environments/repository-project-access.test.ts",
+  "src/gateway/worker-environments/repository-workspace-snapshot.test.ts",
   "src/gateway/worker-environments/repository-workspace-startup.test.ts",
   "src/gateway/worker-environments/service-inventory-recovery.test.ts",
   "src/gateway/worker-environments/service-lifetime.test.ts",
@@ -632,6 +634,7 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server-worker-environment-startup.state.test.ts",
   // A failed native close permanently fences this process's metadata owner.
   "src/gateway/server-close.agent-databases.test.ts",
+  "src/gateway/server-close.supervisor-failure.test.ts",
   "src/gateway/server-close.placement.test.ts",
   "src/gateway/server-close.progress-card.test.ts",
   "src/gateway/server-close.question-publication.test.ts",
