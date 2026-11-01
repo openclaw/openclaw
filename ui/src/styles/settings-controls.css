@@ -42,7 +42,8 @@ select.settings-select:not([multiple]) {
 /* One segmented control. Its height is the surrounding control height, so it
    always matches the inputs and buttons beside it; --compact is the only other
    size, for dense menu rows. The surface keeps its 2px inset. Many-option enums
-   move whole segments to a new row, and labels only break between words. */
+   move whole segments to a new row, and labels only break between words. Segments
+   share any spare width, so a stretched or wrapped track never shows an empty run. */
 .settings-segmented {
   min-height: var(--settings-control-height);
   align-items: stretch;
@@ -65,6 +66,7 @@ select.settings-select:not([multiple]) {
 /* The parent selector also wins over the shared .btn hover/active chrome. */
 .settings-segmented > .settings-segmented__btn {
   display: inline-flex;
+  flex: 1 1 auto;
   align-items: center;
   justify-content: center;
   min-height: calc(var(--settings-control-height) - 6px);
