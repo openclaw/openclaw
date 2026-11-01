@@ -262,7 +262,11 @@ export function buildComputerActParams(params: {
       break;
     }
     case "set_value": {
-      wire.value = readToolStringParam(input, "value", { required: true, allowEmpty: true });
+      wire.value = readToolStringParam(input, "value", {
+        required: true,
+        allowEmpty: true,
+        trim: false,
+      });
       copyDeliveryMode(wire, input);
       break;
     }
@@ -325,13 +329,24 @@ export function buildComputerActParams(params: {
       break;
     }
     case "browser_type": {
-      wire.text = readToolStringParam(input, "text", { required: true, allowEmpty: true });
+      wire.text = readToolStringParam(input, "text", {
+        required: true,
+        allowEmpty: true,
+        trim: false,
+      });
       copyOptionalStringParams(wire, input, "mode");
       copyOptionalBooleanParam(wire, input, "replace");
       break;
     }
     case "browser_dialog": {
-      copyOptionalStringParams(wire, input, "dialogRef", "promptText");
+      copyOptionalStringParams(wire, input, "dialogRef");
+      const promptText = readToolStringParam(input, "promptText", {
+        trim: false,
+        allowEmpty: true,
+      });
+      if (promptText !== undefined) {
+        wire.promptText = promptText;
+      }
       copyDeliveryMode(wire, input);
       break;
     }
