@@ -21,11 +21,7 @@ let refreshPending = false;
 
 const request = (message) => invoke("gateway_profile_request", { message });
 const showError = (error) => {
-  elements["gateway-error"].textContent = t(
-    "gatewaySwitch.actionFailed",
-    "Gateway action failed: {error}",
-    { error: String(error) },
-  );
+  elements["gateway-error"].textContent = String(error);
   elements["gateway-error"].hidden = false;
 };
 const clearError = () => { elements["gateway-error"].hidden = true; };
@@ -213,7 +209,9 @@ const load = async () => {
     renderProfiles(result.selectedId);
     elements["gateway-empty"].hidden = profiles.length > 0;
     elements["gateway-status"].textContent = profiles.length && elements["gateway-editor"].hidden
-      ? t("gateways.profilesSaved", "Saved Gateways: {count}", { count: profiles.length })
+      ? profiles.length === 1
+        ? t("gateways.profilesSaved", "{count} saved Gateway", { count: profiles.length })
+        : t("gateways.profilesSavedOther", "{count} saved Gateways", { count: profiles.length })
       : "";
     const recovery = window.__OPENCLAW_GATEWAY_RECOVERY__;
     if (recovery && recoveryId && editingId === recoveryId) editingId = recovery.id;

@@ -235,7 +235,13 @@
       ]
     },
     "gateways.profilesSaved": {
-      "source": "Saved Gateways: {count}",
+      "source": "{count} saved Gateway",
+      "args": [
+        "count"
+      ]
+    },
+    "gateways.profilesSavedOther": {
+      "source": "{count} saved Gateways",
       "args": [
         "count"
       ]
