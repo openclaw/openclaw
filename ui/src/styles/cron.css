@@ -1133,7 +1133,22 @@
   .cron-table__row {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 2px var(--space-1);
+    align-items: start;
     padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  }
+
+  /* The name line shares the controls' height, so they center together in every
+     state, including the auto-disabled card's extra line. */
+  .cron-table__name-line {
+    min-height: 32px;
+  }
+
+  .cron-table__state {
+    margin-top: calc((32px - var(--list-row-icon-size)) / 2);
+  }
+
+  .cron-table__name-meta {
+    margin-top: -4px;
   }
 
   /* The whole row opens the job, so its name needs no touch minimum of its own. */
@@ -1175,6 +1190,8 @@
     align-items: center;
     /* Lines up with the name, past the status mark and its gap. */
     padding-left: calc(var(--list-row-icon-size) + 10px);
+    /* Ends where the row's trailing control ends visually. */
+    padding-right: var(--space-2);
     min-width: 0;
     color: var(--muted);
     font-size: var(--control-ui-text-sm);
@@ -1218,6 +1235,14 @@
 
   .cron-table__last-run:has(.cron-last-glyph--error) .cron-table__last-time {
     color: var(--danger);
+  }
+
+  .cron-run-filter-search input:placeholder-shown {
+    text-overflow: ellipsis;
+  }
+
+  .cron-run-entry + .cron-run-entry {
+    border-top: 0;
   }
 }
 
