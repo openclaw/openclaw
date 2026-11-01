@@ -6,6 +6,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { isUpdateAdmissionAuthorityEnvKey } from "../../infra/update-admission-contract.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 
 it(
   "preflights the built CLI without changing the serving profile or taking its port",
@@ -28,7 +29,14 @@ it(
       const original = JSON.stringify({ gateway: { mode: "local", port: address.port } });
       await fs.writeFile(configPath, original);
       const env = Object.fromEntries(
-        Object.entries(process.env).filter(([key]) => !isUpdateAdmissionAuthorityEnvKey(key)),
+        Object.entries(process.env).filter(
+          ([key]) =>
+            !isUpdateAdmissionAuthorityEnvKey(key) &&
+            !key.startsWith("VITEST") &&
+            !key.startsWith("OPENCLAW_VITEST") &&
+            !key.startsWith("OPENCLAW_TEST_") &&
+            key !== "NODE_ENV",
+        ),
       );
       Object.assign(env, {
         HOME: home,
@@ -41,7 +49,7 @@ it(
       const invoke = () =>
         runCommandWithTimeout(
           [
-            process.execPath,
+            resolveTestNodeExecPath(),
             path.join(process.cwd(), "openclaw.mjs"),
             "update",
             "preflight",
@@ -54,6 +62,7 @@ it(
             baseEnv: env,
             timeoutMs: 300_000,
             maxOutputBytes: 256 * 1024,
+            killProcessTree: true,
             requireProcessTreeExtinction: true,
           },
         );
@@ -85,9 +94,9 @@ it(
         expect(await (await fetch(`http://127.0.0.1:${address.port}`)).text()).toBe("serving");
       }
     } finally {
-      await new Promise<void>((resolve, reject) =>
-        serving.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        serving.close((error) => (error ? reject(error) : resolve()));
+      });
       await fs.rm(home, { recursive: true, force: true });
     }
   },

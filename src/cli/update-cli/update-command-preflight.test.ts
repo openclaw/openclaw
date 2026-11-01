@@ -8,6 +8,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { registerUpdateCli } from "../update-cli.js";
 
 const { canary } = vi.hoisted(() => ({ canary: vi.fn() }));
+// mock-isolation: tests receipt mapping without spawning the candidate; the built CLI test covers startup.
 vi.mock("../../infra/update-candidate-canary.js", () => ({
   validateUpdateCandidateCanary: canary,
 }));

@@ -21,6 +21,7 @@ vi.mock("./update-cli/update-command-admit.js", () => ({
   }),
 }));
 
+// mock-isolation: exercises early protocol routing without launching the isolated candidate Gateway.
 vi.mock("./update-cli/update-command-preflight.js", () => ({
   updatePreflightCommand: vi.fn(async () => {
     createSubsystemLogger("state/sqlite").debug("preflight snapshot inspection");
