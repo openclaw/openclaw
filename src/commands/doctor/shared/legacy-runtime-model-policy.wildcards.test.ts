@@ -54,7 +54,7 @@ describe("doctor model allowlist wildcard offer", () => {
   it("replaces a copied list with provider-family wildcards when the operator accepts", async () => {
     mocks.confirm.mockResolvedValue(true);
 
-    const next = await offer(config(copied), {});
+    const { config: next, changes } = await offer(config(copied), {});
 
     expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
     expect(next.agents?.defaults?.modelPolicy?.allow).toEqual([
@@ -62,13 +62,18 @@ describe("doctor model allowlist wildcard offer", () => {
       "clawrouter/anthropic/*",
     ]);
     expect(Object.keys(next.agents?.defaults?.models ?? {})).toEqual(copied);
+    // The writer announces the change after it commits, so the offer prints no change panel.
+    expect(changes).toEqual([
+      "- agents.defaults.modelPolicy.allow: openai/*, clawrouter/anthropic/*",
+    ]);
+    expect(mocks.note).toHaveBeenCalledOnce();
   });
 
   it("keeps the list when the operator declines", async () => {
     mocks.confirm.mockResolvedValue(false);
     const cfg = config(copied);
 
-    expect(await offer(cfg, { repair: true })).toBe(cfg);
+    expect((await offer(cfg, { repair: true })).config).toBe(cfg);
     expect(mocks.confirm).toHaveBeenCalledOnce();
   });
 
@@ -79,7 +84,7 @@ describe("doctor model allowlist wildcard offer", () => {
   ] as const)("never changes the list with %s", async (_label, options, tty) => {
     const cfg = config(copied);
 
-    expect(await offer(cfg, options, tty)).toBe(cfg);
+    expect((await offer(cfg, options, tty)).config).toBe(cfg);
     expect(mocks.confirm).not.toHaveBeenCalled();
     expect(mocks.note).not.toHaveBeenCalled();
   });
@@ -88,7 +93,7 @@ describe("doctor model allowlist wildcard offer", () => {
     vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
     const cfg = config(copied);
 
-    expect(await offer(cfg, {})).toBe(cfg);
+    expect((await offer(cfg, {})).config).toBe(cfg);
     expect(mocks.confirm).not.toHaveBeenCalled();
   });
 
@@ -98,7 +103,7 @@ describe("doctor model allowlist wildcard offer", () => {
   ])("does not offer for a handcrafted list: %s", async (_label, allow) => {
     const cfg = config(allow);
 
-    expect(await offer(cfg, {})).toBe(cfg);
+    expect((await offer(cfg, {})).config).toBe(cfg);
     expect(mocks.note).not.toHaveBeenCalled();
   });
 
@@ -111,7 +116,7 @@ describe("doctor model allowlist wildcard offer", () => {
       },
     };
 
-    const next = await offer(cfg, {});
+    const { config: next } = await offer(cfg, {});
 
     expect(next.agents?.entries?.main?.modelPolicy?.allow).toEqual(["openai/*"]);
   });

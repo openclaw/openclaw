@@ -147,19 +147,20 @@ function applyModelAllowlistWildcardOffers(
 export async function maybeOfferModelAllowlistWildcards(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
-}): Promise<OpenClawConfig> {
+}): Promise<{ config: OpenClawConfig; changes: string[] }> {
+  const unchanged = { config: params.cfg, changes: [] };
   const { repairMode } = params.prompter;
   if (!repairMode.canPrompt || repairMode.updateInProgress) {
-    return params.cfg;
+    return unchanged;
   }
   const offers = collectModelAllowlistWildcardOffers(params.cfg);
   if (offers.length === 0) {
-    return params.cfg;
+    return unchanged;
   }
   const { note } = await import("../../../../packages/terminal-core/src/note.js");
   note(
     [
-      "Your allowed-models list matches your per-model settings, so models added later stay hidden.",
+      "Your allowed-models list matches your per-model settings, so new models from these providers stay hidden.",
       ...offers.map(
         ({ agentId, before, after }) =>
           `${agentId === undefined ? "agents.defaults" : `agents.entries.${agentId}`}.modelPolicy.allow\n  now: ${before.join(", ")}\n  new: ${after.join(", ")}`,
@@ -173,18 +174,16 @@ export async function maybeOfferModelAllowlistWildcards(params: {
     requiresInteractiveConfirmation: true,
   });
   if (!accepted) {
-    return params.cfg;
+    return unchanged;
   }
-  note(
-    offers
-      .map(
-        ({ agentId, after }) =>
-          `- ${agentId === undefined ? "agents.defaults" : `agents.entries.${agentId}`}.modelPolicy.allow: ${after.join(", ")}`,
-      )
-      .join("\n"),
-    "Doctor changes",
-  );
-  return applyModelAllowlistWildcardOffers(params.cfg, offers);
+  // The config writer prints these once the write commits.
+  return {
+    config: applyModelAllowlistWildcardOffers(params.cfg, offers),
+    changes: offers.map(
+      ({ agentId, after }) =>
+        `- ${agentId === undefined ? "agents.defaults" : `agents.entries.${agentId}`}.modelPolicy.allow: ${after.join(", ")}`,
+    ),
+  };
 }
 
 /** Add runtime policy unless the model entry already selects an explicit non-auto runtime. */

@@ -329,7 +329,17 @@ export function resolveFinalDoctorHealthContributions(params: {
       async run(ctx) {
         const { maybeOfferModelAllowlistWildcards } =
           await import("../commands/doctor/shared/legacy-runtime-model-policy.js");
-        ctx.cfg = await maybeOfferModelAllowlistWildcards({ cfg: ctx.cfg, prompter: ctx.prompter });
+        const { config, changes } = await maybeOfferModelAllowlistWildcards({
+          cfg: ctx.cfg,
+          prompter: ctx.prompter,
+        });
+        ctx.cfg = config;
+        if (changes.length > 0) {
+          ctx.configResult.pendingChangePanels = [
+            ...(ctx.configResult.pendingChangePanels ?? []),
+            changes.join("\n"),
+          ];
+        }
       },
     }),
     createDoctorHealthContribution("doctor:bootstrap-size", "Bootstrap size", {
