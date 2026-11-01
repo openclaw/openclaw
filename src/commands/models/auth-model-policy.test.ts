@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshotRefreshHandler } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createTestModelDefinition } from "../test-runtime-config-helpers.js";
 import { allowProviderModels } from "./auth-model-policy.js";
 import { updateConfig } from "./shared.js";
 
@@ -83,7 +84,10 @@ describe("provider model access after sign-in", () => {
     config.agents!.defaults!.models = { tiny: {} };
     config.models = {
       providers: {
-        sample: { baseUrl: "https://sample.invalid/v1", models: [{ id: "tiny", name: "Tiny" }] },
+        sample: {
+          baseUrl: "https://sample.invalid/v1",
+          models: [createTestModelDefinition("tiny", { name: "Tiny" })],
+        },
       },
     };
     await state.writeConfig(config);
