@@ -155,9 +155,20 @@ suite.define(() => {
           },
         },
       });
-      const attachmentDownload = Promise.withResolvers<void>();
       await page.route("**/api/artifacts/download/navigation/notes", async (route) => {
-        await attachmentDownload.promise;
+        // Keep the original HTTP bytes pending until the same-session frame commits.
+        await gateway.emitGatewayEvent("sessions.changed", {
+          ...session,
+          sessionKey: session.key,
+          label: "Delivery notes updated",
+          reason: "patch",
+          updatedAt: Date.now() + 1,
+        });
+        await page
+          .getByText("Delivery notes updated", { exact: true })
+          .first()
+          .waitFor({ state: "attached" });
+        await waitForLayoutSettled(page, ".agent-chat__composer-combobox");
         await route.fulfill({ body: "# Delivery notes\n", contentType: "text/markdown" });
       });
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -171,36 +182,16 @@ suite.define(() => {
       await file.click();
       const heading = page.getByRole("heading", { name: "Delivery notes", exact: true });
       await heading.waitFor();
-      await page.getByRole("button", { name: "More file actions", exact: true }).click();
       await gateway.deferNext("sessions.files.download");
+      await page.getByRole("button", { name: "More file actions", exact: true }).click();
       await page.getByRole("menuitem", { name: "Attach to session", exact: true }).click();
       await gateway.waitForRequest("sessions.files.download");
       await page.setViewportSize({ width: 1300, height: 900 });
       await waitForLayoutSettled(page, "openclaw-chat-detail-panel");
-      try {
-        await Promise.all([
-          page.waitForRequest("**/api/artifacts/download/navigation/notes"),
-          gateway.resolveDeferred("sessions.files.download"),
-        ]);
-        await composer.fill("Please review the attached delivery notes before publishing.");
-        await gateway.emitGatewayEvent("sessions.changed", {
-          ...session,
-          sessionKey: session.key,
-          label: "Delivery notes updated",
-          reason: "patch",
-          updatedAt: Date.now() + 1,
-        });
-        await page
-          .getByText("Delivery notes updated", { exact: true })
-          .first()
-          .waitFor({ state: "attached" });
-        await waitForLayoutSettled(page, ".agent-chat__composer-combobox");
-      } finally {
-        attachmentDownload.resolve();
-      }
+      await gateway.resolveDeferred("sessions.files.download");
       await page.getByRole("button", { name: "Remove notes.md", exact: true }).waitFor();
       expect(await composer.inputValue()).toBe(
-        "Please review the attached delivery notes before publishing.",
+        "Please review the delivery notes before publishing.",
       );
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await page.getByRole("button", { name: "Send message", exact: true }).click();

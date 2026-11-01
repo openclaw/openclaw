@@ -18,7 +18,6 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
-import type { ChatAttachmentControlsProps } from "./components/chat-attachment-controls.types.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { releaseChatMediaResourceOwner } from "./components/chat-message-media.ts";
 import {
@@ -43,12 +42,6 @@ import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import { cancelChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
 
 type ChatRenderLifecycleScope = Set<() => void>;
-type AttachmentInputCallbacks = Required<
-  Pick<
-    ChatAttachmentControlsProps,
-    "getAttachments" | "onAttachmentsChange" | "onPendingReadsChange"
-  >
->;
 
 function transcriptSources(state: ChatPageHost): readonly unknown[] {
   return [
@@ -86,10 +79,7 @@ export function createChatState<TState extends ChatPageHost>(
     publishStateEffects();
   };
   let attachmentReadsValue = new ChatAttachmentReadLifecycle(attachmentChanged);
-  const attachmentBindings = new WeakMap<
-    TState,
-    AttachmentInputCallbacks & { reads: ChatAttachmentReadLifecycle; readSignal: AbortSignal }
-  >();
+  let attachmentDestination: ReturnType<typeof captureAttachmentDestination> | undefined;
   let publishedDraft: ReturnType<typeof composerDraft.read> | undefined;
   let publishedAttachmentReads: ChatAttachmentReadLifecycle | undefined;
   const composerPersistence = new ChatComposerPersistence(
@@ -136,6 +126,7 @@ export function createChatState<TState extends ChatPageHost>(
       composerPersistence.stop();
       stopChatEffects();
       stateValue = undefined;
+      attachmentDestination = undefined;
       previousTranscriptSources = [];
     },
 
@@ -175,37 +166,22 @@ export function createChatState<TState extends ChatPageHost>(
     attachmentInputProps(state: TState) {
       const reads = attachmentReadsValue;
       const readSignal = reads.readSignal;
-      let binding = attachmentBindings.get(state);
-      // Transfers use callback identity to detect destination changes, not ordinary pane refreshes.
-      if (!binding || binding.reads !== reads || binding.readSignal !== readSignal) {
-        binding = {
-          reads,
-          readSignal,
-          getAttachments: () => state.chatAttachments,
-          onPendingReadsChange: (delta: 1 | -1) => {
-            if (delta === 1 && readSignal === reads.readSignal) {
-              markChatComposerEdit(state);
-            }
-            reads.updatePending(readSignal, delta);
-          },
-          onAttachmentsChange: (next: ChatPageHost["chatAttachments"]) => {
-            state.chatAttachments = next;
-            attachmentChanged();
-          },
-        };
-        attachmentBindings.set(state, binding);
+      // File transfers compare destination callbacks before the next Solid frame commits.
+      if (
+        attachmentDestination?.state !== state ||
+        attachmentDestination.reads !== reads ||
+        attachmentDestination.readSignal !== readSignal
+      ) {
+        attachmentDestination = captureAttachmentDestination(state, reads, readSignal);
       }
       return {
         uploadConfig: state.uploadConfig,
         attachmentReads: reads,
         attachments: state.chatAttachments,
         attachmentLimits: resolveChatAttachmentLimits(state.hello?.policy),
-        getAttachments: binding.getAttachments,
+        ...attachmentDestination.callbacks,
         pendingAttachmentReads: reads.pendingReads,
-        getPendingAttachmentReads: () => reads.pendingReads,
         readSignal,
-        onPendingReadsChange: binding.onPendingReadsChange,
-        onAttachmentsChange: binding.onAttachmentsChange,
       };
     },
 
@@ -363,6 +339,32 @@ export function createChatState<TState extends ChatPageHost>(
     captureRenderChanges: captureRenderLifecycleChanges,
   };
   return api;
+
+  function captureAttachmentDestination(
+    state: TState,
+    reads: ChatAttachmentReadLifecycle,
+    readSignal: AbortSignal,
+  ) {
+    return {
+      state,
+      reads,
+      readSignal,
+      callbacks: {
+        getAttachments: () => state.chatAttachments,
+        getPendingAttachmentReads: () => reads.pendingReads,
+        onPendingReadsChange: (delta: 1 | -1) => {
+          if (delta === 1 && readSignal === reads.readSignal) {
+            markChatComposerEdit(state);
+          }
+          reads.updatePending(readSignal, delta);
+        },
+        onAttachmentsChange: (next: ChatPageHost["chatAttachments"]) => {
+          state.chatAttachments = next;
+          attachmentChanged();
+        },
+      },
+    };
+  }
 
   function publishComposerDraft() {
     publishedDraft = composerDraft.read();
