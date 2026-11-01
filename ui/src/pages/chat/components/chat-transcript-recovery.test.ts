@@ -156,7 +156,12 @@ describe("chat transcript full-message recovery", () => {
     expect(restored?.snapshot.rowDisplay?.["assistant-full-1"]?.recoveredMessage).toEqual(
       recovered,
     );
-    cacheChatSessionSnapshot(cache, host, target, expectDefined(restored).snapshot);
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      target,
+      expectDefined(restored, "restored snapshot").snapshot,
+    );
     const pane = document.createElement("test-recovery-transcript") as RecoveryTranscriptElement;
     pane.props = threadProps("cached-search", target.sessionKey, [source], {
       fullMessageAgentId: target.agentId,
