@@ -18,6 +18,7 @@ import {
   normalizeExtraMemoryPaths,
   remapChunkLines,
   runWithConcurrency,
+  shouldSkipConfiguredMemorySearchPath,
   stripMemoryAnnotationCarriers,
 } from "./internal.js";
 import { normalizeMemoryMultimodalSettings, type MemoryMultimodalSettings } from "./multimodal.js";
@@ -221,6 +222,45 @@ describe("memory host SDK package internals", () => {
       path.join("extra", "note.md"),
       path.join("extra", "recording.m2a"),
     ]);
+  });
+
+  it("keeps generated dreaming reports out of default and overlapping extra paths", async () => {
+    const workspaceDir = getTmpDir();
+    const memoryDir = path.join(workspaceDir, "memory");
+    const dreamingDir = path.join(memoryDir, "dreaming", "light");
+    await fs.mkdir(dreamingDir, { recursive: true });
+    await fs.writeFile(path.join(memoryDir, "current.md"), "Current truth");
+    await fs.writeFile(path.join(dreamingDir, "report.md"), "Generated report");
+    expect(
+      (await listMemoryFiles(workspaceDir)).map((file) => path.relative(workspaceDir, file)),
+    ).toContain(path.join("memory", "dreaming", "light", "report.md"));
+    const files = await listMemoryFiles(workspaceDir, [memoryDir], undefined, undefined, [
+      "memory/dreaming/**",
+    ]);
+    expect(files.map((file) => path.relative(workspaceDir, file))).toEqual([
+      path.join("memory", "current.md"),
+    ]);
+  });
+
+  it("matches exclusion globs against workspace-relative paths only", () => {
+    const workspaceDir = path.resolve("/test/workspace");
+    const skipped = (
+      relative: string,
+      excludePaths = ["memory/dreaming/**", "memory/.dreams/**"],
+    ) =>
+      shouldSkipConfiguredMemorySearchPath({
+        workspaceDir,
+        absPath: path.resolve(workspaceDir, relative),
+        excludePaths,
+      });
+    expect(skipped("memory/dreaming")).toBe(true);
+    expect(skipped("memory/dreaming/light/report.md")).toBe(true);
+    expect(skipped("memory/.dreams/report.md")).toBe(true);
+    expect(skipped("memory/dreaming-notes.md")).toBe(false);
+    expect(skipped("memory/current.md")).toBe(false);
+    expect(skipped("../other/memory/dreaming/report.md")).toBe(false);
+    expect(skipped("..notes/report.md", ["..notes/**"])).toBe(true);
+    expect(skipped("memory/dreaming/light/report.md", [])).toBe(false);
   });
 
   it.each([

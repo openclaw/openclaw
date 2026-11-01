@@ -164,6 +164,28 @@ export function matchesExtraMemoryPathEntry(
   }
 }
 
+/** Match workspace-relative paths only; outside extra roots are not governed by workspace globs. */
+export function shouldSkipConfiguredMemorySearchPath(params: {
+  workspaceDir: string;
+  absPath: string;
+  excludePaths?: readonly string[];
+}): boolean {
+  if (!params.excludePaths?.length) {
+    return false;
+  }
+  const relative = path.relative(params.workspaceDir, params.absPath);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return false;
+  }
+  const normalized = relative.replaceAll(path.sep, "/");
+  return params.excludePaths.some(
+    (pattern) =>
+      // matchesGlob("dir", "dir/**") is false; match the directory so scans and watchers prune it.
+      (pattern.endsWith("/**") && normalized === pattern.slice(0, -3)) ||
+      path.posix.matchesGlob(normalized, pattern),
+  );
+}
+
 export function isMemoryPath(relPath: string): boolean {
   const normalized = relPath
     .trim()
@@ -259,16 +281,18 @@ export async function listMemoryFiles(
   extraPaths?: MemoryExtraPath[],
   multimodal?: MemoryMultimodalSettings,
   onSkippedSymlinkRoot?: (root: string) => void,
+  excludePaths?: readonly string[],
 ): Promise<string[]> {
   const result: string[] = [];
   const memoryDir = path.join(workspaceDir, "memory");
 
   const shouldSkipWorkspaceMemoryPath = (absPath: string): boolean =>
-    shouldSkipRootMemoryAuxiliaryPath({ workspaceDir, absPath });
+    shouldSkipRootMemoryAuxiliaryPath({ workspaceDir, absPath }) ||
+    shouldSkipConfiguredMemorySearchPath({ workspaceDir, absPath, excludePaths });
 
   const addMarkdownFile = async (absPath: string) => {
     const stat = await scanMemorySource(absPath, () => statEnumerableMemoryFile(absPath));
-    if (!stat || !absPath.endsWith(".md")) {
+    if (!stat || !absPath.endsWith(".md") || shouldSkipWorkspaceMemoryPath(absPath)) {
       return;
     }
     result.push(absPath);

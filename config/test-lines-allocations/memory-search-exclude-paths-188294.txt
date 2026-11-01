@@ -1,0 +1,2 @@
+# memory.search.excludePaths: default scope-hash compatibility, shared-watcher rebaseline, discovery and glob matching, and exclusion rebuild regressions.
+145
