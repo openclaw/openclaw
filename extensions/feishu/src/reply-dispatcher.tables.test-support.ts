@@ -1,5 +1,6 @@
 // Shared harness for the Feishu reply dispatcher table suites: mocked transports, a
 // streaming-card stand-in, and the real table-mode resolver behind a registered plugin.
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   convertMarkdownTables,
   type MarkdownTableMode,
@@ -352,6 +353,73 @@ export function trackChat(startup: "ready" | "delayed" | "rejected" = "ready") {
     return card;
   };
   return { cardEntry, gate, watch, visible: () => chat.filter((entry) => !entry.removed) };
+}
+
+/**
+ * A reply whose preview card is rejected or backed off and whose second static card is
+ * rejected. Prose longer than one card goes out as a block, or is only previewed, then a
+ * table block and a tail block or a final. Returns the chat in creation order, each message
+ * as id:parts with "@" for the reader mention, and each call's receipt ids, "!" marking a
+ * partial-delivery error.
+ */
+export async function settleWithoutPreviewCard(
+  startup: "rejected" | "backoff",
+  prose: "block" | "preview",
+  settle: "tail" | "final",
+) {
+  await useRealMarkdownChunker(200);
+  createBlockTableHarness(tableCfg("off"));
+  if (startup === "backoff") {
+    streamingStartBackoffUntilByAccount.set("main", Date.now() + 60_000);
+  }
+  const { visible } = trackChat(startup === "backoff" ? "ready" : startup);
+  const card = mocks.sendStructuredCardFeishu.getMockImplementation()!;
+  mocks.sendStructuredCardFeishu
+    .mockImplementationOnce(card)
+    .mockRejectedValueOnce(new Error("second card rejected"));
+  const reader = [{ openId: "ou_reader", name: "Reader", key: "@reader" }];
+  const { result, options } = createDispatcherHarness({
+    accountId: "main",
+    cfg: tableCfg("off"),
+    mentionTargets: reader,
+  });
+  const parts = [
+    prose === "block" ? "y".repeat(300) : "Here is the roster for the team.",
+    tableMarkdown,
+    "Roster complete.",
+  ];
+  const receipts: string[] = [];
+  const settled = (pending: ReturnType<typeof options.deliver>) =>
+    pending.then(
+      (delivered) => String(delivered?.messageIds),
+      (error: unknown) =>
+        isChannelPartialDeliveryError(error) ? `${String(error.deliveryResult.messageIds)}!` : "x",
+    );
+  for (const [index, text] of parts.entries()) {
+    result.replyOptions.onPartialReply?.({ text: parts.slice(0, index + 1).join("\n\n") });
+    if ((prose === "preview" && index === 0) || (settle === "final" && index === 2)) {
+      continue;
+    }
+    receipts.push(await settled(options.deliver({ text }, { kind: "block" })));
+  }
+  if (settle === "final") {
+    receipts.push(await settled(options.deliver({ text: parts.join("\n\n") }, { kind: "final" })));
+  }
+  await options.onIdle?.();
+  const names = new Map(parts.map((part, index) => [part, "PTS"[index]]));
+  const name = (text: string) =>
+    text
+      .split("\n\n")
+      .map((part) => names.get(part) ?? (/^y+$/.test(part) ? `y${part.length}` : part))
+      .join("+");
+  const mention = (mentions: unknown) =>
+    mentions === undefined ? "" : JSON.stringify(mentions) === JSON.stringify(reader) ? "@" : "@?";
+  return {
+    chat: visible()
+      .map((entry) => `${entry.id}:${name(entry.text)}${mention(entry.mentions)}`)
+      .join(" "),
+    receipts: receipts.join(" "),
+  };
 }
 
 export function streamingUpdateTexts(instanceIndex = 0): string[] {

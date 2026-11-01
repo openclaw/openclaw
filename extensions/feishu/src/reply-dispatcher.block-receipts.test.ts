@@ -17,6 +17,7 @@ const {
   sendMediaFeishuMock,
   sendCardFeishuMock,
   sendStructuredCardFeishuMock,
+  settleWithoutPreviewCard,
   streamingInstances,
   streamingUpdateTexts,
   tableCfg,
@@ -293,6 +294,16 @@ describe("createFeishuReplyDispatcher block table receipts", () => {
       }
     },
   );
+
+  // Without a preview card a prose block keeps only what its first card took, and prose
+  // only previewed rides in the table post. Either way each part is sent once.
+  it.each([
+    ["rejected", "block", "final", "oc-1:y200 om-1:T@ om-2:S@", "oc-1! om-1 oc-1,om-1,om-2!"],
+    ["backoff", "block", "tail", "oc-1:y200 om-1:T@ oc-2:S", "oc-1! om-1 oc-2"],
+    ["rejected", "preview", "final", "om-1:P+T@ om-2:S@", "om-1 om-1,om-2"],
+  ] as const)("%s start, %s prose, %s once", async (startup, prose, settle, chat, receipts) => {
+    expect(await settleWithoutPreviewCard(startup, prose, settle)).toEqual({ chat, receipts });
+  });
 
   it.each([undefined, "settings", "write", "throw"] as const)(
     "delivers the rest once around a prose card close that fails with %s",

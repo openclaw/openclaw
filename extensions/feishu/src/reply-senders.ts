@@ -50,7 +50,7 @@ type FeishuReplySenderContext = {
   requiredMentionTargets?: MentionTarget[];
   markVisibleReplySent: () => void;
   deliveredFinalTexts: Set<string>;
-  blockPostDeliveries: [string, Promise<FeishuReplyDeliveryResult>][];
+  blockPostDeliveries: [string, Promise<FeishuReplyDeliveryResult>, "fallback"?][];
   rememberStreamingSettlement: (content: string, result: FeishuReplyDeliveryResult) => void;
   tableNeedsPostPath: (value: string) => boolean;
   answerTableNeedsPostPath: (value: string) => boolean;
@@ -271,10 +271,13 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
         const accepted: FeishuReplyDeliveryResult[] = [];
         let remaining = blockAnswerText;
         let answerComplete = false;
+        let fallbackFailure: unknown;
         try {
           // Keep identical block occurrences in dispatch order. Only complete acceptance
-          // advances the prefix; a partial rejection still owns its chunks.
-          for (const [blockText, pending] of matchingBlocks) {
+          // advances the prefix; a partial rejection still owns its chunks. A fallback card
+          // that failed after its first chunk owns them too, but its own block reported
+          // that, so the rest goes out and the final then reports the same failure.
+          for (const [blockText, pending, origin] of matchingBlocks) {
             if (!remaining.startsWith(blockText)) {
               continue;
             }
@@ -282,10 +285,14 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
             try {
               block = await pending;
             } catch (error: unknown) {
-              if (isChannelPartialDeliveryError(error)) {
+              if (!isChannelPartialDeliveryError(error)) {
+                continue;
+              }
+              if (origin !== "fallback") {
                 throw error;
               }
-              continue;
+              block = error.deliveryResult;
+              fallbackFailure = error.cause ?? error;
             }
             accepted.push(block);
             remaining = remaining.slice(blockText.length).replace(/^\s*\n/u, "");
@@ -314,7 +321,6 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
             );
           }
           deliveredFinalTexts.add(blockAnswerText);
-          return mergeFeishuReplyDeliveryResults(accepted);
         } catch (error: unknown) {
           const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
           // A remainder rejected whole leaves every receipt above reusable, so its failure
@@ -330,6 +336,11 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
             mergeFeishuReplyDeliveryResults([...accepted, ...(partial ? [partial] : [])]),
           );
         }
+        const settled = mergeFeishuReplyDeliveryResults(accepted);
+        if (fallbackFailure !== undefined) {
+          throw createFeishuPartialReplyDeliveryError(fallbackFailure, settled);
+        }
+        return settled;
       })();
     }
     const delivery = send();
@@ -390,17 +401,21 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
     if (leading) {
       remaining = remaining.slice(leading.text.length).replace(/^\s*\n/u, "");
     }
-    for (const [blockText, pending] of blockPostDeliveries) {
+    for (const [blockText, pending, origin] of blockPostDeliveries) {
       if (!remaining.startsWith(blockText)) {
         continue;
       }
       try {
         await pending;
       } catch (error: unknown) {
-        if (isChannelPartialDeliveryError(error)) {
+        if (!isChannelPartialDeliveryError(error)) {
+          continue;
+        }
+        // A fallback card that failed after its first chunk reported that through its own
+        // block, so the walk passes its text rather than resend it or refuse this block.
+        if (origin !== "fallback") {
           throw error;
         }
-        continue;
       }
       remaining = remaining.slice(blockText.length).replace(/^\s*\n/u, "");
     }

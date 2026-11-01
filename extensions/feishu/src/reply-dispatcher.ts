@@ -271,7 +271,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   // Partial previews are replaceable; only committed final text may precede an error notice.
   let hasStreamingFinalText = false;
   const deliveredFinalTexts = new Set<string>();
-  const blockPostDeliveries: [string, Promise<FeishuReplyDeliveryResult>][] = [];
+  const blockPostDeliveries: [string, Promise<FeishuReplyDeliveryResult>, "fallback"?][] = [];
   type StreamingDisposition = "closed" | "discarded";
   type StreamingCloseOutcome = {
     disposition: StreamingDisposition;
@@ -1320,8 +1320,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (useFallbackCard) {
           const card = sendChunkedTextReply({ text, useCard: true, infoKind: info?.kind });
           if (info?.kind === "block") {
-            // This card is the block's delivery, so a later post or final walks past it.
-            blockPostDeliveries.push([text, card]);
+            // This card is the block's delivery, so a later post or final walks past it,
+            // even when it failed after its first chunk.
+            blockPostDeliveries.push([text, card, "fallback"]);
             void card.catch(() => undefined);
           }
           deliveredResults.push(await card);
