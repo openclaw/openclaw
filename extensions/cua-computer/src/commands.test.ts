@@ -228,13 +228,23 @@ describe("cua-computer provider", () => {
     },
   );
 
-  it("mints opaque refs without a screenshot and maps background evidence", async () => {
+  it("mints actionable refs without a screenshot when the driver defaults to Markdown", async () => {
     const { session, callTool } = windowDriver((name) =>
       name === "click" ? actionResult("confirmedBackgroundAction") : cuaToolResult({}),
     );
     callTool.mockImplementationOnce(async () => cuaToolResult(fixtures.listWindows));
     callTool.mockImplementationOnce(async (_name, args) => {
-      return cuaToolResult(fixtures.windowState, { image: args.include_screenshot !== false });
+      // CUA 0.37 omits the elements array unless its structured tree is requested.
+      const structured = args.tree_format === "elements";
+      return cuaToolResult(
+        {
+          ...fixtures.windowState,
+          elements: structured ? fixtures.windowState.elements : undefined,
+          tree_format: structured ? "elements" : "markdown",
+          tree_markdown: structured ? undefined : '- [7] text field "Body" value="old"',
+        },
+        { image: args.include_screenshot !== false },
+      );
     });
     const computer = await execution(session);
     const listed = await computer.read<{
@@ -253,6 +263,7 @@ describe("cua-computer provider", () => {
     });
     expect(Boolean(observed.observation.base64)).toBe(false);
     const { observationId, elements } = observed.observation;
+    expect(elements).toHaveLength(1);
     const { elementRef } = elements[0]!;
     expect(observed).toMatchObject({ details: { coordinateSpace: "image-pixels" } });
     expect(observationId).toMatch(/^cua:v2:observation:/);
