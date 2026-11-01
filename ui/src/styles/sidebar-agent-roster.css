@@ -13,7 +13,7 @@ openclaw-sidebar-agent-roster {
   column-gap: 8px;
   margin-inline: -6px;
   padding-inline: 6px 13px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   corner-shape: superellipse(1.5);
   color: var(--muted);
   font-size: 12px;
@@ -213,7 +213,7 @@ openclaw-sidebar-agent-roster {
   grid-template-columns: var(--roster-avatar-size) minmax(0, 1fr);
   align-items: center;
   gap: 10px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   corner-shape: superellipse(1.5);
   flex: 1;
   align-self: stretch;

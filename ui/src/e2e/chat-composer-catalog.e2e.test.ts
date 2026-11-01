@@ -65,7 +65,7 @@ async function expectText(target: Locator, text: string) {
 }
 
 suite.define(() => {
-  it.each(["config.changed", "chat.metadata.changed"])(
+  it.each(["chat.metadata.changed"])(
     "recovers the retained composer after %s without reloading",
     async (event) => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
@@ -108,7 +108,7 @@ suite.define(() => {
           commands: [],
           models: [{ ...model, available: true }],
         });
-        await gateway.emitGatewayEvent(event, {});
+        await gateway.emitGatewayEvent(event, { modelCatalogChanged: true });
         await gateway.waitForRequest("models.list", { after: 1 });
         expect(await textarea.isDisabled()).toBe(false);
         expect(await textarea.inputValue()).toBe(draft);

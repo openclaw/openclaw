@@ -2,6 +2,11 @@ title: "Runtime tool fixture — apply-patch"
 
 scenario:
   id: runtime-tool-apply-patch
+  gatewayConfigPatch:
+    tools:
+      exec:
+        applyPatch:
+          workspaceOnly: true
   surface: runtime-tools
   runtimePairLane: core
   coverage:

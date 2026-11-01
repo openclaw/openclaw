@@ -3,10 +3,11 @@
 .agent-chat__capability-menu-panel,
 .chat-controls__permission-menu,
 .chat-talk-input-picker__menu {
-  border: 1px solid var(--chat-composer-popover-border, var(--overlay-border));
-  border-radius: var(--chat-composer-popover-radius, var(--radius-lg));
-  background: var(--popover);
-  box-shadow: var(--overlay-shadow);
+  border: 0;
+  border-radius: var(--menu-radius);
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
   corner-shape: superellipse(1.5);
 }
 
@@ -434,13 +435,6 @@
   stroke-width: 1.75px;
 }
 
-.agent-chat__capability-menu-panel .agent-chat__capability-menu-divider {
-  height: 1px;
-  margin: 6px 4px;
-  background: color-mix(in srgb, var(--border) 72%, transparent);
-  flex-shrink: 0;
-}
-
 .agent-chat__capability-menu-switch .settings-toggle__control {
   border-color: color-mix(in srgb, var(--border) 92%, var(--text));
   background: color-mix(in srgb, var(--text) 12%, var(--card));
@@ -566,19 +560,6 @@
   width: 24px;
   height: 24px;
   color: var(--muted);
-}
-.agent-chat__capability-menu-search {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  padding: 0;
-}
-.agent-chat__capability-menu-search::-webkit-search-cancel-button {
-  display: none;
 }
 .agent-chat__capability-menu-emoji {
   font-size: 17px;
@@ -1470,7 +1451,7 @@
 .slash-menu-group__label {
   padding: 4px 8px 3px;
   font-size: calc(10px * var(--control-ui-text-scale));
-  font-weight: 650;
+  font-weight: var(--control-ui-font-weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--muted);
@@ -1480,11 +1461,10 @@
   display: grid;
   grid-template-columns: 15px minmax(0, 1fr);
   align-items: center;
-  column-gap: 10px;
-  min-height: 34px;
-  padding: 0 8px;
+  column-gap: 8px;
+  min-height: 32px;
+  padding: 6px 8px;
   border-radius: var(--menu-item-radius);
-  transition: background var(--duration-fast) ease;
 }
 
 .slash-menu-item[role="option"] {
@@ -1492,7 +1472,7 @@
 }
 
 .slash-menu-item--active {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .slash-menu-copy {
@@ -1514,8 +1494,8 @@
 }
 
 .slash-menu-icon svg {
-  width: 12px;
-  height: 12px;
+  width: 15px;
+  height: 15px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5px;
@@ -1528,7 +1508,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: var(--control-ui-text-sm);
-  font-weight: 550;
+  font-weight: var(--control-ui-font-weight-semibold);
   color: var(--text-strong);
   white-space: nowrap;
 }
@@ -1698,7 +1678,6 @@
   flex: 0 0 auto;
   width: 56px;
   height: 56px;
-  box-sizing: border-box;
   border: 1px solid var(--border);
   border-radius: var(--chat-attachment-radius);
   corner-shape: superellipse(1.5);
@@ -2102,7 +2081,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   margin: 0;
   padding: 0;
   border: 0;
-  box-sizing: border-box;
   opacity: 0;
   pointer-events: none;
 }
@@ -2289,9 +2267,9 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 /* The outer surface owns elevation so scrolling never clips the shadow to a square. */
 .chat-controls__effort-picker > .chat-picker-overlay {
-  border-radius: var(--chat-composer-popover-radius, var(--radius-lg));
+  border-radius: var(--menu-radius);
   corner-shape: superellipse(1.5);
-  box-shadow: var(--overlay-shadow);
+  box-shadow: var(--menu-shadow);
 }
 
 .chat-controls__effort-menu {
@@ -2342,12 +2320,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   grid-column: 1 / -1;
   gap: 8px;
   padding: 9px;
-  border-radius: max(
-    0px,
-    calc(
-      var(--chat-composer-popover-radius, var(--radius-lg)) - var(--chat-permission-panel-padding)
-    )
-  );
+  border-radius: var(--menu-item-radius);
 }
 
 .chat-controls__permission-option > .oc-menu-item__icon,
@@ -3306,9 +3279,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 .chat-controls__effort-zap--ultrafast {
-  --icon-secondary: color-mix(in oklab, var(--accent) 75%, white);
-  --icon-primary: var(--accent);
-
   width: 16px;
   height: 18px;
   flex-basis: 16px;
@@ -3547,9 +3517,13 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
       transform: translate(-50%, -50%);
     }
 
+    /* The double bolt is centered geometrically, but its bright front bolt sits
+       low-right and its tip hangs below the open dial. Nudge it up-left so its
+       visual weight lands on the dial center and its tip meets the arc ends. */
     & .chat-controls__effort-fast-badge.chat-controls__effort-zap--ultrafast {
       width: 12px;
       height: 14px;
+      margin: -0.75px 0 0 -0.25px;
     }
 
     & .agent-chat__composer-footer .chat-controls__effort-fast-badge svg {
@@ -3956,8 +3930,10 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   stroke: currentColor;
 }
 
+/* Reset the muted overrides so zapDouble uses its own accent colors. */
 .chat-controls__speed-option[aria-checked="true"] .chat-controls__speed-option-icon {
-  --icon-secondary: color-mix(in oklab, var(--accent) 75%, white);
+  --icon-primary: initial;
+  --icon-secondary: initial;
   color: var(--accent);
 }
 

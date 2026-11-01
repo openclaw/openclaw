@@ -54,10 +54,12 @@ export function SettingsPage(props: {
   children?: JSX.Element;
   wide?: boolean;
   carapace?: boolean;
+  busy?: boolean;
 }) {
   return (
     <ShellLayoutBoundary traits={{ settingsPage: true, settingsWide: props.wide }}>
       <div
+        aria-busy={props.busy ? "true" : undefined}
         class={[
           "settings-page",
           { "settings-page--wide": props.wide, "oc-app-surface": props.carapace },

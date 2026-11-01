@@ -1,4 +1,5 @@
-import { rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -9,6 +10,7 @@ import {
   installSpeechProviders,
   listSpeechVoices,
   prepareTtsRequest,
+  prefsPathFor,
   requireFirstCallParam,
   requireFirstSynthesisRequest,
   requireRecord,
@@ -23,6 +25,9 @@ import {
   type SpeechListVoicesRequest,
   type TtsConfig,
 } from "./tts-runtime.test-support.js";
+import * as ttsSettings from "./tts-settings.js";
+
+const { resolveExplicitTtsOverridesAsync } = await import("./tts-request.js");
 
 const mockConfig = (providerConfig: Record<string, unknown>): OpenClawConfig => ({
   tts: { enabled: true, provider: "mock", providers: { mock: providerConfig } },
@@ -146,6 +151,76 @@ describe("TTS runtime native voice-note routing", () => {
       voice: "safe",
     });
     expect(prepared.directives).toMatchObject({ cleanedText: "", ttsText: "Speak this instead" });
+  });
+
+  it("skips preference preparation for explicit providers and empty overrides", async () => {
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        aliases: ["mock-alias"],
+        resolveTalkOverrides: ({ params }) => ({ voice: params.voiceId }),
+      }),
+    ]);
+    const cfg = { tts: { provider: "mock", prefsPath: prefsPathFor("unused-explicit-overrides") } };
+    const preparePreferences = vi.spyOn(ttsSettings, "resolveTtsPrefsPathAsync");
+    try {
+      await expect(
+        resolveExplicitTtsOverridesAsync({ cfg, modelId: " ", voiceId: " " }),
+      ).resolves.toEqual({});
+      await expect(
+        resolveExplicitTtsOverridesAsync({
+          cfg,
+          provider: "  MOCK-ALIAS  ",
+          voiceId: " voice-id ",
+        }),
+      ).resolves.toEqual({
+        provider: "mock",
+        providerOverrides: { mock: { voice: "voice-id" } },
+      });
+      await expect(
+        resolveExplicitTtsOverridesAsync({ cfg, provider: " UNKNOWN " }),
+      ).resolves.toEqual({
+        provider: "unknown",
+      });
+      await expect(
+        resolveExplicitTtsOverridesAsync({ cfg, provider: "unknown", voiceId: "voice-id" }),
+      ).rejects.toThrow("speech provider unknown is not registered");
+      expect(preparePreferences).not.toHaveBeenCalled();
+    } finally {
+      preparePreferences.mockRestore();
+    }
+  });
+
+  it("prepares fallback preferences once and reads their current provider after preparation", async () => {
+    const dir = mkdtempSync(path.join(realpathSync(os.tmpdir()), "openclaw-explicit-overrides-"));
+    const prefsPath = path.join(dir, "tts.json");
+    const cfg = { tts: { provider: "previous", prefsPath } };
+    installSpeechProviders([
+      createMockSpeechProvider("previous"),
+      createMockSpeechProvider("mock", {
+        resolveTalkOverrides: ({ params }) => ({ voice: params.voiceId }),
+      }),
+    ]);
+    writeFileSync(prefsPath, JSON.stringify({ tts: { provider: "previous" } }));
+    const resolvePrefsPath = ttsSettings.resolveTtsPrefsPathAsync;
+    const preparePreferences = vi
+      .spyOn(ttsSettings, "resolveTtsPrefsPathAsync")
+      .mockImplementation(async (...args) => {
+        const preparedPath = await resolvePrefsPath(...args);
+        writeFileSync(prefsPath, JSON.stringify({ tts: { provider: "mock" } }));
+        return preparedPath;
+      });
+    try {
+      await expect(resolveExplicitTtsOverridesAsync({ cfg, voiceId: "voice-id" })).resolves.toEqual(
+        {
+          provider: "mock",
+          providerOverrides: { mock: { voice: "voice-id" } },
+        },
+      );
+      expect(preparePreferences).toHaveBeenCalledOnce();
+    } finally {
+      preparePreferences.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("pre-transcodes synthesized mp3 to opus-in-CAF when the host can satisfy preferAudioFileFormat", async () => {

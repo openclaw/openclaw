@@ -50,19 +50,19 @@ struct StaleGatewayServiceReplacement {
         else { return nil }
         let appManaged = CLIInstallPrompter.launchAgentUsesManagedCLI(programArguments: previous.prefix + ["gateway"])
         guard Self.admits(
-                  connectionMode: app.connectionMode,
-                  isPaused: app.isPaused,
-                  launchAgentUsesManagedCLI: appManaged,
-                  gatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel(),
-                  installPolicy: CLIInstallPolicy.storedPolicy(),
-                  launchAgentWriteDisabled: GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()),
-              GatewayLaunchAgentManager.bundledRuntimeReplacementError(
-                  appManaged: appManaged,
-                  installedRuntimePath: previous.prefix.first,
-                  stateDirectory: profile.stateDirectoryURL()) == nil,
-              // Ordinary launches stop here; only a stale service seeds this build early.
-              !previous.matchesBundledRuntime(BundledRuntime(root: runtimes.appendingPathComponent(buildID))),
-              let runtime = try? await BundledRuntime.seed(bundle: bundle, profile: profile)
+            connectionMode: app.connectionMode,
+            isPaused: app.isPaused,
+            launchAgentUsesManagedCLI: appManaged,
+            gatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel(),
+            installPolicy: CLIInstallPolicy.storedPolicy(),
+            launchAgentWriteDisabled: GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()),
+            GatewayLaunchAgentManager.bundledRuntimeReplacementError(
+                appManaged: appManaged,
+                installedRuntimePath: previous.prefix.first,
+                stateDirectory: profile.stateDirectoryURL()) == nil,
+            // Ordinary launches stop here; only a stale service seeds this build early.
+            !previous.matchesBundledRuntime(BundledRuntime(root: runtimes.appendingPathComponent(buildID))),
+            let runtime = try? await BundledRuntime.seed(bundle: bundle, profile: profile)
         else { return nil }
         return Self.replacing(previous, with: runtime)
     }

@@ -14,6 +14,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writePackageTarball } from "./docker-all-harness.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const harness = process.cwd();
@@ -467,9 +468,7 @@ if (command === 'git') {
   ])("preserves $runner proof settlement: $mode", ({ runner, mode, exit }) => {
     const root = tempDirs.make("e2e-wait-");
     const { at, file, bin, log, env } = fixture(root);
-    file("package/package.json", JSON.stringify({ name: "openclaw", version: "1.2.3" }));
-    const packageTgz = at("candidate.tgz");
-    expect(spawnSync("tar", ["-czf", packageTgz, "-C", root, "package"]).status).toBe(0);
+    const packageTgz = writePackageTarball(root, "openclaw", "1.2.3", "candidate.tgz");
     const commands = {
       git: `if [[ "$*" == *rev-parse* ]]; then printf '%040d\\n' 0; fi`,
       sleep: `printf 'sleep %s\\n' "$*" >> "$PROOF_TRACE"`,

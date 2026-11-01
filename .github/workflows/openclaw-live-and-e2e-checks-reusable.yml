@@ -1632,14 +1632,13 @@ jobs:
             --server-san 127.0.0.1 --server-san localhost --server-san host.openshell.internal
           cat > "$fixture_root/gateway.toml" <<TOML
           [openshell]
-          version = 1
+          version = 2
           [openshell.gateway]
-          compute_drivers = ["docker"]
+          compute_driver = "docker"
           [openshell.gateway.mtls_auth]
           enabled = true
           [openshell.drivers.docker]
-          sandbox_namespace = "$gateway_name"
-          network_name = "$gateway_name"
+          sandbox_label = "$gateway_name"
           grpc_endpoint = "https://host.openshell.internal:$gateway_port"
           TOML
           RUST_LOG=info openshell-gateway --config "$fixture_root/gateway.toml" \
@@ -3130,6 +3129,7 @@ jobs:
         if: steps.plan.outputs.needs_package == '1' && needs.validate_selected_ref.outputs.package_artifact_present != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: docker-e2e-package-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .artifacts/docker-e2e-package/openclaw-current.tgz
@@ -4157,14 +4157,6 @@ jobs:
             bash .release-harness/scripts/docker/shared-image-artifact.sh \
             load .artifacts/live-test-image live-test "$TARGET_SHA" "$WORKFLOW_SHA" "$LIVE_IMAGE"
 
-      - name: Setup Node environment
-        if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
-
       - name: Hydrate live auth/profile inputs
         if: contains(matrix.profiles, inputs.release_test_profile)
         run: bash scripts/ci-hydrate-live-auth.sh
@@ -4306,13 +4298,6 @@ jobs:
         env: *live_test_image_load_env
         shell: bash
         run: *live_test_image_load_run
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
 
       - name: Normalize provider allowlist
         shell: bash

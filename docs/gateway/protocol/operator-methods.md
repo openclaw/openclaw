@@ -16,6 +16,11 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
 - `commands.list` (`operator.read`) fetches the runtime command inventory for
   an agent.
   - `agentId` is optional; omit it to read the default agent workspace.
+  - `projectId` is optional and only valid without `sessionKey`. It previews
+    the skills of a registered project selected before a session exists. The
+    Gateway reads that project's `skills/` and `.agents/skills/` only when the
+    client could create a session there for the agent, including sandbox
+    containment; otherwise the agent catalog is returned unchanged.
   - `scope` controls which surface the primary `name` targets: `text` returns
     the primary text command token without the leading `/`; `native` and the
     default `both` path return provider-aware native names when available.
@@ -46,6 +51,8 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
     authority, credentials, discovery, and final run policy can change which
     tools are offered. Absence from this preview does not establish that a tool
     is disabled, and inclusion does not guarantee execution access.
+    See [Codex pre-turn verification](/plugins/codex-harness/commands#verify-tool-access-before-a-codex-turn)
+    for supported checks and their limits.
   - The projection can use cached inventory while refreshing it. Unsaved UI
     edits are not inputs, and saved or runtime changes may not appear immediately.
   - Managed sessions using an OpenClaw tool runtime can include the GitHub

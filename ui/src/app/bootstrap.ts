@@ -1,6 +1,5 @@
 import "./boot-capabilities.ts";
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
-import type { ControlUiFocusLocation } from "@openclaw/session-url-contract";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -12,7 +11,6 @@ import {
   routeIdFromPath,
   startApplicationRouter,
   warmApplicationRouteModule,
-  type ApplicationRouter,
   type RouteId,
 } from "../app-routes.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
@@ -21,7 +19,6 @@ import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import type { ChannelCapability, createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
-import { loadCurrentDeviceAuthToken } from "../lib/nodes/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { openPreferredApplicationSession } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
@@ -33,9 +30,7 @@ import {
 import { ControlUiPluginRuntime } from "../plugins/control-ui-runtime.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
-import type { ControlUiDocumentMode } from "./approval-deep-link.ts";
 import { AssistantDock } from "./assistant-dock.ts";
-import { readBootRecord } from "./boot-record.ts";
 import { prepareApplicationStartup } from "./bootstrap-connection.ts";
 import {
   applicationRouteLocation,
@@ -49,14 +44,13 @@ import {
 import { createApplicationNavigationPreferences } from "./bootstrap-navigation-preferences.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import {
-  prewarmBootChat,
   subscribeBootRecordPersistence,
   subscribeWarmBootConnection,
 } from "./bootstrap-warm-boot.ts";
 import { startBrowserAuthRecovery } from "./browser-auth-recovery.tsx";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
-import { createApplicationConfigCapability, type ReadOnlyConfigNotice } from "./config.ts";
+import { createApplicationConfigCapability } from "./config.ts";
 import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { MountedApplicationShell } from "./context-types.ts";
 import type { ApplicationNavigationOptions, ApplicationContext } from "./context.ts";
@@ -93,23 +87,7 @@ import { openUpdateFailureTriage } from "./update-triage.ts";
 import { seedUserPreferences } from "./user-prefs-cache.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
-export type ApplicationRuntime = {
-  readonly context: ApplicationContext;
-  readonly router: ApplicationRouter;
-  readonly documentMode: ControlUiDocumentMode | null;
-  readonly readOnlyConfig?: ReadOnlyConfigNotice;
-  readonly warmBoot: boolean;
-  readonly focusLocation: ControlUiFocusLocation | null;
-  readonly pendingGatewayConnection: {
-    readonly gatewayUrl: string;
-    readonly token: string | null;
-  } | null;
-  readonly confirmPendingGatewayConnection: () => void;
-  readonly cancelPendingGatewayConnection: () => void;
-  readonly setShell: (shell: MountedApplicationShell | undefined) => void;
-  start: () => Promise<void>;
-  stop: () => void;
-};
+export type { ApplicationRuntime } from "./application-runtime.ts";
 
 type PendingRouterStartNavigation = {
   location: RouteLocation;
@@ -119,7 +97,7 @@ type PendingRouterStartNavigation = {
 export function bootstrapApplication(
   initial = prepareApplicationStartup(),
   earlyGateway?: EarlyApplicationGateway,
-): ApplicationRuntime {
+): import("./application-runtime.ts").ApplicationRuntime {
   const {
     history,
     basePath,
@@ -168,28 +146,10 @@ export function bootstrapApplication(
   const connectionBootstrap = createConnectionBootstrapCoordinator();
   const chatSubmissions = createChatSubmissions();
   const router = createApplicationRouter();
-  const bootRecord =
-    ownsWarmBoot && !hasPendingGateway
-      ? readBootRecord(gatewayCredentialScope(settings.gatewayUrl), (method) => {
-          if (startup.pendingBootstrapToken || startup.password) {
-            return null;
-          }
-          if (["trusted-proxy", "tailscale", "password"].includes(method)) {
-            return settings.token.trim() ? null : "";
-          }
-          // An explicit token takes precedence over paired-device auth on the next connect.
-          return method === "token"
-            ? settings.token
-            : settings.token.trim()
-              ? null
-              : loadCurrentDeviceAuthToken(settings.gatewayUrl);
-        })
-      : null;
+  const bootRecord = initial.bootRecord;
   let warmBoot = bootRecord !== null;
   const warmBootConnectionRevision = gateway.connectionRevision;
-  if (bootRecord) {
-    prewarmBootChat(bootRecord, settings.sessionKey, applicationLocation, basePath);
-  }
+  initial.prewarmChatSnapshot();
   if (startsApplicationRouter && !firstRunDefaultLanding) {
     // Explicit routes download alongside snapshot reads, before shell construction.
     warmApplicationRouteModule(router, applicationLocation, basePath);
@@ -596,13 +556,19 @@ export function bootstrapApplication(
         void config.refresh({ ifNeeded: true, signal: startupLifecycle.signal });
       }
       const stopRouter = () => router.stop();
+      const earlyNewConnection = earlyGateway !== undefined && !earlyGateway.credentials;
       if (startsApplicationRouter) {
         startupLifecycle.addDisposer(stopRouter);
       }
       const steps: StartupStep[] = [
         () => {
           gateway.start();
-          return () => gateway.stop();
+          return () => {
+            if (earlyNewConnection && !gateway.snapshot.client) {
+              earlyGateway.transport.client.stop();
+            }
+            gateway.stop();
+          };
         },
         () => startGatewayPageActivation(gateway, document, window),
         () => startGatewayPresenceActivity(gateway, document),

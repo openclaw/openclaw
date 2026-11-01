@@ -39,6 +39,7 @@ import { getCurrentSessionControllerOwner } from "../../sessions/session-control
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isCronWithinActiveHours } from "../active-hours.js";
 import { isCronExecutionIdle } from "../execution-idle.js";
+import { resolveCronOwnerTransferRecoveryError } from "../human-owner.js";
 import { CronOperatorSourceError } from "../operator-source-error.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { removeCronRunContinuationSessionIfIdle } from "../run-continuation-cleanup.js";
@@ -101,6 +102,10 @@ async function runCronIsolatedAgentTurnInTrace(
   params: RunCronAgentTurnParams,
 ): Promise<RunCronAgentTurnResult> {
   params.assertCurrent?.();
+  const ownerTransferError = resolveCronOwnerTransferRecoveryError(params.job);
+  if (ownerTransferError) {
+    return { status: "error", error: ownerTransferError };
+  }
   const admittedLifecycleGeneration = getAgentEventLifecycleGeneration();
   const upstreamAbortSignal = params.abortSignal ?? params.signal;
   const lifecycleAbortController = new AbortController();

@@ -33,9 +33,13 @@ function rejectsAction(base: object, fields: Record<string, unknown>) {
 }
 
 describe("session GitHub publication protocol", () => {
-  it("binds review requests to the current PR without freeform text", () => {
+  it("accepts current or explicit PR review requests without freeform text", () => {
     const review = { ...request("request_review"), requestId, expectedHeadCommit: head };
-    action.accepts(review, { ...review, requestId: undefined });
+    action.accepts(review, {
+      ...review,
+      requestId: undefined,
+      pullRequestUrl: "https://github.com/example/repository/pull/7",
+    });
     rejectsAction(review, {
       ...foreignTarget,
       body: "@clawsweeper stop",

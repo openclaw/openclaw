@@ -219,11 +219,6 @@
   color: var(--accent);
 }
 
-.chat-dashboard-menu__panel .board-widget__menu-separator {
-  margin: 7px 2px;
-  border-top: 1px solid var(--details-separator);
-}
-
 .chat-dashboard-menu__panel .board-widget__menu-heading {
   padding: 3px 10px 6px;
   font-size: 12px;

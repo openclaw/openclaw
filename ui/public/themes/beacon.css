@@ -19,6 +19,8 @@
   --github-item-bg: color-mix(in srgb, var(--text) 4%, var(--bg));
   --github-item-hover-bg: color-mix(in srgb, var(--text) 7%, var(--bg));
   --overlay-border: var(--border-strong);
+  /* A full hairline: half-pixel edges vanish on the panels this theme targets. */
+  --menu-shadow: 0 0 0 1px var(--overlay-border), 0 8px 16px -4px rgb(0 0 0 / 12.16%);
   /* Auxiliary controls retain this palette's deliberately stronger ink. */
   --text-tertiary: var(--muted);
   --icon-interactive: var(--muted);

@@ -19,7 +19,7 @@ suite.define(() => {
     { destination: "roster", mode: "roster", pinned: false },
     { destination: "pinned agent", mode: "roster", pinned: true },
   ] as const)(
-    "shows a provisional row only where the admitted row appears ($destination) and restores the draft on rejection",
+    "adds no sidebar placeholder while creating ($destination) and restores the draft on rejection",
     async ({ mode, pinned }) => {
       await suite.withPage(
         { viewport: { width: 1280, height: 900 }, colorScheme: "dark" },
@@ -63,44 +63,19 @@ suite.define(() => {
           await page.getByRole("button", { name: "Start session", exact: true }).click();
           await gateway.waitForRequest("sessions.create");
           await page.locator("openclaw-pending-session-create .chat-pane__header").waitFor();
-          const provisional = page.locator(".sidebar-recent-session--creating");
-          if (mode === "chip") {
-            await expect.poll(() => provisional.count()).toBe(1);
-          } else {
-            // Agent-only rosters must not flash a row they will not retain after admission.
+          // The sidebar adds nothing until the Gateway lists the session; only the
+          // chat header shows the naming placeholder.
+          if (mode !== "chip") {
             await page.locator('[data-agent-id="main"]').waitFor();
-            expect(await provisional.count()).toBe(0);
           }
-          if (mode === "chip") {
-            const handoffSlot = page.locator(
-              ".sidebar-sessions .sidebar-recent-sessions .sidebar-recent-session--creating",
-            );
-            expect(await handoffSlot.count()).toBe(1);
-            const titleInset = (row: typeof provisional) =>
-              row
-                .locator(".sidebar-recent-session__text")
-                .evaluate((element) => Math.round(element.getBoundingClientRect().left));
-            expect(await titleInset(provisional)).toBe(await titleInset(oldRow));
-            const bounds = (row: typeof provisional) =>
-              row.evaluate((element) => element.getBoundingClientRect().toJSON() as DOMRect);
-            const [pendingBox, oldBox] = [await bounds(provisional), await bounds(oldRow)];
-            expect(Math.round(oldBox.top - pendingBox.bottom)).toBe(2);
-            expect(await provisional.locator('[aria-current="page"]').count()).toBe(1);
-            expect(
-              await provisional.locator(".sidebar-recent-session__link").getAttribute("aria-busy"),
-            ).toBe("true");
-            expect(await oldRow.locator('[aria-current="page"]').count()).toBe(0);
-            expect(await provisional.locator("button, a[href]").count()).toBe(0);
-            expect(await provisional.locator(".session-title-placeholder").count()).toBe(1);
-          }
-          const bars = provisional
-            .locator(".session-title-placeholder > span")
-            .or(
-              page
-                .locator("openclaw-pending-session-create .session-title-placeholder > span")
-                .filter({ visible: true }),
-            );
-          expect(await bars.count()).toBe(mode === "chip" ? 2 : 1);
+          expect(await page.locator(".sidebar .skeleton").count()).toBe(0);
+          expect(await page.locator('.sidebar-recent-session [aria-current="page"]').count()).toBe(
+            0,
+          );
+          const bars = page
+            .locator("openclaw-pending-session-create .session-title-placeholder > span")
+            .filter({ visible: true });
+          expect(await bars.count()).toBe(1);
           for (const bar of await bars.all()) {
             expect(
               await bar.evaluate((element) => getComputedStyle(element, "::after").animationName),
@@ -118,7 +93,6 @@ suite.define(() => {
             message: "Synthetic admission refused",
           });
           await pollValue(message).toBe(prompt);
-          expect(await provisional.count()).toBe(0);
           expect(await page.locator('.sidebar-recent-session [aria-current="page"]').count()).toBe(
             0,
           );
@@ -134,7 +108,7 @@ suite.define(() => {
     },
   );
 
-  it("keeps a group-targeted provisional row in that group through admission", async () => {
+  it("adds a group-targeted create to that group only once it is listed", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, colorScheme: "dark" },
       async ({ page }) => {
@@ -176,13 +150,11 @@ suite.define(() => {
         const params = create.params as { key: string; category?: string };
         expect(params.category).toBe("Claws");
 
-        const provisional = page.locator(".sidebar-recent-session--creating");
-        await expect.poll(() => provisional.count()).toBe(1);
-        expect(await templates.locator(".sidebar-recent-session--creating").count()).toBe(1);
-        const top = (locator: typeof provisional) =>
+        const top = (locator: typeof existing) =>
           locator.evaluate((element) => Math.round(element.getBoundingClientRect().top));
-        const provisionalTop = await top(provisional);
-        expect(provisionalTop).toBeLessThan(await top(existing));
+        // No placeholder takes a slot, so existing rows hold still until admission.
+        const existingTop = await top(existing);
+        expect(await page.locator(".sidebar .skeleton").count()).toBe(0);
 
         await page.evaluate(() => {
           const replies: Array<(payload: unknown) => void> = [];
@@ -203,14 +175,11 @@ suite.define(() => {
         await expect
           .poll(() => new URL(page.url()).pathname)
           .toContain(params.key.split(":").at(-1)!.replaceAll("-", ""));
-        await expect.poll(() => provisional.count()).toBe(1);
-        expect(await provisional.textContent()).toContain(accepted.label);
         const title = page
           .locator("openclaw-chat-pane .chat-pane__session-title-text")
           .filter({ hasText: accepted.label });
         await title.waitFor({ state: "visible" });
-        expect(await provisional.locator('[aria-busy="true"]').count()).toBe(0);
-        expect(await top(provisional)).toBe(provisionalTop);
+        expect(await top(existing)).toBe(existingTop);
         expect(await templates.locator(`[data-session-key="${params.key}"]`).count()).toBe(0);
         await gateway.setSessionsListResponse({ sessions: [accepted, ...sessions] });
         await page.evaluate(
@@ -237,8 +206,9 @@ suite.define(() => {
         );
         const admitted = templates.locator(`[data-session-key="${params.key}"]`);
         await admitted.waitFor();
-        await expect.poll(() => provisional.count()).toBe(0);
-        expect(await top(admitted)).toBe(provisionalTop);
+        expect(await top(admitted)).toBe(existingTop);
+        expect(await top(existing)).toBeGreaterThan(existingTop);
+        expect(await admitted.locator('[aria-current="page"]').count()).toBe(1);
       },
     );
   });

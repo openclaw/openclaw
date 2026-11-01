@@ -581,7 +581,7 @@ describe("model diagnostic lifecycle", () => {
         stream: true,
         input: [{ role: "user", content: "private preparation fixture" }],
       });
-      expect(await request.body.text()).toContain("private preparation fixture");
+      expect(await new Response(request.body).text()).toContain("private preparation fixture");
       return completedStream();
     });
     const events = await timeline(async () => {

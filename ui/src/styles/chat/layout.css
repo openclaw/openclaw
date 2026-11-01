@@ -243,6 +243,12 @@ openclaw-pending-session-create {
   color: var(--muted);
 }
 
+/* Same system colors as browser find, so matches read in every theme. */
+::highlight(openclaw-chat-search) {
+  background-color: Mark;
+  color: MarkText;
+}
+
 .chat-workspace-conflict-notice,
 .chat-cloud-disk-space-notice {
   flex: 0 0 auto;
@@ -726,7 +732,6 @@ openclaw-pending-session-create {
 
 /* Included in the transcript virtualizer's header margin; keep this height exact. */
 .chat-pending-inputs--history {
-  box-sizing: border-box;
   overflow: hidden;
   height: 44px;
   flex-wrap: nowrap;
@@ -1554,10 +1559,10 @@ openclaw-chat-video-player {
   position: fixed;
   z-index: 9999;
   padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
 }
 
 .chat-reply-context-menu {
@@ -1577,9 +1582,9 @@ openclaw-chat-video-player {
 }
 
 .chat-reply-context-menu button {
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  padding: 8px 12px;
+  padding: 5px 8px;
   text-align: left;
 }
 
@@ -1742,7 +1747,7 @@ openclaw-chat-video-player {
   padding: 14px 16px 17px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
   background: var(--task-suggestion-card-bg);
   user-select: text;
   box-shadow:
@@ -1807,7 +1812,7 @@ openclaw-chat-video-player {
 .task-suggestion__position {
   flex: 0 0 auto;
   padding: 2px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--task-suggestion-path-bg);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
@@ -1826,7 +1831,7 @@ openclaw-chat-video-player {
   padding: 0;
   place-items: center;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
@@ -1961,7 +1966,7 @@ openclaw-chat-video-player {
   margin-top: -5px;
   padding: 12px 13px;
   overflow: auto;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--task-suggestion-prompt-bg);
 }
 
@@ -1980,7 +1985,7 @@ openclaw-chat-video-player {
   min-width: 0;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--panel);
   color: var(--text);
   font: inherit;
@@ -2211,7 +2216,7 @@ button.chat-pr__diff {
   gap: 5px;
   padding: 1px 8px;
   border: 1px solid color-mix(in srgb, currentColor 27%, transparent);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, currentColor 12%, transparent);
   cursor: var(--cursor-action);
   font-size: 12px;
@@ -2256,7 +2261,7 @@ button.chat-pr__diff {
   overscroll-behavior: contain;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--menu-radius);
   background: var(--panel);
   box-shadow: var(--shadow-md);
   color: var(--text);
@@ -2393,7 +2398,7 @@ button.chat-pr__diff {
   flex: 0 0 auto;
   padding: 4px 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
   cursor: var(--cursor-action);
@@ -2931,7 +2936,7 @@ openclaw-chat-ci-details {
   max-width: min(100%, 780px);
   padding: 8px 10px;
   border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg) 82%, transparent);
 }
 

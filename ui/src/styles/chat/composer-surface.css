@@ -166,8 +166,6 @@
   --icon-interactive: var(--chat-composer-control-icon);
   --chat-composer-hover: var(--surface-hover);
   --chat-composer-group-hover: var(--surface-hover);
-  --chat-composer-popover-border: var(--overlay-border);
-  --chat-composer-popover-radius: calc(14px * var(--openclaw-corner-radius-scale));
   /* Footer control box. Smaller than the editor's own line box on purpose: the
      controls read as chrome beside the text, not as peers of it. */
   --chat-composer-control-size: 28px;

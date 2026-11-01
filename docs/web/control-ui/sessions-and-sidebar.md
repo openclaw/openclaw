@@ -238,10 +238,12 @@ can differ from the personal default selected when the actual chat starts.
 
 **Start session** uses a matching prepared name if it is ready. Otherwise, normal
 initial naming runs after submission; Start never waits for the speculative call.
-While a name is pending, the sidebar and chat header show a subtle loading bar
-instead of “New session.” A ready name replaces it immediately; if naming ends
-without a name, the ordinary fallback label returns. Reduced-motion preferences
-keep the placeholder still.
+The sidebar adds no placeholder row while a session is being created: the row
+appears once the Gateway lists the session and fades in. While a name is
+pending, the chat header shows a subtle loading bar instead of “New session,”
+and the sidebar row keeps its title blank; the name fades in when it is ready. If
+naming ends without a name, the ordinary fallback label appears. Reduced-motion
+preferences skip the fades and keep the placeholder still.
 This is creation-only: later messages do not regenerate an existing session's
 name. Explicit worktree names are preserved, and typing never creates a worktree
 or runs setup.
@@ -370,6 +372,13 @@ still apply; opening Systems does not grant additional access.
 
 System details use reported facts. A connected device is not necessarily the
 machine running a session, and unavailable measurements are not shown as zero.
+The telemetry and backup overview reserves its space while those readings load,
+so the desktop and Backups stay in place. It summarizes the three volumes with
+the highest used percentage and reserves unused rows for machines with fewer
+volumes. **+N more volumes in Details** opens every volume and its history.
+**Backup details** opens the complete backup outcomes, schedules, and storage
+locations, even when no machine is selected. The overview does not scroll;
+turning off statistics keeps a compact backup area.
 See [Cloud Worker Desktop](/gateway/cloud-workers/desktop) for worker desktop
 enablement and sizing.
 
@@ -653,14 +662,19 @@ the search; Arrow Down and Enter let you select a matching owner.
 1. Open the saved session and select **Session sharing** in the chat header. In the compact header menu, select **Session sharing** there instead.
 2. Under **Public access**, select **Enable public access…**, review the warning, then select **Make public**.
 3. Select **Copy public link** to copy the normal thread URL. The **Public** badge in the chat header remains visible while the transcript is published and updates when another window changes public access.
-4. Open that same URL in a signed-out browser to verify the read-only conversation and **Log in** button. Signing in returns to the thread with your existing permissions. New user messages and assistant final answers become visible to public readers automatically.
+4. Open that same URL in a signed-out browser to verify the read-only conversation and **Log in** button. Signing in returns to the thread with your existing permissions. New user and assistant text, including progress updates, becomes visible to public readers automatically.
 5. Return to **Session sharing** and select **Disable public access** to stop anonymous reads. The same URL then returns an unavailable page to signed-out readers. Enabling access again makes that URL public again; disabling access cannot recall saved copies.
 
-The public page excludes tools, reasoning, files, images, widgets, hidden messages,
-and internal metadata. Included text is not secret-masked, so review the
-conversation for credentials and other sensitive content before publishing. Public access does not let visitors send
-messages or grant authenticated Control UI permissions. For link lifecycle, pagination,
-backup behavior, and login-proxy configuration, see
+Alongside visible conversation text, the public page can show eligible shared
+images (including tool-result images), saved inline widgets, and collapsed
+tool-step summaries.
+Other attachments appear as filename chips without download links. Raw tool-result
+text, reasoning, hidden messages, internal metadata, and pinned dashboard widgets
+remain excluded. Included text is not secret-masked, so review the conversation
+for credentials and other sensitive content before publishing. Public access does
+not let visitors send messages or grant authenticated Control UI permissions. For
+image and widget checks, content limits, link lifecycle, pagination, backup behavior,
+and login-proxy configuration, see
 [Public session transcripts](/web/urls#public-session-transcripts).
 
 ### Session placement

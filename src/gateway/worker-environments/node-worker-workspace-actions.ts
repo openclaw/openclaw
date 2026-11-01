@@ -187,11 +187,12 @@ export function createNodeWorkerWorkspaceActions(params: {
       throw new Error("Repository checkpoint source is required");
     }
     const { authorize, markPhase } = request.source;
+    const transferBaseRef = request.source.acceptedManifestRef ?? request.baseManifestRef;
     const resultVersion = (await params.supportsGitResults?.()) ? 2 : undefined;
     authorize?.();
     const token = params.workspaceTransfer.prepareUpload(
       params.environmentId,
-      request.baseManifestRef,
+      transferBaseRef,
       authorize,
       resultVersion,
     );
@@ -203,16 +204,13 @@ export function createNodeWorkerWorkspaceActions(params: {
           direction: "upload",
           token,
           ...(resultVersion ? { resultVersion } : {}),
-          baseManifestRef: request.baseManifestRef,
+          baseManifestRef: transferBaseRef,
           referenceManifestRef: request.source.referenceManifestRef,
         },
         "Node repository checkpoint upload failed",
         { assertCurrent: authorize },
       );
-      const uploaded = params.workspaceTransfer.takeUpload(
-        params.environmentId,
-        request.baseManifestRef,
-      );
+      const uploaded = params.workspaceTransfer.takeUpload(params.environmentId, transferBaseRef);
       try {
         const verifyStable = async () => {
           markPhase?.("repositoryVerification");

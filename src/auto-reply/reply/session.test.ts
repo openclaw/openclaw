@@ -24,6 +24,7 @@ import {
   SESSION_ROLLOVER_LINEAGE_CASES,
 } from "../../config/sessions/session-lineage.test-support.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
 import { resolveWorkerPlacementSessionTarget } from "../../gateway/server-worker-placement-session-target.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "../../gateway/session-utils-store.js";
@@ -70,6 +71,7 @@ import {
 import { resolveReplySessionPreprocessingState } from "./session.js";
 import { expectSessionParticipantInputs } from "./session.participant.test-support.js";
 import {
+  expectEntryFields,
   initSessionState,
   readSessionStore as readSessionStoreFast,
   runExplicitResetCases,
@@ -141,16 +143,6 @@ async function makeStorePath(prefix: string, agentId?: string): Promise<string> 
 }
 
 const TEST_NATIVE_MODEL_PROFILE_ID = "openai:secondary@example.test";
-
-function expectEntryFields(
-  entry: SessionEntry,
-  expected: Record<string, unknown>,
-  label?: string,
-): void {
-  for (const [key, value] of Object.entries(expected)) {
-    expect((entry as unknown as Record<string, unknown>)[key], label ?? key).toEqual(value);
-  }
-}
 
 describe("resolveReplySessionPreprocessingState", () => {
   const sessionKey = "agent:main:harness:codex:supervision:media-preflight";
@@ -656,7 +648,7 @@ describe("initSessionState thread forking", () => {
         updatedAt: Date.now(),
         totalTokens: 170_000,
         totalTokensFresh: true,
-        totalTokensVersion: 1,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       },
     });
 

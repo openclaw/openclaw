@@ -1,8 +1,5 @@
-import type {
-  DecisionBatchV2,
-  DecisionAnswerV2,
-  DecisionOutcomeV2,
-} from "../../../decisions/types-v2.js";
+import type { DecisionOutcomeV2 } from "../../../decisions/host-outcomes.js";
+import type { DecisionBatchV2, DecisionAnswerV2 } from "../../../decisions/types-v2.js";
 
 export const DECISION_TOOL_PREFILTER_RUBRIC_VERSION = "10";
 export const DECISION_TOOL_PREFILTER_THRESHOLD = 0.35;

@@ -329,12 +329,17 @@ changes the draft state without publishing more source or merging the PR. It
 accepts no child or arbitrary PR selector. After an uncertain response, read with
 `edit` before retrying; an already-ready PR returns its observed state.
 
-To request another ClawSweeper review of the current session's shared PR, use
-`github_publish` with `action: "request_review"`. Read the PR with `edit` first,
-then pass its `requestId` and `expectedHeadCommit`. Guests can request this for
-their own authorized publication in local or repository workspaces. The Gateway
-posts exactly `@clawsweeper re-review`; comment text, review focus, other commands,
-and child or arbitrary PR selectors are not accepted.
+To request another ClawSweeper review, use `github_publish` with
+`action: "request_review"`. Read the PR with `edit` first, then pass its observed
+`headCommit` as `expectedHeadCommit` and any publication `requestId`. To select an
+explicitly identified PR, supply the same `pullRequestUrl` on both calls and omit
+`requestId`. The Gateway verifies the current requester's linked authorship or
+maintainer authority and repository access. This works without importing source,
+binding a workspace, or publishing from the conversation; an explicit URL takes
+precedence over its existing PR.
+
+The Gateway posts exactly `@clawsweeper re-review`; comment text, review focus,
+other commands, child sessions, and source ref selectors are not accepted.
 
 The result confirms only that the comment was posted and includes its URL.
 ClawSweeper decides whether to accept the request and complete the review. Use
