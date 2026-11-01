@@ -569,7 +569,9 @@ async function spawnText(
           resolve(stdout);
           return;
         }
-        const detail = stderr.trim() || (result.signal ? `terminated by ${result.signal}` : "");
+        const detail =
+          stderr.trim() ||
+          (result.signal ? `terminated by ${result.signal}` : `exited with code ${result.code}`);
         const failure = terminalFailure ?? createFailure("nonzero-exit", detail);
         if (processTreeCleanupFailure) {
           Object.assign(failure, {
@@ -702,7 +704,10 @@ async function spawnText(
     child.once("close", (code, signal) => {
       const result = { code, signal };
       if (code !== 0 && !terminalFailure) {
-        fail("nonzero-exit", stderr.trim() || (signal ? `terminated by ${signal}` : ""));
+        fail(
+          "nonzero-exit",
+          stderr.trim() || (signal ? `terminated by ${signal}` : `exited with code ${code}`),
+        );
       }
       if (processGroupIsAlive()) {
         childClosedResult = result;
