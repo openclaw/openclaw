@@ -1,0 +1,219 @@
+/* A full-viewport top-layer surface holding the backdrop and the bottom-anchored panel. */
+.oc-popover.oc-sheet {
+  --oc-popover-padding: 0;
+
+  position: fixed;
+  position-anchor: auto;
+  position-area: none;
+  inset: 0 !important;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  margin: 0;
+  overflow: hidden;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.oc-popover.oc-sheet:popover-open {
+  opacity: 1;
+  scale: 1;
+}
+
+.oc-sheet__backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: var(--overlay-modal-backdrop);
+  touch-action: none;
+  animation: fade-in var(--motion-sheet);
+}
+
+/* Anchored to the shell canvas, like the sidebar's sheets, so it rides above the keyboard. */
+.oc-sheet__panel {
+  position: absolute;
+  inset: auto var(--safe-area-right) calc(100% - var(--shell-canvas-height)) var(--safe-area-left);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(var(--shell-canvas-height) - var(--safe-area-top) - var(--space-7));
+  padding-block-end: var(--shell-safe-area-bottom);
+  border-radius: var(--overlay-modal-radius) var(--overlay-modal-radius) 0 0;
+  background: var(--popover);
+  box-shadow: var(--overlay-shadow);
+  animation: oc-sheet-in var(--motion-sheet);
+}
+
+.oc-sheet__grabber {
+  position: relative;
+  flex: none;
+  align-self: center;
+  width: 36px;
+  height: 4px;
+  margin-block: 8px 2px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+  /* The grabber swipes the sheet down; its touch target extends past the pill. */
+  touch-action: none;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: -12px -64px;
+  }
+}
+
+/* Equal tracks either side keep the title on the sheet's center, with or without an action. */
+.oc-sheet__header {
+  display: grid;
+  flex: none;
+  grid-template-columns: repeat(2, 32px) minmax(0, 1fr) repeat(2, 32px);
+  align-items: center;
+  min-height: 44px;
+  padding-inline: var(--space-3);
+}
+
+.oc-sheet__title {
+  grid-area: 1 / 3;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-md);
+  font-weight: var(--control-ui-font-weight-semibold);
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Page-level touch sizing on bare buttons must not move the X between sheets. */
+.oc-popover.oc-sheet .oc-sheet__close {
+  display: inline-flex;
+  grid-area: 1 / 5;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+/* A header search keeps its toggle beside the close button; the sheet's title is the title. */
+.oc-sheet__action {
+  display: flex;
+  grid-area: 1 / 1 / auto / 5;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.oc-sheet__action > .header-search {
+  flex: 1;
+  justify-content: flex-end;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.oc-sheet__action > .header-search > .header-search__title {
+  display: none;
+}
+
+.oc-sheet__header .header-search__toggle {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  color: var(--muted);
+}
+
+.oc-sheet__header .header-search__toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* While searching, the field takes the row and its clear button is the only X. */
+.oc-popover.oc-sheet
+  .oc-sheet__header:has(.header-search[data-searching])
+  > :is(.oc-sheet__title, .oc-sheet__close) {
+  display: none;
+}
+
+.oc-sheet__action:has(> .header-search[data-searching]) {
+  grid-column-end: -1;
+  padding-inline-start: var(--space-1);
+}
+
+.oc-sheet__close svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* One rhythm for every sheet's form. Real inputs sit on iOS's 16px floor, so the rest of the
+   sheet matches it instead of going below it. */
+.oc-sheet__body {
+  --settings-control-height: 40px;
+
+  min-height: 0;
+  padding: var(--space-2) var(--space-4) var(--space-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.oc-popover.oc-sheet .oc-sheet__body :is(input, select, textarea) {
+  font-size: 16px;
+}
+
+.oc-popover.oc-sheet .oc-sheet__body .btn {
+  justify-content: center;
+  width: 100%;
+  height: var(--settings-control-height);
+  min-height: var(--settings-control-height);
+  font-size: var(--control-ui-text-md);
+}
+
+/* A long value keeps its chevron: the same one-line clip as the shared select family. */
+@supports (appearance: base-select) {
+  .oc-sheet__body select.settings-select:not([multiple], [size]) {
+    overflow: hidden;
+    align-items: flex-start;
+    padding-block: 0;
+    line-height: calc(var(--settings-control-height) - 2px);
+    overflow-wrap: anywhere;
+    white-space: normal;
+
+    &::picker-icon {
+      flex: none;
+      align-self: center;
+    }
+  }
+}
+
+@keyframes oc-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oc-sheet__backdrop,
+  .oc-sheet__panel {
+    animation: none;
+  }
+}
+
+@supports (corner-shape: superellipse(1.5)) {
+  .oc-sheet__panel {
+    corner-shape: superellipse(1.5);
+  }
+}
