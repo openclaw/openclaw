@@ -13,6 +13,7 @@ import { registerSessionMenuEnglish } from "../../i18n/locales/en-session-menu.t
 import { formatUiError } from "../../lib/format-error.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { groupSessionRows } from "../../lib/sessions/grouping.ts";
 import { sessionsTableColumnCount } from "./session-row.tsx";
 import { SessionWindow, type SessionEntry } from "./session-window.tsx";
@@ -26,6 +27,8 @@ registerSessionMenuEnglish();
 const PAGE_SIZES = [10, 25, 50, 100] as const;
 
 const SKELETON_ROW_COUNT = 4;
+// Keep in sync with the phone block in styles/sessions.css.
+const PHONE_LAYOUT_QUERY = "(max-width: 640px)";
 type RosterOutcome = { ok: true } | { ok: false; error: unknown };
 
 // Initial load renders shimmer rows instead of flashing the empty state
@@ -57,6 +60,10 @@ function SkeletonRows(props: { columnCount: number }) {
 
 export function SessionsView(props: SessionsProps) {
   const application = useOptionalApplication();
+  const phoneLayout = createMediaQuery(
+    PHONE_LAYOUT_QUERY,
+    globalThis.matchMedia?.(PHONE_LAYOUT_QUERY).matches ?? false,
+  );
   const rows = createMemo(() => props.result?.sessions ?? []);
   const archivedCount = createMemo(() => rows().filter((row) => row.archived === true).length);
   const transcriptSearch = createMemo(() => props.transcriptSearch);
@@ -118,7 +125,22 @@ export function SessionsView(props: SessionsProps) {
                 <SettingsStatus kind="muted" label={t("common.working")} />
               </span>
             </Show>
-            <TranscriptSearchForm {...props} />
+            <Show when={phoneLayout()}>
+              <div class="sessions-search">
+                <span class="sessions-search__icon" aria-hidden="true">
+                  <Icon name="search" />
+                </span>
+                <input
+                  type="search"
+                  class="settings-input"
+                  value={props.searchQuery}
+                  aria-label={t("sessionsView.personalGroupSearch")}
+                  placeholder={t("sessionsView.personalGroupSearch")}
+                  onInput={(event) => props.onSearchChange(event.currentTarget.value)}
+                />
+              </div>
+            </Show>
+            <TranscriptSearchForm {...props} phoneLayout={phoneLayout()} />
             <button
               class="btn btn--xs btn--icon sessions-toolbar__icon sessions-toolbar__refresh"
               type="button"
@@ -132,6 +154,7 @@ export function SessionsView(props: SessionsProps) {
               {...props}
               searchQuery={props.searchQuery}
               archivedCount={archivedCount()}
+              phoneLayout={phoneLayout()}
             />
             <Show when={application}>
               {(context) => (
@@ -150,7 +173,7 @@ export function SessionsView(props: SessionsProps) {
         <Show when={props.transcriptSearch !== null}>
           <TranscriptSearchResults {...props} readSearch={transcriptSearch} />
         </Show>
-        <SessionsTable {...props} readRoster={roster} />
+        <SessionsTable {...props} readRoster={roster} phoneLayout={phoneLayout()} />
       </SettingsSection>
     </SettingsPage>
   );
@@ -297,10 +320,26 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
       </>
     );
   }
+  function SelectAllOnPage() {
+    return (
+      <input
+        type="checkbox"
+        checked={allSelected()}
+        prop:indeterminate={selectedOnPage() > 0 && !allSelected()}
+        onChange={() => {
+          const update = allSelected() ? props.onDeselectPage : props.onSelectPage;
+          update(paginated().map((r) => r.key));
+        }}
+        aria-label={t("sessionsView.selectAllOnPage")}
+      />
+    );
+  }
   return (
     <>
       {props.selectedKeys.size > 0 ? (
         <div class="data-table-bulk-bar">
+          {/* The phone list has no header row, so select-all joins the bulk bar. */}
+          {props.phoneLayout ? <SelectAllOnPage /> : undefined}
           <span>{t("sessionsView.selected", { count: String(props.selectedKeys.size) })}</span>
           <button class="btn btn--sm" onClick={() => props.onDeselectAll()}>
             {t("common.unselect")}
@@ -330,18 +369,7 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
           <thead>
             <tr>
               <th class="data-table-checkbox-col">
-                {paginated().length > 0 ? (
-                  <input
-                    type="checkbox"
-                    checked={allSelected()}
-                    prop:indeterminate={selectedOnPage() > 0 && !allSelected()}
-                    onChange={() => {
-                      const update = allSelected() ? props.onDeselectPage : props.onSelectPage;
-                      update(paginated().map((r) => r.key));
-                    }}
-                    aria-label={t("sessionsView.selectAllOnPage")}
-                  />
-                ) : undefined}
+                {paginated().length > 0 && !props.phoneLayout ? <SelectAllOnPage /> : undefined}
               </th>
               <SortHeader
                 {...props}

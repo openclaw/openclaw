@@ -12,6 +12,8 @@ export function SidebarSessionFilterPopover(props: {
   label: string;
   initialFocus: () => HTMLElement | undefined;
   focusTargets: () => readonly HTMLElement[];
+  /** Rendered below the grabber; `close` slides the sheet away like a swipe. */
+  header?: (close: () => void) => JSX.Element;
   content: JSX.Element;
   onClose: (restoreFocus: boolean) => void;
 }) {
@@ -129,6 +131,7 @@ export function SidebarSessionFilterPopover(props: {
           class="sidebar-session-filter-panel__grabber"
           aria-hidden="true"
         />
+        {props.header?.(slideOutAndDismiss)}
         {props.content}
       </Popover>
     </openclaw-sidebar-session-filter-popover>

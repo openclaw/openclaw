@@ -25,6 +25,8 @@ registerCommandPaletteEnglish();
 
 export type TranscriptSearchProps = TranscriptSearchState & {
   transcriptSearchAvailable: boolean;
+  /** Beside the phone toolbar's search field the trigger needs its own icon. */
+  phoneLayout?: boolean;
   onTranscriptSearchChange: (query: string) => void;
   onTranscriptSearch: () => void;
   onClearTranscriptSearch: () => void;
@@ -122,7 +124,7 @@ export function TranscriptSearchForm(props: TranscriptSearchProps) {
           }
         }}
       >
-        <Icon name="search" />
+        <Icon name={props.phoneLayout ? "textSearch" : "search"} />
       </button>
     </form>
   );
