@@ -70,6 +70,9 @@ const enOpenClawIdDialogs = {
     kitShowCode: "Show",
     kitHideCode: "Hide",
     kitPasswordManagerHint: "Your password manager can save this kit.",
+    kitOtherPasswordManagers: "Other ways to save your kit are below.",
+    kitOnePasswordNotes:
+      "Claw address: {url}\nRecovery kit ID: {id}\nTo restore access, choose Set up this browser on the Claws site, then use your recovery kit. Paste the saved password as the recovery code.",
     kitActionUnavailable: "Your browser didn't open that. Use another option or copy the kit.",
     kitActionFailed: "That didn't work: {error}. Use another option or copy the kit.",
     kitSaved: "I've saved my recovery kit somewhere safe",

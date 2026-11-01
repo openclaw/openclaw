@@ -5,6 +5,7 @@ import type { RecoveryKitDetails } from "../../lib/openclaw-id/kit-export.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { clawNameFromHostname } from "./claw-name.ts";
+import { OnePasswordKitSave } from "./onepassword-kit-save.tsx";
 
 registerEnglishCatalog(registerOpenClawIdDialogsEnglish);
 
@@ -37,38 +38,41 @@ export function RecoveryKitForm(props: {
     username.defaultValue = "";
   });
   return (
-    <form
-      id="openclaw-recovery-kit"
-      name="openclaw-recovery-kit"
-      aria-label={t("openclawId.kitTitle")}
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (retired || !props.saved) {
-          return;
-        }
-        retired = true;
-        submitTask.port2.postMessage(null);
-      }}
-    >
-      <label class="field">
-        <span>{t("openclawId.kitAccount")}</span>
-        <input
-          ref={(element) => (username = element)}
-          id="openclaw-recovery-kit-username"
-          name="username"
-          type="text"
-          autocomplete="username"
-          readonly
-          value={
-            props.accountEmail ||
-            t("openclawId.kitAccountFallback", {
-              name: clawNameFromHostname(props.details.hostname),
-            })
+    <>
+      <OnePasswordKitSave details={props.details} accountEmail={props.accountEmail} />
+      <form
+        id="openclaw-recovery-kit"
+        name="openclaw-recovery-kit"
+        aria-label={t("openclawId.kitTitle")}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (retired || !props.saved) {
+            return;
           }
-        />
-      </label>
-      {props.children}
-    </form>
+          retired = true;
+          submitTask.port2.postMessage(null);
+        }}
+      >
+        <label class="field">
+          <span>{t("openclawId.kitAccount")}</span>
+          <input
+            ref={(element) => (username = element)}
+            id="openclaw-recovery-kit-username"
+            name="username"
+            type="text"
+            autocomplete="username"
+            readonly
+            value={
+              props.accountEmail ||
+              t("openclawId.kitAccountFallback", {
+                name: clawNameFromHostname(props.details.hostname),
+              })
+            }
+          />
+        </label>
+        {props.children}
+      </form>
+    </>
   );
 }
 
