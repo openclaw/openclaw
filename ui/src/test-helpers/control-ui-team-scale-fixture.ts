@@ -112,8 +112,8 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
       people,
       counts,
     });
-  const { transcriptSender, avatarAsset, paneMethodResponses, paneChromeSettings } =
-    prepareTeamScalePaneFixture({
+  const { transcriptSender, paneMethodResponses, paneChromeSettings } = prepareTeamScalePaneFixture(
+    {
       options,
       now,
       people,
@@ -121,7 +121,8 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
       agents,
       assets,
       session: pinnedRows[0]!,
-    });
+    },
+  );
   const duplicateReads = options.duplicateBootReads
     ? createTeamScaleDuplicateReadFixture(selectedSessionKey, now)
     : undefined;

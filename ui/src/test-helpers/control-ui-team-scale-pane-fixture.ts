@@ -1,4 +1,5 @@
-import type { AgentsListResult, GatewaySessionRow, UserProfile } from "../api/types.ts";
+import type { UserProfile } from "../../../packages/gateway-protocol/src/schema/users.js";
+import type { AgentsListResult, GatewaySessionRow } from "../api/types.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
 import type { TeamScaleFixtureAsset } from "./control-ui-team-scale-history-fixture.ts";
 import { TEAM_SCALE_AVATAR_ASSET } from "./control-ui-team-scale-people.ts";
@@ -72,5 +73,5 @@ export function prepareTeamScalePaneFixture(input: {
         },
       }
     : {};
-  return { transcriptSender, avatarAsset, paneMethodResponses, paneChromeSettings };
+  return { transcriptSender, paneMethodResponses, paneChromeSettings };
 }
