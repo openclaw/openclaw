@@ -41,6 +41,7 @@ export function readSessionColdStorageProtection(
     const entry = record ? projectCanonicalSessionEntryShape(record) : null;
     const recovery = record?.mainRestartRecovery;
     const recoveryPending =
+      entry?.restartRecoveryBeforeAgentReplyState === "undispatched-v1" ||
       entry?.restartRecoveryBeforeAgentReplyState === "admitted" ||
       entry?.restartRecoveryBeforeAgentReplyState === "pending" ||
       entry?.restartRecoveryBeforeAgentReplyState === "continue" ||

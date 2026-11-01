@@ -139,7 +139,11 @@ export type MainSessionRecoveryTransitionResult =
         | "recovery_validated"
         | "tombstoned";
     }
-  | { kind: "admitted_recovery"; admission: AdmittedRecoveryAttempt }
+  | {
+      kind: "admitted_recovery";
+      admission: AdmittedRecoveryAttempt;
+      undispatchedSourceTurnId?: string;
+    }
   | { kind: "foreground_claimed"; claim: MainSessionRecoveryOwnerClaim }
   | { kind: "observed"; view: MainSessionRecoveryView }
   | { kind: "rejected"; reason: MainSessionRecoveryConflict }

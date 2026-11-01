@@ -7,7 +7,10 @@ import type {
   MainRestartRecoveryState,
   RestartRecoveryRun,
 } from "../../config/sessions.js";
-import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
+import {
+  hasRestartRecoveryTerminalRun,
+  resolveRestartRecoveryChannelAuthority,
+} from "../../config/sessions/restart-recovery-state.js";
 import {
   isAcpSessionKey,
   isCronSessionKey,
@@ -544,6 +547,17 @@ export function transitionMainSessionRecovery(
         return { kind: "rejected", reason: conflict };
       }
       const state = entry.mainRestartRecovery!;
+      const undispatched = entry.restartRecoveryBeforeAgentReplyState === "undispatched-v1";
+      const authority = undispatched ? resolveRestartRecoveryChannelAuthority(entry) : undefined;
+      if (
+        undispatched &&
+        (!authority || entry.pendingFinalDelivery || entry.restartRecoveryDeliveryReceiptState)
+      ) {
+        return { kind: "rejected", reason: "stale_reservation" };
+      }
+      if (undispatched) {
+        entry.restartRecoveryBeforeAgentReplyState = undefined;
+      }
       updateRecoveryState(entry, state, {
         reservation: undefined,
         foregroundClaims: undefined,
@@ -565,6 +579,7 @@ export function transitionMainSessionRecovery(
       }
       return {
         kind: "admitted_recovery",
+        ...(authority ? { undispatchedSourceTurnId: authority.sourceTurnId } : {}),
         admission: {
           cycleId: state.cycleId,
           attempt: state.chargedAttempts,

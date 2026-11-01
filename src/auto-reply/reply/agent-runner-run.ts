@@ -604,6 +604,7 @@ export async function runReplyAgent(
   }
   const {
     admitUserTurn,
+    consumeUndispatchedSource,
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
     clear: clearRestartRecoveryDeliveryClaim,
@@ -630,6 +631,7 @@ export async function runReplyAgent(
       activeSessionStore,
       admitUserTurn,
       applyReplyToMode,
+      consumeUndispatchedSource,
       beginBeforeAgentReply,
       blockReplyPipeline,
       cfg,
