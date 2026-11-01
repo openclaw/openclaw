@@ -818,6 +818,7 @@ describe("existing PR preparation through the registered agent action", () => {
         failedRead = true;
         return commandResult("", 1);
       }
+      return undefined;
     });
     await expect(f.invoke()).rejects.toThrow(
       "The original PR's write eligibility could not be verified",

@@ -218,6 +218,7 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
               scenario === "malformed lookup" ? 0 : 1,
             );
           }
+          return undefined;
         });
       }
       if (scenario === "malformed lookup") {
