@@ -86,13 +86,6 @@ export function formatKeyboardShortcutParts(
   ];
 }
 
-export function formatKeyboardShortcutCombo(
-  combo: KeyboardShortcutCombo,
-  applePlatform = isApplePlatform(),
-): string {
-  return formatKeyboardShortcutParts(combo, applePlatform).join(applePlatform ? "" : "+");
-}
-
 export function matchesShortcutCombo(combo: KeyboardShortcutCombo, event: KeyboardEvent): boolean {
   return matchesKeyboardShortcut(combo, event, isApplePlatform(), resolveAsciiShortcutKey(event));
 }

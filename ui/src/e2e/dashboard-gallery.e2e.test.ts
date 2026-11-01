@@ -1,11 +1,16 @@
+import { writeFileSync } from "node:fs";
+import path from "node:path";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import type { SessionsResolveResult } from "../../../packages/gateway-protocol/src/index.js";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { openSidebarPages } from "./sidebar-customization.test-support.ts";
+import { themeConfigResponse } from "./theme-typography.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI dashboard gallery",
@@ -78,6 +83,164 @@ async function waitForPreview(card: Locator) {
   await frame.contentFrame().getByText("All systems nominal", { exact: true }).waitFor();
 }
 suite.define(() => {
+  it.each(["dark", "light"] as const)("fits empty dashboard previews in %s mode", async (mode) => {
+    const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+    const emptyKey = "agent:main:dashboard:empty";
+    const rows = [
+      { ...dashboardRows[0]!, hasBoard: true },
+      {
+        ...dashboardRows[1]!,
+        key: emptyKey,
+        hasBoard: true,
+        displayName: "A dashboard with a long title that should stay inside its gallery card",
+      },
+    ];
+    const list = (sessions: typeof rows) => ({
+      ts: now,
+      path: "",
+      count: sessions.length,
+      defaults: { contextTokens: null, model: null, modelProvider: null },
+      sessions,
+    });
+    await suite.withPage(
+      {
+        colorScheme: mode,
+        viewport: { width: 1440, height: 900 },
+        ...(capture
+          ? { recordVideo: { dir: suite.artifactDir, size: { width: 1440, height: 900 } } }
+          : {}),
+      },
+      async ({ page }) => {
+        await seedChatSettings(page, suite.server.baseUrl, { theme: "dash", themeMode: mode });
+        await page.route("**/dashboard-gallery-widget.html", (route) =>
+          route.fulfill({ contentType: "text/html; charset=utf-8", body: widgetMarkup }),
+        );
+        const gateway = await installMockGateway(page, {
+          sessions: rows,
+          featureMethods: ["board.get"],
+          deferredRequests: [{ method: "sessions.list", match: { hasBoard: true } }],
+          methodResponses: {
+            "config.get": themeConfigResponse("dash", mode),
+            "sessions.list": { cases: [responseCase({ hasBoard: true }, list(rows))] },
+            "board.get": {
+              cases: [
+                responseCase({ sessionKey: selectedSessionKey }, boardSnapshots[0]),
+                responseCase(
+                  { sessionKey: emptyKey },
+                  { ...boardSnapshots[1], sessionKey: emptyKey, widgets: [] },
+                ),
+              ],
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}dashboards`);
+        const gallery = page.locator("openclaw-dashboards-page");
+        const toolbar = gallery.locator(".dashboards-toolbar");
+        await gallery.locator(".dashboards-loading__control").first().waitFor();
+        const loadingToolbar = await toolbar.boundingBox();
+        await gateway.resolveDeferred("sessions.list");
+        await gallery.getByRole("searchbox").waitFor();
+        const loadedToolbar = await toolbar.boundingBox();
+        expect(loadedToolbar!.y).toBeCloseTo(loadingToolbar!.y, 0);
+        expect(Math.abs(loadedToolbar!.height - loadingToolbar!.height)).toBeLessThan(1);
+        const emptyCard = gallery.locator(`[data-dashboard-session="${emptyKey}"]`);
+        const filledCard = gallery.locator(`[data-dashboard-session="${selectedSessionKey}"]`);
+        const empty = emptyCard.locator(".board-empty");
+        await empty.waitFor();
+        await waitForPreview(filledCard);
+        await expect.poll(() => page.locator("html").getAttribute("data-theme-id")).toBe("dash");
+        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
+        const saveFrame = async (name: string, element: Locator) => {
+          if (!capture) {
+            return;
+          }
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator("openclaw-app"),
+            [element],
+            {
+              animations: "disabled",
+              scrollTo: element,
+              elements: [element],
+            },
+          );
+          writeFileSync(path.join(suite.artifactDir, `${mode}-${name}.png`), frame.png);
+          writeFileSync(
+            path.join(suite.artifactDir, `${mode}-${name}-crop.png`),
+            frame.elements[0]!.png,
+          );
+        };
+        const measurements = [];
+        for (const width of [1280, 320]) {
+          await page.setViewportSize({ width, height: 900 });
+          await emptyCard.scrollIntoViewIfNeeded();
+          await saveFrame(`gallery-${width}`, emptyCard);
+          const bounds = await empty.evaluate((element) => {
+            const preview = element.closest(".dashboard-preview")!.getBoundingClientRect();
+            return {
+              preview: {
+                top: preview.top,
+                bottom: preview.bottom,
+                left: preview.left,
+                right: preview.right,
+              },
+              content: [element, ...element.children].map((child) => {
+                const rect = child.getBoundingClientRect();
+                return { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right };
+              }),
+            };
+          });
+          measurements.push({ width, bounds });
+          for (const content of bounds.content) {
+            expect
+              .soft(content.top, `empty preview top at ${width}px`)
+              .toBeGreaterThanOrEqual(bounds.preview.top);
+            expect
+              .soft(content.bottom, `empty preview bottom at ${width}px`)
+              .toBeLessThanOrEqual(bounds.preview.bottom);
+            expect.soft(content.left).toBeGreaterThanOrEqual(bounds.preview.left);
+            expect.soft(content.right).toBeLessThanOrEqual(bounds.preview.right);
+          }
+          expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+        }
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await emptyCard.scrollIntoViewIfNeeded();
+        const restingY = (await emptyCard.boundingBox())!.y;
+        await emptyCard.hover();
+        await expect.poll(async () => (await emptyCard.boundingBox())!.y).toBeLessThan(restingY);
+        await saveFrame("hover", emptyCard);
+        await gallery.getByRole("searchbox").fill("No matching dashboard");
+        await gallery.locator("[data-dashboards-no-results]").waitFor();
+        await saveFrame("search-empty", gallery.locator("[data-dashboards-no-results]"));
+        await gateway.setMethodResponse("sessions.list", {
+          cases: [responseCase({ hasBoard: true }, list([]))],
+        });
+        await page.reload();
+        await gallery.locator(".dashboards-loading__control").first().waitFor();
+        await gateway.resolveDeferred("sessions.list");
+        await gallery.locator("[data-dashboards-empty]").waitFor();
+        expect(await gallery.locator("[data-dashboards-no-results]").count()).toBe(0);
+        await saveFrame("catalog-empty", gallery.locator("[data-dashboards-empty]"));
+        if (capture) {
+          const theme = await page.evaluate(() => ({
+            id: document.documentElement.dataset.themeId,
+            mode: document.documentElement.dataset.themeMode,
+            palette: document.documentElement.dataset.theme,
+            sheets: [...document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')]
+              .filter((link) => link.href.includes("/themes/"))
+              .map((link) => ({ href: link.href, loaded: Boolean(link.sheet) })),
+            background: getComputedStyle(document.body).backgroundColor,
+            color: getComputedStyle(document.body).color,
+          }));
+          writeFileSync(
+            path.join(suite.artifactDir, `${mode}-measurements.json`),
+            JSON.stringify({ theme, measurements }, null, 2),
+          );
+        }
+      },
+    );
+  });
+
   it("opens a responsive gallery card without restarting its retained dashboard widgets", async () => {
     await suite.withPage(
       { colorScheme: "dark", viewport: { width: 1440, height: 900 } },

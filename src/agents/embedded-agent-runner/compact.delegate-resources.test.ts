@@ -5,7 +5,7 @@ import { getAiTransportHost, type AssistantMessage, type Model } from "@openclaw
 import { createAssistantMessageEventStream } from "@openclaw/ai/event-stream";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { withinTest, withTestTimeout } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../../config/validation-core.js";
@@ -312,6 +312,7 @@ function openTool(current: Fixture, name: string): Connection {
 // this fixture tests runtime custody, not either wire protocol.
 vi.mock("../agent-bundle-mcp-tools.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agent-bundle-mcp-tools.js")>();
+  const runtimeModule = await import("../agent-bundle-mcp-runtime.js");
   return {
     ...actual,
     createBundleMcpToolRuntime: async (
@@ -320,9 +321,9 @@ vi.mock("../agent-bundle-mcp-tools.js", async (importOriginal) => {
       const current = fixture();
       const connection = openTool(current, "mcp");
       if (current.mode.startsWith("mcp-")) {
-        return actual.createBundleMcpToolRuntime({
-          ...params,
-          createRuntime: (input) => ({
+        const createRuntime = vi
+          .spyOn(runtimeModule, "createSessionMcpRuntime")
+          .mockImplementationOnce((input) => ({
             sessionId: input.sessionId,
             workspaceDir: input.workspaceDir,
             configFingerprint: "delegate-mcp",
@@ -345,8 +346,12 @@ vi.mock("../agent-bundle-mcp-tools.js", async (importOriginal) => {
                 closeConnection(connection);
               }
             },
-          }),
-        });
+          }));
+        try {
+          return await actual.createBundleMcpToolRuntime(params);
+        } finally {
+          createRuntime.mockRestore();
+        }
       }
       const track = captureAsyncWorkTracker();
       if (current.mode === "preparation-failure") {
@@ -692,7 +697,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                 }
               }
               const result = pendingPreparation
-                ? await withTestTimeout(operation, 5_000, "Tool preparation did not settle")
+                ? await withinTest(operation, signal)
                 : await operation;
               const cancelled =
                 mode === "reload-abort-before-commit" || mode === "abort-after-commit";
@@ -737,7 +742,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                 if (mode !== "cleanup-tail") {
                   expect(current.tools.every((tool) => tool.database.isOpen)).toBe(true);
                 }
-                const owner = captured?.work ?? parent;
+                const owner = captured?.active.work ?? parent;
                 expect(owner.hasPendingWork).toBe(true);
                 let finished = false;
                 drained = owner.drain().then(() => {
@@ -779,7 +784,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
               current.finish.resolve();
               await Promise.allSettled([operation, ...current.pending]);
               await (drained ?? parent.drain());
-              await captured?.work.drain();
+              await captured?.active.work.drain();
               await captured?.release();
               await previousLease?.[Symbol.asyncDispose]();
               await resetPreparedModelRuntimeSnapshotsForTest();

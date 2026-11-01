@@ -1,27 +1,18 @@
 import { execFileSync } from "node:child_process";
-import {
-  appendFileSync,
-  existsSync,
-  lstatSync,
-  readFileSync,
-  readdirSync,
-  writeFileSync,
-} from "node:fs";
+import { appendFileSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { join, posix, resolve } from "node:path";
 import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import {
   NATIVE_COOWNED_GENERATED_I18N_RE,
   NATIVE_HARD_GENERATED_I18N_RE,
-  NATIVE_CANONICAL_V2_MIGRATION_GENERATED_RE,
 } from "./lib/ci-native-generated-scope.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 import nativeProtocolInputs from "./native-protocol-inputs.json" with { type: "json" };
 
-/** @typedef {{ runNode: boolean; runMacos: boolean; runMacosNode: boolean; runIosBuild: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runChangedSmoke: boolean; runControlUiI18n: boolean; runUiTests: boolean }} ChangedScope */
+/** @typedef {{ runNode: boolean; runMacos: boolean; runMacosNode: boolean; runIosBuild: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runControlUiI18n: boolean; runUiTests: boolean }} ChangedScope */
 /** @typedef {{ runFastOnly: boolean; runPluginContracts: boolean; runCiRouting: boolean }} NodeFastScope */
-/** @typedef {{ runFastInstallSmoke: boolean; runFullInstallSmoke: boolean }} InstallSmokeScope */
 
 const CHANGED_PATHS_OUTPUT_MAX_BYTES = 64 * 1024;
 
@@ -111,7 +102,6 @@ const FULL_SCOPE = {
   runAndroid: true,
   runWindows: true,
   runSkillsPython: true,
-  runChangedSmoke: true,
   runControlUiI18n: true,
   runUiTests: true,
 };
@@ -125,7 +115,6 @@ const EMPTY_SCOPE = {
   runAndroid: false,
   runWindows: false,
   runSkillsPython: false,
-  runChangedSmoke: false,
   runControlUiI18n: false,
   runUiTests: false,
 };
@@ -133,7 +122,6 @@ const EMPTY_SCOPE = {
 // Skills native subscriptions need real filesystem proof on both desktop OSes.
 const SKILLS_WATCH_SCOPE_RE = /^src\/skills\/runtime\/refresh(?:[.-][^/]+)?\.ts$/;
 const SKILLS_PYTHON_SCOPE_RE = /^(skills\/|skills\/pyproject\.toml$)/;
-const INSTALL_SMOKE_WORKFLOW_SCOPE_RE = /^\.github\/workflows\/install-smoke\.yml$/;
 const NATIVE_PROTOCOL_GEN_RE = /^apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\//;
 const APPLE_SWIFT_CONFIG_RE = /^config\/(?:swiftformat|swiftlint\.yml)$/;
 const SWIFT_LINT_OWNER_RE = /^scripts\/(?:run-swiftlint|lib\/check-limits)\.mts$/;
@@ -147,13 +135,13 @@ const MACOS_SCRIPT_SCOPE_RE =
 const WORKER_DEPLOY_ARTIFACT_SCOPE_RE =
   /^src\/(?:agents\/github-exec-(?:launcher|credential)\.ts|shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$/;
 const IOS_BUILD_RE =
-  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-simslim|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|screenshots|simulator-prepare|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|scripts\/lib\/(?:(?:ios-fastlane|swift-toolchain)\.sh|(?:ios|mobile)-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
+  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-simslim|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|screenshots|simulator-prepare|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|scripts\/lib\/(?:(?:ios-fastlane|swift-toolchain)\.sh|(?:ios|mobile)-version\.ts|ios-test-results\.(?:mjs|d\.mts)|release-version\.mjs|version-script-args\.ts)$)/;
 // Tests and WatchTests Swift sources belong only to retained native unit-test targets.
 // UITests, resources, and project changes still prove the screenshot target graph.
 const IOS_SCREENSHOT_APP_SCOPE_RE =
   /^(?:apps\/ios\/(?!(?:Tests|WatchTests)\/.*\.swift$)|apps\/shared\/OpenClawKit\/|apps\/swabble\/|Swabble\/)/;
 const IOS_SCREENSHOT_SCRIPT_SCOPE_RE =
-  /^scripts\/(?:check-swift-tools|format-swift|install-simslim|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|simulator-prepare|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:(?:ios-fastlane|swift-toolchain)\.sh|(?:ios|mobile)-version\.ts|release-version\.mjs|version-script-args\.ts)$/;
+  /^scripts\/(?:check-swift-tools|format-swift|install-simslim|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|simulator-prepare|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:(?:ios-fastlane|swift-toolchain)\.sh|(?:ios|mobile)-version\.ts|ios-test-results\.(?:mjs|d\.mts)|release-version\.mjs|version-script-args\.ts)$/;
 const ANDROID_NATIVE_RE =
   /^(apps\/android\/|apps\/shared\/|\.github\/actions\/setup-android-toolchain\/)/;
 // JVM tests and benchmark-only changes do not enter the store capture graph.
@@ -190,7 +178,7 @@ const WINDOWS_USAGE_TEMPLATE_SCOPE_RE =
 const WINDOWS_MEDIA_UNDERSTANDING_FILE_URL_SCOPE_RE =
   /^src\/media-understanding\/attachments\.(?:cache(?:\.test)?|file-url\.windows\.test|normalize(?:\.test)?)\.ts$/;
 const WINDOWS_HOME_DISPLAY_SCOPE_RE =
-  /^(?:src\/(?:utils(?:\.test)?|infra\/(?:home-display|path-guards)|commands\/agents\.commands\.list(?:\.test)?|cli\/daemon-cli\/status\.print(?:\.test)?|agents\/(?:sandbox\/fs-paths|sessions\/tools\/render-utils)(?:\.test)?)|packages\/terminal-core\/src\/display-string(?:\.test)?)\.ts$/;
+  /^(?:src\/(?:utils(?:\.test)?|infra\/(?:home-display|path-guards)|commands\/agents\.commands\.list(?:\.test)?|cli\/daemon-cli\/status\.print(?:\.test)?|agents\/(?:sandbox\/fs-paths(?:\.test)?|sessions\/tools\/(?:read|render-utils\.test)))|packages\/terminal-core\/src\/display-string(?:\.test)?)\.ts$/;
 const WINDOWS_CHILD_ENV_SCOPE_RE =
   /^src\/(?:agents\/provider-local-service(?:-process|\.(?:env-case|shutdown|settlement)\.test)?|cli\/mcp-cli(?:\.path-case\.windows)?\.test|cli\/mcp-cli|infra\/process-env(?:\.test)?)\.ts$/;
 const WINDOWS_SOURCE_CLI_SCOPE_RE =
@@ -213,7 +201,7 @@ const WINDOWS_WORKER_BUNDLE_SCOPE_RE =
 const WINDOWS_WORKER_WORKSPACE_SCOPE_RE =
   /^src\/(?:infra\/git-exec(?:\.test)?|agents\/worktrees\/(?:git|base-ref)(?:\.test)?|node-host\/node-worker-transfer-client(?:\.test)?|gateway\/worker-environments\/(?:node-worker-tunnel(?:\.test)?|workspace-result-(?:git(?:\.test)?|staging|ref-mutation\.test)|session-repository-checkpoints(?:\.test)?|workspace-sync-(?:scripts|manifest\.test)))\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
-  /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|extensions\/(?:active-memory|memory-wiki)\/control-ui\.presentation\.json$|extensions\/[^/]+\/(?:package\.json$|(?:.*\/)?i18n\/(?:locales|\.i18n)\/)|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/(?:control-ui-plugin-i18n-catalog\.ts|control-ui-i18n-(?:(?:catalog(?:-values)?|config|raw-copy|sync-plan)\.ts|config\.json)))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
+  /^(src\/shared\/(?:control-ui-locale|public-session-copy)\.ts$|ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|extensions\/(?:active-memory|memory-wiki)\/control-ui\.presentation\.json$|extensions\/[^/]+\/(?:package\.json$|(?:.*\/)?i18n\/(?:locales|\.i18n)\/)|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/(?:control-ui-plugin-i18n-catalog\.ts|control-ui-i18n-(?:(?:catalog(?:-values)?|config|raw-copy|sync-plan)\.ts|config\.json)))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
 // A plugin can declare its browser entry in any package directory. Keep this
 // path-only planner conservative; source discovery selects actual UI owners.
 const CONTROL_UI_I18N_PRODUCTION_SOURCE_RE =
@@ -229,15 +217,9 @@ class NativeGeneratedArtifactsMixedError extends Error {}
 // QA Lab real-Gateway suites share the same Chromium owner. The test runtime
 // owner sets the Bun UI env; main runs UI on Node, so only PRs prove it.
 const CHROMIUM_UI_TEST_SCOPE_RE =
-  /^(ui\/|extensions\/(?:active-memory|memory-wiki)\/control-ui\.presentation\.json$|extensions\/[^/]+\/control-ui\.(?:channel-detail|settings-presentation)\.json$|extensions\/[^/]+\/browser(?:\/|$)|extensions\/browser\/chrome-extension\/|extensions\/qa-lab\/src\/[^/]+\.real-gateway\.e2e\.test\.ts$|test\/vitest\/vitest\.(?:ui-(?:e2e|browser)(?:-[^/.]+)?\.[^/]+\.ts|(?:pattern-file|performance-config|timeouts|weighted-sharding)\.ts|ui-(?:isolated-)?paths\.mjs)$|test\/helpers\/temp-dir\.ts$|scripts\/(?:ensure-playwright-chromium\.mts|test-desktop-resize-real\.mts|check-control-ui-(?:performance(?:-base)?|precompressed-assets)\.mts|ui\.(?:mts|js)|control-ui-mock-[^/]+\.ts|lib\/(?:ci-test-(?:runtime|timings(?:-schema)?)|desktop-resize-proof|vitest-local-scheduling)\.mts)$|config\/(?:ci-test-timings|control-ui-startup-budget-baseline)\.json$|\.github\/workflows\/ci\.yml$)/;
+  /^(ui\/|extensions\/(?:active-memory|memory-wiki)\/control-ui\.presentation\.json$|extensions\/[^/]+\/control-ui\.(?:channel-detail|settings-presentation|session-source)\.json$|extensions\/[^/]+\/browser(?:\/|$)|extensions\/browser\/chrome-extension\/|extensions\/qa-lab\/src\/[^/]+\.real-gateway\.e2e\.test\.ts$|test\/vitest\/vitest\.(?:ui-(?:e2e|browser)(?:-[^/.]+)?\.[^/]+\.ts|(?:pattern-file|performance-config|timeouts|weighted-sharding)\.ts|ui-(?:isolated-)?paths\.mjs)$|test\/helpers\/temp-dir\.ts$|scripts\/(?:ensure-playwright-chromium\.mts|test-desktop-resize-real\.mts|check-control-ui-(?:performance(?:-base)?|precompressed-assets)\.mts|ui\.(?:mts|js)|control-ui-mock-[^/]+\.ts|lib\/(?:ci-test-(?:runtime|timings(?:-schema)?)|desktop-resize-proof|vitest-local-scheduling)\.mts)$|config\/(?:ci-test-timings|control-ui-startup-budget-baseline)\.json$|\.github\/workflows\/ci\.yml$)/;
 const NATIVE_I18N_SCOPE_RE =
   /^(?:apps\/\.i18n\/|apps\/android\/(?:app\/src\/(?:main|play|thirdParty)\/|wear\/src\/main\/)|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-(?:app-i18n|i18n-(?:inventory|locales)))\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
-const FAST_INSTALL_SMOKE_SCOPE_RE =
-  /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/ci-changed-scope\.mjs$|scripts\/postinstall-bundled-plugins\.mjs$|scripts\/e2e\/(?:Dockerfile(?:\.qr-import)?|agents-delete-shared-workspace-docker\.sh|gateway-network-docker\.sh)$|extensions\/[^/]+\/(?:package\.json|openclaw\.plugin\.json)$|\.github\/workflows\/install-smoke\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
-const FULL_INSTALL_SMOKE_SCOPE_RE =
-  /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/ci-changed-scope\.mjs$|scripts\/(?:install(?:-cli|-policy)?\.sh|build-installers\.mjs|lib\/standalone-installers\.mjs)$|scripts\/install\.ps1$|scripts\/test-install-sh-docker\.sh$|scripts\/docker\/|scripts\/e2e\/(?:Dockerfile(?:\.qr-import)?|qr-import-docker\.sh|bun-global-install-smoke\.sh)$|\.github\/workflows\/(?:install-smoke|website-installer-sync)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
-const FAST_INSTALL_SMOKE_RUNTIME_SCOPE_RE =
-  /^(?:src\/(?:channels|gateway|plugin-sdk|plugins)\/|packages\/gateway-(?:client|protocol)\/src\/)/;
 const NODE_FAST_PLUGIN_CONTRACT_SCOPE_RE =
   /^src\/plugins\/contracts\/(?:inventory\/bundled-capability-metadata|registry|tts-contract-suites)\.ts$/;
 const NODE_FAST_CI_ROUTING_SCOPE_RE =
@@ -303,7 +285,6 @@ export function detectChangedScope(changedPaths) {
   let runAndroid = false;
   let runWindows = false;
   let runSkillsPython = false;
-  let runChangedSmoke = false;
   let runControlUiI18n = false;
   let runUiTests = false;
   let hasNonDocs = false;
@@ -331,10 +312,6 @@ export function detectChangedScope(changedPaths) {
 
     if (SKILLS_PYTHON_SCOPE_RE.test(path)) {
       runSkillsPython = true;
-    }
-
-    if (INSTALL_SMOKE_WORKFLOW_SCOPE_RE.test(path)) {
-      runChangedSmoke = true;
     }
 
     if (
@@ -402,10 +379,6 @@ export function detectChangedScope(changedPaths) {
       runWindows = true;
     }
 
-    if (detectInstallSmokeScopeForPath(path).runFastInstallSmoke) {
-      runChangedSmoke = true;
-    }
-
     if (
       CONTROL_UI_I18N_SCOPE_RE.test(path) ||
       (CONTROL_UI_I18N_PRODUCTION_SOURCE_RE.test(path) && !facts.isTestOnly)
@@ -435,7 +408,6 @@ export function detectChangedScope(changedPaths) {
     runAndroid,
     runWindows: runWindows || hasGitOwnerChanges || hasSkillsWatchChanges,
     runSkillsPython,
-    runChangedSmoke,
     runControlUiI18n,
     runUiTests,
   };
@@ -525,9 +497,6 @@ export function assertControlUiGeneratedArtifactsIsolated(changedPaths, branchNa
   if (sourcePaths.length === 0) {
     return;
   }
-  if (isControlUiCanonicalMemoryMigration(changedPaths, generatedPaths)) {
-    return;
-  }
   throw new ControlUiGeneratedArtifactsMixedError(
     [
       "Control UI generated locale artifacts must be isolated from source changes.",
@@ -536,65 +505,6 @@ export function assertControlUiGeneratedArtifactsIsolated(changedPaths, branchNa
       ...sourcePaths.map((filePath) => `- source: ${filePath}`),
     ].join("\n"),
   );
-}
-
-/**
- * @param {string[]} changedPaths
- * @param {string[]} generatedPaths
- * @returns {boolean}
- */
-function isControlUiCanonicalMemoryMigration(changedPaths, generatedPaths) {
-  const requiredOwners = [
-    ".gitattributes",
-    "scripts/ci-changed-scope.mjs",
-    "scripts/control-ui-i18n.ts",
-    "scripts/control-ui-i18n-verify.ts",
-    "scripts/lib/control-ui-i18n-catalog.ts",
-    "scripts/lib/control-ui-i18n-catalog-values.ts",
-    "scripts/lib/control-ui-i18n-sync-plan.ts",
-    "ui/AGENTS.md",
-    "ui/config/control-ui-locales.ts",
-    "ui/vite.config.ts",
-  ];
-  if (!requiredOwners.every((owner) => changedPaths.includes(owner))) {
-    return false;
-  }
-
-  const assetsDir = new URL("../ui/src/i18n/.i18n/", import.meta.url);
-  const locales = readdirSync(assetsDir)
-    .filter((fileName) => fileName.endsWith(".tm.jsonl"))
-    .map((fileName) => fileName.slice(0, -".tm.jsonl".length));
-  const requiredGeneratedPaths = [
-    "ui/src/i18n/.i18n/catalog-fallbacks.json",
-    ...locales.flatMap((locale) => [
-      `ui/src/i18n/.i18n/${locale}.tm.jsonl`,
-      `ui/src/i18n/.i18n/${locale}.meta.json`,
-    ]),
-  ];
-  if (
-    generatedPaths.length !== requiredGeneratedPaths.length ||
-    !requiredGeneratedPaths.every((filePath) => generatedPaths.includes(filePath))
-  ) {
-    return false;
-  }
-
-  return locales.every((locale) => {
-    const adapterPath = `ui/src/i18n/locales/${locale}.ts`;
-    if (!changedPaths.includes(adapterPath)) {
-      return false;
-    }
-    let source;
-    try {
-      source = readFileSync(new URL(`../${adapterPath}`, import.meta.url), "utf8").trim();
-    } catch {
-      return false;
-    }
-    const exportName = locale.replaceAll("-", "_");
-    return (
-      source ===
-      `export { default as ${exportName} } from "virtual:openclaw-control-ui-locale/${locale}";`
-    );
-  });
 }
 
 /**
@@ -636,12 +546,6 @@ export function assertNativeGeneratedArtifactsIsolated(changedPaths, branchName 
   if (sourcePaths.length === 0) {
     return;
   }
-  if (isNativeCanonicalV2Migration(changedPaths, generatedPaths)) {
-    return;
-  }
-  if (isAndroidBuildTimeI18nMigration(changedPaths, generatedPaths, sourcePaths)) {
-    return;
-  }
   throw new NativeGeneratedArtifactsMixedError(
     [
       "Native generated locale artifacts must be isolated from source changes.",
@@ -650,70 +554,6 @@ export function assertNativeGeneratedArtifactsIsolated(changedPaths, branchName 
       ...generatedCompanionPaths.map((filePath) => `- generated companion: ${filePath}`),
       ...sourcePaths.map((filePath) => `- source: ${filePath}`),
     ].join("\n"),
-  );
-}
-
-/**
- * The projection retirement must carry its output-only translations into canonical inputs.
- * Requiring the deleted lookup path confines this exception to the cutover diff.
- * @param {string[]} changedPaths
- * @param {string[]} generatedPaths
- * @param {string[]} sourcePaths
- */
-function isAndroidBuildTimeI18nMigration(changedPaths, generatedPaths, sourcePaths) {
-  const retiredLookup =
-    "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt";
-  const owners = [
-    ".github/workflows/native-app-locale-refresh.yml",
-    "apps/.i18n/native-source.json",
-    "apps/android/app/build.gradle.kts",
-    "scripts/android-app-i18n.ts",
-    "scripts/native-app-i18n.ts",
-    "scripts/ci-changed-scope.mjs",
-    "test/scripts/android-app-i18n.test.ts",
-    "test/scripts/native-app-i18n.test.ts",
-    "src/scripts/ci-changed-scope.native-i18n.test.ts",
-  ];
-  return (
-    changedPaths.includes(retiredLookup) &&
-    !existsSync(new URL(`../${retiredLookup}`, import.meta.url)) &&
-    owners.every((owner) => changedPaths.includes(owner)) &&
-    sourcePaths.every(
-      (filePath) =>
-        owners.includes(filePath) ||
-        filePath === "package.json" ||
-        filePath === "apps/android/README.md",
-    ) &&
-    generatedPaths.every(
-      (filePath) =>
-        filePath === retiredLookup ||
-        /^(?:apps\/\.i18n\/native\/[^/]+\.json|apps\/android\/app\/src\/main\/res\/values-[^/]+\/strings\.xml)$/.test(
-          filePath,
-        ),
-    )
-  );
-}
-
-/**
- * One-time v2 native artifact migration escape; remove after the migration PR lands.
- * @param {string[]} changedPaths
- * @param {string[]} generatedPaths
- * @returns {boolean}
- */
-function isNativeCanonicalV2Migration(changedPaths, generatedPaths) {
-  const requiredOwners = [
-    ".gitattributes",
-    "scripts/ci-changed-scope.mjs",
-    "scripts/native-app-i18n.ts",
-    "scripts/android-app-i18n.ts",
-    "scripts/apple-app-i18n.ts",
-    "test/scripts/native-app-i18n.test.ts",
-    "test/scripts/apple-app-i18n.test.ts",
-    "src/scripts/ci-changed-scope.native-i18n.test.ts",
-  ];
-  return (
-    requiredOwners.every((owner) => changedPaths.includes(owner)) &&
-    generatedPaths.every((filePath) => NATIVE_CANONICAL_V2_MIGRATION_GENERATED_RE.test(filePath))
   );
 }
 
@@ -817,44 +657,6 @@ export function detectNodeFastScope(changedPaths) {
 }
 
 /**
- * @param {string} path
- * @returns {InstallSmokeScope}
- */
-function detectInstallSmokeScopeForPath(path) {
-  const facts = getChangedPathFacts(path);
-  const runFullInstallSmoke = FULL_INSTALL_SMOKE_SCOPE_RE.test(path);
-  const runFastInstallSmoke =
-    runFullInstallSmoke ||
-    FAST_INSTALL_SMOKE_SCOPE_RE.test(path) ||
-    (FAST_INSTALL_SMOKE_RUNTIME_SCOPE_RE.test(path) && !facts.isTestOnly);
-  return { runFastInstallSmoke, runFullInstallSmoke };
-}
-
-/**
- * @param {string[]} changedPaths
- * @returns {InstallSmokeScope}
- */
-export function detectInstallSmokeScope(changedPaths) {
-  if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
-    return { runFastInstallSmoke: true, runFullInstallSmoke: true };
-  }
-
-  let runFastInstallSmoke = false;
-  let runFullInstallSmoke = false;
-  for (const rawPath of changedPaths) {
-    const facts = getChangedPathFacts(rawPath);
-    const { path } = facts;
-    if (!path || facts.surface === "docs") {
-      continue;
-    }
-    const pathScope = detectInstallSmokeScopeForPath(path);
-    runFastInstallSmoke ||= pathScope.runFastInstallSmoke;
-    runFullInstallSmoke ||= pathScope.runFullInstallSmoke;
-  }
-  return { runFastInstallSmoke, runFullInstallSmoke };
-}
-
-/**
  * @param {string} base
  * @param {string} [head]
  * @param {string} [cwd]
@@ -891,7 +693,6 @@ export function listChangedPaths(
 /**
  * @param {ChangedScope} scope
  * @param {string} [outputPath]
- * @param {InstallSmokeScope} [installSmokeScope]
  * @param {NodeFastScope} [nodeFastScope]
  * @param {boolean} [runNativeI18n]
  * @param {string[] | null} [changedPaths]
@@ -901,10 +702,6 @@ export function listChangedPaths(
 export function writeGitHubOutput(
   scope,
   outputPath = process.env.GITHUB_OUTPUT,
-  installSmokeScope = {
-    runFastInstallSmoke: scope.runChangedSmoke,
-    runFullInstallSmoke: scope.runChangedSmoke,
-  },
   nodeFastScope = { runFastOnly: false, runPluginContracts: false, runCiRouting: false },
   runNativeI18n = true,
   changedPaths = null,
@@ -933,7 +730,6 @@ export function writeGitHubOutput(
   appendFileSync(outputPath, `run_android=${scope.runAndroid}\n`, "utf8");
   appendFileSync(outputPath, `run_windows=${scope.runWindows}\n`, "utf8");
   appendFileSync(outputPath, `run_skills_python=${scope.runSkillsPython}\n`, "utf8");
-  appendFileSync(outputPath, `run_changed_smoke=${scope.runChangedSmoke}\n`, "utf8");
   appendFileSync(outputPath, `run_node_fast_only=${nodeFastScope.runFastOnly}\n`, "utf8");
   appendFileSync(
     outputPath,
@@ -941,16 +737,6 @@ export function writeGitHubOutput(
     "utf8",
   );
   appendFileSync(outputPath, `run_node_fast_ci_routing=${nodeFastScope.runCiRouting}\n`, "utf8");
-  appendFileSync(
-    outputPath,
-    `run_fast_install_smoke=${installSmokeScope.runFastInstallSmoke}\n`,
-    "utf8",
-  );
-  appendFileSync(
-    outputPath,
-    `run_full_install_smoke=${installSmokeScope.runFullInstallSmoke}\n`,
-    "utf8",
-  );
   appendFileSync(outputPath, `run_control_ui_i18n=${scope.runControlUiI18n}\n`, "utf8");
   appendFileSync(
     outputPath,
@@ -1016,7 +802,6 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
         EMPTY_SCOPE,
         process.env.GITHUB_OUTPUT,
         undefined,
-        undefined,
         false,
         [],
         workflowEventName,
@@ -1029,7 +814,6 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     writeGitHubOutput(
       detectChangedScope(changedPaths),
       process.env.GITHUB_OUTPUT,
-      detectInstallSmokeScope(changedPaths),
       detectNodeFastScope(changedPaths),
       shouldRunNativeI18n(changedPaths),
       changedPaths,
@@ -1046,7 +830,6 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
       writeGitHubOutput(
         FULL_SCOPE,
         process.env.GITHUB_OUTPUT,
-        undefined,
         undefined,
         true,
         null,

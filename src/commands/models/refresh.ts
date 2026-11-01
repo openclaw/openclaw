@@ -12,8 +12,7 @@ export async function modelsRefreshCommand(
     params: {},
     target: "remote model catalog",
     onForeignOwner: "refuse",
-    runLocal: async ({ config, env, signal, assertCurrent }) => {
-      assertCurrent();
+    runLocal: async ({ config, env, signal }) => {
       return await refreshRemoteModelCatalog({
         config,
         force: true,

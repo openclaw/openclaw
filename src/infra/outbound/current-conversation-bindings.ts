@@ -134,7 +134,7 @@ function bindingWriteOptions(
 /** Updates one binding from its currently committed row in one synchronous transaction. */
 export function updateCurrentConversationBindingRecord(
   ref: ConversationRef,
-  update: (current: SessionBindingRecord | null) => SessionBindingRecord | null,
+  update: (current: SessionBindingRecord | null) => SessionBindingRecord | null | undefined,
 ): { previous: SessionBindingRecord | null; current: SessionBindingRecord | null } {
   const conversation = normalizeConversationRef(ref);
   return runOpenClawStateWriteTransaction(({ db }) =>
@@ -274,9 +274,11 @@ function bindingRefFromId(bindingId: string, scope?: SessionBindingScope): Conve
   if (!bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
     return null;
   }
-  const [channel, accountId, parentConversationId, conversationId] = bindingId
+  const [channel, accountId, parentConversationId, ...conversationParts] = bindingId
     .slice(CURRENT_BINDINGS_ID_PREFIX.length)
     .split("\u241f");
+  // Conversation ids may contain the separator; they are the key's final field.
+  const conversationId = conversationParts.join("\u241f");
   if (!channel || !accountId || !conversationId) {
     return null;
   }
@@ -400,7 +402,9 @@ export function touchGenericCurrentConversationBinding(
             lastActivityAt: at,
           },
         }
-      : current,
+      : current
+        ? undefined
+        : null,
   );
 }
 
@@ -506,9 +510,6 @@ export async function inspectCurrentConversationBindingRecordAsync(
   );
   if (!result) {
     return null;
-  }
-  if (!result.ok || result.type !== "conversationBindings.inspect") {
-    throw new Error("Unexpected current conversation binding inspection result");
   }
   return result.record;
 }
@@ -623,7 +624,6 @@ export function captureGenericBindingSupport(ref: ConversationRef) {
       throw new SessionBindingError(
         "BINDING_ADAPTER_UNAVAILABLE",
         "Generic conversation binding owner is no longer available",
-        { channel: ref.channel, accountId: ref.accountId },
       );
     }
   };

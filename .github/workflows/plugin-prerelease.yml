@@ -33,7 +33,7 @@ on:
         default: false
         type: boolean
       test_runtime_policy:
-        description: Extension batch runtime trial (bun-all or dual-all); empty preserves current behavior
+        description: Extension batch runtime override (node, bun-all, or dual-all); empty uses Bun, or both runtimes for full release validation
         required: false
         default: ""
         type: string
@@ -188,7 +188,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Checkout target
@@ -251,13 +251,13 @@ jobs:
       - name: Setup manifest TypeScript runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.x"
+          node-version: "24.22.1"
 
       - name: Setup manifest pnpm
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
           cache-mode: restore
-          node-version: "24.x"
+          node-version: "24.22.1"
 
       - name: Install manifest dependencies
         run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
@@ -281,8 +281,8 @@ jobs:
           const hourly = process.env.GITHUB_EVENT_NAME === "schedule";
           const phase = process.env.PHASE ?? "all";
           const runtimePolicy = process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim();
-          if (runtimePolicy && runtimePolicy !== "bun-all" && runtimePolicy !== "dual-all") {
-            throw new Error("test_runtime_policy must be bun-all or dual-all");
+          if (runtimePolicy && !["node", "bun-all", "dual-all"].includes(runtimePolicy)) {
+            throw new Error("test_runtime_policy must be node, bun-all, or dual-all");
           }
 
           let pluginPrereleasePlan = { staticChecks: [], dockerLanes: [] };
@@ -388,7 +388,7 @@ jobs:
                 fullReleaseValidation,
                 vitestArgs: extensionVitestArgs,
               });
-              if (runtimePolicy && (runtime.test_runtime_policy !== runtimePolicy || runtime.requires_bun !== true)) {
+              if (runtimePolicy && (runtime.test_runtime_policy !== runtimePolicy || runtime.requires_bun !== (runtimePolicy !== "node"))) {
                 throw new Error(`Target ref does not support requested test_runtime_policy: ${runtimePolicy}`);
               }
               return {
@@ -721,6 +721,7 @@ jobs:
       - name: Run extension shard
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
           OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
           OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers }}
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}

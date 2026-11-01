@@ -5,21 +5,18 @@ import { mapAssistantMessageStream } from "../../llm/utils/stream-wrapper.js";
 import { runPluginStreamConsumer } from "../../plugins/plugin-instance-scope.js";
 import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import type { AgentMessage, StreamFn } from "../runtime/index.js";
-import { isAssistantMessageWithContent, isThinkingBlock } from "../thinking-signatures.js";
+import { isThinkingLikeBlock } from "../thinking-block.js";
+import { isAssistantMessageWithContent } from "../thinking-signatures.js";
 import { log } from "./logger.js";
 import { wrapStreamObjectSettlement } from "./run/stream-wrapper.js";
 
 type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 type RecoveryAssessment = "valid" | "incomplete-thinking" | "incomplete-text";
-type AnthropicThinkingRecovery = {
-  originalMessages: AgentMessage[];
-  cleanedMessages: AgentMessage[];
-};
 type RecoverySessionMeta = {
   id: string;
   recoveredAnthropicThinking?: boolean;
-  onRecoveredAnthropicThinking?: (recovery: AnthropicThinkingRecovery) => void | Promise<void>;
+  onRecoveredAnthropicThinking?: () => void | Promise<void>;
 };
 
 type ThinkingRecoveryRequest = {
@@ -119,7 +116,7 @@ export function stripInvalidThinkingSignatures(
       ? message
       : filterAssistantContent(
           message,
-          (block) => !isThinkingBlock(block) || hasReplayableThinkingSignature(block),
+          (block) => !isThinkingLikeBlock(block) || hasReplayableThinkingSignature(block),
         ),
   );
 }
@@ -166,7 +163,7 @@ export function stripThinkingBlocksFromMessage(message: AgentMessage): AgentMess
   if (!isAssistantMessageWithContent(message)) {
     return message;
   }
-  return filterAssistantContent(message, (block) => !isThinkingBlock(block));
+  return filterAssistantContent(message, (block) => !isThinkingLikeBlock(block));
 }
 
 function stripAllThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
@@ -196,7 +193,7 @@ export function assessLastAssistantMessage(message: AgentMessage): RecoveryAsses
     if (!block || typeof block !== "object") {
       return "incomplete-thinking";
     }
-    if (isThinkingBlock(block)) {
+    if (isThinkingLikeBlock(block)) {
       if (!isSignedThinkingBlock(block)) {
         return "incomplete-thinking";
       }
@@ -269,12 +266,9 @@ function shouldRecoverAnthropicThinkingErrorMessage(
   return true;
 }
 
-async function notifyRecoveredAnthropicThinking(
-  sessionMeta: RecoverySessionMeta,
-  recovery: AnthropicThinkingRecovery,
-): Promise<void> {
+async function notifyRecoveredAnthropicThinking(sessionMeta: RecoverySessionMeta): Promise<void> {
   try {
-    await sessionMeta.onRecoveredAnthropicThinking?.(recovery);
+    await sessionMeta.onRecoveredAnthropicThinking?.();
   } catch (error: unknown) {
     log.warn(
       `[session-recovery] Anthropic thinking transcript repair hook failed: sessionId=${sessionMeta.id} error=${formatErrorMessage(error)}`,
@@ -426,12 +420,7 @@ export function wrapAnthropicStreamWithRecovery(
     const readNotification = () => notification;
     const notify = () => {
       notification ??= trackRecovery(() =>
-        Promise.resolve().then(() =>
-          notifyRecoveredAnthropicThinking(requestMeta, {
-            originalMessages,
-            cleanedMessages: stripAllThinkingBlocks(originalMessages),
-          }),
-        ),
+        Promise.resolve().then(() => notifyRecoveredAnthropicThinking(requestMeta)),
       );
       return notification;
     };

@@ -21,7 +21,6 @@ import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";
 import { listPluginContributionIds } from "../../plugins/plugin-registry.js";
 import type { ChannelChoice } from "../onboard-types.js";
 
-/** List channel ids contributed by currently installed manifest-backed plugins. */
 export function listManifestInstalledChannelIds(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;

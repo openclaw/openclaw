@@ -5,7 +5,9 @@ import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { renderChatQueueSolid as ChatQueue } from "./components/chat-composer-queue.tsx";
 import baseStyles from "../../styles/base.css?inline";
+import queueContentStyles from "../../styles/chat/composer-queue-content.css?inline";
 import queueStyles from "../../styles/chat/composer-queue.css?inline";
+import componentStyles from "../../styles/components.css?inline";
 
 let container: HTMLDivElement;
 let styles: HTMLStyleElement;
@@ -13,7 +15,7 @@ let styles: HTMLStyleElement;
 beforeEach(async () => {
   await page.viewport(960, 700);
   styles = document.createElement("style");
-  styles.textContent = baseStyles + queueStyles;
+  styles.textContent = baseStyles + componentStyles + queueStyles + queueContentStyles;
   document.head.append(styles);
   container = document.createElement("div");
   container.className = "agent-chat__composer-shell";

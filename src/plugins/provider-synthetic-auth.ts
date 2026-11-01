@@ -145,7 +145,7 @@ export async function prepareSyntheticAuthWithProvider(
         })
         .then((prepared) => {
           options.signal?.throwIfAborted();
-          return (current.result = prepared ? Object.freeze({ ...prepared }) : null);
+          return (current.result = prepared ?? null);
         })
         .finally(() => {
           current.pending.delete(options.signal);

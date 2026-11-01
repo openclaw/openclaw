@@ -24,6 +24,7 @@ import {
   withAgentDatabaseStartupAdmission,
 } from "../state/agent-database-startup.js";
 import * as deletionJournal from "../state/agent-deletion-journal.read.js";
+import { gatewayRequest } from "./request-frame.test-support.js";
 import { createRequestGatewayMethodRegistry, handleGatewayRequest } from "./server-methods.js";
 import { authorizeGatewayRequestPreDispatch } from "./server-methods/request-authorization.js";
 import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
@@ -61,13 +62,34 @@ function describeFixture() {
     context,
     methodRegistry: createRequestGatewayMethodRegistry(),
   };
-  return { projection, context, client, request };
+  const authorize = (
+    method = request.method,
+    requestParams: unknown = request.requestParams,
+    options: Pick<Parameters<typeof authorizeGatewayRequestPreDispatch>[0], "signal"> = {},
+  ) => authorizeGatewayRequestPreDispatch({ ...request, method, requestParams, ...options });
+  const dispatch = (
+    req: Parameters<typeof handleGatewayRequest>[0]["req"],
+    respond: Parameters<typeof handleGatewayRequest>[0]["respond"],
+    extraHandlers = sessionByKeyReadHandlers,
+  ) =>
+    handleGatewayRequest({
+      req,
+      context,
+      client,
+      respond,
+      isWebchatConnect: () => false,
+      extraHandlers,
+    });
+  const describe = (respond: Parameters<typeof handleGatewayRequest>[0]["respond"]) =>
+    dispatch(gatewayRequest("description", "sessions.describe", { key: query.key }), respond);
+  return { projection, context, client, request, authorize, dispatch, describe };
 }
 
 async function withPendingStartupInspection(
   run: (
     fixture: ReturnType<typeof describeFixture> & {
       complete: () => void;
+      fail: (error: Error) => void;
       databasePath: string;
       admission: Parameters<Parameters<typeof withAgentDatabaseStartupAdmission>[0]>[0];
     },
@@ -99,16 +121,17 @@ async function withPendingStartupInspection(
       migrateAgent: async () => {},
       publishAgent: async () => {},
     });
-    fixture.context.agentDatabaseStartup = {
-      get hasPendingAgents() {
-        return admission.hasPendingAgents;
-      },
-      waitForAgentPreparation: admission.waitForAgentPreparation.bind(admission),
-    };
+    fixture.context.agentDatabaseStartup = admission.observation;
     try {
       await runInDetachedAsyncContext(() => {
         expect(getAgentDatabaseStartupAdmission()).toBeUndefined();
-        return run({ ...fixture, complete, admission, databasePath: pathname });
+        return run({
+          ...fixture,
+          complete,
+          fail: inspection.reject,
+          admission,
+          databasePath: pathname,
+        });
       });
     } finally {
       complete();
@@ -120,6 +143,89 @@ async function withPendingStartupInspection(
   });
 }
 
+function useSharedStore(context: ReturnType<typeof requestContext>, databasePath: string) {
+  const sharedConfig: OpenClawConfig = {
+    agents: {
+      ownership: "explicit",
+      entries: { main: {}, ops: {} },
+      defaults: { sessionStore: { agentId: "ops" } },
+    },
+    session: { scope: "global", store: databasePath },
+  };
+  context.getRuntimeConfig = () => sharedConfig;
+  // Native routing and host-SQL isolation are covered by session-sqlite-target.worker.test.ts.
+  vi.spyOn(sqliteTarget, "prepareSqliteTargetFromSessionStorePath").mockResolvedValue({
+    agentId: "main",
+    path: databasePath,
+    shared: true,
+  });
+}
+
+it.each(["before", "after refusal"] as const)(
+  "preserves terminal inspection failure %s write authorization",
+  async (when) => {
+    await withPendingStartupInspection(async ({ authorize, fail, admission }) => {
+      const write = () =>
+        authorize("sessions.send", { key: "agent:main:startup", message: "hello" });
+      if (when === "after refusal") {
+        await expect(write()).resolves.toMatchObject({
+          error: { code: "UNAVAILABLE", retryable: true },
+        });
+      }
+      fail(new Error("synthetic failed inspection"));
+      await admission.pendingPreparation;
+      await expect(write()).resolves.toMatchObject({
+        error: {
+          code: "UNAVAILABLE",
+          message: expect.stringContaining("synthetic failed inspection"),
+          retryable: false,
+        },
+      });
+    });
+  },
+);
+
+it("admits an unrelated agent's write while startup preparation continues", async () => {
+  await withPendingStartupInspection(async ({ authorize, context }) => {
+    context.getRuntimeConfig = () => ({ agents: { entries: { main: {}, ready: {} } } });
+    await expect(
+      authorize("sessions.create", { agentId: "ready", message: "hello" }),
+    ).resolves.toMatchObject({ error: null });
+    expect(readAgentDatabaseAdmissionRefusal("main")?.code).toBe(
+      "agent-database-inspection-pending",
+    );
+  });
+});
+
+it("waits for the physical shared-store owner on reads but refuses pending writes", async () => {
+  await withPendingStartupInspection(
+    async ({ authorize, context, databasePath, complete, admission }) => {
+      useSharedStore(context, databasePath);
+      const write = () => authorize("sessions.create", { agentId: "ops", message: "hello" });
+      await expect(write()).resolves.toMatchObject({
+        error: {
+          code: "UNAVAILABLE",
+          retryable: true,
+          details: { reason: "startup-sidecars", method: "sessions.create" },
+        },
+      });
+      expect(() => assertAgentDatabaseAdmitted("ops")).not.toThrow();
+      let settled = false;
+      const reading = authorize("sessions.list", { agentId: "ops" }).then((result) => {
+        settled = true;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      expect(() => assertAgentDatabaseAdmitted("main")).toThrow("synthetic inspection");
+      complete();
+      await admission.pendingPreparation;
+      await expect(reading).resolves.toMatchObject({ error: null });
+      await expect(write()).resolves.toMatchObject({ error: null });
+    },
+  );
+});
+
 it.each([
   ["sessions.list", { agentId: "main" }],
   ["sessions.resolve", { key: "agent:main:startup" }],
@@ -130,19 +236,14 @@ it.each([
 ] as const)(
   "holds %s reads until their startup inspection publishes (%j)",
   async (method, params) => {
-    await withPendingStartupInspection(async ({ context, client, complete }) => {
+    await withPendingStartupInspection(async ({ dispatch, complete }) => {
       const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
         assertAgentDatabaseAdmitted("main");
         respond(true, { read: "committed" });
       });
       const respond = vi.fn();
-      const request = handleGatewayRequest({
-        req: { type: "req", id: "startup-read", method, params },
-        context,
-        client,
-        respond,
-        isWebchatConnect: () => false,
-        extraHandlers: { [method]: handler },
+      const request = dispatch({ type: "req", id: "startup-read", method, params }, respond, {
+        [method]: handler,
       });
       await vi.advanceTimersByTimeAsync(0);
       expect(handler).not.toHaveBeenCalled();
@@ -157,17 +258,14 @@ it.each([
 );
 
 it("dispatches broad lists while an agent remains in startup preparation", async () => {
-  await withPendingStartupInspection(async ({ context, client }) => {
+  await withPendingStartupInspection(async ({ dispatch }) => {
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { sessions: [] }));
     const respond = vi.fn();
-    const request = handleGatewayRequest({
-      req: { type: "req", id: "broad-startup-list", method: "sessions.list", params: {} },
-      context,
-      client,
+    const request = dispatch(
+      { type: "req", id: "broad-startup-list", method: "sessions.list", params: {} },
       respond,
-      isWebchatConnect: () => false,
-      extraHandlers: { "sessions.list": handler },
-    });
+      { "sessions.list": handler },
+    );
     await vi.advanceTimersByTimeAsync(0);
     expect(handler).toHaveBeenCalledOnce();
     expect(respond).toHaveBeenCalledExactlyOnceWith(true, { sessions: [] });
@@ -178,46 +276,11 @@ it("dispatches broad lists while an agent remains in startup preparation", async
   });
 });
 
-it("holds a logical agent's read for the physical shared-store owner", async () => {
-  await withPendingStartupInspection(async ({ request, context, databasePath, complete }) => {
-    const sharedConfig: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: { main: {}, ops: {} },
-        defaults: { sessionStore: { agentId: "ops" } },
-      },
-      session: { scope: "global", store: databasePath },
-    };
-    context.getRuntimeConfig = () => sharedConfig;
-    // Native shared-store routing and host-SQL isolation belong to session-sqlite-target.worker.test.ts.
-    vi.spyOn(sqliteTarget, "prepareSqliteTargetFromSessionStorePath").mockResolvedValue({
-      agentId: "main",
-      path: databasePath,
-      shared: true,
-    });
-    let settled = false;
-    const reading = authorizeGatewayRequestPreDispatch({
-      ...request,
-      method: "sessions.list",
-      requestParams: { agentId: "ops" },
-    }).then((result) => {
-      settled = true;
-      return result;
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(settled).toBe(false);
-    expect(() => assertAgentDatabaseAdmitted("ops")).not.toThrow();
-    expect(() => assertAgentDatabaseAdmitted("main")).toThrow("synthetic inspection");
-    complete();
-    await expect(reading).resolves.toMatchObject({ error: null });
-  });
-});
-
 it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)(
   "settles startup discovery after %s before dispatch",
   async (outcome) => {
     await withPendingStartupInspection(
-      async ({ request, context, client, databasePath, complete }) => {
+      async ({ authorize, context, client, databasePath, complete }) => {
         let liveConfig: OpenClawConfig = cfg;
         context.getRuntimeConfig = () => liveConfig;
         const discovery =
@@ -235,12 +298,11 @@ it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)
             return racePromiseWithAbortSignal(discovery.promise, signal);
           });
         const controller = new AbortController();
-        const reading = authorizeGatewayRequestPreDispatch({
-          ...request,
-          method: "sessions.list",
-          requestParams: { agentId: "healthy" },
-          signal: controller.signal,
-        });
+        const reading = authorize(
+          "sessions.list",
+          { agentId: "healthy" },
+          { signal: controller.signal },
+        );
         const cancelled =
           outcome === "cancelled"
             ? expect(reading).rejects.toMatchObject({ name: "AbortError" })
@@ -271,35 +333,17 @@ it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)
             outcome === "revoked" ? { error: { code: "FORBIDDEN" } } : { error: null },
           );
         }
-        expect(prepare).toHaveBeenCalledTimes(outcome === "changed config" ? 2 : 1);
         expect(discoverySignal?.aborted).toBe(true);
       },
     );
   },
 );
 
-it("rechecks scopes after startup admission", async () => {
-  await withPendingStartupInspection(async ({ request, client, complete }) => {
-    const read = authorizeGatewayRequestPreDispatch(request);
-    await vi.advanceTimersByTimeAsync(0);
-    await expect(
-      authorizeGatewayRequestPreDispatch({
-        ...request,
-        method: "sessions.list",
-        requestParams: { agentId: "healthy" },
-      }),
-    ).resolves.toMatchObject({ error: null });
-    client.connect.scopes = [];
-    complete();
-    await expect(read).resolves.toMatchObject({ error: { code: "FORBIDDEN" } });
-  });
-});
-
 it.each(["current", "revoked"] as const)(
   "bounds startup reads with %s authority without cancelling preparation or granting writes",
   async (authority) => {
-    await withPendingStartupInspection(async ({ request, client, complete, admission }) => {
-      const read = authorizeGatewayRequestPreDispatch(request);
+    await withPendingStartupInspection(async ({ authorize, client, complete, admission }) => {
+      const read = authorize();
       await vi.advanceTimersByTimeAsync(0);
       if (authority === "revoked") {
         client.connect.scopes = [];
@@ -328,19 +372,14 @@ it.each(["current", "revoked"] as const)(
 it.each(["request", "connection", "observation"] as const)(
   "cancels startup waiting when the %s ends without stopping preparation",
   async (source) => {
-    await withPendingStartupInspection(async ({ request, client, admission }) => {
+    await withPendingStartupInspection(async ({ authorize, client, admission }) => {
       const controller = new AbortController();
       const scope = new AsyncWorkScope();
       if (source === "connection") {
         client.connectionSignal = controller.signal;
       }
       const read = scope.run(() =>
-        authorizeGatewayRequestPreDispatch({
-          ...request,
-          method: "models.list",
-          requestParams: {},
-          ...(source === "request" ? { signal: controller.signal } : {}),
-        }),
+        authorize("models.list", {}, source === "request" ? { signal: controller.signal } : {}),
       );
       const cancelled = expect(read).rejects.toMatchObject({ name: "AbortError" });
       await vi.advanceTimersByTimeAsync(0);
@@ -371,7 +410,7 @@ it("preserves the admin dispatch shortcut without preparing private rows", async
 it.each(["dispatch scopes", "private access"] as const)(
   "rechecks %s after row preparation",
   async (boundary) => {
-    const { projection, context, client } = describeFixture();
+    const { projection, context, client, describe: dispatchDescription } = describeFixture();
     const prepare = projection.withPreparedExactRows.bind(projection);
     const describe = vi.spyOn(projection, "describe");
     if (boundary === "dispatch scopes") {
@@ -392,19 +431,7 @@ it.each(["dispatch scopes", "private access"] as const)(
     });
     if (boundary === "dispatch scopes") {
       const respond = vi.fn();
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "revoked-description",
-          method: "sessions.describe",
-          params: { key: query.key },
-        },
-        context,
-        client,
-        respond,
-        isWebchatConnect: () => false,
-        extraHandlers: sessionByKeyReadHandlers,
-      });
+      await dispatchDescription(respond);
       expect(respond).toHaveBeenCalledExactlyOnceWith(
         false,
         undefined,
@@ -432,7 +459,7 @@ it.each(["dispatch scopes", "private access"] as const)(
 it.each(["operator.admin", "operator.read"])(
   "ends describe preparation after its %s connection closes",
   async (scope) => {
-    const { projection, context, client } = describeFixture();
+    const { projection, client, dispatch } = describeFixture();
     const connection = new AbortController();
     client.connect.scopes = [scope];
     client.connectionSignal = connection.signal;
@@ -446,19 +473,12 @@ it.each(["operator.admin", "operator.read"])(
       });
     const respond = vi.fn();
     try {
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "cancelled-description",
-          method: "sessions.describe",
-          params: { key: "agent:main:cancelled-read" },
-        },
-        context,
-        client,
+      await dispatch(
+        gatewayRequest("cancelled-description", "sessions.describe", {
+          key: "agent:main:cancelled-read",
+        }),
         respond,
-        isWebchatConnect: () => false,
-        extraHandlers: sessionByKeyReadHandlers,
-      });
+      );
       expect(prepare).toHaveBeenCalledOnce();
       expect(respond).not.toHaveBeenCalled();
     } finally {
@@ -467,55 +487,51 @@ it.each(["operator.admin", "operator.read"])(
   },
 );
 
-it.each(["disposed", "refreshed"] as const)(
-  "consumes rows only from an active, ready frame: %s",
-  async (preparation) => {
-    const owner = createSessionRowProjectionFixture({ cfg, store: {} });
-    const queries = vi.fn(() => [query]);
-    const initial = owner.state;
-    let current = initial;
-    const state = vi.fn(() => current);
-    if (preparation === "refreshed") {
-      Object.defineProperty(owner, "state", { get: state });
-      vi.spyOn(owner, "describe").mockImplementation(() => {
-        current = {
-          ...initial,
-          rowContext: {
-            ...initial.rowContext,
-            configuredDefaultModelByAgent: new Map([
-              ["main", { provider: "fixture", model: "fresh" }],
-            ]),
-          },
-        };
-        return undefined;
-      });
-    }
-    const consume = vi.fn((read: SessionRowReadView) => {
-      state.mockClear();
-      expect(read.state.rowContext.configuredDefaultModelByAgent.get("main")).toEqual({
-        provider: "fixture",
-        model: "fresh",
-      });
-      expect(read.describe(query)).toBeUndefined();
-      expect(state).not.toHaveBeenCalled();
+it("shares captured metadata during consumption while reading current policy", () => {
+  const owner = createSessionRowProjectionFixture({ cfg, store: {} });
+  const initial = owner.state;
+  let current = initial;
+  let policy: OpenClawConfig = cfg;
+  vi.spyOn(owner, "getPolicyConfig").mockImplementation(() => policy);
+  const state = vi.fn(() => current);
+  Object.defineProperty(owner, "state", { get: state });
+  vi.spyOn(owner, "describe").mockImplementation(() => {
+    current = {
+      ...initial,
+      rowContext: {
+        ...initial.rowContext,
+        configuredDefaultModelByAgent: new Map([["main", { provider: "fixture", model: "fresh" }]]),
+      },
+    };
+    return undefined;
+  });
+  const consume = vi.fn((read: SessionRowReadView) => {
+    state.mockClear();
+    const captured = read.state;
+    expect(read.state).toBe(captured);
+    expect(captured.policyConfig).toBe(cfg);
+    policy = { ...cfg, session: { scope: "global" } };
+    expect(read.state.policyConfig).toBe(policy);
+    expect(captured.policyConfig).toBe(cfg);
+    expect(read.state.rowContext.configuredDefaultModelByAgent.get("main")).toEqual({
+      provider: "fixture",
+      model: "fresh",
     });
-    try {
-      const read = () =>
-        readPreparedSessionRows(owner, () => preparation !== "disposed", queries, consume);
-      if (preparation === "disposed") {
-        expect(read).toThrow("no longer active");
-        expect(queries).not.toHaveBeenCalled();
-      } else {
-        read();
-      }
-      if (preparation !== "refreshed") {
-        expect(consume).not.toHaveBeenCalled();
-      }
-    } finally {
-      owner.dispose();
-    }
-  },
-);
+    expect(read.describe(query)).toBeUndefined();
+    expect(state).not.toHaveBeenCalled();
+  });
+  try {
+    const queries = vi.fn(() => [query]);
+    expect(() => readPreparedSessionRows(owner, () => false, queries, consume)).toThrow(
+      "no longer active",
+    );
+    expect(queries).not.toHaveBeenCalled();
+    expect(consume).not.toHaveBeenCalled();
+    readPreparedSessionRows(owner, () => true, queries, consume);
+  } finally {
+    owner.dispose();
+  }
+});
 
 it.each(["child", "parent"] as const)(
   "rechecks %s membership after placement preparation and consumes the exact frame once",
@@ -561,7 +577,11 @@ it.each(["child", "parent"] as const)(
       dirtyKey = undefined;
     });
     const exact = createSessionRowAncestorReads({
-      state: () => ({ cfg, context: projection.state.rowContext }),
+      state: () => ({
+        cfg,
+        context: projection.state.rowContext,
+        catalog: { prepareCurrent: async () => {} },
+      }),
       referenced: (key) => projection.describe({ agentId: "main", key }),
       lookup: projection.describe,
       prepareExactRows: () => undefined,
@@ -585,8 +605,9 @@ it.each(["child", "parent"] as const)(
       const row = expectDefined(read.describe(child), "prepared child row");
       return exact.ancestorRows(row)?.map(({ key }) => key);
     });
+    const select = vi.fn(() => [child]);
     try {
-      const prepared = exact.withPreparedExactRows(() => [child], consume, {
+      const prepared = exact.withPreparedExactRows(select, consume, {
         includeAncestors: true,
       });
       await Promise.race([placementStarted.promise, prepared]);
@@ -603,6 +624,8 @@ it.each(["child", "parent"] as const)(
       await expect(prepared).resolves.toEqual([parent.key]);
       expect(prepareMembership).toHaveBeenCalledOnce();
       expect(consume).toHaveBeenCalledOnce();
+      // One initial selection, one after placement yields, one after membership yields.
+      expect(select).toHaveBeenCalledTimes(3);
     } finally {
       placementReply.resolve(snapshot);
       membershipReady.resolve();

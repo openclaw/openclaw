@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import type {
   SqliteColumnCatalog,
   SqliteForeignKeyCatalog,
@@ -14,6 +15,7 @@ import {
   createSqliteTableContract,
   type SqliteTableContract,
 } from "./sqlite-schema-contract-assembly.js";
+import { invalidateSqliteSchemaFacts } from "./sqlite-schema-facts.js";
 import {
   foldSqliteIdentifierCase,
   normalizeSchemaSql,
@@ -27,6 +29,71 @@ export type SqliteTableContractReader = ((tableName: string) => SqliteTableContr
   ) => SqliteSchemaCatalog;
   readView?: (viewName: string) => SqliteViewCatalog | undefined;
 };
+
+/** Retain native catalog parsing only for the caller's bounded admission lifetime. */
+export function openSqliteWritableSchema(database: DatabaseSync): () => void {
+  database.enableDefensive?.(false);
+  try {
+    // sqlite-allow-raw -- Catalog admission and migration share this native owner.
+    database.exec("PRAGMA writable_schema = ON;");
+  } catch (error) {
+    database.enableDefensive?.(true);
+    throw error;
+  }
+  let open = true;
+  return () => {
+    if (!open) {
+      return;
+    }
+    open = false;
+    try {
+      // sqlite-allow-raw -- RESET reloads the catalog before ordinary parsing resumes.
+      database.exec("PRAGMA writable_schema = RESET;");
+    } finally {
+      database.enableDefensive?.(true);
+    }
+  };
+}
+
+export function withSqliteWritableSchema<T>(database: DatabaseSync, operation: () => T): T {
+  const close = openSqliteWritableSchema(database);
+  try {
+    return operation();
+  } finally {
+    close();
+  }
+}
+
+/** The migration owner retains its transaction and exclusive maintenance custody. */
+export function replaceSqliteTableDefinition(
+  database: DatabaseSync,
+  table: string,
+  sql: string,
+): void {
+  if (!database.isTransaction) {
+    throw new Error("Replacing a SQLite table definition requires the owner's transaction");
+  }
+  try {
+    withSqliteWritableSchema(database, () => {
+      const version = Number(database.prepare("PRAGMA schema_version").get()?.schema_version);
+      database // sqlite-allow-raw -- The admitted table keeps its rows, rootpage and dependent objects.
+        .prepare("UPDATE sqlite_schema SET sql = ? WHERE type = 'table' AND name = ?")
+        .run(sql, table);
+      // sqlite-allow-raw -- Expire SQLite's parsed definition in this same transaction.
+      database.exec(`PRAGMA schema_version = ${version + 1};`);
+    });
+  } finally {
+    invalidateSqliteSchemaFacts(database);
+  }
+}
+
+/** Read bounded native header facts without walking the freelist or any table. */
+export function readSqlitePageHeader(database: DatabaseSync) {
+  return {
+    pages: database.prepare("PRAGMA page_count").get()?.page_count,
+    free: database.prepare("PRAGMA freelist_count").get()?.freelist_count,
+  };
+}
 
 /** Reuse actual catalog facts only within one unchanged read transaction on this connection. */
 export function createSqliteTableContractReader(
@@ -126,20 +193,6 @@ type IndexFactsRow = Omit<IndexRow, "name"> & { index_name: string } & (
 type ColumnRow = SqliteColumnCatalog & { table_name: string };
 type ForeignKeyRow = SqliteForeignKeyCatalog & { table_name: string };
 
-function groupRows<Row, Key extends string | number>(
-  rows: readonly Row[],
-  key: (row: Row) => Key,
-): Map<Key, Row[]> {
-  const groups = new Map<Key, Row[]>();
-  for (const row of rows) {
-    const name = key(row);
-    const group = groups.get(name) ?? [];
-    group.push(row);
-    groups.set(name, group);
-  }
-  return groups;
-}
-
 /** Read one native catalog in five statements, independent of its table count. */
 function readSqliteSchemaCatalog(
   database: DatabaseSync,
@@ -238,7 +291,7 @@ function readSqliteSchemaCatalog(
     : "";
   const columns = shadowed
     ? undefined
-    : groupRows(
+    : groupRecords(
         database
           .prepare(`
           SELECT t.name AS table_name, x.cid, x.name, x.type, x."notnull", x.dflt_value, x.pk, x.hidden
@@ -254,7 +307,7 @@ function readSqliteSchemaCatalog(
       );
   const foreignKeys = shadowed
     ? undefined
-    : groupRows(
+    : groupRecords(
         database
           .prepare(`
           SELECT t.name AS table_name, f.id, f.seq, f."table", f."from", f."to",
@@ -268,7 +321,7 @@ function readSqliteSchemaCatalog(
           .all() as ForeignKeyRow[],
         (row) => row.table_name,
       );
-  const triggers = groupRows(
+  const triggers = groupRecords(
     objects.filter((row) => row.type === "trigger"),
     (row) => foldSqliteIdentifierCase(row.tbl_name),
   );
@@ -309,7 +362,7 @@ function readSqliteSchemaCatalog(
             unique,
             index_seq: seq,
           }));
-      const tableTerms = groupRows(terms?.get(table.name) ?? [], (row) => row.index_seq);
+      const tableTerms = groupRecords(terms?.get(table.name) ?? [], (row) => row.index_seq);
       return {
         name: table.name,
         sql: normalizeSchemaSql(table.sql),

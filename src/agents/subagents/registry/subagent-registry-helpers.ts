@@ -2,6 +2,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { sqliteSessionEntriesEqual } from "../../../config/sessions/session-accessor.sqlite-entry-equality.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type {
   SessionEntryCurrentCheck,
@@ -17,15 +18,15 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { computeBackoff } from "../../../infra/backoff.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { defaultRuntime } from "../../../runtime.js";
-import {
-  recordGatewaySessionRunFailure,
-  resolveSessionRunError,
-} from "../../../sessions/session-run-error.js";
+import { isSessionMutationActive } from "../../../sessions/session-controller.lifecycle-projections.js";
+import { resolveSessionRunError } from "../../../sessions/session-run-error-format.js";
+import { recordGatewaySessionRunFailure } from "../../../sessions/session-run-error.js";
 import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
 import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import { getDeliveryLastError } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentSessionRuntimeMs,
@@ -34,12 +35,16 @@ import {
 } from "./subagent-session-metrics.js";
 import { resolveCompletionFromSessionEntry } from "./subagent-session-reconciliation.js";
 
+/** A kill no operation settlement confirmed is reconciled by the sweeper after this window. */
 export const PROVISIONAL_KILL_RECONCILIATION_MS = 5 * 60_000;
+export const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
 export const MIN_ANNOUNCE_RETRY_DELAY_MS = 15_000;
 const MAX_ANNOUNCE_RETRY_DELAY_MS = 5 * 60_000;
 const ANNOUNCE_RETRY_JITTER = 0.2;
 export const ANNOUNCE_EXPIRY_MS = 5 * 60_000;
 export const ANNOUNCE_COMPLETION_HARD_EXPIRY_MS = 30 * 60_000;
+/** The durable media outbox owns its own delivery window, independent of the mailbox. */
+export const SESSION_DELIVERY_DEADLINE_MS = ANNOUNCE_COMPLETION_HARD_EXPIRY_MS;
 
 const ANNOUNCE_RETRY_BACKOFF = {
   initialMs: MIN_ANNOUNCE_RETRY_DELAY_MS,
@@ -124,10 +129,25 @@ export async function persistSubagentSessionTiming(
     options?.session?.storePath ??
     options?.settledQueuedCancellation?.storePath ??
     configuredStorePath;
+  // Controllers retain logical store scopes; native currency pins physical reads.
+  const mutationScopes = new Set([configuredStorePath, storePath]);
   const refused = new Error("Subagent timing owner changed before commit");
   const assertGenerationCurrent = () => {
     if (options?.isCurrentGeneration?.() === false) {
       throw refused;
+    }
+    // Reset/delete own the retained row; late best-effort timing must not
+    // invalidate it. Ordinary kill mutations still publish terminal timing.
+    for (const scope of mutationScopes) {
+      if (
+        isSessionMutationActive(
+          scope,
+          [childSessionKey, entry.childSessionIdentity?.sessionId],
+          ["reset", "delete"],
+        )
+      ) {
+        throw refused;
+      }
     }
     options?.assertCommitAllowed?.();
   };
@@ -137,12 +157,9 @@ export async function persistSubagentSessionTiming(
   const projectedStatus = resolveSubagentSessionStatus(entry);
   const status = isTerminalSessionStatus(projectedStatus) ? projectedStatus : undefined;
 
-  const lastRunError =
-    status === "interrupted"
-      ? "Run interrupted by a Gateway restart."
-      : status
-        ? resolveSessionRunError(entry.execution.outcome ?? {}, status)
-        : undefined;
+  const lastRunError = status
+    ? resolveSessionRunError(entry.execution.outcome ?? {}, status)
+    : undefined;
   const update = (sessionEntry: InternalSessionEntry) => {
     const settled = options?.settledQueuedCancellation;
     if (
@@ -169,7 +186,7 @@ export async function persistSubagentSessionTiming(
       });
       if (existingCompletion && existingCompletion.reason !== SUBAGENT_ENDED_REASON_KILLED) {
         // A provider result already reached durable session state. The kill
-        // marker is provisional and must not erase restart reconciliation evidence
+        // marker is provisional and must not erase an accepted result
         // or leave the session looking aborted after that completion won.
         if (sessionEntry.abortedLastRun !== true) {
           return null;
@@ -209,7 +226,7 @@ export async function persistSubagentSessionTiming(
     } else if (status && status !== "killed") {
       delete next.abortedLastRun;
     }
-    return next;
+    return sqliteSessionEntriesEqual(sessionEntry, next) ? null : next;
   };
   const persist = async (expected: SessionEntry | undefined, assertSessionCurrent?: () => void) => {
     let selected: InternalSessionEntry | undefined;
@@ -348,10 +365,7 @@ function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
   const minutes =
     config.agents?.defaults?.subagents?.archiveAfterMinutes ??
     DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES;
-  if (!Number.isFinite(minutes) || minutes <= 0) {
-    return undefined;
-  }
-  return Math.max(1, Math.floor(minutes)) * 60_000;
+  return minutes === 0 ? undefined : minutes * 60_000;
 }
 
 /** Arms retention only after the run or its waitable collector result has completed. */
@@ -364,7 +378,8 @@ export function updateSubagentArchiveAtMs(entry: SubagentRunRecord, cfg?: OpenCl
           Number.isFinite(entry.completion.capturedAt)
         ? entry.completion.capturedAt
         : endedAt
-    : entry.cleanup === "delete" && entry.pauseReason !== "sessions_yield"
+    : entry.cleanup === "delete" &&
+        (entry.pauseReason !== "sessions_yield" || subagentRuns.isCompletionAuthorityRetired(entry))
       ? entry.delivery?.discardReason === "task-missing"
         ? (entry.delivery.discardedAt ?? endedAt)
         : endedAt

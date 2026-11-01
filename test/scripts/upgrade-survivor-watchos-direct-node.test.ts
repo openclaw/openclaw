@@ -113,7 +113,7 @@ function assertArtifact(
 
 async function gateway(
   tls: ReturnType<typeof createTlsFixture>,
-  deviceToken: string,
+  deviceTokens: string[],
   prefix = "session",
 ) {
   const requests: Array<Record<string, any>> = [];
@@ -138,7 +138,7 @@ async function gateway(
           JSON.stringify({
             ok: true,
             sessionToken: `${prefix}-${requests.length}`,
-            deviceToken,
+            deviceToken: deviceTokens[Math.min(requests.length - 1, deviceTokens.length - 1)],
             nodeId: body.device.id,
             protocol: 4,
           }),
@@ -183,16 +183,21 @@ function signaturePayload(body: Record<string, any>, token: string): string {
 }
 
 describe.skipIf(process.platform === "win32")("watchOS direct-node survivor", () => {
-  it("bootstraps and reconnects with the exact shipped WatchDirectNode contract", async () => {
+  it("bootstraps, rotates credentials and reconnects with the shipped WatchDirectNode contract", async () => {
     const root = tempDirs.make("watchos-direct-node-");
     const state = join(root, "state.json");
     const setup = join(root, "setup.json");
     const bootstrapArtifact = join(root, "bootstrap.json");
     const reconnectArtifact = join(root, "reconnect.json");
+    const rotatedArtifact = join(root, "rotated.json");
     const tls = createTlsFixture(root);
     const bootstrapToken = "bootstrap-secret";
     const deviceToken = "retained-device-secret";
-    const { address, requests, pollTokens, close } = await gateway(tls, deviceToken);
+    const rotatedToken = "rotated-device-secret";
+    const { address, requests, pollTokens, close } = await gateway(tls, [
+      deviceToken,
+      rotatedToken,
+    ]);
     writeJson(setup, {
       setupCode: `oc-pair://${Buffer.from(
         JSON.stringify({
@@ -206,15 +211,16 @@ describe.skipIf(process.platform === "win32")("watchOS direct-node survivor", ()
     try {
       await connect(state, bootstrapArtifact, "baseline", tls.caCert, setup);
       await connect(state, reconnectArtifact, "candidate", tls.caCert);
+      await connect(state, rotatedArtifact, "restart", tls.caCert);
     } finally {
       await close();
     }
 
-    expect(requests).toHaveLength(2);
-    expect(pollTokens).toEqual(["Bearer session-1", "Bearer session-2"]);
-    const [bootstrap, reconnect] = requests;
-    if (!bootstrap || !reconnect) {
-      throw new Error("watch fixture omitted bootstrap or reconnect request");
+    expect(requests).toHaveLength(3);
+    expect(pollTokens).toEqual(["Bearer session-1", "Bearer session-2", "Bearer session-3"]);
+    const [bootstrap, reconnect, rotated] = requests;
+    if (!bootstrap || !reconnect || !rotated) {
+      throw new Error("watch fixture omitted bootstrap, reconnect, or rotated request");
     }
     expect(bootstrap).toMatchObject({
       minProtocol: 4,
@@ -239,6 +245,10 @@ describe.skipIf(process.platform === "win32")("watchOS direct-node survivor", ()
       auth: { deviceToken },
       device: { id: bootstrap.device.id, publicKey: bootstrap.device.publicKey },
     });
+    expect(requests.slice(1).map((body) => body.auth.deviceToken)).toEqual([
+      deviceToken,
+      rotatedToken,
+    ]);
     const publicKey = crypto.createPublicKey({
       key: Buffer.concat([
         Buffer.from("302a300506032b6570032100", "hex"),
@@ -250,6 +260,7 @@ describe.skipIf(process.platform === "win32")("watchOS direct-node survivor", ()
     for (const [body, token] of [
       [bootstrap, bootstrapToken],
       [reconnect, deviceToken],
+      [rotated, rotatedToken],
     ] as const) {
       expect(
         crypto.verify(
@@ -263,25 +274,33 @@ describe.skipIf(process.platform === "win32")("watchOS direct-node survivor", ()
     expect(JSON.parse(readFileSync(state, "utf8"))).toMatchObject({
       deviceId: bootstrap.device.id,
       instanceId: "watchos-upgrade-survivor",
-      deviceToken,
+      deviceToken: rotatedToken,
       endpoint: {
         host: "localhost",
         port: address.port,
         tls: true,
       },
     });
-    for (const [index, artifactPath] of [bootstrapArtifact, reconnectArtifact].entries()) {
-      assertArtifact(artifactPath, [bootstrapToken, deviceToken, `session-${index + 1}`], {
-        ok: true,
-        challengeStatus: 200,
-        connectStatus: 200,
-        protocol: 4,
-        protocolRange: [4, 4],
-        clientId: "openclaw-watchos",
-        clientMode: "node",
-        instanceId: "watchos-upgrade-survivor",
-        endpointSource: index === 0 ? "setupCode" : "persistedState",
-      });
+    for (const [index, artifactPath] of [
+      bootstrapArtifact,
+      reconnectArtifact,
+      rotatedArtifact,
+    ].entries()) {
+      assertArtifact(
+        artifactPath,
+        [bootstrapToken, deviceToken, rotatedToken, `session-${index + 1}`],
+        {
+          ok: true,
+          challengeStatus: 200,
+          connectStatus: 200,
+          protocol: 4,
+          protocolRange: [4, 4],
+          clientId: "openclaw-watchos",
+          clientMode: "node",
+          instanceId: "watchos-upgrade-survivor",
+          endpointSource: index === 0 ? "setupCode" : "persistedState",
+        },
+      );
     }
   });
 
@@ -329,47 +348,5 @@ describe.skipIf(process.platform === "win32")("watchOS direct-node survivor", ()
       nodeId: "watch-device",
       instanceId: "watchos-upgrade-survivor",
     });
-  });
-
-  it("persists a rotated token for the next reconnect without leaking credentials", async () => {
-    const root = tempDirs.make("watchos-direct-node-rotation-");
-    const state = join(root, "state.json");
-    const firstArtifact = join(root, "reconnect-first.json");
-    const secondArtifact = join(root, "reconnect-second.json");
-    const retainedToken = "retained-device-secret";
-    const rotatedToken = "rotated-device-secret";
-    const tls = createTlsFixture(root);
-    const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
-    const publicDer = publicKey.export({ format: "der", type: "spki" });
-    const rawPublicKey = Buffer.from(publicDer).subarray(-32);
-    const { address, requests, pollTokens, close } = await gateway(
-      tls,
-      rotatedToken,
-      "rotation-session",
-    );
-    writeJson(state, {
-      deviceId: crypto.createHash("sha256").update(rawPublicKey).digest("hex"),
-      publicKey: rawPublicKey.toString("base64url"),
-      privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }),
-      instanceId: "watchos-upgrade-survivor",
-      deviceToken: retainedToken,
-      endpoint: { host: "localhost", port: address.port, tls: true },
-    });
-
-    try {
-      await connect(state, firstArtifact, "candidate", tls.caCert);
-      await connect(state, secondArtifact, "restart", tls.caCert);
-    } finally {
-      await close();
-    }
-
-    expect(requests.map((body) => body.auth.deviceToken)).toEqual([retainedToken, rotatedToken]);
-    expect(pollTokens).toEqual(["Bearer rotation-session-1", "Bearer rotation-session-2"]);
-    expect(JSON.parse(readFileSync(state, "utf8"))).toMatchObject({
-      deviceToken: rotatedToken,
-    });
-    for (const [index, artifactPath] of [firstArtifact, secondArtifact].entries()) {
-      assertArtifact(artifactPath, [retainedToken, rotatedToken, `rotation-session-${index + 1}`]);
-    }
   });
 });

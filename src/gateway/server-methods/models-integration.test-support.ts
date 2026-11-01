@@ -1,10 +1,11 @@
 import { execFile } from "node:child_process";
-import { once } from "node:events";
 import type { Server } from "node:http";
 import { promisify } from "node:util";
 import { expect } from "vitest";
+import { listenLoopback as listenModelsEndpoint } from "../../../test/helpers/gateway-integration-fixtures.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import {
   createOpenClawTestState,
@@ -89,20 +90,22 @@ export async function connectModelsReader(port: number, token: string) {
   return Object.assign(client, { [Symbol.asyncDispose]: () => disconnectGatewayClient(client) });
 }
 
-export async function listenModelsEndpoint(server: Server) {
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Models fixture did not bind a TCP port");
-  }
-  return `http://127.0.0.1:${address.port}`;
-}
+export { listenModelsEndpoint };
 
 export async function closeModelsEndpoint(server: Server) {
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
+  await promisify(server.close.bind(server))();
+}
+
+export async function serveModelsEndpoint(server: Server, rejectErrors = false) {
+  const baseUrl = await listenModelsEndpoint(server);
+  return {
+    baseUrl,
+    async [Symbol.asyncDispose]() {
+      server.closeAllConnections();
+      const closed = closeModelsEndpoint(server);
+      await (rejectErrors ? closed : closed.catch(() => {}));
+    },
+  };
 }
 
 // A separate writer supplies no in-process Gateway receipt; refresh must load the durable change.
@@ -118,7 +121,7 @@ export async function writeAuthStoreExternally(
       "--eval",
       `
               import { DatabaseSync } from "node:sqlite";
-              const database = new DatabaseSync(process.argv[1]);
+              const database = new DatabaseSync(process.argv[1], { timeout: Number(process.argv[3]) });
               try {
                 const result = process.argv[2] === "null"
                   ? database.prepare("DELETE FROM auth_profile_store WHERE store_key = ?").run("primary")
@@ -131,6 +134,7 @@ export async function writeAuthStoreExternally(
             `,
       databasePath,
       JSON.stringify(store),
+      String(OPENCLAW_SQLITE_BUSY_TIMEOUT_MS),
     ],
     { env: { ...state.env, NODE_OPTIONS: undefined } },
   );

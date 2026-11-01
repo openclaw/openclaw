@@ -15,6 +15,7 @@ export {
   parseImageDataUrl,
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
+  resolveImageSourceUrl,
   sniffImageMimeType,
   toImageDataUrl,
   type ImageMimeTypeDetection,
@@ -24,11 +25,13 @@ export {
 
 export type {
   GeneratedImageAsset,
+  ImageGenerationSourceImage,
+} from "../image-generation/asset-types.js";
+export type {
   ImageGenerationOpenAIBackground,
   ImageGenerationOutputFormat,
   ImageGenerationProvider,
   ImageGenerationProviderConfiguredContext,
   ImageGenerationRequest,
   ImageGenerationResult,
-  ImageGenerationSourceImage,
 } from "../image-generation/types.js";

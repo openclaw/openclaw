@@ -2,26 +2,37 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createQaBusState } from "./bus-state.js";
 import { resolveQaEvidenceContainment } from "./evidence-summary-schema.js";
 import {
   getEffectiveQaEvidenceEntries,
   projectQaEvidenceScenarioOutcomes,
   type QaEvidenceSummaryV3Json,
 } from "./evidence-summary.js";
-import type { QaLabServerHandle } from "./lab-server.types.js";
 import { qaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import { qaMaturityTaxonomyIdentity, readQaMaturityTaxonomySource } from "./scorecard-taxonomy.js";
 import { createQaSuiteEvidenceInvocation } from "./suite-evidence.js";
 import { runQaSuiteWithInfraRetry } from "./suite-infra-retry.js";
 import { runQaFlowSuiteFromRuntime } from "./suite-run.runtime.js";
-import { makeQaSuiteTestScenario, recordQaSuiteTestResults } from "./suite-test-helpers.js";
+import { artifactPaths, childResult, createTestLab } from "./suite-runtime-parity.test-support.js";
+import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import type { QaSuiteResolvedRunContext, QaSuiteResult, QaSuiteRunParams } from "./suite-types.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const tempDirs = createTempDirHarness();
 let repoRoot: string;
 let outputDir: string;
+function containedEvidence(evidence: QaEvidenceSummaryV3Json, ids: Set<string>) {
+  return {
+    occurrences: evidence.occurrences.filter((item) => ids.has(item.id)),
+    entries: evidence.entries.filter((entry) => ids.has(entry.binding.occurrenceId)),
+  };
+}
+
+function rootInstances(evidence: QaEvidenceSummaryV3Json) {
+  return resolveQaEvidenceContainment(evidence.occurrences, evidence.entries).rootInstances;
+}
+
+const sha256 = (content: string | Buffer) => createHash("sha256").update(content).digest("hex");
 
 const mocks = vi.hoisted(() => ({
   readQaBootstrapScenarioCatalog: vi.fn(),
@@ -50,19 +61,6 @@ vi.mock("./suite-artifacts.js", async (importOriginal) => ({
   writeQaSuiteArtifacts: mocks.writeQaSuiteArtifacts,
 }));
 
-function createControlUiTestLab(): QaLabServerHandle {
-  return {
-    baseUrl: "http://127.0.0.1:43123",
-    listenUrl: "http://127.0.0.1:43123",
-    state: createQaBusState(),
-    setControlUi: vi.fn(),
-    setScenarioRun: vi.fn(),
-    setLatestReport: vi.fn(),
-    runSelfCheck: vi.fn(),
-    stop: vi.fn(async () => {}),
-  };
-}
-
 beforeEach(async () => {
   repoRoot = await tempDirs.makeTempDir("qa-parity-control-ui-");
   outputDir = path.join(repoRoot, "output");
@@ -77,40 +75,11 @@ beforeEach(async () => {
     async (
       params: QaSuiteRunParams | undefined,
       context: QaSuiteResolvedRunContext,
-    ): Promise<QaSuiteResult> => ({
-      outputDir: context.outputDir,
-      evidencePath: "/qa-output/qa-evidence.json",
-      reportPath: "/qa-output/qa-suite-report.md",
-      summaryPath: "/qa-output/qa-suite-summary.json",
-      report: "",
-      ...recordQaSuiteTestResults(
-        params,
-        context.selectedScenarios,
-        context.selectedScenarios.map((scenario) => ({
-          name: scenario.title,
-          status: "pass",
-          steps: [],
-        })),
-      ),
-      startedScenarioIds: context.selectedScenarios.map((scenario) => scenario.id),
-      watchUrl: "http://127.0.0.1:43123",
-      runtimeParityCell: {
-        runtime: params?.forcedRuntime ?? "openclaw",
-        transcriptBytes: "",
-        toolCalls: [],
-        finalText: "ok",
-        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-        wallClockMs: 1,
-        bootStateLines: [],
-      },
-    }),
+    ): Promise<QaSuiteResult> => childResult(params, context.selectedScenarios, context.outputDir),
   );
   mocks.writeQaSuiteArtifacts.mockImplementation(async (params) => ({
     evidence: params.recordedEvidence,
-    evidencePath: "/qa-output/qa-evidence.json",
-    report: "",
-    reportPath: "/qa-output/qa-suite-report.md",
-    summaryPath: "/qa-output/qa-suite-summary.json",
+    ...artifactPaths,
   }));
 });
 
@@ -119,12 +88,9 @@ afterEach(async () => {
 });
 
 describe("runtime parity Control UI ownership", () => {
-  it.each([
-    { evidenceMode: "slim", retryStatus: "pass" },
-    { evidenceMode: "slim", retryStatus: "skip" },
-  ] as const)(
-    "retains raw $evidenceMode runtime cells across a $retryStatus retry",
-    async ({ evidenceMode, retryStatus }) => {
+  it.each(["pass", "skip"] as const)(
+    "retains raw slim runtime cells across a %s retry",
+    async (retryStatus) => {
       const scenario = makeQaSuiteTestScenario("runtime-channel", { surface: "channel" });
       scenario.assertions = [
         {
@@ -175,7 +141,7 @@ describe("runtime parity Control UI ownership", () => {
                 kind: "fixture",
                 source: "qa-suite",
                 path: "runtime-observation.json",
-                sha256: createHash("sha256").update(content).digest("hex"),
+                sha256: sha256(content),
               },
             },
           ],
@@ -188,35 +154,30 @@ describe("runtime parity Control UI ownership", () => {
       });
       let continuation: QaEvidenceSummaryV3Json | undefined;
       let firstAttempt: QaEvidenceSummaryV3Json | undefined;
-      const lab = createControlUiTestLab();
-      const result = await runQaSuiteWithInfraRetry(
-        (attempt) =>
-          runQaFlowSuiteFromRuntime({
-            repoRoot,
-            outputDir,
-            providerMode: "mock-openai",
-            scenarioIds: [scenario.id],
-            runtimePair: ["openclaw", "codex"],
-            evidenceMode,
-            lab,
-            startLab: async () => lab,
-            ...(continuation
-              ? {
-                  evidenceAnchors: resolveQaEvidenceContainment(
-                    continuation.occurrences,
-                    continuation.entries,
-                  ).rootInstances,
-                  evidenceContinuation: continuation,
-                }
-              : {}),
-            onEvidence: (summary) => {
-              continuation = structuredClone(summary);
-              if (attempt === 0) {
-                firstAttempt = structuredClone(summary);
+      const lab = createTestLab();
+      const result = await runQaSuiteWithInfraRetry((attempt) =>
+        runQaFlowSuiteFromRuntime({
+          repoRoot,
+          outputDir,
+          providerMode: "mock-openai",
+          scenarioIds: [scenario.id],
+          runtimePair: ["openclaw", "codex"],
+          evidenceMode: "slim",
+          lab,
+          startLab: async () => lab,
+          ...(continuation
+            ? {
+                evidenceAnchors: rootInstances(continuation),
+                evidenceContinuation: continuation,
               }
-            },
-          }),
-        1,
+            : {}),
+          onEvidence: (summary) => {
+            continuation = structuredClone(summary);
+            if (attempt === 0) {
+              firstAttempt = structuredClone(summary);
+            }
+          },
+        }),
       );
       expect(
         mocks.runQaFlowSuiteStandard.mock.calls.map(([params]) => params.forcedRuntime),
@@ -232,13 +193,8 @@ describe("runtime parity Control UI ownership", () => {
       expect(effective.every((row) => row.result.status === expectedStatus)).toBe(true);
       const firstComparison = firstAttempt!.occurrences.find((item) => item.childOccurrenceIds)!;
       const retainedIds = new Set(firstComparison.childOccurrenceIds);
-      expect(evidence.occurrences.filter((item) => retainedIds.has(item.id))).toEqual(
-        firstAttempt!.occurrences.filter((item) => retainedIds.has(item.id)),
-      );
-      expect(
-        evidence.entries.filter((entry) => retainedIds.has(entry.binding.occurrenceId)),
-      ).toEqual(
-        firstAttempt!.entries.filter((entry) => retainedIds.has(entry.binding.occurrenceId)),
+      expect(containedEvidence(evidence, retainedIds)).toEqual(
+        containedEvidence(firstAttempt!, retainedIds),
       );
       expect(
         evidence.occurrences.some(
@@ -253,17 +209,16 @@ describe("runtime parity Control UI ownership", () => {
         expect(receipts).toHaveLength(1);
         expect(receipts[0]?.phase).toBe("prepared");
         const bytes = await fs.readFile(path.join(outputDir, receipts[0]!.artifact.path));
-        expect(createHash("sha256").update(bytes).digest("hex")).toBe(receipts[0]!.artifact.sha256);
+        expect(sha256(bytes)).toBe(receipts[0]!.artifact.sha256);
         const bundle = JSON.parse(bytes.toString()) as QaEvidenceSummaryV3Json;
         const ids = new Set(owner.childOccurrenceIds);
-        expect(bundle.occurrences).toEqual(evidence.occurrences.filter((item) => ids.has(item.id)));
-        expect(bundle.entries).toEqual(
-          evidence.entries.filter((entry) => ids.has(entry.binding.occurrenceId)),
+        expect({ occurrences: bundle.occurrences, entries: bundle.entries }).toEqual(
+          containedEvidence(evidence, ids),
         );
         for (const child of bundle.occurrences) {
           for (const receipt of child.receipts) {
             const raw = await fs.readFile(path.join(outputDir, receipt.artifact.path));
-            expect(createHash("sha256").update(raw).digest("hex")).toBe(receipt.artifact.sha256);
+            expect(sha256(raw)).toBe(receipt.artifact.sha256);
           }
         }
       }
@@ -312,7 +267,7 @@ describe("runtime parity Control UI ownership", () => {
   );
 
   it("preserves repeated parity starts without merging progress slots", async () => {
-    const lab = createControlUiTestLab();
+    const lab = createTestLab();
     const result = await runQaFlowSuiteFromRuntime({
       repoRoot,
       outputDir,
@@ -326,10 +281,7 @@ describe("runtime parity Control UI ownership", () => {
     expect(mocks.runQaFlowSuiteStandard).toHaveBeenCalledTimes(4);
     expect(result.startedScenarioIds).toEqual(["runtime-channel", "runtime-channel"]);
     const evidence = result.evidence as QaEvidenceSummaryV3Json;
-    const roots = resolveQaEvidenceContainment(
-      evidence.occurrences,
-      evidence.entries,
-    ).rootInstances;
+    const roots = rootInstances(evidence);
     expect(roots).toHaveLength(2);
     const comparisons = roots.map((root) =>
       evidence.occurrences.find(

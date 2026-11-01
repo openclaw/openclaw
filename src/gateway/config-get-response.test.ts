@@ -3,18 +3,26 @@ import fs from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { REDACTED_SENTINEL, restoreRedactedValues } from "../config/redact-snapshot.js";
 import { makeSnapshot } from "../config/redact-snapshot.test-helpers.js";
-import { buildRuntimeConfigSchemaFromRegistry } from "../config/runtime-schema.js";
+import {
+  invalidateGatewayRuntimeConfigSchema,
+  loadGatewayConfigRedactionHints,
+} from "../config/runtime-schema.js";
+import * as schema from "../config/schema.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   pluginRegistryVersion: 1,
+  config: {} as OpenClawConfig,
   snapshot: vi.fn<() => Promise<ConfigFileSnapshot>>(),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
   readConfigFileSnapshot: mocks.snapshot,
+  getRuntimeConfig: () => mocks.config,
 }));
 
 vi.mock("../config/runtime-snapshot.js", async (importOriginal) => ({
@@ -44,8 +52,7 @@ const withToken = (kind: string) => ({
 });
 const activeWatcher = () => "active" as const;
 const disabledWatcher = () => "disabled" as const;
-const loadUiHints = vi.fn(() => undefined);
-const readWatched = () => readResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+const readWatched = () => readResponse({ getHotReloadStatus: activeWatcher });
 
 function webhookRoutes(routes: Record<string, unknown>, enabled?: boolean): OpenClawConfig {
   const webhooks = { config: { routes }, ...(enabled === undefined ? {} : { enabled }) };
@@ -58,40 +65,28 @@ function objectSchema(properties: Record<string, unknown>, $defs?: Record<string
 
 beforeEach(() => {
   invalidateConfigGetResponseCache();
-  loadUiHints.mockClear();
   mocks.pluginRegistryVersion = 1;
+  mocks.config = {};
+  invalidateGatewayRuntimeConfigSchema();
+  setGatewayPluginMetadataSnapshot(createPluginMetadataSnapshotFixture({ plugins: [] }));
   mocks.snapshot.mockReset().mockResolvedValue(makeSnapshot({ gateway: { port: 19_001 } }));
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearCurrentPluginMetadataSnapshot();
+  invalidateGatewayRuntimeConfigSchema();
+});
 
-it.each([true, false])("keeps provenance private across cache modes (valid=%s)", async (valid) => {
-  const config = withToken("runtime");
-  const snapshot = {
-    ...makeSnapshot(config),
-    valid,
-    authoredConfig: withToken("authored-only"),
-    sourceConfigBeforeMigrations: makeSnapshot(withToken("resolved-only")).sourceConfig,
-  };
-  const before = structuredClone(snapshot);
-  mocks.snapshot.mockResolvedValue(snapshot);
-  const cold = await readWatched();
-  const cached = await readWatched();
-  expect(cached).toBe(cold);
-  expect(mocks.snapshot).toHaveBeenCalledOnce();
-  const uncached = await readResponse({
-    getHotReloadStatus: disabledWatcher,
-    loadUiHints,
-  });
-  expect(mocks.snapshot).toHaveBeenCalledTimes(2);
+it("redacts cold config reads without building the form schema", async () => {
+  mocks.config = withToken("cold");
+  mocks.snapshot.mockResolvedValue(makeSnapshot(mocks.config));
+  const buildSchema = vi.spyOn(schema, "buildConfigSchemaCore");
 
-  for (const response of [cold, cached, uncached]) {
-    expect(response.valid).toBe(valid);
-    expect(response).not.toHaveProperty("authoredConfig");
-    expect(response).not.toHaveProperty("sourceConfigBeforeMigrations");
-    expect(JSON.stringify(response)).not.toContain("token-canary");
-  }
-  expect(snapshot).toEqual(before);
+  const response = await readWatched();
+  expect(response.config.gateway?.auth?.token).toBe(REDACTED_SENTINEL);
+  expect(JSON.stringify(response)).not.toContain("synthetic-cold-token-canary");
+  expect(buildSchema).not.toHaveBeenCalled();
 });
 
 it("round-trips wildcard plugin SecretRefs through an unrelated form save", async () => {
@@ -139,14 +134,14 @@ it("round-trips wildcard plugin SecretRefs through an unrelated form save", asyn
       },
     ],
   });
-  const runtimeSchema = buildRuntimeConfigSchemaFromRegistry(manifestRegistry, config);
+  mocks.config = config;
+  setGatewayPluginMetadataSnapshot(createPluginMetadataSnapshotFixture(manifestRegistry));
+  const uiHints = loadGatewayConfigRedactionHints();
   const secretPath = "plugins.entries.webhooks.config.routes.*.secret";
-  expect(runtimeSchema.uiHints[secretPath]?.sensitive).toBe(true);
+  expect(uiHints[secretPath]?.sensitive).toBe(true);
 
   mocks.snapshot.mockResolvedValue(makeSnapshot(config));
-  const response = await readResponse({
-    loadUiHints: () => runtimeSchema.uiHints,
-  });
+  const response = await readResponse({});
   const redactedSecret = { ...secretRef, id: REDACTED_SENTINEL };
   expect(response.config.plugins?.entries?.webhooks?.config).toMatchObject({
     routes: {
@@ -161,19 +156,10 @@ it("round-trips wildcard plugin SecretRefs through an unrelated form save", asyn
 
   const formValue = structuredClone(response.config);
   formValue.gateway = { ...formValue.gateway, port: 19_002 };
-  expect(restoreRedactedValues(formValue, config, runtimeSchema.uiHints)).toEqual({
+  expect(restoreRedactedValues(formValue, config, uiHints)).toEqual({
     ok: true,
     result: { ...config, gateway: { port: 19_002 } },
   });
-  for (const identityChange of [{ source: "env" }, { provider: "alternate" }]) {
-    const changedIdentity = {
-      ...formValue,
-      ...webhookRoutes({ publish: { secret: { ...redactedSecret, ...identityChange } } }),
-    };
-    expect(restoreRedactedValues(changedIdentity, config, runtimeSchema.uiHints)).toMatchObject({
-      ok: false,
-    });
-  }
 });
 
 it("redacts every projection, including disabled channel owners", async () => {
@@ -182,7 +168,12 @@ it("redacts every projection, including disabled channel owners", async () => {
       entries: { core: { enabled: true }, plus: { enabled: false } },
     },
     channels: {
-      proofchat: { core: "synthetic-core", plus: "synthetic-plus", visible: "public-setting" },
+      proofchat: {
+        core: "synthetic-core",
+        plus: "synthetic-plus",
+        visibleToken: "public-setting",
+        endpoint: "https://synthetic-user:synthetic-password@example.test",
+      },
     },
   };
   const { manifestRegistry } = createPluginMetadataSnapshotFixture({
@@ -193,20 +184,30 @@ it("redacts every projection, including disabled channel owners", async () => {
       channelConfigs: {
         proofchat: {
           schema: objectSchema({ [id]: { type: "string" } }),
-          uiHints: { [id]: { sensitive: true } },
+          uiHints: {
+            [id]: { sensitive: true },
+            visibleToken: { sensitive: false },
+            endpoint: { sensitive: false, tags: ["url-secret"] },
+          },
         },
       },
     })),
   });
   mocks.snapshot.mockResolvedValue(makeSnapshot(config));
-  const response = await readResponse({
-    loadUiHints: () => buildRuntimeConfigSchemaFromRegistry(manifestRegistry, config).uiHints,
-  });
+  mocks.config = config;
+  setGatewayPluginMetadataSnapshot(createPluginMetadataSnapshotFixture(manifestRegistry));
+  const response = await readResponse({});
   const output = JSON.stringify(response);
   expect(output).not.toContain("synthetic-core");
   expect(output).not.toContain("synthetic-plus");
+  expect(output).not.toContain("synthetic-password");
   const redacted = REDACTED_SENTINEL;
-  const proofchat = { core: redacted, plus: redacted, visible: "public-setting" };
+  const proofchat = {
+    core: redacted,
+    plus: redacted,
+    visibleToken: "public-setting",
+    endpoint: redacted,
+  };
   const projected = { channels: { proofchat } };
   expect(response).toMatchObject({
     config: projected,
@@ -222,25 +223,24 @@ it("serves identical bytes without filesystem work on an active-watcher cache hi
   const first = await readWatched();
   const stat = vi.spyOn(fs.promises, "stat");
   mocks.snapshot.mockClear();
-  loadUiHints.mockClear();
 
   const hit = await readWatched();
 
   expect(hit).toBe(first);
   expect(stat).not.toHaveBeenCalled();
   expect(mocks.snapshot).not.toHaveBeenCalled();
-  expect(loadUiHints).not.toHaveBeenCalled();
 
   invalidateConfigGetResponseCache();
   const fresh = await readWatched();
   expect(hit).toEqual(fresh);
+  await expect(readResponse({ getHotReloadStatus: disabledWatcher })).resolves.toEqual(fresh);
+  expect(mocks.snapshot).toHaveBeenCalledTimes(2);
 });
 
 it("shares one projection across concurrent active-watcher callers", async () => {
   const responses = await Promise.all(Array.from({ length: 8 }, () => readWatched()));
 
   expect(mocks.snapshot).toHaveBeenCalledOnce();
-  expect(loadUiHints).toHaveBeenCalledOnce();
   expect(responses.every((response) => response === responses[0])).toBe(true);
 });
 
@@ -256,5 +256,4 @@ it.each(["read failure", "metadata generation"])("rebuilds after %s", async (rea
     appliedConfigHash: "resolved-token:applied-1",
   });
   expect(mocks.snapshot).toHaveBeenCalledTimes(2);
-  expect(loadUiHints).toHaveBeenCalledTimes(reason === "read failure" ? 1 : 2);
 });

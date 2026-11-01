@@ -7,8 +7,6 @@ import { resolveMSTeamsSenderAccess } from "./access.js";
 import { createMSTeamsHandlerConfigReader } from "./config.js";
 import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 
-type ReactionDirection = "added" | "removed";
-
 export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
   const { accountId, log } = deps;
   const readConfig = deps.readConfig ?? createMSTeamsHandlerConfigReader(deps);
@@ -16,7 +14,7 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
 
   return async function handleReaction(
     context: MSTeamsTurnContext,
-    direction: ReactionDirection,
+    direction: "added" | "removed",
   ): Promise<void> {
     const cfg = readConfig();
     const activity = context.activity;

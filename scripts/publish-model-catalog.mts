@@ -19,10 +19,10 @@ import {
   type ModelPricingSource,
 } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { ModelInferenceCapabilitiesSchema } from "@openclaw/model-catalog-core/model-inference-capabilities";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ModelCatalogModel } from "../packages/model-catalog-core/src/model-catalog-types.js";
-import { ModelInferenceCapabilitiesSchema } from "../packages/model-catalog-core/src/model-inference-capabilities.js";
 import type {
   RemoteModelCatalogBundle,
   RemoteModelCatalogBundleV2,
@@ -215,8 +215,27 @@ export async function assembleModelCatalogBundle(options: {
       if (isRecord(provider)) {
         // Credential ownership belongs to the installed manifest, never a downloaded catalog.
         // Manifests shipped since 2026.9.7 may still carry the retired authoring field.
-        const { authScope: _authScope, recommendedModels: _retired, ...v1Provider } = provider;
-        providers[providerId] = v1Provider;
+        // Families stay installed-manifest facts too; hosts keep the bundled row's family.
+        // Routed per-vendor utility defaults are resolved only from installed manifests.
+        const {
+          authScope: _authScope,
+          recommendedModels: _retired,
+          family: _family,
+          defaultUtilityModels: _routedUtilityDefaults,
+          ...v1Provider
+        } = provider;
+        providers[providerId] = Array.isArray(v1Provider.models)
+          ? {
+              ...v1Provider,
+              models: v1Provider.models.map((model: unknown) => {
+                if (!isRecord(model)) {
+                  return model;
+                }
+                const { family: _modelFamily, ...hosted } = model;
+                return hosted;
+              }),
+            }
+          : v1Provider;
       } else {
         providers[providerId] = provider;
       }
@@ -239,8 +258,8 @@ export async function assembleModelCatalogBundle(options: {
   const validateBundle: BundleValidator =
     options.validateBundle ?? (await loadClientBundleValidator());
   const validated = validateBundle(bundle);
-  // The assembly is canonical source data, not a legacy wire projection. Preserve
-  // validated task declarations until v1/v2 and v3 are projected separately.
+  // The assembly is canonical source data, not a wire projection. Preserve validated
+  // task declarations so the v1/v2 projections can drop rows that are not chat models.
   for (const [id, provider] of Object.entries(validated.providers)) {
     const source = providers[id];
     if (!isRecord(source) || !Array.isArray(source.models)) {
@@ -595,9 +614,20 @@ export async function hydrateModelCatalogFromModelsDev(options: {
     const ownedProviders = new Set((manifest.providers ?? []).map(normalizeModelCatalogProviderId));
     const catalog = normalizeModelCatalog(manifest.modelCatalog, { ownedProviders });
     for (const [provider, source] of Object.entries(catalog?.modelsDev ?? {})) {
-      if (catalog?.providers?.[provider] && options.bundle.providers[provider]) {
-        mappings.set(provider, source);
+      // A runtime-discovered provider declares no static rows, which normalization
+      // drops; its raw declaration still supplies the transport for models.dev rows.
+      const declared =
+        catalog?.providers?.[provider] ?? manifest.modelCatalog?.providers?.[provider];
+      if (!isRecord(declared)) {
+        continue;
       }
+      const {
+        family: _family,
+        defaultUtilityModels: _routedUtilityDefaults,
+        ...hostedProvider
+      } = declared;
+      options.bundle.providers[provider] ??= { ...hostedProvider, models: [] };
+      mappings.set(provider, source);
     }
     // Endpoint-specific rules remain runtime-owned. Another plugin cannot veto
     // an owner's imports through an unowned shared-catalog suppression.
@@ -693,8 +723,9 @@ const PROVIDER_MODEL_INVENTORIES: Readonly<
   novita: { url: "https://api.novita.ai/openai/v1/models", caseInsensitive: true },
   nvidia: { url: "https://integrate.api.nvidia.com/v1/models" },
   opencode: { url: "https://opencode.ai/zen/v1/models" },
-  "opencode-go": { url: "https://opencode.ai/zen/go/v1/models" },
+  "opencode-go": { url: "https://opencode.ai/inference/go/v1/models" },
   venice: { url: "https://api.venice.ai/api/v1/models" },
+  "vercel-ai-gateway": { url: "https://ai-gateway.vercel.sh/v1/models" },
 };
 
 /** Marks published rows a provider's live inventory no longer lists as deprecated. */
@@ -1320,7 +1351,7 @@ export function projectRecommendedModels(
  * A provider's featured models lead its recommendations as listed, so the global family
  * rule never hides a provider pick; the global projection follows without repeats.
  */
-async function assembleVersionedModelCatalogBundle(
+export async function assembleVersionedModelCatalogBundle(
   bundle: PublishedModelCatalogBundle,
   pricingSelections: WeakMap<ModelCatalogModel, PricingSelection>,
   standalonePricing?: StandalonePricing,
@@ -1355,6 +1386,14 @@ async function assembleVersionedModelCatalogBundle(
           : provider.defaultUtilityModel,
       ...(recommended.length > 0 ? { recommendedModels: recommended } : {}),
     };
+    if (version === 3) {
+      if (!chatModels.some((model) => model.id === provider.defaultModel)) {
+        delete providers[providerId].defaultModel;
+      }
+      if (!chatModels.some((model) => model.id === provider.defaultUtilityModel)) {
+        delete providers[providerId].defaultUtilityModel;
+      }
+    }
     for (const model of provider.models) {
       if (version === 2 && model.inference?.chat === false) {
         continue;
@@ -1398,25 +1437,7 @@ async function assembleVersionedModelCatalogBundle(
   });
 }
 
-export async function assembleModelCatalogBundleV2(
-  bundle: PublishedModelCatalogBundle,
-  pricingSelections: WeakMap<ModelCatalogModel, PricingSelection>,
-  standalonePricing?: StandalonePricing,
-  recommendedModels: readonly string[] = [],
-  featuredModels: Readonly<Record<string, { ids: readonly string[] }>> = {},
-): Promise<RemoteModelCatalogBundleV2> {
-  // SAFETY: the requested wire version selects its corresponding client validator.
-  return (await assembleVersionedModelCatalogBundle(
-    bundle,
-    pricingSelections,
-    standalonePricing,
-    recommendedModels,
-    featuredModels,
-    2,
-  )) as RemoteModelCatalogBundleV2;
-}
-
-export function serializeModelCatalogBundleV2(
+export function serializeVersionedModelCatalogBundle(
   bundle: RemoteModelCatalogBundleV2 | RemoteModelCatalogBundleV3,
 ): string {
   const models = bundle.models
@@ -1486,6 +1507,11 @@ export async function runPublishModelCatalog(
   }
   const loadSource = createModelCatalogSourceLoader(options.fetchImpl);
   const hydrationResult = await hydrateModelCatalogFromModelsDev({ bundle, manifests, loadSource });
+  for (const [providerId, provider] of Object.entries(bundle.providers)) {
+    if (provider.models.length === 0) {
+      delete bundle.providers[providerId];
+    }
+  }
   const retirementResult = await retireUnservedModels({ bundle, loadSource });
   const featuredResult =
     args.outV2 || args.outV3 ? await resolveProviderFeaturedModels({ bundle, loadSource }) : {};
@@ -1499,6 +1525,8 @@ export async function runPublishModelCatalog(
         standalonePricing,
       })
     : { modelsEnriched: 0, pricingEntries: 0 };
+  // Capture task metadata before the released-wire projection mutates the rows.
+  // Keep model identity here: pricing selections are keyed by the enriched objects.
   const bundleV3 = args.outV3
     ? await assembleVersionedModelCatalogBundle(
         bundle,
@@ -1515,7 +1543,7 @@ export async function runPublishModelCatalog(
   const validateBundle = await loadClientBundleValidator();
   // Project while selection facts still refer to the assembled model objects.
   const bundleV2 = args.outV2
-    ? await assembleModelCatalogBundleV2(
+    ? await assembleVersionedModelCatalogBundle(
         bundle,
         pricingSelections,
         standalonePricing,
@@ -1527,9 +1555,9 @@ export async function runPublishModelCatalog(
   const summary = assertModelCatalogCompleteness(bundle);
   const serialized = serializeModelCatalogBundle(bundle);
   const bundleBytes = Buffer.byteLength(serialized);
-  const serializedV2 = bundleV2 ? serializeModelCatalogBundleV2(bundleV2) : undefined;
+  const serializedV2 = bundleV2 ? serializeVersionedModelCatalogBundle(bundleV2) : undefined;
   const bundleV2Bytes = serializedV2 ? Buffer.byteLength(serializedV2) : 0;
-  const serializedV3 = bundleV3 ? serializeModelCatalogBundleV2(bundleV3) : undefined;
+  const serializedV3 = bundleV3 ? serializeVersionedModelCatalogBundle(bundleV3) : undefined;
   const bundleV3Bytes = serializedV3 ? Buffer.byteLength(serializedV3) : 0;
   if (bundleBytes > BUNDLE_SIZE_WARNING_BYTES) {
     process.stderr.write(
@@ -1598,15 +1626,15 @@ export async function runPublishModelCatalog(
     fs.mkdirSync(path.dirname(outputFile), { recursive: true });
     fs.writeFileSync(outputFile, serialized);
   }
-  for (const [version, published, bytes, out] of [
-    [2, bundleV2, bundleV2Bytes, args.outV2],
-    [3, bundleV3, bundleV3Bytes, args.outV3],
-  ] as const) {
-    if (published) {
-      process.stdout.write(
-        `[${SCRIPT_LABEL}] published schemaVersion=${version} models=${published.models.length} recommendedProviders=${Object.values(published.providers).filter((provider) => provider.recommendedModels).length} bundleBytes=${bytes} out=${out}\n`,
-      );
-    }
+  if (bundleV2) {
+    process.stdout.write(
+      `[${SCRIPT_LABEL}] published schemaVersion=2 models=${bundleV2.models.length} recommendedProviders=${Object.values(bundleV2.providers).filter((provider) => provider.recommendedModels).length} bundleBytes=${bundleV2Bytes} out=${args.outV2}\n`,
+    );
+  }
+  if (bundleV3) {
+    process.stdout.write(
+      `[${SCRIPT_LABEL}] published schemaVersion=3 models=${bundleV3.models.length} bundleBytes=${bundleV3Bytes} out=${args.outV3}\n`,
+    );
   }
   process.stdout.write(
     `[${SCRIPT_LABEL}] published ${stats} out=${args.out}\n${hydrationSummary}${retirementSummary}${featuredSummary}`,

@@ -1,15 +1,20 @@
 import { getEventListeners } from "node:events";
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createRetainedCache } from "../infra/retained-cache.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import type { ControlUiSessionPullRequests as Snapshot } from "./control-ui-contract.js";
+import type { ControlUiSessionPrTarget } from "./control-ui-session-pr-read.js";
 import { parseControlUiSessionPullRequestsSubscribeParams as parse } from "./control-ui-session-pr-subscriptions.js";
-import { createTestControlUiSessionPrSubscriptions } from "./control-ui-session-pr-subscriptions.test-support.js";
-import type { ControlUiSessionPullRequestsParams as LoadParams } from "./control-ui-session-prs.js";
+import {
+  createTestControlUiSessionPrSubscriptions,
+  createTestSessionPrReadSource,
+} from "./control-ui-session-pr-subscriptions.test-support.js";
 
 const CHANGED_EVENT = "controlUi.sessionPullRequests.changed";
 
@@ -17,9 +22,13 @@ const READY: Snapshot = { pullRequests: [], rateLimited: false };
 
 let running: ReturnType<typeof createTestControlUiSessionPrSubscriptions> | undefined;
 let broadcastToConnIds: ReturnType<typeof vi.fn<Options["broadcastToConnIds"]>>;
+let load: ReturnType<typeof vi.fn<NonNullable<Options["load"]>>>;
+let clock: ReturnType<typeof createGatewaySchedulerClock>;
 
 beforeEach(() => {
   broadcastToConnIds = vi.fn<Options["broadcastToConnIds"]>();
+  load = vi.fn<NonNullable<Options["load"]>>(async () => READY);
+  clock = createGatewaySchedulerClock(Date.now());
 });
 
 afterEach(async () => {
@@ -29,14 +38,12 @@ afterEach(async () => {
 });
 
 type Options = Parameters<typeof createTestControlUiSessionPrSubscriptions>[0];
-function start(
-  options: Omit<Options, "scheduler" | "broadcastToConnIds"> & { scheduler?: Options["scheduler"] },
-) {
-  const { scheduler = createTestGatewayScheduler(), ...deps } = options;
+function start(options: Omit<Options, "scheduler" | "broadcastToConnIds"> = {}) {
   running = createTestControlUiSessionPrSubscriptions({
-    scheduler,
+    scheduler: createTestGatewayScheduler(clock.clock),
     broadcastToConnIds,
-    ...deps,
+    load,
+    ...options,
   });
   return running;
 }
@@ -60,24 +67,125 @@ function expectPublication(connId: string, key = "session", rateLimited = false)
   );
 }
 
-function loadArgs(sessionKey: string, refresh?: true) {
-  return [
-    { sessionKey, agentId: "main", ...(refresh ? { refresh } : {}) },
-    expect.any(AbortSignal),
-    expect.objectContaining({ assertCurrent: expect.any(Function) }),
-  ] as const;
-}
-
-function expectSessions(
-  load: { mock: { calls: readonly (readonly unknown[])[] } },
-  keys: string[],
-) {
+function expectSessions(keys: string[], refresh?: true, agentId = "main") {
   expect(load.mock.calls.map(([params]) => params)).toEqual(
-    keys.map((sessionKey) => ({ sessionKey, agentId: "main" })),
+    keys.map((sessionKey) => ({ sessionKey, agentId, ...(refresh ? { refresh } : {}) })),
   );
 }
 
 describe("control UI session PR subscriptions", () => {
+  it("reuses current watcher grants across streaming reads and reacquires changed targets", async () => {
+    const readSource = createTestSessionPrReadSource();
+    let revision = 0;
+    let visible = true;
+    const readCurrent = vi.fn(async (): Promise<ControlUiSessionPrTarget | undefined> => {
+      if (!visible) {
+        return undefined;
+      }
+      const captured = revision;
+      return {
+        params: { sessionKey: "session", agentId: "main" },
+        identity: `session-${captured}`,
+        readSource,
+        source: null,
+        taskReceipts: { sessions: [] },
+        assertCurrent: () => {
+          if (!visible || captured !== revision) {
+            throw new Error("Watcher grant changed");
+          }
+        },
+      };
+    });
+    const active = start({ prepareRead: async () => readCurrent });
+    await active.replace("reader", ["session"]);
+    readCurrent.mockClear();
+    broadcastToConnIds.mockClear();
+    for (let index = 0; index < 20; index++) {
+      sessionChanges.emit({ sessionKey: "streaming-child", scope: "transcript" });
+      await nextEventLoopTurn();
+      await active.pollNow();
+    }
+    expect(readCurrent).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).not.toHaveBeenCalled();
+
+    revision++;
+    await active.pollNow();
+    expect(readCurrent).toHaveBeenCalledOnce();
+    expectPublication("reader");
+
+    visible = false;
+    readCurrent.mockClear();
+    broadcastToConnIds.mockClear();
+    await active.pollNow();
+    expect(readCurrent).toHaveBeenCalledOnce();
+    expect(broadcastToConnIds).not.toHaveBeenCalled();
+    readCurrent.mockClear();
+    await active.pollNow();
+    expect(readCurrent).not.toHaveBeenCalled();
+  });
+
+  it("validates an unchanged passive audience in one synchronous pass", async () => {
+    const readSource = createTestSessionPrReadSource();
+    const assertCurrent = vi.fn();
+    const target: ControlUiSessionPrTarget = {
+      params: { sessionKey: "session", agentId: "main" },
+      identity: "session",
+      readSource,
+      source: null,
+      taskReceiptsOnly: true,
+      assertCurrent,
+    };
+    const active = start({ prepareRead: async () => async () => target });
+    for (let index = 0; index < 64; index++) {
+      await active.replace(`reader-${index}`, [], new Set(), new Set(["session"]));
+    }
+    assertCurrent.mockClear();
+    const pending = active.pollNow();
+    try {
+      // Live guards still run for every viewer, without a promise/yield for each one.
+      expect(assertCurrent).toHaveBeenCalledTimes(64);
+    } finally {
+      await pending;
+    }
+  });
+
+  it.each([
+    { facts: "category", invalidated: undefined, refresh: false },
+    { facts: "participants", invalidated: undefined, refresh: false },
+    { facts: undefined, invalidated: "category", refresh: false },
+    { facts: "category", invalidated: true, refresh: true },
+    { facts: "unchanged", invalidated: true, refresh: true },
+    { facts: "participants", invalidated: true, refresh: true },
+  ] as const)(
+    "refreshes=$refresh for facts=$facts, invalidated=$invalidated",
+    async ({ facts, invalidated, refresh }) => {
+      const readSource = createTestSessionPrReadSource();
+      const readCurrent = vi.fn(async () => ({
+        sessionId: "session-id",
+        params: { sessionKey: "session", agentId: "main" },
+        identity: "session",
+        readSource,
+        source: null,
+        taskReceipts: { sessions: [] },
+      }));
+      const active = start({ prepareRead: async () => readCurrent });
+      await active.replace("reader", ["session"]);
+      readCurrent.mockClear();
+      broadcastToConnIds.mockClear();
+      sessionChanges.emit({
+        sessionKey: "session",
+        facts:
+          facts === "category"
+            ? { kind: facts, sessionId: "session-id", category: "work" }
+            : facts && { kind: facts },
+        factsInvalidated: invalidated,
+      });
+      await nextEventLoopTurn();
+      expect(readCurrent.mock.calls.length > 0).toBe(refresh);
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { cleanup: "stop", failing: true },
     { cleanup: "disconnect", failing: false },
@@ -160,9 +268,7 @@ describe("control UI session PR subscriptions", () => {
   });
 
   it("polls the watched union once per wake, including after sleep", async () => {
-    const clock = createGatewaySchedulerClock();
-    const load = vi.fn<(params: LoadParams) => Promise<Snapshot>>(async () => READY);
-    const active = start({ load, scheduler: createTestGatewayScheduler(clock.clock) });
+    const active = start();
 
     await active.replace("conn-a", ["shared", "only-a"]);
     await active.replace("conn-b", ["shared", "only-b"]);
@@ -183,10 +289,63 @@ describe("control UI session PR subscriptions", () => {
     }
   });
 
+  it("retains caller aliases independently within each audience", async () => {
+    const canonicalKey = "agent:main:shared";
+    const readSource = createTestSessionPrReadSource();
+    const signals = new Map<string, AbortSignal | undefined>();
+    load.mockImplementation(async (_params, signal, read) => {
+      read.assertCurrent();
+      signals.set(read.target.identity, signal);
+      return { ...READY, rateLimited: read.target.identity === "private" };
+    });
+    const active = start({
+      prepareRead: async (connId) => async () => ({
+        params: { sessionKey: canonicalKey, agentId: "main" },
+        identity: connId === "private" ? "private" : "shared",
+        readSource,
+        source: null,
+      }),
+    });
+    const aliasPublication = (connId: string, key: string, rateLimited = false) => {
+      const [event, payload, connIds] = publication(connId, key, rateLimited);
+      return [event, payload, connIds, { sessionKeys: [canonicalKey], agentId: "main" }];
+    };
+
+    await active.replace("first", ["short", canonicalKey]);
+    await active.replace("second", ["other-short"]);
+    await active.replace("private", ["short"]);
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(broadcastToConnIds.mock.calls).toEqual([
+      aliasPublication("first", "short"),
+      aliasPublication("first", canonicalKey),
+      aliasPublication("second", "other-short"),
+      aliasPublication("private", "short", true),
+    ]);
+
+    const sharedLifetime = signals.get("shared");
+    const privateLifetime = signals.get("private");
+    await active.replace("private", ["renamed-short"]);
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(privateLifetime?.aborted).toBe(false);
+    expect(broadcastToConnIds).toHaveBeenLastCalledWith(
+      ...aliasPublication("private", "renamed-short", true),
+    );
+    await active.replace("first", [canonicalKey]);
+    active.unsubscribe("second");
+    expect(sharedLifetime?.aborted).toBe(false);
+    broadcastToConnIds.mockClear();
+    await active.replace("first", [canonicalKey], new Set([canonicalKey]));
+    expect(broadcastToConnIds.mock.calls).toEqual([aliasPublication("first", canonicalKey)]);
+    expect(signals.get("shared")).toBe(sharedLifetime);
+    active.unsubscribe("first");
+    expect(sharedLifetime?.aborted).toBe(true);
+    expect(signals.get("private")?.aborted).toBe(false);
+  });
+
   it("skips a watcher disconnected by an earlier synchronous send", async () => {
     let revision = 0;
-    const load = vi.fn(async () => ({ ...READY, rateLimited: revision > 0 }));
-    const active = start({ load });
+    load.mockImplementation(async () => ({ ...READY, rateLimited: revision > 0 }));
+    const active = start();
     await active.replace("conn-a", ["shared"]);
     await active.replace("conn-b", ["shared"]);
     broadcastToConnIds.mockClear();
@@ -205,13 +364,13 @@ describe("control UI session PR subscriptions", () => {
   it("shares the four-load limit across connections, hydration, and polling", async () => {
     vi.useFakeTimers();
     const releases: Array<() => void> = [];
-    const load = vi.fn(
+    load.mockImplementation(
       async () =>
         await new Promise<Snapshot>((resolve) => {
           releases.push(() => resolve(READY));
         }),
     );
-    const active = start({ load });
+    const active = start();
     const sessionKeys = Array.from({ length: 6 }, (_value, index) => `session-${index}`);
 
     const finishLimitedLoads = async (operation: Promise<unknown>, total = 6) => {
@@ -241,11 +400,11 @@ describe("control UI session PR subscriptions", () => {
     vi.useFakeTimers();
     const retired = createDeferred<Snapshot>();
     const fresh = createDeferred<Snapshot>();
-    const load = vi
-      .fn()
+    load = vi
+      .fn<NonNullable<Options["load"]>>()
       .mockImplementationOnce(() => retired.promise)
       .mockImplementationOnce(() => fresh.promise);
-    const active = start({ load });
+    const active = start();
     const initial = active.replace("old", ["session"]);
     await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
     const forced = active.replace("old", ["session"], new Set(["session"]));
@@ -255,7 +414,7 @@ describe("control UI session PR subscriptions", () => {
     await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
 
     expect(broadcastToConnIds).not.toHaveBeenCalled();
-    expectSessions(load, ["session", "session"]);
+    expectSessions(["session", "session"]);
     fresh.resolve(READY);
     await Promise.all([initial, forced, current]);
 
@@ -264,24 +423,15 @@ describe("control UI session PR subscriptions", () => {
 
   it("loads agent-scoped global watch keys from the owning agent store", async () => {
     vi.useFakeTimers();
-    const load = vi.fn(async () => READY);
-    const active = start({
-      load,
-    });
+    const active = start();
 
     await active.replace("conn-a", ["agent:work:global"]);
 
-    expect(load).toHaveBeenCalledWith(
-      { sessionKey: "global", agentId: "work" },
-      expect.any(AbortSignal),
-      expect.objectContaining({ assertCurrent: expect.any(Function) }),
-    );
+    expectSessions(["global"], undefined, "work");
   });
 
   it("coalesces forced refresh bursts per session and acknowledges each requester once", async () => {
-    const clock = createGatewaySchedulerClock();
-    const load = vi.fn(async () => READY);
-    const active = start({ load, scheduler: createTestGatewayScheduler(clock.clock) });
+    const active = start();
     await active.replace("first", ["shared", "independent"]);
     await active.replace("second", ["shared"]);
     await active.replace("first", ["shared", "independent"], new Set(["shared"]));
@@ -295,14 +445,13 @@ describe("control UI session PR subscriptions", () => {
     ];
     await active.replace("first", ["shared", "independent"], new Set(["independent"]));
     await clock.advanceBy(9_999);
-    expect(load).toHaveBeenCalledExactlyOnceWith(...loadArgs("independent", true));
+    expectSessions(["independent"], true);
     broadcastToConnIds.mockClear();
 
     await clock.advanceBy(1);
     await Promise.all(queued);
 
-    expect(load).toHaveBeenCalledTimes(2);
-    expect(load).toHaveBeenLastCalledWith(...loadArgs("shared", true));
+    expectSessions(["independent", "shared"], true);
     expect(broadcastToConnIds.mock.calls).toEqual(
       ["first", "second"].map((connId) => publication(connId, "shared")),
     );
@@ -311,14 +460,8 @@ describe("control UI session PR subscriptions", () => {
   it.each(["stop", "disconnect", "empty replace", "reader retirement"])(
     "cancels a coalesced refresh on %s and settles its callers without waiting",
     async (cleanup) => {
-      const clock = createGatewaySchedulerClock();
-      const load = vi.fn(async () => READY);
       let connected = true;
-      const active = start({
-        load,
-        isConnectionActive: () => connected,
-        scheduler: createTestGatewayScheduler(clock.clock),
-      });
+      const active = start({ isConnectionActive: () => connected });
       await active.replace("requester", ["session"], new Set(["session"]));
       const refresh = active.replace("requester", ["session"], new Set(["session"]));
       broadcastToConnIds.mockClear();
@@ -345,11 +488,10 @@ describe("control UI session PR subscriptions", () => {
     "joins %s and fences queued forced refreshes when stopped",
     async (phase) => {
       const loadStarted = createDeferred();
-      const clock = createGatewaySchedulerClock();
       const replacementEntered = createDeferred();
       const heldSnapshot = createDeferred<Snapshot>();
       let blockLoads = phase === "initial hydration";
-      const load = vi.fn(async ({ sessionKey }: LoadParams) => {
+      load.mockImplementation(async ({ sessionKey }) => {
         if (sessionKey === "barrier") {
           replacementEntered.resolve();
           return READY;
@@ -360,10 +502,7 @@ describe("control UI session PR subscriptions", () => {
         loadStarted.resolve();
         return await heldSnapshot.promise;
       });
-      const subscriptions = start({
-        scheduler: createTestGatewayScheduler(clock.clock),
-        load,
-      });
+      const subscriptions = start();
       const operations: Promise<unknown>[] = [];
       try {
         if (phase === "poll") {
@@ -399,7 +538,7 @@ describe("control UI session PR subscriptions", () => {
           stopCompletions,
           broadcastToConnIds.mock.calls.length,
         ]).toEqual([0, 2, 0]);
-        expectSessions(load, ["session", "barrier"]);
+        expectSessions(["session", "barrier"]);
       } finally {
         heldSnapshot.resolve(READY);
         await Promise.allSettled(operations);
@@ -413,14 +552,14 @@ describe("control UI session PR subscriptions", () => {
     async (kind) => {
       vi.useFakeTimers();
       const pending = createDeferred<Snapshot>();
-      const load = vi
-        .fn()
+      load = vi
+        .fn<NonNullable<Options["load"]>>()
         .mockResolvedValueOnce(READY)
         .mockImplementationOnce(() => pending.promise);
       if (kind !== "handoff") {
         load.mockResolvedValue(READY);
       }
-      const active = start({ load });
+      const active = start();
       await active.replace("conn-a", ["session"]);
       const pendingLoad =
         kind === "refresh"
@@ -442,16 +581,10 @@ describe("control UI session PR subscriptions", () => {
   );
 
   it("rejects replace-sets from inactive connections before loading", async () => {
-    const load = vi.fn(async () => READY);
-    const active = start({
-      load,
-      isConnectionActive: () => false,
-    });
+    const active = start({ isConnectionActive: () => false });
 
-    const onAdmitted = vi.fn();
-    await active.replace("conn-closed", ["orphan"], undefined, onAdmitted);
+    await active.replace("conn-closed", ["orphan"]);
 
-    expect(onAdmitted).toHaveBeenCalledTimes(1);
     expect(load).not.toHaveBeenCalled();
     expect(broadcastToConnIds).not.toHaveBeenCalled();
   });
@@ -459,13 +592,16 @@ describe("control UI session PR subscriptions", () => {
   it("does not publish a superseded replace-set after its load completes", async () => {
     vi.useFakeTimers();
     const { promise: first, resolve: resolveFirst } = createDeferred<Snapshot>();
-    const load = vi.fn(async ({ sessionKey }: { sessionKey: string }) =>
-      sessionKey === "old" ? await first : READY,
-    );
-    const active = start({ load });
+    load.mockImplementation(async ({ sessionKey }) => (sessionKey === "old" ? await first : READY));
+    const active = start();
 
     const oldReplace = active.replace("conn-a", ["old", "current"]);
-    await vi.waitFor(() => expect(load).toHaveBeenCalledWith(...loadArgs("old")));
+    await vi.waitFor(() =>
+      expect(load.mock.calls.map(([params]) => params)).toContainEqual({
+        sessionKey: "old",
+        agentId: "main",
+      }),
+    );
     await active.replace("conn-a", ["current"]);
     resolveFirst(READY);
     await oldReplace;
@@ -478,10 +614,10 @@ describe("control UI session PR subscriptions", () => {
   it("delivers a shared cached key after its earlier hydration was superseded", async () => {
     vi.useFakeTimers();
     const { promise: blocked, resolve: resolveBlocked } = createDeferred<Snapshot>();
-    const load = vi.fn(async ({ sessionKey }: { sessionKey: string }) =>
+    load.mockImplementation(async ({ sessionKey }) =>
       sessionKey.startsWith("blocked") ? await blocked : READY,
     );
-    const active = start({ load });
+    const active = start();
 
     const blockedKeys = Array.from({ length: 4 }, (_, index) => `blocked-${index + 1}`);
     const oldReplace = active.replace("conn-a", [...blockedKeys, "shared"]);
@@ -501,39 +637,35 @@ describe("control UI session PR subscriptions", () => {
 
   it("propagates rate-limit and failure states per key", async () => {
     vi.useFakeTimers();
-    const load = vi.fn(async ({ sessionKey }: { sessionKey: string }): Promise<Snapshot> => {
+    const repository = { owner: "openclaw", repo: "openclaw" };
+    load.mockImplementation(async ({ sessionKey }) => {
       if (sessionKey === "limited") {
-        return { pullRequests: [], rateLimited: true };
+        return { ...READY, rateLimited: true };
       }
       if (sessionKey === "repository-only") {
-        return {
-          pullRequests: [],
-          repository: { owner: "openclaw", repo: "openclaw" },
-          rateLimited: false,
-          status: "unavailable",
-        };
+        return { ...READY, repository, status: "unavailable" };
       }
       throw new Error("GitHub unavailable");
     });
-    const active = start({ load });
+    const active = start();
 
     await active.replace("conn-a", ["limited", "failed", "repository-only"]);
     expect(broadcastToConnIds).toHaveBeenCalledTimes(3);
     expect(broadcastToConnIds.mock.calls.map((call) => call[1])).toEqual(
       expect.arrayContaining([
-        { sessions: { limited: { pullRequests: [], rateLimited: true, status: "rate-limited" } } },
-        { sessions: { failed: { pullRequests: [], rateLimited: false, status: "unavailable" } } },
+        { sessions: { limited: { ...READY, rateLimited: true, status: "rate-limited" } } },
+        { sessions: { failed: { ...READY, status: "unavailable" } } },
         {
           sessions: {
-            "repository-only": {
-              pullRequests: [],
-              repository: { owner: "openclaw", repo: "openclaw" },
-              rateLimited: false,
-              status: "unavailable",
-            },
+            "repository-only": { ...READY, repository, status: "unavailable" },
           },
         },
       ]),
     );
+    const failedTarget = load.mock.calls.find(([params]) => params.sessionKey === "failed")![2]
+      .target;
+    active.readPrepared(failedTarget);
+    const failedRead = await active.read(failedTarget, () => {});
+    expect(failedRead).toBe(active.readPrepared(failedTarget));
   });
 });

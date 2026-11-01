@@ -10,6 +10,10 @@ title: "Agents"
 
 Manage isolated agents (workspaces + auth + routing). Running `openclaw agents` with no subcommand is equivalent to `openclaw agents list`.
 
+Creation summaries strip terminal escape sequences and show embedded newlines,
+tabs, and carriage returns as `\n`, `\t`, and `\r`. Workspace paths and other
+values in saved configuration and `--json` output retain their original contents.
+
 ## Examples
 
 ```bash
@@ -77,10 +81,17 @@ wait for it to exit, and rerun the same command.
 - Interactive mode offers optional auth copying. When the fleet has no default agent, choose a source agent or **Skip copying auth profiles** (the default). Selecting a source still requires confirmation before copying. Only portable static credentials (`api_key` and static `token` profiles) are copied unless a credential opts out with `copyToAgents: false`; OAuth refresh-token profiles are not copied unless a provider opts in with `copyToAgents: true`. Without a copy, OAuth stays available through the shared auth base. If the source agent has its own local OAuth profile, sign in separately for the new agent.
 - An agent id whose deletion has finished can be recreated with `agents add`. Creation claims the finished deletion record when it publishes the new agent, including when the wizard copies or configures auth. An id whose deletion cleanup is still pending is refused until cleanup finishes.
 
+With PostgreSQL agent storage, a retained local anchor must still match an initialized
+server namespace. If that namespace is missing, empty, or belongs to another store,
+creation refuses before changing the workspace or configuration. Restore a matching
+backup, or follow the [manual discard procedure](/gateway/postgresql#recover-a-retained-agent-store)
+if the history is intentionally gone. A failed first creation can be retried normally;
+an incomplete anchor left by an older version requires the same conservative recovery.
+
 #### Role templates
 
 `--role` works in interactive and non-interactive creation, including `--json`.
-Bundled roles are [Claw sources](/cli/claws): each role directory contains a
+Bundled roles are [Template sources](/cli/templates): each role directory contains a
 `CLAW.md` manifest with identity and `SOUL.md` content, plus its operating
 program in `workspace/AGENTS.md`. Available roles:
 
@@ -107,9 +118,9 @@ unfinished bootstrap cannot adopt a role. OpenClaw checks completion before
 adding role files; rejected adoption leaves workspace files and agent config
 unchanged. Complete its bootstrap or choose a new workspace.
 
-With Claws enabled, the equivalent source path is
-`openclaw claws add docs/reference/templates/roles/<role>` from a source
-checkout. Follow the [Claw preview and consent flow](/cli/claws#inspect-and-preview)
+With Templates enabled, the equivalent source path is
+`openclaw templates add docs/reference/templates/roles/<role>` from a source
+checkout. Follow the [Template preview and consent flow](/cli/templates#inspect-and-preview)
 to add it. Use `agents team create` to wire the agents into a team.
 
 ### `agents team create`
@@ -141,8 +152,8 @@ The coordinator's `subagents.allowAgents` names the three specialist ids and
 `delegationMode` is `"prefer"`. Specialists receive `subagents.allowAgents: []`
 and instructions to return results without further delegation. This does not
 change global delegation defaults or tool policy. See [Team preset](/concepts/multi-agent#team-preset).
-Delegation remains team wiring in config; the role Claws will carry these
-settings once the separate Claw profile support lands.
+Delegation remains team wiring in config; the role Templates will carry these
+settings once the separate Template profile support lands.
 
 The coordinator is an explicit chat target. If
 `agents.defaults.systemAgent.agentId` is unset, team creation sets it to the
@@ -174,8 +185,8 @@ Options: `--force`, `--json`.
 - The only configured agent cannot be deleted.
 - Without `--force`, interactive confirmation is required (fails in a non-TTY session; re-run with `--force`).
 - Workspace, agent state, and session transcript directories move to Trash, not hard-deleted. If Trash is unavailable, the agent is removed from config but cleanup remains pending. After config publication succeeds, Gateway deletion returns `UNAVAILABLE` with the path failures in its error message and the existing `removed` and `failed` details attached to the error response. Offline deletion reports those path outcomes through `--json`.
-- Gateway deletion durably closes new sessions, turns, and automations, then aborts and waits for active turns and background memory/session work to settle before retiring storage. In a shared session store, deletion cancels only the deleted agent's work; surviving agents remain admitted. Already accepted storage work settles before retirement. Late session writes are refused as soon as draining starts without interrupting cleanup. Gateway-wide session views, health summaries, usage-cost reports and backfill, and terminal snapshots continue for surviving agents without reopening the deleting agent's store. The Gateway resumes interrupted deletions after restart, including journals from older versions.
-- While deletion cleanup is pending, new session writes remain refused even if draining or restart recovery fails. Resolve the reported failure and retry deletion. Workspace, agent-directory, and session-store relocation is also refused until cleanup finishes; updates that leave the storage targets unchanged remain available.
+- Gateway deletion durably closes new sessions, turns, and automations, then aborts and waits for active turns and background memory/session work to settle before retiring storage. In a shared session store, deletion cancels only the deleted agent's work; surviving agents remain admitted. Already accepted storage work settles before retirement. Late session writes are refused as soon as draining starts without interrupting cleanup. A terminal status update refused by deletion does not block the drain; deletion still waits for the turn's execution and cleanup to finish. Gateway-wide session views, health summaries, usage-cost reports and backfill, and terminal snapshots continue for surviving agents without reopening the deleting agent's store. The Gateway resumes interrupted deletions after restart, including journals from older versions.
+- While deletion cleanup is pending, new session writes remain refused even if draining or restart recovery fails. If deletion rolls back before removing the agent from config, it persists retained terminal updates before reopening the agent. Resolve the reported failure and retry deletion. Workspace, agent-directory, and session-store relocation is also refused until cleanup finishes; updates that leave the storage targets unchanged remain available.
 - Gateway deletion gives active runs 15 seconds to drain. If a run does not stop after cancellation, deletion reports its session ID and preserves the agent's configuration and storage. Wait for the named run to end, then retry deletion.
 - Deletion closes every terminal for the agent, including detached terminals and terminals opened without a chat session, and waits for their processes to exit before retiring storage. Terminals for surviving agents remain usable.
 - Independent background commands are also cancelled and drained when their agent is deleted. Idle MCP runtimes retire before storage, while active MCP views keep deletion pending; close those views and retry. Tracked browser tabs use the same best-effort cleanup as session deletion.
@@ -271,6 +282,7 @@ Each agent workspace can include an `IDENTITY.md` at the workspace root:
 
 - Example path: `~/.openclaw/workspace/IDENTITY.md`
 - `set-identity --from-identity` reads from the workspace root (or an explicit `--identity-file`).
+- Identity files must be valid UTF-8. Invalid encoding fails the import without changing the saved identity.
 
 Avatar paths resolve relative to the workspace root and cannot escape it, even through a symlink.
 
@@ -280,6 +292,8 @@ Avatar paths resolve relative to the workspace root and cannot escape it, even t
 
 - `--agent` or `--workspace` selects the target agent. If `--workspace` matches more than one agent, the command fails and asks you to pass `--agent`.
 - `--workspace` and `--identity-file` only select the agent or identity file. They do not change `agents.entries.*.workspace`.
+  Explicitly empty or whitespace-only values are rejected; omit the flag to use the default identity location.
+  Nonblank source paths preserve leading and trailing whitespace; quote them in your shell to select the exact file or directory.
   For `--json`, `workspace` is the resolved identity directory: the `--workspace` locator, the parent of `--identity-file`, or the agent's workspace when identity is read from there. It is `null` only when identity is supplied through flags with no identity directory. `storedWorkspace` reports the agent's persisted workspace.
 - Relocate an existing agent with `openclaw config set agents.entries.<id>.workspace <dir>`, then follow the CLI restart hint and confirm with `openclaw agents list`.
 - Local workspace-relative avatar image files are limited to 2 MB. HTTP(S) URLs and `data:` URIs are not checked against the local file-size limit.

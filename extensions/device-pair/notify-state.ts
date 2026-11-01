@@ -55,6 +55,4 @@ export function notifySubscriberStoreKey(
   );
 }
 
-export function notifyRequestStoreKey(requestId: string): string {
-  return hashStoreKey(requestId);
-}
+export { hashStoreKey as notifyRequestStoreKey };

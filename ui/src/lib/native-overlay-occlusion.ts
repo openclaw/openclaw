@@ -122,11 +122,10 @@ export function acquireNativeOverlaySurface(element: HTMLElement): () => void {
 }
 
 /** Keep a connected menu above native views through closing and owner removal. */
-export function occludeNativeBrowserSurface(element: HTMLElement) {
+export function occludeNativeBrowserSurface(element: HTMLElement, elements: SurfaceElements) {
   if (!hasNativeBrowserBridge() || !element.isConnected || occludingSurfaces.has(element)) {
     return;
   }
-  const elements = () => [element, ...element.querySelectorAll("*")];
   surfaces.add(elements);
   trackSurfaceLayout();
   const observer = new MutationObserver(() => {

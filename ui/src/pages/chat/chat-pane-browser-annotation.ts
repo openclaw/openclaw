@@ -29,6 +29,7 @@ export function receiveBrowserAnnotation(
   active: boolean,
   event: Event,
   pendingReadBytes: number,
+  replaceAttachments: (attachments: ChatPageHost["chatAttachments"]) => void,
 ): boolean {
   if (!state || !active || event.defaultPrevented || !(event instanceof CustomEvent)) {
     return false;
@@ -61,7 +62,7 @@ export function receiveBrowserAnnotation(
     return false;
   }
   event.preventDefault();
-  state.chatAttachments = [
+  replaceAttachments([
     ...state.chatAttachments,
     {
       ...attachment,
@@ -73,7 +74,6 @@ export function receiveBrowserAnnotation(
         inspectedElement: detail.card.inspectedElement,
       },
     },
-  ];
-  state.requestUpdate?.();
+  ]);
   return true;
 }

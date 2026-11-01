@@ -57,6 +57,7 @@ export async function completeComposerPrediction(params: {
   const result = await runUtilityCompletion(
     {
       ...prepared,
+      purpose: "composer-prediction",
       workspaceDir,
       agentHarnessRuntimeOverride: requestedRuntime,
       systemPrompt: [

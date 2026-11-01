@@ -25,10 +25,6 @@ import type { SystemAgentApprovalRequestPayload } from "./system-agent-approvals
 
 const PLUGIN_EXTERNAL_RESOLUTION_LABEL_MAX_LENGTH = 80;
 
-function normalizeDecisionList(decisions: readonly ApprovalDecision[]): ApprovalDecision[] {
-  return [...new Set<ApprovalDecision>([...decisions, "deny"])];
-}
-
 function sanitizeOptionalSingleLine(value: unknown): string | null {
   const normalized = normalizeOptionalString(value);
   return normalized ? sanitizeExecApprovalDisplayText(normalized) : null;
@@ -57,88 +53,95 @@ function normalizePluginExternalResolution(
   return { label, decisions: [...decisions] };
 }
 
-function buildExecApprovalPresentation(params: {
-  request: unknown;
-  allowedDecisions: readonly ApprovalDecision[];
-}): ApprovalPresentation | null {
-  const request = params.request as ExecApprovalRequestPayload;
-  const { commandText, commandPreview } = resolveExecApprovalCommandDisplay(request);
-  if (!commandText.trim()) {
+function buildApprovalPresentation(
+  kind: ApprovalKind,
+  input: unknown,
+  allowedDecisions: ApprovalDecision[],
+): ApprovalPresentation | null {
+  if (!isRecord(input)) {
     return null;
   }
-  const warningText =
-    typeof request.warningText === "string" && request.warningText.trim()
-      ? sanitizeExecApprovalWarningText(request.warningText)
+  if (kind === "exec") {
+    const request = input as ExecApprovalRequestPayload;
+    const { commandText, commandPreview } = resolveExecApprovalCommandDisplay(request);
+    if (!commandText.trim()) {
+      return null;
+    }
+    const warningText =
+      typeof request.warningText === "string" && request.warningText.trim()
+        ? sanitizeExecApprovalWarningText(request.warningText)
+        : null;
+    const scope = request.scope ? sanitizeApprovalScope(request.scope) : null;
+    return {
+      kind: "exec",
+      commandText,
+      commandPreview,
+      warningText,
+      ...(request.streamProposal
+        ? {
+            streamProposal: {
+              jobId: request.streamProposal.jobId,
+              name: sanitizeExecApprovalDisplayText(request.streamProposal.name),
+              operation: request.streamProposal.operation,
+            },
+          }
+        : {}),
+      host: sanitizeOptionalSingleLine(request.host),
+      nodeId: sanitizeOptionalSingleLine(request.nodeId),
+      agentId: sanitizeOptionalSingleLine(request.agentId),
+      ...(scope ? { scope } : {}),
+      allowedDecisions,
+    };
+  }
+  if (kind === "plugin") {
+    const request = input as PluginApprovalRequestPayload;
+    const rawTitle = normalizeOptionalString(request.title);
+    const rawDescription = normalizeOptionalString(request.description);
+    if (!rawTitle || !rawDescription) {
+      return null;
+    }
+    // Plugin text crosses every reviewer surface. Apply the same redaction and
+    // spoof-resistant escaping as exec prompts before enforcing wire-size limits.
+    const title = sanitizeExecApprovalDisplayText(rawTitle);
+    const description = sanitizeExecApprovalWarningText(rawDescription);
+    if (
+      exceedsApprovalTextLimit(title, PLUGIN_APPROVAL_TITLE_MAX_LENGTH) ||
+      exceedsApprovalTextLimit(description, PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH)
+    ) {
+      return null;
+    }
+    const severity =
+      request.severity === "info" ||
+      request.severity === "warning" ||
+      request.severity === "critical"
+        ? request.severity
+        : "warning";
+    const rawDetail = normalizeOptionalString(request.detail);
+    const detail = rawDetail
+      ? truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail))
       : null;
-  const scope = request.scope ? sanitizeApprovalScope(request.scope) : null;
-  return {
-    kind: "exec",
-    commandText,
-    commandPreview,
-    warningText,
-    host: sanitizeOptionalSingleLine(request.host),
-    nodeId: sanitizeOptionalSingleLine(request.nodeId),
-    agentId: sanitizeOptionalSingleLine(request.agentId),
-    ...(scope ? { scope } : {}),
-    allowedDecisions: normalizeDecisionList(params.allowedDecisions),
-  };
-}
-
-function buildPluginApprovalPresentation(params: {
-  request: unknown;
-  allowedDecisions: readonly ApprovalDecision[];
-}): ApprovalPresentation | null {
-  const request = params.request as PluginApprovalRequestPayload;
-  const rawTitle = normalizeOptionalString(request.title);
-  const rawDescription = normalizeOptionalString(request.description);
-  if (!rawTitle || !rawDescription) {
-    return null;
+    const scope = request.scope ? sanitizeApprovalScope(request.scope) : null;
+    let externalResolution: ReturnType<typeof normalizePluginExternalResolution>;
+    try {
+      externalResolution = normalizePluginExternalResolution(request.externalResolution);
+    } catch {
+      return null;
+    }
+    return {
+      kind: "plugin",
+      title,
+      description,
+      ...(detail ? { detail } : {}),
+      severity,
+      pluginId: sanitizeOptionalSingleLine(request.pluginId),
+      toolName: sanitizeOptionalSingleLine(request.toolName),
+      agentId: sanitizeOptionalSingleLine(request.agentId),
+      ...(scope ? { scope } : {}),
+      allowedDecisions,
+      ...(externalResolution ? { externalResolution } : {}),
+    };
   }
-  // Plugin text crosses every reviewer surface. Apply the same redaction and
-  // spoof-resistant escaping as exec prompts before enforcing wire-size limits.
-  const title = sanitizeExecApprovalDisplayText(rawTitle);
-  const description = sanitizeExecApprovalWarningText(rawDescription);
-  if (
-    exceedsApprovalTextLimit(title, PLUGIN_APPROVAL_TITLE_MAX_LENGTH) ||
-    exceedsApprovalTextLimit(description, PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH)
-  ) {
-    return null;
-  }
-  const severity =
-    request.severity === "info" || request.severity === "warning" || request.severity === "critical"
-      ? request.severity
-      : "warning";
-  const rawDetail = normalizeOptionalString(request.detail);
-  const detail = rawDetail
-    ? truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail))
-    : null;
-  const scope = request.scope ? sanitizeApprovalScope(request.scope) : null;
-  let externalResolution: ReturnType<typeof normalizePluginExternalResolution>;
-  try {
-    externalResolution = normalizePluginExternalResolution(request.externalResolution);
-  } catch {
-    return null;
-  }
-  return {
-    kind: "plugin",
-    title,
-    description,
-    ...(detail ? { detail } : {}),
-    severity,
-    pluginId: sanitizeOptionalSingleLine(request.pluginId),
-    toolName: sanitizeOptionalSingleLine(request.toolName),
-    agentId: sanitizeOptionalSingleLine(request.agentId),
-    ...(scope ? { scope } : {}),
-    allowedDecisions: normalizeDecisionList(params.allowedDecisions),
-    ...(externalResolution ? { externalResolution } : {}),
-  };
-}
-
-function buildSystemAgentApprovalPresentation(params: {
-  request: unknown;
-  allowedDecisions: readonly ApprovalDecision[];
-}): ApprovalPresentation | null {
-  const request = params.request as SystemAgentApprovalRequestPayload;
+  const request = input as SystemAgentApprovalRequestPayload;
   const title = normalizeOptionalString(request.title);
   const description = normalizeOptionalString(request.description);
   if (!title || !description || !/^[a-f0-9]{64}$/.test(request.proposalHash)) {
@@ -154,19 +157,28 @@ function buildSystemAgentApprovalPresentation(params: {
   };
 }
 
-/** Returns the safe cross-surface presentation, or null when no prompt can be rendered. */
-export function buildApprovalPresentation(params: {
-  kind: ApprovalKind;
-  request: unknown;
-  allowedDecisions: readonly ApprovalDecision[];
-}): ApprovalPresentation | null {
-  if (!isRecord(params.request)) {
-    return null;
+/** Prepares the validated reviewer projection before approval persistence. */
+export function prepareExecApprovalPresentation(
+  kind: ApprovalKind,
+  request: unknown,
+  decisions: readonly ApprovalDecision[] | undefined,
+) {
+  const normalized: ApprovalDecision[] = [];
+  for (const decision of decisions ?? ["allow-once", "allow-always", "deny"]) {
+    if (
+      (decision === "allow-once" || decision === "allow-always" || decision === "deny") &&
+      !normalized.includes(decision)
+    ) {
+      normalized.push(decision);
+    }
   }
-  if (params.kind === "exec") {
-    return buildExecApprovalPresentation(params);
+  // Denial remains valid even when the request supplies malformed allowed decisions.
+  if (!normalized.includes("deny")) {
+    normalized.push("deny");
   }
-  return params.kind === "plugin"
-    ? buildPluginApprovalPresentation(params)
-    : buildSystemAgentApprovalPresentation(params);
+  const presentation = buildApprovalPresentation(kind, request, normalized);
+  if (!presentation) {
+    throw new Error("approval cannot be persisted without a valid reviewer presentation");
+  }
+  return presentation;
 }

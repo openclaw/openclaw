@@ -3,11 +3,13 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "@openclaw/normalization-core/number-coercion";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import { observeAgentRunApprovalWait } from "./agent-run-approval-wait.js";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
 import { runBridgeRequest } from "./code-mode-bridge.js";
@@ -56,8 +58,6 @@ type CodeModeRunState = {
   continuation: CodeModeExecutorContinuation;
   pending: PendingBridgeState[];
   settlementMode: CodeModeSettlementMode;
-  // True only when every future bridge call is enforced read-only before execution.
-  replaySafe: boolean;
   output: CodeModeOutputState;
   expiresAt: number;
   agentWaitRetainUntil?: number;
@@ -111,6 +111,7 @@ export function createCodeModeRunOwner(
   let continuation: CodeModeExecutorContinuation | undefined;
   let closing: Promise<void> | undefined;
   const executions = new Set<Promise<CodeModeWorkerResult>>();
+  const trackExecution = createPendingPromiseTracker(executions);
   const disposals = new Map<CodeModeExecutorContinuation, Promise<void>>();
   const cleanupFailures = new Map<CodeModeExecutorContinuation, unknown>();
   const disposeContinuation = (value: CodeModeExecutorContinuation): Promise<void> => {
@@ -143,12 +144,7 @@ export function createCodeModeRunOwner(
       retired.push(disposeContinuation(next));
     }
     const results = await Promise.allSettled(retired);
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (failures.length) {
-      throw new AggregateError(failures, "Code Mode continuation cleanup failed");
-    }
+    throwSettledAggregate(results, "Code Mode continuation cleanup failed");
   };
   const close = (reason?: unknown): Promise<void> => {
     if (closing) {
@@ -240,14 +236,12 @@ export function createCodeModeRunOwner(
           await retainContinuation(result.status === "waiting" ? result.continuation : undefined);
           return result;
         });
-      executions.add(execution);
-      void execution.then(
-        () => executions.delete(execution),
-        () => executions.delete(execution),
-      );
-      return execution;
+      return trackExecution(execution);
     },
     approvalWait,
+    releaseCall() {
+      releaseCall();
+    },
     bindCall(callSignal?: AbortSignal): AbortSignal {
       releaseCall();
       if (signal.aborted) {
@@ -300,13 +294,13 @@ function scheduleActiveRunExpiry(): void {
         removeExpiredRuns();
         scheduleActiveRunExpiry();
       },
-      Math.max(1, nextExpiresAt - Date.now()),
+      Math.max(1, nextExpiresAt - performance.now()),
     ),
   );
-  activeRunExpiryTimer.unref?.();
+  activeRunExpiryTimer.unref();
 }
 
-export function removeExpiredRuns(now = Date.now()): void {
+export function removeExpiredRuns(now = Math.floor(performance.now())): void {
   for (const [runId, state] of activeRuns) {
     if (!isFutureDateTimestampMs(state.expiresAt, { nowMs: now })) {
       // Parked collectors extend idle TTL, bounded so a lost terminal event cannot pin all slots.
@@ -344,12 +338,7 @@ export async function disposeAllCodeModeRuns(): Promise<void> {
   resumingRunIds.clear();
   scheduleActiveRunExpiry();
   const results = await Promise.allSettled(closing);
-  const failures = results.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (failures.length) {
-    throw new AggregateError(failures, "Code Mode runs failed to close");
-  }
+  throwSettledAggregate(results, "Code Mode runs failed to close");
 }
 
 /** Abort each bridge call whose result has not already reached its guest. */
@@ -485,50 +474,6 @@ export function reserveActiveRunSlot(ownedRunId?: string): () => void {
   };
 }
 
-export function pendingBridgeRequestsReplaySafe(
-  pending: readonly PendingBridgeRequest[],
-  runtime: ToolSearchRuntime,
-  catalogProjection: CodeModeCatalogProjection,
-): boolean {
-  return pending.every((request) =>
-    isPendingBridgeRequestReplaySafe(request, runtime, catalogProjection),
-  );
-}
-
-function isPendingBridgeRequestReplaySafe(
-  request: PendingBridgeRequest,
-  runtime: ToolSearchRuntime,
-  catalogProjection: CodeModeCatalogProjection,
-): boolean {
-  if (
-    request.method === "search" ||
-    request.method === "describe" ||
-    request.method === "yield" ||
-    request.method === "agentSpawn" ||
-    request.method === "agentWait" ||
-    request.method === "skillsList" ||
-    request.method === "skillsSearch" ||
-    request.method === "skillsRead" ||
-    request.method === "sleep"
-  ) {
-    return true;
-  }
-  if (request.method === "nodes") {
-    return request.args[0] === "list" || request.args[0] === "get";
-  }
-  // Saved references are transient, and deletion cannot be replayed safely.
-  // Result operations intentionally stay outside restart-safe execution.
-  if (request.method !== "callValue") {
-    return false;
-  }
-  const callableName = Array.isArray(request.args) ? request.args[0] : undefined;
-  if (typeof callableName !== "string") {
-    return false;
-  }
-  const binding = catalogProjection.byCallableName.get(callableName);
-  return binding ? runtime.isReplaySafeExactId(binding.id) : false;
-}
-
 export function createPendingBridgeStates(
   pendingRequests: PendingBridgeRequest[],
   params: Omit<Parameters<typeof runBridgeRequest>[0], "request" | "reply" | "signal"> & {
@@ -599,7 +544,7 @@ export function createPendingBridgeStates(
         const active = activeRuns.get(params.activeRunId);
         if (active?.pending.includes(state)) {
           const renewed = resolveExpiresAtMsFromDurationSeconds(active.config.snapshotTtlSeconds, {
-            nowMs: Date.now(),
+            nowMs: Math.floor(performance.now()),
           });
           if (renewed !== undefined) {
             active.expiresAt = renewed;
@@ -625,7 +570,7 @@ export function storeSuspendedRun(
     cancelPendingBridgeStates(params.pending);
     return codeModeAbortedResult(params);
   }
-  const now = Date.now();
+  const now = Math.floor(performance.now());
   const expiresAt = resolveExpiresAtMsFromDurationSeconds(params.config.snapshotTtlSeconds, {
     nowMs: now,
   });
@@ -648,7 +593,6 @@ export function storeSuspendedRun(
       runId,
       reason: codeModeWaitingReason(params.pending),
       pendingToolCalls: pendingToolCalls(params.pending),
-      replaySafe: params.replaySafe,
       telemetry: telemetry(params.runtime),
     },
     {},
@@ -657,13 +601,16 @@ export function storeSuspendedRun(
   // A result that cannot expose its continuation must not leave an unreachable parked cell.
   activeRuns.set(runId, state);
   scheduleActiveRunExpiry();
-  return recordCodeModeToolOutcome(result, result, params.pending);
+  const recorded = recordCodeModeToolOutcome(result, result, params.pending);
+  // Successful observers can close before the next wait. Parked work remains
+  // owned by the parent run, catalog and expiry, not that completed call.
+  params.owner.releaseCall();
+  return recorded;
 }
 
 export function codeModeAbortedResult(params: {
   bridgeDispatch: CodeModeBridgeDispatchState;
   output: CodeModeOutputState;
-  replaySafe: boolean;
   runtime: ToolSearchRuntime;
 }) {
   return params.output.takeResult(
@@ -672,7 +619,6 @@ export function codeModeAbortedResult(params: {
       code: "aborted" as const,
       failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("host" as const),
       bridgeDispatchStarted: params.bridgeDispatch.started,
-      replaySafe: params.replaySafe,
       telemetry: telemetry(params.runtime),
     },
     { error: "code mode execution aborted" },

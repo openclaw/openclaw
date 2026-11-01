@@ -27,7 +27,11 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
   ["context_engine_turn_outbox", ["idx_agent_context_engine_turn_outbox_engine"]],
   [
     "conversation_deliveries",
-    ["idx_agent_conversation_deliveries_reply", "idx_agent_conversation_deliveries_updated"],
+    [
+      "idx_agent_conversation_deliveries_reply",
+      "idx_agent_conversation_deliveries_source_session",
+      "idx_agent_conversation_deliveries_updated",
+    ],
   ],
   [
     "conversations",
@@ -59,7 +63,7 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
   ],
   ["session_entry_snapshots", []],
   ["session_goal_operations", ["idx_agent_session_goal_operations_expiry"]],
-  ["session_input_completions", []],
+  ["session_input_completions", ["idx_agent_session_input_completions_session_key"]],
   ["session_key_contract", []],
   ["session_members", ["idx_agent_session_members_identity"]],
   [
@@ -71,7 +75,6 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
       "idx_agent_session_nodes_entry_not_valid",
       "idx_agent_session_nodes_entry_valid_pending",
       "idx_agent_session_nodes_label",
-      "idx_agent_session_nodes_last_interaction_at",
       "idx_agent_session_nodes_parent_session_key",
       "idx_agent_session_nodes_spawned_by",
       "idx_agent_session_nodes_status",
@@ -81,7 +84,7 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
   ["session_participants", []],
   ["session_pending_inputs", ["idx_agent_session_pending_inputs_session"]],
   ["session_progress_cards", []],
-  ["session_reactions", ["idx_agent_session_reactions_message"]],
+  ["session_reactions", []],
   [
     "session_suggestions",
     [
@@ -104,6 +107,7 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
       "idx_agent_session_transcript_archives_retention",
     ],
   ],
+  ["session_transcript_cold_archive_chunks", []],
   ["session_transcript_cold_archives", []],
   ["session_transcript_fts", []],
   ["session_transcript_fts_config", []],
@@ -140,12 +144,18 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
   ["transcript_events", []],
   ["transcript_rewrite_watermarks", []],
   ["context_engine_turn_outbox", ["idx_agent_context_engine_turn_outbox_engine"]],
+  [
+    "conversation_deliveries",
+    ["idx_agent_conversation_deliveries_reply", "idx_agent_conversation_deliveries_updated"],
+  ],
   ["memory_embedding_cache", ["idx_memory_embedding_cache_updated_at"]],
   ["memory_entry_origins", []],
   [
     "memory_index_chunks",
     ["idx_memory_index_chunks_path_source", "idx_memory_index_chunks_source"],
   ],
+  ["memory_index_sources", ["idx_memory_index_sources_source"]],
+  ["session_input_completions", []],
   [
     "session_nodes",
     [
@@ -163,6 +173,7 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
     ],
   ],
   ["session_participants", []],
+  ["session_reactions", ["idx_agent_session_reactions_message"]],
   [
     "session_windows",
     [
@@ -172,6 +183,7 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
       "idx_agent_session_windows_updated_at",
     ],
   ],
+  ["trajectory_runtime_events", ["idx_agent_trajectory_runtime_run"]],
   [
     "transcript_event_identities",
     [
@@ -210,6 +222,10 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
   ],
   ["session_transcript_fts_rows", ["idx_agent_transcript_fts_rows_session"]],
   ["session_transcript_index_state", []],
+  [
+    "memory_index_chunks",
+    ["idx_memory_index_chunks_path_source", "idx_memory_index_chunks_source"],
+  ],
   ["transcript_events", []],
   [
     "session_nodes",
@@ -244,17 +260,34 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
     ],
   ],
   ["context_engine_turn_outbox", ["idx_agent_context_engine_turn_outbox_engine"]],
+  [
+    "session_nodes",
+    [
+      "idx_agent_session_nodes_active",
+      "idx_agent_session_nodes_archived_at",
+      "idx_agent_session_nodes_current_session_id",
+      "idx_agent_session_nodes_entry_not_valid",
+      "idx_agent_session_nodes_entry_valid_pending",
+      "idx_agent_session_nodes_label",
+      "idx_agent_session_nodes_last_interaction_at",
+      "idx_agent_session_nodes_parent_session_key",
+      "idx_agent_session_nodes_spawned_by",
+      "idx_agent_session_nodes_status",
+      "idx_agent_session_nodes_updated_at",
+    ],
+  ],
+  ["transcript_events", []],
   ["state_leases", []],
 ];
 const fingerprints: Readonly<Record<string, CatalogReference>> = {
-  // agent, agent-version-28
-  b2e17ebad450773253e5dddaeb87e6baef26b1c20a48982ed9df7ffea4210511: [
+  // agent, agent-version-39
+  a67326c9ddb50583c3b76b9854324d6a42a4d94b87b6aa2285cefb42a9ff1f27: [
     "agent",
-    "a48c6c4d7bc63bb0c14eb2010893f31aa216e4a0ee135e40c81598a39c64b61f",
+    "4a73468ea8dc4b374449c5a8455df0b5b161d9028d4e8a925763d6805dee8664",
     [
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
       26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
-      49, 50, 51, 52, 53, 54, 55,
+      49, 50, 51, 52, 53, 54, 55, 56,
     ],
     [],
   ],
@@ -263,9 +296,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     "agent-version-1",
     "0ac0c6eca2bd401dba88942343f73a31b0c1fa320b4ef72672a421775667f341",
     [
-      0, 1, 2, 3, 4, 5, 56, 7, 8, 9, 57, 58, 12, 13, 59, 15, 16, 17, 18, 19, 20, 22, 24, 25, 26, 27,
-      60, 61, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 44, 62, 46, 47, 48, 49, 50, 51,
-      52, 63, 64, 55,
+      0, 1, 2, 3, 4, 5, 57, 58, 8, 9, 59, 60, 12, 13, 61, 15, 62, 17, 18, 19, 20, 22, 24, 63, 26,
+      27, 64, 65, 30, 31, 66, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 45, 67, 47, 48, 49, 50, 51,
+      52, 68, 69, 70, 56,
     ],
     [],
   ],
@@ -274,9 +307,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     "agent-version-18",
     "516c6a0cbc9a63134e84a65c3af806fbc6b526292c614c84109f4a2b2c106afc",
     [
-      0, 1, 2, 3, 4, 5, 56, 7, 8, 9, 57, 58, 12, 13, 59, 15, 16, 17, 18, 19, 20, 22, 24, 25, 26, 27,
-      60, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 44, 62, 46, 47, 48, 49, 50, 51,
-      52, 63, 64, 55,
+      0, 1, 2, 3, 4, 5, 57, 58, 8, 9, 59, 60, 12, 13, 61, 15, 62, 17, 18, 19, 20, 22, 24, 63, 26,
+      27, 64, 29, 30, 31, 66, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 45, 67, 47, 48, 49, 50, 51,
+      52, 68, 69, 70, 56,
     ],
     [],
   ],
@@ -285,9 +318,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     "agent-version-21",
     "fd83bd56e757e27046bc16f16e0dfd056a4bdb4c187672807f9286089fd4c130",
     [
-      0, 1, 2, 3, 4, 5, 56, 7, 8, 9, 57, 58, 12, 13, 59, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 65,
-      27, 66, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 44, 67, 46, 47, 48, 49, 50,
-      51, 52, 63, 64, 55,
+      0, 1, 2, 3, 4, 5, 57, 58, 8, 9, 59, 60, 12, 13, 61, 15, 62, 17, 18, 19, 20, 21, 22, 24, 63,
+      71, 27, 72, 29, 30, 31, 66, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 45, 73, 47, 48, 49, 50,
+      51, 52, 68, 69, 70, 56,
     ],
     [],
   ],
@@ -296,9 +329,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     "agent-version-22",
     "1571750d60d036d5b09e53c9d062396551d72f79642ee52ae104e9213da8592c",
     [
-      0, 1, 2, 3, 4, 5, 56, 7, 8, 9, 57, 58, 12, 13, 59, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 65,
-      27, 66, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 68, 69, 67, 46, 47, 48, 49,
-      50, 51, 52, 63, 64, 55,
+      0, 1, 2, 3, 4, 5, 57, 58, 8, 9, 59, 60, 12, 13, 61, 15, 62, 17, 18, 19, 20, 21, 22, 24, 63,
+      71, 27, 72, 29, 30, 31, 66, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 74, 75, 73, 47, 48, 49,
+      50, 51, 52, 68, 69, 70, 56,
     ],
     [],
   ],
@@ -307,9 +340,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     "agent-version-23",
     "4cd5cf45ce55fd199d3025021381ad10187c3a5db5340aec56aa108c5a315611",
     [
-      0, 1, 2, 3, 4, 5, 56, 7, 8, 9, 10, 58, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 65,
-      27, 66, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 67, 46, 47, 48, 49,
-      50, 51, 52, 63, 70, 55,
+      0, 1, 2, 3, 4, 5, 57, 58, 8, 9, 10, 60, 12, 13, 76, 15, 62, 17, 18, 19, 20, 21, 22, 24, 63,
+      71, 27, 72, 29, 30, 31, 66, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 44, 45, 73, 47, 48, 49,
+      50, 51, 52, 68, 69, 77, 56,
     ],
     [],
   ],
@@ -318,9 +351,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     "agent-version-24",
     "7ba969c7ed61eb3596c809150d7c46676bfb3d8310052ca5f07141762b345e9b",
     [
-      0, 1, 2, 3, 4, 5, 56, 7, 8, 9, 10, 58, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-      65, 27, 71, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 67, 46, 47, 48,
-      49, 50, 51, 52, 63, 70, 55,
+      0, 1, 2, 3, 4, 5, 57, 58, 8, 9, 10, 60, 12, 13, 76, 15, 62, 17, 18, 19, 20, 21, 22, 23, 24,
+      63, 71, 27, 78, 29, 30, 31, 66, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 44, 45, 73, 47, 48,
+      49, 50, 51, 52, 68, 69, 77, 56,
     ],
     [],
   ],
@@ -329,9 +362,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     "agent-version-25",
     "f4118fc6b09e2d36542335eec66c82e9846b7f50e69e56076814dea6e1244aeb",
     [
-      0, 1, 2, 3, 4, 5, 56, 7, 8, 9, 10, 58, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-      26, 27, 72, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 62, 46, 47, 48,
-      49, 50, 51, 52, 63, 70, 55,
+      0, 1, 2, 3, 4, 5, 57, 58, 8, 9, 10, 60, 12, 13, 76, 15, 62, 17, 18, 19, 20, 21, 22, 23, 24,
+      63, 26, 27, 79, 29, 30, 31, 66, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 44, 45, 67, 47, 48,
+      49, 50, 51, 52, 68, 69, 77, 56,
     ],
     [],
   ],
@@ -340,9 +373,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     "agent-version-26",
     "86dbc086643d83045d9397da12e5e7a5d197b08a10a8aea4942ee7473f03d9ee",
     [
-      0, 1, 2, 3, 4, 5, 73, 7, 8, 9, 10, 58, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-      26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 62, 46, 47, 48,
-      49, 50, 51, 52, 63, 54, 55,
+      0, 1, 2, 3, 4, 5, 80, 58, 8, 9, 10, 60, 12, 13, 76, 15, 62, 17, 18, 19, 20, 21, 22, 23, 24,
+      63, 26, 27, 81, 29, 30, 31, 66, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 44, 45, 67, 47, 48,
+      49, 50, 51, 52, 68, 69, 82, 56,
     ],
     [],
   ],
@@ -351,9 +384,64 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     "agent-version-27",
     "40d0b84e2467b65ff57c4e8171af1a6b0cc54e0e1b5602b6abbe53fc8c10e151",
     [
-      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 58, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-      26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 62, 46, 47, 48,
-      49, 50, 51, 52, 63, 54, 55,
+      0, 1, 2, 3, 4, 5, 6, 58, 8, 9, 10, 60, 12, 13, 76, 15, 62, 17, 18, 19, 20, 21, 22, 23, 24, 63,
+      26, 27, 81, 29, 30, 31, 66, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 44, 45, 67, 47, 48, 49,
+      50, 51, 52, 68, 69, 82, 56,
+    ],
+    [],
+  ],
+  // agent-version-28
+  b2e17ebad450773253e5dddaeb87e6baef26b1c20a48982ed9df7ffea4210511: [
+    "agent-version-28",
+    "a48c6c4d7bc63bb0c14eb2010893f31aa216e4a0ee135e40c81598a39c64b61f",
+    [
+      0, 1, 2, 3, 4, 5, 6, 58, 8, 9, 10, 11, 12, 13, 76, 15, 62, 17, 18, 19, 20, 21, 22, 23, 24, 63,
+      26, 27, 81, 29, 30, 31, 66, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+      50, 51, 52, 68, 54, 82, 56,
+    ],
+    [],
+  ],
+  // agent-version-29
+  abf65b8c18ccb84f0e65b8e4faa6fef6abc23b6bab5e93086339f640d2146082: [
+    "agent-version-29",
+    "ede47c9558c7c22dfd89ed56f0bc28a9d22e512aa69af0ae3acacc989337dc0e",
+    [
+      0, 1, 2, 3, 4, 5, 6, 58, 8, 9, 10, 11, 12, 13, 76, 15, 62, 17, 18, 19, 20, 21, 22, 23, 24, 63,
+      26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+      50, 51, 52, 68, 54, 82, 56,
+    ],
+    [],
+  ],
+  // agent-version-30
+  dbab54723ad6be5e0146085df0789ef92d03b867c53bed915d804fb4c60b3068: [
+    "agent-version-30",
+    "afa4044fdeabdb3042002c27a39be73d1f2edf8c4135515266cf6613adc7f0ba",
+    [
+      0, 1, 2, 3, 4, 5, 6, 58, 8, 9, 10, 11, 12, 13, 76, 15, 62, 17, 18, 19, 20, 21, 22, 23, 24, 63,
+      26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+      50, 51, 52, 53, 54, 82, 56,
+    ],
+    [],
+  ],
+  // agent-version-31, agent-version-32, agent-version-33, agent-version-34, agent-version-35, agent-version-36
+  "57f4523156caf6b8446afbd95e0fede01f1c917771242cd05c61c1b48b7e157e": [
+    "agent-version-31",
+    "4ac0d88399760668d6021213299ff6897bcfd672d2373d5c47b6f0afa31e04a1",
+    [
+      0, 1, 2, 3, 4, 5, 6, 58, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 63,
+      26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+      50, 51, 52, 53, 54, 82, 56,
+    ],
+    [],
+  ],
+  // agent-version-37, agent-version-38
+  "9ffa671518cafee606f88dd17bfdfa9792d9deece5f6773e3cae4de2c10fc84b": [
+    "agent-version-37",
+    "08f828422ad38a4ad92a46abdd793fd45ce6c9e09e72d83177130079588ea41e",
+    [
+      0, 1, 2, 3, 4, 5, 6, 58, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 63,
+      26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
+      49, 50, 51, 52, 53, 54, 82, 56,
     ],
     [],
   ],
@@ -362,8 +450,8 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     "agent-v14-core",
     "14b30834a4c01ee92da4b3390aebbd49d9a8f4d0fb3a40fb517b8093ffb11c76",
     [
-      0, 1, 2, 5, 56, 7, 8, 9, 57, 58, 12, 13, 59, 15, 16, 17, 18, 19, 20, 22, 24, 25, 26, 60, 61,
-      30, 34, 35, 36, 37, 38, 39, 40, 41, 42, 44, 62, 46, 47, 48, 49, 50, 51, 52, 63, 64, 55,
+      0, 1, 2, 5, 57, 58, 8, 9, 59, 60, 12, 13, 61, 15, 62, 17, 18, 19, 20, 22, 24, 63, 26, 64, 65,
+      30, 34, 35, 37, 38, 39, 40, 41, 42, 43, 45, 67, 47, 48, 49, 50, 51, 52, 68, 69, 70, 56,
     ],
     [],
   ],
@@ -378,7 +466,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   be5d39d4389597fcfe2942f51a97d5b1f4e0aa1d6b184677e6abcedc162a2cf0: [
     "agent-v14-additive",
     "08e596f53eef1390bb3048a8c3807ea2413fde157899e0feb314aeebeb26e132",
-    [32, 33],
+    [66, 33],
     [],
   ],
   // agent-v14-board
@@ -399,28 +487,28 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   fdc21b6dc361c491311c11d91fbda296535a9c34dd20f0ab03b949b8a698ded0: [
     "agent-retired-state-leases",
     "6117e088b6b48fe1007de8ef29868981f820404cc3be99040c2bcd899902b7cc",
-    [74],
+    [83],
     [],
   ],
   // agent-legacy-participants
   c45b82b3c3aa8ecc3b2cc09dcf38bd568edfa8305f54b5bb959c975a55571ece: [
     "agent-legacy-participants",
     "30851780a54c5bd9b7bd3be1f420fc2b3e61839901e1a726e6cb24a10f8d4276",
-    [61],
+    [65],
     [],
   ],
   // agent-deployed-fts-rows
   "6ce6f0ae658b1b77759d335e07e75d9371e27363c998bbf9b0e5fc5a132bc4cb": [
     "agent-deployed-fts-rows",
     "81df0b00eeb5ae756a6acce81b099c432f6127233d47582dd60ca32eed304768",
-    [68],
+    [74],
     [],
   ],
   // agent-legacy-transcript-events
   "0e9e5f47efa71d187ed505aee8d1e423865a5de8df5387a15759194561307e72": [
     "agent-legacy-transcript-events",
     "6e5d060cc60439ef893bf9bcf395552be213733a1021f82d9ea1173e6103ed2e",
-    [64],
+    [70],
     [],
   ],
 };

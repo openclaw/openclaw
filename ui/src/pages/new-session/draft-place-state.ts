@@ -3,7 +3,7 @@ import type { FsListDirResult } from "../../../../packages/gateway-protocol/src/
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import { listSelectableAgents } from "../../lib/agents/display.ts";
+import { findSelectableAgent, listSelectableAgents } from "../../lib/agents/display.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
@@ -127,7 +127,7 @@ export class DraftPlaceState {
 
   private readonly selection = createDraftPlaceRestoreState();
   readonly modelControl: NewSessionModelControl;
-  private readonly repositoryState: DraftRepositoryStateOwner;
+  readonly repositoryState: DraftRepositoryStateOwner;
   private readonly folderValidation: DraftRestoredFolderValidation;
 
   constructor(
@@ -350,8 +350,8 @@ export class DraftPlaceState {
   }
 
   selectedAgent() {
-    const agentId = normalizeAgentId(this.agentIdValue);
-    return this.agents().find((agent) => normalizeAgentId(agent.id) === agentId);
+    const agents = this.read().context?.agents.state.agentsList?.agents ?? [];
+    return findSelectableAgent(agents, this.agentIdValue);
   }
 
   devicePlacementRuntime() {

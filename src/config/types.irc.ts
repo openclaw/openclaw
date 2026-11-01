@@ -1,6 +1,7 @@
 import type {
   CommonChannelGroupConfig,
   CommonChannelMessagingConfig,
+  MultiAccountChannelConfig,
 } from "./types.channel-messaging-common.js";
 
 export type IrcAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPatterns"> & {
@@ -42,8 +43,4 @@ export type IrcAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPatter
   groups?: Record<string, CommonChannelGroupConfig>;
 };
 
-export type IrcConfig = {
-  accounts?: Record<string, IrcAccountConfig>;
-  /** Optional default account id when multiple accounts are configured. */
-  defaultAccount?: string;
-} & IrcAccountConfig;
+export type IrcConfig = MultiAccountChannelConfig<IrcAccountConfig>;

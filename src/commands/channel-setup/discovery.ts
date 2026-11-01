@@ -14,7 +14,6 @@ import {
   listTrustedChannelPluginCatalogEntries,
 } from "./trusted-catalog.js";
 
-/** Return true when channel metadata should appear in setup/onboarding choices. */
 export function shouldShowChannelInSetup(meta: Pick<ChannelMeta, "exposure">): boolean {
   return isChannelVisibleInSetup(meta);
 }
@@ -28,7 +27,6 @@ export function isCatalogChannelInstalled(params: {
   cfg: OpenClawConfig;
   entry: ChannelPluginCatalogEntry;
   workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
 }): boolean {
   return listManifestInstalledChannelIds(params).has(params.entry.id as ChannelChoice);
 }

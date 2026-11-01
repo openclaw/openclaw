@@ -4,6 +4,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Primary accent color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",
   "ui.prefs.accent":
     "Control UI accent: #RRGGBB for a custom color, or 'theme' for the selected theme’s palette. Overrides ui.seamColor; clear it to inherit the configured accent color or theme default.",
+  "ui.prefs.locale":
+    "Language for the Control UI, as a supported locale id such as en, de, or zh-CN. Leave unset to follow the browser or system language. Set it from Settings → Appearance → Language. It does not set the assistant's timezone (agents.defaults.userTimezone).",
   tui: "Terminal UI display settings. Use this section for terminal-only presentation preferences without changing Gateway or other UI behavior.",
   "tui.footer":
     "Terminal UI footer display settings. Keep optional context compact so session, model, goal, and token information stay readable.",
@@ -12,7 +14,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "plugins.enabled":
     "Enable or disable plugin/extension loading globally during startup and config reload (default: true). Keep enabled only when extension capabilities are required by your deployment.",
   "plugins.allow":
-    "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Configured bundled chat channels can still activate their bundled plugin when the channel is explicitly enabled in config. Use this to enforce approved extension inventories in controlled environments.",
+    "Optional allowlist of plugin IDs; a non-empty list restricts loading, except for the selected memory plugin (including the default memory-core selection), equal-ID context-engine plugins, and explicitly enabled bundled chat channels. Differently named context-engine owners must be independently enabled or allowlisted and included in any non-empty allowlist. Plugin-owned tools outside the allowlist remain unavailable. Use plugins.deny or plugins.entries.<id>.enabled: false to block a plugin regardless of slot selection.",
   "plugins.deny":
     "Optional denylist of plugin IDs that are blocked even if allowlists or paths include them. Use deny rules for emergency rollback and hard blocks on risky plugins.",
   "plugins.load":
@@ -22,9 +24,9 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "plugins.slots":
     "Selects which plugins own exclusive runtime slots such as memory so only one plugin provides that capability. Use explicit slot ownership to avoid overlapping providers with conflicting behavior.",
   "plugins.slots.memory":
-    'Select the active memory plugin by id, or "none" to disable memory plugins.',
+    'Select the active memory plugin by id (default: memory-core), or "none" to disable memory plugins. The selected plugin can load even when plugins.allow omits it; plugins.deny and explicit per-plugin disable still take precedence.',
   "plugins.slots.contextEngine":
-    "Selects the active context engine plugin by id so one plugin provides context orchestration behavior.",
+    "Selects the registered context engine ID. Plugins with different plugin and engine IDs declare contextEngineIds in their manifest so OpenClaw can load the owner.",
   "plugins.entries":
     "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
   "plugins.entries.*.enabled":
@@ -71,13 +73,11 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
   "agents.defaults.embeddedAgent.cyberFailover":
-    "Automatic Daybreak escalation for replay-safe OpenAI cyber-policy refusals in the embedded runtime.",
+    "Automatic same-model Daybreak escalation for replay-safe OpenAI cyber-policy refusals in the embedded runtime, subject to existing access and policy checks.",
   "agents.defaults.embeddedAgent.cyberFailover.mode":
     'Enable automatic escalation ("auto", default) or keep provider refusals terminal ("off").',
-  "agents.defaults.embeddedAgent.cyberFailover.model":
-    "Provider/model target used for automatic cyber-policy escalation.",
   "agents.defaults.embeddedAgent.cyberFailover.cooloffMs":
-    "How long an unavailable escalation target is skipped for the current session.",
+    "How long unavailable Daybreak access for the active model is skipped for the current session.",
   "agents.defaults.utilityModel":
     "Optional lower-cost model (provider/model, alias, or { primary, fallbacks }) for short internal tasks such as generated titles and progress narration. Utility fallbacks use the same retry, alias resolution, and model-selection policy as configured model fallbacks, independently of model.fallbacks. Unset derives the primary provider's declared small model when available (otherwise the primary model); set to an empty string to disable utility routing.",
   "agents.defaults.utilityModel.primary": "Primary utility model (provider/model or alias).",
@@ -97,7 +97,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.entries.*.modelPolicy":
     "Per-agent model override policy. An explicit allow list replaces the default policy for this agent.",
   "agents.entries.*.modelPolicy.allow":
-    'Allowed model override refs for this agent. Accepts aliases, full "provider/model" refs, and trailing prefix wildcards such as "provider/*" or "provider/namespace/*"; empty permits any model.',
+    'Allowed model override refs for this agent. Accepts aliases, full "provider/model" refs, and trailing prefix wildcards such as "provider/*", "provider/namespace/*" or "provider/family-*"; empty permits any model.',
   "agents.entries.*.models.*.agentRuntime":
     "Optional per-model runtime policy for this agent. Use this for agent-specific model exceptions instead of setting a whole-agent runtime.",
   "agents.entries.*.models.*.agentRuntime.id":
@@ -161,9 +161,9 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.qualityGuard.maxRetries":
     "Maximum number of regeneration retries after a failed safeguard summary quality audit. Use small values to bound extra latency and token cost.",
   "agents.defaults.compaction.midTurnPrecheck":
-    "Optional embedded OpenClaw tool-loop precheck that detects context pressure after a tool result is appended and before the next model call. When enabled, OpenClaw reuses existing precheck recovery to truncate tool results or compact before retrying.",
+    "Optional estimated-pressure threshold between tool rounds using the compaction reserve. Provider-measured threshold maintenance and hard context-window admission run independently, reusing safe truncation or compaction recovery.",
   "agents.defaults.compaction.midTurnPrecheck.enabled":
-    "Enable structured mid-turn context pressure checks for embedded OpenClaw tool loops. Default: false. Keep disabled unless long tool-heavy sessions hit context overflow before normal turn-end compaction can run.",
+    "Enable the optional estimated-pressure threshold between tool rounds. Default: false. Measured threshold maintenance and the hard context-window check remain active when this is disabled.",
   "agents.defaults.compaction.postIndexSync":
     'Controls post-compaction session memory reindex mode: "off", "async", or "await" (default: "async"). Use "await" for strongest freshness, "async" for lower compaction latency, and "off" only when session-memory sync is handled elsewhere.',
   "agents.defaults.compaction.postCompactionSections":
@@ -173,15 +173,13 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.model":
     "Optional provider/model or configured bare alias used only for compaction summarization. Bare aliases resolve before dispatch; a configured literal model ID wins if it collides with an alias. Leave unset to keep using the primary agent model.",
   "agents.defaults.compaction.maxActiveTranscriptBytes":
-    'Byte threshold that triggers normal preflight local compaction when the transcript window the model sees (since the latest compaction or reset) reaches this size (bytes or strings like "20mb"). Set to 0 or leave unset to disable. Also caps Codex app-server native rollout transcripts; oversized native threads restart fresh.',
+    'Byte threshold for preflight local compaction in the built-in runtime (bytes or strings like "20mb"). For Codex app-server, bounds fresh-thread history seeds instead: one host summary attempt only when unsummarized history would be omitted, never on ordinary turns or after native /compact. Set to 0 or leave unset to disable. Native rollout-size and token fuses are unchanged.',
   "agents.defaults.compaction.notifyUser":
     "When enabled, sends brief context-maintenance notices to the user: when compaction starts and completes (for example, '🧹 Compacting context...' and '🧹 Compaction complete'), and when a pre-compaction memory flush is exhausted so the reply continues in a degraded state (for example, '⚠️ Memory maintenance temporarily failed; continuing your reply.'). Disabled by default to keep context maintenance silent and non-intrusive.",
   "agents.defaults.compaction.memoryFlush":
-    "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
+    "Pre-compaction memory flush settings that run an agentic memory write with the active session model and its normal fallback chain before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
   "agents.defaults.compaction.memoryFlush.enabled":
     "Enables pre-compaction memory flush before the runtime performs stronger history reduction near token limits. Keep enabled unless you intentionally disable memory side effects in constrained environments.",
-  "agents.defaults.compaction.memoryFlush.model":
-    "Optional provider/model override used only for pre-compaction memory flush turns. Set this to a local model such as ollama/qwen3:8b when durable memory extraction should avoid the active session's paid model. The override is exact and does not inherit the active model fallback chain.",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
     "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":

@@ -2,13 +2,11 @@ import { afterEach, beforeEach, expect, vi } from "vitest";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { HostedGatewayStop } from "../../daemon/hosted-stop.js";
-import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
 import { captureEnv, deleteTestEnvValue } from "../../test-utils/env.js";
 import type { GatewayRestartResult } from "../daemon-cli/restart-health.types.js";
 import {
-  createActiveWorkSnapshot,
   createCloseMock,
   createGatewayLogger,
   createRuntimeWithExitSignal,
@@ -51,7 +49,6 @@ type ManagedUpdateOwner = NonNullable<GatewayRestartIntent["successorOwner"]>;
 type ManagedHandoff = typeof import("../../infra/update-managed-service-handoff.js");
 type RestartIntent = typeof import("../../infra/restart-intent.js");
 type RestartSentinel = typeof import("../../infra/restart-sentinel.js");
-const idleActiveWorkSnapshot = createActiveWorkSnapshot();
 const gatewayLog = createGatewayLogger();
 const cancelShutdownHardExitWatchdog = vi.fn(async () => {});
 const resettableMocks = {
@@ -87,8 +84,6 @@ const resettableMocks = {
     vi.fn<
       typeof import("../../infra/gateway-suspend-coordinator.js").consumeGatewaySuspendHandoff
     >(),
-  createGatewayActiveWorkSnapshot: vi.fn(() => idleActiveWorkSnapshot),
-  waitForGatewayActiveWork: vi.fn(waitForActiveWork),
   restartGatewayProcessWithFreshPid: vi.fn<
     (_opts?: { env?: NodeJS.ProcessEnv }) => {
       mode: "supervised" | "disabled" | "failed";
@@ -118,7 +113,9 @@ const m = {
   resetGatewaySuspendCoordinatorForLifecycleRestart: vi.fn(),
   disarmGatewaySuspendHandoff: vi.fn(),
   rollbackGatewayRestartSignalAdmission: vi.fn(),
-  requestGatewayRestartWithSignalAdmission: vi.fn(() => ({ status: "emitted" as const })),
+  requestGatewayRestartWithSignalAdmission: vi.fn<
+    typeof import("../../infra/restart.js").requestGatewayRestartWithSignalAdmission
+  >(() => ({ status: "emitted" })),
   writeGatewayRestartHandoff: vi.fn<
     typeof import("../../infra/restart-handoff.js").writeGatewayRestartHandoff
   >(async () => ({
@@ -150,15 +147,13 @@ const m = {
   clearRuntimeConfigSnapshot: vi.fn(),
   markUpdateRestartSentinelFailure: vi.fn<(reason: string) => Promise<null>>(async () => null),
   abortPendingChannelReloads: vi.fn(),
-  abortEmbeddedAgentRun: vi.fn(
-    (_sessionId?: string, _opts?: { mode?: "all" | "compacting"; reason?: "restart" }) => false,
-  ),
   flushLogger: vi.fn(async () => {}),
   writeDiagnosticStabilityBundleForFailureSync: vi.fn(() => ({
     message: "stability bundle recorded",
   })),
   armShutdownHardExitWatchdog: vi.fn(
     (_params: { delayMs: number; onError: (error: unknown) => void }) => ({
+      reportPending: vi.fn(),
       cancel: cancelShutdownHardExitWatchdog,
     }),
   ),
@@ -166,14 +161,6 @@ const m = {
 
 async function drainedCronWork(_timeoutMs?: number) {
   return { drained: true, active: 0 };
-}
-async function waitForActiveWork(
-  _timeoutMs?: number,
-  options?: { onSnapshot?: (snapshot: GatewayActiveWorkSnapshot) => void },
-): Promise<{ drained: boolean; snapshot: GatewayActiveWorkSnapshot }> {
-  const snapshot = m.createGatewayActiveWorkSnapshot();
-  options?.onSnapshot?.(snapshot);
-  return { drained: snapshot.idle, snapshot };
 }
 
 // Delay registry access until invocation: hoisted module factories can run before m initializes.
@@ -203,29 +190,34 @@ vi.mock("../daemon-cli/restart-health.js", async (original) => ({
 }));
 vi.mock("../../infra/gateway-lock.js", async (original) => ({
   ...(await original<typeof import("../../infra/gateway-lock.js")>()),
-  acquireGatewayLock: (opts?: { port?: number }) => m.acquireGatewayLock(opts),
+  acquireGatewayLock: forward(() => m.acquireGatewayLock),
 }));
 vi.mock("../../infra/restart.js", async (original) => ({
   ...(await original<typeof import("../../infra/restart.js")>()),
-  consumeGatewayRestartIntent: () => m.consumeGatewayRestartIntent(),
-  consumeGatewayRestartAuthorization: () => m.consumeGatewayRestartAuthorization(),
-  isGatewayRestartExternallyAllowed: () => m.isGatewayRestartExternallyAllowed(),
-  markGatewayRestartHandled: () => m.markGatewayRestartHandled(),
-  peekGatewayRestartReason: () => m.peekGatewayRestartReason(),
-  resetGatewayRestartStateForInProcessRestart: () =>
-    m.resetGatewayRestartStateForInProcessRestart(),
-  rollbackGatewayRestartSignalAdmission: () => m.rollbackGatewayRestartSignalAdmission(),
+  consumeGatewayRestartIntent: forward(() => m.consumeGatewayRestartIntent),
+  consumeGatewayRestartAuthorization: forward(() => m.consumeGatewayRestartAuthorization),
+  isGatewayRestartExternallyAllowed: forward(() => m.isGatewayRestartExternallyAllowed),
+  markGatewayRestartHandled: forward(() => m.markGatewayRestartHandled),
+  peekGatewayRestartReason: forward(() => m.peekGatewayRestartReason),
+  resetGatewayRestartStateForInProcessRestart: forward(
+    () => m.resetGatewayRestartStateForInProcessRestart,
+  ),
+  rollbackGatewayRestartSignalAdmission: forward(() => m.rollbackGatewayRestartSignalAdmission),
   requestGatewayRestartWithSignalAdmission: m.requestGatewayRestartWithSignalAdmission,
-  scheduleGatewayRestart: (opts?: { delayMs?: number; reason?: string }) =>
-    m.scheduleGatewayRestart(opts),
+  scheduleGatewayRestart: forward(() => m.scheduleGatewayRestart),
 }));
 vi.mock("../../infra/restart-intent.js", async (original) => ({
   ...(await original<typeof import("../../infra/restart-intent.js")>()),
   prepareGatewayRestartIntentConsumption: () => m.consumeGatewayRestartIntentPayload,
 }));
+// mock-isolation: Prior shutdown belongs to the fixture, never the operator's state database.
+vi.mock("../../infra/gateway-boot-lifecycle.js", async (original) => ({
+  ...(await original<typeof import("../../infra/gateway-boot-lifecycle.js")>()),
+  readGatewayLastShutdownAsync: async () => undefined,
+}));
 // mock-isolation: Fixtures own handoff claims without reading or mutating live update state.
 vi.mock("../../infra/update-managed-service-handoff.js", () => ({
-  waitForSystemServiceUpdateHandoffs: () => m.waitForSystemServiceUpdateHandoffs(),
+  waitForSystemServiceUpdateHandoffs: forward(() => m.waitForSystemServiceUpdateHandoffs),
   captureForegroundUpdateHandoffStop: forward(() => m.captureForegroundUpdateHandoffStop),
   isForegroundUpdateHandoff: forward(() => m.isForegroundUpdateHandoff),
   completeForegroundUpdateHandoffAfterClose: forward(
@@ -234,24 +226,20 @@ vi.mock("../../infra/update-managed-service-handoff.js", () => ({
   cancelManagedServiceUpdateHandoff: forward(() => m.cancelManagedServiceUpdateHandoff),
   claimManagedServiceUpdateHandoff: forward(() => m.claimManagedServiceUpdateHandoff),
   requestManagedServiceUpdateHandoffPark: forward(() => m.requestManagedServiceUpdateHandoffPark),
-  commitManagedServiceUpdateHandoff: (
-    identity: ManagedUpdateOwner,
-    outcome?: "update" | "restore",
-  ) => m.commitManagedServiceUpdateHandoff(identity, outcome),
+  commitManagedServiceUpdateHandoff: forward(() => m.commitManagedServiceUpdateHandoff),
 }));
 // mock-isolation: Suspend ownership belongs to each fixture, not the process singleton.
 vi.mock("../../infra/gateway-suspend-coordinator.js", () => ({
   consumeGatewaySuspendHandoff: forward(() => m.consumeGatewaySuspendHandoff),
   disarmGatewaySuspendHandoff: forward(() => m.disarmGatewaySuspendHandoff),
-  resetGatewaySuspendCoordinatorForLifecycleRestart: () =>
-    m.resetGatewaySuspendCoordinatorForLifecycleRestart(),
+  resetGatewaySuspendCoordinatorForLifecycleRestart: forward(
+    () => m.resetGatewaySuspendCoordinatorForLifecycleRestart,
+  ),
 }));
 vi.mock("../../infra/process-respawn.js", async (original) => ({
   ...(await original<typeof import("../../infra/process-respawn.js")>()),
-  respawnGatewayProcessForUpdate: (opts?: { env?: NodeJS.ProcessEnv }) =>
-    m.respawnGatewayProcessForUpdate(opts),
-  restartGatewayProcessWithFreshPid: (opts?: { env?: NodeJS.ProcessEnv }) =>
-    m.restartGatewayProcessWithFreshPid(opts),
+  respawnGatewayProcessForUpdate: forward(() => m.respawnGatewayProcessForUpdate),
+  restartGatewayProcessWithFreshPid: forward(() => m.restartGatewayProcessWithFreshPid),
 }));
 // mock-isolation: Restart sentinel receipts must not read or write the runner's state.
 vi.mock("../../infra/restart-sentinel.js", () => ({
@@ -262,14 +250,6 @@ vi.mock("../../infra/restart-sentinel.js", () => ({
 vi.mock("../../infra/restart-handoff.js", async (original) => ({
   ...(await original<typeof import("../../infra/restart-handoff.js")>()),
   writeGatewayRestartHandoff: forward(() => m.writeGatewayRestartHandoff),
-}));
-// mock-isolation: Drain scenarios own their active-work snapshots and completion gates.
-vi.mock("../../infra/gateway-active-work.js", () => ({
-  createGatewayActiveWorkSnapshot: () => m.createGatewayActiveWorkSnapshot(),
-  waitForGatewayActiveWork: (
-    timeoutMs?: number,
-    options?: { onSnapshot?: (snapshot: GatewayActiveWorkSnapshot) => void },
-  ) => m.waitForGatewayActiveWork(timeoutMs, options),
 }));
 // mock-isolation: Run-loop retirement must not reset process-global cron job tracking.
 vi.mock("../../cron/active-jobs.js", () => ({
@@ -289,13 +269,6 @@ vi.mock("../../config/runtime-snapshot.js", () => ({
   getRuntimeConfigSnapshot: () => null,
   getRuntimeConfigSourceSnapshot: () => null,
   registerRuntimeConfigSnapshotPreparer: vi.fn(),
-}));
-// mock-isolation: Shutdown assertions must not abort unrelated process-global agent runs.
-vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
-  abortEmbeddedAgentRun: (
-    sessionId?: string,
-    opts?: { mode?: "all" | "compacting"; reason?: "restart" },
-  ) => m.abortEmbeddedAgentRun(sessionId, opts),
 }));
 // mock-isolation: Capture lifecycle diagnostics without initializing real log transports.
 vi.mock("../../logging/subsystem.js", () => ({ createSubsystemLogger: () => gatewayLog }));
@@ -434,7 +407,6 @@ export const runLoopFixture = {
   createSignaledLoopHarness,
   expectRestartHandoffCall,
   gatewayLog,
-  idleActiveWorkSnapshot,
   killProcessTree,
   readCgroup,
   respawnHealth,

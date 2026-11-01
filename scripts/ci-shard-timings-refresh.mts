@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { parseArgs, stripVTControlCharacters } from "node:util";
 import { z } from "zod";
 import { decodeNodeTestGroups } from "./lib/ci-node-test-groups-codec.mts";
-import { isCiTimingRuntimeTrial } from "./lib/ci-test-timings-refit.mts";
 import {
   ciTestTimingsSchema,
   isRuntimePlacementIncludePatterns,
@@ -62,24 +61,36 @@ function timingKey(log: string): string {
     .parse(decodeNodeTestGroups([...descriptors][0]!));
   const group = groups[0]!;
   const observedKey = group.timing_key ?? group.shard_name;
+  const policy =
+    /^\d{4}-\d\d-\d\dT[\d:.]+Z\s+OPENCLAW_CI_TEST_RUNTIME_POLICY: (bun-all|dual-all)\s*$/mu.exec(
+      stripVTControlCharacters(log),
+    )?.[1];
+  const prefix = policy ? `${policy}:` : "";
+  const spans = ["", "bun:", "bun-native:", "node-subset:"]
+    .map((runtime) => runtime + observedKey)
+    .filter((key) => log.includes(`[shard:${key}] begin`));
   if (
-    !log.includes(`[shard:${observedKey}] begin`) ||
-    !log.includes(`[shard:${observedKey}] end (exit 0)`)
+    spans.length === 0 ||
+    (policy === "dual-all" && !spans.includes(observedKey)) ||
+    spans.some((key) => !log.includes(`[shard:${key}] end (exit 0)`))
   ) {
     throw new Error("Hosted timing job lacks a successful matching shard span");
   }
   if (group.timing_key?.startsWith("release-full-")) {
-    return group.timing_key;
+    return prefix + group.timing_key;
   }
   const parentShardName = `release-full-${group.shard_name}`;
-  return isRuntimePlacementIncludePatterns(group.includePatterns)
-    ? createCompactSplitTimingGeneration({
-        configs: group.configs,
-        env: group.env,
-        parentShardName,
-        stripes: [group.includePatterns],
-      }).timingKeys[0]!
-    : parentShardName;
+  return (
+    prefix +
+    (isRuntimePlacementIncludePatterns(group.includePatterns)
+      ? createCompactSplitTimingGeneration({
+          configs: group.configs,
+          env: group.env,
+          parentShardName,
+          stripes: [group.includePatterns],
+        }).timingKeys[0]!
+      : parentShardName)
+  );
 }
 
 function main() {
@@ -177,10 +188,6 @@ function main() {
           throw new Error(`Invalid wall clock for CI timing job ${job.id}`);
         }
         const log = api(`actions/jobs/${job.id}/logs`);
-        if (isCiTimingRuntimeTrial(log)) {
-          console.log(`Skipped CI ${run.id}: runtime trial is excluded from timing refresh.`);
-          return;
-        }
         const key = timingKey(log);
         measurements.set(
           key,

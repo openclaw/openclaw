@@ -343,13 +343,6 @@ function extractPortFromHostHeader(hostHeader?: string): string | undefined {
   }
 }
 
-interface TwilioVerificationResult extends WebhookVerificationResult {
-  /** The original URL that passed signature verification; never set on failures. */
-  verificationUrl?: string;
-  /** Whether we're running behind ngrok free tier */
-  isNgrokFreeTier?: boolean;
-}
-
 function createTwilioReplayKey(params: {
   verificationUrl: string;
   signature: string;
@@ -399,8 +392,6 @@ export function verifyTelnyxWebhook(
   options?: {
     /** Skip verification entirely (only for development) */
     skipVerification?: boolean;
-    /** Maximum allowed clock skew (ms). Defaults to 5 minutes. */
-    maxSkewMs?: number;
   },
 ): WebhookVerificationResult {
   if (options?.skipVerification) {
@@ -435,10 +426,9 @@ export function verifyTelnyxWebhook(
       return { ok: false, reason: "Invalid signature" };
     }
 
-    const maxSkewMs = options?.maxSkewMs ?? 5 * 60 * 1000;
     const eventTimeMs = eventTimeSec * 1000;
     const now = Date.now();
-    if (Math.abs(now - eventTimeMs) > maxSkewMs) {
+    if (Math.abs(now - eventTimeMs) > 5 * 60 * 1000) {
       return { ok: false, reason: "Timestamp too old" };
     }
 
@@ -469,7 +459,7 @@ export function verifyTwilioWebhook(
     /** Skip verification entirely (only for development) */
     skipVerification?: boolean;
   },
-): TwilioVerificationResult {
+): WebhookVerificationResult {
   if (options?.skipVerification) {
     return skipWebhookVerification("twilio", ctx, twilioReplayCache);
   }
@@ -492,7 +482,7 @@ export function verifyTwilioWebhook(
 
   const params = new URLSearchParams(ctx.rawBody);
 
-  const verifyUrl = (candidateUrl: string): TwilioVerificationResult | undefined => {
+  const verifyUrl = (candidateUrl: string): WebhookVerificationResult | undefined => {
     if (!validateTwilioSignature(authToken, signature, candidateUrl, params)) {
       return undefined;
     }
@@ -503,7 +493,6 @@ export function verifyTwilioWebhook(
     });
     return {
       ok: true,
-      verificationUrl: candidateUrl,
       ...reserveWebhookReplay(twilioReplayCache, replayKey),
     };
   };
@@ -544,21 +533,12 @@ export function verifyTwilioWebhook(
     }
   }
 
-  const isNgrokFreeTier =
-    verificationUrl.includes(".ngrok-free.app") || verificationUrl.includes(".ngrok.io");
   const diagnosticVerificationUrl = redactTwilioVerificationUrlForDiagnostics(verificationUrl);
 
   return {
     ok: false,
     reason: `Invalid signature for URL: ${diagnosticVerificationUrl}`,
-    isNgrokFreeTier,
   };
-}
-
-interface PlivoVerificationResult extends WebhookVerificationResult {
-  verificationUrl?: string;
-  /** Signature version used for verification */
-  version?: "v3" | "v2";
 }
 
 function normalizeSignatureBase64(input: string): string {
@@ -613,23 +593,21 @@ function constructPlivoV3BaseUrl(params: {
 function verifyPlivoSignature(params: {
   authToken: string;
   version: "v2" | "v3";
-  verificationUrl: string;
   signatures: string[];
   nonce: string;
   baseUrl: string;
-}): PlivoVerificationResult {
+}): WebhookVerificationResult {
   const hmacBase = `${params.baseUrl}${params.version === "v3" ? "." : ""}${params.nonce}`;
   const digest = crypto.createHmac("sha256", params.authToken).update(hmacBase).digest("base64");
   const expected = normalizeSignatureBase64(digest);
   const provided = params.signatures.map(normalizeSignatureBase64);
   const ok = provided.some((signature) => safeEqualSecret(expected, signature));
-  const result = { ok, version: params.version, verificationUrl: params.verificationUrl };
   if (!ok) {
-    return { ...result, reason: `Invalid Plivo ${params.version.toUpperCase()} signature` };
+    return { ok: false, reason: `Invalid Plivo ${params.version.toUpperCase()} signature` };
   }
   const replayKey = `plivo:${params.version}:${sha256Hex(`${params.baseUrl}\n${params.nonce}`)}`;
   return {
-    ...result,
+    ok: true,
     ...reserveWebhookReplay(plivoReplayCache, replayKey),
   };
 }
@@ -650,7 +628,7 @@ export function verifyPlivoWebhook(
     /** Skip verification entirely (only for development) */
     skipVerification?: boolean;
   },
-): PlivoVerificationResult {
+): WebhookVerificationResult {
   if (options?.skipVerification) {
     return skipWebhookVerification("plivo", ctx, plivoReplayCache);
   }
@@ -684,8 +662,6 @@ export function verifyPlivoWebhook(
     if (!method) {
       return {
         ok: false,
-        version: "v3",
-        verificationUrl,
         reason: `Unsupported HTTP method for Plivo V3 signature: ${ctx.method}`,
       };
     }
@@ -695,7 +671,6 @@ export function verifyPlivoWebhook(
     return verifyPlivoSignature({
       authToken,
       version: "v3",
-      verificationUrl,
       // Only V3 permits a comma-separated list of signatures.
       signatures: normalizeStringEntries(signatureV3.split(",")),
       nonce: nonceV3,
@@ -707,7 +682,6 @@ export function verifyPlivoWebhook(
     return verifyPlivoSignature({
       authToken,
       version: "v2",
-      verificationUrl,
       signatures: [signatureV2],
       nonce: nonceV2,
       baseUrl: getBaseUrlNoQuery(verificationUrl),
@@ -717,6 +691,5 @@ export function verifyPlivoWebhook(
   return {
     ok: false,
     reason: "Missing Plivo signature headers (V3 or V2)",
-    verificationUrl,
   };
 }

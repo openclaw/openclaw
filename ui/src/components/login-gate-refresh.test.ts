@@ -74,26 +74,35 @@ it.each(["bounded wait", "rejected retry"])("returns to Retry after %s", async (
     vi.mocked(recovery.retryStaleChunkReloadWhenReachable).mockRejectedValueOnce(new Error());
   }
   const element = await mountMismatch();
-  refresh(element).click();
+  const button = refresh(element);
+  button.focus();
+  button.click();
   await vi.advanceTimersByTimeAsync(failure === "bounded wait" ? 30_000 : 0);
   await element.updateComplete;
   expect(reload).not.toHaveBeenCalled();
   expect(refresh(element).disabled).toBe(false);
   expect(refresh(element).textContent?.trim()).toBe("Retry");
-  if (failure === "bounded wait") {
-    probe.mockResolvedValue({ ok: true });
-    refresh(element).click();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(reload).toHaveBeenCalledOnce();
-  }
+  expect(refresh(element)).toBe(button);
+  expect(document.activeElement).toBe(button);
+  const finish = deferredProbe();
+  button.click();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(refresh(element)).toBe(button);
+  expect(button.disabled).toBe(true);
+  expect(button.textContent?.trim()).toBe("Refreshing…");
+  finish();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(reload).toHaveBeenCalledOnce();
 });
 it.each([
   ["connected", { connected: true }],
   ["dismissed failure", { lastError: null, lastErrorCode: null }],
   ["replacement failure", { lastError: "replacement protocol mismatch" }],
   ["replacement code", { lastErrorCode: Codes.AUTH_REQUIRED }],
+  ["replacement auth reason", { lastErrorAuthReason: "replacement-reason" }],
   ["reconnect", { reconnectPending: true }],
   ["target", { gatewayUrl: "ws://another.example" }],
+  ["resource base", { resourceBasePath: "/replacement-ui" }],
   ["credential", { secret: "replacement-secret" }],
 ])("cancels a pending probe on %s", async (_name, props) => {
   const { element, finish } = await pendingRefresh();
@@ -130,10 +139,45 @@ it.each(["Connect", "Enter", "target input", "credential input", "remove and rei
 );
 it("keeps the same attempt through unrelated rendering", async () => {
   const { element, finish } = await pendingRefresh();
-  element.props = { ...element.props, showGatewaySecret: true, onConnect: vi.fn() };
+  element.props = {
+    ...element.props,
+    showGatewaySecret: true,
+    onConnect: vi.fn(),
+    connected: false,
+    reconnectPending: false,
+  };
   await element.updateComplete;
+  expect(refresh(element).disabled).toBe(true);
+  expect(refresh(element).textContent).toContain("Refreshing");
+  expectAttempt().toHaveBeenCalledOnce();
   finish();
   await vi.waitFor(() => expect(reload).toHaveBeenCalledOnce());
+});
+it("retires an attempt when its identity changes and then returns", async () => {
+  const { element, finish } = await pendingRefresh();
+  const original = element.props;
+  element.props = { ...original, lastError: "replacement protocol mismatch" };
+  await element.updateComplete;
+  element.props = original;
+  await element.updateComplete;
+  expect(refresh(element).disabled).toBe(false);
+  finish();
+  await expectCancelled();
+});
+it("keeps a replacement attempt when the previous probe settles", async () => {
+  const { element, finish } = await pendingRefresh();
+  element.props = { ...element.props, lastError: "replacement protocol mismatch" };
+  await element.updateComplete;
+  refresh(element).click();
+  await element.updateComplete;
+  expectAttempt().toHaveBeenCalledTimes(2);
+  expect(refresh(element).disabled).toBe(true);
+  expect(probe).toHaveBeenCalledOnce();
+  finish();
+  await vi.waitFor(() => expect(reload).toHaveBeenCalledOnce());
+  expectAttempt().toHaveResolvedWith(false);
+  expectAttempt().toHaveResolvedWith(true);
+  expect(probe).toHaveBeenCalledOnce();
 });
 it.each(["automatic first", "manual first"])("navigates once with %s", async (order) => {
   vi.spyOn(Math, "random").mockReturnValue(0);

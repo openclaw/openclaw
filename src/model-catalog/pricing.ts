@@ -11,17 +11,13 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import {
-  getPluginCache,
-  isPluginCacheFactInvalidatedError,
-  retainPluginCache,
-  withPluginCache,
-} from "../plugins/plugin-cache.js";
+import { getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import {
   resolvePluginMetadataSnapshot,
   resolvePluginMetadataSnapshotAsync,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
+import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import { planEffectiveModelCatalogRows } from "./index.js";
 import type { RemoteModelCatalogPrice, RemoteModelCatalogUpstreamPrice } from "./remote-bundle.js";
 import { isRemoteModelCatalogRefreshEnabled } from "./remote-config.js";
@@ -232,35 +228,30 @@ export async function prepareModelPricingContext(
   }
   const env = cloneEnvWithPlatformSemantics(process.env);
   const cache = getPluginCache();
-  const release = retainPluginCache(cache);
-  try {
-    await withPluginCache(cache, async () => {
-      let snapshot: PluginMetadataSnapshot | undefined;
-      try {
-        snapshot = await resolvePluginMetadataSnapshotAsync({
-          config,
-          env,
-          allowWorkspaceScopedCurrent: true,
-        });
-      } catch (error) {
-        if (isPluginCacheFactInvalidatedError(error)) {
-          throw error;
-        }
-        snapshot = undefined;
+  await withPluginCache(cache, async () => {
+    let snapshot: PluginMetadataSnapshot | undefined;
+    try {
+      snapshot = await resolvePluginMetadataSnapshotAsync({
+        config,
+        env,
+        allowWorkspaceScopedCurrent: true,
+      });
+    } catch (error) {
+      if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
+        throw error;
       }
-      if (snapshot && isRemoteModelCatalogRefreshEnabled(config)) {
-        await prepareRemoteModelCatalogStartupSnapshot({ env });
-      }
-      const catalog = getActiveRemoteModelCatalog(config);
-      // A synchronous reader may have prepared this exact pair while metadata awaited I/O.
-      if (!readPricingContext(config, catalog)) {
-        const context = buildPricingContext(config, snapshot);
-        retainPricingContext(config, catalog, context);
-      }
-    });
-  } finally {
-    release();
-  }
+      snapshot = undefined;
+    }
+    if (snapshot && isRemoteModelCatalogRefreshEnabled(config)) {
+      await prepareRemoteModelCatalogStartupSnapshot({ env });
+    }
+    const catalog = getActiveRemoteModelCatalog(config);
+    // A synchronous reader may have prepared this exact pair while metadata awaited I/O.
+    if (!readPricingContext(config, catalog)) {
+      const context = buildPricingContext(config, snapshot);
+      retainPricingContext(config, catalog, context);
+    }
+  });
 }
 
 function hasKnownPricing(pricing: PricingValue): boolean {

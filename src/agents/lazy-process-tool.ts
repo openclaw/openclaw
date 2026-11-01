@@ -31,12 +31,15 @@ export function createLazyProcessTool(defaults?: ProcessToolDefaults): AnyAgentT
     description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
     outputSchema: ProcessToolOutputSchema,
-    execute: async (toolCallId, params, signal, onUpdate) =>
-      (await loadTool()).execute(
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      const source = await loadTool();
+      signal?.throwIfAborted();
+      return source.execute(
         toolCallId,
         params as Parameters<LoadedProcessTool["execute"]>[1],
         signal,
         onUpdate,
-      ),
-  } as AnyAgentTool;
+      );
+    },
+  };
 }

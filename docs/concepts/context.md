@@ -49,6 +49,19 @@ the meter omits context usage instead of borrowing the agent's default model
 capacity; available provider plan usage remains visible. Stale token totals remain
 approximate and do not trigger the context warning.
 
+In the Control UI, open the context ring beside the composer's model picker for a
+compact usage breakdown, latest-run tokens, and provider plan limits when available.
+Select **View context** to open the complete report in one side panel. **Workspace files** groups files by their recorded source: agent workspace,
+execution project, or personal instructions. File paths distinguish matching names
+such as two `AGENTS.md` files. Reports without source metadata show neutral file
+groups rather than guessing their role.
+
+**Tool schemas** groups tools in the direct tool surface by source and MCP server.
+The secondary **Tools loaded on use** section lists catalog entries outside that
+surface; their potential schema sizes are not added to current usage. Discovery descriptions and schemas retrieved into
+the conversation still consume context. Native-harness reports may cover only
+OpenClaw-provided tools, and unmeasured sizes remain unverified rather than zero.
+
 ## Example output
 
 Values vary by model, provider, tool policy, and what's in your workspace.
@@ -137,7 +150,7 @@ OpenClaw pins the complete system prompt for the session. Changed sections,
 including skills, workspace memory, and temporal context, arrive as instruction
 messages after the current user turn. Existing skill and memory refresh rules
 still apply. Changing the route or selected personal profile, resetting, or
-compacting history starts a new series; ordinary turn teardown and Gateway restarts restore the saved series.
+compacting history starts a new series; internal turns continuing the same session keep the series, and ordinary turn teardown and Gateway restarts restore the saved series.
 
 ## Injected workspace files (Project Context)
 
@@ -158,6 +171,10 @@ When truncation occurs, the runtime injects a concise in-prompt notice under Pro
 The system prompt includes a compact **skills list** (name + description + location). This list has real overhead.
 
 `/context` counts the catalog included in the rendered system prompt, not every installed skill. In the embedded runtime without Code Mode, denying both `read` and `skills_read` omits the catalog and reports zero skills.
+
+Code Mode also omits the catalog when installed skill search and reading are
+available. Its report then shows zero listed skills, while the agent can still
+search eligible skills and read their complete instructions on demand.
 
 Skill instructions are _not_ included by default. The model is expected to `read` the skill's `SKILL.md` **only when needed**.
 

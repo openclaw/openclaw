@@ -38,11 +38,10 @@ vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupProviderCore: () => undefined,
 }));
 
-vi.mock("../plugins/provider-external-auth-core.js", () => ({
-  createProviderExternalAuthResolver: () => ({
-    resolveExternalAuthProfilesWithPlugins: () => [],
-  }),
-}));
+// mock-isolation: Synthetic auth and SecretRef fixtures supply provider hooks; external discovery would alter credential precedence.
+vi.mock("../plugins/provider-external-auth-core.js", async () =>
+  (await import("../plugins/provider-external-auth.test-support.js")).createExternalAuthMock(),
+);
 
 vi.mock("../plugins/provider-runtime.js", () => {
   const providerRuntime = {
@@ -270,7 +269,7 @@ function expectAuthFields(
   }
 }
 
-function expectSecret(value: string | undefined, expected: string) {
+function expectSecret(value: string | null | undefined, expected: string) {
   expect(looksLikeSecretSentinel(value ?? "")).toBe(true);
   expect(resolveSecretSentinel(value ?? "")).toBe(expected);
 }
@@ -311,7 +310,7 @@ describe("resolveModelAuthMode", () => {
   });
 
   it("returns oauth for codex when Codex CLI auth is available", () => {
-    const readCodexCliCredentialsCached = vi
+    using readCodexCliCredentialsCached = vi
       .spyOn(cliCredentials, "readCodexCliCredentialsCached")
       .mockReturnValue({
         type: "oauth",
@@ -321,15 +320,11 @@ describe("resolveModelAuthMode", () => {
         expires: Date.now() + 60_000,
       });
 
-    try {
-      expect(resolveModelAuthMode("codex", undefined, authStore({}))).toBe("oauth");
-      expect(readCodexCliCredentialsCached).toHaveBeenCalledWith({
-        ttlMs: 5_000,
-        allowKeychainPrompt: false,
-      });
-    } finally {
-      readCodexCliCredentialsCached.mockRestore();
-    }
+    expect(resolveModelAuthMode("codex", undefined, authStore({}))).toBe("oauth");
+    expect(readCodexCliCredentialsCached).toHaveBeenCalledWith({
+      ttlMs: 5_000,
+      allowKeychainPrompt: false,
+    });
   });
 });
 
@@ -824,6 +819,13 @@ describe("applyLocalNoAuthHeaderOverride", () => {
   });
 
   it("marks synthetic local OpenAI-compatible auth so SDK request headers clear Authorization", () => {
+    const headers = Object.freeze({
+      "X-Test": "1",
+      "X-Removed": null,
+      Authorization: "synthetic",
+      authorization: "synthetic",
+      AUTHORIZATION: "synthetic",
+    });
     const model = applyLocalNoAuthHeaderOverride(
       {
         id: "local-llm",
@@ -832,15 +834,21 @@ describe("applyLocalNoAuthHeaderOverride", () => {
         provider: "custom",
         baseUrl: "http://127.0.0.1:8080/v1",
         ...modelDefaults,
-        headers: { "X-Test": "1" },
+        headers,
       } as Model<"openai-completions">,
       {
         apiKey: CUSTOM_LOCAL_AUTH_MARKER,
       },
     );
 
-    expect(model.headers?.Authorization).toBeNull();
-    expect(model.headers?.["X-Test"]).toBe("1");
+    expect(model.headers).toEqual({
+      "X-Test": "1",
+      "X-Removed": null,
+      Authorization: null,
+      authorization: null,
+      AUTHORIZATION: null,
+    });
+    expect(headers.Authorization).toBe("synthetic");
   });
 });
 
@@ -950,6 +958,59 @@ describe("applyAuthHeaderOverride", () => {
     );
   });
 
+  it.each(["authorization-bearer", "header"] as const)(
+    "preserves exchanged %s credentials across repeated SecretRef protection",
+    async (mode) => {
+      const { applyPreparedRuntimeAuthToModel } = await import("./provider-request-config.js");
+      const { protectPreparedProviderRuntimeAuth } =
+        await import("./provider-runtime-auth-protection.js");
+      const auth = (value: string) =>
+        mode === "authorization-bearer"
+          ? { mode, token: value }
+          : { mode, headerName: "X-Fixture-Key", prefix: "Key-", value };
+      const { sourceConfig, runtimeConfig } = publishGoogle(
+        { request: { auth: auth("secretref-env:GOOGLE_EXCHANGE_TOKEN") } },
+        { request: { auth: auth("configured-source-token") } },
+      );
+      const header = mode === "authorization-bearer" ? "Authorization" : "X-Fixture-Key";
+      const prefix = mode === "authorization-bearer" ? "Bearer " : "Key-";
+      const configured = attachModelProviderRequestTransport(
+        { ...baseModel, headers: { [header]: `${prefix}configured-source-token` } },
+        runtimeConfig.models.providers.google.request,
+      );
+      const protectedConfigured = applySecretRefHeaderSentinels(configured, sourceConfig);
+      const protectedAuth = getModelProviderRequestTransport(protectedConfigured)?.auth;
+      expectSecret(
+        protectedAuth?.mode === "authorization-bearer"
+          ? protectedAuth.token
+          : protectedAuth?.mode === "header"
+            ? protectedAuth.value
+            : undefined,
+        "configured-source-token",
+      );
+      const exchanged = protectPreparedProviderRuntimeAuth({
+        provider: baseModel.provider,
+        preparedAuth: { apiKey: "exchanged-token", request: { auth: auth("exchanged-token") } },
+      });
+      const prepared = applyPreparedRuntimeAuthToModel(protectedConfigured, exchanged);
+      const result = applySecretRefHeaderSentinels(
+        applySecretRefHeaderSentinels(prepared, sourceConfig),
+        sourceConfig,
+      );
+      const requestAuth = getModelProviderRequestTransport(result)?.auth;
+      expect(requestAuth).toEqual(exchanged?.request?.auth);
+      expectSecret(
+        requestAuth?.mode === "authorization-bearer"
+          ? requestAuth.token
+          : requestAuth?.mode === "header"
+            ? requestAuth.value
+            : undefined,
+        "exchanged-token",
+      );
+      expectSecret(result.headers?.[header]?.slice(prefix.length), "exchanged-token");
+    },
+  );
+
   const baseAuth = { apiKey: "test-api-key", source: "env", mode: "api-key" } as const;
   const provider = providerEntry(baseModel.baseUrl, { api: baseModel.api });
   const enabledConfig = configForProviders({ google: { ...provider, authHeader: true } });
@@ -971,14 +1032,42 @@ describe("applyAuthHeaderOverride", () => {
 
   it("strips existing authorization header case-insensitively before injection", () => {
     const result = applyAuthHeaderOverride(
-      { ...baseModel, headers: { authorization: "old-value", "X-Custom": "keep" } },
+      {
+        provider: "google",
+        headers: { authorization: "old-value", "X-Custom": "keep", "X-Removed": null },
+      },
       { apiKey: "test-api-key", source: "env", mode: "api-key" },
       enabledConfig,
     );
 
     expect(result.headers).toEqual({
       "X-Custom": "keep",
+      "X-Removed": null,
       Authorization: "Bearer test-api-key",
     });
   });
+
+  it.each(["authorization-bearer", "header"] as const)(
+    "preserves explicit request %s auth over the configured bearer preference",
+    (mode) => {
+      const headers: Record<string, string> =
+        mode === "authorization-bearer"
+          ? { Authorization: "Bearer request-token" }
+          : { "X-Fixture-Key": "request-token" };
+      const model = attachModelProviderRequestTransport(
+        { provider: "google", headers },
+        {
+          auth:
+            mode === "authorization-bearer"
+              ? { mode, token: "request-token" }
+              : { mode, headerName: "X-Fixture-Key", value: "request-token" },
+        },
+      );
+      const result = applyAuthHeaderOverride(model, baseAuth, enabledConfig);
+      expect(result.headers).toEqual(headers);
+      expect(getModelProviderRequestTransport(result)).toEqual(
+        getModelProviderRequestTransport(model),
+      );
+    },
+  );
 });

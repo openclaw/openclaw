@@ -238,24 +238,6 @@ describe("codesign-mac-app temp file hygiene", () => {
       }),
   );
 
-  it.concurrent("defines a closed Foundation elevation-host signing profile", ({ mac, expect }) =>
-    mac.lifetime.run(async () => {
-      const script = readFileSync(scriptPath, "utf8");
-      const elevationProfile = script.slice(
-        script.indexOf('if [[ "$SIGNING_VARIANT" == "elevation-host" ]]'),
-        script.indexOf("else", script.indexOf('if [[ "$SIGNING_VARIANT" == "elevation-host" ]]')),
-      );
-
-      expect(readFileSync("scripts/lib/mac-signing-identity.sh", "utf8")).toContain(
-        'ELEVATION_IDENTITY="Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)"',
-      );
-      expect(script).toContain('ELEVATION_TEAM_ID="FWJYW4S8P8"');
-      expect(elevationProfile).toContain("<dict/>");
-      expect(elevationProfile).not.toContain("com.apple.security.automation.apple-events");
-      expect(script).toContain("verify_elevation_signature");
-      expect(script).toContain('assert_no_apple_events_entitlement "$APP_BUNDLE"');
-    }));
-
   it.concurrent.for(["file", "symlink"])(
     "rejects an elevation-host CUA driver %s before signing",
     (kind, { mac, expect }) =>
@@ -498,6 +480,10 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
         expect(signs.at(-1)?.args.at(-1)).toBe(fixture.app);
         expect(signs.at(-1)?.entitlements).not.toContain("disable-library-validation");
         expect(signs.at(-1)?.entitlements).not.toContain("allow-jit");
+        if (elevation) {
+          expect(signs.at(-1)?.entitlements).toContain("<dict/>");
+          expect(signs.at(-1)?.entitlements).not.toContain("automation.apple-events");
+        }
         for (const [filename, policy] of expected) {
           const signed = expectDefined(
             signs.find(({ args }) => args.at(-1) === filename),

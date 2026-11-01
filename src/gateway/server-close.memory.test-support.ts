@@ -17,6 +17,7 @@ import {
   resolveBundledPluginPublicModulePath,
   resolveRelativeBundledPluginPublicModuleId,
 } from "../test-utils/bundled-plugin-public-surface.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 
 // Load the real plugin fixture during collection, outside individual test deadlines.
 const { createMemoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
@@ -40,8 +41,9 @@ export function createGatewayMemoryCloseRegistryFactory(config: OpenClawConfig) 
     pluginId: "memory-core",
     artifactBasename: "worker-api.js",
   });
-  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
-  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.dirname(path.dirname(workerApi)));
+  // The enclosing Gateway/state fixture owns restoration of these selectors.
+  deleteTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
+  setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", path.dirname(path.dirname(workerApi)));
   const env = { ...process.env };
   const registry = (close: () => Promise<void>, beforeEmbedBatch?: () => Promise<void>) => {
     const builder = createPluginRegistry({

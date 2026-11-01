@@ -129,7 +129,7 @@ export async function getSessionGoal(
     { sessionKey: options.sessionKey, storePath: options.storePath },
     (entry) => {
       const accounted = accountSessionGoalUsage(entry, now);
-      goal = accounted ? { ...accounted } : undefined;
+      goal = accounted;
       if (!accounted || JSON.stringify(accounted) === JSON.stringify(entry.goal)) {
         return null;
       }

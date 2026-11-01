@@ -5,7 +5,7 @@ import type {
   WAPresence,
 } from "baileys";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   parseStrictPositiveInteger,
   resolveTimerTimeoutMs,
@@ -32,7 +32,7 @@ type WhatsAppSocketOperationTimeoutHooks = {
   onSendMessageTimeout?: (params: { jid: string; promise: Promise<WAMessage | undefined> }) => void;
 };
 
-const socketSendMessageQueues = new WeakMap<WhatsAppSocketOperationAdapter, KeyedAsyncQueue>();
+const socketSendMessageQueues = new WeakMap<WhatsAppSocketOperationAdapter, Promise<void>>();
 
 export const DEFAULT_WHATSAPP_SOCKET_TIMING: Required<WhatsAppSocketTimingOptions> = {
   keepAliveIntervalMs: 25_000,
@@ -76,20 +76,6 @@ export function isWhatsAppSocketOperationTimeoutError(
 
 export function resolveWhatsAppSocketOperationTimeoutMs(timeoutMs: number): number {
   return resolveTimerTimeoutMs(timeoutMs, DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
-}
-
-function runSerializedSocketSendMessage<T>(
-  sock: WhatsAppSocketOperationAdapter,
-  run: () => Promise<T>,
-): Promise<T> {
-  // Adapter instances are short-lived, so key the FIFO by the raw socket. A
-  // bounded send releases the queue after timeout to avoid wedging later work.
-  let queue = socketSendMessageQueues.get(sock);
-  if (!queue) {
-    queue = new KeyedAsyncQueue();
-    socketSendMessageQueues.set(sock, queue);
-  }
-  return queue.enqueue("sendMessage", run);
 }
 
 export async function withWhatsAppSocketOperationTimeout<T>(
@@ -136,7 +122,10 @@ export function createWhatsAppSocketOperationTimeoutAdapter(
         onTimeout?.(promise);
       });
     };
-    return operation === "sendMessage" ? runSerializedSocketSendMessage(sock, run) : run();
+    // Key by the raw socket across short-lived adapters; bounded sends release on timeout.
+    return operation === "sendMessage"
+      ? enqueueKeyedTask({ tails: socketSendMessageQueues, key: sock, task: run })
+      : run();
   };
   return {
     sendMessage: (jid, content, options) =>

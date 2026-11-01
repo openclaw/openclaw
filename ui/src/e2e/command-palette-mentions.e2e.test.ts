@@ -1,5 +1,7 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiE2eWaitTimeoutMs } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { twoFrames } from "./chat-presentation.test-support.ts";
 import {
   expectForegroundUnchanged,
   openFromForeground,
@@ -113,67 +115,80 @@ suite.define(() => {
     });
   });
 
-  it.each([1280, 390])(
-    "keeps one, two, and many people compact and anchored at %s px",
-    async (width) => {
-      await suite.withPage(
-        { ...createControlUiE2eContextOptions(), viewport: { width, height: 900 } },
-        async ({ page }) => {
-          const gateway = await installMockGateway(page, mentionScenario());
-          const { palette, input, composer, url } = await openFromForeground(
-            page,
-            suite.server.baseUrl,
-          );
-          await page.evaluate(() => document.fonts.ready);
-          const before = await anchors(palette);
-          const mentions = [];
-          for (let index = 0; index < people.length; index++) {
-            const start = (await input.inputValue()).length;
-            await selectPerson(input, palette, index);
-            mentions.push({
-              profileId: people[index]!.profileId,
-              start,
-              end: start + people[index]!.displayName.length + 1,
-            });
-            if ([1, 2, 10].includes(index + 1)) {
-              expect(await anchors(palette)).toEqual(before);
-              expect(await palette.locator(".composer-context-strip__person").count()).toBe(
-                index + 1,
-              );
-              expect(await input.getAttribute("aria-activedescendant")).toBeNull();
-            }
-          }
-          await palette.locator(".composer-context-strip__more").waitFor({ state: "visible" });
-          expect(
-            await palette
-              .locator(".composer-context-strip__people")
-              .evaluate((element) => element.scrollWidth <= element.clientWidth),
-          ).toBe(true);
-          await input.press("@");
-          const menu = palette.getByRole("listbox", { name: "Mention a person" });
-          await menu.getByText(/10 people/u).waitFor();
-          expect(await menu.textContent()).toContain("10 people");
-          expect(await menu.getByRole("option").count()).toBe(0);
-          expect(await input.getAttribute("aria-activedescendant")).toBeNull();
-          const limited = await input.inputValue();
-          await input.press("Enter");
-          expect(await input.inputValue()).toBe(limited);
-          expect(await gateway.getRequests("sessions.create")).toEqual([]);
-          await input.press("Escape");
-          expect(await input.isVisible()).toBe(true);
-          await input.press("Backspace");
-          const message = (await input.inputValue()).trim();
-          await input.press("ControlOrMeta+Enter");
-          expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
-            message,
-            mentions,
-          });
-          await input.waitFor({ state: "hidden" });
-          await expectForegroundUnchanged(page, composer, url);
-          expect(await gateway.getRequests("chat.send")).toEqual([]);
-          expect(await gateway.getRequests("sessions.sharing.set")).toEqual([]);
-        },
+  it("keeps one, two, and many people compact and anchored at desktop and phone widths", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, mentionScenario());
+      const { palette, input, composer, url } = await openFromForeground(
+        page,
+        suite.server.baseUrl,
       );
-    },
-  );
+      await page.evaluate(() => document.fonts.ready);
+      const widths = [1280, 390];
+      const before = new Map<number, Awaited<ReturnType<typeof anchors>>>();
+      for (const width of widths) {
+        await page.setViewportSize({ width, height: 900 });
+        await twoFrames(page);
+        before.set(width, await anchors(palette));
+      }
+      const mentions = [];
+      for (let index = 0; index < people.length; index++) {
+        const start = (await input.inputValue()).length;
+        await selectPerson(input, palette, index);
+        mentions.push({
+          profileId: people[index]!.profileId,
+          start,
+          end: start + people[index]!.displayName.length + 1,
+        });
+        if ([1, 2, 10].includes(index + 1)) {
+          for (const width of widths) {
+            await page.setViewportSize({ width, height: 900 });
+            await twoFrames(page);
+            expect(await anchors(palette)).toEqual(before.get(width));
+            expect(await palette.locator(".composer-context-strip__person").count()).toBe(
+              index + 1,
+            );
+            expect(await input.getAttribute("aria-activedescendant")).toBeNull();
+          }
+        }
+      }
+      for (const width of widths) {
+        await page.setViewportSize({ width, height: 900 });
+        await twoFrames(page);
+        await palette.locator(".composer-context-strip__more").waitFor({ state: "visible" });
+        // The existing +more chip can stay visible until ResizeObserver sizes the new person.
+        await expect
+          .poll(
+            () =>
+              palette
+                .locator(".composer-context-strip__people")
+                .evaluate((element) => element.scrollWidth <= element.clientWidth),
+            { timeout: controlUiE2eWaitTimeoutMs },
+          )
+          .toBe(true);
+        await input.press("@");
+        const menu = palette.getByRole("listbox", { name: "Mention a person" });
+        await menu.getByText(/10 people/u).waitFor();
+        expect(await menu.textContent()).toContain("10 people");
+        expect(await menu.getByRole("option").count()).toBe(0);
+        expect(await input.getAttribute("aria-activedescendant")).toBeNull();
+        const limited = await input.inputValue();
+        await input.press("Enter");
+        expect(await input.inputValue()).toBe(limited);
+        expect(await gateway.getRequests("sessions.create")).toEqual([]);
+        await input.press("Escape");
+        expect(await input.isVisible()).toBe(true);
+        await input.press("Backspace");
+      }
+      const message = (await input.inputValue()).trim();
+      await input.press("ControlOrMeta+Enter");
+      expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
+        message,
+        mentions,
+      });
+      await input.waitFor({ state: "hidden" });
+      await expectForegroundUnchanged(page, composer, url);
+      expect(await gateway.getRequests("chat.send")).toEqual([]);
+      expect(await gateway.getRequests("sessions.sharing.set")).toEqual([]);
+    });
+  });
 });

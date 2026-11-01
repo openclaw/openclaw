@@ -1,5 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { createEffect, createMemo, For, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import {
@@ -16,34 +16,41 @@ import type { AgentSelectionCapability } from "../app/agent-selection.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
-import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
+import { i18n } from "../i18n/index.ts";
+import { registerRouteSubtitlesEnglish } from "../i18n/locales/en-route-subtitles.ts";
+import { registerSettingsSidebarEnglish } from "../i18n/locales/en-settings-sidebar.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
-import type { GatewayStatus } from "../lib/gateway-status.ts";
+import type { GatewayStatus as GatewayStatusKind } from "../lib/gateway-status.ts";
 import { isComposingKeyboardEvent } from "../lib/ime.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectAgentSelection } from "../lib/reactive/application.ts";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
-import { listen } from "../lib/reactive/listener.ts";
 import { liveValue } from "../lib/reactive/live-value.ts";
-import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
-import { cancelRoutePreload, scheduleRoutePreload } from "../lib/route-preload.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
+import { themeBrandingProjection } from "../lib/reactive/theme-branding.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
   settingsNavigationLabelForRoute,
   settingsNavigationOwnerRoute,
   settingsSearchTextMatches,
 } from "../lib/settings-navigation.ts";
-import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
-import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.tsx";
-import { renderGatewayStatus } from "./solid/gateway-status.tsx";
+import type { GatewayStatusProps } from "./gateway-status.ts";
+import {
+  SettingsSaveIndicator,
+  type SettingsSaveIndicatorProps,
+} from "./settings-save-indicator.tsx";
+import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
+import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
+import "./agent-select-registration.ts";
+import "../styles/settings.css";
 import { Kbd } from "./solid/kbd.tsx";
 import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
-import "./agent-select-registration.ts";
-import "./settings-save-indicator.tsx";
-import "../styles/settings.css";
-import "./sidebar-build-chip.tsx";
+
+registerRouteSubtitlesEnglish();
+
+registerSettingsSidebarEnglish();
 
 type AgentRosterRow = AgentsListResult["agents"][number];
 
@@ -57,18 +64,19 @@ export type SettingsSidebarProps = {
   activePathname?: string;
   activeSearch?: string;
   activeHash?: string;
-  connectionStatus: GatewayStatus | null;
+  connectionStatus: GatewayStatusKind | null;
+  footerStatus?: GatewayStatusProps | null;
   lastError: string | null;
   gatewayVersion: string;
   searchQuery: string;
   searchBlockMatches?: readonly SettingsSearchBlock[];
-  searchParams?: Parameters<typeof findSettingsSearchBlocks>[0];
+  searchParams?: Parameters<
+    typeof import("../pages/config/settings-search.ts").findSettingsSearchBlocks
+  >[0];
   onExit: () => void;
   onRetryConnect: () => void;
   onNavigate: (routeId: RouteId, options?: ApplicationNavigationOptions) => void;
-  onPreload?: (routeId: RouteId) => Promise<void> | void;
   onSearchQueryChange: (query: string) => void;
-  preloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
   saveIndicator: SettingsSaveIndicatorProps;
   canAdmin?: boolean;
   nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
@@ -83,96 +91,6 @@ type SettingsNavigationItemView = {
   routeId: RouteId;
   blocks: readonly SettingsSearchBlock[];
 };
-
-function isRedundantRouteBlock(routeId: RouteId, block: SettingsSearchBlock): boolean {
-  if (block.pathname) {
-    return false;
-  }
-  const blockLabel = normalizeLowercaseStringOrEmpty(block.label);
-  return [settingsNavigationLabelForRoute(routeId), titleForRoute(routeId)].some(
-    (label) => normalizeLowercaseStringOrEmpty(label) === blockLabel,
-  );
-}
-
-function filterSettingsNavigationGroups(
-  searchQuery: string,
-  blockMatches: readonly SettingsSearchBlock[],
-  canAdmin: boolean,
-  nativeDeviceSettings: NativeDeviceSettingsCapability | null,
-): readonly SettingsNavigationGroupView[] {
-  const navigationGroups = visibleSettingsNavigationGroups(canAdmin, nativeDeviceSettings);
-  const visibleBlockMatches = blockMatches.filter((block) =>
-    isSettingsNavigationRouteVisible(block.routeId, canAdmin, nativeDeviceSettings),
-  );
-  const query = normalizeLowercaseStringOrEmpty(searchQuery);
-  if (!query) {
-    return navigationGroups.map((group) => ({
-      labelKey: group.labelKey,
-      items: group.routes.map((routeId) => ({ routeId, blocks: [] })),
-    }));
-  }
-  const sidebarRoutes = navigationGroups.flatMap((group) => group.routes);
-  const searchableRoutes = [
-    ...new Set([
-      ...sidebarRoutes,
-      ...SETTINGS_SEARCHABLE_SUBPAGE_ROUTES.filter((routeId) =>
-        isSettingsNavigationRouteVisible(routeId, canAdmin, nativeDeviceSettings),
-      ),
-      ...visibleBlockMatches.map((block) => block.routeId),
-    ]),
-  ];
-  const directRoutes = searchableRoutes.filter((routeId) =>
-    [
-      settingsNavigationLabelForRoute(routeId),
-      titleForRoute(routeId),
-      subtitleForRoute(routeId),
-    ].some((value) => settingsSearchTextMatches(value, query)),
-  );
-  const includedRoutes = new Set<RouteId>(directRoutes);
-  const groupRoutes = navigationGroups.flatMap((group) => {
-    const groupMatches = group.labelKey && settingsSearchTextMatches(t(group.labelKey), query);
-    if (!groupMatches) {
-      return [];
-    }
-    return group.routes.filter((routeId) => {
-      if (includedRoutes.has(routeId)) {
-        return false;
-      }
-      includedRoutes.add(routeId);
-      return true;
-    });
-  });
-  const blocksByRoute = new Map<RouteId, SettingsSearchBlock[]>();
-  const seenBlocks = new Set<string>();
-  for (const block of visibleBlockMatches) {
-    const blockKey = `${block.routeId}\u0000${block.pathname ?? ""}\u0000${block.search ?? ""}\u0000${block.hash}`;
-    if (seenBlocks.has(blockKey)) {
-      continue;
-    }
-    seenBlocks.add(blockKey);
-    const routeBlocks = blocksByRoute.get(block.routeId) ?? [];
-    routeBlocks.push(block);
-    blocksByRoute.set(block.routeId, routeBlocks);
-  }
-  const pageRoutes = [...directRoutes, ...groupRoutes];
-  return [
-    {
-      labelKey: null,
-      items: pageRoutes.map((routeId) => ({
-        routeId,
-        blocks: (blocksByRoute.get(routeId) ?? []).filter(
-          (block) => !isRedundantRouteBlock(routeId, block),
-        ),
-      })),
-    },
-    ...searchableRoutes
-      .filter((routeId) => !includedRoutes.has(routeId) && blocksByRoute.has(routeId))
-      .map((routeId) => ({
-        labelKey: null,
-        items: [{ routeId, blocks: blocksByRoute.get(routeId) ?? [] }],
-      })),
-  ].filter((group) => group.items.length > 0);
-}
 
 function buildAgentRosterTree(agents: AgentRosterRow[]) {
   const agentById = new Map(agents.map((agent) => [agent.id, agent]));
@@ -215,36 +133,14 @@ function SettingsNavigationItem(props: {
   branding: ThemeBranding;
 }) {
   const active = () => settingsNavigationOwnerRoute(props.sidebar.activeRouteId) === props.routeId;
-  const preload = (event: Event, touch = false) =>
-    scheduleRoutePreload(
-      props.sidebar.preloadTimers,
-      props.routeId,
-      event,
-      props.sidebar.onPreload,
-      active(),
-      touch,
-    );
-  let anchor!: HTMLAnchorElement;
-  onSettled(() => listen(anchor, "touchstart", (event) => preload(event, true), { passive: true }));
   return (
     <a
-      ref={(element) => {
-        anchor = element;
-      }}
       href={pathForRoute(props.routeId, props.sidebar.basePath)}
       class={["settings-sidebar__item", { "settings-sidebar__item--active": active() }]}
       aria-current={active() ? "page" : undefined}
-      onFocus={preload}
-      onBlur={(event) => cancelRoutePreload(props.sidebar.preloadTimers, event)}
-      onPointerEnter={preload}
-      onPointerLeave={(event) => cancelRoutePreload(props.sidebar.preloadTimers, event)}
-      onClick={(event) => {
-        if (!shouldHandleNavigationClick(event)) {
-          return;
-        }
-        event.preventDefault();
-        props.sidebar.onNavigate(props.routeId);
-      }}
+      onClick={(event) =>
+        handleNavigationClick(event, () => props.sidebar.onNavigate(props.routeId))
+      }
     >
       <span class="settings-sidebar__item-icon" aria-hidden="true">
         <Show
@@ -286,17 +182,15 @@ function SettingsBlockItem(props: { sidebar: SettingsSidebarProps; block: Settin
       href={pathname() + (props.block.search ?? "") + props.block.hash}
       class={["settings-sidebar__subitem", { "settings-sidebar__subitem--active": active() }]}
       aria-current={active() ? "location" : undefined}
-      onClick={(event) => {
-        if (!shouldHandleNavigationClick(event)) {
-          return;
-        }
-        event.preventDefault();
-        props.sidebar.onNavigate(props.block.routeId, {
-          ...(props.block.pathname ? { pathname: props.block.pathname } : {}),
-          ...(props.block.search ? { search: props.block.search } : {}),
-          hash: props.block.hash,
-        });
-      }}
+      onClick={(event) =>
+        handleNavigationClick(event, () => {
+          props.sidebar.onNavigate(props.block.routeId, {
+            ...(props.block.pathname ? { pathname: props.block.pathname } : {}),
+            ...(props.block.search ? { search: props.block.search } : {}),
+            hash: props.block.hash,
+          });
+        })
+      }
     >
       <span class="settings-sidebar__subitem-label">{props.block.label}</span>
     </a>
@@ -308,14 +202,24 @@ function SettingsAgentSelector(props: SettingsSidebarProps) {
   const selectionSource = createMemo(() => props.settingsAgentSelection);
   const identities = createMemo(() => projectOwner(identitySource(), (source) => source.entries()));
   const selection = createMemo(() => projectAgentSelection(selectionSource()));
+  let readIdentityTargets: () => readonly (string | null)[] = () => [
+    selection().read().state.selectedId,
+  ];
   createEffect(
-    () => [identitySource(), selection().read().state.selectedId] as const,
-    ([source, agentId]) => {
-      void source.ensure([agentId]);
+    () => {
+      identities().read();
+      return {
+        source: identitySource(),
+        ids: [...new Set([selection().read().state.selectedId, ...readIdentityTargets()])],
+      };
+    },
+    ({ source, ids }) => {
+      void source.ensure(ids);
     },
   );
+  const roster = createMemo(() => props.agents);
   const agents = createMemo(() =>
-    listSelectableAgents(props.agents).map((agent) =>
+    listSelectableAgents(roster()).map((agent) =>
       Object.assign({}, agent, {
         id: normalizeAgentId(agent.id),
         creatorAgentId: agent.creatorAgentId
@@ -336,6 +240,10 @@ function SettingsAgentSelector(props: SettingsSidebarProps) {
     <div class="settings-sidebar__agent">
       <openclaw-agent-select
         prop:options={options()}
+        prop:identityTargetsRef={(read) => {
+          readIdentityTargets = read;
+        }}
+        prop:onIdentityTargetsChange={() => void identitySource().ensure(readIdentityTargets())}
         prop:identityById={Object.fromEntries(
           identities()
             .read()
@@ -346,7 +254,6 @@ function SettingsAgentSelector(props: SettingsSidebarProps) {
         prop:menuLabel={t("agentScope.label")}
         prop:disabled={options().length <= 1}
         prop:onSelect={(agentId: string) => props.settingsAgentSelection.set(agentId)}
-        onOverlay-show={() => void props.agentIdentity.ensure(agents().map((agent) => agent.id))}
       />
     </div>
   );
@@ -356,13 +263,14 @@ function SettingsConnectionStatus(props: SettingsSidebarProps) {
   return (
     <Show
       when={props.connectionStatus !== null}
-      fallback={<openclaw-settings-save-indicator prop:props={props.saveIndicator} />}
+      fallback={<SettingsSaveIndicator {...props.saveIndicator} />}
     >
-      {renderGatewayStatus({
-        kind: props.connectionStatus,
-        lastError: props.lastError,
-        onRetry: props.onRetryConnect,
-      })}
+      <GatewayStatus
+        kind={props.connectionStatus}
+        lastError={props.lastError}
+        onRetry={props.onRetryConnect}
+        announce
+      />
     </Show>
   );
 }
@@ -400,21 +308,107 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
   const query = createMemo(() => props.searchQuery);
   let searchInput: HTMLInputElement | undefined;
   function SettingsNavigation() {
-    const branding = projectSource(null, {
-      read: currentThemeBranding,
-      subscribe: (_source, notify) => subscribeThemeBranding(notify),
-      equality: Object.is,
+    const branding = themeBrandingProjection;
+    const blockMatches = createMemo(() => {
+      i18nRevision();
+      const params = props.searchParams;
+      if (props.searchBlockMatches) {
+        return props.searchBlockMatches;
+      }
+      if (!props.searchQuery.trim() || !params) {
+        return [];
+      }
+      return (async () => {
+        const { findSettingsSearchBlocks } = await import("../pages/config/settings-search.ts");
+        await i18n.prepareLocale();
+        return findSettingsSearchBlocks(params);
+      })();
     });
-    const groups = createMemo(() => {
+    const groups = createMemo<readonly SettingsNavigationGroupView[]>(() => {
       i18nRevision();
       branding.read();
-      return filterSettingsNavigationGroups(
-        props.searchQuery,
-        props.searchBlockMatches ??
-          (props.searchParams ? findSettingsSearchBlocks(props.searchParams) : []),
-        props.canAdmin !== false,
-        props.nativeDeviceSettings ?? null,
+      const searchQuery = props.searchQuery;
+      const canAdmin = props.canAdmin !== false;
+      const nativeDeviceSettings = props.nativeDeviceSettings ?? null;
+      const navigationGroups = visibleSettingsNavigationGroups(canAdmin, nativeDeviceSettings);
+      const normalizedQuery = normalizeLowercaseStringOrEmpty(searchQuery);
+      if (!normalizedQuery) {
+        return navigationGroups.map((group) => ({
+          labelKey: group.labelKey,
+          items: group.routes.map((routeId) => ({ routeId, blocks: [] })),
+        }));
+      }
+      const visibleBlockMatches = blockMatches().filter((block) =>
+        isSettingsNavigationRouteVisible(block.routeId, canAdmin, nativeDeviceSettings),
       );
+      const sidebarRoutes = navigationGroups.flatMap((group) => group.routes);
+      const searchableRoutes = [
+        ...new Set([
+          ...sidebarRoutes,
+          ...SETTINGS_SEARCHABLE_SUBPAGE_ROUTES.filter((routeId) =>
+            isSettingsNavigationRouteVisible(routeId, canAdmin, nativeDeviceSettings),
+          ),
+          ...visibleBlockMatches.map((block) => block.routeId),
+        ]),
+      ];
+      const directRoutes = searchableRoutes.filter((routeId) =>
+        [
+          settingsNavigationLabelForRoute(routeId),
+          titleForRoute(routeId),
+          subtitleForRoute(routeId),
+        ].some((value) => settingsSearchTextMatches(value, normalizedQuery)),
+      );
+      const includedRoutes = new Set<RouteId>(directRoutes);
+      const groupRoutes = navigationGroups.flatMap((group) => {
+        const groupMatches =
+          group.labelKey && settingsSearchTextMatches(t(group.labelKey), normalizedQuery);
+        if (!groupMatches) {
+          return [];
+        }
+        return group.routes.filter((routeId) => {
+          if (includedRoutes.has(routeId)) {
+            return false;
+          }
+          includedRoutes.add(routeId);
+          return true;
+        });
+      });
+      const blocksByRoute = new Map<RouteId, SettingsSearchBlock[]>();
+      const seenBlocks = new Set<string>();
+      for (const block of visibleBlockMatches) {
+        const blockKey = `${block.routeId}\u0000${block.pathname ?? ""}\u0000${block.search ?? ""}\u0000${block.hash}`;
+        if (seenBlocks.has(blockKey)) {
+          continue;
+        }
+        seenBlocks.add(blockKey);
+        const routeBlocks = blocksByRoute.get(block.routeId) ?? [];
+        routeBlocks.push(block);
+        blocksByRoute.set(block.routeId, routeBlocks);
+      }
+      const pageRoutes = [...directRoutes, ...groupRoutes];
+      return [
+        {
+          labelKey: null,
+          items: pageRoutes.map((routeId) => ({
+            routeId,
+            blocks: (blocksByRoute.get(routeId) ?? []).filter((block) => {
+              if (block.pathname) {
+                return true;
+              }
+              const blockLabel = normalizeLowercaseStringOrEmpty(block.label);
+              return ![settingsNavigationLabelForRoute(routeId), titleForRoute(routeId)].some(
+                (label) => normalizeLowercaseStringOrEmpty(label) === blockLabel,
+              );
+            }),
+          })),
+        },
+        ...searchableRoutes
+          .filter((routeId) => !includedRoutes.has(routeId) && blocksByRoute.has(routeId))
+          .map((routeId) => ({
+            labelKey: null,
+            items: [{ routeId, blocks: blocksByRoute.get(routeId) ?? [] }],
+          })),
+      ].filter((group) => group.items.length > 0);
     });
     return (
       <nav
@@ -427,38 +421,57 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           )
         }
       >
-        <Show
-          when={groups().length > 0}
-          fallback={
-            <p class="settings-sidebar__empty" role="status">
-              {t("nav.settingsSearchNoResults")}
+        <Errored
+          fallback={(_error, retry) => (
+            <p class="settings-sidebar__empty" role="alert">
+              {t("nav.settingsLoadFailed")}
+              <button type="button" class="btn btn--sm" onClick={retry}>
+                {t("common.retry")}
+              </button>
             </p>
-          }
+          )}
         >
-          <For each={groups()} keyed={false}>
-            {(group) => (
-              <div class="settings-sidebar__group">
-                <Show when={group().labelKey}>
-                  {(label) => <div class="settings-sidebar__group-label">{t(label())}</div>}
-                </Show>
-                <For each={group().items} keyed={false}>
-                  {(item) => (
-                    <>
-                      <SettingsNavigationItem
-                        sidebar={props}
-                        routeId={item().routeId}
-                        branding={branding.read()}
-                      />
-                      <For each={item().blocks} keyed={false}>
-                        {(block) => <SettingsBlockItem sidebar={props} block={block()} />}
-                      </For>
-                    </>
-                  )}
-                </For>
-              </div>
-            )}
-          </For>
-        </Show>
+          <Loading
+            fallback={
+              <p class="settings-sidebar__empty" role="status">
+                {t("common.loading")}
+              </p>
+            }
+          >
+            <Show
+              when={groups().length > 0}
+              fallback={
+                <p class="settings-sidebar__empty" role="status">
+                  {t("nav.settingsSearchNoResults")}
+                </p>
+              }
+            >
+              <For each={groups()} keyed={false}>
+                {(group) => (
+                  <div class="settings-sidebar__group">
+                    <Show when={group().labelKey}>
+                      {(label) => <div class="settings-sidebar__group-label">{t(label())}</div>}
+                    </Show>
+                    <For each={group().items} keyed={false}>
+                      {(item) => (
+                        <>
+                          <SettingsNavigationItem
+                            sidebar={props}
+                            routeId={item().routeId}
+                            branding={branding.read()}
+                          />
+                          <For each={item().blocks} keyed={false}>
+                            {(block) => <SettingsBlockItem sidebar={props} block={block()} />}
+                          </For>
+                        </>
+                      )}
+                    </For>
+                  </div>
+                )}
+              </For>
+            </Show>
+          </Loading>
+        </Errored>
       </nav>
     );
   }
@@ -512,7 +525,9 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
                   return;
                 }
                 event.preventDefault();
-                if (props.searchQuery) {
+                // Native input can be newer than the committed query projection.
+                if (event.currentTarget.value) {
+                  event.currentTarget.value = "";
                   props.onSearchQueryChange("");
                 } else {
                   props.onExit();
@@ -535,14 +550,21 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           </div>
           <SettingsNavigation />
           <footer class="settings-sidebar__footer">
+            <Show when={props.footerStatus}>
+              {(status) => (
+                <div class="sidebar-shell__footer">
+                  <GatewayStatus {...status()} row />
+                </div>
+              )}
+            </Show>
             <div class="settings-sidebar__connection">
-              <SettingsConnectionStatus {...props} />
+              <SettingsSaveIndicator {...props.saveIndicator} />
             </div>
-            <openclaw-sidebar-build-chip
-              prop:basePath={props.basePath}
-              prop:gatewayVersion={props.gatewayVersion || null}
-              prop:variant="settings"
-              prop:onNavigate={() => props.onNavigate("about")}
+            <SidebarBuildChip
+              basePath={props.basePath}
+              gatewayVersion={props.gatewayVersion || null}
+              variant="settings"
+              onNavigate={() => props.onNavigate("about")}
             />
           </footer>
         </aside>

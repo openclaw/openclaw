@@ -1,3 +1,5 @@
+import type { SandboxConfig } from "../../agents/sandbox/types.js";
+import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import {
   captureWorktreeRegistryReadGuard,
   prepareWorktreeRegistryGuard,
@@ -11,22 +13,138 @@ import type {
 } from "../../agents/worktrees/types.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
+import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
+import { localWorkspaceProjectionPath } from "./local-workspace-checkout.js";
+import { finishLocalWorkspaceHandoff } from "./local-workspace-handoff.js";
+import { assertLocalWorkspaceProjectionOwner } from "./local-workspace-owner-identity.js";
 import { projectionOperations } from "./local-workspace-state.js";
 import { withLocalWorkspaceStore, type LocalWorkspaceStore } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
+import { workspaceSizeRecoveryPaths } from "./workspace-manifest-comparison.js";
 import { isLocalWorkspaceBaseRefreshRef } from "./workspace-result-inventory.js";
 
 type LocalWorkspaceCustody = {
+  worktreeId: string;
+  projectionPath?: string;
+  projectionRevision?: number;
   prepareArchive?: (snapshot: string) => Promise<void>;
   canonicalPaths?: () => Promise<Set<string>>;
   assertCurrent: () => void;
   workerAuthority: WorktreeWorkerAuthority;
 };
+
+type PendingWorkspaceOperation<T> = { result: Promise<T>; signal?: AbortSignal };
+const pendingCheckpoints = new Map<string, PendingWorkspaceOperation<void>>();
+const pendingPreparations = new Map<string, PendingWorkspaceOperation<string>>();
+
+/** Queued preparations share observation, while each caller retains its own run authority. */
+export function withLocalWorkspacePreparation(
+  owner: LocalWorkspaceOwner,
+  options: { sandbox: SandboxConfig; acceleration: boolean; signal?: AbortSignal },
+  prepare: (beginCapture: () => void) => Promise<string>,
+): Promise<string> {
+  return joinLocalWorkspaceOperation(
+    pendingPreparations,
+    owner,
+    [owner.agentId, owner.sessionKey, owner.sessionId, owner.lifecycleRevision],
+    prepare,
+    options,
+  );
+}
+
+async function joinLocalWorkspaceOperation<T>(
+  pendingOperations: Map<string, PendingWorkspaceOperation<T>>,
+  params: {
+    worktree: ManagedWorktreeRecord;
+    env?: NodeJS.ProcessEnv;
+    assertCurrent?: () => void;
+    workerAuthority?: WorktreeWorkerAuthority;
+  },
+  session: readonly [string, string, string, string | null] | undefined,
+  run: (beginCapture: () => void) => Promise<T>,
+  options: { sandbox?: SandboxConfig; acceleration?: boolean; signal?: AbortSignal } = {},
+): Promise<T> {
+  const context = captureWorktreeRunEndContext(params.env ?? process.env);
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    options.signal?.throwIfAborted();
+    params.assertCurrent?.();
+    params.workerAuthority?.assertCurrent?.();
+  };
+  assertCurrent();
+  const { worktree } = params;
+  const key = JSON.stringify([
+    context.admission.coordinationKey,
+    worktree.id,
+    worktree.path,
+    worktree.repoRoot,
+    worktree.ownerKind,
+    worktree.ownerId,
+    worktree.branch,
+    worktree.snapshotRef,
+    worktree.removedAt,
+    session,
+    options.sandbox,
+    options.acceleration,
+  ]);
+  const pending = pendingOperations.get(key);
+  let result: T;
+  if (pending) {
+    try {
+      result = await racePromiseWithAbortSignal(pending.result, options.signal);
+    } catch (error) {
+      assertCurrent();
+      // Retry a stopped producer only after settlement, never an uncertain write
+      // or storage failure that happened to coincide with its cancellation.
+      if (
+        pending.signal?.aborted &&
+        (error === pending.signal.reason ||
+          (error instanceof OpenClawStateLeaseError &&
+            error.code === "OPENCLAW_STATE_LEASE_ABORTED" &&
+            error.cause === pending.signal.reason))
+      ) {
+        return joinLocalWorkspaceOperation(pendingOperations, params, session, run, options);
+      }
+      throw error;
+    }
+  } else {
+    const forget = () => {
+      if (pendingOperations.get(key)?.result === resultPromise) {
+        pendingOperations.delete(key);
+      }
+    };
+    // Guest writes do not advance a database generation. Requests arriving after
+    // capture starts need their own observation, even while this one is in flight.
+    const resultPromise = run(forget).finally(forget);
+    pendingOperations.set(key, { result: resultPromise, signal: options.signal });
+    result = await resultPromise;
+  }
+  assertCurrent();
+  return result;
+}
+
+/** Checkpoint callers keep their own session authority while sharing queued capture. */
+export function checkpointLocalWorkspace(owner: LocalWorkspaceOwner): Promise<void> {
+  return joinLocalWorkspaceOperation(
+    pendingCheckpoints,
+    owner,
+    [owner.agentId, owner.sessionKey, owner.sessionId, owner.lifecycleRevision],
+    (beginCapture) =>
+      withLocalWorkspaceProjection(owner, (state) => {
+        beginCapture();
+        return state.synchronize("canonical");
+      }),
+  );
+}
 
 /** Publication and lifecycle callers retain their own authority while joining local settlement. */
 export async function withSettledLocalWorkspace<T>(
@@ -38,17 +156,82 @@ export async function withSettledLocalWorkspace<T>(
     retireRuntime?: boolean;
     restoreSnapshot?: boolean;
     finishRestore?: boolean;
+    sessionOwner?: Pick<
+      LocalWorkspaceOwner,
+      "agentId" | "sessionKey" | "sessionId" | "lifecycleRevision"
+    >;
   },
   operation: (custody?: LocalWorkspaceCustody) => Promise<T>,
 ): Promise<T> {
+  return await settleLocalWorkspace(params, operation);
+}
+
+async function settleLocalWorkspace<T>(
+  params: Parameters<typeof withSettledLocalWorkspace>[0],
+  operation: (custody?: LocalWorkspaceCustody) => Promise<T>,
+  beginCapture?: () => void,
+): Promise<T> {
   const context = captureWorktreeRunEndContext(params.env ?? process.env);
   const env = { ...(params.env ?? process.env), ...context.environment };
+  const persistentRetirements: Array<{ finish: () => Promise<void> }> = [];
+  if (params.retireRuntime) {
+    // Stream finalization checkpoints acquire the projection lease themselves.
+    // Settle them before taking that lease; its quiescence owner rechecks custody below.
+    const reply = await executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env },
+      { type: "localWorkspace.get", input: { id: params.worktree.id } },
+      { context, current: true, live: true },
+    );
+    context.admission.assertCurrent();
+    params.assertCurrent?.();
+    if (reply && (!reply.ok || reply.type !== "localWorkspace.get")) {
+      throw new Error("Unexpected local workspace retirement lookup");
+    }
+    if (reply?.row) {
+      if (params.sessionOwner) {
+        const expectedOwner: LocalWorkspaceOwner = {
+          ...params.sessionOwner,
+          // The existing same-id reset repair below owns lifecycle-revision adoption.
+          lifecycleRevision: reply.row.lifecycle_revision,
+          worktree: params.worktree,
+          env,
+          assertCurrent: params.assertCurrent ?? (() => {}),
+        };
+        assertLocalWorkspaceProjectionOwner(
+          reply.row,
+          expectedOwner,
+          localWorkspaceProjectionPath(expectedOwner),
+        );
+      }
+      const { readRegistry } = await import("../../agents/sandbox/registry.js");
+      const { prepareSandboxPersistentExecRetirement } =
+        await import("../../agents/sandbox/persistent-exec-retirement.js");
+      for (const runtime of (await readRegistry({ path: context.admission.databasePath, env }))
+        .entries) {
+        if (runtime.workspaceDir === reply.row.projection_path) {
+          persistentRetirements.push(
+            await prepareSandboxPersistentExecRetirement({
+              containerName: runtime.containerName,
+              env,
+              assertCurrent: () => {
+                context.admission.assertCurrent();
+                params.assertCurrent?.();
+                params.workerAuthority?.assertCurrent?.();
+              },
+            }),
+          );
+        }
+      }
+    }
+  }
   return await withLocalWorkspaceStore(
     { ...params, env, worktreeId: params.worktree.id },
     async (store) => {
+      store.assertCurrent();
       const row = store.get();
       if (!row) {
         return await operation({
+          worktreeId: params.worktree.id,
           assertCurrent: store.assertCurrent,
           workerAuthority: store.workerAuthority,
         });
@@ -74,17 +257,22 @@ export async function withSettledLocalWorkspace<T>(
       const owner: LocalWorkspaceOwner = {
         worktree,
         env,
-        agentId: row.agent_id,
-        sessionKey: row.session_key,
-        sessionId: row.session_id,
-        lifecycleRevision: row.lifecycle_revision,
+        agentId: params.sessionOwner?.agentId ?? row.agent_id,
+        sessionKey: params.sessionOwner?.sessionKey ?? row.session_key,
+        sessionId: params.sessionOwner?.sessionId ?? row.session_id,
+        lifecycleRevision: params.sessionOwner
+          ? params.sessionOwner.lifecycleRevision
+          : row.lifecycle_revision,
         workerAuthority,
         assertCurrent: () => {
-          params.assertCurrent?.();
+          if (params.assertCurrent !== workerAuthority.assertCurrent) {
+            params.assertCurrent?.();
+          }
           assertWorktreeCurrent();
         },
       };
       return await runLocalWorkspaceProjection(owner, store, async (state, quiescence) => {
+        beginCapture?.();
         if (params.finishRestore) {
           await state.finishRestore();
         } else if (params.restoreSnapshot) {
@@ -97,22 +285,61 @@ export async function withSettledLocalWorkspace<T>(
           }
         }
         if (params.retireRuntime) {
+          for (const retirement of persistentRetirements) {
+            await retirement.finish();
+          }
           await quiescence?.retire();
         }
-        owner.assertCurrent();
+        const current = state.current();
         return await operation(
-          state.current().baseline_ref
+          current.baseline_ref
             ? {
+                worktreeId: worktree.id,
+                projectionPath: current.projection_path,
+                projectionRevision: current.revision,
                 prepareArchive: state.prepareArchive,
                 canonicalPaths: state.canonicalPaths,
                 assertCurrent: state.current,
                 workerAuthority: state.workerAuthority,
               }
-            : { assertCurrent: store.assertCurrent, workerAuthority: store.workerAuthority },
+            : {
+                worktreeId: worktree.id,
+                projectionRevision: current.revision,
+                assertCurrent: store.assertCurrent,
+                workerAuthority: store.workerAuthority,
+              },
         );
       });
     },
   );
+}
+
+/** File readers need a fresh checkpoint, not a lease-bearing custody callback. */
+export async function checkpointLocalWorkspacePath(params: {
+  cwd: string;
+  assertCurrent?: () => void;
+}): Promise<void> {
+  const context = captureWorktreeRunEndContext(process.env);
+  const env = { ...process.env, ...context.environment };
+  const worktree = await readLiveRegistryWorktreeByPath(context, params.cwd);
+  params.assertCurrent?.();
+  if (worktree) {
+    const projection = await executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env },
+      { type: "localWorkspace.exists", input: { id: worktree.id } },
+      { context, current: true, live: true },
+    );
+    context.admission.assertCurrent();
+    params.assertCurrent?.();
+    // An absent projection has no checkpoint; custody callbacks still own absent rows.
+    if (projection?.exists === false) {
+      return;
+    }
+    const checkpoint = { worktree, env, assertCurrent: params.assertCurrent };
+    await joinLocalWorkspaceOperation(pendingCheckpoints, checkpoint, undefined, (beginCapture) =>
+      settleLocalWorkspace(checkpoint, async () => {}, beginCapture),
+    );
+  }
 }
 
 export async function withSettledLocalWorkspacePath<T>(
@@ -129,6 +356,76 @@ export async function withSettledLocalWorkspacePath<T>(
         operation,
       )
     : await operation();
+}
+
+/** An unchanged turn needs no filesystem effects and can leave its runtimes running. */
+export function reuseLocalWorkspaceProjection(
+  owner: LocalWorkspaceOwner,
+  signal?: AbortSignal,
+  beginCapture?: () => void,
+) {
+  return withLocalWorkspaceStore(
+    { ...owner, worktreeId: owner.worktree.id, signal },
+    async (store) => {
+      using phases = observeDiagnosticsTimelinePhases(
+        "attempt.setup.sandbox.workspace_selection.reuse.reconcile",
+      );
+      try {
+        let row = store.get();
+        if (row?.baseline_ref) {
+          beginCapture?.();
+        }
+        if (
+          row?.baseline_ref &&
+          row.tree_root_digest &&
+          row.session_id === owner.sessionId &&
+          row.lifecycle_revision === owner.lifecycleRevision &&
+          !row.pending_ref &&
+          !row.journal_json &&
+          !row.paused_runtimes_json
+        ) {
+          // Bind this row to the session before probing. The lease and observation
+          // receipts preserve that binding; every store call rechecks live authority.
+          projectionOperations(owner, store, row).current();
+          for (const target of ["canonical", "projection"] as const) {
+            const selected = row;
+            const snapshot = await timeWorktreePreparationPhase(
+              target === "canonical" ? "synchronizeCanonical" : "synchronizeProjection",
+              async () => {
+                try {
+                  // A probe never prepares changed packs or repairs a baseline.
+                  // Live writers can interrupt discovery; retry after pausing.
+                  return await store.manifest(selected, {
+                    kind: "probe",
+                    target,
+                    canonicalRoot: owner.worktree.path,
+                  });
+                } catch {
+                  store.signal.throwIfAborted();
+                  store.assertCurrent();
+                  return undefined;
+                }
+              },
+            );
+            store.assertCurrent();
+            if (snapshot?.kind !== "scan" || snapshot.resultingRoot !== snapshot.previousRoot) {
+              break;
+            }
+            // Acceptance failures must propagate, never retry an uncertain write.
+            if (snapshot.observation) {
+              row = await store.accept(snapshot.observation, owner.workerAuthority);
+            }
+            if (target === "projection") {
+              return row.projection_path;
+            }
+          }
+        }
+        return await runLocalWorkspaceProjection(owner, store, (state) => state.reuse());
+      } finally {
+        phases.mark("attempt.setup.sandbox.workspace_selection.reuse.release");
+      }
+    },
+  );
 }
 
 /** Every operation owns the same renewable, cross-process reconciliation lease. */
@@ -157,18 +454,10 @@ async function runLocalWorkspaceProjection<T>(
   options: { provision?: boolean } = {},
 ) {
   const assertCurrent = () => {
-    store.assertCurrent();
+    store.get();
     owner.assertCurrent();
   };
   assertCurrent();
-  const workerAuthority: WorktreeWorkerAuthority = {
-    ...store.workerAuthority,
-    predicates: owner.workerAuthority?.predicates ?? store.workerAuthority.predicates,
-    assertCurrent: () => {
-      store.workerAuthority.assertCurrent?.();
-      owner.workerAuthority?.assertCurrent?.();
-    },
-  };
   let previous = store.get();
   // A reset may recover its prior result; another session incarnation cannot adopt it.
   if (
@@ -181,37 +470,51 @@ async function runLocalWorkspaceProjection<T>(
     previous = await store.update(
       previous,
       { lifecycle_revision: owner.lifecycleRevision },
-      workerAuthority,
+      owner.workerAuthority,
     );
   }
-  const operations = projectionOperations(
-    { ...owner, assertCurrent, workerAuthority },
-    store,
-    previous,
-  );
+  const operations = projectionOperations(owner, store, previous);
+  if (previous) {
+    operations.current();
+  }
   const { quiesceLocalWorkspace, parseLocalWorkspacePausedRuntimes } =
     await import("../../agents/sandbox/local-workspace-quiescence.js");
   const quiescence =
     previous && !options.provision
-      ? await quiesceLocalWorkspace({
-          workspaceDir: previous.projection_path,
-          retained: parseLocalWorkspacePausedRuntimes(previous.paused_runtimes_json),
-          persist: (runtimes) =>
-            operations.rememberPaused(runtimes.length ? JSON.stringify(runtimes) : null),
-          assertCurrent,
-        })
+      ? await timeWorktreePreparationPhase("runtimeQuiesce", () =>
+          quiesceLocalWorkspace({
+            env: owner.env,
+            workspaceDir: previous.projection_path,
+            retained: parseLocalWorkspacePausedRuntimes(previous.paused_runtimes_json),
+            persist: (runtimes) =>
+              operations.rememberPaused(runtimes.length ? JSON.stringify(runtimes) : null),
+            assertCurrent,
+          }),
+        )
       : undefined;
   try {
     return await run(operations, quiescence);
+  } catch (error) {
+    if (error instanceof Error && workspaceSizeRecoveryPaths(error).length > 0) {
+      const { describeLocalWorkspaceRecovery } = await import("./local-workspace-recovery.js");
+      throw await describeLocalWorkspaceRecovery(error, owner, operations);
+    }
+    throw error;
   } finally {
-    // Only acknowledged journal changes allow the frozen guest to resume.
-    const retained = store.get();
+    // Retirement finished cleanup before removal could invalidate the old binding.
+    // Otherwise, only acknowledged journal changes allow the frozen guest to resume.
+    if (!quiescence?.retired) {
+      store.workerAuthority.assertCurrent?.();
+    }
+    const retained = quiescence?.retired ? undefined : store.get();
     if (
       retained &&
       !retained.journal_json &&
       !(retained.pending_target && isLocalWorkspaceBaseRefreshRef(retained.pending_ref))
     ) {
-      await quiescence?.resume();
+      if (quiescence) {
+        await timeWorktreePreparationPhase("runtimeResume", () => quiescence.resume());
+      }
     }
   }
 }
@@ -229,6 +532,7 @@ export async function expireLocalWorkspaceProjection(params: {
   return await withLocalWorkspaceStore(
     { ...params, env, worktreeId: params.worktree.id },
     async (store) => {
+      store.assertCurrent();
       const row = store.get();
       if (!row) {
         await params.retireSnapshot?.(store.assertCurrent);
@@ -253,6 +557,9 @@ export async function expireLocalWorkspaceProjection(params: {
         lifecycleRevision: row.lifecycle_revision,
         workerAuthority: params.workerAuthority,
         assertCurrent: () => {
+          if (params.workerAuthority?.assertCurrent !== params.assertCurrent) {
+            params.workerAuthority?.assertCurrent?.();
+          }
           params.assertCurrent();
           assertWorktreeCurrent();
         },
@@ -270,6 +577,7 @@ export async function resolveLocalWorkspaceOwner(params: {
   agentId: string;
   sessionKey: string;
   workspaceDir?: string;
+  storePath?: string;
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
 }): Promise<(LocalWorkspaceOwner & Disposable) | undefined> {
@@ -278,26 +586,25 @@ export async function resolveLocalWorkspaceOwner(params: {
   const scope = {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
-    storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
-      agentId: params.agentId,
-      env,
-    }),
+    storePath:
+      params.storePath ??
+      resolveSessionStorePathCore(params.cfg.session?.store, {
+        agentId: params.agentId,
+        env,
+      }),
     env,
   };
-  let active = true;
+  const lifetime = new DisposableStack();
   let retained: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
   let unregister = () => {};
-  const release = () => {
-    if (!active) {
-      return;
-    }
-    active = false;
+  lifetime.defer(() => {
     retained?.release();
     unregister();
-  };
+  });
+  const release = () => lifetime.dispose();
   const assertActive = () => {
     params.assertCurrent?.();
-    if (!active) {
+    if (lifetime.disposed) {
       throw new Error("Local sandbox workspace authority changed");
     }
   };
@@ -358,8 +665,8 @@ export async function resolveLocalWorkspaceOwner(params: {
       throw new Error("Local sandbox managed workspace owner changed");
     }
     const assertSessionCurrent = () => {
-      assertActive();
       if (!metadata) {
+        assertActive();
         if (!retained?.isCurrent()) {
           throw new Error("Local sandbox workspace authority changed");
         }
@@ -380,7 +687,7 @@ export async function resolveLocalWorkspaceOwner(params: {
       assertWorktreeCurrent();
     };
     assertCurrent();
-    return {
+    const owner: LocalWorkspaceOwner & Disposable = {
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       sessionId: entry.sessionId,
@@ -394,6 +701,22 @@ export async function resolveLocalWorkspaceOwner(params: {
       env,
       [Symbol.dispose]: release,
     };
+    if (entry.localWorkspaceHandoff) {
+      const handoff = entry.localWorkspaceHandoff;
+      await finishLocalWorkspaceHandoff(owner, handoff);
+      await patchSessionEntryCore(scope, (current) => {
+        assertCurrent();
+        if (
+          current?.sessionId !== owner.sessionId ||
+          current.lifecycleRevision !== entry.lifecycleRevision ||
+          JSON.stringify(current.localWorkspaceHandoff) !== JSON.stringify(handoff)
+        ) {
+          throw new Error("Local workspace handoff changed before completion");
+        }
+        return { localWorkspaceHandoff: undefined };
+      });
+    }
+    return owner;
   } catch (error) {
     release();
     throw error;

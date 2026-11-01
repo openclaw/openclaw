@@ -22,7 +22,7 @@ import {
   type ShortTermDreamingStatsEntry,
 } from "../../memory-host-sdk/dreaming.js";
 import { readMemorySearchManagerStatus } from "../../memory-host-sdk/host/types.js";
-import * as defaultMemoryCoreRuntime from "../../plugin-sdk/memory-core-bundled-runtime.js";
+import * as memoryCoreRuntime from "../../plugin-sdk/memory-core-bundled-runtime.js";
 import {
   getActiveMemorySearchManagerCore,
   resolveActiveMemoryBackendConfig,
@@ -50,17 +50,6 @@ export type {
 } from "../../../packages/gateway-protocol/src/doctor-memory.js";
 
 export type { DoctorMemoryDreamDiaryPayload } from "./doctor-memory-files.js";
-
-type DoctorMemoryCoreRuntime = Pick<
-  typeof defaultMemoryCoreRuntime,
-  | "dedupeDreamDiaryEntries"
-  | "loadShortTermPromotionDreamingStats"
-  | "previewGroundedRemMarkdown"
-  | "removeBackfillDiaryEntries"
-  | "removeGroundedShortTermCandidates"
-  | "repairDreamingArtifacts"
-  | "writeBackfillDiaryEntries"
->;
 
 type DreamingStoreStats = Omit<ShortTermDreamingStats, "storePath" | "phaseSignalPath"> & {
   storePath?: string;
@@ -174,11 +163,14 @@ function compareDreamingEntryByPromotion(
 async function loadDreamingStoreStats(
   workspaceDir: string,
   nowMs: number,
-  loadShortTermPromotionDreamingStats: DoctorMemoryCoreRuntime["loadShortTermPromotionDreamingStats"],
   timezone?: string,
 ): Promise<DreamingStoreStats> {
   try {
-    return await loadShortTermPromotionDreamingStats({ workspaceDir, nowMs, timezone });
+    return await memoryCoreRuntime.loadShortTermPromotionDreamingStats({
+      workspaceDir,
+      nowMs,
+      timezone,
+    });
   } catch (err) {
     return {
       ...mergeDreamingStoreStats([]),
@@ -309,9 +301,7 @@ async function resolveManagedDreamingCronStatus(
   }
 }
 
-export const createDoctorHandlers = (
-  memoryCoreRuntime: DoctorMemoryCoreRuntime = defaultMemoryCoreRuntime,
-): GatewayRequestHandlers => ({
+export const createDoctorHandlers = (): GatewayRequestHandlers => ({
   "doctor.memory.status": async ({
     respond,
     context,
@@ -387,12 +377,7 @@ export const createDoctorHandlers = (
           ? []
           : await Promise.all(
               allWorkspaces.map((entry) =>
-                loadDreamingStoreStats(
-                  entry,
-                  nowMs,
-                  memoryCoreRuntime.loadShortTermPromotionDreamingStats,
-                  dreamingConfig.timezone,
-                ),
+                loadDreamingStoreStats(entry, nowMs, dreamingConfig.timezone),
               ),
             ),
       );

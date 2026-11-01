@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
@@ -18,7 +19,9 @@ import {
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { retainGatewayPluginMetadata } from "./plugin-metadata-lifecycle.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
+import { resolvePluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import {
+  createPluginNativeCaptureRoot,
   createPluginSourceCaptureRoot,
   prunePluginNativeCaptureDirectories,
   retainPluginSourceCaptureInstance,
@@ -97,11 +100,41 @@ function captureFixture() {
   return { instance, capture, root, payload };
 }
 
+it("keeps update source copies in TMPDIR without relocating retained native captures", () => {
+  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const artifact = artifactFixture();
+  expectArtifactBytes(artifact);
+  expect(
+    artifact.boundaryRoot.startsWith(path.join(process.env.TMPDIR!, "openclaw-plugin-captures-")),
+  ).toBe(true);
+  const native = createPluginNativeCaptureRoot(stateDir);
+  cleanups.push(() => native.disposeAsync());
+  const storage = resolvePluginSourceCaptureStorage();
+  const preparedNative = createPluginNativeCaptureRoot(storage.stateDir, storage.placement);
+  cleanups.push(() => preparedNative.disposeAsync());
+  expect(
+    native.directory.startsWith(path.join(stateDir, "tmp", "plugin-captures") + path.sep),
+  ).toBe(true);
+  expect(
+    preparedNative.directory.startsWith(path.join(stateDir, "tmp", "plugin-captures") + path.sep),
+  ).toBe(true);
+});
+
 function metadataFixture(scheduler = createTestGatewayScheduler()) {
   const metadata = retainGatewayPluginMetadata(scheduler);
   cleanups.push(() => metadata.close());
   return metadata;
 }
+
+it("keeps update plugin captures on the selected temporary volume", async () => {
+  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+  const { capture, root } = captureFixture();
+  expect(root.startsWith(`${process.env.TMPDIR}${path.sep}`)).toBe(true);
+  const artifact = artifactFixture(capture);
+  expectArtifactBytes(artifact);
+  expect(fs.existsSync(path.join(stateDir, "tmp", "plugin-captures"))).toBe(false);
+});
 
 function artifactFixture(directory?: string, managedRoot?: string) {
   const create = () => capturePluginGenerationArtifact(source);
@@ -116,16 +149,50 @@ function expectArtifactBytes(artifact: ReturnType<typeof capturePluginGeneration
   expectBytes(artifact.resolve(path.join(source, "index.cjs")));
 }
 
-function runChild(script: string, args: string[] = [], exitCode = 0) {
+function runChild(script: string, args: string[] = [], exitCode = 0, execArgv: string[] = []) {
   const result = spawnSync(
     process.execPath,
-    [...runtimeArgs, "--input-type=module", "-e", script, ...args],
+    [...execArgv, ...runtimeArgs, "--input-type=module", "-e", script, ...args],
     { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir }, encoding: "utf8", timeout: 15_000 },
   );
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(exitCode);
   return result;
 }
+
+it("does not retain the caller that first imports source capture storage", () => {
+  runChild(
+    `
+    import assert from "node:assert/strict";
+    import { AsyncLocalStorage } from "node:async_hooks";
+    import { setImmediate } from "node:timers/promises";
+    await import(${moduleSpecifier("scheduler")});
+    const caller = new AsyncLocalStorage();
+    async function load() {
+      const payload = { text: "synthetic caller context" };
+      const reference = new WeakRef(payload);
+      await caller.run(payload, () => import(${moduleSpecifier("captureDirectory")}));
+      return reference;
+    }
+    const reference = await load();
+    function unowned() { return new WeakRef({ unowned: true }); }
+    const control = unowned();
+    try {
+      for (let pass = 0; pass < 8; pass++) {
+        await setImmediate();
+        globalThis.gc();
+      }
+      assert.equal(control.deref(), undefined, "Unowned control must collect");
+      assert.equal(reference.deref(), undefined, "Source capture import retained its caller");
+    } finally {
+      caller.disable();
+    }
+  `,
+    [],
+    0,
+    ["--expose-gc"],
+  );
+});
 
 function capturePaths(boundaryRoot: string, capturedFile: string, worker = false) {
   const captureRoot = worker ? path.dirname(boundaryRoot) : boundaryRoot;
@@ -379,10 +446,7 @@ async function startCliCapture(worker: boolean, legacy = false, signal = false) 
   child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
     stderr += chunk;
   });
-  const exited = new Promise<void>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", () => resolve());
-  });
+  const exited = once(child, "close");
   void exited.catch(() => {});
   const nextLine = async () => {
     const result = await lines.next();

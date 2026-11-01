@@ -96,13 +96,6 @@ export type VideoGenerationResult = {
 /** Supported high-level video generation operation modes. */
 export type VideoGenerationMode = "generate" | "imageToVideo" | "videoToVideo";
 
-/**
- * Primitive type tag for a declared `providerOptions` key. Keep narrow —
- * plugins that need richer shapes should leave them out of the typed contract
- * and interpret the forwarded opaque value inside their own provider code.
- */
-export type VideoGenerationProviderOptionType = "number" | "boolean" | "string";
-
 /** Capability limits and supported options for one video generation mode. */
 export type VideoGenerationModeCapabilities = {
   maxVideos?: number;
@@ -131,7 +124,12 @@ export type VideoGenerationModeCapabilities = {
    * candidate provider at runtime so mis-typed or provider-specific options
    * never silently reach the wrong provider.
    */
-  providerOptions?: Readonly<Record<string, VideoGenerationProviderOptionType>>;
+  /**
+   * Primitive type tag for a declared `providerOptions` key. Keep narrow —
+   * plugins that need richer shapes should leave them out of the typed contract
+   * and interpret the forwarded opaque value inside their own provider code.
+   */
+  providerOptions?: Readonly<Record<string, "number" | "boolean" | "string">>;
 };
 
 /** Capability block for transform modes that may be independently enabled. */

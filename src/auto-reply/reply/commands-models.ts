@@ -1,12 +1,10 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
   resolveModelAuthLabel,
   resolveModelAuthLabelAsync,
 } from "../../agents/model-auth-label.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
@@ -98,32 +96,10 @@ function parseModelsArgs(raw: string): ParsedModelsCommand {
 type ProviderLabelParams = {
   provider: string;
   cfg: OpenClawConfig;
-  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   sessionEntry?: ModelsCommandSessionEntry;
 };
-
-function resolveProviderLabelParams(params: ProviderLabelParams) {
-  const harnessPolicy = resolveAgentHarnessPolicy({
-    config: params.cfg,
-    provider: params.provider,
-    agentId: params.agentId,
-  });
-  const acceptedProviderIds = listOpenAIAuthProfileProvidersForAgentRuntime({
-    provider: params.provider,
-    harnessRuntime: harnessPolicy.runtime,
-    config: params.cfg,
-  });
-  return {
-    provider: params.provider,
-    acceptedProviderIds,
-    cfg: params.cfg,
-    sessionEntry: params.sessionEntry,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-  };
-}
 
 function formatProviderLabel(provider: string, authLabel: string | undefined): string {
   if (!authLabel || authLabel === "unknown") {
@@ -133,10 +109,7 @@ function formatProviderLabel(provider: string, authLabel: string | undefined): s
 }
 
 async function resolveProviderLabelAsync(params: ProviderLabelParams): Promise<string> {
-  return formatProviderLabel(
-    params.provider,
-    await resolveModelAuthLabelAsync(resolveProviderLabelParams(params)),
-  );
+  return formatProviderLabel(params.provider, await resolveModelAuthLabelAsync(params));
 }
 
 /** @deprecated Use formatModelsAvailableHeaderAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
@@ -155,10 +128,7 @@ export function formatModelsAvailableHeader(params: {
     method: "formatModelsAvailableHeader",
     replacement: "formatModelsAvailableHeaderAsync",
   });
-  const providerLabel = formatProviderLabel(
-    params.provider,
-    resolveModelAuthLabel(resolveProviderLabelParams(params)),
-  );
+  const providerLabel = formatProviderLabel(params.provider, resolveModelAuthLabel(params));
   return formatModelsHeader(params, providerLabel);
 }
 
@@ -365,13 +335,14 @@ async function buildModelsCommandReply(
   const effectivePageSize = all ? total : pageSize;
   const pageCount = Math.ceil(total / effectivePageSize);
   const safePage = all ? 1 : Math.max(1, Math.min(page, pageCount));
+  const pageSizeSuffix = pageSize === PAGE_SIZE_DEFAULT ? "" : ` limit=${pageSize}`;
 
   if (!all && page !== safePage) {
     return {
       text: [
         `Page out of range: ${page} (valid: 1-${pageCount})`,
         "",
-        `Try: /models list ${provider} ${safePage}`,
+        `Try: /models list ${provider} ${safePage}${pageSizeSuffix}`,
         `All: /models list ${provider} all`,
       ].join("\n"),
     };
@@ -391,7 +362,7 @@ async function buildModelsCommandReply(
   }
   lines.push("", "Switch: /model <provider/model>");
   if (!all && safePage < pageCount) {
-    lines.push(`More: /models list ${provider} ${safePage + 1}`);
+    lines.push(`More: /models list ${provider} ${safePage + 1}${pageSizeSuffix}`);
   }
   if (!all) {
     lines.push(`All: /models list ${provider} all`);

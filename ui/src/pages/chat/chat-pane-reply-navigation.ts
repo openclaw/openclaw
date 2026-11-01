@@ -5,15 +5,15 @@ import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { ChatPaneSession } from "./chat-pane-session.ts";
-import { persistedMessageEntryId } from "./chat-thread.ts";
+import { persistedMessageEntryId } from "./chat-thread-items.ts";
 import type { ReplyMessageStatus } from "./components/chat-reply-preview.ts";
 
 registerChatMessageMetadataEnglish();
 
 export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
   private activeReplyNavigation: symbol | null = null;
-  private replyNavigationSessionKey: string | null = null;
-  protected replyNavigationId: string | null = null;
+  replyNavigationSessionKey: string | null = null;
+  replyNavigationId: string | null = null;
   protected replyMessageRevision = 0;
   private replyMessageSource: unknown[] | undefined;
   private readonly replyMessages = new Map<
@@ -104,7 +104,6 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     this.activeReplyNavigation = navigation;
     this.replyNavigationSessionKey = sessionKey;
     this.replyNavigationId = messageId;
-    this.invalidate();
     try {
       while (
         !state.chatMessages.some((message) => persistedMessageEntryId(message) === messageId)
@@ -114,7 +113,6 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
         }
         if (!state.chatHistoryPagination.hasMore) {
           state.lastError = t("chat.messages.originalUnavailable");
-          state.requestUpdate?.();
           return;
         }
         const loaded = await this.loadOlderMessages();
@@ -124,7 +122,6 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
         if (!loaded) {
           if (!state.chatHistoryPagination.hasMore && !state.lastError) {
             state.lastError = t("chat.messages.originalUnavailable");
-            state.requestUpdate?.();
           }
           return;
         }
@@ -132,15 +129,13 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
       if (!isCurrent()) {
         return;
       }
-      this.invalidate();
-      await this.updateComplete;
+      await this.awaitDomCommit();
       if (isCurrent()) {
         this.transcript.revealMessage(messageId);
       }
     } finally {
       if (this.activeReplyNavigation === navigation) {
         this.resetReplyNavigation();
-        this.invalidate();
       }
     }
   };

@@ -1,4 +1,7 @@
-import { resolveOpenAIReasoningEffortForModel } from "@openclaw/ai/internal/openai";
+import {
+  resolveOpenAIReasoningEffortForModel,
+  type OpenAIResponsesOptions,
+} from "@openclaw/ai/internal/openai";
 import {
   createEmptyTransportUsage,
   resolveOpenAIReasoningEffortMap,
@@ -28,6 +31,8 @@ import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js"
 import { mapAssistantMessageStream } from "../llm/utils/stream-wrapper.js";
 import { findCodeRegions } from "../shared/text/code-regions.js";
 import { assertProviderStreamEvent } from "./provider-stream-event-normalization.js";
+export { recordSuppressedReasoning } from "@openclaw/llm-core/diagnostics";
+export { applyOpenAICompletionsToolReasoning } from "@openclaw/ai/internal/openai";
 export {
   isGoogleGemini3FlashModel,
   isGoogleGemini3ProModel,
@@ -41,6 +46,27 @@ export {
 } from "@openclaw/ai/internal/anthropic";
 export { createDeferredEventBuffer } from "@openclaw/ai/internal/runtime";
 export { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
+// Native stream primitives must not initialize the full agent/plugin transport host.
+// Keep these on their canonical owners, not the provider-transport-runtime barrel.
+export { buildAssistantMessage } from "../agents/stream-message-shared.js";
+export {
+  describeUnsupportedToolResultMedia,
+  extractToolResultText,
+  formatToolResultText,
+  isImageWithMediaPayload,
+  sortPromptCacheToolsByName,
+  splitSystemPromptRelocatableBoundary,
+  stripSystemPromptCacheBoundary,
+} from "@openclaw/ai/internal/shared";
+export {
+  createEmptyTransportUsage,
+  mergeTransportHeaders,
+  createProviderWaitObserver,
+  failTransportStream,
+  MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+  notifyProviderHttpResponse,
+  parseTerminalToolCallArguments,
+} from "@openclaw/ai/transports";
 
 type ProviderWrapStreamFnContext = import("../plugins/types.js").ProviderWrapStreamFnContext;
 
@@ -247,6 +273,45 @@ export function createPayloadPatchStreamWrapper(
     return streamWithPayloadPatch(underlying, model, context, options, (payload) =>
       patchPayload({ payload, model, context, options }),
     );
+  };
+}
+
+/** OpenAI Responses hosted-search wire policy shared by native and admitted proxy routes. */
+export function createOpenAIHostedWebSearchWrapper(
+  baseStreamFn: StreamFn | undefined,
+  shouldPatch: NonNullable<
+    NonNullable<Parameters<typeof createPayloadPatchStreamWrapper>[2]>["shouldPatch"]
+  >,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (
+    model,
+    context,
+    options?: Parameters<StreamFn>[2] &
+      Pick<OpenAIResponsesOptions, "openclawCodeModeAllowedHostedToolTypes">,
+  ) => {
+    if (!shouldPatch({ model, context, options })) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+      options?.openclawCodeModeAllowedHostedToolTypes?.add("web_search");
+      const existingTools = Array.isArray(payload.tools) ? payload.tools : [];
+      const filteredTools = existingTools.filter((tool) => {
+        const record = asOptionalObjectRecord(tool);
+        return record?.type !== "function" || record.name !== "web_search";
+      });
+      if (filteredTools.some((tool) => asOptionalObjectRecord(tool)?.type === "web_search")) {
+        if (filteredTools.length !== existingTools.length) {
+          payload.tools = filteredTools;
+        }
+      } else {
+        payload.tools = [...filteredTools, { type: "web_search" }];
+      }
+      const reasoning = asOptionalObjectRecord(payload.reasoning);
+      if (reasoning?.effort === "minimal") {
+        reasoning.effort = "low";
+      }
+    });
   };
 }
 

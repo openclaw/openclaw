@@ -1,10 +1,8 @@
-/** Doctor checks and repairs for state dir durability, sessions, transcripts, and credentials. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { isSharedAuthStoreOwner } from "../agents/agent-delete-safety.js";
 import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
@@ -18,11 +16,6 @@ import {
   resolveNativeSharedAuthStorePath as resolveSharedAuthStorePath,
 } from "../agents/auth-profiles/path-resolve.native.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
-import {
-  clearWedgedSubagentRecoveryAbort,
-  formatSubagentRecoveryWedgedReason,
-  isSubagentRecoveryWedgedEntry,
-} from "../agents/subagents/registry/subagent-recovery-state.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
@@ -34,7 +27,6 @@ import {
   resolveSessionStorePathCore,
 } from "../config/sessions/paths.js";
 import {
-  applySessionEntryReplacements,
   loadExactSessionEntryReadOnly,
   scanDoctorSessionEntriesStrict,
 } from "../config/sessions/session-accessor.js";
@@ -51,10 +43,7 @@ import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migration
 import { preserveDeferredPluginSessionSource } from "../infra/deferred-plugin-session-sources.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { safeStatSync } from "../infra/path-guards.js";
-import {
-  loadLegacySessionStore,
-  updateLegacySessionStore,
-} from "../infra/state-migrations.legacy-session-store.js";
+import { loadLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
@@ -63,11 +52,6 @@ import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
-import {
-  inspectMainSessionRecoveryEntry,
-  noteMainSessionRecoveryIntegrity,
-  type MainSessionRecoveryIntegrityCandidate,
-} from "./doctor-main-session-recovery.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   createPluginSessionStateDoctorScanner,
@@ -84,13 +68,8 @@ import {
   formatWindowsCloudSyncedStateDirWarning,
 } from "./doctor-state-storage-platform.js";
 import { collectRetainedUnconfiguredAgentDatabaseWarnings } from "./doctor-unconfigured-agent-databases.js";
-import { iterateDoctorSessionKeyBatches } from "./doctor/shared/session-entry-rewrite.js";
 
 const STATE_INTEGRITY_CHECK_ID = "core/doctor/state-integrity";
-
-type DoctorPrompterLike = Pick<DoctorPrompter, "confirmRuntimeRepair"> & {
-  note?: typeof note;
-};
 
 type RuntimeDirLabel = "Sessions dir" | "Session store dir" | "OAuth dir";
 
@@ -346,8 +325,8 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   if ([...withPersistedAuth].some((channelId) => !withoutPersistedAuth.has(channelId))) {
     return true;
   }
-  // Pairing allowlists are persisted under credentials/<channel>-allowFrom.json, so a
-  // channel id with no effective plugin owner can never pair and must not require the dir.
+  // Legacy pairing allowlists lived under credentials/<channel>-allowFrom.json;
+  // only channels with an effective plugin owner need that directory's repair hint.
   for (const [channelId, channelCfg] of Object.entries(channels)) {
     const scopedChannelId = normalizeOptionalLowercaseString(channelId);
     if (!scopedChannelId || !withPersistedAuth.has(scopedChannelId)) {
@@ -365,7 +344,6 @@ export function detectStateIntegrityHealthIssues(
   params?: {
     configPath?: string;
     env?: NodeJS.ProcessEnv;
-    homedir?: () => string;
   },
 ): StateIntegrityHealthIssue[] {
   const issues: StateIntegrityHealthIssue[] = [];
@@ -375,7 +353,7 @@ export function detectStateIntegrityHealthIssues(
     }
   };
   const env = params?.env ?? process.env;
-  const homedir = () => resolveRequiredHomeDir(env, params?.homedir ?? os.homedir);
+  const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   const stateDir = resolveStateDir(env, homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
   const dirCandidates = resolveSessionRuntimeDirectories(cfg, env, homedir);
@@ -532,7 +510,6 @@ export function stateIntegrityIssueToHealthFinding(
       return finding(
         `${issue.label} is missing.`,
         "Run `openclaw doctor --fix` to create missing runtime state directories.",
-        "error",
       );
     case "runtime-dir-not-writable":
       return finding(
@@ -578,13 +555,12 @@ export function stateIntegrityIssueToRepairEffect(
 /** Emits state integrity warnings and applies selected runtime repairs. */
 export async function noteStateIntegrity(
   cfg: OpenClawConfig,
-  prompter: DoctorPrompterLike,
+  prompter: Pick<DoctorPrompter, "confirmRuntimeRepair">,
   configPath?: string,
   options?: { stateDirExistedAtStart?: boolean },
 ) {
   const warnings: string[] = [];
   const changes: string[] = [];
-  const noteFn = prompter.note ?? note;
   const env = process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   const stateDir = resolveStateDir(env, homedir);
@@ -741,7 +717,7 @@ export async function noteStateIntegrity(
         if (label !== "OAuth dir") {
           continue;
         }
-        warnings.push(`- CRITICAL: ${label} missing (${displayDir}).`);
+        warnings.push(`- ${label} missing (${displayDir}).`);
         const create = await prompter.confirmRuntimeRepair({
           message: `Create ${label} at ${displayDir}?`,
           initialValue: true,
@@ -827,20 +803,12 @@ export async function noteStateIntegrity(
       mainKey: cfg.session?.mainKey,
       sessionScope: cfg.session?.scope,
     });
-    const mainRecoveryWedged: MainSessionRecoveryIntegrityCandidate[] = [];
-    const wedgedSubagentSessions: Array<{ key: string; reason: string }> = [];
     const sqlitePluginStateScanner = createPluginSessionStateDoctorScanner({ agentId, cfg, env });
     const legacyPluginStateScanner = createPluginSessionStateDoctorScanner({ agentId, cfg, env });
     let mainEntry: SessionEntry | undefined;
     const inspectMergedEntry = (sessionKey: string, entry: SessionEntry) => {
       if (sessionKey === mainKey) {
         mainEntry = entry;
-      }
-      if (isSubagentRecoveryWedgedEntry(entry)) {
-        wedgedSubagentSessions.push({
-          key: sessionKey,
-          reason: formatSubagentRecoveryWedgedReason(entry),
-        });
       }
     };
     const sqliteEntryCount = scanDoctorSessionEntriesStrict(
@@ -849,10 +817,6 @@ export async function noteStateIntegrity(
         sqliteSessionKeys.add(sessionKey);
         sqlitePluginStateScanner.scanEntry(sessionKey, entry);
         inspectMergedEntry(sessionKey, entry);
-        const recovery = inspectMainSessionRecoveryEntry(sessionKey, entry);
-        if (recovery) {
-          mainRecoveryWedged.push(recovery);
-        }
       },
     );
     for (const [sessionKey, entry] of legacyEntries) {
@@ -863,83 +827,9 @@ export async function noteStateIntegrity(
       inspectMergedEntry(sessionKey, entry);
     }
     const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
-    await noteMainSessionRecoveryIntegrity({
-      storePath: sqliteStorePath,
-      wedged: mainRecoveryWedged,
-      warnings,
-      changes,
-      confirmRepair: (params) => prompter.confirmRuntimeRepair(params),
-    });
     // Session SQLite migration owns legacy transcript validation and archival.
     // Repeating it here turns healthy pending imports into integrity warnings.
     if (sqliteEntryCount > 0 || legacyEntries.length > 0) {
-      if (wedgedSubagentSessions.length > 0) {
-        const wedgedCount = countLabel(wedgedSubagentSessions.length, "wedged subagent session");
-        warnings.push(
-          [
-            `- Found ${wedgedCount} with automatic restart recovery tombstoned.`,
-            "  OpenClaw will not auto-resume these child sessions on restart; use Doctor to repair stale native subagent recovery state.",
-            `  Examples: ${wedgedSubagentSessions
-              .slice(0, 3)
-              .map(({ key }) => key)
-              .join(", ")}`,
-            `  Fix: ${formatCliCommand("openclaw doctor --fix")}`,
-          ].join("\n"),
-        );
-        const repairWedged = await prompter.confirmRuntimeRepair({
-          message: `Clear stale aborted recovery flags for ${wedgedCount}?`,
-          initialValue: true,
-        });
-        if (repairWedged) {
-          let repaired = 0;
-          const repairedAt = Date.now();
-          const sqliteKeys = wedgedSubagentSessions
-            .map(({ key }) => key)
-            .filter((key) => sqliteSessionKeys.has(key));
-          for (const sessionKeys of iterateDoctorSessionKeyBatches(sqliteKeys)) {
-            repaired += await applySessionEntryReplacements<number>({
-              agentId,
-              sessionKeys,
-              storePath: sqliteStorePath,
-              update: (currentEntries) => {
-                const replacements = currentEntries.filter(({ entry }) =>
-                  clearWedgedSubagentRecoveryAbort(entry, repairedAt),
-                );
-                return { replacements, result: replacements.length };
-              },
-            });
-          }
-          const legacyKeys = wedgedSubagentSessions
-            .map(({ key }) => key)
-            .filter((key) => !sqliteSessionKeys.has(key));
-          if (legacyKeys.length > 0 && safeStatSync(absoluteStorePath)?.isFile()) {
-            await updateLegacySessionStore(absoluteStorePath, (currentStore) => {
-              for (const key of legacyKeys) {
-                const current = currentStore[key];
-                if (current && clearWedgedSubagentRecoveryAbort(current, repairedAt)) {
-                  repaired += 1;
-                  currentStore[key] = current;
-                }
-              }
-            });
-          }
-          if (repaired > 0) {
-            changes.push(
-              `- Cleared aborted restart-recovery flags for ${countLabel(
-                repaired,
-                "wedged subagent session",
-              )}.`,
-            );
-          }
-        }
-
-        const wedgedReasons = wedgedSubagentSessions.map(({ reason }) => reason);
-        const visibleWedgedReasons = uniqueStrings(wedgedReasons).slice(0, 2);
-        if (visibleWedgedReasons.length > 0) {
-          warnings.push(visibleWedgedReasons.map((reason) => `  Reason: ${reason}`).join("\n"));
-        }
-      }
-
       await runPluginSessionStateDoctorRepairs({
         scan: await sqlitePluginStateScanner.result(),
         store: { kind: "sqlite", agentId, path: sqliteStorePath },
@@ -1021,10 +911,10 @@ export async function noteStateIntegrity(
   }
 
   if (warnings.length > 0) {
-    noteFn(warnings.join("\n"), "State integrity");
+    note(warnings.join("\n"), "State integrity");
   }
   if (changes.length > 0) {
-    noteFn(changes.join("\n"), "Doctor changes");
+    note(changes.join("\n"), "Doctor changes");
   }
 }
 

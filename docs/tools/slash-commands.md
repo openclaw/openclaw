@@ -10,6 +10,9 @@ read_when:
 
 The Gateway handles commands sent as standalone messages starting with `/`.
 Host-only bash commands use `! <cmd>` (with `/bash <cmd>` as an alias).
+The bang must start the command text, after any required group mention. Bang
+commands still require command authorization and elevated access; text such as
+`hello ! poll` and Markdown images such as `![diagram](image.png)` remain ordinary chat.
 
 When a conversation is bound to an ACP session, normal text routes to the ACP
 harness. Gateway management commands remain local: `/acp ...` always reaches
@@ -44,6 +47,9 @@ command handling is enabled for the surface.
       and an adjacent separator (or its own line ending when alone on a line)
       are removed. Text with no recognized directive is unchanged.
       Added prompt context is not scanned for text commands or stripped as directives.
+    - Ordinary prose such as `How does /queue work?` stays unchanged. Native
+      `/queue` commands and explicit `/queue:` syntax still validate their arguments;
+      a mistyped mode such as `/queue backlog` still produces an error.
     - In **directive-only** messages (the message is only directives), they
       persist to the session and reply with an acknowledgement. Both the literal
       command and its delivered acknowledgement are retained as user/assistant
@@ -115,6 +121,10 @@ do not rewrite transcript history.
   registration. Previously registered commands may stay visible until removed.
 </ParamField>
 
+The system prompt omits the `/reasoning` and `/status` hints when both text and
+native commands are disabled on the session's channel. Guidance uses channel-level
+native settings; per-account overrides may differ. Text-only surfaces keep the hints.
+
 <ParamField path="commands.nativeSkills" type='boolean | "auto"' default='"auto"'>
   Registers skill commands natively when supported. Auto: on for
   Discord/Telegram. Off for Slack. Override with
@@ -148,7 +158,7 @@ do not rewrite transcript history.
 </ParamField>
 
 <ParamField path="commands.restart" type="boolean" default="true">
-  Enables `/restart`, `/update`, and external `SIGUSR2` restart requests.
+  Enables `/restart`, `/update`, external-chat `gateway` tool restart/update actions, and external `SIGUSR2` restart requests. `gateway` cleanup does not restart and is independent of this setting.
 </ParamField>
 
 <ParamField path="commands.ownerAllowFrom" type="string[]">
@@ -271,17 +281,17 @@ plugins, and installed skills.
     | `/exec host=<auto\|sandbox\|gateway\|node> security=<deny\|allowlist\|full> ask=<off\|on-miss\|always> node=<id>` | Show resolved exec defaults; persist host/node placement, apply security/ask to this message only. See [Session permission modes](/gateway/permission-modes) |
     | `/login [provider]` | Show sign-in providers, then choose a connection method when several are available. Owner/admin only |
     | `/login refresh` | Refresh saved sign-in status without signing in again. Owner/admin only |
-    | `/login access <provider>` | Reopen model-access choices for a provider without signing in again. Owner/admin only |
     | `/model [name\|default\|list\|status] [-s\|--session\|-a\|--agent\|-g\|--global]` | Show or select a model. `-s` changes only this session; owner/admin `-a` and `-g` also update configured defaults |
     | `/models [provider] [page] [limit=<n>\|all]` | List configured/auth-available providers or models |
     | `/queue <mode>` | Manage active-run queue behavior. See [Queue](/concepts/queue) and [Queue steering](/concepts/queue-steering) |
+    | `/followup <message>` | Run this message as a new turn, waiting behind current and already-queued work. Leaves the stored queue mode unchanged. See [Queue](/concepts/queue) |
     | `/steer <message>` | Inject guidance into the active run. Alias: `/tell`. See [Steer](/tools/steer) |
 
     <AccordionGroup>
       <Accordion title="verbose / trace / fast / reasoning safety">
         - `/verbose` is for debugging — keep it **off** in normal use.
         - `/trace` reveals only plugin-owned trace/debug lines. Normal verbose chatter stays off.
-        - `/fast auto|on|off|ultrafast` persists a session override. Use `/fast default` or the Sessions UI `inherit` option to clear it.
+        - `/fast auto|on|off|ultrafast` persists a session override. `/fast ultra` is shorthand for `/fast ultrafast` and stores the same value. Use `/fast default` or the Sessions UI `inherit` option to clear it.
         - `/fast` is provider-specific: ordinary Fast starts from priority on OpenAI/Codex. Codex requests Ultrafast only for an explicit `"ultrafast"` selection and an authenticated app-server catalog that advertises it for the selected native model. Fast, Auto, and unspecified selections never automatically upgrade. Set `appServer.enableUltrafast: false` to disable Ultrafast: explicit `/fast ultrafast` then sends ordinary Fast (`priority`) without an Ultrafast catalog check. Saving the preference does not guarantee provider fulfillment. Standard and inactive Auto remain off. Direct Anthropic Fast requests map to `service_tier=auto` or `standard_only`.
         - `/reasoning`, `/verbose`, and `/trace` are risky in group settings — they may reveal internal reasoning or plugin diagnostics. Keep them off in group chats.
 
@@ -332,11 +342,14 @@ named `dashboard`, skill discovery exposes its generated slash alias as
 `/dashboard_2`. `$dashboard` and `/skill dashboard` continue to select that
 user skill directly.
 
+A multiline `/dashboard` request keeps its line breaks and indentation, so a
+list of requirements reaches the agent complete.
+
   <Accordion title="Skills, allowlists, approvals">
     | Command | Description |
     | --- | --- |
     | `/skill <name> [input]` | Run a skill by name |
-    | `/learn [request]` | Draft one reviewable skill from the current conversation or named sources through [Skill Workshop](/tools/skill-workshop) |
+    | `/learn [request]` | Learn from the current conversation or named sources: procedures become [Skill Workshop](/tools/skill-workshop) skills, and facts and preferences go to the selected memory plugin when it supports learning |
     | `/learn undo <id>` | Owner-only. Revert every skill change one background review made, as the notice's **Undo** button does |
     | `/loop [interval] <prompt>` | Owner-only. Repeat a prompt in this conversation; omit the interval for self-paced checks |
     | `/loop status` | Owner-only. List loops bound to this conversation |
@@ -439,9 +452,14 @@ Results are session-scoped. Changing agent, channel, thread, sender
 authorization, or model can change the output. For profile and override editing,
 use the Control UI Tools panel or config surfaces.
 
+Managed sessions on supported runtimes include brokered GitHub tools when tool
+policy allows them. Listing a tool does not grant permission to run its actions.
+
 ## `/loop`: recurring conversation work
 
 `/loop` is owner-only because it uses the cron control-plane tool. `/loop 5m check deploy status` asks the agent to create a fixed-cadence cron job in the current conversation. Without an interval, `/loop watch for new issues` creates a self-paced loop that checks more often while active and backs off toward 1 hour while quiet. `/loop status` lists the conversation's loop jobs. `/loop stop [name]` removes them.
+
+Multiline prompts retain their line breaks and indentation. Generated loop names collapse whitespace onto one line; the recurring prompt keeps the complete text.
 
 ## `/model`: model selection
 
@@ -466,6 +484,10 @@ Numeric selections such as `/model 3` are not supported.
 /model default     # use configured default, following the selected scope
 /model status      # detailed view with endpoint and API mode
 ```
+
+For plain-text model browsing, `/models openai limit=5` selects a custom page size
+(`size=5` is an alias). Emitted **More** and out-of-range **Try** commands retain
+that size; omit it for the default 20 models per page, or use `all` to disable pagination.
 
 On Discord, the bare native `/model` and `/models` commands open an interactive
 picker. Choose a provider and model from the dropdowns, then select **Submit**.
@@ -602,6 +624,8 @@ tool output).
 
 `/btw` is a quick side question about the current session context. Alias: `/side`.
 
+Questions can span multiple lines or start on the line after `/btw` or `/side`. Pasted errors, blank lines, and indentation are preserved in the question.
+
 ```text
 /btw what are we doing right now?
 /side what changed while the main run continued?
@@ -628,9 +652,10 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - **Native Discord commands:** `agent:<agentId>:discord:slash:<userId>`
     - **Native Slack commands:** `agent:<agentId>:slack:slash:<userId>` (prefix configurable via `channels.slack.slashCommand.sessionPrefix`)
     - **Native Telegram commands:** run in the chat session like text commands.
+    - Native commands entering shared reply dispatch restore an archived command-source session in place before execution. The session ID and history are retained. Restart-recovery tombstones, active worker placement, and non-human or unauthorized requests remain blocked with recovery guidance; archive and retention policies are unchanged. Discord's direct status and picker shortcuts do not use this dispatch path.
     - **`/login`** requires a private chat or Control UI session. It shows provider buttons without starting sign-in. API keys and local setup use the Control UI handoff. `/login codex` still selects OpenAI device pairing. Retry messages name the exact connection command.
     - **`/login openrouter`** sends a browser sign-in action through the Gateway's managed HTTPS address. Approve access in your browser, then return to chat for the saved result. See [OpenRouter](/providers/openrouter#getting-started) for address requirements. Use `/login cancel` to cancel a pending sign-in.
-    - After login, model restrictions can prompt **Show all provider models** or **Keep current restrictions**. Credentials stay saved either way, and the question does not block another sign-in. An expired question or changed restrictions opens a fresh choice without signing in again. `/login cancel` can cancel the pending question without removing saved credentials.
+    - After login, if model restrictions hide every model of the provider, OpenClaw adds `<provider>/*` to them and says so in the completion message. Restrictions that already name some of the provider's models stay unchanged.
     - Chat login applies saved credentials directly to the running Gateway. If sign-in status cannot be confirmed, use `/login refresh`, then `/models`; you do not need to repeat authentication.
     - **`/stop`** targets the active chat session to abort the selected run and stop its ordinary Gateway or sandbox commands, including commands that already yielded a process handle. Later model runs, commands, and queued input remain untouched while Stop prepares cancellation. It waits for command cleanup and reports an error if cleanup cannot be confirmed. Services started with `background: true` keep running; stop those separately with their process handle.
 
@@ -645,6 +670,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - Command-only messages from allowlisted senders are handled immediately (bypass queue + model).
     - Inline shortcuts (`/help`, `/commands`, `/status`, `/whoami`) also work embedded in normal messages and are stripped before the model sees the remaining text.
     - In Control UI, every non-skill slash command can be selected in the middle of a draft. The command runs separately, only the command invocation is removed, and the surrounding draft remains unsent.
+    - A later slash token at the caret keeps its completion menu even when the draft starts with another command. Enter or clicking a command runs only that invocation; Tab completes without sending. Active freeform argument collection still owns slash-like argument text.
     - In Control UI (WebChat), selecting a skill from slash completion inserts the existing `$skill-name` reference into the message (for example, `Please use $weather to check Sydney`).
     - Inline command dispatch follows the same connection, permission, and confirmation checks as sending that command by itself. Typing slash-like prose without selecting or submitting the completion does not execute it.
     - On external channels, unauthorized text command-only messages are silently ignored. Inline `/...` tokens are treated as plain text. Native `/compact` returns an authorization refusal when a channel-admitted sender cannot use the command. Reset denials show a permission reply only when the request and reply stay in WebChat.

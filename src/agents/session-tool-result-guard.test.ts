@@ -5,7 +5,6 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it } from "vitest";
 import { convertToLlm } from "../../packages/agent-core/src/harness/messages.js";
 import { convertResponsesMessages } from "../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
-import type { Model } from "../../packages/ai/src/types.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
@@ -17,6 +16,7 @@ import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { sanitizeTranscriptMessage } from "./transcript-sanitize.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -83,18 +83,15 @@ describe("installSessionToolResultGuard", () => {
         for (const message of live) {
           await sm[append](message);
         }
-        const model = {
+        const model = makeProviderModelFixture<"openai-responses">({
           id: "test-model",
           name: "Test model",
           api: "openai-responses",
           provider: "openai",
           baseUrl: "https://example.invalid/v1",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: 32_000,
           maxTokens: 1_024,
-        } satisfies Model<"openai-responses">;
+        });
         const context = {
           systemPrompt: "Stable fixture instructions",
           messages: convertToLlm(live),
@@ -159,8 +156,10 @@ describe("installSessionToolResultGuard", () => {
         aggregated: "x".repeat(80_000),
         timedOut: false,
       },
+      warningText: "w".repeat(80_000),
       aggregateOutputDropped: true,
     });
+    expect(output.details).toMatchObject({ aggregated: "x".repeat(80_000) });
     const content = output.content[0];
     if (!content || content.type !== "text") {
       throw new Error("expected text result");
@@ -260,10 +259,11 @@ describe("installSessionToolResultGuard", () => {
 
   it("consumes runtime attribution when a hook blocks the marker before the next user", () => {
     let writes = 0;
-    const { sm, guard } = setup({
+    const context = {
+      nextUserMessagePersistence: "runtime" as const,
       beforeMessageWriteHook: () => (writes++ === 0 ? { block: true } : undefined),
-    });
-    guard.setNextUserMessagePersistence("runtime");
+    };
+    const { sm } = setup({ captureMessageContext: () => context });
     sm.appendMessage(makeUserMessage("runtime-only marker", 1));
     sm.appendMessage(makeUserMessage("actual user", 2));
 
@@ -353,10 +353,7 @@ describe("installSessionToolResultGuard", () => {
     sm.appendMessage(asAppendMessage({ role: "assistant", content: "private room-event note" }));
     sm.appendMessage(call("call_1", "message"));
     expect(messages(sm)).toMatchObject([
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1" }],
-      },
+      { role: "assistant", content: [{ type: "toolCall", id: "call_1" }] },
     ]);
   });
 });

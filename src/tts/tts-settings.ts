@@ -4,11 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../packages/normalization-core/src/string-coerce.js";
-import {
-  getRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshot,
-  selectApplicableRuntimeConfig,
-} from "../config/runtime-snapshot.js";
+import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type {
   OpenClawConfig,
   ResolvedTtsPersona,
@@ -36,7 +32,7 @@ import type { PreparedTtsPreferences } from "./tts-preferences.js";
 import type { ResolvedTtsConfig, ResolvedTtsModelOverrides } from "./tts-types.js";
 
 export type { ResolvedTtsConfig, ResolvedTtsModelOverrides };
-export { isTtsConfigReservedKey, readTtsPrefs, type TtsUserPrefs } from "./tts-config.js";
+export { readTtsPrefs, type TtsUserPrefs } from "./tts-config.js";
 
 export const DEFAULT_TTS_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
@@ -75,16 +71,6 @@ export function resolveModelOverridePolicy(
     allowNormalization: enabled && (overrides?.allowNormalization ?? true),
     allowSeed: enabled && (overrides?.allowSeed ?? true),
   };
-}
-
-export function resolveTtsRuntimeConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return (
-    selectApplicableRuntimeConfig({
-      inputConfig: cfg,
-      runtimeConfig: getRuntimeConfigSnapshot(),
-      runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
-    }) ?? cfg
-  );
 }
 
 export function asProviderConfig(value: unknown): SpeechProviderConfig {
@@ -142,7 +128,7 @@ export function resolveTtsConfig(
   cfgInput: OpenClawConfig,
   contextOrAgentId?: string | TtsConfigResolutionContext,
 ): ResolvedTtsConfig {
-  const cfg = resolveTtsRuntimeConfig(cfgInput);
+  const cfg = selectLiveRuntimeConfig(cfgInput);
   const raw: TtsConfig = resolveEffectiveTtsConfig(cfg, contextOrAgentId);
   const providerSource = raw.provider ? "config" : "default";
   const timeoutMs = raw.timeoutMs ?? DEFAULT_TTS_TIMEOUT_MS;
@@ -252,18 +238,6 @@ export type TtsProviderPreference = {
   source: "prefs" | "persona" | "config";
 };
 
-type ResolvedTtsSettingsSnapshot = {
-  autoMode: TtsAutoMode;
-  config: ResolvedTtsConfig;
-  maxLength: number;
-  persona?: ResolvedTtsPersona;
-  personaId?: string;
-  preferredProvider?: TtsProvider;
-  providerPreference?: TtsProviderPreference;
-  prefsPath: string;
-  summarize: boolean;
-};
-
 export function resolveTtsSettingsSnapshot(params: {
   cfg: OpenClawConfig;
   preparedTtsPreferences?: PreparedTtsPreferences;
@@ -271,7 +245,7 @@ export function resolveTtsSettingsSnapshot(params: {
   agentId?: string;
   channelId?: string;
   accountId?: string;
-}): ResolvedTtsSettingsSnapshot {
+}) {
   const config = resolveTtsConfig(params.cfg, {
     agentId: params.agentId,
     channelId: params.channelId,

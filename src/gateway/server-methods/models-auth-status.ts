@@ -6,7 +6,6 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   ErrorCodes,
-  errorShape,
   validateModelsAuthSetApiKeyParams,
   type ModelsAuthSetApiKeyResult,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -30,6 +29,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
+import { createChatAbortOps } from "../chat-abort-ops.js";
 import { abortChatRunsForProvider } from "../chat-abort.js";
 import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
@@ -42,7 +42,7 @@ import {
 import { resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { modelsAuthRefreshHandlers } from "./models-auth-refresh.js";
 import { readModelAuthStatusFacts } from "./models-auth-status-facts.js";
-import { readProviderUsageStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
+import { readProviderUsage } from "./models-auth-status-usage-cache.js";
 import type {
   ModelAuthExpiry,
   ModelAuthLogoutResult,
@@ -50,7 +50,8 @@ import type {
   ModelAuthStatusResult,
 } from "./models-auth-status.types.js";
 import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
-import { respondUnavailableOnThrow } from "./response.js";
+import { respondError, respondUnavailableOnThrow } from "./response.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -183,26 +184,28 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    let assertCurrent: (() => void) | undefined;
+    // The save writes credentials and can widen the model allowlist: both need live requester authority.
+    const requestAuthority = readGatewayRequestMutationAuthority(options);
+    let assertCurrent: () => void = requestAuthority.assertCurrent;
     if (expectedOwnerId !== undefined) {
       if (typeof expectedOwnerId !== "string" || !expectedOwnerId.trim()) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "expectedOwnerId must be a non-empty string"),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "expectedOwnerId must be a non-empty string",
         );
         return;
       }
       if (!hasGatewayAdminScope(client)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.FORBIDDEN, "missing scope: operator.admin"),
-        );
+        respondError(respond, ErrorCodes.FORBIDDEN, "missing scope: operator.admin");
         return;
       }
       try {
-        assertCurrent = captureLocalStateMutationGuard(expectedOwnerId, options);
+        const assertOwnerCurrent = captureLocalStateMutationGuard(expectedOwnerId, options);
+        assertCurrent = () => {
+          requestAuthority.assertCurrent();
+          assertOwnerCurrent();
+        };
       } catch (error) {
         respond(false, undefined, localStateOwnerChangedError(error));
         return;
@@ -212,28 +215,37 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     await respondUnavailableOnThrow(respond, async () => {
       const config = context.getRuntimeConfig();
       // CLI-only target semantics must not load the model-command runtime during Gateway startup.
-      const scope = assertCurrent
-        ? {
-            ok: true as const,
-            ...(await import("../../commands/models/shared.js")).resolveModelsTargetAgent(
-              config,
-              params.agentId,
-              { kind: "mutation" },
-            ),
-          }
-        : resolveModelAuthAgentScope(config, params.agentId);
+      const scope =
+        expectedOwnerId !== undefined
+          ? {
+              ok: true as const,
+              ...(await import("../../commands/models/shared.js")).resolveModelsTargetAgent(
+                config,
+                params.agentId,
+                { kind: "mutation" },
+              ),
+            }
+          : resolveModelAuthAgentScope(config, params.agentId);
       if (!scope.ok) {
         respond(false, undefined, scope.error);
         return;
       }
       const { saveModelProviderApiKey } = await import("../../commands/models/auth-api-key.js");
-      const { profileId, warning: configWarning } = await saveModelProviderApiKey({
+      const {
+        profileId,
+        warning: configWarning,
+        modelAccess,
+      } = await saveModelProviderApiKey({
         config,
         provider,
         apiKey: params.apiKey,
+        agentId: scope.agentId,
         agentDir: scope.agentDir,
         assertCurrent,
       });
+      if (modelAccess) {
+        log.info(modelAccess);
+      }
       const refreshWarning = await refreshAfterCredentialMutation(context, scope.agentId);
       const warning = [configWarning, refreshWarning].filter(Boolean).join(" ");
       const result: ModelsAuthSetApiKeyResult = {
@@ -247,22 +259,22 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
   "models.authLogout": async ({ params, respond, context }) => {
     const provider = readProviderParam(params);
     if (!provider) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "provider is required"));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "provider is required");
       return;
     }
     const selection = readLogoutProfileSelection(params);
     if (!selection.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selection.message));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, selection.message);
       return;
     }
     if (
       (params.credentialType !== undefined && params.credentialType !== "api_key") ||
       (params.credentialType !== undefined && selection.profileIds !== undefined)
     ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "Choose either API keys or specific profiles"),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "Choose either API keys or specific profiles",
       );
       return;
     }
@@ -288,10 +300,10 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         selection.profileIds &&
         selection.profileIds.some((profileId) => !availableProfiles.includes(profileId))
       ) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "profileIds contain unavailable auth profiles"),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "profileIds contain unavailable auth profiles",
         );
         return;
       }
@@ -311,22 +323,11 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const { runIds: abortedRunIds } =
         selection.profileIds || apiKeyOnly
           ? { runIds: [] as string[] }
-          : abortChatRunsForProvider(
-              {
-                chatAbortControllers: context.chatAbortControllers,
-                chatRunState: context.chatRunState,
-                removeChatRun: context.removeChatRun,
-                agentRunSeq: context.agentRunSeq,
-                broadcast: context.broadcast,
-                nodeSendToSession: context.nodeSendToSession,
-              },
-              {
-                cfg,
-                providerId: authProvider,
-                agentId: scope.agentId,
-                stopReason: "auth-revoked",
-              },
-            );
+          : abortChatRunsForProvider(createChatAbortOps(context), {
+              cfg,
+              providerId: authProvider,
+              agentId: scope.agentId,
+            });
       const refreshWarning = await refreshAfterCredentialMutation(context, scope.agentId);
       const warning = [configWarning, refreshWarning].filter(Boolean).join(" ");
       const result: ModelAuthLogoutResult = {
@@ -412,7 +413,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         agentDir,
         store,
       });
-      const usageByProvider = readProviderUsageStaleWhileRevalidate({
+      const usageParams = {
         agentId,
         agentDir,
         authStore: providerUsageRuntime.store,
@@ -421,6 +422,10 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         forceRefresh: refreshRequested,
         providerIds: usageProviderIds,
         now,
+      };
+      const { usageByProvider, refreshAt: usageRefreshAt } = await readProviderUsage({
+        ...usageParams,
+        awaitRefresh: Boolean(params.refreshUsage),
       });
 
       const providers: ModelAuthStatusProvider[] = [];
@@ -530,7 +535,12 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
               : undefined,
         });
       }
-      const result: ModelAuthStatusResult = { ts: now, providers, providerCapabilities };
+      const result: ModelAuthStatusResult = {
+        ts: now,
+        providers,
+        providerCapabilities,
+        usageRefreshAt,
+      };
       respond(true, result, undefined);
     });
   },

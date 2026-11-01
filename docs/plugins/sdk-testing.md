@@ -30,7 +30,6 @@ import {
   shouldAckReaction,
   removeAckReactionAfterReply,
 } from "openclaw/plugin-sdk/channel-feedback";
-import { installCommonResolveTargetErrorCases } from "openclaw/plugin-sdk/channel-target-testing";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describePluginRegistrationContract } from "openclaw/plugin-sdk/plugin-test-contracts";
@@ -112,10 +111,11 @@ or module resets. Use it only in tests that already load a declaration.
 | `createPluginRuntimeMock`                                                 | Build a mocked plugin runtime surface. Import from `plugin-sdk/plugin-test-runtime`                                                         |
 | `createPluginSetupWizardStatus`                                           | Build setup status helpers for channel plugins. Import from `plugin-sdk/plugin-test-runtime`                                                |
 | `createTestWizardPrompter`                                                | Build a mocked setup wizard prompter. Import from `plugin-sdk/plugin-test-runtime`                                                          |
+| `runInHarnessToolAuthorityForTest`                                        | Run a harness attempt inside its admitted turn and core tool-authority boundary. Import from `plugin-sdk/plugin-test-runtime`               |
+| `withAdmittedSessionTurnForTest`                                          | Admit a session turn through the real session controller. Import from `plugin-sdk/plugin-test-runtime`                                      |
 | `runProviderCatalog`                                                      | Execute a provider catalog hook with test dependencies. Import from `plugin-sdk/plugin-test-runtime`                                        |
 | `resolveProviderModelPickerEntries`                                       | Resolve provider model-picker entries in contract tests. Import from `plugin-sdk/plugin-test-runtime`                                       |
 | `buildProviderPluginMethodChoice`                                         | Build provider wizard choice ids for assertions. Import from `plugin-sdk/plugin-test-runtime`                                               |
-| `setProviderWizardProvidersResolverForTest`                               | Inject provider wizard providers for isolated tests. Import from `plugin-sdk/plugin-test-runtime`                                           |
 | `describeOpenAIProviderRuntimeContract`                                   | Install provider-family runtime contract checks. Import from `plugin-sdk/provider-test-contracts`                                           |
 | `expectPassthroughReplayPolicy`                                           | Assert provider replay policies pass through provider-owned tools and metadata. Import from `plugin-sdk/provider-test-contracts`            |
 | `runRealtimeSttLiveTest`                                                  | Run a live realtime STT provider test with shared audio fixtures. Import from `plugin-sdk/provider-test-contracts`                          |
@@ -126,7 +126,6 @@ or module resets. Use it only in tests that already load a declaration.
 | `getProviderHttpMocks`                                                    | Access opt-in provider HTTP/auth Vitest mocks. Import from `plugin-sdk/provider-http-test-mocks`                                            |
 | `installProviderHttpMockCleanup`                                          | Reset provider HTTP/auth mocks after each test. Import from `plugin-sdk/provider-http-test-mocks`                                           |
 | `createOpenClawTestState` / `withOpenClawTestState` / `OpenClawTestState` | Create and clean up isolated OpenClaw state, config, workspace, environment, and auth-profile fixtures. Import from `plugin-sdk/test-state` |
-| `installCommonResolveTargetErrorCases`                                    | Shared test cases for target resolution error handling. Import from `plugin-sdk/channel-target-testing`                                     |
 | `shouldAckReaction`                                                       | Check whether a channel should add an ack reaction. Import from `plugin-sdk/channel-feedback`                                               |
 | `removeAckReactionAfterReply`                                             | Remove ack reaction after reply delivery. Import from `plugin-sdk/channel-feedback`                                                         |
 | `createTestRegistry`                                                      | Build a channel plugin registry fixture. Import from `plugin-sdk/plugin-test-runtime` or `plugin-sdk/channel-test-helpers`                  |
@@ -194,28 +193,11 @@ import type { MockFn, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/plug
 
 ## Testing target resolution
 
-Use `installCommonResolveTargetErrorCases` to add standard error cases for
-channel target resolution:
-
-```typescript
-import { installCommonResolveTargetErrorCases } from "openclaw/plugin-sdk/channel-target-testing";
-import { describe } from "vitest";
-
-describe("my-channel target resolution", () => {
-  installCommonResolveTargetErrorCases({
-    resolveTarget: ({ to, mode, allowFrom }) => {
-      // Your channel's target resolution logic
-      return myChannelResolveTarget({ to, mode, allowFrom });
-    },
-    implicitAllowFrom: ["user1", "user2"],
-  });
-
-  // Add channel-specific test cases
-  it("should resolve @username targets", () => {
-    // ...
-  });
-});
-```
+Test the channel's resolver directly with channel-specific inputs and expected
+results. Cover missing and whitespace-only targets, failed normalization, and
+explicit versus implicit resolution with the channel's allowlist policy.
+Assert the returned target or error so each case exercises the resolver's
+observable behavior.
 
 ## Testing patterns
 

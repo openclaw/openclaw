@@ -1,34 +1,26 @@
-/* The lobster uses this ledge even when the invitation is disabled. */
-.sidebar-shell__invite {
-  position: relative;
-  z-index: 1;
-  flex: 0 0 auto;
-  margin-inline: calc(-1 * var(--sidebar-pad-x));
-}
-
 .shell--mobile-nav .sidebar-shell {
   --sidebar-session-row-floor: 44px;
+  --sidebar-session-menu-size: 36px;
 }
 
-/* Keep metadata, but do not charge a title for an empty endcap. */
+/* Keep metadata, but do not charge a title for an empty endcap or a hidden draft badge. */
 .shell--mobile-nav .sidebar-recent-session--single-line:not(.sidebar-recent-session--team) {
   .sidebar-recent-session__text {
     gap: var(--sidebar-row-gap);
   }
 
   .sidebar-recent-session__details:not(
-    :has(.session-row-badges, .viewer-facepile, .session-row-trail)
+    :has(.session-row-badge:not(.session-row-badge--draft), .viewer-facepile, .session-row-trail)
   ) {
     display: none;
   }
 }
 
-/* The mobile drawer keeps management actions in its always-reachable menu. */
+/* The mobile drawer keeps management actions in its always-reachable menu, with the
+   dots ending on the same edge as the filter control above the list. */
 .shell--mobile-nav .sidebar-recent-session {
-  padding-right: 0;
-
   &.session-row-host {
-    --session-row-actions-reserve: 48px;
+    --session-row-actions-reserve: var(--sidebar-session-menu-size);
   }
 
   :is([data-sidebar-session-pin], [data-sidebar-session-archive]) {
@@ -37,37 +29,156 @@
 
   .session-action--touch-menu {
     display: inline-flex;
-    width: 44px;
-    height: 44px;
+    justify-content: flex-end;
+    width: var(--sidebar-session-menu-size);
+    height: var(--sidebar-session-row-floor);
+    padding-inline-end: 6px;
     opacity: 1;
     pointer-events: auto;
   }
+
+  .session-row-badge--draft {
+    display: none;
+  }
 }
 
-/* Reserve the menu beside the title, not in an otherwise empty second row.
-   Preview metadata keeps its natural line, and child toggles keep the horizontal
-   clearance owned by layout.css. */
-.shell--mobile-nav
-  .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--team) {
-  .sidebar-recent-session__text {
-    padding-right: var(--session-row-actions-reserve);
+/* Every row pays once for the menu at its edge. Signals exist only when they have
+   something to say, so a row without any gives that width back to its title. */
+.shell--mobile-nav .sidebar-recent-session:not(.sidebar-recent-session--team) {
+  padding-inline: var(--sidebar-session-row-inset) var(--sidebar-session-menu-size);
+
+  &.session-row-host {
+    --session-row-actions-reserve: 0px;
+  }
+
+  > .sidebar-recent-session__link {
+    padding-inline: var(--sidebar-inset) 0;
   }
 
   > .sidebar-recent-session__aside {
-    top: 50%;
+    inset: 50% auto auto;
+    inset-inline-end: 0;
+    padding: 0;
+  }
+
+  > .sidebar-child-session-toggle {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 32px;
+    margin-inline-start: 0;
+    padding: 0;
+  }
+
+  .sidebar-child-session-toggle__count {
+    order: -1;
+  }
+
+  .sidebar-session-indicator {
+    height: var(--sidebar-lead);
   }
 
   .sidebar-recent-session__title-row {
-    padding-right: 0;
+    padding-inline-end: 0;
   }
 
-  /* A phone has no hover gesture to reveal the marquee's faded tail. */
+  /* A phone has no hover gesture to reveal the marquee's faded tail, so the end of
+     the title box always fades; text that stops before that zone is untouched. */
   .sidebar-recent-session__name {
-    text-overflow: ellipsis;
-    mask-image: none;
+    text-overflow: clip;
+    mask-image: linear-gradient(
+      var(--hover-marquee-fade-direction, to right),
+      black calc(100% - var(--hover-marquee-fade-width, 24px)),
+      transparent
+    );
   }
 
   .sidebar-recent-session__name > .hover-marquee__text {
     display: inline;
+  }
+
+  /* Participant stacks stay inside the lead so every state shares one axis. */
+  .session-owner-stack {
+    direction: ltr;
+    width: var(--sidebar-lead);
+  }
+
+  .session-owner-stack::before,
+  .session-owner-stack::after {
+    inset-block: 3px;
+    width: 14px;
+  }
+
+  .session-owner-stack__front,
+  .session-owner-stack__back .viewer-avatar,
+  .session-owner-stack__overflow {
+    width: 14px;
+    height: 14px;
+    font-size: 7px;
+  }
+
+  .session-owner-stack__back {
+    width: 14px;
+    height: 14px;
+  }
+}
+
+/* Child rows keep their hierarchy indent on the logical side so RTL dots stay on the axis. */
+.shell--mobile-nav .sidebar-session-tree__children {
+  margin-inline: calc(var(--sidebar-lead) + 5px) 0;
+}
+
+.shell--mobile-nav .sidebar-recent-sessions__head {
+  padding-inline: calc(var(--sidebar-inset) + var(--sidebar-session-row-inset)) 0.75px;
+}
+
+/* Each person pays only for what it shows: the dots end on the filter control's edge and
+   the counts sit against them, so a row without a running count gives that width to its name. */
+.shell--mobile-nav {
+  .sidebar-online__list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sidebar-online__row {
+    --sidebar-online-menu-size: 44px;
+    --sidebar-online-menu-width: 31px;
+    grid-template-columns: minmax(0, 1fr) var(--sidebar-online-menu-width);
+    padding-inline-end: 0;
+  }
+
+  .sidebar-online__menu {
+    grid-area: 1 / 2;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .sidebar-online__menu-trigger.oc-menu-trigger {
+    justify-content: flex-end;
+    width: var(--sidebar-online-menu-width);
+    height: var(--sidebar-online-menu-size);
+    padding-inline-end: 7.5px;
+  }
+
+  .sidebar-online__person {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: var(--sidebar-online-menu-size);
+    margin-inline-end: 0;
+    padding-block: 10px;
+    padding-inline-end: 8px;
+  }
+
+  .sidebar-online__row:has(> .sidebar-online__menu) > .sidebar-online__person {
+    padding-inline-end: var(--sidebar-online-menu-width);
+  }
+
+  .sidebar-online__avatar,
+  .sidebar-online__counts {
+    flex: none;
+  }
+
+  .sidebar-online__person-name {
+    flex: 1 1 0;
+    text-align: start;
   }
 }

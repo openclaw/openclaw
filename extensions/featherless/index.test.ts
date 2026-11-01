@@ -4,125 +4,92 @@ import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onbo
 import { describe, expect, it } from "vitest";
 import { createProviderDynamicModelContext } from "../test-support/provider-model-test-helpers.js";
 import featherlessPlugin from "./index.js";
-import {
-  FEATHERLESS_BASE_URL,
-  FEATHERLESS_DEFAULT_CONTEXT_WINDOW,
-  FEATHERLESS_DEFAULT_MAX_TOKENS,
-  FEATHERLESS_DEFAULT_MODEL_ID,
-  FEATHERLESS_DEFAULT_MODEL_REF,
-  FEATHERLESS_DYNAMIC_COMPAT,
-  FEATHERLESS_DYNAMIC_CONTEXT_WINDOW,
-  FEATHERLESS_DYNAMIC_MAX_TOKENS,
-} from "./models.js";
+import * as models from "./models.js";
 import { applyFeatherlessConfig } from "./onboard.js";
 
-function createDefaultRuntimeModel(): ProviderRuntimeModel {
+function createRuntimeModel(overrides: Partial<ProviderRuntimeModel> = {}): ProviderRuntimeModel {
   return {
-    id: FEATHERLESS_DEFAULT_MODEL_ID,
+    id: models.FEATHERLESS_DEFAULT_MODEL_ID,
     name: "Qwen3 32B",
     provider: "featherless",
-    api: "openai-completions",
-    baseUrl: FEATHERLESS_BASE_URL,
+    api: "openai-responses",
+    baseUrl: "https://models.example.test/v1",
+    headers: { "X-Route": "custom-template" },
     reasoning: true,
     input: ["text"],
     cost: { input: 0.102, output: 0.493, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: FEATHERLESS_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: FEATHERLESS_DEFAULT_MAX_TOKENS,
+    contextWindow: models.FEATHERLESS_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: models.FEATHERLESS_DEFAULT_MAX_TOKENS,
     compat: { thinkingFormat: "qwen-chat-template" },
+    ...overrides,
   };
+}
+
+async function resolveModel(modelId: string, catalog: ProviderRuntimeModel[]) {
+  const provider = await registerSingleProviderPlugin(featherlessPlugin);
+  return provider.resolveDynamicModel?.(
+    createProviderDynamicModelContext({ provider: "featherless", modelId, models: catalog }),
+  );
 }
 
 describe("featherless provider plugin", () => {
   it("applies the curated default during onboarding", () => {
-    const config = applyFeatherlessConfig({});
-
-    expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
-      FEATHERLESS_DEFAULT_MODEL_REF,
+    const defaults = applyFeatherlessConfig({}).agents?.defaults;
+    expect(resolveAgentModelPrimaryValue(defaults?.model)).toBe(
+      models.FEATHERLESS_DEFAULT_MODEL_REF,
     );
-    expect(config.agents?.defaults?.models?.[FEATHERLESS_DEFAULT_MODEL_REF]?.alias).toBe(
-      "Qwen3 32B",
-    );
+    expect(defaults?.models?.[models.FEATHERLESS_DEFAULT_MODEL_REF]?.alias).toBe("Qwen3 32B");
   });
-
   it.each(["custom", "missing"] as const)(
     "resolves arbitrary Featherless model ids with a %s template",
     async (source) => {
-      const provider = await registerSingleProviderPlugin(featherlessPlugin);
-      const template = createDefaultRuntimeModel();
-      template.api = "openai-responses";
-      template.baseUrl = "https://models.example.test/v1";
-      template.headers = { "X-Route": "custom-template" };
-      const resolved = provider.resolveDynamicModel?.(
-        createProviderDynamicModelContext({
-          provider: "featherless",
-          modelId: "moonshotai/Kimi-K2-Instruct",
-          models: source === "missing" ? [] : [template],
-        }),
-      );
-
+      const template = createRuntimeModel();
+      const missing = source === "missing";
+      const resolved = await resolveModel("moonshotai/Kimi-K2-Instruct", missing ? [] : [template]);
       expect(resolved).toMatchObject({
         id: "moonshotai/Kimi-K2-Instruct",
         provider: "featherless",
-        api: source === "missing" ? "openai-completions" : template.api,
-        baseUrl: source === "missing" ? FEATHERLESS_BASE_URL : template.baseUrl,
+        api: missing ? "openai-completions" : template.api,
+        baseUrl: missing ? models.FEATHERLESS_BASE_URL : template.baseUrl,
         reasoning: false,
         input: ["text"],
-        contextWindow: FEATHERLESS_DYNAMIC_CONTEXT_WINDOW,
-        maxTokens: FEATHERLESS_DYNAMIC_MAX_TOKENS,
-        compat: FEATHERLESS_DYNAMIC_COMPAT,
-        cost:
-          source === "missing"
-            ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
-            : template.cost,
+        contextWindow: models.FEATHERLESS_DYNAMIC_CONTEXT_WINDOW,
+        maxTokens: models.FEATHERLESS_DYNAMIC_MAX_TOKENS,
+        compat: models.FEATHERLESS_DYNAMIC_COMPAT,
+        cost: missing ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } : template.cost,
       });
-      expect(resolved?.headers).toEqual(source === "missing" ? undefined : template.headers);
+      expect(resolved?.headers).toEqual(missing ? undefined : template.headers);
     },
   );
-
   it("applies provider compat to configured models without overriding explicit values", async () => {
     const provider = await registerSingleProviderPlugin(featherlessPlugin);
     const normalized = provider.normalizeResolvedModel?.({
       provider: "featherless",
       modelId: "google/gemma-3-27b-it",
-      model: {
-        ...createDefaultRuntimeModel(),
+      model: createRuntimeModel({
         id: "google/gemma-3-27b-it",
         name: "Gemma 3 27B",
-        compat: {
-          supportsStore: true,
-          thinkingFormat: "deepseek",
-        },
-      },
+        compat: { supportsStore: true, thinkingFormat: "deepseek" },
+      }),
     });
-
     expect(normalized?.compat).toMatchObject({
-      ...FEATHERLESS_DYNAMIC_COMPAT,
+      ...models.FEATHERLESS_DYNAMIC_COMPAT,
       supportsStore: true,
       thinkingFormat: "deepseek",
     });
   });
-
   it("defers the curated model to static catalog resolution", async () => {
-    const provider = await registerSingleProviderPlugin(featherlessPlugin);
-    const resolved = provider.resolveDynamicModel?.(
-      createProviderDynamicModelContext({
-        provider: "featherless",
-        modelId: FEATHERLESS_DEFAULT_MODEL_ID,
-        models: [createDefaultRuntimeModel()],
-      }),
-    );
-
-    expect(resolved).toBeUndefined();
+    expect(
+      await resolveModel(models.FEATHERLESS_DEFAULT_MODEL_ID, [createRuntimeModel()]),
+    ).toBeUndefined();
   });
-
   it("preserves Featherless reasoning during replay", async () => {
     const provider = await registerSingleProviderPlugin(featherlessPlugin);
     const policy = provider.buildReplayPolicy?.({
       provider: "featherless",
       modelApi: "openai-completions",
-      modelId: FEATHERLESS_DEFAULT_MODEL_ID,
+      modelId: models.FEATHERLESS_DEFAULT_MODEL_ID,
     });
-
     expect(policy).toBeDefined();
     expect(policy).not.toHaveProperty("dropReasoningFromHistory");
   });

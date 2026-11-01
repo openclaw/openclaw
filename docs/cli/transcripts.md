@@ -16,6 +16,8 @@ Inspector and export command for durable meeting transcripts.
 [Slack huddles](/plugins/slack-huddles), and [Zoom](/plugins/zoom-meetings)
 browser participants capture notes automatically;
 the `transcripts` agent tool also supports provider capture and manual import.
+Automatic meeting capture continues after the joining CLI disconnects. It stops
+when OpenClaw leaves the meeting or its owning plugin stops or reloads.
 
 Stored transcript state lives in the shared SQLite database at
 `$OPENCLAW_STATE_DIR/state/openclaw.sqlite`. `show` and `path` explicitly
@@ -277,7 +279,10 @@ larger exports.
 
 Status reports registered subscriptions, not confirmed recording. `armed`,
 `not-active`, and `unknown` remain distinct; a sanitized URL alone cannot prove
-which original invitation started a capture. Provider, configured-source, and
+which original invitation started a capture. During a configuration change,
+source health may briefly reflect the previous entry until the auto-start service
+reindexes it; this display does not grant capture or stop authority.
+Provider, configured-source, and
 active lists are limited to 100 entries with omitted counts. Saved utterance
 counts come from durable rows. The latest transcript is the most recently
 updated session containing utterances; source speech times are not ingestion

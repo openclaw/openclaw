@@ -20,7 +20,10 @@ import {
 import type { SessionRowReadView } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
-import { resolveSessionSubscriptionKey } from "../session-subscription-keys.js";
+import {
+  resolveSessionSubscriptionKey,
+  resolveSessionSubscriptionKeys,
+} from "../session-subscription-keys.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -36,8 +39,8 @@ type SessionChangedPayload = {
 type SessionChangeContext = Pick<
   GatewayRequestContext,
   | "broadcastToConnIds"
-  | "chatAbortControllers"
   | "getRuntimeConfig"
+  | "resolveGatewayContext"
   | "sessionRowProjectionOwner"
   | "getSessionEventSubscriberConnIds"
   | "getSessionMessageSubscriberConnIds"
@@ -224,6 +227,14 @@ function broadcastSessionsChanged(
   const projection = getSessionRowProjection(context);
   const broadcastOptions = {
     ...routingOptions,
+    sessionEventSubscriptionKeys:
+      payload.sessionKey && routingAgentId
+        ? resolveSessionSubscriptionKeys(
+            payload.sessionKey,
+            routingAgentId,
+            compatibilityOwnerAgentId,
+          )
+        : [],
     ...resolvePrivateSessionEventBroadcastScope(payload.sessionKey, scope),
     ...(read && projection
       ? { prepareSessionProjection: prepareSessionEventProjection(projection, read) }
@@ -235,22 +246,26 @@ function broadcastSessionsChanged(
     context.broadcastToConnIds("sessions.changed", eventPayload, connIds, broadcastOptions);
     return;
   }
-  const preparedRow = read?.describe(query);
-  const currentRow = read
-    ? preparedRow && read.present(preparedRow)
-    : projection?.snapshot(query).row;
+  const preparedRow = read ? read.describe(query) : projection?.describe(query);
+  const currentRow = preparedRow
+    ? read
+      ? read.present(preparedRow)
+      : projection?.present(preparedRow)
+    : undefined;
   const sessionRow =
     payload.sessionId && payload.sessionId !== currentRow?.sessionId ? null : currentRow;
   const activeRunState =
-    sessionRow && (sessionRow.key !== "global" || routingAgentId !== undefined)
+    sessionRow && preparedRow && (sessionRow.key !== "global" || routingAgentId !== undefined)
       ? resolveVisibleActiveSessionRunState({
-          context,
+          storePath: preparedRow.storeTarget.storePath,
+          resolveGatewayContext: context.resolveGatewayContext,
           requestedKey: payload.sessionKey ?? sessionRow.key,
           canonicalKey: sessionRow.key,
           sessionId: sessionRow.sessionId,
           agentId: routingAgentId,
           defaultAgentId: compatibilityOwnerAgentId,
           projectedAgentRunIndex: projection?.state.rowContext.projectedAgentRuns,
+          physicalPaths: read?.physicalPaths ?? projection?.physicalPaths,
         })
       : null;
   context.broadcastToConnIds(
@@ -261,9 +276,11 @@ function broadcastSessionsChanged(
         ? {
             ...buildGatewaySessionSnapshot({
               sessionRow,
-              includeSession: true,
               agentId: eventAgentId,
               activeRunState,
+              // A send publication is the producer's current running fact; a queued
+              // source must not downgrade it using an older preparation phase.
+              status: payload.reason === "send" ? "running" : undefined,
             }),
             ...(context.workerSessionPlacementService
               ? {
@@ -462,8 +479,7 @@ export function emitSessionsChanged(
     pending.timer = setTimeout(
       () => finishPendingSessionChange(pending),
       Math.max(0, Math.min(SESSIONS_CHANGED_DEBOUNCE_MS, maxWaitRemaining)),
-    );
-    pending.timer.unref?.();
+    ).unref();
     return;
   }
   try {
@@ -482,8 +498,10 @@ export function emitSessionsChanged(
   };
   owner.pending.set(publicationKey, next);
   pendingSessionChanges.add(next);
-  next.timer = setTimeout(() => finishPendingSessionChange(next), SESSIONS_CHANGED_DEBOUNCE_MS);
-  next.timer.unref?.();
+  next.timer = setTimeout(
+    () => finishPendingSessionChange(next),
+    SESSIONS_CHANGED_DEBOUNCE_MS,
+  ).unref();
   startPendingSessionChange(next, { payload, scope });
 }
 

@@ -3,6 +3,7 @@ import { threadId } from "node:worker_threads";
 import {
   isPostgresSqlConnection,
   sqlPublicationAnchor,
+  type EngineConnection,
   type PostgresSqlConnection,
 } from "./sql-connection.js";
 import {
@@ -11,10 +12,11 @@ import {
   readSqliteDatabaseFactRevision,
   readSqliteDatabaseGeneration,
   readSqliteDatabaseAdmissionFact,
+  SqliteDatabaseGenerationSlot,
   admitSqliteDatabaseFactValue,
   type Admission,
   type AdmissionFactValue,
-  type SqliteDatabaseAdmissionKey,
+  type SqliteDatabaseFactKey,
   type StagedAdmissionFact,
   type SqliteDatabaseAdmissionRegistry,
 } from "./sqlite-database-admission-record.js";
@@ -31,6 +33,8 @@ export function createSqliteDatabaseAdmissionReader(owner: {
     schemaDirty: WeakSet<DatabaseSync>;
     rolledBack: WeakSet<DatabaseSync>;
     misses: WeakMap<Admission, Map<string, number>>;
+    openedIdentities: WeakMap<DatabaseSync, string>;
+    localSchemaRevisions: Map<string, number>;
   };
   admission: (database: DatabaseSync, create?: boolean) => Admission | undefined;
   pathAdmission: (location: string) => Admission | undefined;
@@ -39,12 +43,38 @@ export function createSqliteDatabaseAdmissionReader(owner: {
   release: (record: Admission) => void;
   publishFact: <T>(
     record: Admission,
-    key: SqliteDatabaseAdmissionKey<T>,
+    key: SqliteDatabaseFactKey<T>,
     value: AdmissionFactValue,
     revision: number,
   ) => void;
 }) {
   const { state, admission, pathAdmission, exchange, retain, release, publishFact } = owner;
+
+  /** A retained native consumer keeps its dependency's exact admission generation alive. */
+  function retainSqliteDatabaseAdmissionForPath(location: string) {
+    const record = pathAdmission(location);
+    if (!record) {
+      return undefined;
+    }
+    try {
+      retain(record);
+    } catch (error) {
+      release(record);
+      throw error;
+    }
+    let released = false;
+    const current = state.registry.prepareLocation(location);
+    return {
+      location,
+      isCurrent: () => !released && current() === record,
+      release(this: void) {
+        if (!released) {
+          released = true;
+          release(record);
+        }
+      },
+    };
+  }
 
   function withPathAdmission<T>(
     location: string,
@@ -63,8 +93,8 @@ export function createSqliteDatabaseAdmissionReader(owner: {
   }
   function getSqliteDatabaseAdmission<T>(
     database: DatabaseSync | PostgresSqlConnection,
-    key: SqliteDatabaseAdmissionKey<T>,
-    options: { existingOnly?: boolean } = {},
+    key: SqliteDatabaseFactKey<T>,
+    options: { existingOnly?: boolean; refresh?: boolean } = {},
   ): T | undefined {
     const anchor = sqlPublicationAnchor(database);
     if (!anchor.isOpen || state.suspended.has(anchor)) {
@@ -96,7 +126,8 @@ export function createSqliteDatabaseAdmissionReader(owner: {
       state.rolledBack.delete(anchor);
     }
     let fact = record.facts.get(key.name);
-    if (!fact || !valid(record, fact)) {
+    // A retry may have physical facts while later schema publications are still in transit.
+    if (!fact || !valid(record, fact) || (options.refresh && key.writer !== "host")) {
       if (key.writer === "host") {
         if (
           database.isTransaction ||
@@ -112,7 +143,11 @@ export function createSqliteDatabaseAdmissionReader(owner: {
       const revision = readSqliteDatabaseGeneration(record, "publicationRevision");
       const misses = state.misses.get(record) ?? new Map<string, number>();
       state.misses.set(record, misses);
-      if (!database.isTransaction && misses.get(key.name) !== revision) {
+      if (
+        key.writer !== "connection" &&
+        !database.isTransaction &&
+        (options.refresh || misses.get(key.name) !== revision)
+      ) {
         exchange(record);
         fact = record.facts.get(key.name);
         misses.set(key.name, readSqliteDatabaseGeneration(record, "publicationRevision"));
@@ -123,7 +158,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
 
   function getOrLoadSqliteDatabaseAdmissionForPath<T>(
     location: string,
-    key: SqliteDatabaseAdmissionKey<T>,
+    key: SqliteDatabaseFactKey<T>,
     load: () => T | undefined,
   ): T | undefined {
     const read = (record: Admission | undefined): T | undefined => {
@@ -149,6 +184,64 @@ export function createSqliteDatabaseAdmissionReader(owner: {
       : read(pathAdmission(location));
   }
 
+  /** Optional preparation consumes only facts already delivered to this isolate. */
+  function peekSqliteDatabaseAdmissionForPath<T>(
+    location: string,
+    key: SqliteDatabaseFactKey<T>,
+  ): T | undefined {
+    const record = state.registry.forLocation(location);
+    const fact = record?.facts.get(key.name);
+    return record && fact && valid(record, fact)
+      ? readSqliteDatabaseAdmissionFact(fact, key)
+      : undefined;
+  }
+
+  /** Retain revision cells while following the owner's current publication. */
+  function prepareSqliteDatabaseAdmissionForPath<T>(
+    location: string,
+    key: SqliteDatabaseFactKey<T>,
+  ): () => T | undefined {
+    const record = pathAdmission(location);
+    if (!record) {
+      return () => undefined;
+    }
+    const generation = new Int32Array(record.generation);
+    const revisionSlot = key.schemaDependent
+      ? SqliteDatabaseGenerationSlot.schemaRevision
+      : SqliteDatabaseGenerationSlot.factRevision;
+    let fact = record.facts.get(key.name);
+    let current = fact && new Int32Array(fact.current);
+    return () => {
+      if (Atomics.load(generation, SqliteDatabaseGenerationSlot.retired) !== 0) {
+        return undefined;
+      }
+      const published = record.facts.get(key.name);
+      if (published !== fact) {
+        fact = published;
+        current = fact && new Int32Array(fact.current);
+      }
+      return fact &&
+        current &&
+        Atomics.load(current, 0) === 1 &&
+        fact.revision === Atomics.load(generation, revisionSlot)
+        ? readSqliteDatabaseAdmissionFact(fact, key)
+        : undefined;
+    };
+  }
+
+  function getSqliteDatabaseSchemaRevision(
+    connection: EngineConnection,
+    options: { existingOnly?: boolean } = {},
+  ): number | undefined {
+    const database = sqlPublicationAnchor(connection);
+    const record = admission(database, options.existingOnly !== true);
+    if (record) {
+      return readSqliteDatabaseGeneration(record, "schemaRevision");
+    }
+    const fileIdentity = state.openedIdentities.get(database);
+    return fileIdentity ? (state.localSchemaRevisions.get(fileIdentity) ?? 0) : undefined;
+  }
+
   function hasSqliteDatabaseSchemaAdmissionForPath(location: string): boolean {
     return hasSqliteDatabaseSchemaAdmission(pathAdmission(location));
   }
@@ -169,9 +262,13 @@ export function createSqliteDatabaseAdmissionReader(owner: {
 
   return {
     getSqliteDatabaseAdmission,
+    getSqliteDatabaseSchemaRevision,
     getOrLoadSqliteDatabaseAdmissionForPath,
+    peekSqliteDatabaseAdmissionForPath,
+    prepareSqliteDatabaseAdmissionForPath,
     hasSqliteDatabaseSchemaAdmissionForPath,
     getSqliteDatabaseAdmissionIdentityForPath,
     hasSqliteDatabaseSchemaAdmissionForIdentity,
+    retainSqliteDatabaseAdmissionForPath,
   };
 }

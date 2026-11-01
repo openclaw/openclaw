@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createSessionEventState } from "./chat-state.test-support.ts";
 
@@ -74,7 +74,11 @@ it.each(
       ...(authority === "client correlation" ? {} : { runId }),
     },
   };
-  const { state } = createSessionEventState({ chatMessages: [currentUser], chatRunId: runId });
+  const { state } = createSessionEventState({
+    chatMessages: [currentUser],
+    chatRunId: runId,
+    chatStream: "Continuing the current reply.",
+  });
 
   emitGatewayEvent(state, "session.message", {
     sessionKey: state.sessionKey,
@@ -88,4 +92,5 @@ it.each(
 
   expect(state.chatMessages).toEqual([currentUser, ...(authority === "metadata" ? [message] : [])]);
   expect(state.chatRunId).toBe(runId);
+  expect(state.chatStream).toBe("Continuing the current reply.");
 });

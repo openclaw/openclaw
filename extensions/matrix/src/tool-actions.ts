@@ -49,6 +49,7 @@ import {
   startMatrixVerification,
   verifyMatrixRecoveryKey,
 } from "./matrix/actions/verification.js";
+import { resolveMatrixAuthContext } from "./matrix/client.js";
 import { withAuthorizedMatrixReadTarget } from "./matrix/read-policy.js";
 import type { MatrixClient } from "./matrix/sdk.js";
 import { reactMatrixMessage, sendMessageMatrix } from "./matrix/send.js";
@@ -135,11 +136,11 @@ export async function handleMatrixAction(
       throw new Error(MATRIX_ACTION_DISABLED_MESSAGES[gate]);
     }
     const clientOpts = { cfg, ...(accountId ? { accountId } : {}) };
-    const withReadTarget = async <T>(
+    const withReadTarget = <T>(
       roomId: string,
       run: (roomId: string, opts: typeof clientOpts & { client: MatrixClient }) => Promise<T>,
     ) =>
-      await withAuthorizedMatrixReadTarget({
+      withAuthorizedMatrixReadTarget({
         cfg,
         accountId,
         roomId,
@@ -203,7 +204,7 @@ export async function handleMatrixAction(
       { removeErrorMessage: "Emoji is required to remove a Matrix reaction." },
     );
     if (remove || isEmpty) {
-      const result = await withReadTarget(roomId, async (resolvedRoom, actionOpts) =>
+      const result = await withReadTarget(roomId, (resolvedRoom, actionOpts) =>
         removeMatrixReactions(resolvedRoom, messageId, {
           ...actionOpts,
           emoji: remove ? emoji : undefined,
@@ -211,7 +212,7 @@ export async function handleMatrixAction(
       );
       return jsonResult({ ok: true, removed: result.removed });
     }
-    await withReadTarget(roomId, async (resolvedRoom, actionOpts) =>
+    await withReadTarget(roomId, (resolvedRoom, actionOpts) =>
       reactMatrixMessage(resolvedRoom, messageId, emoji, actionOpts),
     );
     return jsonResult({ ok: true, added: emoji });
@@ -224,7 +225,7 @@ export async function handleMatrixAction(
     });
     const roomId = readRoomId(params);
     const { withReadTarget } = prepareAction("reactions");
-    const reactions = await withReadTarget(roomId, async (resolvedRoom, actionOpts) =>
+    const reactions = await withReadTarget(roomId, (resolvedRoom, actionOpts) =>
       listMatrixReactions(resolvedRoom, messageId, {
         ...actionOpts,
         limit,
@@ -251,7 +252,7 @@ export async function handleMatrixAction(
     // The bound conversation bypasses the parameter reader above. Preserve
     // its late normalization and missing-room error after the action gate.
     const resolvedRoomId = readRoomId({ roomId });
-    const emojis = await withReadTarget(resolvedRoomId, async (resolvedRoom, actionOpts) =>
+    const emojis = await withReadTarget(resolvedRoomId, (resolvedRoom, actionOpts) =>
       listMatrixEmojis(resolvedRoom, {
         ...actionOpts,
         limit,
@@ -300,7 +301,7 @@ export async function handleMatrixAction(
     const content = readStringParam(params, "message", { required: true, trim: false });
     const roomId = readRoomId(params);
     const { withReadTarget } = prepareAction("messages");
-    const result = await withReadTarget(roomId, async (resolvedRoom, actionOpts) =>
+    const result = await withReadTarget(roomId, (resolvedRoom, actionOpts) =>
       editMatrixMessage(resolvedRoom, messageId, content, actionOpts),
     );
     return jsonResult({ ok: true, result });
@@ -310,7 +311,7 @@ export async function handleMatrixAction(
     const messageId = readStringParam(params, "messageId", { required: true });
     const roomId = readRoomId(params);
     const { withReadTarget } = prepareAction("messages");
-    await withReadTarget(roomId, async (resolvedRoom, actionOpts) =>
+    await withReadTarget(roomId, (resolvedRoom, actionOpts) =>
       deleteMatrixMessage(resolvedRoom, messageId, {
         reason: undefined,
         ...actionOpts,
@@ -352,7 +353,13 @@ export async function handleMatrixAction(
       readStringParam(params, "filePath");
     const displayName = readStringParam(params, "displayName") ?? readStringParam(params, "name");
     const avatarUrl = readStringParam(params, "avatarUrl");
-    const { accountId } = prepareAction("profile");
+    // Omitted account ids resolve to defaultAccount. Check that account's profile gate.
+    const contextAccountId = readStringParam({ accountId: ctx.accountId }, "accountId");
+    const accountId = contextAccountId ?? resolveMatrixAuthContext({ cfg }).accountId;
+    const profileEnabled = createActionGate(resolveMatrixAccountConfig({ cfg, accountId }).actions);
+    if (!profileEnabled("profile")) {
+      throw new Error(MATRIX_ACTION_DISABLED_MESSAGES.profile);
+    }
     const result = await applyMatrixProfileUpdate({
       cfg,
       account: accountId,
@@ -368,7 +375,7 @@ export async function handleMatrixAction(
     const userId = readStringParam(params, "userId", { required: true });
     const roomId = readRoomId(params);
     const { withReadTarget } = prepareAction("memberInfo");
-    const result = await withReadTarget(roomId, async (resolvedRoom, actionOpts) =>
+    const result = await withReadTarget(roomId, (resolvedRoom, actionOpts) =>
       getMatrixMemberInfo(userId, { roomId: resolvedRoom, ...actionOpts }),
     );
     return jsonResult({ ok: true, member: result });
@@ -377,9 +384,7 @@ export async function handleMatrixAction(
   if (action === "channel-info") {
     const roomId = readRoomId(params);
     const { withReadTarget } = prepareAction("channelInfo");
-    const result = await withReadTarget(roomId, async (resolvedRoom, actionOpts) =>
-      getMatrixRoomInfo(resolvedRoom, actionOpts),
-    );
+    const result = await withReadTarget(roomId, getMatrixRoomInfo);
     return jsonResult({ ok: true, room: result });
   }
 
@@ -402,7 +407,7 @@ export async function handleMatrixAction(
       ...readPollOptionIndexes(params),
       ...(optionIndex !== undefined ? [optionIndex] : []),
     ];
-    const result = await withReadTarget(roomId, async (resolvedRoom, actionOpts) =>
+    const result = await withReadTarget(roomId, (resolvedRoom, actionOpts) =>
       voteMatrixPoll(resolvedRoom, pollId, {
         ...actionOpts,
         optionIds,
@@ -480,14 +485,14 @@ export async function handleMatrixAction(
         return jsonResult({ ok: true, verification });
       },
       "verification-accept": () => runVerification(acceptMatrixVerification),
-      "verification-cancel": async () => {
+      "verification-cancel": () => {
         const reason = readStringParam(params, "reason");
         const code = readStringParam(params, "code");
         return runVerification((id, opts) =>
           cancelMatrixVerification(id, { reason, code, ...opts }),
         );
       },
-      "verification-start": async () => {
+      "verification-start": () => {
         const method = normalizeOptionalLowercaseString(readStringParam(params, "method"));
         if (method && method !== "sas") {
           throw new Error(
@@ -502,7 +507,7 @@ export async function handleMatrixAction(
         const qr = await generateMatrixVerificationQr(requireRequestId(), clientOpts);
         return jsonResult({ ok: true, ...qr });
       },
-      "verification-scan-qr": async () => {
+      "verification-scan-qr": () => {
         const qrDataBase64 =
           readStringParam(params, "qrDataBase64") ??
           readStringParam(params, "qrData") ??

@@ -7,6 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AssistantMessage, AssistantMessageEvent } from "../llm/types.js";
 import { mapAssistantMessageStream } from "../llm/utils/stream-wrapper.js";
 import type { PluginTextReplacement, PluginTextTransforms } from "../plugins/cli-backend.types.js";
+import { mapNestedStrings } from "../shared/map-nested-strings.js";
 import type { StreamFn } from "./runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "./stream-compat.js";
 import { createStreamIteratorWrapper } from "./stream-iterator-wrapper.js";
@@ -44,6 +45,9 @@ function transformContentText(
   replacements?: PluginTextReplacement[],
   mode: "content" | "arguments" | "message" = "content",
 ): unknown {
+  if (mode === "arguments") {
+    return mapNestedStrings(content, (value) => applyPluginTextReplacements(value, replacements));
+  }
   if (mode === "message" && !isRecord(content)) {
     return content;
   }
@@ -55,14 +59,6 @@ function transformContentText(
   }
   if (!isRecord(content)) {
     return content;
-  }
-  if (mode === "arguments") {
-    return Object.fromEntries(
-      Object.entries(content).map(([key, entry]) => [
-        key,
-        transformContentText(entry, replacements, mode),
-      ]),
-    );
   }
   const next = { ...content };
   if (mode === "content" && typeof next.text === "string") {

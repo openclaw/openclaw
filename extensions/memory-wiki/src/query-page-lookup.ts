@@ -1,11 +1,7 @@
 import path from "node:path";
-import { WIKI_PAGE_GROUPS } from "./markdown.js";
-import {
-  listWikiMarkdownFiles,
-  readQueryableWikiPagesByPaths,
-  type QueryableWikiPage,
-} from "./query-pages.js";
+import type { QueryableWikiPage } from "./query-scoring.js";
 import { normalizeLookupKey } from "./query-shared-memory.js";
+import { WIKI_PAGE_GROUPS } from "./wiki-page-kinds.js";
 
 type LookupPage = { relativePath: string; id?: string | undefined };
 
@@ -46,32 +42,38 @@ function isExactWikiPagePath(lookup: string): boolean {
   );
 }
 
+/**
+ * Resolves a wiki_get lookup to the page a read of the whole vault would pick: the exact
+ * path, then the path tiers from the listing in listing order, then every page. The caller
+ * supplies the reads so the whole-vault read can run off the calling thread.
+ */
 export async function resolveQueryableWikiPageForLookup(params: {
-  rootDir: string;
   lookup: string;
+  listFiles: () => Promise<string[]>;
+  readPages: (relativePaths: string[]) => Promise<QueryableWikiPage[]>;
   canReadPage: (page: QueryableWikiPage) => boolean;
 }): Promise<QueryableWikiPage | null> {
   const key = normalizeLookupKey(params.lookup);
   if (isExactWikiPagePath(key)) {
-    const [page] = await readQueryableWikiPagesByPaths(params.rootDir, [key]);
+    const [page] = await params.readPages([key]);
     if (page && params.canReadPage(page)) {
       return page;
     }
   }
-  const files = await listWikiMarkdownFiles(params.rootDir);
+  const files = await params.listFiles();
   // Read path tiers in listing order before falling back to IDs. The digest cannot
   // prove which pages carry an ID after the last compile, so ID lookup reads all pages.
   const candidatePaths = new Set(
     createPathLookupMatchers(key).flatMap((matches) => files.filter(matches)),
   );
   for (const candidatePath of candidatePaths) {
-    const [page] = await readQueryableWikiPagesByPaths(params.rootDir, [candidatePath]);
+    const [page] = await params.readPages([candidatePath]);
     if (page && params.canReadPage(page)) {
       return page;
     }
   }
   return resolveQueryableWikiPageByLookup(
-    (await readQueryableWikiPagesByPaths(params.rootDir, files)).filter(params.canReadPage),
+    (await params.readPages(files)).filter(params.canReadPage),
     key,
   );
 }

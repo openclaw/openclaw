@@ -2,14 +2,14 @@ import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "../api.js";
 import { VisitorAccessError } from "./errors.js";
-import { visitorRuntimeStore } from "./runtime.js";
+import { VISITOR_NOTE_MAX_CHARS } from "./grant-record.js";
+import { visitorRuntimeStore, type VisitorRuntime } from "./runtime.js";
 import {
   visitorInviteDetailsSchema,
   visitorListDetailsSchema,
   visitorRevokeDetailsSchema,
   visitorToolErrorSchema,
 } from "./tool-results.js";
-import type { VisitorAccessService } from "./visitors.js";
 
 const identityFields = {
   github: Type.Optional(
@@ -39,7 +39,7 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
       name: "visitor_invite",
       label: "Invite visitor",
       description:
-        "Grant or renew visitor access to team.openclaw.ai. Requires administrator or designated-owner authority. Provide exactly one Team sign-in email or GitHub login. A GitHub invitation uses the immutable account ID, not public email. Checks restricted guest access and preserves existing assigned roles. Grants expire after the configured duration (14 days by default); forever must be explicit.",
+        "Grant or renew visitor access to the Team Gateway. Requires administrator or designated-owner authority. Provide exactly one Team sign-in email or GitHub login. A GitHub invitation uses the immutable account ID, not public email. Checks restricted guest access and preserves existing assigned roles. Grants expire after the configured duration (14 days by default); forever must be explicit. An optional note from you to the visitor, such as a session link to start from, is stored with the grant; renewal without a note keeps the existing one. The result includes invitationText: short plain text naming the inviter, sign-in address, identity to use, expiry, and note, ready to hand to the visitor.",
       parameters: Type.Object(
         {
           ...identityFields,
@@ -53,12 +53,24 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
           forever: Type.Optional(
             Type.Boolean({ description: "Explicitly grant access without expiry." }),
           ),
+          note: Type.Optional(
+            Type.String({
+              maxLength: VISITOR_NOTE_MAX_CHARS,
+              description:
+                "Free-text message from the inviter to the visitor, included in the invitation text; may include a session link. Replaces the stored note; omit to keep it on renewal.",
+            }),
+          ),
         },
         { additionalProperties: false, oneOf: [{ required: ["email"] }, { required: ["github"] }] },
       ),
       outputSchema: Type.Union([visitorInviteDetailsSchema, visitorToolErrorSchema]),
-      run: (service: VisitorAccessService, raw: unknown) =>
-        service.invite(raw, { assertCurrent, invitedVia: context.sessionKey ?? context.agentId }),
+      run: async ({ service, readInviter, readSignInUrl }: VisitorRuntime, raw: unknown) =>
+        service.invite(raw, {
+          assertCurrent,
+          invitedVia: context.sessionKey ?? context.agentId,
+          invitedBy: await readInviter(),
+          signInUrl: readSignInUrl(),
+        }),
     },
     {
       name: "visitor_revoke",
@@ -74,7 +86,7 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
         { additionalProperties: false },
       ),
       outputSchema: Type.Union([visitorRevokeDetailsSchema, visitorToolErrorSchema]),
-      run: (service: VisitorAccessService, raw: unknown) => service.revoke(raw, assertCurrent),
+      run: ({ service }: VisitorRuntime, raw: unknown) => service.revoke(raw, assertCurrent),
     },
     {
       name: "visitor_list",
@@ -83,7 +95,7 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
         "List recorded visitor grants, current verified GitHub identities, current Gateway access, invitation and expiry dates, and drift from the Access policy. Grant expiry does not describe independent staff access. Unmanaged policy targets are reported and retained; missing policy targets are never automatically restored.",
       parameters: Type.Object({}, { additionalProperties: false }),
       outputSchema: Type.Union([visitorListDetailsSchema, visitorToolErrorSchema]),
-      run: (service: VisitorAccessService) => service.list(assertCurrent),
+      run: ({ service }: VisitorRuntime) => service.list(assertCurrent),
     },
   ];
   return definitions.map(({ name, label, description, parameters, outputSchema, run }) => ({
@@ -105,7 +117,7 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
       }
       try {
         assertCurrent();
-        const { text, details } = await run(runtime.service, raw);
+        const { text, details } = await run(runtime, raw);
         return textResult(text, details);
       } catch (error) {
         return {

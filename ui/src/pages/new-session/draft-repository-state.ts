@@ -1,3 +1,7 @@
+import {
+  GatewayProtocolRequestError,
+  readMissingScopeError,
+} from "@openclaw/gateway-client/browser";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   AgentSummary,
@@ -6,6 +10,8 @@ import type {
   WorktreesBranchesResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { findSelectableAgent } from "../../lib/agents/display.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { DraftRepositoryState } from "./discovery.ts";
@@ -33,6 +39,8 @@ type DraftRepositoryCallbacks = {
     expected: SubmittedWorktreePreference,
   ) => ((consume: () => void) => void | Promise<void>) | undefined;
 };
+
+export type DraftRepositoryRead<T> = Readonly<{ completed: Promise<T> }>;
 
 type ResolvedRepository = Exclude<DraftRepositoryState, { kind: "checking" }>;
 
@@ -64,6 +72,17 @@ export class DraftRepositoryStateOwner {
   private requestToken = 0;
   private checkoutScope: { project: ProjectRecord; agentId: string } | undefined;
   private checkoutOptions: ProjectsCheckoutOptionsResult | "loading" | "error" | undefined;
+
+  private checkoutReadValue: DraftRepositoryRead<ProjectsCheckoutOptionsResult> | undefined;
+  private repositoryReadValue: DraftRepositoryRead<WorktreesBranchesResult> | undefined;
+
+  get checkoutRead() {
+    return this.checkoutReadValue;
+  }
+
+  get repositoryRead() {
+    return this.repositoryReadValue;
+  }
 
   private selectionRevision = 0;
   private preferredWorktreeRestore = false;
@@ -206,6 +225,8 @@ export class DraftRepositoryStateOwner {
     this.repositoryValue = { kind: "idle" };
     this.checkoutScope = undefined;
     this.checkoutOptions = undefined;
+    this.checkoutReadValue = undefined;
+    this.repositoryReadValue = undefined;
   }
 
   selectWorktree(value: boolean, clearName = true) {
@@ -266,7 +287,7 @@ export class DraftRepositoryStateOwner {
     const revision = this.selectionRevision;
     const snapshot = this.read();
     const agentId = normalizeAgentId(submission.agentId);
-    const agent = snapshot.agents.find((candidate) => normalizeAgentId(candidate.id) === agentId);
+    const agent = findSelectableAgent(snapshot.agents, agentId);
     const owner = { agentId, workspace: normalizeOptionalString(agent?.workspace) ?? "" };
     const currentAgent = owner.agentId === snapshot.agentId;
     const persist = this.callbacks.capturePreferenceConsumption(owner, {
@@ -346,12 +367,15 @@ export class DraftRepositoryStateOwner {
         ? { project: snapshot.selectedProject, agentId: snapshot.agentId }
         : undefined;
     this.checkoutOptions = this.checkoutScope ? "loading" : undefined;
+    this.checkoutReadValue = undefined;
+    this.repositoryReadValue = undefined;
     if (this.checkoutScope && snapshot.gateway?.phase === "connected" && snapshot.gateway.client) {
-      void snapshot.gateway.client
-        .request<ProjectsCheckoutOptionsResult>("projects.checkoutOptions", {
-          projectId: this.checkoutScope.project.id,
-          agentId: this.checkoutScope.agentId,
-        })
+      const completed = snapshot.gateway.client.request<ProjectsCheckoutOptionsResult>(
+        "projects.checkoutOptions",
+        { projectId: this.checkoutScope.project.id, agentId: this.checkoutScope.agentId },
+      );
+      this.checkoutReadValue = { completed };
+      void completed
         .then((options) => {
           if (requestId !== this.requestToken || !this.matchesProjectCheckout()) {
             return;
@@ -376,12 +400,20 @@ export class DraftRepositoryStateOwner {
       return this.adoptResolvedRepository({ kind: "idle" });
     }
     const { repoRoot } = discovery;
-    this.repositoryValue = discovery;
-    void client
-      .request<WorktreesBranchesResult>("worktrees.branches", {
+    if (!hasOperatorWriteAccess(snapshot.gateway.hello?.auth ?? null)) {
+      return this.adoptResolvedRepository({
+        kind: "forbidden",
         repoRoot,
-        includeRepositoryStatus: true,
-      })
+        missingScope: "operator.write",
+      });
+    }
+    this.repositoryValue = discovery;
+    const completed = client.request<WorktreesBranchesResult>("worktrees.branches", {
+      repoRoot,
+      includeRepositoryStatus: true,
+    });
+    this.repositoryReadValue = { completed };
+    void completed
       .then((result) => {
         if (requestId !== this.requestToken) {
           return;
@@ -399,11 +431,21 @@ export class DraftRepositoryStateOwner {
             : { kind: result?.repositoryStatus === "not_git" ? "direct" : "unavailable", repoRoot },
         );
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (requestId !== this.requestToken) {
           return;
         }
-        this.adoptResolvedRepository({ kind: "unavailable", repoRoot });
+        const missing = readMissingScopeError(error);
+        this.adoptResolvedRepository(
+          missing ||
+            (error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN")
+            ? {
+                kind: "forbidden",
+                repoRoot,
+                ...(missing ? { missingScope: missing.missingScope } : {}),
+              }
+            : { kind: "unavailable", repoRoot },
+        );
       });
   }
 

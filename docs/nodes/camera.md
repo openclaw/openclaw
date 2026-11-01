@@ -131,6 +131,7 @@ openclaw nodes camera clip --node <id> --no-audio
 - `openclaw nodes camera snap` defaults to `maxWidth=1600` unless overridden.
 - `camera.snap` waits `delayMs` (default 2000ms, clamped to `[0, 10000]`) after warm-up/exposure settle before capturing.
 - Photo payloads are recompressed to keep base64 under 5MB.
+- Clips that would not fit the Gateway's 25 MiB result frame (about 18.75 MiB of MP4) fail with `UNAVAILABLE: camera.clip payload too large; reduce durationMs` and the node stays connected.
 
 If a macOS external camera starts a photo session in portrait, OpenClaw selects an advertised landscape format with transposed dimensions and the same encoding, when one exists. Already-landscape, built-in, and Continuity Camera formats are unchanged. Without an exact counterpart, or if the camera cannot be reconfigured, capture keeps the negotiated format. `--max-width` still only limits the returned JPEG width; it does not choose a camera format.
 

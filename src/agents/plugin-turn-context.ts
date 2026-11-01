@@ -24,7 +24,7 @@ export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): vo
   }
 }
 
-/** Collect queued context before prepare, heartbeat, and prompt-build hooks. */
+/** Collect queued context before prepare and prompt-build hooks. */
 export async function resolvePluginTurnContext(params: {
   config: OpenClawConfig;
   prompt: string;
@@ -35,7 +35,12 @@ export async function resolvePluginTurnContext(params: {
         hasHooks: (hookName: "agent_turn_prepare") => boolean;
       })
     | null;
+  /** A refresh continuation already started this turn; its injections and turn-start hooks ran. */
+  refreshContinuation?: boolean;
 }): Promise<PluginAgentTurnPrepareResult> {
+  if (params.refreshContinuation) {
+    return {};
+  }
   const runId = params.hookCtx.runId;
   const cachedInjections = runId ? promptBuildDrainCache.get(runId) : undefined;
   const queuedContext = cachedInjections

@@ -29,6 +29,7 @@ import {
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
 import { withWorkerSqliteIntegrityCounter } from "./session-accessor.sqlite-integrity-counter.test-support.js";
+import { observeNativeSqliteIntegrityChecks } from "./session-accessor.sqlite-native-integrity.test-support.js";
 import * as sessionWorker from "./session-accessor.sqlite-replacement-worker.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 
@@ -106,7 +107,6 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 const roots = createTempDirTracker();
 const pending: Promise<unknown>[] = [];
 const releases: Array<() => void> = [];
-const realOpen = sqlite.openNodeSqliteDatabase;
 const realIntegrity = integrity.assertSqliteIntegrityInWorker;
 
 beforeEach(() => {
@@ -154,7 +154,10 @@ function fixture() {
   closeOpenClawAgentDatabaseByPath(database.path);
   invalidateOpenClawAgentDatabaseValidation(database.path);
   revokeSqliteDatabaseAdmissionsForPath(database.path);
-  return { scope, databaseOptions };
+  const target = { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] };
+  const deleteEntry = (options: Partial<Parameters<typeof deleteSessionEntryLifecycle>[0]> = {}) =>
+    deleteSessionEntryLifecycle({ storePath, target, archiveTranscript: false, ...options });
+  return { scope, databaseOptions, target, deleteEntry };
 }
 
 function observeColdAdmission(
@@ -183,26 +186,8 @@ function observeColdAdmission(
   };
   releases.push(() => release.resolve());
   let parentChecks = 0;
-  vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
-    const database = realOpen(pathname, options);
-    if (pathname === databasePath && !options?.readOnly) {
-      const prepare = database.prepare.bind(database);
-      database.prepare = (sql) => {
-        const statement = prepare(sql);
-        if (
-          sql === "PRAGMA integrity_check;" ||
-          sql === "PRAGMA integrity_check('sqlite_schema');"
-        ) {
-          const all = statement.all.bind(statement);
-          statement.all = () => {
-            parentChecks += 1;
-            return all();
-          };
-        }
-        return statement;
-      };
-    }
-    return database;
+  observeNativeSqliteIntegrityChecks(databasePath, () => {
+    parentChecks += 1;
   });
   vi.spyOn(integrity, "assertSqliteIntegrityInWorker").mockImplementation((...args) => {
     const work = realIntegrity(...args);
@@ -250,18 +235,10 @@ function observeColdAdmission(
   };
 }
 
-it("keeps cold delete preparation asynchronous inside its writer FIFO", async () => {
-  const f = fixture();
-  const admission = observeColdAdmission(f.databaseOptions.path);
-  const work = own(
-    deleteSessionEntryLifecycle({
-      storePath: f.scope.storePath,
-      target: { canonicalKey: f.scope.sessionKey, storeKeys: [f.scope.sessionKey] },
-      archiveTranscript: false,
-    }),
-  );
-  await yieldToEventLoop();
-  expect(admission.parentChecks()).toBe(0);
+async function expectAdmission(
+  admission: ReturnType<typeof observeColdAdmission>,
+  work: Promise<unknown>,
+) {
   expect(
     await Promise.race([
       admission.entered.promise.then(() => true),
@@ -271,6 +248,21 @@ it("keeps cold delete preparation asynchronous inside its writer FIFO", async ()
       ),
     ]),
   ).toBe(true);
+}
+
+const cleanupOptions = {
+  sessionKeySegmentPrefix: "dreaming-",
+  transcriptContentMarker: "dreaming-marker",
+  orphanTranscriptMinAgeMs: 0,
+};
+
+it("keeps cold delete preparation asynchronous inside its writer FIFO", async () => {
+  const f = fixture();
+  const admission = observeColdAdmission(f.databaseOptions.path);
+  const work = own(f.deleteEntry());
+  await yieldToEventLoop();
+  expect(admission.parentChecks()).toBe(0);
+  await expectAdmission(admission, work);
   let followingWriterEntered = false;
   const following = own(
     runExclusiveSqliteSessionWrite(
@@ -317,9 +309,7 @@ it.each(["cold", "warm"] as const)(
         cleanupSessionLifecycleArtifactsCore({
           agentId: scope.agentId,
           storePath: scope.storePath,
-          sessionKeySegmentPrefix: "dreaming-",
-          transcriptContentMarker: "dreaming-marker",
-          orphanTranscriptMinAgeMs: 0,
+          ...cleanupOptions,
         }),
       ).resolves.toEqual({ removedEntries: 0, archivedTranscriptArtifacts: 0 });
       expect(loadSessionEntryReadOnly(scope)).toMatchObject(entry);
@@ -343,9 +333,7 @@ it("retains canonical repair refusal during warm cleanup with no matching artifa
   await expect(
     cleanupSessionLifecycleArtifactsCore({
       storePath: f.scope.storePath,
-      sessionKeySegmentPrefix: "dreaming-",
-      transcriptContentMarker: "dreaming-marker",
-      orphanTranscriptMinAgeMs: 0,
+      ...cleanupOptions,
     }),
   ).rejects.toThrow("invalid persisted session row requires repair");
   expect(database.db.isTransaction).toBe(false);
@@ -362,10 +350,7 @@ it("rejects retired authority before evaluating a stale deletion target", async 
   let allowed = true;
   const revoked = new Error("deletion authority retired during validation");
   const work = own(
-    deleteSessionEntryLifecycle({
-      storePath: f.scope.storePath,
-      target: { canonicalKey: f.scope.sessionKey, storeKeys: [f.scope.sessionKey] },
-      archiveTranscript: false,
+    f.deleteEntry({
       expectedSessionId: "stale-generation",
       commitGuard: () => {
         if (!allowed) {
@@ -374,15 +359,7 @@ it("rejects retired authority before evaluating a stale deletion target", async 
       },
     }),
   );
-  expect(
-    await Promise.race([
-      admission.entered.promise.then(() => true),
-      work.then(
-        () => false,
-        () => false,
-      ),
-    ]),
-  ).toBe(true);
+  await expectAdmission(admission, work);
   allowed = false;
   admission.release.resolve();
   await expect(work).rejects.toBe(revoked);
@@ -406,26 +383,12 @@ it("retains the selected state owner while cold deletion waits in the FIFO", asy
   );
   await blockerEntered.promise;
   const admission = observeColdAdmission(f.databaseOptions.path);
-  const work = own(
-    deleteSessionEntryLifecycle({
-      storePath: f.scope.storePath,
-      target: { canonicalKey: f.scope.sessionKey, storeKeys: [f.scope.sessionKey] },
-      archiveTranscript: false,
-    }),
-  );
+  const work = own(f.deleteEntry());
   const otherRoot = roots.make("session-lifecycle-other-state-");
   vi.stubEnv("OPENCLAW_STATE_DIR", otherRoot);
   releaseBlocker.resolve();
   await blocker;
-  expect(
-    await Promise.race([
-      admission.entered.promise.then(() => true),
-      work.then(
-        () => false,
-        () => false,
-      ),
-    ]),
-  ).toBe(true);
+  await expectAdmission(admission, work);
   admission.release.resolve();
   await expect(work).resolves.toMatchObject({ deleted: true });
   expect(fs.existsSync(path.join(otherRoot, "state", "openclaw.sqlite"))).toBe(false);
@@ -434,7 +397,7 @@ it("retains the selected state owner while cold deletion waits in the FIFO", asy
 
 it("keeps historical preparation asynchronous after materialization evicts its parent handle", async () => {
   const f = fixture();
-  const target = { canonicalKey: f.scope.sessionKey, storeKeys: [f.scope.sessionKey] };
+  const { target } = f;
   await appendTranscriptMessage(
     { ...f.scope, sessionId: "retained" },
     {
@@ -460,22 +423,8 @@ it("keeps historical preparation asynchronous after materialization evicts its p
     revokeSqliteDatabaseAdmissionsForPath(f.databaseOptions.path);
     admission.armHistoricalCheck();
   };
-  const work = own(
-    deleteSessionEntryLifecycle({
-      storePath: f.scope.storePath,
-      target,
-      archiveTranscript: true,
-    }),
-  );
-  expect(
-    await Promise.race([
-      admission.entered.promise.then(() => true),
-      work.then(
-        () => false,
-        () => false,
-      ),
-    ]),
-  ).toBe(true);
+  const work = own(f.deleteEntry({ archiveTranscript: true }));
+  await expectAdmission(admission, work);
   await yieldToEventLoop();
   expect(admission.parentChecks()).toBe(0);
   expect(loadSessionEntryReadOnly(f.scope)).toMatchObject({ sessionId: "current" });

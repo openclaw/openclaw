@@ -1,6 +1,4 @@
 /**
- * Session-to-agent binding resolver.
- *
  * Derives the trusted active agent from explicit agent ids, agent session keys, or configured main-session aliases.
  */
 import {

@@ -7,9 +7,9 @@ destination="${2:?Vercel CLI destination is required}"
 github_output="${3:-}"
 cli_label=Vercel
 cli_package=vercel
-expected_version=63.1.0
-expected_lock_sha256="0a83048049df839446b98af4a6d27b26b40903f9ca125e850965baa6cb590c6f"
-expected_integrity="sha512-JQvJODfMeBGejhW1nfu0zfczU8I0NiARD3FilxuBjFeMtEzgK2LeBD6RC1yyhwR8mVQzod/p/SbjyDNFx11njQ=="
+expected_version=64.7.0
+expected_lock_sha256="1db1446b10416f8d95a388ab9c347f53672cead3a3da30a0bdcf0c5de2cb5c84"
+expected_integrity="sha512-/2ze0K7OVfjDbh6eWQmCCOoAa3MDcbZX3OYljobcougiyqCMakLTAtj5H8aKubgD5IM1+otUMxvYcvlo6pv0Ng=="
 # Use Sandbox directly: Vercel's sandbox wrapper overwrites failed remote exits.
 additional_bin=sandbox_cli=sandbox
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/materialize-pinned-cli.sh"

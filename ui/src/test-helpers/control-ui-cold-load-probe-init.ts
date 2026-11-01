@@ -5,42 +5,36 @@ export type SolidSidebarProbeOwner = {
   readonly hostElement: HTMLElement;
   readonly isConnected: boolean;
   sessionData: SessionDataProbeOwner;
-  requestUpdate(): void;
+  shouldPublishSessionData: (this: SolidSidebarProbeOwner) => boolean;
+  invalidate(): void;
   prepareRender(): void;
   commitRender(): void;
+  releaseSidebarSnapshot(): void;
 };
-export type SidebarLifecycle = "requestUpdate" | "prepareRender" | "commitRender";
+export type SidebarLifecycle = "invalidate" | "prepareRender" | "commitRender";
 export type ProbeMethod = (...args: unknown[]) => unknown;
-type ChatMethod =
-  | "requestUpdate"
-  | "performUpdate"
-  | "render"
-  | "prepareRender"
-  | "commitRender"
-  | "afterCommit";
 export type ChatProbeOwner = {
+  readonly element: HTMLElement;
   readonly isConnected: boolean;
-  requestUpdate: ProbeMethod;
-  performUpdate: ProbeMethod;
   render: ProbeMethod;
-  prepareRender?: ProbeMethod;
-  commitRender?: ProbeMethod;
-  afterCommit?: ProbeMethod;
 };
 export type ChatOwnerRecord = {
   host: HTMLElement;
   owner: ChatProbeOwner;
-  originals: Map<ChatMethod, ProbeMethod>;
+  originalRender?: ProbeMethod;
   pending: Map<string, number>;
   pendingRequests: Map<number, string>;
-  queuedRequests: Map<number, string>;
-  publicationRequests: Map<number, string>;
-  publicationPending: boolean;
 };
 
 export type ColdLoadProbeInput = {
   ownerProbes?: boolean;
+  sidebarCounters?: boolean;
   latencyMs: number;
+  downloadKbps?: number;
+  methodLatencyMs?: Record<string, number>;
+  sidebarQueryLatencyMs?: Record<string, number>;
+  omitHelloSelfPresence?: boolean;
+  connectNotBeforeMs?: number;
   frameGapMs: number;
   events: Array<{ event: string; payload: unknown }>;
   liveEvents?: Array<{
@@ -60,6 +54,41 @@ export type ColdLoadProbeInput = {
     messages: unknown[];
     inFlightRun: { runId: string; text: string; startedAt: number; events: unknown[] };
   };
+};
+
+export type ColdLoadRpcRecord = {
+  method: string;
+  requestBytes: number;
+  responseBytes: number;
+  ms: number;
+  requestMs: number;
+  responseMs: number;
+  responseOk?: boolean;
+  initialHistoryOk?: boolean;
+  dispatchMs?: number;
+  responseAtMs?: number;
+  abandoned?: true;
+  params: unknown;
+  stack: string | undefined;
+};
+
+export type ColdLoadSocketClose = {
+  socketId: number;
+  atMs: number;
+  code: number;
+  reason: string;
+  wasClean: boolean;
+};
+
+export type ColdLoadEventHeader = {
+  socketId: number;
+  event: string;
+  seq: number | null;
+  queuedAtMs: number;
+  eligibleAtMs: number;
+  deliveredAtMs?: number;
+  deliveryOrder?: number;
+  socketStateAtDelivery?: number;
 };
 
 type LiveDeliveryOrigin = {

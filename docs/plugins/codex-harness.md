@@ -15,6 +15,52 @@ native compaction, and app-server execution. OpenClaw still owns chat
 channels, session files, model selection, OpenClaw dynamic tools, approvals,
 media delivery, and the visible transcript mirror.
 
+Turns without a routable source conversation, such as operator CLI turns, return
+their final response automatically to the caller. The `message` tool needs an
+explicit `target` for sends from these turns; it cannot post progress to a
+current conversation.
+
+Managed inference proxy restarts do not replace an otherwise reusable native
+thread. Thread identity uses the proxy's upstream provider and routing policy, not
+its temporary loopback address. Upstream, authentication-profile, and creation-time
+policy changes still invalidate thread reuse; live requests continue through the
+current owned proxy. Context-only projection refreshes use that same logical
+inference identity when background work retains its predecessor, rather than
+comparing the private relay URL with the logical route fingerprint.
+
+If Codex discards an unused native thread, the next turn starts a replacement
+through the existing thread lifecycle and logs a warning. A binding with recorded
+conversation history is preserved when its native thread cannot be found;
+OpenClaw reports the error instead of silently starting over.
+
+If active work still claims a native thread, OpenClaw rejects configuration
+changes that would release it without trying fallback models. Wait for that work
+to finish or stop it before retrying. The original thread and its configuration
+remain available.
+
+To diagnose a blocked reply after context refresh, set the existing
+[log file level](/gateway/logging) to `debug`. The
+`codex app-server context-engine binding changed; starting a new thread` record
+includes `backgroundRetentionReason`: `retained`, `client-mismatch`,
+`engine-policy-mismatch`, `tool-mismatch`, `not-background-only`,
+`plugin-policy-mismatch`, or `immutable-config-mismatch`. It reports the first
+failed check; later checks have not run. `retained` means preparation qualified,
+not that a successor has committed. A subsequent
+`codex app-server retained thread release blocked` record reports whether the
+physical owner still has a claim, protection, or background-only custody, and
+whether it differs from the requesting client. These diagnostic fields contain
+only fixed reason codes and booleans, not instructions or configuration contents.
+The same-client and complete-policy checks remain enforced; diagnostics do not
+make a previously refused continuation eligible.
+
+Provider-review acknowledgments must continue the reviewed native thread. If
+changed tools or runtime configuration would require a replacement thread, or
+native resume fails, OpenClaw refuses the acknowledgment before creating or saving
+a replacement. Restore the original tools and runtime configuration and retry
+from the original conversation. The review remains pending until Codex accepts
+the continuation; acknowledgment does not bypass the review checks or repair a
+binding that was already replaced by an earlier failed attempt.
+
 ## Shared output projection
 
 Codex uses the shared native harness projection owners for bounded tool output,
@@ -23,10 +69,28 @@ The shared settlement owner preserves callback order and joins pending
 presentation work before terminal delivery. Projection draining stays under the
 attempt cancellation and settlement deadline.
 
+After a transient provider retry, final-answer recovery uses the original
+persisted user prompt and the completed tool results. It can produce a summary
+when the native turn finishes without text, without running those tools again.
+
 The Codex adapter retains native item identities, protocol parsing, approvals,
 hook handling, and transcript provenance. Constructed messages are persisted
 through the existing scoped transcript APIs; the shared projection helpers do
 not own storage.
+
+The adapter validates native responses with checks and diagnostic schemas generated
+from the pinned app-server schemas. This removes runtime schema compilation and
+normalization while preserving invalid-response diagnostics. Protocol sync regenerates both outputs.
+For validator-only changes, run
+`pnpm codex-app-server:validators:gen` and verify with
+`pnpm codex-app-server:validators:check` without running Codex.
+
+Run tool summaries retain explicit native-tool failures recorded before execution,
+including malformed patches and workspace refusals. A successful retry leaves the
+earlier failure in the count. Code Mode wrapper output does not add another count
+when a native execution item already accounts for it. A completed command result
+with a nonzero exit code also marks the run unsafe to replay, even if its native
+execution item is missing.
 
 During `initialize`, OpenClaw uses `capabilities.optOutNotificationMethods` to
 suppress unused app-server notifications before they reach the transport and JSON
@@ -78,6 +142,8 @@ matching the paired-node response budget. Healthy siblings still return; backgro
 native hydration can continue warming the next request. Complete catalog `thread/list` pages and metadata-only `thread/read` responses
 up to 64 KiB are parsed and projected inline, avoiding worker startup for small
 catalog refreshes. Larger responses use a worker owned by their app-server client.
+The shared worker pool retires an idle decoder after one minute, extending recurring
+reuse to five minutes; memory pressure and client shutdown can retire it sooner.
 Both paths apply the same projection. The stdout reader waits for the compact result
 before delivering later responses or notifications. It transfers larger responses
 as bytes, admits one worker task at a time, and pauses the transport while that task runs.
@@ -371,6 +437,33 @@ legacy Codex GPT refs. Put OpenAI agent auth order under `auth.order.openai`.
 Legacy Codex auth profile ids and legacy Codex auth order entries are
 repaired by `openclaw doctor --fix`.
 
+### Parent-local inference connection recovery
+
+When an ordinary managed turn ends with the exact `Codex parent-local inference
+transport failed` error, OpenClaw settles its recorded output before retiring
+that connection from future acquisitions. Retirement is skipped while sibling
+work or idle Incognito history still owns the process: Incognito history cannot
+be resumed from disk. Existing sibling turns
+continue normally; preserving their ownership takes priority over this optional
+connection refresh.
+The next eligible attempt can resume the saved thread on a fresh connection.
+The relay does not replay tools or add a retry loop; existing retry limits and
+side-effect checks still apply. Unrelated upstream 502s, supervised sessions,
+and client-bound native tool catalogs do not trigger this retirement.
+
+The logs include `codex inference HTTP relay failed` with a bounded stage and
+cause classification, plus `codex inference transport retired after settled failure`
+when retirement occurs. These diagnostics omit private routes, credentials,
+request bodies, and arbitrary exception text.
+
+After installing a repair, verify its live activation receipt before calling it
+active. If activation is pending, an authorized operator can run
+`openclaw plugins reload codex --json`. Then verify a reply and a read-only tool
+call in the affected session. For background-worker incidents, also follow up
+with the same worker through its parent and verify the worker's completed result;
+a successful parent reply alone does not establish worker recovery. Reconcile
+previous tool results and delivery receipts before retrying external work.
+
 With provider/model runtime policy unset or `auto`, the `openai/*` prefix alone
 never selects this harness. OpenAI may select Codex implicitly only for an
 exact official HTTPS Platform Responses or ChatGPT Responses route with no
@@ -383,6 +476,14 @@ If Codex owns auth before Platform versus ChatGPT routing is known, OpenClaw
 still requires every candidate route to declare Codex compatibility. Native
 auth ownership alone never bypasses that route check.
 
+For managed local stdio, automatic selection uses the built-in OpenClaw harness
+when no native Codex binary is available. This includes platforms without a
+published binary, such as Linux RISC-V64. An explicitly selected or pinned Codex
+runtime reports an error instead. Install a native Codex build and set
+`plugins.entries.codex.config.appServer.command` or `OPENCLAW_CODEX_APP_SERVER_BIN`
+to use it. Configured commands, WebSocket connections, Unix sockets, and
+worker-hosted app-servers retain their own startup validation.
+
 When no OpenClaw sandbox is active, OpenClaw starts Codex app-server threads
 with Codex native code mode enabled (code-mode-only stays off by default), so
 native workspace/code capabilities remain available alongside OpenClaw
@@ -392,6 +493,8 @@ unless you opt into the experimental sandbox exec-server path. The effective
 tool profile must allow all native shell and filesystem capabilities: `coding`
 and `full` do, while `messaging` and `minimal` disable the native surface. Agent
 and provider profile overrides and explicit tool restrictions still apply.
+
+Codex-native file edits remain limited to the turn cwd; linked worktrees need OpenClaw file tools or a managed worktree (`worktree: true`).
 
 Selecting a managed GitHub Identity also uses OpenClaw's host-owned tools instead
 of native Code Mode. The same exec owner used by the built-in runtime binds the
@@ -403,18 +506,35 @@ With no managed identity selected, native Code Mode and shell defaults are uncha
 Ordinary paired-node exec keeps node-local authentication: a Gateway GitHub
 selection and command approval never export that credential to the node.
 
+`openclaw agent exec` also uses host-owned tools so its one-shot cleanup can
+join every command it starts. The generic `--code-mode` setting does not enable
+Codex native Code Mode; `codeModeEngaged` reports OpenClaw Code Mode, not the
+Codex harness's native surface.
+
+For one-shot runs without native commands, cleanup closes app-server stdin and
+waits for normal exit before resorting to process termination. Confirmed forced
+termination produces a warning without replacing a completed answer with an
+error. Unconfirmed process cleanup or native commands whose descendants cannot
+be accounted for still fail cleanup and retain state ownership until exit.
+
 When sandboxing disables the native surface, allowed shell commands remain available
 through `sandbox_exec`. Denying `process` removes `sandbox_process` and background
 continuation, while `sandbox_exec` runs to completion under the existing timeout,
 sandbox backend, and workspace-access policy.
 
-When deferred tools or native delegation are available, normal threads receive
-guidance to call listed tools directly and use `tool_search` for unlisted tools.
-They keep an `exec` / `ALL_TOOLS` fallback for the case where `tool_search` is
-not directly callable (for example a model whose metadata selects code-mode-only
-execution), but are told never to use `exec` to look up a listed tool or to
-repeat a completed call. Configured code-mode-only threads receive the original
-`exec` / `ALL_TOOLS` discovery guidance.
+When native Code Mode is available, normal threads call listed tools by their
+exact qualified names and use `tool_search` for deferred tools when supplied.
+The fallback is Codex's native JavaScript `exec`, where `ALL_TOOLS` and `tools`
+are JavaScript globals. Code-mode-only threads use that JavaScript discovery
+path. These globals are not shell environment variables, and OpenClaw shell
+command tools are separate from the native JavaScript runner.
+
+When the native surface is disabled, OpenClaw publishes its allowed dynamic
+tools directly instead of requiring deferred discovery. This includes managed
+GitHub identity and sandbox-backed execution paths. The current tool policy,
+argument validation, session authority, and effect owners still apply. Dashboard
+and widget actions use those session-bound tools; a shell CLI connection and
+its device pairing do not replace them.
 
 Sandbox turns also use these tools when Codex allows only managed hooks and cannot
 install the native process-admission hook. OpenClaw selects this existing execution
@@ -461,6 +581,27 @@ is disabled. Idle conversation eviction does not interrupt that work.
 The existing unknown-outcome audit diagnostic remains; cancellation and a
 command with no confirmed live owner retain their failure handling.
 
+### Intentional yield and native interruption markers
+
+`sessions_yield` pauses the OpenClaw run while it waits for a follow-up event.
+OpenClaw returns the dynamic tool result, then uses `turn/interrupt` to stop the
+native Codex turn. The current app-server protocol has no client-requested normal
+completion: `turn/completed` is a server notification, `turn/interrupt` accepts
+only thread and turn IDs, and `DynamicToolCallResponse` carries only content and
+success. Returning that tool result alone allows another model step; OpenClaw's
+internal terminal-tool flag cannot finish the native turn through the protocol.
+
+As a result, Codex can persist a `<turn_aborted>` marker saying the user
+interrupted the previous turn even when the agent intentionally yielded.
+OpenClaw preserves native history and adds explicit yield context to the saved
+continuation: the pause was agent-requested, and a native interruption marker for
+that yield does not mean the user requested Stop or canceled the task. Work
+continues when the expected follow-up arrives. Avoiding this native marker needs
+an upstream completion or per-interrupt reason contract; OpenClaw does not
+disable interruption guidance globally or rewrite the native rollout.
+
+### Stop and cancellation
+
 Stopping an active Codex run interrupts its turn. After a parent yields to native
 children, Stop waits for its admitted descendants to reach real terminal events
 and finish completion settlement. A child that completes successfully during
@@ -469,6 +610,9 @@ session generation. After Stop settles, you can send another message in the same
 chat without reconnecting.
 Stop also retires an already-interrupted child without interrupting its finished
 turn again, so that child cannot keep its parent session blocked.
+Before retiring a canceled native child, Stop also waits for its owned process
+cleanup. An interrupted turn alone does not prove its commands stopped. This
+includes children whose parent has yielded and children interrupted before Stop.
 If its previous native process is already closing, Stop cancels the waiting run
 without waiting for physical exit. A replacement writer still waits for that exit.
 Session-wide Stop preserves the caller's request ownership, protected-run, and
@@ -542,6 +686,13 @@ Native Codex subagents use Codex's execution and collaboration controls, not
 OpenClaw's retired Tasks view. Their current execution, assignment result, and
 result delivery remain separate facts.
 
+Once every native child has finished and its result has been captured, pending
+result delivery no longer prevents the parent from resuming. OpenClaw retains
+those results for delivery and retry. Running children still protect the parent
+subscription. Interrupted assignments remain resumable without pinning an idle
+parent. Admitted resumed execution reacquires protection before inference, even
+if its start notification is delayed.
+
 Retirement revokes captured requester authority immediately, then joins accepted
 native submission and assignment writes before releasing child subscriptions.
 Client disposal joins those writes before releasing retained owners.
@@ -599,6 +750,12 @@ delegation continues to use `sessions_spawn`. Stored submission and result
 receipts are recovery evidence, not permission to adopt a child or deliver to a
 replacement parent.
 
+When a native child spawns its own child, Codex delivers that grandchild's result
+to the immediate native parent. OpenClaw retires the completed assignment without
+another root continuation, including after restart when native lineage can be
+verified. Unavailable lineage leaves the assignment pending for later recovery;
+native-parent rotation alone does not prove nested delivery.
+
 For native Codex V1 agents, a completed `wait` result also records delivery to
 the foreground parent. OpenClaw does not start another continuation for that
 same child result after the parent replies.
@@ -608,7 +765,7 @@ same child result after the parent replies.
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
 - Managed Codex app-server `0.160.0` or newer. The plugin ships
-  `@openai/codex` `0.162.0` and uses a newer stable `codex` from `PATH` only
+  `@openai/codex` `0.164.0` and uses a newer stable `codex` from `PATH` only
   after it passes a version check and an app-server handshake; see
   [Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
   Explicit custom, remote, and macOS desktop-owned

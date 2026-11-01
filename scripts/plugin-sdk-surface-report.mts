@@ -6,14 +6,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import {
   SignatureKind,
   SymbolFlags,
   type Checker,
   type Project,
   type Symbol,
-} from "typescript/unstable/async";
+} from "typescript/async";
 import { listPluginCompatRecords } from "../src/plugins/compat/registry.js";
 import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mts";
 import { formatNativeTypeScriptDiagnostics } from "./lib/native-typescript-diagnostics.mts";
@@ -187,7 +187,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +1: owner-approved synchronous watched-session compatibility during async migration.
   // +1: owner-approved synchronous agent-end compatibility during async migration.
   // +1: synchronous model-auth selection during the auth worker migration.
-  "agent-harness-runtime": 13,
+  // +2: retained Workshop guidance exports migrate to listToolPromptGuidance (#187661).
+  "agent-harness-runtime": 15,
   // +4: deprecated media projection type, builder, and turn aliases.
   "channel-inbound": 21,
   "inbound-envelope": 3,
@@ -231,7 +232,12 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the shared state-owner boundary for plugin CLIs.
       // +1: owner-approved service-bound remote Control UI ingress.
       // +2: shared database-engine host and worker adapters.
-      155,
+      // +1: maintainer-requested context-engine-transcript-runtime watermark subpath (2026-10-08).
+      // +1: approved shared OpenAI Decisions codec used by OpenAI and ClawRouter.
+      // +1: approved lightweight nullable request-header projection for provider transports.
+      // +1: approved shared automation tool-default selection before policy and approval.
+      // +2: reconcile the accepted public entrypoint inventory after the cron budget update.
+      161,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -284,7 +290,25 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // DoctorMemoryStatusPayload for the plugin-owned Memory overview.
       // +2: MemorySearchResponse and AgentsWorkspaceGetResult type-only contracts
       // for the plugin-owned indexed Memory search presentation.
-      3800,
+      // +5: maintainer-requested context-engine transcript watermark reader, its types, and fence error.
+      // +3: ControlUiChannelSettingsSnapshot, ControlUiChannelSettingsContext, and
+      // ControlUiChannelSettingsView for plugin-owned channel Settings presentations.
+      // +1: the shared message-tool source-reply finality resolver.
+      // +1: awaited web_search policy preparation for harnesses; the sync resolver stays.
+      // +3: shared Decisions support/evaluation functions and the canonical capability schema.
+      // +2: openRecord and ToolArgumentValidationError on the existing tool-plugin facade.
+      // +1: resolveManagedResourceStateDir keeps plugin-managed model caches and binaries on the operator root during redirected agent exec.
+      // +2: shared SystemOne question encoder and response decoder on the Decisions facade.
+      // +4: capability-aware auth context and transport model types in core/plugin-entry.
+      // +2: the shared automation tool-default resolver and its exact-selection mode type.
+      // +19: reconcile the accepted public export inventory after the cron budget update.
+      // +6: repository authority types on plugin-entry (#188656).
+      // +2: explicit OpenAI Decision execution function and context type (#188228).
+      // +1: lossless Decision V1 compatibility predicate (#188251).
+      // +1: callable-tool prompt guidance for harnesses (#187661).
+      // +1: accepted diagnostic trace-context normalizer (#189133).
+      // +1: accepted WorkerResourceReceipt type on plugin-entry (#189019).
+      3855,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -324,7 +348,18 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +6: four lossless Decision codecs and two bounded V2 validators.
       // +1: the same boot-selected family lookup.
       // +1: the same shared auth-patch application.
-      2205,
+      // +1: maintainer-requested context-engine transcript watermark reader.
+      // +1: the shared message-tool source-reply finality resolver, so harnesses apply a run's default.
+      // +1: the same awaited web_search policy preparation.
+      // +2: the same shared Decisions support predicate and evaluator.
+      // +1: the same openRecord helper; ToolArgumentValidationError is construct-only.
+      // +1: resolveManagedResourceStateDir keeps plugin-managed model caches and binaries on the operator root during redirected agent exec.
+      // +2: the same shared SystemOne codec functions.
+      // +1: the same shared automation tool-default resolver.
+      // +12: reconcile the accepted callable export inventory after the cron budget update.
+      // +3: Decision execution, V1 compatibility, and callable-tool prompt guidance.
+      // +1: the same diagnostic trace-context normalizer (#189133).
+      2231,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -345,7 +380,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +10: approved missing deprecations for retained synchronous transcript lookup,
       // proxy initialization, approval preparation, and command authorization.
       // +1: released snapshot publication remains during its approved async replacement.
-      219,
+      // +2: retained Workshop guidance exports migrate to listToolPromptGuidance (#187661).
+      221,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

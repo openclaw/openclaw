@@ -45,26 +45,6 @@ export function parseBrowserTabToolBinding(value: unknown): BrowserTabToolBindin
   };
 }
 
-export const BROWSER_TAB_BOUND_ACTIONS = [
-  "act",
-  "close",
-  "console",
-  "requests",
-  "errors",
-  "text",
-  "emulate",
-  "dialog",
-  "download",
-  "focus",
-  "navigate",
-  "pdf",
-  "screenshot",
-  "snapshot",
-  "tabs",
-  "upload",
-  "waitfordownload",
-] as const;
-
 function bindTargetId(record: Record<string, unknown>, targetId: string): Record<string, unknown> {
   const requestedTargetId = normalizeOptionalString(record.targetId);
   if (requestedTargetId && requestedTargetId !== targetId) {

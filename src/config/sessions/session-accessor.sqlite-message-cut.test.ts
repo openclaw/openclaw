@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { assert, afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
@@ -12,17 +12,17 @@ import {
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import {
-  appendTranscriptEvent,
-  forkSessionAtMessage,
-  listSessionBranches,
-  listSessionParticipantsReadOnly,
-  loadSessionEntry,
-  loadTranscriptEvents,
-  readSessionTranscriptMessageEventPage,
-  readSessionTranscriptMessageEvents,
-  rewindSessionToMessage,
-  switchSessionBranch,
-  updateSessionEntry,
+  appendTranscriptEvent as appendEvent,
+  forkSessionAtMessage as fork,
+  listSessionBranches as branches,
+  listSessionParticipantsReadOnly as participantsFor,
+  loadSessionEntry as readEntry,
+  loadTranscriptEvents as readEvents,
+  readSessionTranscriptMessageEventPage as readPage,
+  readSessionTranscriptMessageEvents as readMessages,
+  rewindSessionToMessage as rewind,
+  switchSessionBranch as switchBranch,
+  updateSessionEntry as updateEntry,
 } from "./session-accessor.js";
 import {
   agentId,
@@ -35,15 +35,10 @@ import { SYNC_REBUILD_MAX_BYTES } from "./session-transcript-index.js";
 import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import type { InternalSessionEntry } from "./types.js";
 
-const fixtures = useSessionMessageCutFixtures();
-async function createSession() {
-  const fixture = await fixtures.createSession();
-  const { env } = fixture.scope;
-  return { ...fixture, params: { agentId, env, sessionKey, entryId: "user-2" } };
-}
+const { createSession } = useSessionMessageCutFixtures();
 
 async function retainLegacyCheckpoints(
-  scope: Parameters<typeof updateSessionEntry>[0] & { sessionId: string },
+  scope: Parameters<typeof updateEntry>[0] & { sessionId: string },
 ) {
   const checkpoints = [
     {
@@ -52,16 +47,8 @@ async function retainLegacyCheckpoints(
       postCompaction: { sessionId: scope.sessionId },
     },
   ];
-  await updateSessionEntry(scope, (entry) => ({ ...entry, compactionCheckpoints: checkpoints }));
+  await updateEntry(scope, (entry) => ({ ...entry, compactionCheckpoints: checkpoints }));
   return checkpoints;
-}
-
-function expectCreated(result: Awaited<ReturnType<typeof rewindSessionToMessage>>) {
-  expect(result.status).toBe("created");
-  if (result.status !== "created") {
-    throw new Error("expected created result");
-  }
-  return result;
 }
 
 function expectEditorResult(result: unknown, key: string) {
@@ -81,15 +68,15 @@ afterEach(() => {
 it("returns missing-session for history navigation in an absent store", async () => {
   const { env } = await createSession();
   const missing = { env, agentId: "absent", sessionKey: "agent:absent:missing" };
-  await expect(rewindSessionToMessage({ ...missing, entryId: "user-2" })).resolves.toEqual({
+  await expect(rewind({ ...missing, entryId: "user-2" })).resolves.toEqual({
     status: "missing-session",
   });
-  await expect(switchSessionBranch({ ...missing, leafEntryId: "assistant-2" })).resolves.toEqual({
+  await expect(switchBranch({ ...missing, leafEntryId: "assistant-2" })).resolves.toEqual({
     status: "missing-session",
   });
   const denied = new Error("Missing-store navigation authority was revoked");
   await expect(
-    rewindSessionToMessage({
+    rewind({
       ...missing,
       entryId: "user-2",
       commitGuard() {
@@ -112,7 +99,7 @@ it("returns a committed rewind after identity publication retires its old author
     }
   });
   try {
-    const result = await rewindSessionToMessage(
+    const result = await rewind(
       {
         ...params,
         commitGuard() {
@@ -123,7 +110,7 @@ it("returns a committed rewind after identity publication retires its old author
       },
       sourceExpectedState,
     );
-    expect({ status: result.status, current, entry: loadSessionEntry(scope) }).toMatchObject({
+    expect({ status: result.status, current, entry: readEntry(scope) }).toMatchObject({
       status: "created",
       current: false,
       entry: { previousSessionId: scope.sessionId },
@@ -141,21 +128,15 @@ it("refuses a valid physical store replacement before rewind preparation resumes
   const replacementPath = `${database.path}.replacement`;
   fs.copyFileSync(database.path, replacementPath, fs.constants.COPYFILE_EXCL);
   const readStoredState = (pathname: string) => {
-    const reader = new DatabaseSync(pathname, { readOnly: true });
-    try {
-      return {
-        entries: reader
-          .prepare(
-            "SELECT session_key, current_session_id, entry_json FROM session_nodes ORDER BY session_key",
-          )
-          .all(),
-        transcripts: reader
-          .prepare("SELECT * FROM transcript_events ORDER BY session_id, seq")
-          .all(),
-      };
-    } finally {
-      reader.close();
-    }
+    using reader = new DatabaseSync(pathname, { readOnly: true });
+    return {
+      entries: reader
+        .prepare(
+          "SELECT session_key, current_session_id, entry_json FROM session_nodes ORDER BY session_key",
+        )
+        .all(),
+      transcripts: reader.prepare("SELECT * FROM transcript_events ORDER BY session_id, seq").all(),
+    };
   };
   const before = readStoredState(database.path);
   expect(before.entries).toEqual([
@@ -166,7 +147,7 @@ it("refuses a valid physical store replacement before rewind preparation resumes
 
   let originalMoved = false;
   let replacementMoved = false;
-  const mutation = rewindSessionToMessage({
+  const mutation = rewind({
     ...scope,
     storePath: database.path,
     entryId: "user-2",
@@ -210,30 +191,26 @@ it("drains fixture resources before retiring native handles and removing the roo
   const { env } = await createSession();
   const agentDatabase = openOpenClawAgentDatabase({ agentId, env });
   const stateDatabase = openOpenClawStateDatabase({ env });
-  const closingSnapshots: Array<{ agentOpen: boolean; stateOpen: boolean; rootExists: boolean }> =
-    [];
+  const snapshot = () => [
+    agentDatabase.db.isOpen,
+    stateDatabase.db.isOpen,
+    fs.existsSync(env.OPENCLAW_STATE_DIR),
+  ];
+  const closingSnapshots: boolean[][] = [];
   registerOpenClawAgentDatabaseAsyncResource({
     agentId,
     path: agentDatabase.path,
     revoke: () => {},
     close: async () => {
       await Promise.resolve();
-      closingSnapshots.push({
-        agentOpen: agentDatabase.db.isOpen,
-        stateOpen: stateDatabase.db.isOpen,
-        rootExists: fs.existsSync(env.OPENCLAW_STATE_DIR),
-      });
+      closingSnapshots.push(snapshot());
     },
   });
 
   // Inspect real fixture teardown after both consumer and helper afterEach hooks run.
   onTestFinished(() => {
-    expect(closingSnapshots).toEqual([{ agentOpen: true, stateOpen: true, rootExists: true }]);
-    expect([
-      agentDatabase.db.isOpen,
-      stateDatabase.db.isOpen,
-      fs.existsSync(env.OPENCLAW_STATE_DIR),
-    ]).toEqual([false, false, false]);
+    expect(closingSnapshots).toEqual([[true, true, true]]);
+    expect(snapshot()).toEqual([false, false, false]);
   });
 });
 
@@ -243,7 +220,7 @@ it.each(["rewind", "fork"] as const)(
     const { scope, params } = await createSession();
     const ownerChangeGate = createDeferred();
     const ownerChangeStarted = createDeferred();
-    const ownerChange = updateSessionEntry(scope, async () => {
+    const ownerChange = updateEntry(scope, async () => {
       ownerChangeStarted.resolve();
       await ownerChangeGate.promise;
       return { lifecycleRevision: "replacement-lifecycle-revision" };
@@ -251,10 +228,7 @@ it.each(["rewind", "fork"] as const)(
     await ownerChangeStarted.promise;
 
     const targetKey = `${sessionKey}:raced-fork`;
-    const mutation =
-      mode === "rewind"
-        ? rewindSessionToMessage(params)
-        : forkSessionAtMessage({ ...params, targetKey });
+    const mutation = mode === "rewind" ? rewind(params) : fork({ ...params, targetKey });
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -262,12 +236,12 @@ it.each(["rewind", "fork"] as const)(
 
     await ownerChange;
     await expect(mutation).resolves.toEqual({ status: "conflict" });
-    expect(loadSessionEntry(scope)).toMatchObject({
+    expect(readEntry(scope)).toMatchObject({
       lifecycleRevision: "replacement-lifecycle-revision",
       sessionId: sourceExpectedState.sessionId,
     });
-    expect(loadSessionEntry({ ...params, sessionKey: targetKey })).toBeUndefined();
-    await expect(listSessionBranches(params)).resolves.toMatchObject({
+    expect(readEntry({ ...params, sessionKey: targetKey })).toBeUndefined();
+    await expect(branches(params)).resolves.toMatchObject({
       status: "ok",
       branches: expect.arrayContaining([
         expect.objectContaining({ active: true, leafEntryId: "assistant-2" }),
@@ -281,24 +255,23 @@ it("rewinds by repointing the active leaf and returns the editor text", async ()
   const legacyCheckpoints = await retainLegacyCheckpoints(scope);
 
   const canonicalKey = "agent:main:canonical-message-cut";
-  const result = expectCreated(
-    await rewindSessionToMessage({
-      ...params,
-      sessionKey: canonicalKey,
-      sessionStoreKey: sessionKey,
-    }),
-  );
+  const result = await rewind({
+    ...params,
+    sessionKey: canonicalKey,
+    sessionStoreKey: sessionKey,
+  });
+  assert(result.status === "created");
 
   expectEditorResult(result, sessionKey);
   expect(
-    readSessionTranscriptMessageEventPage(
+    readPage(
       { agentId, env: scope.env, sessionId: result.entry.sessionId },
       { maxMessages: 0, offset: 0 },
     ).totalMessages,
   ).toBe(2);
-  expect(loadSessionEntry(params)?.sessionId).toBe(result.entry.sessionId);
-  expect(loadSessionEntry({ ...params, sessionKey: canonicalKey })).toBeUndefined();
-  expect(loadSessionEntry(scope)).toHaveProperty("compactionCheckpoints", legacyCheckpoints);
+  expect(readEntry(params)?.sessionId).toBe(result.entry.sessionId);
+  expect(readEntry({ ...params, sessionKey: canonicalKey })).toBeUndefined();
+  expect(readEntry(scope)).toHaveProperty("compactionCheckpoints", legacyCheckpoints);
   expect(result.entry).toMatchObject({
     agentHarnessId: undefined,
     claudeCliSessionId: undefined,
@@ -323,21 +296,22 @@ it("rewinds by repointing the active leaf and returns the editor text", async ()
 
 it("defers an oversized rewind projection until the reconcile worker finishes", async () => {
   const { scope, params } = await createSession();
-  await appendTranscriptEvent(scope, {
+  await appendEvent(scope, {
     type: "oversized-padding",
     padding: "x".repeat(SYNC_REBUILD_MAX_BYTES),
   });
 
-  const result = expectCreated(await rewindSessionToMessage(params));
+  const result = await rewind(params);
+  assert(result.status === "created");
   const targetScope = { ...scope, sessionId: result.entry.sessionId };
-  expect(() => readSessionTranscriptMessageEvents(targetScope)).toThrow(/projection is rebuilding/);
+  expect(() => readMessages(targetScope)).toThrow(/projection is rebuilding/);
 
   await waitForSessionTranscriptProjection(targetScope);
-  expect(readSessionTranscriptMessageEvents(targetScope)).toHaveLength(2);
+  expect(readMessages(targetScope)).toHaveLength(2);
 });
 
 it("forks an exact active-path prefix without changing the source", async () => {
-  const { env, scope, params } = await createSession();
+  const { scope, params } = await createSession();
   const legacyCheckpoints = await retainLegacyCheckpoints(scope);
   const canonicalSourceKey = "agent:main:canonical-message-cut-source";
   const targetKey = "agent:main:dashboard:message-cut-fork";
@@ -349,7 +323,7 @@ it("forks an exact active-path prefix without changing the source", async () => 
   const sql = observeHostDataSql();
   let result;
   try {
-    result = await forkSessionAtMessage({
+    result = await fork({
       ...params,
       sessionKey: canonicalSourceKey,
       sessionStoreKey: sessionKey,
@@ -361,8 +335,8 @@ it("forks an exact active-path prefix without changing the source", async () => 
   }
 
   expectEditorResult(result, targetKey);
-  result = expectCreated(result);
-  const forkEvents = await loadTranscriptEvents({
+  assert(result.status === "created");
+  const forkEvents = await readEvents({
     ...scope,
     sessionId: result.entry.sessionId,
     sessionKey: targetKey,
@@ -373,13 +347,14 @@ it("forks an exact active-path prefix without changing the source", async () => 
       event && typeof event === "object" && "id" in event ? [event.id] : [],
     ),
   ).toEqual([result.entry.sessionId, "user-1", "assistant-1"]);
-  expect(loadSessionEntry(scope)?.sessionId).toBe(scope.sessionId);
-  expect(loadSessionEntry(scope)).toHaveProperty("compactionCheckpoints", legacyCheckpoints);
-  expect(loadSessionEntry({ agentId, env, sessionKey: targetKey })).not.toHaveProperty(
+  expect(readEntry(scope)?.sessionId).toBe(scope.sessionId);
+  expect(readEntry(scope)).toHaveProperty("compactionCheckpoints", legacyCheckpoints);
+  expect(readEntry({ ...params, sessionKey: targetKey })).not.toHaveProperty(
     "compactionCheckpoints",
   );
-  expect(listSessionParticipantsReadOnly({ agentId, env }).get(targetKey)).toBeUndefined();
-  expect(listSessionParticipantsReadOnly({ agentId, env }).get(sessionKey)).toEqual([
+  const participants = participantsFor(scope);
+  expect(participants.get(targetKey)).toBeUndefined();
+  expect(participants.get(sessionKey)).toEqual([
     {
       identity: { type: "profile", id: "source-person" },
       contributionCount: 1,
@@ -408,5 +383,5 @@ it("forks an exact active-path prefix without changing the source", async () => 
     sessionId: "message-cut-source",
     entryId: "user-2",
   });
-  expect(loadSessionEntry(scope)?.lifecycleRevision).toBe("source-lifecycle-revision");
+  expect(readEntry(scope)?.lifecycleRevision).toBe("source-lifecycle-revision");
 });

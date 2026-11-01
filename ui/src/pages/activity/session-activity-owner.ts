@@ -4,8 +4,10 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { activityPersonFromPath, activityPersonLocation } from "../../app-route-paths.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { createSessionEventRefreshCoordinator } from "../../lib/sessions/event-refresh-coordinator.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { requestSessionListParams } from "../../lib/sessions/session-requests.ts";
 import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import { activityPulseBoundaries } from "./activity-pulse-window.ts";
 import {
@@ -59,13 +61,16 @@ export function createSessionActivity(notify: () => void) {
   let incomplete = false;
   let requestState: "idle" | "loading" | "retrying" = "idle";
   let currentClient: GatewayBrowserClient | null = null;
+  let connected = false;
   let currentQueryKey: string | undefined;
   let pendingRequest:
     | {
         controller: AbortController;
         completion: ReturnType<typeof createDeferredCore<void>>;
+        presentation: ReturnType<typeof createDeferredCore<void>>;
       }
     | undefined;
+  let read: { promise: Promise<void> } | undefined;
   let summaryPending: AbortController | undefined;
   const summaryAttempts = new Map<string, string>();
   const summaryRetries = new Set<string>();
@@ -111,22 +116,29 @@ export function createSessionActivity(notify: () => void) {
     };
   }
 
-  function resetQuery(): void {
+  function suspendRequests(): void {
     clearTimeout(bucketRollover);
     bucketRollover = undefined;
     eventRefresh.reset();
+    pendingRequest?.presentation.resolve();
     pendingRequest?.controller.abort();
     pendingRequest = undefined;
     resetSummaries();
     requestState = "idle";
+    connected = false;
+    pendingChanges.length = 0;
+    changesOverflowed = false;
+  }
+
+  function resetQuery(): void {
+    suspendRequests();
+    read = undefined;
     incomplete = false;
     currentError = undefined;
     currentClient = null;
     currentQueryKey = undefined;
     currentResult = undefined;
     currentFilters = null;
-    pendingChanges.length = 0;
-    changesOverflowed = false;
     historyRows.reset();
     normalizedLocation = "";
   }
@@ -381,7 +393,9 @@ export function createSessionActivity(notify: () => void) {
           }
         }
         if (!requiresRefresh && !incomplete && !changesOverflowed) {
-          eventRefresh.scheduleFallback();
+          if (currentFilters !== "current") {
+            eventRefresh.scheduleFallback();
+          }
           return;
         }
       }
@@ -394,9 +408,10 @@ export function createSessionActivity(notify: () => void) {
     filters: ActivityQuery | null,
     reason: "query" | "refresh" | "retry" = "query",
     canEnsureSummaries = summariesAllowed,
+    available = true,
   ): Promise<void> {
-    summariesAllowed = canEnsureSummaries;
-    if (!canEnsureSummaries) {
+    summariesAllowed = available && canEnsureSummaries;
+    if (!summariesAllowed) {
       resetSummaries();
     }
     if (!client || !filters) {
@@ -409,11 +424,6 @@ export function createSessionActivity(notify: () => void) {
       filters === "current" ? undefined : activityPulseBoundaries(filters.time, now.getTime());
     clearTimeout(bucketRollover);
     bucketRollover = undefined;
-    if (boundaries && typeof setTimeout === "function") {
-      const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
-      const rollover = Math.min(boundaries.at(-1)!, midnight);
-      bucketRollover = setTimeout(() => eventRefresh.schedule(), rollover - now.getTime() + 1_000);
-    }
     const request = {
       source: "activity",
       excludeDock: true,
@@ -430,7 +440,7 @@ export function createSessionActivity(notify: () => void) {
             activityPulseBoundaries: boundaries,
             excludeSubagents: true,
             includeActivitySummary: true,
-            sortBy: "activity",
+            sortBy: "activity" as const,
             ...(filters.personId ? { involvingProfileId: filters.personId } : {}),
             ...(filters.query ? { search: filters.query } : {}),
             ...(filters.time === "all"
@@ -440,23 +450,52 @@ export function createSessionActivity(notify: () => void) {
                     filters.time === "24h" ? 1440 : filters.time === "7d" ? 10080 : 43200,
                 }),
           }),
-    };
+    } as const;
     const queryKey = JSON.stringify(request);
     const sameQuery = currentClient === client && currentQueryKey === queryKey;
+    const sameFilters =
+      currentClient === client && JSON.stringify(currentFilters) === JSON.stringify(filters);
+    if (!available) {
+      if (!sameFilters) {
+        resetQuery();
+        currentClient = client;
+        currentQueryKey = queryKey;
+        currentFilters = filters;
+      } else {
+        suspendRequests();
+      }
+      notify();
+      return Promise.resolve();
+    }
+    const wasConnected = connected;
+    connected = true;
+    if (boundaries && typeof setTimeout === "function") {
+      const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
+      const rollover = Math.min(boundaries.at(-1)!, midnight);
+      bucketRollover = setTimeout(() => eventRefresh.schedule(), rollover - now.getTime() + 1_000);
+    }
     if (sameQuery && pendingRequest && reason !== "retry") {
       if (reason === "refresh") {
         eventRefresh.schedule();
       }
       return pendingRequest.completion.promise;
     }
-    if (reason === "query" && sameQuery) {
+    if (reason === "query" && sameQuery && wasConnected) {
       void ensureSummaries();
       return Promise.resolve();
     }
+    pendingRequest?.presentation.resolve();
     pendingRequest?.controller.abort();
     eventRefresh.absorb();
-    const pending = { controller: new AbortController(), completion: createDeferredCore() };
+    const pending = {
+      controller: new AbortController(),
+      completion: createDeferredCore(),
+      presentation: createDeferredCore(),
+    };
     pendingRequest = pending;
+    read = pending.presentation;
+    // The owner can finish while no view is mounted; a later reader still sees the rejection.
+    void read.promise.catch(() => undefined);
     currentClient = client;
     currentQueryKey = queryKey;
     currentFilters = filters;
@@ -467,15 +506,18 @@ export function createSessionActivity(notify: () => void) {
     if (!sameQuery) {
       historyRows.reset();
       resetSummaries();
-      currentResult = undefined;
+      if (!sameFilters) {
+        currentResult = undefined;
+      }
       incomplete = false;
     }
     const readRevision = ++historyRevision;
     notify();
-    void client
-      .request<SessionsListResult>("sessions.list", request, { signal: pending.controller.signal })
+    void requestSessionListParams(client, request, () => pendingRequest === pending, {
+      signal: pending.controller.signal,
+    })
       .then((result) => {
-        if (pendingRequest === pending) {
+        if (result && pendingRequest === pending) {
           if (filters === "current") {
             const next = reconcileCurrentWork(result, pendingChanges);
             incomplete = changesOverflowed || next.requiresRefresh;
@@ -487,16 +529,12 @@ export function createSessionActivity(notify: () => void) {
               currentResult = next.result;
             }
           } else {
-            const next = reconcileSessionActivityRead(
+            currentResult = reconcileSessionActivityRead(
               result,
               currentResult,
               historyRows,
               readRevision,
             );
-            if (next.requiresRefresh) {
-              eventRefresh.schedule();
-            }
-            currentResult = next.result;
             void ensureSummaries();
           }
         }
@@ -504,10 +542,10 @@ export function createSessionActivity(notify: () => void) {
       .catch((error: unknown) => {
         if (pendingRequest === pending && !pending.controller.signal.aborted) {
           if (filters === "current") {
-            currentResult = undefined;
             incomplete = false;
           }
           currentError = error instanceof Error ? error.message : String(error);
+          pending.presentation.reject(error);
         }
       })
       .finally(() => {
@@ -518,19 +556,25 @@ export function createSessionActivity(notify: () => void) {
           notify();
         }
         pending.completion.resolve();
+        pending.presentation.resolve();
       });
     return pending.completion.promise;
   }
 
-  if (observesPageLifecycle) {
-    document.addEventListener("visibilitychange", handlePageLifecycle);
-    globalThis.addEventListener("pagehide", handlePageLifecycle);
-    globalThis.addEventListener("pageshow", handlePageLifecycle);
-  }
+  const lifecycleStops = observesPageLifecycle
+    ? [
+        listen(document, "visibilitychange", handlePageLifecycle),
+        listen(globalThis, "pagehide", handlePageLifecycle),
+        listen(globalThis, "pageshow", handlePageLifecycle),
+      ]
+    : [];
   function loading() {
-    return requestState !== "idle" || incomplete;
+    return connected && (requestState !== "idle" || incomplete);
   }
   return {
+    get read() {
+      return read;
+    },
     get result() {
       return currentResult;
     },
@@ -552,10 +596,8 @@ export function createSessionActivity(notify: () => void) {
     canonicalLocation,
     locationForFilters,
     dispose() {
-      if (observesPageLifecycle) {
-        document.removeEventListener("visibilitychange", handlePageLifecycle);
-        globalThis.removeEventListener("pagehide", handlePageLifecycle);
-        globalThis.removeEventListener("pageshow", handlePageLifecycle);
+      for (const stop of lifecycleStops) {
+        stop();
       }
       resetQuery();
     },

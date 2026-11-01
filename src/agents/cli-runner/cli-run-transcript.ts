@@ -11,8 +11,8 @@ import type {
   SessionTranscriptReadScope,
   SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.types.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
@@ -35,7 +35,6 @@ import type { StopReason, Usage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
 import { resolveCliTranscriptUsage, type CliTranscriptUsage } from "../cli-transcript-usage.js";
 import {
@@ -88,10 +87,6 @@ export function buildCliHookAssistantMessage(params: {
     stopReason: params.stopReason,
     timestamp: Date.now(),
   };
-}
-
-function isAgentMessage(value: unknown): value is AgentMessage {
-  return Boolean(value && typeof value === "object" && "role" in value);
 }
 
 type CliAgentEndHookParams = Parameters<typeof runAgentEndSideEffectsAsync>[0];
@@ -164,6 +159,8 @@ export async function persistCliAssistantTranscript(params: {
   turnUsage?: CliUsage;
   stopReason: StopReason;
   yielded?: true;
+  /** The native Claude row this message mirrors; the history merge joins them by it. */
+  nativeIdentity?: { cliSessionId: string; externalId: string };
 }): Promise<{
   owned: boolean;
   idempotencyKey?: string;
@@ -204,7 +201,8 @@ export async function persistCliAssistantTranscript(params: {
         const message = runAgentHarnessBeforeMessageWriteHook({
           ...write,
           message: projectAgentHarnessTranscriptMessageForDisplay({
-            hidden: false,
+            runId: runParams.runId,
+            hidden: runParams.privateCompletion === true,
             inputProvenance: runParams.inputProvenance,
             message: write.message,
           }),
@@ -212,13 +210,17 @@ export async function persistCliAssistantTranscript(params: {
         });
         return message
           ? projectAgentHarnessTranscriptMessageForDisplay({
-              hidden: false,
+              runId: runParams.runId,
+              hidden: runParams.privateCompletion === true,
               inputProvenance: runParams.inputProvenance,
               message,
             })
           : null;
       },
       message: {
+        ...(params.nativeIdentity
+          ? { __openclaw: { importedFrom: "claude-cli", ...params.nativeIdentity } }
+          : {}),
         ...buildAssistantMessage({
           model: {
             api: "cli",
@@ -530,7 +532,7 @@ export async function persistCliRunBlock(
 
 export async function finalizeCliContextEngineTurn(params: {
   context: PreparedCliRunContext;
-  historyMessages: unknown[];
+  historyMessages: AgentMessage[];
   assistantText: string;
   terminalAnchor?: import("../../config/sessions/session-accessor.js").TranscriptEntryAnchor;
   output: CliOutput;
@@ -554,7 +556,6 @@ export async function finalizeCliContextEngineTurn(params: {
           params.output.terminalInterruption !== undefined ||
           runParams.abortSignal?.aborted === true,
         yieldAborted: false,
-        isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
         runtimeContext: {
           provider: runParams.modelProvider ?? runParams.provider,
           modelId: context.modelId,
@@ -564,7 +565,7 @@ export async function finalizeCliContextEngineTurn(params: {
       });
     }
   } else {
-    const prePromptMessages = params.historyMessages.filter(isAgentMessage);
+    const prePromptMessages = params.historyMessages;
     const turnMessages: AgentMessage[] = [];
     if (context.contextEngineTurnPrompt) {
       turnMessages.push(buildCliHookUserMessage(context.contextEngineTurnPrompt));
@@ -594,7 +595,6 @@ export async function finalizeCliContextEngineTurn(params: {
       sessionKey: runParams.sessionKey,
       sessionTarget: runParams.sessionTarget,
       sessionFile: runParams.sessionFile,
-      isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
       messagesSnapshot: [...prePromptMessages, ...turnMessages],
       prePromptMessageCount: prePromptMessages.length,
       sessionManager: runParams.sessionManager,

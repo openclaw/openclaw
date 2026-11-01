@@ -11,7 +11,6 @@ import {
   readSessionActorMemoryCollaboration,
   mutateSessionActorMemoryCollaboration,
 } from "./session-actor-memory-collaboration.js";
-import { readSessionActorMemoryCompletion } from "./session-actor-memory-completion.js";
 import {
   readSessionActorMemoryConversationDelivery,
   beginSessionActorMemoryConversationDelivery,
@@ -96,8 +95,6 @@ export function readSessionActorMemoryStorage(
       return readSessionActorMemoryCorpus(context, query);
     case "session.history.search":
       return readSessionActorMemorySearch(context, query.input);
-    case "session.completion.read":
-      return readSessionActorMemoryCompletion(context.state, query.input, context);
     case "session.turn.prepare":
       return prepareSessionActorMemoryTurn(context, query.input);
     case "session.lifecycle.artifacts":
@@ -202,8 +199,6 @@ export function mutateSessionActorMemoryStorage(
     case "session.outbox.complete":
     case "session.outbox.recordFailure":
     case "session.outbox.discardIntent":
-    case "session.heartbeat.persist":
-    case "session.heartbeat.claim":
     case "session.messageToolOutcome.record":
     case "session.trajectory.append":
       return mutateSessionActorMemorySideEffects(context, command);
@@ -244,18 +239,7 @@ export function mutateSessionActorMemoryStorage(
           : context.state;
       return createSessionActorMemoryPending(window, context).mutate(command.input);
     }
-    case "session.pendingInput.interruptHistory": {
-      if (!authority.isPendingInputProtected) {
-        throw new Error("Pending input reconciliation requires its live custody owner");
-      }
-      const window = editPendingWindow(context, command.input.sessionId);
-      return createSessionActorMemoryPending(window, context).interruptHistory(command.input, {
-        isProtected: (candidate) =>
-          authority.isPendingInputProtected!(candidate, context.state.hot.entry?.sessionId),
-        admit: (stage, grant) =>
-          context.admit(stage, { ...grant, currentSessionId: context.state.hot.entry?.sessionId }),
-      });
-    }
+
     case "session.goal.mutate":
       return createSessionActorMemoryGoals(context).mutate(command.input);
     default:

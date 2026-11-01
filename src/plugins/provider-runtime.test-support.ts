@@ -1,4 +1,3 @@
-// Provides shared fixtures and assertions for provider plugin runtime tests.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, vi, type Mock } from "vitest";
@@ -6,7 +5,10 @@ import type { SubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { AnyAgentTool } from "./types.js";
 
-export const PROVIDER_RUNTIME_TEST_MODEL: ProviderRuntimeModel = {
+type ProviderRuntime = typeof import("./provider-runtime.js");
+export const PROVIDER_RUNTIME_TEST_MODEL: ProviderRuntimeModel & {
+  headers?: Record<string, string>;
+} = {
   id: "demo-model",
   name: "Demo Model",
   api: "openai-responses",
@@ -39,15 +41,11 @@ export const DEMO_TOOL = {
 } as unknown as AnyAgentTool;
 
 const openaiCodexCatalogEntries = [
-  { provider: "openai", id: "gpt-5.5", name: "gpt-5.5" },
-  { provider: "openai", id: "gpt-5.5-pro", name: "gpt-5.5-pro" },
   { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
   { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
   { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
-  { provider: "openai", id: "gpt-5.2-pro", name: "GPT-5.2 Pro" },
   { provider: "openai", id: "gpt-5-mini", name: "GPT-5 mini" },
   { provider: "openai", id: "gpt-5-nano", name: "GPT-5 nano" },
-  { provider: "openai", id: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
 ];
 
 const expectedAugmentedOpenaiCodexCatalogEntries = [
@@ -66,47 +64,26 @@ export const expectedOpenaiPluginCodexCatalogEntriesWithGpt55 =
   expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55;
 
 export function expectCodexMissingAuthHint(
-  buildProviderMissingAuthMessageWithPlugin: (params: {
-    provider: string;
-    env: NodeJS.ProcessEnv;
-    context: {
-      env: NodeJS.ProcessEnv;
-      provider: string;
-      listProfileIds: (providerId: string) => string[];
-    };
-  }) => string | undefined,
+  buildMessage: ProviderRuntime["buildProviderMissingAuthMessageWithPlugin"],
   expectedModel = "openai/gpt-5.5",
 ) {
-  expect(
-    buildProviderMissingAuthMessageWithPlugin({
-      provider: "openai",
-      env: process.env,
-      context: {
-        env: process.env,
-        provider: "openai",
-        listProfileIds: (providerId) => (providerId === "openai" ? ["p1"] : []),
-      },
-    }),
-  ).toContain(expectedModel);
+  const context = {
+    env: process.env,
+    provider: "openai",
+    listProfileIds: (providerId: string) => (providerId === "openai" ? ["p1"] : []),
+  };
+  expect(buildMessage({ provider: "openai", env: process.env, context })).toContain(expectedModel);
 }
 
 export async function expectAugmentedCodexCatalog(
-  augmentModelCatalogWithProviderPlugins: (params: {
-    env: NodeJS.ProcessEnv;
-    context: {
-      env: NodeJS.ProcessEnv;
-      entries: typeof openaiCodexCatalogEntries;
-    };
-  }) => Promise<unknown>,
+  augmentCatalog: ProviderRuntime["augmentModelCatalogWithProviderPlugins"],
   expectedEntries = expectedAugmentedOpenaiCodexCatalogEntries,
 ) {
-  const result = (await augmentModelCatalogWithProviderPlugins({
-    env: process.env,
-    context: {
-      env: process.env,
-      entries: openaiCodexCatalogEntries,
-    },
-  })) as Array<Record<string, unknown>>;
+  const env = process.env;
+  const result = await augmentCatalog({
+    env,
+    context: { env, entries: openaiCodexCatalogEntries },
+  });
   expect(result).toHaveLength(expectedEntries.length);
   for (const entry of expectedEntries) {
     expect(result).toContainEqual(expect.objectContaining(entry));

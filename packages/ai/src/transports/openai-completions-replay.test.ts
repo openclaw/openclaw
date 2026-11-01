@@ -8,6 +8,7 @@ import {
   buildOpenAICompletionsRequest,
   buildOpenAICompletionsParams,
 } from "./openai-completions-params.js";
+import { applyCompletionsReplay } from "./openai-completions-replay.js";
 import {
   makeCompletionsModel,
   openRouterModel,
@@ -148,6 +149,26 @@ describe("Chat Completions historical tools", () => {
 });
 
 describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () => {
+  it.each([
+    ["native reasoning", "native reasoning"],
+    ["", "streamed reasoning"],
+  ])("prefers nonempty reasoning_content when explicitly required (%j)", (native, expected) => {
+    const model = {
+      ...customReasoningProxyModel,
+      compat: { requiresReasoningContentOnAssistantMessages: true },
+    };
+    const message = {
+      role: "assistant" as const,
+      content: "Answer",
+      reasoning_content: native,
+      reasoning: "streamed reasoning",
+      reasoning_text: "alternate reasoning",
+      reasoning_details: "not replayable here",
+    };
+    applyCompletionsReplay([message], { messages: [] }, model, getCompat(model));
+    expect(message).toEqual({ role: "assistant", content: "Answer", reasoning_content: expected });
+  });
+
   it.each(["reasoning_text"])(
     "strips %s from stock OpenAI Chat Completions assistant replay",
     (thinkingSignature) => {
@@ -299,18 +320,14 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
   it.each([
     [
       "OpenCode Zen DeepSeek V4 Flash Free",
-      {
+      makeCompletionsModel({
         id: "deepseek-v4-flash-free",
         name: "DeepSeek V4 Flash Free",
-        api: "openai-completions" as const,
         provider: "opencode",
         baseUrl: "https://opencode.ai/zen/v1",
         reasoning: false,
-        input: ["text"] as ("text" | "image")[],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 65_536,
-        maxTokens: 8192,
-      },
+      }),
     ],
   ] as const)("preserves reasoning_content replay despite the %s tier suffix", (_label, model) => {
     const assistant = getAssistantMessage(

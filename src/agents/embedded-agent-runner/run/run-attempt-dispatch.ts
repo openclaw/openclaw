@@ -1,13 +1,14 @@
 import fs from "node:fs/promises";
-import path from "node:path";
-import { resolveSessionStorePathCore } from "../../../config/sessions.js";
-import { resolveSessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
+import * as sourceTurn from "../../../auto-reply/reply/source-turn-id.js";
+import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { copyExplicitSkillSelectionFileHost } from "../../../skills/discovery/skill-command-provenance.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { createAgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
+import { resizeExecApprovalContinuationPrompt } from "../../bash-tools.exec-approval-output.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { prepareDelegationCapability } from "../../delegation-capability.js";
 import { agentHarnessBuildsOpenClawTools } from "../../harness/tool-surface.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
@@ -16,15 +17,14 @@ import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.j
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
-import { resolveSessionSkillResourceSnapshot } from "../../session-placement-skill-resources.js";
+import { resolveLiveToolResultMaxChars } from "../../tool-result-limits.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import { preparePluginHarnessWorkspace, resolveHarnessWorkspace } from "../../workspace-sandbox.js";
 import { log } from "../logger.js";
 import { remapExplicitSkillSelectionPath, remapSkillReferencePaths } from "../sandbox-skills.js";
-import { prepareEmbeddedSkills } from "../skill-runtime.js";
+import { preparePluginHarnessSkills } from "../skill-runtime.js";
 import { mapThinkingLevelForProvider } from "../utils.js";
 import { createAttemptContinuationRetryCount } from "./attempt-continuation-retry.js";
-import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
 import { withPreparedEmbeddedGatewayTools } from "./attempt-gateway-tools.js";
 import { resolveEmbeddedAttemptMemoryAudience } from "./attempt-memory-audience.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
@@ -32,6 +32,7 @@ import { EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE } from "./attempt-stage-timing.js";
 import { prepareAttemptSystemPromptAdditions } from "./attempt-system-prompt-additions.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush.js";
 import { prepareEmbeddedHarnessTrajectory } from "./attempt-trajectory.js";
+import { resolveAttemptDispatchSessionTarget } from "./attempt-transcript-helpers.js";
 import { resolveAttemptDispatchApiKey } from "./auth-store.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
 import type { PreparedEmbeddedAttemptDispatchInput } from "./execution-context.js";
@@ -105,33 +106,13 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
   });
   const attemptFastMode = resolveAttemptFastModeParam();
-  const existingSessionTarget = sessionPromptState.sessionTarget;
-  const selectedPromptTarget = { ...existingSessionTarget };
-  const reusableSessionTarget =
-    existingSessionTarget?.sessionKey === resolvedSessionKey ||
-    sessionPromptState.sessionTargetAdopted
-      ? existingSessionTarget
-      : undefined;
-  const resolvedTranscriptTarget =
-    reusableSessionTarget ??
-    (resolvedSessionKey
-      ? await resolveSessionTranscriptRuntimeTarget({
-          agentId: workspaceResolution.agentId,
-          sessionId: sessionPromptState.sessionId,
-          sessionKey: resolvedSessionKey,
-          storePath: resolveSessionStorePathCore(params.config?.session?.store, {
-            agentId: workspaceResolution.agentId,
-          }),
-        })
-      : undefined);
-  const resolvedSessionTarget =
-    resolvedTranscriptTarget || sessionPromptState.sessionTarget
-      ? {
-          ...sessionPromptState.sessionTarget,
-          ...resolvedTranscriptTarget,
-          ...sessionPromptState.sessionWriterFence,
-        }
-      : undefined;
+  const selectedPromptTarget = { ...sessionPromptState.sessionTarget };
+  const resolvedSessionTarget = await resolveAttemptDispatchSessionTarget({
+    agentId: workspaceResolution.agentId,
+    config: params.config,
+    sessionKey: resolvedSessionKey,
+    promptState: sessionPromptState,
+  });
   await sessionPromptState.settleOwnedTranscriptProjection(
     resolvedSessionTarget,
     params.abortSignal,
@@ -224,19 +205,34 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     Boolean(fallbackReason);
   const attemptContextEngine =
     nativeModelOwned && contextEngine?.info.id === "legacy" ? undefined : contextEngine;
-  const attemptAbortController = new AbortController();
-  input.setPostCompactionAbortController(attemptAbortController);
-  const preparedExecApprovalContinuation = prepareExecApprovalContinuationForAttempt({
-    prompt,
-    transcriptPrompt: params.transcriptPrompt,
-    promptRange: params.execApprovalContinuationPromptRange,
-    transcriptPromptRange: params.execApprovalContinuationTranscriptPromptRange,
-    contextTokenBudget: runtime.contextTokenBudget,
-    modelContextWindow: effectiveModel.contextWindow,
-    modelMaxTokens: effectiveModel.maxTokens,
-    userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
-  });
-  const assertActiveRun = requireActiveAssertion(attemptAbortController.signal);
+  const preparedExecApprovalContinuation = { prompt, transcriptPrompt: params.transcriptPrompt };
+  const promptRange = params.execApprovalContinuationPromptRange;
+  if (promptRange) {
+    const contextWindowTokens = Math.max(
+      1,
+      Math.floor(
+        runtime.contextTokenBudget ??
+          effectiveModel.contextWindow ??
+          effectiveModel.maxTokens ??
+          DEFAULT_CONTEXT_TOKENS,
+      ),
+    );
+    const maxOutputUtf16Units = resolveLiveToolResultMaxChars({ contextWindowTokens });
+    const resize = (outputPrompt: string, range = promptRange) =>
+      resizeExecApprovalContinuationPrompt({ prompt: outputPrompt, range, maxOutputUtf16Units });
+    preparedExecApprovalContinuation.prompt = resize(prompt);
+    preparedExecApprovalContinuation.transcriptPrompt =
+      params.transcriptPrompt === undefined
+        ? undefined
+        : resize(
+            params.transcriptPrompt,
+            params.execApprovalContinuationTranscriptPromptRange ?? promptRange,
+          );
+    params.userTurnTranscriptRecorder?.replaceTextBeforePersistence?.(
+      preparedExecApprovalContinuation.transcriptPrompt ?? preparedExecApprovalContinuation.prompt,
+    );
+  }
+  const assertActiveRun = requireActiveAssertion(params.abortSignal);
   assertActiveRun();
   if (runtime.pluginHarnessOwnsTransport) {
     await params.awaitSessionDiffBaseline?.();
@@ -301,36 +297,19 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     toolsAllow: params.toolsAllow,
   });
   assertActiveRun();
-  let skillsSnapshot = resolveSessionSkillResourceSnapshot(params.skillsSnapshot);
-  let skillReferencePaths = pluginSandbox?.readOnlyResourceMounts?.map((mount) => ({
-    skillFile: path.join(mount.hostPath, "SKILL.md"),
-    readPath: path.posix.join(mount.containerPath, "SKILL.md"),
-  }));
-  if (pluginSandbox?.enabled && !pluginSandbox.readOnlyResourceMounts?.length && skillsSnapshot) {
-    const prepared = await prepareEmbeddedSkills({
-      assertCurrent: () => {
-        attemptAbortController.signal.throwIfAborted();
-        assertActiveRun();
-      },
-      applySkillEnvironment: false,
-      includeCodeModeSkills: false,
-      attempt: {
-        bootstrapWorkspaceDir,
-        config: params.config,
-        contextTokenBudget: runtime.contextTokenBudget,
-        skillsSnapshot,
-        toolExecutionAllow: params.toolExecutionAllow,
-      },
-      effectiveWorkspace: workspaceDir,
-      sandbox: pluginSandbox,
-      sessionAgentId: workspaceResolution.agentId,
-    });
-    skillsSnapshot = {
-      ...(prepared.skillsSnapshotForRun ?? skillsSnapshot),
-      prompt: prepared.skillsPrompt,
-    };
-    skillReferencePaths = prepared.skillUsagePaths;
-  }
+  const { skillsSnapshot, skillReferencePaths } = await preparePluginHarnessSkills({
+    assertCurrent: assertActiveRun,
+    attempt: {
+      bootstrapWorkspaceDir,
+      config: params.config,
+      contextTokenBudget: runtime.contextTokenBudget,
+      skillsSnapshot: params.skillsSnapshot,
+      toolExecutionAllow: params.toolExecutionAllow,
+    },
+    effectiveWorkspace: workspaceDir,
+    sandbox: pluginSandbox,
+    sessionAgentId: workspaceResolution.agentId,
+  });
   const delegationCapability = await prepareDelegationCapability({
     fallbackActive,
     run: params,
@@ -343,25 +322,33 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   // Resolve after the last fallible preparation so the attempt's finally owns the leases.
   const { memoryAudience, release: releaseMemoryAudience } =
     await resolveEmbeddedAttemptMemoryAudience({
-      memoryAudience: params.memoryAudience,
-      config: params.config,
+      run: params,
       agentId: workspaceResolution.agentId,
       sessionKey: resolvedSessionKey,
       sessionId,
-      senderIsOwner: params.senderIsOwner,
       admission: runInput.sessionAdmission,
       assertCallerCurrent: assertActiveRun,
     });
   const attemptControls = createAttemptControls({
     admittedRunContext,
-    abortSignal: attemptAbortController.signal,
     onAbort: () => {
       params.replyOperation?.abortByUser();
     },
   });
   const pluginRefresh = captureAgentPluginRuntimeRefresh();
+  const assertTargetCurrent = () => {
+    if (
+      !attemptControls.isAttemptCurrent() ||
+      sessionPromptState.sessionId !== sessionId ||
+      (["agentId", "sessionId", "sessionKey", "storePath", "threadId"] as const).some(
+        (field) => sessionPromptState.sessionTarget?.[field] !== selectedPromptTarget[field],
+      )
+    ) {
+      throw new Error("Session target preparation outlived its attempt");
+    }
+  };
   const preparedSessionTarget =
-    !sessionManager &&
+    (!sessionManager || params.sessionPersistence === "detached") &&
     resolvedSessionTarget?.agentId &&
     resolvedSessionTarget.sessionId &&
     resolvedSessionTarget.sessionKey &&
@@ -374,19 +361,19 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
             sessionKey: resolvedSessionTarget.sessionKey,
             storePath: resolvedSessionTarget.storePath,
           }),
-          assertCurrent: () => {
-            assertActiveRun();
-            if (
-              !attemptControls.isCurrent() ||
-              sessionPromptState.sessionId !== sessionId ||
-              (["agentId", "sessionId", "sessionKey", "storePath", "threadId"] as const).some(
-                (field) =>
-                  sessionPromptState.sessionTarget?.[field] !== selectedPromptTarget[field],
-              )
-            ) {
-              throw new Error("Session target preparation outlived its attempt");
+          assertCurrent: composeSessionSourceAssertion([assertActiveRun], (assertSource) => {
+            assertTargetCurrent();
+            try {
+              assertSource();
+            } catch (cause) {
+              throw new Error(`Session target preparation outlived its attempt: ${String(cause)}`, {
+                cause,
+              });
             }
-          },
+            // Source callbacks can retire this attempt or replace its selected target.
+            assertTargetCurrent();
+            assertActiveRun.assertScopeCurrent();
+          }),
         }
       : undefined;
   const attemptParams: EmbeddedRunAttemptInternalParams & {
@@ -395,16 +382,20 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     agentHarnessId: string;
   } = {
     modelCallSequence: (runInput.modelCallSequence ??= { value: 0 }),
+    bindWatchdogAttempt: attemptControls.bindWatchdogAttempt,
     providerReviewAcknowledgment: params.providerReviewAcknowledgment,
     awaitSessionDiffBaseline: params.awaitSessionDiffBaseline,
-    pluginRuntimeRefreshPending: pluginRefresh.isPending,
+    pluginRuntimeRefreshPending: pluginRefresh.stopAtStep,
     registerPluginRuntimeRefreshConsumer: (isCurrent) => {
       if (attemptControls.isCurrent()) {
         pluginRefresh.bindConsumer(() => attemptControls.isCurrent() && isCurrent());
       }
     },
     pluginRuntimeRefreshMessages: params.pluginRuntimeRefreshMessages,
+    pluginRuntimeRefreshUserPrompt: params.pluginRuntimeRefreshUserPrompt,
     continuation: sessionPromptState.continuation,
+    runCleanupSettlement: params.runCleanupSettlement,
+    joinObservation: params.joinObservation,
     permissionChange: input.permissionChange,
     admittedRunContext: params.admittedRunContext,
     startedAtMs: runInput.startedAtMs,
@@ -562,6 +553,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     agentId: workspaceResolution.agentId,
     thinkLevel: runtime.thinkLevel,
     thinkingExplicit: params.thinkingExplicit,
+    cyberAccessProgram: params.cyberAccessProgram,
     onToolOutcome: input.observeToolOutcome,
     isTurnTainted: input.isTurnTainted,
     allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,
@@ -613,9 +605,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     onDeferredLifecycleAbort: params.onDeferredLifecycleAbort,
     onExecutionPhase: params.onExecutionPhase,
     extraSystemPrompt,
+    extraSystemPromptTurnContext: params.extraSystemPromptTurnContext,
     gitCoauthorPrompt,
     preparedTtsPreferences: params.preparedTtsPreferences,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    messageToolFinalByDefault: params.messageToolFinalByDefault,
     silentReplyPromptMode: params.silentReplyPromptMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     inputProvenance: params.inputProvenance,
@@ -627,7 +621,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     streamParams: params.streamParams,
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,
-    skillWorkshopReviewOf: params.skillWorkshopReviewOf,
     skillLibraryAuthoring: params.skillLibraryAuthoring,
     promptMode: params.promptMode,
     ownerNumbers: params.ownerNumbers,
@@ -654,15 +647,12 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     disableMessageTool: params.disableMessageTool,
     swarmCollector: params.swarmCollector,
     swarmOutputSchema: params.swarmOutputSchema,
-    forceRestartSafeTools: params.forceRestartSafeTools,
-    forceCodeModeTools: params.forceCodeModeTools,
     codeModeOverride: params.codeModeOverride,
     disableToolSearch: params.disableToolSearch,
+    compactionForbidden: params.disableCompactionRecovery,
     sessionReadScopeKey: params.sessionReadScopeKey,
+    blindPrompt: params.blindPrompt,
     forceMessageTool: params.forceMessageTool,
-    enableHeartbeatTool: params.enableHeartbeatTool,
-    forceHeartbeatTool: params.forceHeartbeatTool,
-    continuesConversation: params.continuesConversation,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     internalEvents: params.internalEvents,
     runtimeContextFragments: params.runtimeContextFragments,
@@ -679,8 +669,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       sessionPromptState.activePrompt.persisted = false;
     },
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
+    privateCompletion: params.privateCompletion,
     ...continuationRetryCount.capability,
   };
+  // Recovery changes execution IDs without changing the original admitted input source.
+  sourceTurn.copyChannelSourceTurnContext(attemptParams, params);
   let rawAttempt: EmbeddedRunAttemptResult;
   try {
     rawAttempt = await withPreparedEmbeddedGatewayTools(attemptParams, () => {
@@ -705,7 +698,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       }
     } finally {
       releaseMemoryAudience();
-      input.clearPostCompactionAbortController(attemptAbortController);
     }
   }
 

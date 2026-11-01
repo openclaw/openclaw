@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { logWarn } from "../logger.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -23,12 +24,7 @@ function isClaudeResultLine(line: string): boolean {
   if (Buffer.byteLength(line, "utf8") > TERMINAL_EVENT_MAX_BYTES) {
     return false;
   }
-  try {
-    const value = JSON.parse(line) as { type?: unknown };
-    return value?.type === "result";
-  } catch {
-    return false;
-  }
+  return safeParseJsonRecord(line)?.type === "result";
 }
 
 /** Spawn the node-resolved Claude binary and stream bounded UTF-8 stdout. */

@@ -1,4 +1,5 @@
 import type { readSqliteDatabaseScopedWriteToken } from "../../infra/sqlite-database-admission.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-projection-append.js";
 
 /** Complete eligible metadata for a bounded, boundary-free active path. No event bodies. */
@@ -23,7 +24,12 @@ export type SessionTranscriptProjectionFacts = {
   generation: string | undefined;
   updatedAt: number | null;
   hasUnclassified: boolean;
-  latestIndexedReset: { active_position: number; event_type: "reset"; seq: number } | null;
+  latestIndexedReset: {
+    active_position: number;
+    event_id: string;
+    event_type: "reset";
+    seq: number;
+  } | null;
   hasUnindexedPrefix: boolean;
   latestSeq: number | null;
   state?: SessionTranscriptProjectionState;
@@ -31,7 +37,6 @@ export type SessionTranscriptProjectionFacts = {
 };
 
 export type SessionTranscriptProjectionReceipt = {
-  path: string;
   sessionId: string;
   /** The actor snapshot validated this entry independently of transcript-window completeness. */
   entrySessionKey?: string;
@@ -39,6 +44,7 @@ export type SessionTranscriptProjectionReceipt = {
   writeScopes: Parameters<typeof readSqliteDatabaseScopedWriteToken>[1];
   facts?: SessionTranscriptProjectionFacts;
   contextStats?: SessionTranscriptContextStats;
-  /** Accounting retains its own projection snapshot, borrowing only bounded context metadata. */
+  contextStatsVersion?: SessionTranscriptContextVersion;
+  /** Accounting borrows totals only when its native snapshot matches contextStatsVersion. */
   contextOnly?: boolean;
 };

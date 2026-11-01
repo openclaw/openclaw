@@ -1,2 +1,4 @@
 /** Host-owned Settings destinations with a packaged plugin presentation. */
-export type ControlUiSettingsPlacement = { section: "memory"; panel: "overview" | "memories" };
+export type ControlUiSettingsPlacement =
+  | { section: "memory"; panel: "overview" | "memories" }
+  | { section: "channels"; panel: "detail"; channelId: string };

@@ -208,6 +208,47 @@ describe("repairCanonicalSqliteIndexes", () => {
     }
   });
 
+  it.each(["quick", "full"] as const)(
+    "checks the %s source once and each rebuilt table once without losing rows",
+    (check) => {
+      const db = createDatabase();
+      try {
+        db.exec(`
+          INSERT INTO records VALUES
+            (1, 'Tenant', NULL, 1),
+            (2, 'Other', 'two', 0);
+          DROP INDEX idx_records_identity;
+          DROP INDEX idx_records_active_lookup;
+        `);
+        const traced = traceSqlExecutions(db);
+
+        expect(
+          repairCanonicalSqliteIndexes(traced.database, "test database", expectedCatalog, {
+            integrity: { check },
+            validateAfterRepair: () =>
+              assertSqliteSchemaContains(db, "test database", expectedCatalog),
+          }),
+        ).toEqual(["idx_records_active_lookup", "idx_records_identity"]);
+
+        expect(
+          traced.statements.filter((sql) =>
+            /^PRAGMA (?:quick_check|integrity_check|foreign_key_check)\b/u.test(sql),
+          ),
+        ).toEqual([
+          `PRAGMA ${check === "quick" ? "quick_check" : "integrity_check"};`,
+          "PRAGMA foreign_key_check;",
+          "PRAGMA integrity_check('records');",
+        ]);
+        expect(db.prepare("SELECT * FROM records ORDER BY id").all()).toEqual([
+          { id: 1, tenant_id: "Tenant", external_id: null, active: 1 },
+          { id: 2, tenant_id: "Other", external_id: "two", active: 0 },
+        ]);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
   it("rolls back without dropping the drifted index when canonical rows conflict", () => {
     const db = createDatabase();
     try {

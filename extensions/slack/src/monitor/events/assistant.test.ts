@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SlackMonitorContext } from "../context.js";
-import { registerSlackAssistantEvents } from "./assistant.js";
+import { registerSlackWorkspaceEvents } from "../events.js";
 
 type Handler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 
@@ -26,13 +26,15 @@ function createHarness(overrides?: {
         handlers[name] = handler;
       },
     },
+    cfg: {},
+    accountId: "default",
     runtime: { error: vi.fn() },
     botToken: "xoxb-test",
     botUserId: "B1",
     shouldDropMismatchedSlackEvent: () => overrides?.shouldDrop === true,
     ...state,
   } as unknown as SlackMonitorContext;
-  registerSlackAssistantEvents({ ctx, trackEvent: state.trackEvent });
+  registerSlackWorkspaceEvents({ ctx, trackEvent: state.trackEvent });
   return {
     emit: (event: Record<string, unknown>) => handlers[String(event.type)]?.({ event, body: {} }),
     ...state,
@@ -44,7 +46,6 @@ const context = { channel_id: "C456", team_id: "T789", enterprise_id: "E123" };
 const savedContext = {
   assistantChannelId: "D123",
   threadTs: "1729999327.187299",
-  userId: "U123",
   channelId: "C456",
   teamId: "T789",
   enterpriseId: "E123",
@@ -55,7 +56,7 @@ function makeThreadEvent(type: string) {
   return { type, assistant_thread: { user_id: "U123", ...threadAddress, context: { ...context } } };
 }
 
-describe("registerSlackAssistantEvents", () => {
+describe("Slack assistant events", () => {
   it("stores new assistant thread context and sets default prompts", async () => {
     const harness = createHarness();
 
@@ -131,7 +132,6 @@ describe("registerSlackAssistantEvents", () => {
   it("preserves cached assistant thread context when updates omit optional fields", async () => {
     const cached = {
       ...savedContext,
-      userId: "UOLD",
       channelId: "COLD",
       teamId: "TOLD",
       enterpriseId: "EOLD",

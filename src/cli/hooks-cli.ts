@@ -4,7 +4,11 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { decorativePrefix } from "../../packages/terminal-core/src/decorative-emoji.js";
+import {
+  decorativeEmoji,
+  decorativePrefix,
+} from "../../packages/terminal-core/src/decorative-emoji.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   resolveAgentWorkspaceDir,
@@ -27,24 +31,239 @@ import { withPluginDiagnosticsReport } from "../plugins/status.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { summarizeStringEntries } from "../shared/string-sample.js";
+import { displayPath } from "../utils.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { formatCliCommand } from "./command-format.js";
-import { ExpectedCliError, rethrowExpectedCliError } from "./failure-output.js";
+import {
+  ExpectedCliError,
+  formatCliJsonFailure,
+  rethrowExpectedCliError,
+} from "./failure-output.js";
 import { canFallbackToImplicitLocalGateway } from "./gateway-rpc.js";
 import { formatDocsHelp } from "./help-format.js";
-import {
-  formatHookInfo,
-  formatHookMissingSummary,
-  formatHooksCheck,
-  formatHooksList,
-  type HooksListOptions,
-  type HooksReportOptions,
-} from "./hooks-cli.format.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import type { RunPluginInstallCommandParams } from "./plugins-install-preflight.js";
 import type { RunPluginUpdateCommandParams } from "./plugins-update-command.js";
+import { formatCliRequirements, formatCliStatusTable } from "./skills-hooks-cli.format.js";
+
+type HooksReportOptions = {
+  agent?: string;
+  json?: boolean;
+};
+
+type HooksListOptions = HooksReportOptions & {
+  eligible?: boolean;
+  verbose?: boolean;
+};
+
+function formatHookStatus(hook: HookStatusEntry, detailed = false): string {
+  if (hook.loadable) {
+    return theme.success(detailed ? "✓ Ready" : "✓ ready");
+  }
+  if (!hook.enabledByConfig) {
+    return theme.warn(decorativePrefix("⏸", detailed ? "Disabled" : "disabled"));
+  }
+  const reason =
+    hook.blockedReason && hook.blockedReason !== "missing requirements"
+      ? hook.blockedReason
+      : detailed
+        ? "missing requirements"
+        : "missing";
+  return theme.error(
+    terminalText`✗ ${detailed ? `${reason.charAt(0).toUpperCase()}${reason.slice(1)}` : reason}`,
+  );
+}
+
+const HOOK_REQUIREMENT_GROUPS = [
+  ["bins", "Binaries"],
+  ["anyBins", "Any binary"],
+  ["env", "Environment"],
+  ["config", "Config"],
+  ["os", "OS"],
+] as const;
+
+function formatHookMissingRequirements(hook: HookStatusEntry, itemLimit?: number): string[] {
+  const formatEntries = (entries: string[]) =>
+    itemLimit === undefined
+      ? entries.join(", ")
+      : summarizeStringEntries({ entries, limit: itemLimit });
+  return HOOK_REQUIREMENT_GROUPS.filter(([key]) => hook.missing[key].length > 0).map(
+    ([key]) => `${key}: ${formatEntries(hook.missing[key])}`,
+  );
+}
+
+function formatHookMissingSummary(hook: HookStatusEntry, itemLimit?: number): string {
+  const missing = formatHookMissingRequirements(hook, itemLimit);
+  if (hook.enabledByConfig && hook.blockedReason && hook.blockedReason !== "missing requirements") {
+    missing.unshift(hook.blockedReason);
+  }
+  return missing.join("; ");
+}
+
+function formatHooksList(report: HookStatusReport, opts: HooksListOptions): string {
+  const hooks = opts.eligible ? report.hooks.filter((h) => h.loadable) : report.hooks;
+
+  if (opts.json) {
+    const jsonReport = {
+      workspaceDir: report.workspaceDir,
+      managedHooksDir: report.managedHooksDir,
+      hooks: hooks.map((h) => ({
+        name: h.name,
+        description: h.description,
+        emoji: h.emoji,
+        eligible: h.loadable,
+        disabled: !h.enabledByConfig,
+        enabledByConfig: h.enabledByConfig,
+        requirementsSatisfied: h.requirementsSatisfied,
+        loadable: h.loadable,
+        blockedReason: h.blockedReason,
+        source: h.source,
+        pluginId: h.pluginId,
+        events: h.events,
+        unknownEvents: h.unknownEvents,
+        homepage: h.homepage,
+        missing: h.missing,
+        managedByPlugin: h.managedByPlugin,
+      })),
+    };
+    return JSON.stringify(jsonReport, null, 2);
+  }
+
+  if (hooks.length === 0) {
+    return opts.eligible
+      ? `No eligible hooks found. Run \`${formatCliCommand("openclaw hooks list")}\` to see all hooks.`
+      : "No hooks found.";
+  }
+
+  return formatCliStatusTable({
+    title: "Hooks",
+    ready: hooks.filter((hook) => hook.loadable).length,
+    nameColumn: { key: "Hook", header: "Hook", minWidth: 18, flex: true },
+    sourceColumn: { key: "Source", header: "Source", minWidth: 12, flex: true },
+    verbose: opts.verbose,
+    rows: hooks.map((hook) => {
+      const emoji = terminalText`${hook.emoji ?? decorativeEmoji("🔗")}`;
+      const name = theme.command(terminalText`${hook.name}`);
+      return {
+        Status: formatHookStatus(hook),
+        Hook: emoji ? `${emoji} ${name}` : name,
+        Description: theme.muted(terminalText`${hook.description}`),
+        Source: terminalText`${hook.managedByPlugin ? `plugin:${hook.pluginId ?? "unknown"}` : hook.source}`,
+        Missing: opts.verbose ? theme.warn(terminalText`${formatHookMissingSummary(hook)}`) : "",
+      };
+    }),
+  });
+}
+
+function formatHookInfo(
+  hook: HookStatusEntry | undefined,
+  hookName: string,
+  opts: HooksReportOptions,
+): string {
+  if (!hook) {
+    if (opts.json) {
+      const failure = formatCliJsonFailure(`Hook "${hookName}" not found.`);
+      return JSON.stringify({ ...failure, hook: hookName }, null, 2);
+    }
+    return terminalText`Hook "${hookName}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`;
+  }
+
+  if (opts.json) {
+    return JSON.stringify(
+      {
+        ...hook,
+        eligible: hook.loadable,
+        disabled: !hook.enabledByConfig,
+      },
+      null,
+      2,
+    );
+  }
+
+  const emoji = terminalText`${hook.emoji ?? decorativeEmoji("🔗")}`;
+  const lines = [
+    `${emoji ? `${emoji} ` : ""}${theme.heading(terminalText`${hook.name}`)} ${formatHookStatus(hook, true)}`,
+    "",
+    terminalText`${hook.description}`,
+    "",
+    theme.heading("Details:"),
+    `${theme.muted("  Source:")} ${terminalText`${hook.source}${hook.managedByPlugin ? ` (${hook.pluginId ?? "unknown"})` : ""}`}`,
+    `${theme.muted("  Path:")} ${displayPath(hook.filePath)}`,
+    `${theme.muted("  Handler:")} ${displayPath(hook.handlerPath)}`,
+  ];
+  if (hook.homepage) {
+    lines.push(`${theme.muted("  Homepage:")} ${terminalText`${hook.homepage}`}`);
+  }
+  if (hook.events.length > 0) {
+    lines.push(`${theme.muted("  Events:")} ${terminalText`${hook.events.join(", ")}`}`);
+  }
+  if (hook.unknownEvents.length > 0) {
+    lines.push(
+      theme.warn(
+        terminalText`  ⚠ Event${hook.unknownEvents.length === 1 ? "" : "s"} not emitted by core (likely typo): ${hook.unknownEvents.join(", ")}`,
+      ),
+    );
+  }
+  if (hook.managedByPlugin) {
+    lines.push(theme.muted("  Managed by plugin; enable/disable via hooks CLI not available."));
+  }
+  if (hook.blockedReason) {
+    lines.push(`${theme.muted("  Blocked reason:")} ${terminalText`${hook.blockedReason}`}`);
+  }
+
+  lines.push(...formatCliRequirements(hook, HOOK_REQUIREMENT_GROUPS, hook.configChecks));
+
+  return lines.join("\n");
+}
+
+function formatHooksCheck(report: HookStatusReport, opts: HooksReportOptions): string {
+  const eligible = report.hooks.filter((h) => h.loadable);
+  const notEligible = report.hooks.filter((h) => !h.loadable);
+  if (opts.json) {
+    return JSON.stringify(
+      {
+        total: report.hooks.length,
+        eligible: eligible.length,
+        notEligible: notEligible.length,
+        hooks: {
+          eligible: eligible.map((h) => h.name),
+          notEligible: notEligible.map((h) => ({
+            name: h.name,
+            blockedReason: h.blockedReason,
+            missing: h.missing,
+          })),
+        },
+      },
+      null,
+      2,
+    );
+  }
+
+  const lines = [
+    theme.heading("Hooks Status"),
+    "",
+    `${theme.muted("Total hooks:")} ${report.hooks.length}`,
+    `${theme.success("Ready:")} ${eligible.length}`,
+    `${theme.warn("Not ready:")} ${notEligible.length}`,
+  ];
+
+  if (notEligible.length > 0) {
+    lines.push("");
+    lines.push(theme.heading("Hooks not ready:"));
+    for (const hook of notEligible) {
+      const reasons = formatHookMissingRequirements(hook);
+      if (hook.blockedReason && hook.blockedReason !== "missing requirements") {
+        reasons.unshift(hook.blockedReason);
+      }
+      const emoji = hook.emoji ?? decorativeEmoji("🔗");
+      lines.push(terminalText`  ${emoji ? `${emoji} ` : ""}${hook.name} - ${reasons.join("; ")}`);
+    }
+  }
+
+  return lines.join("\n");
+}
 
 const GATEWAY_HOOKS_STATUS_TIMEOUT_MS = 1_500;
 
@@ -168,7 +387,11 @@ async function runOneShotHooksCliAction(
   const result = await action().catch((err: unknown) => {
     rethrowExpectedCliError(err);
     const message = formatErrorMessage(err);
-    const humanOutput = `${theme.error("Error:")} ${message}`;
+    // Owner remedies span lines (Config:/Fix:); keep the breaks, strip controls per line.
+    const humanOutput = `${theme.error("Error:")} ${message
+      .split("\n")
+      .map((line) => terminalText`${line}`)
+      .join("\n")}`;
     if (failureOwner === "root") {
       throw new ExpectedCliError({ message, humanOutput, machineOutput: message });
     }
@@ -180,74 +403,6 @@ async function runOneShotHooksCliAction(
   // CLI setup and handlers can leave ref'd handles behind. Defer exit until
   // runCli finishes shared teardown and drains both output streams.
   requestExitAfterOneShotOutput(defaultRuntime, exitCode);
-}
-async function setHookEnabled(hookName: string, enabled: boolean, agentId?: string): Promise<void> {
-  return await runWithLocalStateOwner({
-    method: `hooks.${enabled ? "enable" : "disable"}`,
-    params: {},
-    target: `hook "${hookName}"`,
-    onForeignOwner: "refuse",
-    runLocal: ({ assertCurrent }) => setHookEnabledLocal(hookName, enabled, agentId, assertCurrent),
-  });
-}
-
-async function setHookEnabledLocal(
-  hookName: string,
-  enabled: boolean,
-  agentId: string | undefined,
-  assertCurrent: () => void,
-): Promise<void> {
-  const committed = await transformConfigFile({
-    writeOptions: { assertConfigPathForWrite: assertCurrent },
-    transform: (config) =>
-      withHooksReport(config, resolveHooksReportTarget(config, agentId), (report) => {
-        const hook = resolveHookSelection(report, hookName);
-        if (!hook) {
-          throw new Error(
-            `Hook "${hookName}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`,
-          );
-        }
-        if (hook.managedByPlugin) {
-          throw new Error(
-            `Hook "${hookName}" is managed by plugin "${hook.pluginId ?? "unknown"}" and cannot be enabled/disabled.`,
-          );
-        }
-        if (enabled && !hook.requirementsSatisfied) {
-          const missing = formatHookMissingSummary(hook, 3);
-          const installHint = hook.install.length
-            ? ` Install options: ${summarizeStringEntries({
-                entries: hook.install.map((option) => option.label),
-                limit: 3,
-              })}.`
-            : "";
-          throw new Error(
-            `Hook "${hookName}" is not eligible; missing ${missing}.${installHint} Run \`${formatCliCommand(`openclaw hooks info ${hookName}`)}\` for details.`,
-          );
-        }
-        const entries = { ...config.hooks?.internal?.entries };
-        entries[hook.hookKey] = { ...entries[hook.hookKey], enabled };
-        const nextConfig: OpenClawConfig = {
-          ...config,
-          hooks: {
-            ...config.hooks,
-            internal: {
-              ...config.hooks?.internal,
-              ...(enabled ? { enabled: true } : {}),
-              entries,
-            },
-          },
-        };
-        return { nextConfig, result: { name: hook.name, emoji: hook.emoji } };
-      }),
-  });
-  const selectedHook = expectDefined(committed.result, "hook mutation result");
-  const prefix = enabled
-    ? `${theme.success("✓")} Enabled hook:`
-    : theme.warn(decorativePrefix("⏸", "Disabled hook:"));
-  const name = selectedHook.emoji
-    ? `${selectedHook.emoji} ${theme.command(selectedHook.name)}`
-    : decorativePrefix("🔗", theme.command(selectedHook.name));
-  defaultRuntime.log(`${prefix} ${name}`);
 }
 
 export function registerHooksCli(program: Command): void {
@@ -333,9 +488,68 @@ export function registerHooksCli(program: Command): void {
       .description(enabled ? "Enable a hook" : "Disable a hook")
       .option("--agent <id>", "Agent id whose workspace to inspect")
       .action(async (name, _opts: { agent?: string }, command: Command) =>
-        runOneShotHooksCliAction(() =>
-          setHookEnabled(name, enabled, resolveOptionFromCommand<string>(command, "agent")),
-        ),
+        runOneShotHooksCliAction(async () => {
+          const agentId = resolveOptionFromCommand<string>(command, "agent");
+          return await runWithLocalStateOwner({
+            method: `hooks.${enabled ? "enable" : "disable"}`,
+            params: {},
+            target: `hook "${name}"`,
+            onForeignOwner: "refuse",
+            runLocal: async ({ assertCurrent }) => {
+              const committed = await transformConfigFile({
+                writeOptions: { assertConfigPathForWrite: assertCurrent },
+                transform: (config) =>
+                  withHooksReport(config, resolveHooksReportTarget(config, agentId), (report) => {
+                    const hook = resolveHookSelection(report, name);
+                    if (!hook) {
+                      throw new Error(
+                        `Hook "${name}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`,
+                      );
+                    }
+                    if (hook.managedByPlugin) {
+                      throw new Error(
+                        `Hook "${name}" is managed by plugin "${hook.pluginId ?? "unknown"}" and cannot be enabled/disabled.`,
+                      );
+                    }
+                    if (enabled && !hook.requirementsSatisfied) {
+                      const missing = formatHookMissingSummary(hook, 3);
+                      const installHint = hook.install.length
+                        ? ` Install options: ${summarizeStringEntries({
+                            entries: hook.install.map((option) => option.label),
+                            limit: 3,
+                          })}.`
+                        : "";
+                      throw new Error(
+                        `Hook "${name}" is not eligible; missing ${missing}.${installHint} Run \`${formatCliCommand(`openclaw hooks info ${name}`)}\` for details.`,
+                      );
+                    }
+                    const entries = { ...config.hooks?.internal?.entries };
+                    entries[hook.hookKey] = { ...entries[hook.hookKey], enabled };
+                    const nextConfig: OpenClawConfig = {
+                      ...config,
+                      hooks: {
+                        ...config.hooks,
+                        internal: {
+                          ...config.hooks?.internal,
+                          ...(enabled ? { enabled: true } : {}),
+                          entries,
+                        },
+                      },
+                    };
+                    return { nextConfig, result: { name: hook.name, emoji: hook.emoji } };
+                  }),
+              });
+              const selectedHook = expectDefined(committed.result, "hook mutation result");
+              const prefix = enabled
+                ? `${theme.success("✓")} Enabled hook:`
+                : theme.warn(decorativePrefix("⏸", "Disabled hook:"));
+              const formattedName = selectedHook.emoji
+                ? `${terminalText`${selectedHook.emoji} `}${theme.command(terminalText`${selectedHook.name}`)}`
+                : decorativePrefix("🔗", theme.command(terminalText`${selectedHook.name}`));
+              defaultRuntime.log(`${prefix} ${formattedName}`);
+            },
+          });
+        }),
       );
   }
 

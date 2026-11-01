@@ -9,7 +9,7 @@ title: "Linux app"
 ---
 
 The Gateway is fully supported on Linux. Node is the primary, default, and
-recommended runtime; Bun 1.4.3+ builds with WAL-reset-safe `node:sqlite` can run
+recommended runtime; Bun 1.4.4+ builds with WAL-reset-safe `node:sqlite` can run
 OpenClaw as an explicit opt-in. Use `pnpm` rather than Bun for dependency
 installation.
 
@@ -82,13 +82,34 @@ disconnection, and manual recovery.
 
 ### Desktop compatibility
 
-The Linux companion shares one Bun fork pin with the native macOS app and CI.
-Runtime admission, SQLite safety checks, and the fork's disabled implicit package
-auto-install remain enabled. macOS Tauri test builds keep their existing runtime
-behavior; the native macOS app owns its separate bundled runtime. Windows Tauri
+The Tauri companion defaults to JIT: the pinned OpenClaw Bun fork plus its
+matching OpenClaw package. Runtime admission, SQLite safety checks, and the
+fork's disabled implicit package auto-install remain enabled. Windows Tauri
 releases use the signed Windows fork from the shared pin for local setup; an
 unsigned dry-run is not shippable. See
 [Bun compatibility](/install/bun-compatibility).
+
+To build an experimental AOT companion, set `OPENCLAW_DESKTOP_RUNTIME=aot` and
+`OPENCLAW_DESKTOP_AOT_ARTIFACT` to a prebuilt
+[standalone artifact](/install/standalone#desktop-app-artifacts). Keep its
+executable, `manifest.json`, and runtime sidecar together. The Tauri build stages
+that artifact without building the experimental compiler. The embedded manifest
+selects the launch command, CLI, and Gateway runtime; the tray shows its flavor.
+Set `OPENCLAW_DESKTOP_RUNTIME=jit` to switch the next build back. Release defaults
+remain JIT.
+
+The manual **Linux App** workflow accepts the same choice through
+`desktop_runtime`. For AOT, also supply `aot_run_id` and `aot_artifact_name` from a
+successful push or manually dispatched workflow in the same repository. The
+artifact must target Linux x64 and contain the standalone files at its root.
+Ordinary PR tests keep their JIT fixtures. AOT runtime qualification and native
+plugin checks must cover the exact artifact you supply.
+
+AOT supports glibc Linux x64/arm64 and Apple silicon macOS Tauri builds. It uses
+the experimental OpenClaw Bun/WebKit forks. macOS Tauri builds require macOS 26.2
+or later; AOT must be signed with hardened runtime and without `allow-jit`.
+The native macOS app has a separate runtime owner and continues to default to
+JIT.
 
 Published AMD64 AppImages are built on Ubuntu 22.04 and require glibc 2.35 or
 newer plus a `libstdc++` that provides `GLIBCXX_3.4.30`. Ubuntu 22.04 and
@@ -98,6 +119,11 @@ this requirement.
 
 `.deb` installs stay owned by the system package manager; installing the download
 does not add an APT repository. AppImages use the signed in-app updater.
+After replacing an existing app with a different runtime build, choose
+**Use bundled runtime…** in the tray to activate it for the local Gateway.
+Updating the app alone does not replace an existing Gateway service. A successful
+activation retains the previous runtime for recovery and keeps any runtime
+still used by a running process.
 
 Global shortcuts are available on X11. On Wayland, use the tray's **Quick Chat**
 entry when your desktop provides a tray host; global shortcuts are unavailable.
@@ -138,7 +164,10 @@ Changing it requires the separate **Set as Primary** confirmation on a saved
 token-authenticated connection. Other Gateway windows retain their own targets.
 The companion remembers successful explicit selections, returns to Primary when
 that saved connection is removed, and keeps credentials in the operating
-system's credential store. Linux requires an unlocked Secret Service, such as
+system's credential store. Each saved Gateway keeps its own dashboard storage, so
+an approved device pairing survives restarts. Removing the Gateway retires that
+storage: saving it again pairs a new dashboard session, and the old storage is
+deleted at the next launch. Linux requires an unlocked Secret Service, such as
 GNOME Keyring or KWallet's Secret Service support.
 
 An unavailable credential store shows a dismissible notice without blocking the
@@ -156,8 +185,8 @@ separate from the native **OpenClaw** app.
 
 ### Use the bundled runtime
 
-On Linux, fresh local setup installs the Gateway on the bundled OpenClaw Bun
-fork through the standard CLI. The install guard requires the service to still
+On Linux, Windows, and macOS Tauri builds, fresh local setup installs the Gateway on the selected bundled runtime
+through the standard CLI. The install guard requires the service to still
 be absent. A service that appears during setup blocks that installation. The app's
 runtime marker is informational and never authorizes automatic service changes.
 
@@ -165,7 +194,7 @@ For any existing Gateway that uses another runtime, choose **Use bundled
 runtime…** in the tray menu. This includes Node, an older bundled Bun after an
 app update, and an operator-selected runtime. The confirmation shows the current
 runtime. The CLI install checks that the service definition and runtime pin still
-match what you confirmed before switching to the current bundled Bun. If either
+match what you confirmed before switching to the app's bundled runtime. If either
 changed, the action refuses. A paused or stopped Gateway stays stopped; choose
 **Start Gateway** before switching runtimes.
 
@@ -180,14 +209,16 @@ openclaw gateway install --force --runtime node
 
 To return to a particular previous executable, use
 `openclaw gateway install --force --runtime-path /absolute/path/to/node-or-bun`.
-The CLI owns service installation. Switching an existing Gateway's runtime
-leaves its CLI launcher unchanged.
+The CLI owns service installation. Successful activation also refreshes the
+app-managed CLI launcher; independently installed CLI launchers remain under
+their original owner.
 
 Startup and app updates never change an existing Gateway service or runtime pin.
 After an app update, the current service keeps its existing runtime until you
 choose **Use bundled runtime…** again. Immutable app runtime directories are
-retained, so updates never remove a runtime referenced by a service. These actions
-are Linux-only; macOS Tauri keeps its existing behavior, separate from the
+retained, so updates never remove a runtime referenced by a service. Windows
+Tauri uses this action to activate its updated JIT runtime too; Windows AOT is
+unsupported. The macOS Tauri app remains separate from the
 [native macOS app](/platforms/mac/bundled-gateway).
 
 ### Desktop sharing
@@ -390,6 +421,32 @@ requests. Manual runs build and upload the `.deb` and AppImage as the
 See `apps/linux/README.md` in the repository for Linux build dependencies and
 development commands.
 
+### Raspberry Pi and low-memory desktops
+
+For headless Gateway hosts, see the [Raspberry Pi swap setup](/install/raspberry-pi#setup)
+and [managed service heap sizing](/platforms/linux#gateway-service-systemd).
+The settings below apply to the desktop companion's WebKitGTK WebView.
+
+If a source-built ARM64 companion shows a blank or frozen window on a Pi with
+Mesa, quit the companion fully and try launching the installed binary with:
+
+```bash
+WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 openclaw-desktop
+```
+
+These disable the DMA-BUF renderer and accelerated compositing. They were
+[reported to help on Pi 5 with Debian 13 and WebKitGTK 2.52](https://github.com/openclaw/openclaw/issues/138279#issuecomment-5547961043);
+results depend on the graphics stack. This does not imply official ARM64 release availability.
+
+For memory pressure in the WebView, try a separate launch with
+`JSC_useJIT=false openclaw-desktop`. Disabling JavaScriptCore's JIT may reduce
+memory use at the cost of JavaScript performance. The linked Pi measurements
+are single-host observations, not a guaranteed memory budget.
+
+Keep these variables in the companion launcher rather than a shell profile or
+Gateway service. For an AppImage, replace `openclaw-desktop` with its path.
+Remove the variables to return to the default rendering and JIT behavior.
+
 ### Quick Chat
 
 `Ctrl+Shift+O` opens a new session only in the focused dashboard. The companion
@@ -441,7 +498,7 @@ and its reply.
 The CLI remains the simplest option for a headless server or VPS. Use a manual
 SSH tunnel when connecting without the Linux desktop companion:
 
-1. Install Node 26 (recommended), or another supported release: Node 24.16+ or Node 26.1+.
+1. Install Node 26 (recommended), or another supported release: Node 24.22.1+ or Node 26.12.1+.
 2. On npm 12 or npm 11.16+, run `npm i -g openclaw@latest --allow-scripts=openclaw`. On npm 11.15 and earlier, omit `--allow-scripts=openclaw`.
 3. `openclaw onboard --install-daemon`
 4. From your laptop: `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
@@ -500,7 +557,7 @@ The bundled Linux Canvas bridge and its desktop Canvas window have been removed.
 For inline widgets in the Control UI, use [`show_widget`](/tools/show-widget).
 The separate [macOS widget panel](/platforms/mac/canvas) requires a connected
 Mac and is render-only. These widget surfaces do not restore the former Linux
-Canvas bridge or its A2UI push commands.
+Canvas bridge.
 
 ## Install
 
@@ -567,6 +624,8 @@ TimeoutStartSec=30
 SuccessExitStatus=0 143
 OOMPolicy=continue
 KillMode=mixed
+Delegate=yes
+DelegateSubgroup=gateway
 
 [Install]
 WantedBy=default.target
@@ -576,6 +635,24 @@ Hand-written units do not inherit the adaptive heap sizing that `openclaw gatewa
 
 `TimeoutStopSec=330` covers the Gateway's five-minute cooperative drain plus teardown reserve. To inspect the current managed unit body, run `systemctl --user cat openclaw-gateway.service` (or `systemctl --user cat openclaw-gateway-<profile>.service` for a named profile).
 
+Host shutdown also stops the enclosing `user@<uid>.service`. Its timeout can cut
+short the Gateway's own drain; Ubuntu 24.04 ships a five-second limit in
+`/usr/lib/systemd/system/user@.service.d/timeout.conf`. Doctor and Gateway status
+warn when the effective user-manager timeout is below 90 seconds. This warning
+does not trigger a Gateway reinstall or change host policy.
+
+Inspect it with `systemctl show user@$(id -u).service -p TimeoutStopUSec`. To allow
+more time, create `/etc/systemd/system/user@<uid>.service.d/zz-openclaw-stop-timeout.conf`:
+
+```ini
+[Service]
+TimeoutStopSec=90
+```
+
+Use `330` to preserve the full Gateway drain, accepting a potentially longer host
+shutdown. The drop-in name sorts after Ubuntu's `timeout.conf`; run
+`sudo systemctl daemon-reload` and inspect the effective value again.
+
 Enable it:
 
 ```bash
@@ -583,6 +660,74 @@ systemctl --user enable --now openclaw-gateway[-<profile>].service
 ```
 
 ## Memory pressure and OOM kills
+
+### Agent exec resource isolation
+
+On systemd 254+ with cgroup v2, managed Gateway units use `Delegate=yes` and
+`DelegateSubgroup=gateway`. systemd places the launcher and Gateway in the
+`gateway` leaf before they spawn children. This leaves the service cgroup empty,
+as required before enabling controllers for sibling cgroups.
+
+Runtime detection reads the process's own `/proc/self/cgroup` membership and
+checks the delegated subtree's writable controls and available controllers.
+Exec helpers discover the same kernel-owned policy; no environment setting
+enables isolation. Without writable delegation, OpenClaw leaves the cgroup
+layout unchanged and reports the missing prerequisite once at startup.
+
+OpenClaw places host agent-exec process trees in the sibling `agent-exec` cgroup.
+Placement follows the launch caller's typed execution intent: agent tool commands
+and their PTYs enter `agent-exec`; Gateway-internal commands stay in `gateway`.
+This includes managed worktree preparation, base refresh and hydration, Git
+status and diff RPCs, and sandbox synchronization helpers. Executable names,
+arguments, and cleanup ownership do not select the cgroup. Descendants inherit
+their command's placement.
+
+On Node, the Gateway's existing spawn broker launches supported child commands
+and PTY helpers without forking the Gateway's large address space. Workspace
+inventory and Git pack transfers write output files in the broker, including
+bounded output, and remain Gateway-internal work. Durable-process
+observation and cron command watchers retain that broker across detached timers
+and queues. This changes the launch process, not execution intent: durable
+`systemctl` helpers remain Gateway work, while durable commands themselves remain
+independent systemd user services.
+
+The `agent-exec` CPU weight is `10`, compared with the Gateway leaf's default `100`; these are
+relative shares during contention, not a fixed CPU cap. Aggregate `memory.high`
+reuses the host exec memory allowance: the smaller of one quarter of available
+host/container memory and half that memory remaining after Gateway RSS.
+Existing per-exec memory limits and child-first OOM policy still apply.
+`memory.high` applies reclaim pressure; it is not a hard memory limit.
+
+An aggregate `io.max` ceiling covers agent-exec IO on each device backing the
+Gateway state directory. Non-rotational devices receive **250 MiB/s in each
+direction and 40,960 read/write operations per second**, independent of RAM or
+device count. Classification uses the logical device's `queue/rotational` value,
+including md/dm devices, rather than separately throttling their members.
+Rotational devices, or devices without that attribute, retain the conservative
+pressure budget: `memory.high / 600 / deviceCount` bytes per second in each
+direction, with that rate divided by `4096` operations per second. These are
+policy ceilings, not measured disk bandwidth. The non-rotational ceiling balances
+agent IO throughput against Gateway WAL commit latency on btrfs, rather than
+device utilization; the IOPS ceiling remains fixed at the measured 40,960.
+For example, a 4 GiB memory allowance on one SSD gives 250 MiB/s per direction; on a rotational device it
+gives about 6.8 MiB/s. Half of any finite ancestor IO limit further caps each
+corresponding rate. Gateway IO remains outside the exec ceiling. The policy is
+applied at Gateway startup.
+
+Enable this policy for an older managed unit with an explicit
+`openclaw doctor --fix` or `openclaw gateway install --force`. Normal updates
+preserve the existing delegation policy, including units without delegation;
+shutdown-policy refreshes do not opt the unit in. For a custom unit,
+add the two directives above and reload/restart it through its service owner.
+Doctor and Gateway status report missing delegation or leaf placement. If
+systemd is older than 254, cgroup v2 controllers are unavailable, or delegation
+is not writable, the Gateway continues without this isolation and logs the
+reason. Upgrade the host or adjust its delegation policy to enable it.
+On Bun, isolating PTY commands also requires Node for the terminal helper. If
+Node is unavailable, native PTY commands continue in the Gateway cgroup with a
+partial-isolation warning; add `node` to `PATH` to isolate them.
+
+### Child-first OOM policy
 
 On Linux, the kernel picks an OOM victim when a host, VM, or container cgroup
 runs out of memory. The Gateway is a poor victim because it owns long-lived

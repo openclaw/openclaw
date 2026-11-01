@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { prepareCliPromptImagePayload } from "../../agents/cli-runner/helpers.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/run/images.js";
@@ -15,35 +16,20 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import type { TemplateContext } from "../templating.js";
-import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 import {
-  createFollowupRun,
+  createCliFollowupRun as createCliRun,
   createMinimalRunAgentTurnParams,
-  createTestUserTurnRecorder,
   expectMockCallArgFields,
   getExecuteAgentTurnForTest,
-  initialFallbackAttemptOptions,
   makeTestSessionStorePath,
   requireMockCall,
   requireRecord,
   setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
+import { createTestUserTurnRecorder } from "./agent-runner-execution.transcript.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
 
-function createCliRun(provider: string, model: string) {
-  state.isCliProviderMock.mockReturnValue(true);
-  state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-    result: await params.run(provider, model, initialFallbackAttemptOptions(params)),
-    provider,
-    model,
-    attempts: [],
-  }));
-  const followupRun = createFollowupRun();
-  followupRun.run.provider = provider;
-  followupRun.run.model = model;
-  return followupRun;
-}
 afterEach(resetGeneratedMediaTaskActivityForTests);
 
 function rejectUnexpectedCompactionSuccessor(): never {
@@ -380,130 +366,95 @@ describe("executeAgentTurn: CLI session routing", () => {
     });
   });
 
-  it("drops replacement room-event CLI sessions when reuse fails", async () => {
-    const followupRun = createCliRun("codex-cli", "gpt-5.4");
-    state.runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "ambient" }],
-      meta: {
-        agentMeta: {
+  it.each([
+    {
+      scenario: "returned replacement",
+      text: "ambient",
+      agentMeta: {
+        sessionId: "transient-cli-session",
+        cliSessionBinding: {
           sessionId: "transient-cli-session",
-          cliSessionBinding: {
-            sessionId: "transient-cli-session",
-            authProfileId: "profile",
-          },
-          clearCliSessionBinding: true,
+          authProfileId: "profile",
         },
+        clearCliSessionBinding: true,
       },
-    });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    followupRun.currentInboundEventKind = "room_event";
-    const sessionEntry = {
-      cliSessionBindings: {
-        "codex-cli": { sessionId: "existing-cli-session" },
+    },
+    {
+      scenario: "unflushed replacement",
+      text: "handled",
+      agentMeta: {
+        sessionId: "",
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        clearCliSessionBinding: true,
       },
-    } as unknown as SessionEntry;
-    const activeSessionStore = { main: sessionEntry };
-    let cleanupObservedBeforePlacementRelease = false;
-    const restoreAdmission = installSessionPlacementAdmissionProvider({
-      assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
-      executeLocalTurn: async (_claim, runLocal) => {
-        const resultLocal = await runLocal();
-        expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
-        cleanupObservedBeforePlacementRelease = true;
-        return resultLocal;
-      },
-      executeTurn: async (_claim, _params, runLocal) => await runLocal(),
-    });
-
-    let result: Awaited<ReturnType<typeof executeAgentTurn>>;
-    try {
-      result = await executeAgentTurn({
-        ...createMinimalRunAgentTurnParams({ followupRun }),
-        activeSessionStore,
-        getActiveSessionEntry: () => sessionEntry,
+    },
+  ])(
+    "clears room-event CLI bindings for $scenario before placement release",
+    async ({ text, agentMeta }) => {
+      const followupRun = createCliRun("codex-cli", "gpt-5.4");
+      state.runCliAgentMock.mockResolvedValueOnce({
+        payloads: [{ text }],
+        meta: { agentMeta },
       });
-    } finally {
-      restoreAdmission();
-    }
 
-    expect(result.kind).toBe("success");
-    expect(cleanupObservedBeforePlacementRelease).toBe(true);
-    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
-      currentInboundEventKind: "room_event",
-      cliSessionId: "existing-cli-session",
-      cliSessionBinding: {
-        sessionId: "existing-cli-session",
-      },
-    });
-    if (result.kind !== "success") {
-      throw new Error("expected success");
-    }
-    expect(result.runResult.meta?.agentMeta?.sessionId).toBe("");
-    expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toBeUndefined();
-    expect(result.runResult.meta?.agentMeta?.clearCliSessionBinding).toBeUndefined();
-    expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
-  });
-
-  it("clears room-event CLI bindings when an unflushed replacement is dropped", async () => {
-    const followupRun = createCliRun("codex-cli", "gpt-5.4");
-    state.runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "handled" }],
-      meta: {
-        agentMeta: {
-          sessionId: "",
-          provider: "codex-cli",
-          model: "gpt-5.4",
-          clearCliSessionBinding: true,
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      followupRun.currentInboundEventKind = "room_event";
+      const sessionEntry = {
+        cliSessionBindings: {
+          "codex-cli": { sessionId: "existing-cli-session" },
         },
-      },
-    });
+      } as unknown as SessionEntry;
+      const activeSessionStore = { main: sessionEntry };
+      let cleanupObservedBeforePlacementRelease = false;
+      const restoreAdmission = installSessionPlacementAdmissionProvider({
+        assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
+        executeLocalTurn: async (_claim, runLocal) => {
+          const resultLocal = await runLocal();
+          expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
+          cleanupObservedBeforePlacementRelease = true;
+          return resultLocal;
+        },
+        executeTurn: async (_claim, _params, runLocal) => await runLocal(),
+      });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    followupRun.currentInboundEventKind = "room_event";
-    const sessionEntry = {
-      cliSessionBindings: {
-        "codex-cli": { sessionId: "existing-cli-session" },
-      },
-    } as unknown as SessionEntry;
-    const activeSessionStore = { main: sessionEntry };
+      let result: Awaited<ReturnType<typeof executeAgentTurn>>;
+      try {
+        result = await executeAgentTurn({
+          ...createMinimalRunAgentTurnParams({ followupRun }),
+          activeSessionStore,
+          getActiveSessionEntry: () => sessionEntry,
+        });
+      } finally {
+        restoreAdmission();
+      }
 
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({ followupRun }),
-      activeSessionStore,
-      getActiveSessionEntry: () => sessionEntry,
-    });
-
-    expect(result.kind).toBe("success");
-    if (result.kind !== "success") {
-      throw new Error("expected success");
-    }
-    expect(result.runResult.meta?.agentMeta?.sessionId).toBe("");
-    expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toBeUndefined();
-    expect(result.runResult.meta?.agentMeta?.clearCliSessionBinding).toBeUndefined();
-    expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
-  });
+      expect(result.kind).toBe("success");
+      expect(cleanupObservedBeforePlacementRelease).toBe(true);
+      expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+        currentInboundEventKind: "room_event",
+        cliSessionId: "existing-cli-session",
+        cliSessionBinding: {
+          sessionId: "existing-cli-session",
+        },
+      });
+      if (result.kind !== "success") {
+        throw new Error("expected success");
+      }
+      expect(result.runResult.meta?.agentMeta?.sessionId).toBe("");
+      expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toBeUndefined();
+      expect(result.runResult.meta?.agentMeta?.clearCliSessionBinding).toBeUndefined();
+      expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
+    },
+  );
 
   it("preserves a reused binding after an operator aborts a channel turn", async () => {
     const sessionKey = "agent:main:direct:aborted-run";
-    state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run(
-        "claude-cli",
-        "claude-opus-4-8",
-        initialFallbackAttemptOptions(params),
-      ),
-      provider: "claude-cli",
-      model: "claude-opus-4-8",
-      attempts: [],
-    }));
     state.runCliAgentMock.mockRejectedValueOnce(
       Object.assign(new Error("CLI run aborted"), { name: "AbortError" }),
     );
 
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "claude-cli";
-    followupRun.run.model = "claude-opus-4-8";
+    const followupRun = createCliRun("claude-cli", "claude-opus-4-8");
     const sessionEntry = {
       sessionId: "openclaw-session",
       updatedAt: 1,
@@ -537,14 +488,8 @@ describe("executeAgentTurn: CLI session routing", () => {
       }),
     );
 
-    let releaseAdmission!: () => void;
-    const admissionGate = new Promise<void>((resolve) => {
-      releaseAdmission = resolve;
-    });
-    let notifyAdmissionWait!: () => void;
-    const admissionWait = new Promise<void>((resolve) => {
-      notifyAdmissionWait = resolve;
-    });
+    const { resolve: releaseAdmission, promise: admissionGate } = createDeferred();
+    const { resolve: notifyAdmissionWait, promise: admissionWait } = createDeferred();
     const restoreAdmission = installSessionPlacementAdmissionProvider({
       assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
       executeLocalTurn: async (_claim, runLocal) => {

@@ -32,15 +32,6 @@ export type ChannelDoctorEmptyAllowlistPolicyHooks = {
   extraWarningsForAccount: NonNullable<ChannelDoctorAdapter["collectEmptyAllowlistExtraWarnings"]>;
 } & Required<Pick<ChannelDoctorAdapter, "shouldSkipDefaultEmptyGroupAllowlistWarning">>;
 
-function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
-  return listDoctorConfiguredChannelIds(cfg, {
-    configEntryPolicy: "enabled",
-    skipWhenPluginsDisabled: true,
-    excludeExplicitlyDisabled: true,
-    sort: "codepoint",
-  });
-}
-
 function isChannelDoctorBlockedByConfig(channelId: string, cfg: OpenClawConfig): boolean {
   if (cfg.plugins?.enabled === false) {
     return true;
@@ -96,7 +87,12 @@ function mergeDoctorAdapters(
 
 function listChannelDoctorEntries(
   context: ChannelDoctorLookupContext,
-  channelIds: readonly string[] = collectConfiguredChannelIds(context.cfg),
+  channelIds: readonly string[] = listDoctorConfiguredChannelIds(context.cfg, {
+    configEntryPolicy: "enabled",
+    skipWhenPluginsDisabled: true,
+    excludeExplicitlyDisabled: true,
+    sort: "codepoint",
+  }),
   readOnlyDoctorsById?: ReadonlyMap<string, ChannelDoctorAdapter | undefined>,
 ): ChannelDoctorEntry[] {
   const selectedIds = new Set(
@@ -230,7 +226,6 @@ export function collectChannelDoctorCompatibilityMutations(
   return mutation.changes.length || mutation.warnings?.length ? [mutation] : [];
 }
 
-/** Collect stale channel config cleanup mutations from configured channel doctor adapters. */
 export async function collectChannelDoctorStaleConfigMutations(
   cfg: OpenClawConfig,
   options: { env?: NodeJS.ProcessEnv; channelIds?: readonly string[] } = {},
@@ -242,7 +237,6 @@ export async function collectChannelDoctorStaleConfigMutations(
   );
 }
 
-/** Collect channel-specific doctor preview warnings for configured channels. */
 export async function collectChannelDoctorPreviewWarnings(
   params: Parameters<NonNullable<ChannelDoctorAdapter["collectPreviewWarnings"]>>[0],
 ): Promise<string[]> {

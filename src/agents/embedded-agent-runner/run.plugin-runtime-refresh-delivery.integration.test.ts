@@ -7,12 +7,10 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
-import { createReplyRestartRecoveryClaimController } from "../../auto-reply/reply/restart-recovery-claim.js";
-import { createReplyRecoveryActorFixture } from "../../auto-reply/reply/restart-recovery-claim.test-support.js";
+import { createReplyActorFixture } from "../../auto-reply/reply/reply-actor.test-support.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -20,11 +18,10 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { OutboundHandoffRejectedError } from "../../infra/outbound/deliver-handoff.js";
-import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
-import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
+import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   createChannelTestPluginBase,
@@ -46,6 +43,7 @@ import { captureAgentPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
 import type { StreamFn } from "../runtime/index.js";
 import { AuthStorage } from "../sessions/auth-storage.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
+import { createQueuedAssistantStream } from "../test-helpers/assistant-event-stream.test-support.js";
 import {
   buildEmbeddedRunnerAssistant,
   createEmbeddedAgentRunnerOpenAiConfig,
@@ -78,6 +76,8 @@ const plugin: ChannelPlugin = {
 };
 const registry = createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]);
 const transport = vi.fn();
+const runMessageAction = messageActionRunner.runMessageAction;
+let messageActionRunnerSpy: MockInstance<typeof runMessageAction> | undefined;
 const providerStream = vi.fn<StreamFn>();
 const messageTools: AnyAgentTool[] = [];
 const messageExecutions: MockInstance<AnyAgentTool["execute"]>[] = [];
@@ -165,26 +165,6 @@ vi.doMock("../tools/message-tool-execution.js", async () => {
   const actual = await vi.importActual<typeof import("../tools/message-tool-execution.js")>(
     "../tools/message-tool-execution.js",
   );
-  const options = (input?: MessageToolOptions): MessageToolOptions => ({
-    ...input,
-    runMessageAction: (action) =>
-      runMessageAction({
-        ...action,
-        gateway: {
-          request: transport,
-          terminalSourceReplyReceiptOwner: "caller",
-          clientName: "gateway-client",
-          mode: "backend",
-        },
-      }),
-    getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-    resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
-      resolvedConfig,
-      diagnostics: [],
-      targetStatesByPath: {},
-      hadUnresolvedTargets: false,
-    }),
-  });
   const record = (tool: AnyAgentTool) => {
     messageTools.push(tool);
     messageExecutions.push(vi.spyOn(tool, "execute"));
@@ -195,11 +175,11 @@ vi.doMock("../tools/message-tool-execution.js", async () => {
     ...actual,
     createMessageTool: (input?: MessageToolOptions) => {
       beforeBuildMessage();
-      return record(actual.createMessageTool(options(input)));
+      return record(actual.createMessageTool(input));
     },
     createMessageToolAsync: async (input?: MessageToolOptions) => {
       beforeBuildMessage();
-      return record(await actual.createMessageToolAsync(options(input)));
+      return record(await actual.createMessageToolAsync(input));
     },
   };
 });
@@ -228,6 +208,18 @@ beforeEach(async () => {
   events.length = 0;
   transport.mockReset();
   providerStream.mockReset();
+  messageActionRunnerSpy = vi
+    .spyOn(messageActionRunner, "runMessageAction")
+    .mockImplementation((action) =>
+      runMessageAction({
+        ...action,
+        gateway: {
+          request: transport,
+          clientName: "gateway-client",
+          mode: "backend",
+        },
+      }),
+    );
   setActivePluginRegistry(registry);
 });
 
@@ -238,14 +230,19 @@ afterEach(async () => {
     try {
       await disposeAllSessionMcpRuntimes();
     } finally {
-      await state?.cleanup();
+      try {
+        await state?.cleanup();
+      } finally {
+        messageActionRunnerSpy?.mockRestore();
+        messageActionRunnerSpy = undefined;
+      }
     }
   }
 });
 
 describe("ordinary source reply across deferred plugin refresh", () => {
-  it.for(["confirmed", "not-dispatched"] as const)(
-    "preserves the real %s receipt when the runner rebuilds its message tool",
+  it.for(["confirmed", "not-dispatched", "ambiguous"] as const)(
+    "preserves %s delivery facts when the runner rebuilds its message tool",
     async (outcome, context) => {
       const sourceTurnId = `source-${outcome}`;
       const identity = {
@@ -266,10 +263,10 @@ describe("ordinary source reply across deferred plugin refresh", () => {
         tools: { codeMode: true, allow: ["message", "reload_runtime", "exec", "wait"] },
       };
       setRuntimeConfigSnapshot(config);
-      let entry: InternalSessionEntry = { sessionId: identity.sessionId, updatedAt: 1 };
+      const entry: InternalSessionEntry = { sessionId: identity.sessionId, updatedAt: 1 };
       await replaceSessionEntry(scope, entry);
       const operation = createReplyOperation({ ...identity, resetTriggered: false });
-      await using actor = createReplyRecoveryActorFixture({
+      await using actor = createReplyActorFixture({
         ...scope,
         operation,
         getSessionId: () => identity.sessionId,
@@ -284,48 +281,32 @@ describe("ordinary source reply across deferred plugin refresh", () => {
         target: { ...scope, sessionEntry: entry },
         updateMode: "none",
       });
-      const claim = createReplyRestartRecoveryClaimController({
-        ...scope,
-        sourceTurnId,
-        admissionRunId: identity.runId,
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        getEntry: () => entry,
-        getSessionId: () => identity.sessionId,
-        setEntry: (next) => {
-          entry = next;
-        },
-        acquireSessionActor: () => actor.acquireSessionActor(),
-        isRestartAbort: () => false,
-        resolveDeliveryContext: () => ({ channel: "refreshchat", to: "C123" }),
-        sourceReplyDeliveryMode: "message_tool_only",
-      });
-      expect(await claim.admitUserTurn(recorder)).toBe("admitted");
+      await actor.bind();
+      await recorder.persistApproved();
       expect(recorder.hasPersisted()).toBe(true);
-      expect(loadSessionEntry(scope)).toMatchObject({
-        restartRecoveryDeliveryRunId: identity.runId,
-        restartRecoveryDeliverySourceRunId: sourceTurnId,
-      });
 
       const started = createDeferred();
       const release = createDeferred();
       const parked = createDeferred();
       const physicalSend = vi.fn(() => ({ ok: true, messageId: "reply-1", toJid: "C123" }));
-      let firstCallId: string | undefined;
       let refreshOwner: ReturnType<typeof captureAgentPluginRuntimeRefresh> | undefined;
       transport.mockImplementation(async () => {
-        const current = loadSessionEntry(scope);
-        expect(current?.restartRecoveryDeliveryReceiptState).toBe("terminal-pending");
-        expect(current?.restartRecoveryDeliverySourceRunId).toBe(sourceTurnId);
         if (transport.mock.calls.length === 1) {
-          firstCallId = current?.restartRecoveryDeliveryToolCallId;
-          expect(firstCallId).toBeTypeOf("string");
-          // A confirmed send holds only its ACK; refusal never dispatches an effect.
-          const reply = outcome === "confirmed" ? physicalSend() : undefined;
+          // Hold the response after the effect; only a definite refusal never sends.
+          const reply = outcome !== "not-dispatched" ? physicalSend() : undefined;
           started.resolve();
           await release.promise;
           if (outcome === "not-dispatched") {
             events.push("transport:refused");
             throw new OutboundHandoffRejectedError(new Error("fixture refused before dispatch"));
+          }
+          if (outcome === "ambiguous") {
+            events.push("transport:unknown");
+            // An unstructured provider failure cannot prove whether dispatch happened.
+            throw Object.assign(new Error("fixture lost the reply after dispatch"), {
+              name: "GatewayClientRequestError",
+              gatewayCode: "UNAVAILABLE",
+            });
           }
           events.push("transport:acknowledged");
           return reply;
@@ -349,16 +330,9 @@ describe("ordinary source reply across deferred plugin refresh", () => {
         expect(attemptResults).toHaveLength(1);
         expect(attemptResults[0]?.terminal.kind).toBe("ok");
         expect(testing.activeRuns.size).toBe(0);
-        const current = loadSessionEntry(scope);
-        expect(current?.restartRecoveryDeliverySourceRunId).toBe(sourceTurnId);
-        if (outcome === "confirmed") {
-          expect(current?.restartRecoveryDeliveryReceiptState).toBe("delivered-terminal");
-          expect(current?.restartRecoveryDeliveryToolCallId).toBe(firstCallId);
-          expect(attemptResults[0]?.didSendViaMessagingTool).toBe(true);
-        } else {
-          expect(current?.restartRecoveryDeliveryReceiptState).toBeUndefined();
-          expect(current?.restartRecoveryDeliveryToolCallId).toBeUndefined();
-          expect(attemptResults[0]?.didSendViaMessagingTool).toBe(false);
+        expect(attemptResults[0]?.didSendViaMessagingTool).toBe(outcome === "confirmed");
+        if (outcome === "ambiguous") {
+          expect(events).toContain("transport:unknown");
         }
       };
       const sentForGeneration = new Set<number>();
@@ -404,7 +378,10 @@ describe("ordinary source reply across deferred plugin refresh", () => {
             parked.resolve();
           }
           call = { name: "wait", arguments: { runId: details.runId } };
-        } else if (!sentForGeneration.has(generation)) {
+        } else if (
+          !sentForGeneration.has(generation) &&
+          (generation === 1 || outcome === "not-dispatched")
+        ) {
           sentForGeneration.add(generation);
           const send =
             'message({ action: "send", target: "C123", message: "The result.", final: true })';
@@ -452,12 +429,9 @@ describe("ordinary source reply across deferred plugin refresh", () => {
             : [{ type: "text", text: "The result." }],
           stopReason: call ? "toolUse" : "stop",
         });
-        const stream = createAssistantMessageEventStream();
-        queueMicrotask(() => {
-          stream.push({ type: "done", reason: call ? "toolUse" : "stop", message });
-          stream.end();
+        return createQueuedAssistantStream((push) => {
+          push({ type: "done", reason: call ? "toolUse" : "stop", message });
         });
-        return stream;
       });
 
       const abort = new AbortController();
@@ -552,7 +526,7 @@ describe("ordinary source reply across deferred plugin refresh", () => {
         expect(attemptResults).toHaveLength(0);
         expect(refreshOwner?.isRequested()).toBe(true);
         expect(refreshOwner?.isPending()).toBe(false);
-        expect(physicalSend).toHaveBeenCalledTimes(outcome === "confirmed" ? 1 : 0);
+        expect(physicalSend).toHaveBeenCalledTimes(outcome !== "not-dispatched" ? 1 : 0);
         release.resolve();
         const result = await withinTest(running, context.signal);
         expect(result.meta.error).toBeUndefined();
@@ -566,20 +540,33 @@ describe("ordinary source reply across deferred plugin refresh", () => {
         });
         expect(messageTools, settlementDiagnostics).toHaveLength(2);
         expect(messageTools[1]).not.toBe(messageTools[0]);
-        expect(messageExecutions[1]).toHaveBeenCalledOnce();
-        const successorResult = await messageExecutions[1]?.mock.results[0]?.value;
-        if (outcome === "confirmed") {
-          expect(successorResult).toMatchObject({ details: { status: "already_delivered" } });
-        }
+        expect(messageExecutions[1]).toHaveBeenCalledTimes(outcome === "not-dispatched" ? 1 : 0);
         expect(events.indexOf("message:2:built")).toBeGreaterThan(
           events.indexOf("attempt:1:settled"),
         );
         expect(physicalSend).toHaveBeenCalledOnce();
-        expect(transport).toHaveBeenCalledTimes(outcome === "confirmed" ? 1 : 2);
-        expect(loadSessionEntry(scope)?.restartRecoveryDeliveryReceiptState).toBe(
-          "delivered-terminal",
-        );
-        expect(result.didSendViaMessagingTool).toBe(true);
+        expect(transport).toHaveBeenCalledTimes(outcome === "not-dispatched" ? 2 : 1);
+        if (outcome === "ambiguous") {
+          expect(result.didSendViaMessagingTool).toBe(false);
+          expect(result.didDeliverSourceReplyViaMessageTool).not.toBe(true);
+          expect(result.sourceReplyDelivered).not.toBe(true);
+          expect(result.sourceReplyDeliveryState).not.toBe("delivered");
+          expect(result.meta.agentMeta?.terminalReceipt?.sourceReplyDelivered).not.toBe(true);
+          expect(operation.sourceReplyDelivered).not.toBe(true);
+          for (const input of attemptInputs) {
+            expect(input.settled, settlementDiagnostics).toBeDefined();
+            expect(input.settled?.terminal, settlementDiagnostics).toBe("ok");
+            expect(input.settled?.didSendViaMessagingTool).not.toBe(true);
+            expect(input.settled?.didDeliverSourceReplyViaMessageTool).not.toBe(true);
+            expect(input.settled?.sourceReplyDelivered).not.toBe(true);
+            expect(input.settled?.sourceReplyDeliveryState).not.toBe("delivered");
+            expect(input.settled?.finalTargets).toBe(0);
+            expect(input.settled?.finalPayloads).toBe(0);
+            expect(input.settled?.operationSourceReplyDelivered).not.toBe(true);
+          }
+        } else {
+          expect(result.didSendViaMessagingTool).toBe(true);
+        }
         expect(
           loadTranscriptEventsSync(scope).filter((event) => {
             const message = asOptionalRecord(asOptionalRecord(event)?.message);
@@ -587,10 +574,12 @@ describe("ordinary source reply across deferred plugin refresh", () => {
           }),
         ).toHaveLength(1);
         expect(testing.activeRuns.size).toBe(0);
-        expect(
-          attemptResults.map((attempt) => attempt.terminal.kind),
-          settlementDiagnostics,
-        ).toEqual(["ok", "ok"]);
+        if (outcome !== "ambiguous") {
+          expect(
+            attemptResults.map((attempt) => attempt.terminal.kind),
+            settlementDiagnostics,
+          ).toEqual(["ok", "ok"]);
+        }
       } finally {
         release.resolve();
         abort.abort();

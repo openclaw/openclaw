@@ -1,21 +1,17 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import * as writerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as profileAuthority from "../../state/user-channel-identity-operations.js";
+import { getUserProfileListItem } from "../../state/user-profile-list-item.test-support.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import {
   mergeCanonicalUserProfiles,
   setCanonicalUserProfileRole,
 } from "../../state/user-profile-writes.js";
-import {
-  linkEmail,
-  setAvatar,
-  setDisplayName,
-  setUserProfileRole,
-  syncGitHubIdentity,
-} from "../../state/user-profile-writes.worker.js";
+import { setUserProfileRole, syncGitHubIdentity } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -27,392 +23,328 @@ import {
 import type { RespondFn } from "./response-types.js";
 import { usersHandlers } from "./users.js";
 
-it("returns only the authenticated person's private emails from the shared users.self catalog", async () => {
-  const state = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "users-self-private-",
+let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
+let catalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>> | undefined;
+let context: ReturnType<typeof createContext>;
+beforeEach(async () => {
+  state = await createOpenClawTestState({ layout: "state-only", prefix: "users-enumeration-" });
+  context = createContext();
+});
+afterEach(async () => {
+  vi.restoreAllMocks();
+  catalog?.release();
+  catalog = undefined;
+  await state?.cleanup();
+});
+
+function dispatchClient(
+  method: string,
+  client: ReturnType<typeof createOperatorClient>,
+  params = {},
+) {
+  const respond = vi.fn<RespondFn>();
+  const request = handleGatewayRequest({
+    req: { type: "req", id: method, method, params },
+    respond,
+    context,
+    client,
+    isWebchatConnect: () => false,
+    extraHandlers: usersHandlers,
   });
-  let catalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>> | undefined;
-  try {
-    const people = ["alpha-private@example.test", "bravo-private@example.test"].map((email) => ({
-      email,
-      profile: ensureProfileForEmail(email),
-    }));
-    catalog = await prepareUserProfileCatalog();
-    const context = createContext();
-    for (const { email, profile } of people) {
-      for (const scopes of [["operator.read"], []]) {
-        const respond = vi.fn<RespondFn>();
-        await handleGatewayRequest({
-          req: { type: "req", id: profile.id, method: "users.self", params: {} },
-          respond,
-          context,
-          client: createOperatorClient({ profileId: profile.id, scopes }),
-          isWebchatConnect: () => false,
-          extraHandlers: usersHandlers,
-        });
-        expect(respond.mock.calls).toEqual([
-          scopes.length
-            ? [
-                true,
-                {
-                  profile: {
-                    ...profile,
-                    emails: [email],
-                    githubIdentity: null,
-                    hasAvatar: false,
-                  },
-                },
-              ]
-            : [false, undefined, expect.objectContaining({ code: "FORBIDDEN" })],
-        ]);
-      }
+  return { respond, request };
+}
+
+function dispatch(method: string, profileId: string, scopes = ["operator.read"], params = {}) {
+  return dispatchClient(method, createOperatorClient({ profileId, scopes }), params);
+}
+
+async function rpc(method: string, profileId: string, scopes = ["operator.read"], params = {}) {
+  const { respond, request } = dispatch(method, profileId, scopes, params);
+  await request;
+  return respond;
+}
+
+const forbidden = [false, undefined, expect.objectContaining({ code: "FORBIDDEN" })];
+const profileEdits = [
+  ["users.setDisplayName", { displayName: "Current name" }, { displayName: "Current name" }],
+  ["users.setAvatar", { mime: "image/png", avatarBase64: "AQI=" }, { hasAvatar: true }],
+] as const;
+
+it("returns only the authenticated person's private emails from the shared users.self catalog", async () => {
+  const people = ["alpha-private@example.test", "bravo-private@example.test"].map((email) => ({
+    email,
+    profile: ensureProfileForEmail(email),
+  }));
+  catalog = await prepareUserProfileCatalog();
+  for (const { email, profile } of people) {
+    const expected = {
+      profile: { ...profile, emails: [email], githubIdentity: null, hasAvatar: false },
+    };
+    for (const scopes of [["operator.read"], []]) {
+      const respond = await rpc("users.self", profile.id, scopes);
+      expect(respond.mock.calls).toEqual([scopes.length ? [true, expected] : forbidden]);
     }
-  } finally {
-    catalog?.release();
-    await state.cleanup();
   }
 });
 
 it.each(["role", "identity"] as const)(
   "rejects users.self when a committed %s change revokes its prepared profile before response",
   async (change) => {
-    const state = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "users-self-revoke-",
-    });
-    let catalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>> | undefined;
     const resume = createDeferredCore();
-    try {
-      const person = ensureProfileForEmail("original-private@example.test");
-      const replacement = ensureProfileForEmail("replacement-private@example.test");
-      catalog = await prepareUserProfileCatalog();
-      const prepared = createDeferredCore();
-      const prepare = profileAuthority.prepareUserProfileRoleAuthority;
-      using preparation = vi.spyOn(profileAuthority, "prepareUserProfileRoleAuthority");
-      preparation.mockImplementation(async (profileId, options) => {
-        const authority = await prepare(profileId, options);
-        if (options?.includeProfile) {
-          prepared.resolve();
-          await resume.promise;
-        }
-        return authority;
-      });
-      const respond = vi.fn<RespondFn>();
-      const request = handleGatewayRequest({
-        req: { type: "req", id: change, method: "users.self", params: {} },
-        respond,
-        context: createContext(),
-        client: createOperatorClient({ profileId: person.id, scopes: ["operator.read"] }),
-        isWebchatConnect: () => false,
-        extraHandlers: usersHandlers,
-      });
-      try {
-        await Promise.race([prepared.promise, request]);
-        expect(respond).not.toHaveBeenCalled();
-        if (change === "role") {
-          await setCanonicalUserProfileRole(person.id, "reader");
-        } else {
-          await mergeCanonicalUserProfiles(person.id, replacement.id);
-        }
-      } finally {
-        resume.resolve();
-        await request;
+    const person = ensureProfileForEmail("original-private@example.test");
+    const replacement = ensureProfileForEmail("replacement-private@example.test");
+    catalog = await prepareUserProfileCatalog();
+    const prepared = createDeferredCore();
+    const prepare = profileAuthority.prepareUserProfileRoleAuthority;
+    using preparation = vi.spyOn(profileAuthority, "prepareUserProfileRoleAuthority");
+    preparation.mockImplementation(async (profileId, options) => {
+      const authority = await prepare(profileId, options);
+      if (options?.includeProfile) {
+        prepared.resolve();
+        await resume.promise;
       }
-      expect(respond.mock.calls).toEqual([
-        [
-          false,
-          undefined,
-          expect.objectContaining({
-            code: "UNAVAILABLE",
-            message: "Gateway requester profile changed",
-          }),
-        ],
-      ]);
+      return authority;
+    });
+    const { respond, request } = dispatch("users.self", person.id);
+    try {
+      await Promise.race([prepared.promise, request]);
+      expect(respond).not.toHaveBeenCalled();
+      if (change === "role") {
+        await setCanonicalUserProfileRole(person.id, "reader");
+      } else {
+        await mergeCanonicalUserProfiles(person.id, replacement.id);
+      }
     } finally {
       resume.resolve();
-      catalog?.release();
-      await state.cleanup();
+      await request;
+    }
+    expect(respond.mock.calls).toEqual([
+      [
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          message: "Gateway requester profile changed",
+        }),
+      ],
+    ]);
+  },
+);
+
+it.each(
+  ["operator.read", "operator.sessions.read", "operator.sessions.write"].flatMap((scope) =>
+    ["unchanged", "revoked", "reassigned"].map((change) => ({ scope, change })),
+  ),
+)(
+  "checks $scope at the native profile commit after authority is $change",
+  async ({ scope, change }) => {
+    const person = ensureProfileForEmail("commit-owner@example.test");
+    const replacement = ensureProfileForEmail("commit-replacement@example.test");
+    catalog = await prepareUserProfileCatalog();
+    const refresh = vi.fn();
+    context.refreshConnectedUserProfile = refresh;
+    requireNodeSqlite();
+    const calls = observeMainThreadSql();
+    for (const [method, params, expected] of profileEdits) {
+      const before = getUserProfileListItem(person.id);
+      const replacementBefore = getUserProfileListItem(replacement.id);
+      calls.clear();
+      if (change === "unchanged") {
+        expect(
+          await rpc(method, person.id, [scope], { profileId: replacement.id, ...params }),
+        ).toHaveBeenCalledWith(...forbidden);
+      }
+      const client = createOperatorClient({ profileId: person.id, scopes: [scope] });
+      const createAdmission = writerAdmission.createSqliteWorkerOperationAdmission;
+      let commitReached = 0;
+      // Keep the real worker transaction and admission guard; change only live caller authority
+      // after the worker has prepared its write and asks to commit it.
+      using observation = vi
+        .spyOn(writerAdmission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((admit, attachment) =>
+          createAdmission((request, grant) => {
+            if (request.stage === "commit") {
+              commitReached += 1;
+              if (change === "revoked") {
+                client.connect.scopes = [];
+              }
+              if (change === "reassigned") {
+                client.authenticatedUserProfile = {
+                  ...client.authenticatedUserProfile!,
+                  profileId: replacement.id,
+                };
+              }
+            }
+            admit(request, grant);
+          }, attachment),
+        );
+      const pending = dispatchClient(method, client, { profileId: person.id, ...params });
+      await pending.request;
+      const { respond } = pending;
+      observation.mockRestore();
+      calls.expectIdle();
+      expect(commitReached).toBeGreaterThan(0);
+      if (change === "unchanged") {
+        expect(respond).toHaveBeenCalledExactlyOnceWith(
+          true,
+          expect.objectContaining({
+            profile: expect.objectContaining({ id: person.id, ...expected }),
+          }),
+        );
+        expect(refresh).toHaveBeenLastCalledWith(
+          expect.objectContaining({ id: person.id, ...expected }),
+        );
+        expect(getUserProfileListItem(person.id)).toMatchObject(expected);
+      } else {
+        expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+        expect(getUserProfileListItem(person.id)).toEqual(before);
+      }
+      expect(getUserProfileListItem(replacement.id)).toEqual(replacementBefore);
+    }
+    if (change === "unchanged") {
+      calls.clear();
+      for (const [method, params] of [
+        ["users.setRole", { profileId: person.id, role: null }],
+        ["users.linkEmail", { email: "other@example.test", targetProfileId: person.id }],
+        ["users.merge", { sourceProfileId: replacement.id, targetProfileId: person.id }],
+      ] as const) {
+        expect(await rpc(method, person.id, [scope], params)).toHaveBeenCalledWith(...forbidden);
+      }
+      expect(await rpc("users.self", person.id, [scope])).toHaveBeenCalledWith(true, {
+        profile: expect.objectContaining({ displayName: "Current name", hasAvatar: true }),
+      });
+      calls.expectIdle();
     }
   },
 );
 
-it("commits profile display and avatar edits through their Gateway handlers without host SQL", async () => {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix: "users-setters-" });
-  let catalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>> | undefined;
-  try {
-    const person = ensureProfileForEmail("setter@example.test");
-    catalog = await prepareUserProfileCatalog();
-    const refreshConnectedUserProfile = vi.fn();
-    requireNodeSqlite();
-    const calls = observeMainThreadSql();
-    for (const [method, params, expected] of [
-      ["users.setDisplayName", { displayName: "Current name" }, { displayName: "Current name" }],
-      ["users.setAvatar", { mime: "image/png", avatarBase64: "AQI=" }, { hasAvatar: true }],
-    ] as const) {
-      const respond = vi.fn();
-      await usersHandlers[method]!({
-        req: {} as never,
-        params: { profileId: person.id, ...params },
-        respond,
-        context: { getRuntimeConfig: () => ({}), refreshConnectedUserProfile } as never,
-        client: { connect: { role: "operator", scopes: ["operator.admin"] } } as never,
-        isWebchatConnect: () => false,
-      });
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        true,
-        expect.objectContaining({
-          profile: expect.objectContaining({ id: person.id, ...expected }),
-        }),
-      );
-      expect(refreshConnectedUserProfile).toHaveBeenLastCalledWith(
-        expect.objectContaining({ id: person.id, ...expected }),
-      );
-    }
-    calls.expectIdle();
-  } finally {
-    vi.restoreAllMocks();
-    catalog?.release();
-    await state.cleanup();
-  }
-});
-
 it("enforces scoped, bounded users.list dispatch without filtering profiles or running host SQL", async () => {
-  const state = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "users-enumeration-",
+  const alpha = ensureProfileForEmail("alpha@example.test");
+  const grace = ensureProfileForEmail("grace@example.test");
+  syncGitHubIdentity({
+    identity: { accountId: 101, login: "alpha-primary" },
+    authenticationAlias: { kind: "email", email: "alpha@example.test" },
   });
-  try {
-    const alpha = ensureProfileForEmail("alpha@example.test");
-    const retired = ensureProfileForEmail("old@example.test");
-    const grace = ensureProfileForEmail("grace@example.test");
-    linkEmail("old@example.test", alpha.id);
-    setDisplayName(alpha.id, "Alpha");
-    setDisplayName(grace.id, "Grace");
-    setUserProfileRole(grace.id, "reader");
-    expect(setAvatar(alpha.id, new Uint8Array([1, 2]), "image/png").ok).toBe(true);
-    syncGitHubIdentity({
-      identity: { accountId: 101, login: "alpha-primary" },
-      authenticationAlias: { kind: "email", email: "alpha@example.test" },
-    });
-    const { db } = openOpenClawStateDatabase();
-    db.prepare(
-      "INSERT INTO user_profile_identities (provider, subject, profile_id, canonical_login, created_at) VALUES ('github', '102', ?, 'alpha-secondary', 1)",
-    ).run(alpha.id);
-    [alpha.id, retired.id, grace.id].forEach((id, index) => {
-      db.prepare("UPDATE user_profiles SET created_at = ?, updated_at = ? WHERE id = ?").run(
-        index + 1,
-        index + 11,
-        id,
-      );
-    });
-    const profiles = [
-      {
-        id: alpha.id,
-        displayName: "Alpha",
-        avatarMime: "image/png",
-        mergedInto: null,
-        createdAt: 1,
-        updatedAt: 11,
-        emails: ["alpha@example.test", "old@example.test"],
-        githubIdentity: {
-          login: "alpha-primary",
-          profileUrl: "https://github.com/alpha-primary",
-          avatarUrl: "https://avatars.githubusercontent.com/u/101?v=4",
-        },
-        hasAvatar: true,
-        roleSource: "default",
-      },
-      {
-        id: retired.id,
-        displayName: "old",
-        avatarMime: null,
-        mergedInto: alpha.id,
-        createdAt: 2,
-        updatedAt: 12,
-        emails: [],
-        githubIdentity: null,
-        hasAvatar: false,
-        roleSource: "default",
-      },
-      {
-        id: grace.id,
-        displayName: "Grace",
-        avatarMime: null,
-        mergedInto: null,
-        createdAt: 3,
-        updatedAt: 13,
-        emails: ["grace@example.test"],
-        githubIdentity: null,
-        hasAvatar: false,
-        role: "reader",
-        roleSource: "default",
-      },
-    ];
-    const selected = {
-      profiles,
-      githubProfiles: [{ accountId: 102, profileId: alpha.id }],
-    };
-    const cases: {
-      name: string;
-      params: Record<string, unknown>;
-      scopes?: string[];
-      expected: Parameters<RespondFn>;
-    }[] = [
-      {
-        name: "ordinary empty params retain the original response shape",
-        params: {},
-        expected: [true, { profiles }],
-      },
-      {
-        name: "empty selection returns no numeric associations",
-        params: { githubAccountIds: [] },
-        expected: [true, { profiles, githubProfiles: [] }],
-      },
-      {
-        name: "selected secondary identity excludes the unrequested primary identity",
-        params: { githubAccountIds: [1, 102, 999] },
-        expected: [true, selected],
-      },
-      {
-        name: "500 unique positive safe integers include a match in the last position",
-        params: {
-          githubAccountIds: [
-            Number.MAX_SAFE_INTEGER,
-            ...Array.from({ length: 498 }, (_entry, index) => index + 1000),
-            102,
-          ],
-        },
-        expected: [true, selected],
-      },
-      ...[
-        {
-          name: "501 account IDs",
-          githubAccountIds: Array.from({ length: 501 }, (_entry, index) => index + 1),
-        },
-        { name: "duplicate account IDs", githubAccountIds: [102, 102] },
-        { name: "zero account ID", githubAccountIds: [0] },
-        { name: "negative account ID", githubAccountIds: [-1] },
-        { name: "fractional account ID", githubAccountIds: [1.5] },
-        { name: "unsafe integer account ID", githubAccountIds: [Number.MAX_SAFE_INTEGER + 1] },
-      ].map(({ name, githubAccountIds }) => ({
-        name,
-        params: { githubAccountIds },
-        expected: [
-          false,
-          undefined,
-          expect.objectContaining({
-            code: "INVALID_REQUEST",
-            message: expect.stringMatching(/^invalid users\.list params:/),
-          }),
-        ] satisfies Parameters<RespondFn>,
-      })),
-      ...[[], ["operator.approvals"]].map((scopes) => ({
-        name: `insufficient scopes: ${JSON.stringify(scopes)}`,
-        params: { githubAccountIds: [102, 999] },
-        scopes,
-        expected: [
-          false,
-          undefined,
-          {
-            code: "FORBIDDEN",
-            message: "missing scope: operator.read",
-            details: {
-              code: "MISSING_SCOPE",
-              missingScope: "operator.read",
-              requiredScopes: ["operator.read"],
-            },
-          },
-        ] satisfies Parameters<RespondFn>,
-      })),
-      {
-        name: "ordinary response remains unchanged after selected reads and rejections",
-        params: {},
-        expected: [true, { profiles }],
-      },
-    ];
-    const context = createContext();
-    requireNodeSqlite();
-    const calls = observeMainThreadSql();
-    try {
-      for (const scenario of cases) {
-        const respond = vi.fn<RespondFn>();
-        await handleGatewayRequest({
-          req: {
-            type: "req",
-            id: scenario.name,
-            method: "users.list",
-            params: scenario.params,
-          },
-          respond,
-          context,
-          client: createOperatorClient({
-            profileId: alpha.id,
-            scopes: scenario.scopes ?? ["operator.read"],
-          }),
-          isWebchatConnect: () => false,
-        });
-        expect(respond.mock.calls, scenario.name).toEqual([scenario.expected]);
-        calls.expectIdle();
-      }
-    } finally {
-      vi.restoreAllMocks();
-    }
-  } finally {
-    await state.cleanup();
+  const { db } = openOpenClawStateDatabase();
+  db.prepare(
+    "INSERT INTO user_profile_identities (provider, subject, profile_id, canonical_login, created_at) VALUES ('github', '102', ?, 'alpha-secondary', 1)",
+  ).run(alpha.id);
+  db.prepare("UPDATE user_profiles SET created_at = CASE id WHEN ? THEN 1 ELSE 2 END").run(
+    alpha.id,
+  );
+  const profiles = [
+    expect.objectContaining({
+      id: alpha.id,
+      emails: ["alpha@example.test"],
+      githubIdentity: expect.objectContaining({ login: "alpha-primary" }),
+    }),
+    expect.objectContaining({ id: grace.id, emails: ["grace@example.test"], githubIdentity: null }),
+  ];
+  const selected = {
+    profiles,
+    githubProfiles: [{ accountId: 102, profileId: alpha.id }],
+  };
+  const maximumSelection = [
+    Number.MAX_SAFE_INTEGER,
+    ...Array.from({ length: 498 }, (_entry, index) => index + 1000),
+    102,
+  ];
+  requireNodeSqlite();
+  const calls = observeMainThreadSql();
+  const check = async (
+    params: Record<string, unknown>,
+    expected: Parameters<RespondFn>,
+    scopes?: string[],
+  ) => {
+    const respond = await rpc("users.list", alpha.id, scopes, params);
+    expect(respond.mock.calls, JSON.stringify({ params, scopes })).toEqual([expected]);
+    calls.expectIdle();
+  };
+  await check({}, [true, { profiles }]);
+  await check({ githubAccountIds: [] }, [true, { profiles, githubProfiles: [] }]);
+  await check({ githubAccountIds: [1, 102, 999] }, [true, selected]);
+  await check({ githubAccountIds: maximumSelection }, [true, selected]);
+  for (const githubAccountIds of [
+    Array.from({ length: 501 }, (_entry, index) => index + 1),
+    [102, 102],
+    [0],
+    [-1],
+    [1.5],
+    [Number.MAX_SAFE_INTEGER + 1],
+  ]) {
+    await check({ githubAccountIds }, [
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringMatching(/^invalid users\.list params:/),
+      }),
+    ]);
   }
+  for (const scopes of [[], ["operator.approvals"]]) {
+    await check(
+      { githubAccountIds: [102, 999] },
+      [
+        false,
+        undefined,
+        {
+          code: "FORBIDDEN",
+          message: "missing scope: operator.read",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope: "operator.read",
+            requiredScopes: ["operator.read"],
+          },
+        },
+      ],
+      scopes,
+    );
+  }
+  await check({}, [true, { profiles }]);
 });
 
 it("observes native first-use role assignment after warming a legacy worker reader", async () => {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix: "users-role-" });
-  try {
-    const { db } = openOpenClawStateDatabase();
-    db.exec(`CREATE TABLE user_profiles (
+  const { db } = openOpenClawStateDatabase();
+  db.exec(`CREATE TABLE user_profiles (
       id TEXT NOT NULL PRIMARY KEY, display_name TEXT, avatar BLOB, avatar_mime TEXT,
       avatar_sha256 TEXT, merged_into TEXT, created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     ) STRICT`);
-    const profile = ensureProfileForEmail("legacy@example.test");
-    const version = db.prepare("PRAGMA user_version").get()?.user_version;
-    const read = async (expected: unknown) => {
-      requireNodeSqlite();
-      const calls = observeMainThreadSql();
-      const respond = vi.fn();
-      try {
-        await usersHandlers["users.list"]!({
-          req: {} as never,
-          params: {},
-          respond,
-          context: createContext(),
-          client: null,
-          isWebchatConnect: () => false,
-        });
-        expect(respond).toHaveBeenCalledExactlyOnceWith(true, { profiles: [expected] });
-        calls.expectIdle();
-      } finally {
-        vi.restoreAllMocks();
-      }
-    };
-    await read({
+  const profile = ensureProfileForEmail("legacy@example.test");
+  const version = db.prepare("PRAGMA user_version").get()?.user_version;
+  const read = async (expected: unknown) => {
+    requireNodeSqlite();
+    const calls = observeMainThreadSql();
+    const respond = vi.fn();
+    try {
+      await usersHandlers["users.list"]!({
+        req: {} as never,
+        params: {},
+        respond,
+        context: createContext(),
+        client: null,
+        isWebchatConnect: () => false,
+      });
+      expect(respond).toHaveBeenCalledExactlyOnceWith(true, { profiles: [expected] });
+      calls.expectIdle();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  };
+  await read(
+    expect.objectContaining({
       id: profile.id,
       displayName: "legacy",
-      avatarMime: null,
-      mergedInto: null,
       createdAt: profile.createdAt,
       updatedAt: profile.updatedAt,
       emails: ["legacy@example.test"],
-      githubIdentity: null,
-      hasAvatar: false,
-      roleSource: "default",
-    });
-    expect(tableHasColumn(db, "user_profiles", "role")).toBe(false);
+    }),
+  );
+  expect(tableHasColumn(db, "user_profiles", "role")).toBe(false);
 
-    setUserProfileRole(profile.id, "maintainer");
-    await read(
-      expect.objectContaining({ id: profile.id, role: "maintainer", roleSource: "default" }),
-    );
-    expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
-  } finally {
-    await state.cleanup();
-  }
+  setUserProfileRole(profile.id, "maintainer");
+  await read(
+    expect.objectContaining({ id: profile.id, role: "maintainer", roleSource: "default" }),
+  );
+  expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
 });

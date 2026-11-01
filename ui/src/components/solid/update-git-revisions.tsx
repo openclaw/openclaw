@@ -1,12 +1,16 @@
 import { createMemo, Show } from "solid-js";
 import type { UpdateAvailable, UpdateScheduleState } from "../../api/types.ts";
 import { getUpdateGitRevisions } from "../../app/update-schedule-projection.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerUpdateActionsEnglish } from "../../i18n/locales/en-update-actions.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../styles/update-git-revisions.css";
+
+registerEnglishCatalog(registerUpdateActionsEnglish);
 
 export function UpdateGitRevisions(props: {
   schedule: UpdateScheduleState | null | undefined;
   updateAvailable: UpdateAvailable | null | undefined;
+  compareLinkRef?: (element: HTMLAnchorElement) => void;
 }) {
   const revisions = createMemo(() => getUpdateGitRevisions(props.schedule, props.updateAvailable));
   return (
@@ -26,7 +30,7 @@ export function UpdateGitRevisions(props: {
           </span>
           <Show when={value().compareUrl}>
             {(url) => (
-              <a href={url()} target="_blank" rel="noopener noreferrer">
+              <a ref={props.compareLinkRef} href={url()} target="_blank" rel="noopener noreferrer">
                 {t("updates.target.viewChanges")} <span aria-hidden="true">↗</span>
               </a>
             )}

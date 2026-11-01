@@ -1,35 +1,44 @@
+import { symlinkSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterAll, expect, it } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterAll, expect, it, onTestFinished } from "vitest";
 import { isRecordedModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import {
   withSessionCompactionPersistenceAsync,
-  type CommittedCompactionAppend,
+  type CommittedCompactionBoundary,
   type PreparedCompactionAppend,
   type CompactionAppendPersistenceAsync,
 } from "../../agents/sessions/session-compaction-persistence.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { openOpenClawAgentSqliteWorkerStoreV2 } from "../../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { assertCompactionPathAlias } from "./compaction-pathalias.test-support.js";
+import { sessionNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
-  persistCompactionBoundaryWithSessionEntrySync,
   persistCompactionBoundaryWithSessionEntryAsync,
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
+import { applySessionEntryOperation } from "./session-accessor.sqlite-entry.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import type { SessionMetadataWorkerOperations } from "./session-manager-write-contract.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
@@ -73,7 +82,7 @@ async function seedCompaction(
   return { manager, keptId, persist, compact };
 }
 
-type CompactionScope = Parameters<typeof persistCompactionBoundaryWithSessionEntrySync>[0];
+type CompactionScope = Parameters<typeof persistCompactionBoundaryWithSessionEntryAsync>[0];
 const byteLatch = (scope: CompactionScope) => ({
   activeBytes: 2048,
   sessionId: scope.sessionId,
@@ -108,30 +117,181 @@ function expectRolledBack(
   expect(loadSessionEntry(scope)?.transcriptByteCompactionLatch).toBeUndefined();
 }
 
-it("retains intervening accounting writes and publishes a usable transcript version", async () => {
-  const scope = sessionScope("successive-compactions", "successive-compactions");
-  const { manager, compact } = await seedCompaction(scope);
-  await compact();
-  await upsertSessionEntryCore(scope, {
-    ...loadSessionEntry(scope)!,
-    compactionCount: 7,
-    label: "preserve this metadata",
+it.each([undefined, "different store", "changed writer"] as const)(
+  "compacts through a symlinked state root (refusal=%s)",
+  async (refusal) => {
+    const canonical = sessionScope("symlink-compaction");
+    const alias = path.join(sessionDirs.make(), "state");
+    symlinkSync(canonical.env!.OPENCLAW_STATE_DIR, alias, "junction");
+    const scope = {
+      ...canonical,
+      env: { OPENCLAW_STATE_DIR: alias },
+      storePath: path.join(alias, "sessions.json"),
+    };
+    await assertCompactionPathAlias(scope, { ...canonical, env: canonical.env! }, refusal);
+  },
+);
+
+it.each([false, true])(
+  "fuses summary accounting and intervening metadata (incognito=%s)",
+  async (incognito) => {
+    const scope = sessionScope(
+      incognito ? "dashboard:incognito-successive-compactions" : "successive-compactions",
+      "successive-compactions",
+    );
+    if (incognito) {
+      onTestFinished(() => {
+        memorySessionActorOwners.closeDatabase({
+          agentId: scope.agentId,
+          path: resolveIncognitoOpenClawAgentSqlitePath(scope),
+        });
+      });
+    }
+    const { manager, compact } = await seedCompaction(scope, incognito ? { incognito: true } : {});
+    await compact();
+    await upsertSessionEntryCore(scope, {
+      ...loadSessionEntry(scope)!,
+      compactionCount: 7,
+      label: "preserve this metadata",
+    });
+    let committed: CommittedCompactionBoundary | undefined;
+    const boundaryId = await compact(async (prepared) => {
+      committed = await persistCompactionBoundaryWithSessionEntryAsync(scope, {
+        prepared,
+        tokensAfter: 45,
+        transcriptByteCompactionLatch: null,
+      });
+      return committed;
+    });
+    const receipt = expectDefined(committed, "Compaction must return its committed accounting");
+    expect(receipt.entry).toMatchObject({
+      compactionCount: 8,
+      label: "preserve this metadata",
+      totalTokens: 45,
+      totalTokensFresh: true,
+    });
+    expect(receipt.entry.transcriptByteCompactionLatch).toBeUndefined();
+    expect(loadSessionEntry(scope)).toEqual(receipt.entry);
+
+    // A recap without a final estimate must invalidate the provisional tokens without recounting.
+    const corrected = await applySessionEntryOperation(
+      scope,
+      { kind: "compaction-accounting", accounting: { amount: 0, tokensAfter: null } },
+      { skipMaintenance: true },
+    );
+    expect(corrected).toMatchObject({ compactionCount: 8, totalTokensFresh: false });
+    expect(corrected?.totalTokensVersion).toBeUndefined();
+    const nextId = await manager.appendMessageAsync({
+      role: "user",
+      content: "next",
+      timestamp: 2,
+    });
+    expect(loadSessionEntry(scope)).toMatchObject({
+      compactionCount: 8,
+      label: "preserve this metadata",
+    });
+    expect((await loadTranscriptEvents(scope)).slice(-2)).toMatchObject([
+      { id: boundaryId, type: "compaction" },
+      { id: nextId, type: "message", parentId: boundaryId },
+    ]);
+    expect((await SessionManager.openAsync(scope)).getBranch()).toEqual(manager.getBranch());
+  },
+);
+
+it.each(["explicit", "ambient"] as const)(
+  "rolls back the boundary and accounting when %s authority is revoked at commit",
+  async (binding) => {
+    const scope = sessionScope("compaction-authority-at-commit", "session", binding === "explicit");
+    const { compact, keptId } = await seedCompaction(scope);
+    const before = loadTranscriptEventsSync(scope);
+    let revoked = false;
+    const ownerClosed = new Error("compaction authority revoked");
+    const assertCurrent = () => {
+      if (revoked) {
+        throw ownerClosed;
+      }
+    };
+    const observed = sqliteWorkerOwnerProbe.admission(admission, (request, grant, callback) => {
+      if (
+        request.stage === "commit" &&
+        isRecord(request.facts) &&
+        request.facts.kind === "session-manager-authority"
+      ) {
+        revoked = true;
+      }
+      callback(request, grant);
+    });
+    try {
+      const pending =
+        binding === "explicit"
+          ? compact((prepared) =>
+              persistCompactionBoundaryWithSessionEntryAsync(
+                scope,
+                { prepared, tokensAfter: 45, transcriptByteCompactionLatch: null },
+                assertCurrent,
+              ),
+            )
+          : withOwnedSessionTranscriptWrites(
+              {
+                sessionTarget: scope,
+                assertCommitAllowed: assertCurrent,
+                withTranscriptWrite: async (run) => await run(),
+              },
+              () =>
+                persistCompactionBoundaryWithSessionEntryAsync(scope, {
+                  prepared: preparedBoundary(scope, keptId, "prepared-compaction"),
+                  transcriptByteCompactionLatch: byteLatch(scope),
+                }),
+            );
+      await expect(pending).rejects.toThrow("compaction authority revoked");
+      expect(revoked).toBe(true);
+    } finally {
+      observed.mockRestore();
+    }
+    expectRolledBack(scope, before);
+  },
+);
+
+it("recovers both transcript and accounting after a worker crash before compaction COMMIT", async () => {
+  const scope = sessionScope("compaction-crash-before-commit");
+  const { manager, keptId } = await seedCompaction(scope);
+  const initialEntries = manager.getEntries();
+  const before = loadTranscriptEventsSync(scope);
+  const worker = await openOpenClawAgentSqliteWorkerStoreV2<SessionMetadataWorkerOperations>(
+    toDatabaseOptions(resolveSqliteTranscriptScope(scope)),
+    { version: 2, assertCurrent() {} },
+    {
+      moduleUrl: resolveRuntimeWorkerUrl(sessionNativeProcessEntrypoints.compactionCrash),
+      input: undefined,
+    },
+  );
+  const { env: _env, ...target } = scope;
+  const prepared = preparedBoundary(target, keptId, "interrupted-compaction");
+  try {
+    await expect(
+      worker.execute(
+        {
+          type: "session.transcript.compactionBoundary",
+          input: { scope: target, prepared, tokensAfter: 45, transcriptByteCompactionLatch: null },
+        },
+        () => {},
+      ),
+    ).rejects.toMatchObject({
+      code: "outcome-unknown",
+      cause: expect.objectContaining({ message: "SQLite worker exited with code 92" }),
+    });
+  } finally {
+    await worker.close();
+  }
+  expect((await SessionManager.openAsync(scope)).getEntries()).toEqual(initialEntries);
+  expectRolledBack(scope, before);
+  const recovered = await persistCompactionBoundaryWithSessionEntryAsync(scope, {
+    prepared: { ...prepared, scope },
+    tokensAfter: 45,
+    transcriptByteCompactionLatch: null,
   });
-  const boundaryId = await compact();
-  const nextId = await manager.appendMessageAsync({
-    role: "user",
-    content: "next",
-    timestamp: 2,
-  });
-  expect(loadSessionEntry(scope)).toMatchObject({
-    compactionCount: 8,
-    label: "preserve this metadata",
-  });
-  expect(loadTranscriptEventsSync(scope).slice(-2)).toMatchObject([
-    { id: boundaryId, type: "compaction" },
-    { id: nextId, type: "message", parentId: boundaryId },
-  ]);
-  expect((await SessionManager.openAsync(scope)).getBranch()).toEqual(manager.getBranch());
+  expect(recovered.entry).toMatchObject({ compactionCount: 1, totalTokens: 45 });
+  expect(loadSessionEntry(scope)).toEqual(recovered.entry);
 });
 
 it("retains a committed receipt when accounting retargets the manager before publication", async () => {
@@ -143,7 +303,7 @@ it("retains a committed receipt when accounting retargets the manager before pub
   };
   const { manager, compact, persist } = await seedCompaction(scope);
   await upsertSessionEntryCore(replacement, { sessionId: replacement.sessionId, updatedAt: 1 });
-  let committed: CommittedCompactionAppend | undefined;
+  let committed: Awaited<ReturnType<typeof persist>> | undefined;
   const pending = compact(async (prepared) => {
     committed = await persist(prepared);
     // The independent retarget must not inherit the compaction's physical writer admission.
@@ -306,9 +466,8 @@ it("rolls back accounting when the prepared boundary identity already exists", a
   };
   const { keptId } = await seedCompaction(scope, expected);
   const before = loadTranscriptEventsSync(scope);
-
-  expect(() =>
-    persistCompactionBoundaryWithSessionEntrySync(
+  await expect(
+    persistCompactionBoundaryWithSessionEntryAsync(
       {
         ...scope,
         expectedLifecycleRevision: expected.lifecycleRevision,
@@ -319,35 +478,9 @@ it("rolls back accounting when the prepared boundary identity already exists", a
         transcriptByteCompactionLatch: byteLatch(scope),
       },
     ),
-  ).toThrow(`Session transcript entry was not persisted: ${keptId}: transcript-event-not-appended`);
-
-  expectRolledBack(scope, before);
-});
-
-it("rolls back when the admitted writer rejects the appended boundary", async () => {
-  const scope = sessionScope("compaction-boundary-owner", "session", false);
-  const { keptId } = await seedCompaction(scope);
-  const before = loadTranscriptEventsSync(scope);
-  const ownerClosed = new Error("compaction owner closed");
-
-  await expect(
-    withOwnedSessionTranscriptWrites(
-      {
-        sessionTarget: scope,
-        assertCommitAllowed: () => {
-          if (loadTranscriptEventsSync(scope).length > before.length) {
-            throw ownerClosed;
-          }
-        },
-        withTranscriptWrite: async (run) => await run(),
-      },
-      async () =>
-        persistCompactionBoundaryWithSessionEntrySync(scope, {
-          prepared: preparedBoundary(scope, keptId, "prepared-compaction"),
-          transcriptByteCompactionLatch: byteLatch(scope),
-        }),
-    ),
-  ).rejects.toBe(ownerClosed);
+  ).rejects.toThrow(
+    `Session transcript entry was not persisted: ${keptId}: transcript-event-not-appended`,
+  );
 
   expectRolledBack(scope, before);
 });

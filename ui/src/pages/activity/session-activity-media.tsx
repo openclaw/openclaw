@@ -1,4 +1,15 @@
-import { createEffect, createSignal, onSettled, untrack } from "solid-js";
+import {
+  createDeferred,
+  createEffect,
+  createMemo,
+  createSignal,
+  Errored,
+  isPending,
+  latest,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import type { ArtifactsListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
@@ -9,11 +20,12 @@ import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { observeIntersection } from "../../lib/reactive/observers.ts";
 import { ChatImageLightbox } from "../chat/components/chat-image-lightbox-view.tsx";
-import { MessageImages } from "../chat/components/chat-message-images-solid.tsx";
+import { MessageImages } from "../chat/components/chat-message-deferred.tsx";
 import {
   assistantMediaPolicyKey,
-  releaseChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
   type ImageBlock,
 } from "../chat/components/chat-message-media.ts";
 import "./session-activity-media.css";
@@ -24,6 +36,7 @@ type ImageEntry = {
   images: ImageBlock[];
   loaded: boolean;
   pending?: Promise<void>;
+  read?: { promise: Promise<void> };
   cursor?: string;
   error?: boolean;
   omitted?: boolean;
@@ -93,10 +106,21 @@ export type ActivitySessionMediaProps = {
 };
 
 export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
+  return (
+    <Show when={props.context.gateway} keyed>
+      {(gateway) => SessionMedia(gateway, props)}
+    </Show>
+  );
+}
+
+function SessionMedia(
+  sourceGateway: ApplicationContext["gateway"],
+  props: ActivitySessionMediaProps,
+) {
   let host!: HTMLElement;
+  const mediaOwner = {};
   const [revision, setRevision] = createSignal(0);
   let visible = false;
-  let observer: IntersectionObserver | undefined;
   let entry: ImageEntry | undefined;
   let settledEntry: ImageEntry | undefined;
   let displayedImages: ImageBlock[] = [];
@@ -144,7 +168,7 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
       settledEntry = undefined;
       displayedImages = [];
       closeImage(false);
-      releaseChatMediaResourceSubscriber(refresh);
+      releaseChatMediaResourceOwner(mediaOwner);
       boundImageIdentity = identity;
     }
     if (nextOwner !== owner || nextKey !== key) {
@@ -266,6 +290,15 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
         target.pending = undefined;
         refresh();
       });
+    target.read = {
+      promise: target.pending.then(() => {
+        if (target.error) {
+          throw new Error(t("activity.images.failed"));
+        }
+      }),
+    };
+    // The shared cache can outlive a visible reader.
+    void target.read.promise.catch(() => undefined);
     refresh();
   };
 
@@ -291,7 +324,7 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
         settings: { token: gateway.connection.token },
         password: gateway.connection.password,
       }),
-      onRequestUpdate: refresh,
+      mediaOwner,
       onRequestOpenImage: () => ++imageRequest,
       onOpenImage: (item: ImageLightboxItem, version?: number) => {
         if (
@@ -327,13 +360,7 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
         ),
     };
   }
-  // The projection is seeded once; its source follows the tracked effect below.
-  const gatewayProjection = projectGateway(untrack(() => props.context.gateway));
-  // Keep the Gateway observer attached to the presented connection owner.
-  createEffect(
-    () => props.context.gateway,
-    (source) => gatewayProjection.replaceSource(source),
-  );
+  const gatewayProjection = projectGateway(sourceGateway);
   // Synchronize the viewport-gated artifact requests with their Gateway/session scope.
   createEffect(
     () => [
@@ -346,29 +373,34 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
     refresh,
   );
   onSettled(() => {
+    let stopObserving: (() => void) | undefined;
     // Visibility is required before transcript discovery; never fall back to an eager scan.
     if (typeof IntersectionObserver !== "undefined") {
-      observer = new IntersectionObserver(
+      stopObserving = observeIntersection(
+        [host],
         (entries) => {
           visible = entries.some((observation) => observation.isIntersecting);
           refresh();
         },
         { rootMargin: "200px" },
       );
-      observer.observe(host);
     }
     return () => {
       disposed = true;
-      observer?.disconnect();
+      stopObserving?.();
       visible = false;
       closeImage(false);
-      releaseChatMediaResourceSubscriber(refresh);
+      releaseChatMediaResourceOwner(mediaOwner);
     };
   });
   const displayEntry = () => {
     revision();
     return owner && props.context.gateway.snapshot.client ? (settledEntry ?? entry) : undefined;
   };
+  const request = createMemo(() => displayEntry()?.read);
+  // Gallery/cache changes stay live while pagination readiness deliberately lags.
+  const read = createDeferred(() => request()?.promise);
+  const failed = createMemo(() => Boolean(displayEntry()?.error));
   const hasImages = () => {
     revision();
     return displayedImages.length > 0;
@@ -382,16 +414,36 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
     return Boolean(value?.error || value?.omitted || (!hasImages() && value?.cursor));
   };
   const loadDisplayed = () => load(displayEntry());
-  const loadLabel = () => t(displayEntry()?.pending ? "common.loading" : "activity.images.older");
-  const olderButton = (
-    <button
-      class="activity-feed__note-action"
-      disabled={Boolean(displayEntry()?.pending)}
-      onClick={loadDisplayed}
-    >
-      {loadLabel()}
-    </button>
-  );
+  function OlderButton() {
+    return (
+      <Loading
+        on={failed()}
+        fallback={
+          <button class="activity-feed__note-action" disabled onClick={loadDisplayed}>
+            {t("common.loading")}
+          </button>
+        }
+      >
+        <Errored
+          fallback={
+            <button class="activity-feed__note-action" onClick={loadDisplayed}>
+              {t("common.retry")}
+            </button>
+          }
+        >
+          {(latest(read), null)}
+          <button
+            class="activity-feed__note-action"
+            disabled={isPending(read)}
+            onClick={loadDisplayed}
+          >
+            {t(isPending(read) ? "common.loading" : "activity.images.older")}
+          </button>
+        </Errored>
+      </Loading>
+    );
+  }
+  const olderButton = <OlderButton />;
   const galleryImages = () => {
     revision();
     return displayedImages;
@@ -414,16 +466,10 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
           {showNote() && (
             <div class="activity-feed__note">
               {displayEntry()?.omitted && <span>{t("activity.images.incomplete")}</span>}
-              {displayEntry()?.error && <span role="status">{t("activity.images.failed")}</span>}
-              {(displayEntry()?.error || (!hasImages() && older())) && (
-                <button
-                  class="activity-feed__note-action"
-                  disabled={Boolean(displayEntry()?.pending)}
-                  onClick={loadDisplayed}
-                >
-                  {displayEntry()?.error ? t("common.retry") : loadLabel()}
-                </button>
-              )}
+              <Errored fallback={<span role="status">{t("activity.images.failed")}</span>}>
+                <Loading>{(latest(read), null)}</Loading>
+              </Errored>
+              {(displayEntry()?.error || (!hasImages() && older())) && <OlderButton />}
             </div>
           )}
         </div>

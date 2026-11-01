@@ -1,9 +1,10 @@
-// Gateway method/event catalog.
 // Lists advertised core, auxiliary, channel plugin methods, and websocket events.
 import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
 import { listCoreAdvertisedGatewayMethodNames } from "./methods/core-method-policy.js";
 
-function listChannelGatewayMethods(): string[] {
+/** Returns the de-duplicated gateway method catalog advertised through method-list APIs. */
+export function listGatewayMethods(): string[] {
+  const coreMethods = listCoreAdvertisedGatewayMethodNames();
   const methods: string[] = [];
   for (const plugin of listLoadedChannelPlugins()) {
     // Plugins may still expose legacy names while newer plugins expose descriptors.
@@ -13,12 +14,5 @@ function listChannelGatewayMethods(): string[] {
       methods.push(descriptor.name);
     }
   }
-  return methods;
-}
-
-/** Returns the de-duplicated gateway method catalog advertised through method-list APIs. */
-export function listGatewayMethods(): string[] {
-  return Array.from(
-    new Set([...listCoreAdvertisedGatewayMethodNames(), ...listChannelGatewayMethods()]),
-  );
+  return Array.from(new Set([...coreMethods, ...methods]));
 }

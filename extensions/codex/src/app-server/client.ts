@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { coerceErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
+import {
+  coerceErrorMessage,
+  materializeErrorStack,
+  toStringifiedError,
+} from "openclaw/plugin-sdk/error-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
 import {
@@ -11,6 +15,10 @@ import type {
   CodexCatalogDecodeResult,
   CodexClientRequestAttempt,
 } from "./client-catalog-response.js";
+import {
+  readCodexCatalogDecodeRoute,
+  type CodexCatalogDecodeRoute,
+} from "./client-catalog-route.js";
 import { CodexCatalogWorker, codexCatalogRequestId } from "./client-catalog-worker.js";
 import {
   appendBoundedTail,
@@ -28,8 +36,6 @@ import { parseCodexAppServerMessage } from "./client-message-decoder.js";
 import {
   listenCodexAppServerLines,
   createCodexAppServerMessageWriter,
-  readCodexCatalogDecodeRoute,
-  type CodexCatalogDecodeRoute,
 } from "./client-message-frames.js";
 import {
   CodexAppServerNotifications,
@@ -195,7 +201,9 @@ export class CodexAppServerClient {
     child.once("exit", (code, signal) => {
       this.transportExited = true;
       this.closeWithError(
-        child.startupFailure?.error ?? buildCodexAppServerExitError(code, signal, this.stderrTail),
+        child.startupFailure?.error ??
+          child.exitError ??
+          buildCodexAppServerExitError(code, signal, this.stderrTail),
       );
     });
     // Guard against unhandled EPIPE / write-after-close errors on the stdin
@@ -253,7 +261,8 @@ export class CodexAppServerClient {
     }
   }
 
-  static fromTransportForTests(child: CodexAppServerTransport): CodexAppServerClient {
+  /** Wraps an externally owned transport, including worker duplex connections. */
+  static fromTransport(child: CodexAppServerTransport): CodexAppServerClient {
     return new CodexAppServerClient(child);
   }
 
@@ -516,12 +525,21 @@ export class CodexAppServerClient {
   }): Promise<CodexAppServerCloseResult> {
     this.markClosed(new Error("codex app-server client is closed"));
     const [result] = await Promise.all([
-      closeCodexAppServerTransportAndWait(this.child, options),
+      closeCodexAppServerTransportAndWait(this.child, {
+        ...options,
+        gracefulExit: Boolean(this.child.pid) && !this.nativeExecutionObserved,
+      }),
       this.waitForCloseWork(),
     ]);
     // Codex can discard terminal handles before OS cleanup. Later ancestry
     // containment cannot discharge a command whose descendants already reparented.
-    return this.nativeExecutionObserved ? { ...result, cleanup: "uncertain" } : result;
+    if (this.nativeExecutionObserved) {
+      return { ...result, cleanup: "uncertain" };
+    }
+    if (result.cleanup === "terminated") {
+      embeddedAgentLog.warn("Codex app-server required forced shutdown; process cleanup confirmed");
+    }
+    return result;
   }
 
   /** Joins local settlement already started by close without changing transport policy. */
@@ -645,6 +663,7 @@ export class CodexAppServerClient {
     if (this.markClosed(error)) {
       closeCodexAppServerTransport(this.child, {
         drainStdio: !this.initialized && this.child.startupFailure !== undefined,
+        gracefulExit: Boolean(this.child.pid) && !this.nativeExecutionObserved,
       });
     }
   }
@@ -655,6 +674,7 @@ export class CodexAppServerClient {
     }
     this.closed = true;
     closeCodexCatalogClientSource(this);
+    materializeErrorStack(error);
     this.closeError = error;
     this.closeMessageReader();
     this.catalogWorkerClosed = this.catalogWorker.close(error);

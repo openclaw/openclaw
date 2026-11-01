@@ -276,9 +276,6 @@ async function runNewAppFlow(params: {
   })) as "allowlist" | "open" | "disabled";
 
   const configProgress = prompter.progress(t("wizard.feishu.configuring"));
-  await new Promise((resolve) => {
-    setTimeout(resolve, 50);
-  });
 
   next = patchFeishuConfig(next, targetAccountId, {
     ...(appId && appSecret ? { appId, appSecret, connectionMode: "websocket" } : {}),

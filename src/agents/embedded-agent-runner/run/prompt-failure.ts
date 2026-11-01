@@ -5,11 +5,8 @@ import {
   buildAgentRunTerminalOutcomeFromAttempt,
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
-import {
-  classifyFailoverReason,
-  parseImageSizeError,
-  pickFallbackThinkingLevel,
-} from "../../embedded-agent-helpers.js";
+import { parseImageSizeError } from "../../embedded-agent-helpers/image-errors.js";
+import { pickFallbackThinkingLevel } from "../../embedded-agent-helpers/thinking.js";
 import {
   coerceToFailoverError,
   describeFailoverError,
@@ -19,7 +16,8 @@ import {
   isNonProviderRuntimeCoordinationError,
   resolveFailoverStatus,
 } from "../../failover-error.js";
-import { classifyRateLimitWindow } from "../../failover/retry-evidence.js";
+import { classifyFailoverReason } from "../../failover/classify.js";
+import { classifyRateLimitWindow, resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 import type { FailoverReason } from "../../failover/signal.js";
 import { resolveSessionSuspensionReason } from "../../session-suspension.js";
 import { log } from "../logger.js";
@@ -257,6 +255,11 @@ export async function handleEmbeddedPromptFailure(input: {
           profileId: failedProfileId,
           reason: promptProfileFailureReason,
           modelId: preparedRuntime.modelId,
+          retryAfterMs: resolveRetryAfterMs(
+            formatErrorMessage(terminal.promptError),
+            Date.now(),
+            terminal.promptError,
+          ),
         })
         .catch((error: unknown) => {
           log.warn(`prompt profile failure mark failed: ${String(error)}`);

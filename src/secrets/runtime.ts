@@ -41,7 +41,7 @@ import {
   mergeSecretsRuntimeEnv,
   resolveRefreshAgentDirs,
 } from "./runtime-fast-path.js";
-import { mergeProviderAuthRuntimeWarnings } from "./runtime-provider-auth-warnings.js";
+import type { SecretResolverWarning } from "./runtime-shared.js";
 import {
   activateProviderAuthRuntimeSnapshot,
   activateSecretsRuntimeSnapshotState,
@@ -547,6 +547,14 @@ function selectProviderAuthConfig(config: OpenClawConfig): OpenClawConfig {
   };
 }
 
+function isProviderAuthRuntimeWarning(warning: SecretResolverWarning): boolean {
+  return (
+    warning.path.startsWith("models.providers.") ||
+    warning.path.startsWith("models.providers[") ||
+    warning.path.includes(".auth-profiles.")
+  );
+}
+
 function mergeProviderAuthOwners(
   active: PreparedSecretsRuntimeSnapshot,
   candidate: PreparedSecretsRuntimeSnapshot,
@@ -629,10 +637,10 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
       authStores: candidate.snapshot.authStores,
       authStoreCredentialsRevision: candidate.snapshot.authStoreCredentialsRevision,
       authStoreSnapshotsRevision: candidate.snapshot.authStoreSnapshotsRevision,
-      warnings: mergeProviderAuthRuntimeWarnings(
-        activeSnapshot.warnings,
-        candidate.snapshot.warnings,
-      ),
+      warnings: [
+        ...activeSnapshot.warnings.filter((warning) => !isProviderAuthRuntimeWarning(warning)),
+        ...candidate.snapshot.warnings.filter(isProviderAuthRuntimeWarning),
+      ],
       ...mergeProviderAuthOwners(activeSnapshot, candidate.snapshot),
     };
     // The revision check and activation are synchronous. A queued auth refresh must retry

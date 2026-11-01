@@ -80,6 +80,7 @@ import {
   resolveGatewayUpdateAdmission,
   reportImmutableGatewayUpdateRefusal,
 } from "./update-admission.js";
+import { updateRecoveryCleanupHandler } from "./update-cleanup.js";
 import { recordGatewayUpdateOutcome } from "./update-outcome-observation.js";
 import { updateReportHandler } from "./update-report.js";
 import { updateStatusHandlers } from "./update-status.js";
@@ -89,6 +90,7 @@ const MANAGED_HANDOFF_ALREADY_RUNNING_REASON = "managed-service-handoff-already-
 export const updateHandlers: GatewayRequestHandlers = {
   ...updateStatusHandlers,
   "update.report": updateReportHandler,
+  "update.recovery.cleanup": updateRecoveryCleanupHandler,
   "update.run": async (request) => {
     const { respond, client, context, sessionMutationCommitGuard } = request;
     const params = await admitGatewayUpdateRequest(request);
@@ -554,7 +556,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             handoff = {
               status: "already-running",
               command: started.command,
-              message: "Another managed update is already running; retry after it completes.",
+              message: started.message,
             };
           }
           result = {

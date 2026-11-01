@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { vi } from "vitest";
 import type { ChromeMcpProcessSnapshot } from "./chrome-mcp-contracts.js";
 
@@ -15,6 +16,14 @@ const fixture = vi.hoisted(() => ({
   linuxRows: new Map<number, ChromeMcpProcessSnapshot>(),
 }));
 
+async function afterCensus<T>(operation: Promise<T>, isCensus: boolean): Promise<T> {
+  const result = await operation;
+  if (isCensus) {
+    await fixture.mocks?.afterCensus?.();
+  }
+  return result;
+}
+
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   const readdir = async (...args: Parameters<typeof actual.readdir>) => {
@@ -23,19 +32,13 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       fixture.linuxRows = new Map(rows.map((row) => [row.pid, row]));
       return rows.map((row) => String(row.pid));
     }
-    const result = await actual.readdir(...args);
-    if (args[0] === "/proc") {
-      await fixture.mocks?.afterCensus?.();
-    }
-    return result;
+    return afterCensus(actual.readdir(...args), args[0] === "/proc");
   };
   const readFile = async (...args: Parameters<typeof actual.readFile>) => {
     const match = typeof args[0] === "string" ? /^\/proc\/(\d+)\/stat$/.exec(args[0]) : null;
     if (match && fixture.mocks?.listProcesses) {
       const row = fixture.linuxRows.get(Number(match[1]));
-      if (!row) {
-        throw new Error("fixture process exited");
-      }
+      assert(row, "fixture process exited");
       return `${row.pid} (fixture) S ${row.ppid} ${Array(17).fill("0").join(" ")} ${row.identity}`;
     }
     return actual.readFile(...args);
@@ -59,30 +62,23 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
   return {
     ...actual,
     runExec: async (...args: Parameters<typeof actual.runExec>) => {
+      const mocks = fixture.mocks;
       if (
         args[0] === "taskkill" &&
-        (fixture.mocks?.platform ||
-          fixture.mocks?.listProcesses ||
-          fixture.mocks?.taskkillProcessTree)
+        (mocks?.platform || mocks?.listProcesses || mocks?.taskkillProcessTree)
       ) {
-        if (!fixture.mocks.taskkillProcessTree) {
-          throw new Error("synthetic process census has no taskkill handler");
-        }
-        await fixture.mocks.taskkillProcessTree(Number(args[1][1]));
+        assert(mocks.taskkillProcessTree, "synthetic process census has no taskkill handler");
+        await mocks.taskkillProcessTree(Number(args[1][1]));
         return { stdout: "", stderr: "" };
       }
-      if (args[0] === "powershell.exe" && fixture.mocks?.listProcesses) {
-        const rows = await fixture.mocks.listProcesses();
+      if (args[0] === "powershell.exe" && mocks?.listProcesses) {
+        const rows = await mocks.listProcesses();
         return {
           stdout: rows.map((row) => `${row.pid}\t${row.ppid}\t${row.identity}\tfixture`).join("\n"),
           stderr: "",
         };
       }
-      const result = await actual.runExec(...args);
-      if (args[0] === "ps" || args[0] === "powershell.exe") {
-        await fixture.mocks?.afterCensus?.();
-      }
-      return result;
+      return afterCensus(actual.runExec(...args), args[0] === "ps" || args[0] === "powershell.exe");
     },
   };
 });
@@ -107,9 +103,7 @@ export function mockChromeMcpProcesses(mocks: ProcessMocks): void {
   const killProcess = mocks.killProcess;
   if (killProcess || mocks.listProcesses || mocks.platform) {
     const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-      if (!killProcess) {
-        throw new Error("synthetic process census has no signal handler");
-      }
+      assert(killProcess, "synthetic process census has no signal handler");
       if (signal !== "SIGTERM" && signal !== "SIGKILL") {
         throw new Error("expected a Chrome MCP cleanup signal");
       }

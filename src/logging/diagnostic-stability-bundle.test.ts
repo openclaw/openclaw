@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
-import { registerFatalErrorHook, runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
+import { runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
 import {
   installDiagnosticStabilityFatalHook,
   MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES,
@@ -276,27 +276,21 @@ describe("diagnostic stability bundles", () => {
     uninstallDiagnosticStabilityFatalHook();
     expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toStrictEqual([]);
 
-    const unsubscribeIndependent = registerFatalErrorHook(() => "independent diagnostic");
     try {
       const reinstalledDir = path.join(tempDir, "reinstalled");
       installDiagnosticStabilityFatalHook({ stateDir: reinstalledDir });
+      installDiagnosticStabilityFatalHook({ stateDir: tempDir });
       const reinstalledMessages = runFatalErrorHooks({ reason: "uncaught_exception" });
-      expect(reinstalledMessages).toHaveLength(2);
-      expect(reinstalledMessages[0]).toBe("independent diagnostic");
-      expect(reinstalledMessages[1]).toContain("wrote stability bundle:");
-      expect(reinstalledMessages[1]).toContain(reinstalledDir);
+      expect(reinstalledMessages).toHaveLength(1);
+      expect(reinstalledMessages[0]).toContain("wrote stability bundle:");
+      expect(reinstalledMessages[0]).toContain(reinstalledDir);
 
       uninstallDiagnosticStabilityFatalHook();
-      expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toEqual([
-        "independent diagnostic",
-      ]);
+      expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toEqual([]);
       uninstallDiagnosticStabilityFatalHook();
-      expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toEqual([
-        "independent diagnostic",
-      ]);
+      expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toEqual([]);
     } finally {
       uninstallDiagnosticStabilityFatalHook();
-      unsubscribeIndependent();
     }
   });
 
@@ -392,7 +386,7 @@ describe("diagnostic stability bundles", () => {
     );
   });
 
-  it("preserves worker memory attribution and unavailable samples in exported bundles", () => {
+  it("preserves OS and worker memory attribution and unavailable samples in exported bundles", () => {
     startDiagnosticStabilityRecorder();
     emitDiagnosticEvent({
       type: "diagnostic.memory.pressure",
@@ -404,11 +398,17 @@ describe("diagnostic stability bundles", () => {
       workerThreadId: 2,
       memory: {
         rssBytes: 4096,
+        anonymousRssBytes: 3072,
+        anonymousSwapBytes: 0,
+        heapSizeLimitBytes: 4096,
+        oldGenerationAfterGcBytes: 256,
         heapTotalBytes: 1024,
         heapUsedBytes: 512,
         externalBytes: 32,
         arrayBuffersBytes: 16,
         workerCount: 2,
+        postgresBridgeCount: 3,
+        postgresPoolSelfRootCount: 1,
         workerHeapSampledCount: 1,
         workerHeapTotalBytes: 2048,
         workerHeapUsedBytes: 1024,
@@ -423,6 +423,7 @@ describe("diagnostic stability bundles", () => {
             threadId: 2,
             heapUsed: 1024,
             heapSizeLimitBytes: 1100,
+            oldGenerationAfterGcBytes: 800,
             heapTotal: 2048,
             external: 1024,
             arrayBuffers: 512,
@@ -467,7 +468,13 @@ describe("diagnostic stability bundles", () => {
       workerThreadId: 2,
     });
     expect(readback.bundle.snapshot.events[0]?.memory).toMatchObject({
+      anonymousRssBytes: 3072,
+      anonymousSwapBytes: 0,
+      heapSizeLimitBytes: 4096,
+      oldGenerationAfterGcBytes: 256,
       workerCount: 2,
+      postgresBridgeCount: 3,
+      postgresPoolSelfRootCount: 1,
       workerHeapSampledCount: 1,
       workerHeapUsedBytes: 1024,
       workerExternalBytes: 1024,
@@ -481,6 +488,7 @@ describe("diagnostic stability bundles", () => {
           threadId: 2,
           heapUsed: 1024,
           heapSizeLimitBytes: 1100,
+          oldGenerationAfterGcBytes: 800,
           heapTotal: 2048,
           external: 1024,
           arrayBuffers: 512,
@@ -767,6 +775,58 @@ describe("diagnostic stability bundles", () => {
     expect(result.status === "failed" ? String(result.error) : "").toContain(
       "Unsupported stability bundle version",
     );
+  });
+
+  it.each([
+    {
+      name: "legacy bundle without build identity",
+      identity: {},
+      expected: {},
+    },
+    {
+      name: "public version metadata and maximum generated build id",
+      identity: {
+        openclawVersion: "2026.4.22-beta.1+fixture",
+        buildId: "b".repeat(96),
+        commit: "abcdef0",
+      },
+      expected: {
+        openclawVersion: "2026.4.22-beta.1+fixture",
+        buildId: "b".repeat(96),
+        commit: "abcdef0",
+      },
+    },
+    {
+      name: "unsafe imported identity",
+      identity: {
+        openclawVersion: "version\nsecret",
+        buildId: "/private/build",
+        commit: "not-a-commit",
+      },
+      expected: {},
+    },
+    {
+      name: "overlong imported identity",
+      identity: {
+        openclawVersion: "v".repeat(257),
+        buildId: "b".repeat(97),
+        commit: "a".repeat(41),
+      },
+      expected: {},
+    },
+  ])("preserves only recorded safe build identity: $name", ({ identity, expected }) => {
+    const file = path.join(tempDir, "imported.json");
+    const bundle = createImportedBundle();
+    const originalProcess = bundle.process as Record<string, unknown>;
+    bundle.process = { ...originalProcess, ...identity };
+    fs.writeFileSync(file, JSON.stringify(bundle), "utf8");
+
+    const result = readDiagnosticStabilityBundleFileSync(file);
+    expect(result.status).toBe("found");
+    if (result.status !== "found") {
+      throw new Error("Expected readable stability bundle");
+    }
+    expect(result.bundle.process).toEqual({ ...originalProcess, ...expected });
   });
 
   it("rejects oversized bundle files before reading them", () => {

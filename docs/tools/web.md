@@ -100,12 +100,18 @@ configured tools continue to read current credentials at execution time.
 
 ## Choosing a provider
 
+`tools.web.search.provider` is matched case-insensitively and ignores surrounding
+whitespace. For example, `SearXNG` selects the existing `searxng` provider.
+
 <CardGroup cols={2}>
   <Card title="Brave Search" icon="shield" href="/tools/brave-search">
     Structured results with snippets. Supports `llm-context` mode, country/language filters. Free tier available.
   </Card>
   <Card title="Codex Hosted Search" icon="search" href="/plugins/codex-harness">
     AI-synthesized grounded answers through your Codex app-server account.
+  </Card>
+  <Card title="DeepSeek" icon="search" href="/providers/deepseek#web-search">
+    Structured results with model-oriented summaries. Uses the official installable DeepSeek plugin.
   </Card>
   <Card title="DuckDuckGo" icon="bird" href="/tools/duckduckgo-search">
     Key-free provider. No API key needed. Unofficial HTML-based integration.
@@ -154,6 +160,7 @@ configured tools continue to read current credentials at execution time.
 | ------------------------------------------------ | -------------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------- |
 | [Brave](/tools/brave-search)                     | Structured snippets                                | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                                                                         |
 | [Codex Hosted Search](/plugins/codex-harness)    | AI-synthesized + source URLs                       | Domains, context size, user location             | None; uses Codex/OpenAI sign-in                                                         |
+| [DeepSeek](/providers/deepseek#web-search)       | Structured results with model-oriented summaries   | Query operators: sites, language, dates          | `DEEPSEEK_API_KEY`                                                                      |
 | [DuckDuckGo](/tools/duckduckgo-search)           | Structured snippets                                | --                                               | None (key-free)                                                                         |
 | [Exa](/tools/exa-search)                         | Structured + extracted                             | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                                                                           |
 | [Firecrawl](/tools/firecrawl)                    | Structured snippets                                | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                                                                     |
@@ -243,6 +250,13 @@ payload carrying an `error` key is always reported as `kind: "error"` with the
 raw provider code preserved inside the wrapped message. Raw passthrough
 payloads keep whatever markers the provider set.
 
+Structured results share a 20,000-character budget for URLs and sanitized prose,
+excluding external-content envelopes. URLs are reserved first. Prose is allocated
+from shorter to longer sanitized rows without changing provider result order, so
+long early snippets cannot consume the entire budget before later rows receive a
+share. Sanitization expansion counts toward the budget; truncated output sets
+`truncated: true`.
+
 Perplexity, Tavily, and xAI HTTP errors retain the status code and bounded
 diagnostics, with reflected request credentials redacted. Review diagnostics
 before sharing them; redaction does not remove every kind of sensitive content.
@@ -276,9 +290,11 @@ API-backed providers first:
 9. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey` (order 70)
 10. **Parallel** -- paid Parallel Search API via `PARALLEL_API_KEY` or `plugins.entries.parallel.config.webSearch.apiKey`; optional `plugins.entries.parallel.config.webSearch.baseUrl` overrides the endpoint (order 75)
 
+11. **DeepSeek** -- `DEEPSEEK_API_KEY`, `plugins.entries.deepseek.config.webSearch.apiKey`, or `models.providers.deepseek.apiKey` while that provider and its models use `https://api.deepseek.com` (order 80; install the official DeepSeek plugin first)
+
 Configured endpoint providers after that:
 
-11. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
+12. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
 
 If an auto-detected provider fails, OpenClaw tries the next eligible provider.
 If all attempts fail, it reports the first provider's error to help you diagnose
@@ -302,7 +318,7 @@ instead.
 <Note>
   All provider key fields support SecretRef objects. Plugin-scoped SecretRefs
   under `plugins.entries.<plugin>.config.webSearch.apiKey` are resolved for the
-  installed API-backed web search providers, including Brave, Exa, Firecrawl,
+  installed API-backed web search providers, including Brave, DeepSeek, Exa, Firecrawl,
   Gemini, Grok, Kimi, MiniMax, Parallel, Perplexity, and Tavily,
   whether the provider is picked explicitly via `tools.web.search.provider` or
   selected through auto-detect. In auto-detect mode, OpenClaw resolves only the

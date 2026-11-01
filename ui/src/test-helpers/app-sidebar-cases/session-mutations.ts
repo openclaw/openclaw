@@ -3,12 +3,13 @@ import type { ControlUiAction } from "../../../../src/plugin-sdk/control-ui.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import "../../lib/toast-host.ts";
+import "../../lib/toast-host.tsx";
 import { publishSidebarSessionList } from "../../components/session-data-events.ts";
 import {
   pauseSessionPlacementRecovery,
   readSessionPlacementRecovery,
 } from "../../lib/sessions/session-placement-recovery.ts";
+import { openRowSessionMenu as openSessionMenu } from "../app-sidebar-menu.ts";
 import {
   createGatewayHarness,
   createSessionState,
@@ -84,21 +85,6 @@ describe("AppSidebar session mutation feedback", () => {
     return { gateway, harness, sidebar, context };
   }
 
-  async function openSessionMenu(sidebar: SidebarLifecycleState, key: string) {
-    const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key}"]`);
-    if (!row) {
-      throw new Error(`expected session row for ${key}`);
-    }
-    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
-    await sidebar.updateComplete;
-    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
-    if (!menu) {
-      throw new Error("expected session menu");
-    }
-    await menu.updateComplete;
-    return menu;
-  }
-
   function selectSession(sidebar: SidebarLifecycleState, key: string) {
     const link = sidebar.querySelector<HTMLAnchorElement>(
       `[data-session-key="${key}"] .sidebar-recent-session__link`,
@@ -135,7 +121,7 @@ describe("AppSidebar session mutation feedback", () => {
       }),
       run,
     });
-    sidebar.requestUpdate();
+    sidebar.invalidate();
     await sidebar.updateComplete;
     const publish = (rows: GatewaySessionRow[]) => {
       publishSidebarSessionList(sidebar.sessionData, {

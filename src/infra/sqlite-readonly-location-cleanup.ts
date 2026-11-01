@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { copyRootFileSync } from "@openclaw/fs-safe/advanced";
+import { coerceErrorMessage, extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   createRetainedOperation,
   mapRetainedOperation,
@@ -11,7 +12,11 @@ import { getChildLogger } from "../logging/logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { hasErrnoCode } from "./errno.js";
-import { retireSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
+import { isPathInside } from "./path-guards.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  retireSqliteDatabaseAdmissionForPath,
+} from "./sqlite-database-admission.js";
 import { recordSqliteSnapshotFailure } from "./sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import type {
@@ -452,8 +457,64 @@ export function sealRetainedSnapshotTempDirectory(
       "SQLite snapshot is still owned; cleanup has not been requested",
     );
   }
-  assertSnapshotReadersRetired(owner);
-  owner.retirementStarted = true;
+  const ownedDirectories = [...snapshotDirectories].filter(([candidate]) =>
+    isPathInside(directory, candidate),
+  );
+  for (const [, current] of ownedDirectories) {
+    assertSnapshotReadersRetired(current);
+  }
+  for (const [, current] of ownedDirectories) {
+    current.retirementStarted = true;
+  }
+  // Native deletion cannot release the host's cached facts after their pathname is gone.
+  for (const admission of captureSqliteDatabaseAdmissions()) {
+    if (isPathInside(directory, admission.location)) {
+      retireSqliteDatabaseAdmissionForPath(admission.location);
+    }
+  }
+}
+
+export function preparationCleanupError(errors: unknown[], operation: string): AggregateError {
+  return createSqliteLifecycleAggregateError(
+    errors,
+    `${operation} and cleanup failed: ${coerceErrorMessage(errors[0])}`,
+    errors[0],
+  );
+}
+
+/** Failed copy attempts discard their files without retiring the caller's directory token. */
+export function discardPreparedCopyPayload(directory: string, error: unknown): void {
+  try {
+    for (const name of ["database.sqlite", "database.sqlite.partial"]) {
+      for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+        const location = path.join(directory, `${name}${suffix}`);
+        retireSqliteDatabaseAdmissionForPath(location);
+        fs.rmSync(location, { force: true });
+      }
+    }
+  } catch (cleanupError) {
+    throw preparationCleanupError([error, cleanupError], "SQLite snapshot preparation");
+  }
+}
+
+export async function cleanupFailedSnapshotPreparation(
+  directory: string,
+  error: unknown,
+  operation: string,
+  callerOwnsDirectory: boolean,
+): Promise<never> {
+  if (callerOwnsDirectory) {
+    discardPreparedCopyPayload(directory, error);
+  } else {
+    const errors: unknown[] = [error];
+    const removed = await removeTempDirectoryAsync(directory, (cleanupError) =>
+      errors.push(cleanupError),
+    );
+    if (!removed) {
+      throw preparationCleanupError(errors, operation);
+    }
+  }
+  throw error;
 }
 
 export function publishPreparedCopy(
@@ -464,7 +525,22 @@ export function publishPreparedCopy(
   for (const suffix of ["-wal", "-shm", "-journal", ""]) {
     const staged = `${location}.partial${suffix}`;
     if (fs.existsSync(staged)) {
-      fs.renameSync(staged, `${location}${suffix}`);
+      const published = `${location}${suffix}`;
+      try {
+        fs.renameSync(staged, published);
+      } catch (error) {
+        if (!hasErrnoCode(error, "EXDEV")) {
+          throw error;
+        }
+        // EFS can reject same-directory renames. Readers see this private family only after return.
+        using target = copyRootFileSync({
+          source: { rootPath: directory, absolutePath: staged },
+          destination: { rootPath: directory, absolutePath: published },
+          mode: 0o600,
+        });
+        fs.fsyncSync(target.fd);
+        fs.unlinkSync(staged);
+      }
     }
   }
   let journalFreeContent: PreparedSqliteReadOnlyLocation["journalFreeContent"];

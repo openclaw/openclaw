@@ -26,8 +26,9 @@ controls signed-in people. None of those settings creates a public link.
 
 The session creator or a Gateway admin can explicitly enable **Public access**.
 Anyone with the normal thread URL can then read existing and future conversation
-text without signing in, while tools, reasoning, files, images, widgets, hidden
-messages, and internal metadata remain excluded. **Log in** returns to that same
+text, shared images, saved inline widgets, and tool-step summaries without signing
+in, while tool-result text, reasoning, file downloads, hidden messages, and internal
+metadata remain excluded. **Log in** returns to that same
 thread with the person's existing permissions. Assigning a different owner does
 not transfer publication authority. Disabling public access stops anonymous
 reads; enabling it again makes the same normal URL readable. Previously revoked
@@ -45,6 +46,13 @@ Every session carries up to three layers of attribution:
 - **Participants** (history): authenticated people, channel senders, and requesting agents whose accepted input targets the session. The session's own agent and passive viewers are never recorded. New-identity admission is bounded at 32 records per session. Repair can preserve larger existing histories. Participation is recorded best-effort in the background, so it never delays a turn.
 
 Gateway profile display names and avatars are resolved from the current profile when session rows are returned. Agent actors resolve from the configured agent identity. Participant aggregates do not store display labels, so renaming a profile or agent updates the ownership UI without rewriting participant history.
+
+For `sessions_create`, the selected human remains the session's creator and access
+principal, while the opening message identifies the agent as its author. This
+creator record does not prove that the person authored or approved the operation.
+When audit collection is enabled, operation receipts can separately record the
+selected authority subject. A new agent-initiated execution records the agent
+invoker separately from the represented person.
 
 ## Assigning an owner
 
@@ -120,7 +128,7 @@ Administrators can still create shared profiles through the CLI (`openclaw model
 
 Creating your own session with `operator.sessions.write` applies your saved new-chat default when available, or uses the Gateway's configured selection otherwise. This includes an agent using [`sessions_create`](/concepts/session-tool#creating-an-independent-session) on your behalf under your current admitted operator authority. The agent can use that saved default without receiving permission to select another personal account or manage your accounts. Explicit personal account selection and changes to your new-chat default still require an authenticated human with `operator.write`. Creation retains the applicable live caller, profile, and role checks.
 
-When a linked person creates a session, OpenClaw captures their default as that session's auth selection. The selection has the same strength as a `/model ...@profile` pin. This happens before an initial message is dispatched, including when creation and the first message are separate requests. Sessions first created by turn admission capture the default at that admission. The pin is **session-sticky**: other people steering into that session use its selected account, and forks inherit it. An explicit `/model ...@profile -s` pin outranks the link. A fresh personal selection must belong to the authenticated human making it. Knowing another person's account id is not permission to select it. Agent- and channel-originated turns do not create personal links. The qualified `sessions_create` path can capture the admitted person's existing default for the new session; it does not create or change that default. For runtimes using OpenClaw's auth fallback planner, the ordered shared profiles for the same provider remain failover candidates if the pinned account fails. This matches the behavior of an explicit pin. Claude CLI requires its selected account and does not substitute shared profiles or its native login when that account cannot be used.
+When a linked person creates a session, OpenClaw captures their default as that session's auth selection. The selection has the same strength as a `/model ...@profile` pin. This happens before an initial message is dispatched, including when creation and the first message are separate requests. Sessions first created by turn admission capture the default at that admission. The pin is **session-sticky**: other people steering into that session use its selected account, forks inherit it, and it survives `/new`, `/reset`, and daily or idle resets. `sessions_spawn` children do not inherit it; see [Defaults](/tools/subagents/tool-reference#tool-sessions_spawn). An explicit `/model ...@profile -s` pin outranks the link. A fresh personal selection must belong to the authenticated human making it. Knowing another person's account id is not permission to select it. Agent- and channel-originated turns do not create personal links. The qualified `sessions_create` path can capture the admitted person's existing default for the new session; it does not create or change that default. For runtimes using OpenClaw's auth fallback planner, the ordered shared profiles for the same provider remain failover candidates if the pinned account fails. This matches the behavior of an explicit pin. Claude CLI requires its selected account and does not substitute shared profiles or its native login when that account cannot be used.
 
 **Use Gateway defaults for new chats**, CLI `clear-default`, and API `users.unlinkAuthProfile` affect future sessions only. Changing a default does not repin existing chats, including unpinned chats using shared credentials. Adopting or forking an existing chat does not apply the current participant's default, and changing providers does not silently select their personal account. Expand the **Account** category in the model menu to make that explicit choice. Clearing a default neither deletes the saved credential nor revokes a provider token. Revoke it with the provider if existing sessions must stop using it. Links and existing session credentials follow verified profile merges, but an explicit unlink on the surviving profile is not reversed by a merge.
 
@@ -200,7 +208,7 @@ does not retain their delivered channel message IDs. See
 
 In the transcript, selected mentions show a small inline avatar beside the original name. Missing photos use initials. The badge omits the visible `@`, while copied text keeps it.
 
-In a normal Control UI chat, type `@` and search by a person's display name (including spaces) or any linked verified GitHub handle, then select the person from the picker. The composer shows **Will notify** with your selected recipients. You can select up to ten mentions per message. Typing or pasting `@name` without selecting a person sends ordinary text and does not notify anyone. **Remove mention** clears the recipient selections while keeping the message text.
+In a normal Control UI chat, type `@` and search by a person's display name (including spaces) or any linked verified GitHub handle, then select the person from the picker. People without a display name appear under a linked verified GitHub handle when available; otherwise, they keep a neutral person label rather than exposing an email address. The composer shows **Will notify** with your selected recipients. You can select up to ten mentions per message. Typing or pasting `@name` without selecting a person sends ordinary text and does not notify anyone. **Remove mention** clears the recipient selections while keeping the message text.
 
 Use Up/Down to move through people, Home/End to jump to the first or last result,
 and Enter or Tab to insert the selected mention. Escape closes the picker. Typing a
@@ -213,13 +221,16 @@ another mention. After five minutes, it refreshes cached results in the backgrou
 without hiding the people you can already select. Switching sessions, profiles,
 or connections clears that cache. Results older than 30 minutes are discarded.
 The picker shows placeholders for uncached searches, an empty message when nobody
-matches, and **Retry** if a search without usable cached results fails.
+matches, and **Retry** if a search without usable cached results fails temporarily.
+Permission, profile-verification, and unsupported-conversation rejections clear
+cached people and show guidance instead of Retry. Follow that guidance to restore
+your access or choose a supported conversation.
 **Will notify** reuses the selected person's photo, with initials while it loads or
 when the photo is unavailable.
 
 Selected mentions render as distinct person references in the transcript. Hover, focus, or tap a reference to open the same information card used in the sidebar: current name and avatar, observed presence and connection details, visible watched and recent sessions, and the Activity link. The original message label and copied text stay unchanged. Cards follow explicit profile merges; ordinary unselected `@name` text does not become a person reference.
 
-The picker includes known Gateway profiles eligible to read the session, including people who are offline. Its online indicator is only a connection hint, not an eligibility requirement. Sign in with a durable Gateway profile to use human mentions. A mention adds personal discovery involvement, not authored participation or Git contributor credit. It never adds session membership, changes visibility, or grants access. The Gateway rechecks the recipient's current access when creating and displaying it.
+The picker includes known Gateway profiles eligible to read the session, including people who are offline. Its online indicator is only a connection hint, not an eligibility requirement. Sign in with a durable Gateway profile to use human mentions. Guests with session-only permissions can select eligible people in existing conversations they are allowed to write in. A mention adds personal discovery involvement, not authored participation or Git contributor credit. It never adds session membership, changes visibility, or grants access. The Gateway rechecks the recipient's current access when creating and displaying it.
 
 Mentions work for ordinary messages, queued or steered input, and the first message of a new session, including a remotely placed session. They are unavailable in incognito, Goal, catalog, suggestion-only, command-send, or terminal-launch modes. If selected mentions remain after switching to an unsupported mode, the composer blocks the send. It asks you to remove them, or to return to a normal chat. It does not silently discard selected recipients.
 
@@ -231,7 +242,9 @@ Open **Inbox → Mentions** to see messages addressed to your signed-in profile 
 
 Mentions and dismissals survive Gateway restarts and upgrades. Entries keep their original identifiers and expiry times: **up to seven days**, with at most **100 entries per profile** and **10,000 across the Gateway**. Older entries can be evicted earlier by capacity limits. Refreshing or reconnecting reloads the retained Inbox without resending old browser alerts. Old transcript messages are not scanned to rebuild missing entries.
 
-Personal involvement and hide/show choices live in private metadata on the logical session node, independently of Inbox retention. Reset and session relocation preserve them; deleting the session removes them, and forks do not inherit them. Existing transcript messages are not scanned to backfill involvement. The last committed mention position prevents replay of an old message from undoing a later hide choice, even after the Inbox entry expires.
+Gateway features can also add an agent message that mentions someone on behalf of a signed-in profile, without a model run. The mention appears as a person chip in the agent's message, and the Inbox names that profile as the sender. The same rules apply as for a typed mention: the recipient must be able to read the session, nobody can mention themselves, and incognito sessions never carry mentions. A retried insert reuses the same message and Inbox entry. Clients cannot request these messages.
+
+Personal involvement and hide/show choices live in private metadata on the logical session node, independently of Inbox retention. Hiding or showing a session changes your personal discovery list; ongoing authorized work and saved workspace files remain available to its participants. Reset and session relocation preserve them; deleting the session removes them, and forks do not inherit them. Existing transcript messages are not scanned to backfill involvement. The last committed mention position prevents replay of an old message from undoing a later hide choice, even after the Inbox entry expires.
 
 The Inbox and its replay bookkeeping use the shared database's existing machine-state records, with no SQLite schema change. Mention annotations stay in the existing message JSON, and notification preferences use existing preference records. See [Inbox storage and retention](/reference/database-schemas#mentions-inbox).
 
@@ -239,9 +252,12 @@ The Inbox works without browser notification permission. For optional alerts whi
 
 ## Agent-spawned sessions
 
-In a turn steered by several people, `sessions_spawn` requires `user` (the requester's verified `requester_profile.id`)
-and the child acts with that person's retained authority. This selection does not
-change the session's model account or the creator and owner rules below.
+`sessions_spawn` defaults to the active execution's requester, including after
+collaborative steering. An explicit `user` selects an authenticated participant
+whose source authority remains current; the child carries that person's requester
+facts and resolves current destination policy at admission. Selection leaves the
+parent execution unchanged and does not change the session's model account or the
+creator and owner rules below.
 
 Sessions an agent creates with `sessions_spawn` (`visible: true`) normally retain the requesting agent as their immutable creator. A required sandbox instead preserves the parent's creator provenance as an isolation policy. If the active human requester matches the requesting session's verified human owner, a new visible child assigns that person as its initial owner. A different owner, an unlinked requester, or a system-triggered spawn explicitly assigns the requesting agent as owner, even when sandbox policy retained human creator provenance. The sidebar shows the current owner's profile or configured agent identity rather than an internal session key. The assignment follows the same [owner and personal-context rules](/concepts/multi-user#assigning-an-owner); sharing and visibility authority remains anchored on the creator.
 
@@ -258,6 +274,10 @@ This state improves continuity. It is not an authorization or isolation boundary
 ## Drafts
 
 Start a session as a draft to keep work in progress out of other people's sidebars until you publish it. Drafts are never hidden from admins, who see other people's drafts with a faded ghost marker. This is a coordination feature, not a security boundary.
+
+When Draft sessions are enabled, newly spawned children of a Draft session also start as Draft, including hidden helpers and visible sessions. Publishing the parent later does not publish its children; each session keeps its own audience until you change it.
+
+Disabling Draft creation leaves existing Draft conversations usable, but prevents them from spawning new Draft children. The request fails without sharing the child instead. Continue in the existing conversation or ask an administrator to enable Draft creation.
 
 Catalog listings and progress updates recheck current session visibility for each recipient. Cached provider results do not preserve access to a session that has become draft or incognito. An adopted thread remains bound to its original session instance and plugin ownership. Deleting and recreating a session key does not transfer the old thread to the new creator. Catalog reads and mutations also recheck the stored session after provider enumeration.
 

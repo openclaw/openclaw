@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { loadRatchetSources } from "./lib/shrink-ratchet.mts";
 import {
@@ -19,10 +19,10 @@ type DialectSite = DialectMatch & { line: number; column: number };
 export type DialectInventoryRow = { file: string; matches: DialectSite[] };
 export type DialectInventoryCache = Map<string, { text: string; matches: DialectSite[] }>;
 const roots = ["src", "extensions", "packages"];
-const SQL_STATEMENT =
+export const SQL_STATEMENT =
   /^[\s(]*(?:SELECT|INSERT|UPDATE|DELETE|REPLACE|WITH|CREATE|DROP|ALTER|PRAGMA|BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|VACUUM|ATTACH|DETACH|ANALYZE|REINDEX|EXPLAIN)\b/u;
 
-function productionFile(file: string) {
+export function productionFile(file: string) {
   return (
     /^(?:src|extensions|packages)\/.*\.(?:ts|mts|sql)$/u.test(file) &&
     !excluded.test(file) &&
@@ -67,8 +67,39 @@ export function changedProductionFiles(root: string, base: string, staged: boole
 
 function findSites(file: string, source: ts.SourceFile): DialectSite[] {
   const sites: DialectSite[] = [];
+  const postgresGuards = new Set<string>();
+  for (const statement of source.statements) {
+    if (
+      ts.isImportDeclaration(statement) &&
+      ts.isStringLiteral(statement.moduleSpecifier) &&
+      path.posix.normalize(
+        path.posix.join(path.posix.dirname(file), statement.moduleSpecifier.text),
+      ) === "src/infra/sql-connection.js" &&
+      statement.importClause?.namedBindings &&
+      ts.isNamedImports(statement.importClause.namedBindings)
+    ) {
+      for (const binding of statement.importClause.namedBindings.elements) {
+        if ((binding.propertyName?.text ?? binding.name.text) === "isPostgresSqlConnection") {
+          postgresGuards.add(binding.name.text);
+        }
+      }
+    }
+  }
+  const isPostgresGuard = (node: ts.Expression) =>
+    ts.isCallExpression(node) &&
+    ts.isIdentifier(node.expression) &&
+    postgresGuards.has(node.expression.text);
   const physicalLayoutOwner = SQLITE_PHYSICAL_LAYOUT_OWNERS.includes(file);
-  const add = (match: DialectMatch, position: number) => {
+  const add = (match: DialectMatch, position: number, postgres = false, text = "") => {
+    // Only these shared names have proven PostgreSQL callers; SQLite-only JSON stays debt.
+    if (
+      postgres &&
+      /^(?:(?:json_each|jsonb_(?:set|typeof|each|array_elements))\s*\(|->>?)/iu.test(
+        text.slice(match.index),
+      )
+    ) {
+      return;
+    }
     // These engine owners define/call PostgreSQL functions, not SQLite connection UDFs.
     if (
       match.construct === "custom-function" &&
@@ -84,21 +115,49 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
     ) {
       return;
     }
+    // Native migration locks and private archive row order have no PostgreSQL SQL equivalent.
+    // Keep other constructs at these owners, and these constructs at callers, in the ratchet.
+    const nativeMaintenance =
+      (file === "src/infra/update-doctor-migration-attribution.ts" &&
+        (match.construct === "transaction-mode" ||
+          match.construct === "pragma" ||
+          match.construct === "schema-version")) ||
+      ((file === "src/infra/sqlite-migration-scoped-snapshot.ts" ||
+        // The SQLite v31 schema transaction rebuilds this table without changing row identities.
+        // PostgreSQL relaxes its constraint directly in openclaw-state-db-engine.ts.
+        file === "src/state/openclaw-state-db-schema-v31-workspace-manifests.ts") &&
+        match.construct === "rowid") ||
+      // Knowledge's keyword index is a rebuildable cache in its own per-store state.sqlite,
+      // never the selected Gateway engine: its FTS5 corpus, temp subset and rowid are engine-private.
+      (file === "extensions/knowledge/src/retrieval.ts" &&
+        (match.construct === "fts5" ||
+          match.construct === "temp-schema" ||
+          match.construct === "rowid"));
     const { line, character } = source.getLineAndCharacterOfPosition(position);
     sites.push({
       ...match,
-      owner: match.owner || SQLITE_PRIMITIVE_OWNERS.includes(file),
+      group: nativeMaintenance ? "engine-maintenance" : match.group,
+      owner: nativeMaintenance || match.owner || SQLITE_PRIMITIVE_OWNERS.includes(file),
       line: line + 1,
       column: character + 1,
     });
   };
-  const literal = (node: ts.StringLiteral | ts.TemplateLiteralToken, owner: boolean) => {
+  const literal = (
+    node: ts.StringLiteral | ts.TemplateLiteralToken,
+    owner: boolean,
+    postgres: boolean,
+  ) => {
     for (const match of matchDialect(node.text, owner, false, physicalLayoutOwner)) {
       // Locations identify the containing literal, independent of cooked escape widths.
-      add(match, node.getStart(source));
+      add(match, node.getStart(source), postgres, node.text);
     }
   };
-  const template = (node: ts.TemplateLiteral, owner: boolean, tagged = false) => {
+  const template = (
+    node: ts.TemplateLiteral,
+    owner: boolean,
+    postgres: boolean,
+    tagged = false,
+  ) => {
     const head = ts.isTemplateExpression(node) ? node.head : node;
     if (!tagged && !SQL_STATEMENT.test(head.text)) {
       return;
@@ -118,18 +177,40 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
     for (const { part, start } of spans) {
       for (const match of matches) {
         if (match.index >= start && match.index < start + part.text.length) {
-          add({ ...match, index: match.index - start }, part.getStart(source));
+          add({ ...match, index: match.index - start }, part.getStart(source), postgres, part.text);
         }
       }
     }
   };
-  const visit = (node: ts.Node, inheritedOwner = false) => {
+  const visit = (node: ts.Node, inheritedOwner = false, inheritedPostgres = false) => {
     let owner = inheritedOwner;
+    let postgres = inheritedPostgres;
     if (ts.isFunctionLikeDeclaration(node)) {
+      // These helpers only serve the PostgreSQL branches of the context reader.
+      postgres =
+        file === "src/config/sessions/session-model-context-projection.ts" &&
+        ts.isFunctionDeclaration(node) &&
+        /^(?:projectPostgresModelContextRowsSql|postgresModelEventSql|postgresNavigationObjectSql|postgresModelNavigationSql)$/u.test(
+          node.name?.text ?? "",
+        );
       owner =
         file === "src/infra/kysely-sync.ts" &&
         ts.isFunctionDeclaration(node) &&
         /^(?:sqliteStringSet|sqliteStringSetEntries)$/u.test(node.name?.text ?? "");
+    }
+    if (ts.isConditionalExpression(node) && isPostgresGuard(node.condition)) {
+      visit(node.condition, owner, postgres);
+      visit(node.whenTrue, owner, true);
+      visit(node.whenFalse, owner, postgres);
+      return;
+    }
+    if (ts.isIfStatement(node) && isPostgresGuard(node.expression)) {
+      visit(node.expression, owner, postgres);
+      visit(node.thenStatement, owner, true);
+      if (node.elseStatement) {
+        visit(node.elseStatement, owner, postgres);
+      }
+      return;
     }
     if (ts.isTaggedTemplateExpression(node)) {
       const tag = node.tag;
@@ -139,15 +220,15 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
           ? tag.name.text
           : "";
       if (/sql$/iu.test(name)) {
-        template(node.template, owner, true);
+        template(node.template, owner, postgres, true);
       }
-      visit(tag, owner);
+      visit(tag, owner, postgres);
       return;
     }
     if (ts.isStringLiteral(node) && SQL_STATEMENT.test(node.text)) {
-      literal(node, owner);
+      literal(node, owner, postgres);
     } else if (ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateExpression(node)) {
-      template(node, owner);
+      template(node, owner, postgres);
       return; // Substitutions are outside the lexical contract, regardless of tag.
     }
     if (
@@ -160,7 +241,7 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
         node.expression.name.getStart(source),
       );
     }
-    node.forEachChild((child) => visit(child, owner));
+    node.forEachChild((child) => visit(child, owner, postgres));
   };
   visit(source);
   return sites;

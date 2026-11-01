@@ -3,8 +3,10 @@ import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provid
 import { resolveLoadedProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { indexFirstByKey } from "../shared/dedupe-by-key.js";
-import { buildConfiguredFallbackModel } from "./embedded-agent-runner/model.configured-fallback.js";
-import { resolveExplicitModelWithRegistry } from "./embedded-agent-runner/model.registry-resolution.js";
+import {
+  normalizeConfiguredProviderModel,
+  resolveExplicitModelWithRegistry,
+} from "./embedded-agent-runner/model.registry-resolution.js";
 import { resolveManifestModelCatalogProviderAliasMetadata } from "./embedded-agent-runner/model.static-catalog.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { modelKey } from "./model-ref-shared.js";
@@ -26,7 +28,10 @@ export function completeConfiguredRuntimeModels(
     PreparedModelRuntimeAgentFacts,
     "input" | "env" | "configuredModelRefs" | "configuredRuntimeModels"
   >,
-  pluginGeneration: PreparedModelRuntimePluginGeneration,
+  pluginGeneration: Pick<
+    PreparedModelRuntimePluginGeneration,
+    "pluginMetadataSnapshot" | "pluginRegistry"
+  >,
   modelRegistry: ModelRegistry,
 ): readonly PreparedConfiguredRuntimeModel[] {
   if (!pluginGeneration.pluginRegistry) {
@@ -143,7 +148,7 @@ export function prepareConfiguredModelAliases(
         });
         const supported = resolved
           ? resolved.kind === "resolved"
-          : buildConfiguredFallbackModel({
+          : normalizeConfiguredProviderModel({
               provider: ref.provider,
               modelId: ref.model,
               cfg: config,

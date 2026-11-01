@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as mcpConfig from "../agents/agent-bundle-mcp-runtime-config.js";
 import { createMcpProofPluginRegistry } from "../agents/mcp-connection-resolver.test-fixtures.js";
+import { configFor, modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as discovery from "../plugins/discovery.js";
 import * as manifests from "../plugins/manifest-registry.js";
@@ -13,6 +14,7 @@ import * as pluginTools from "../plugins/tools.js";
 import { defaultRuntime } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
+import type { HealthFinding } from "./health-checks.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -67,30 +69,26 @@ it.each([
         const paths = ids.map((id) => {
           const root = state.path("plugins", id);
           fs.mkdirSync(root, { recursive: true });
-          fs.writeFileSync(
-            path.join(root, "package.json"),
-            JSON.stringify({
-              name: id,
-              version: "1.0.0",
-              openclaw: { extensions: ["./index.cjs"] },
-            }),
-          );
-          fs.writeFileSync(
-            path.join(root, "openclaw.plugin.json"),
-            JSON.stringify({
-              id,
-              contracts: {
-                ...(id !== providerPluginId
-                  ? { tools: [id === "fleet-tool" ? toolName : id.replaceAll("-", "_")] }
-                  : {}),
-                ...((id === providerPluginId && variant !== "legacy-provider-collision") ||
-                (id === "fleet-tool" && duplicateProvider)
-                  ? { webSearchProviders: ["fixture-search"] }
-                  : {}),
-              },
-              configSchema: { type: "object", additionalProperties: false },
-            }),
-          );
+          const writeJson = (name: string, value: unknown) =>
+            fs.writeFileSync(path.join(root, name), JSON.stringify(value));
+          writeJson("package.json", {
+            name: id,
+            version: "1.0.0",
+            openclaw: { extensions: ["./index.cjs"] },
+          });
+          writeJson("openclaw.plugin.json", {
+            id,
+            contracts: {
+              ...(id !== providerPluginId
+                ? { tools: [id === "fleet-tool" ? toolName : id.replaceAll("-", "_")] }
+                : {}),
+              ...((id === providerPluginId && variant !== "legacy-provider-collision") ||
+              (id === "fleet-tool" && duplicateProvider)
+                ? { webSearchProviders: ["fixture-search"] }
+                : {}),
+            },
+            configSchema: { type: "object", additionalProperties: false },
+          });
           fs.writeFileSync(
             path.join(root, "index.cjs"),
             `
@@ -129,49 +127,34 @@ module.exports = { id, register(api) {
           );
           return root;
         });
+        const inspectedAgent = (id: string) => ({
+          workspace: state.path(id),
+          tools: {
+            allow: withoutPluginTools
+              ? ["web_search", "requester__*"]
+              : [toolName, "failed_tool", "requester__*"],
+          },
+        });
         const cfg: OpenClawConfig = {
           agents: {
             ownership: "explicit",
             defaults: { systemAgent: { agentId: "alpha" }, model: "fixture/local" },
             entries: {
-              alpha: {
-                workspace: state.path("alpha"),
-                tools: {
-                  allow: withoutPluginTools
-                    ? ["web_search", "requester__*"]
-                    : [toolName, "failed_tool", "requester__*"],
-                },
-              },
-              beta: {
-                workspace: state.path("beta"),
-                tools: {
-                  allow: withoutPluginTools
-                    ? ["web_search", "requester__*"]
-                    : [toolName, "failed_tool", "requester__*"],
-                },
-              },
+              alpha: inspectedAgent("alpha"),
+              beta: inspectedAgent("beta"),
               excluded: { workspace: state.path("excluded"), tools: { deny: ["group:plugins"] } },
             },
           },
-          models: {
-            providers: {
-              fixture: {
-                api: "openai-completions",
-                baseUrl: "http://127.0.0.1:1/v1",
-                models: [
-                  {
-                    id: "local",
-                    name: "Local fixture",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 128000,
-                    maxTokens: 8192,
-                  },
-                ],
-              },
-            },
-          },
+          ...configFor("fixture", "http://127.0.0.1:1/v1", {
+            api: "openai-completions",
+            models: [
+              modelDefinition("local", {
+                name: "Local fixture",
+                reasoning: false,
+                contextWindow: 128000,
+              }),
+            ],
+          }),
           plugins: { allow: ids, load: { paths }, slots: { memory: "none" } },
           mcp: {
             servers: {
@@ -190,11 +173,12 @@ module.exports = { id, register(api) {
         );
         expect(check).toBeDefined();
         const caller = createMcpProofPluginRegistry();
+        const resolveRequester = vi.fn(() => {
+          throw new Error("Doctor has no authenticated requester");
+        });
         caller.apiFor("requester-owner").registerMcpServerConnectionResolver({
           serverName: "requester",
-          resolve: () => {
-            throw new Error("Doctor has no authenticated requester");
-          },
+          resolve: resolveRequester,
         });
         const detectorFailure = new Error("fixture detector failed after tool inspection");
         const rejectColdRead = vi.fn(() => {
@@ -232,13 +216,14 @@ module.exports = { id, register(api) {
           await expect(operation).rejects.toBe(detectorFailure);
         } else {
           const findings = await operation;
-          expect(findings).toContainEqual(
-            expect.objectContaining({
-              severity: "info",
-              path: "mcp.servers.requester",
-              requirement: "authenticated requester context",
-            }),
-          );
+          const expectFinding = (fields: Partial<HealthFinding>) =>
+            expect(findings).toContainEqual(expect.objectContaining(fields));
+          expectFinding({
+            severity: "info",
+            path: "mcp.servers.requester",
+            requirement: "authenticated requester context",
+            fixHint: "Verify this server from an authenticated agent turn.",
+          });
           expect(findings.filter((finding) => finding.target === toolName)).toEqual(
             (withoutPluginTools || (collision && providerConfigured) ? [] : ["alpha", "beta"]).map(
               (agentId) =>
@@ -251,35 +236,32 @@ module.exports = { id, register(api) {
             ),
           );
           if (!withoutPluginTools) {
-            expect(findings).toContainEqual(
-              expect.objectContaining({
-                target: "failed-tool",
-                requirement: expect.stringContaining("fixture registration unavailable"),
-              }),
-            );
+            expectFinding({
+              target: "failed-tool",
+              requirement: expect.stringContaining("fixture registration unavailable"),
+            });
           }
           if (variant === "cleanup-errors") {
-            expect(findings).toContainEqual(
-              expect.objectContaining({
-                message: "Runtime tool schema inspection could not confirm plugin cleanup.",
-                requirement: expect.stringContaining("Plugin tool inspection cleanup failed"),
-              }),
-            );
+            expectFinding({
+              message: "Runtime tool schema inspection could not confirm plugin cleanup.",
+              requirement: expect.stringContaining("Plugin tool inspection cleanup failed"),
+            });
           }
         }
         expect(rejectColdRead).not.toHaveBeenCalled();
+        expect(resolveRequester).not.toHaveBeenCalled();
         expect(fs.existsSync(unexpectedProbe)).toBe(false);
         const observed = fs
           .readFileSync(events, "utf8")
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line));
-        expect(
+        const eventIds = (kind: string) =>
           observed
-            .filter((row) => row.kind === "register")
+            .filter((row) => row.kind === kind)
             .map((row) => row.id)
-            .toSorted((left, right) => left.localeCompare(right)),
-        ).toEqual(registeredPluginIds);
+            .toSorted((left, right) => left.localeCompare(right));
+        expect(eventIds("register")).toEqual(registeredPluginIds);
         expect(observed.filter((row) => row.kind === "factory")).toEqual(
           (withoutPluginTools ? [] : ["alpha", "beta"]).map((agentId) => ({
             id: "fleet-tool",
@@ -288,12 +270,7 @@ module.exports = { id, register(api) {
             workspaceDir: state.path(agentId),
           })),
         );
-        expect(
-          observed
-            .filter((row) => row.kind === "dispose")
-            .map((row) => row.id)
-            .toSorted((left, right) => left.localeCompare(right)),
-        ).toEqual(registeredPluginIds);
+        expect(eventIds("dispose")).toEqual(registeredPluginIds);
       },
     );
   },

@@ -82,7 +82,7 @@ export async function enrollOwnedAuthProfileAuthorization(params: {
         { agentId: params.agentId, path: databasePath, env: params.env },
         {
           operationLabel: "auth-profiles.doctor-enroll-authorization",
-          repairAdmission: { assertCurrent },
+          repairAdmission: { assertCurrent, integrityTables: ["auth_profile_store"] },
         },
       );
       noteAuthProfileFileWrite(databasePath);

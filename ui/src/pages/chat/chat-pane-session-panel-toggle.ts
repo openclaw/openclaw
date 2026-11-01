@@ -25,14 +25,21 @@ import { listen } from "../../lib/reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import { closeSlot, openSlot, setSidebarDock } from "./sidebar-layout.ts";
+import {
+  closeSlot,
+  openSlot,
+  setSidebarDock,
+  setSidebarExpanded,
+  toggleSidebarPanelExpanded,
+  type SidebarSlotId,
+} from "./sidebar-layout.ts";
 
 interface ActivePanelOwner {
-  renderRoot: ParentNode;
+  sidebarRegion: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | null;
   state: ChatPageHost;
   linkReaders: readonly ControlUiLinkReaderDescriptor[];
   pluginPanels: readonly `${string}/${string}`[];
-  updateComplete: Promise<unknown>;
+  awaitDomCommit(): Promise<unknown>;
 }
 
 export type PendingSessionPanelToggle = {
@@ -43,20 +50,18 @@ export type PendingSessionPanelToggle = {
 
 interface SessionPanelToggleOptions {
   current: () => ActivePanelOwner | null;
-  pending: Map<SessionPanelToggleSlot, PendingSessionPanelToggle>;
-  requestUpdate: () => void;
+  pending: { requests: Map<SessionPanelToggleSlot, PendingSessionPanelToggle> };
   updateSidebarLayout: (layout: ChatPageHost["sidebarLayout"]) => void;
+  onOpenPanel?: (slot: SidebarSlotId) => void;
 }
 
 const panelToggleEvents = [
-  [TERMINAL_PANEL_TOGGLE_EVENT, "terminal", "openclaw-terminal-panel"],
-  [BROWSER_PANEL_TOGGLE_EVENT, "browser", "openclaw-browser-panel"],
-  [LINK_READER_PANEL_TOGGLE_EVENT, "link-reader", "openclaw-link-reader-panel"],
-  [DESKTOP_PANEL_TOGGLE_EVENT, "desktop", "openclaw-desktop-panel"],
-  [PORTAL_PANEL_TOGGLE_EVENT, "portal", "openclaw-portals-page"],
+  [TERMINAL_PANEL_TOGGLE_EVENT, "terminal"],
+  [BROWSER_PANEL_TOGGLE_EVENT, "browser"],
+  [LINK_READER_PANEL_TOGGLE_EVENT, "link-reader"],
+  [DESKTOP_PANEL_TOGGLE_EVENT, "desktop"],
+  [PORTAL_PANEL_TOGGLE_EVENT, "portal"],
 ] as const;
-
-type PanelTagName = (typeof panelToggleEvents)[number][2];
 
 function canOpenLinkReader(owner: ActivePanelOwner | null, url: string | undefined): boolean {
   return Boolean(
@@ -69,6 +74,12 @@ function canOpenLinkReader(owner: ActivePanelOwner | null, url: string | undefin
 
 /** Owns shell-to-pane panel intent handoff for the active chat presentation. */
 export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOptions): () => void {
+  function deletePending(slot: SessionPanelToggleSlot): void {
+    const requests = new Map(options.pending.requests);
+    requests.delete(slot);
+    options.pending.requests = requests;
+  }
+
   function handlePluginPanel(event: Event): void {
     const owner = options.current();
     if (!owner || !(event instanceof CustomEvent)) {
@@ -92,14 +103,22 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
     if (detail.dock) {
       layout = setSidebarDock(layout, detail.dock);
     }
+    const panel = layout.columns
+      .flatMap((column) => column.panels)
+      .find((entry) => entry.slot === slot);
+    if (detail.open && panel && typeof detail.expanded === "boolean") {
+      layout =
+        detail.expanded && panel.id !== layout.mainPanelId
+          ? toggleSidebarPanelExpanded(layout, panel.id)
+          : setSidebarExpanded(layout, detail.expanded);
+    }
     options.updateSidebarLayout(layout);
+    if (detail.open) {
+      options.onOpenPanel?.(slot);
+    }
   }
 
-  function handle(
-    slot: (typeof panelToggleEvents)[number][1],
-    tagName: PanelTagName,
-    event: Event,
-  ): void {
+  function handle(slot: (typeof panelToggleEvents)[number][1], event: Event): void {
     const owner = options.current();
     if (!owner) {
       return;
@@ -122,7 +141,7 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
       event.preventDefault();
     }
     if (detail?.open === false) {
-      options.pending.delete(slot);
+      deletePending(slot);
       options.updateSidebarLayout(closeSlot(owner.state.sidebarLayout, slot));
       return;
     }
@@ -148,28 +167,26 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
       panel.environmentId = detail.environmentId;
       delete panel.portalId;
     }
+    if (panel && typeof detail?.expanded === "boolean") {
+      layout =
+        detail.expanded && panel.id !== layout.mainPanelId
+          ? toggleSidebarPanelExpanded(layout, panel.id)
+          : setSidebarExpanded(layout, detail.expanded);
+    }
     if (slot === "terminal") {
       const intent = terminalToggleIntent(event, resolveChatAgentId(owner.state));
-      const embeddedTerminal = owner.renderRoot.querySelector<
-        HTMLElementTagNameMap["openclaw-terminal-panel"]
-      >("openclaw-terminal-panel[embedded]");
-      const terminalConstructor = customElements.get("openclaw-terminal-panel");
-      const embeddedTerminalMounted =
-        embeddedTerminal !== null &&
-        terminalConstructor !== undefined &&
-        embeddedTerminal instanceof terminalConstructor;
-      if (embeddedTerminalMounted) {
-        embeddedTerminal.activateTerminalHost();
-      }
+      // A new pane can hold the tag before its lazy sidebar bridge upgrades it.
+      const embeddedTerminalMounted = owner.sidebarRegion?.activateTerminalHost?.() ?? false;
       if (intent) {
         void terminalIntentQueue.queue(intent, {
           deferUntilHostChange: !embeddedTerminalMounted,
         });
       }
       options.updateSidebarLayout(layout);
+      options.onOpenPanel?.(slot);
       return;
     }
-    const existing = options.pending.get(slot);
+    const existing = options.pending.requests.get(slot);
     if (
       slot === "link-reader" &&
       existing?.owner === owner.state &&
@@ -177,6 +194,7 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
     ) {
       existing.events.push(event);
       options.updateSidebarLayout(layout);
+      options.onOpenPanel?.(slot);
       return;
     }
     const queue: PendingSessionPanelToggle = {
@@ -184,35 +202,44 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
       owner: owner.state,
       sessionKey: owner.state.sessionKey,
     };
-    const sessionKey = owner.state.sessionKey;
-    const isCurrent = () =>
-      options.pending.get(slot) === queue &&
-      options.current()?.state === owner.state &&
-      owner.state.sessionKey === sessionKey;
-    options.pending.set(slot, queue);
+    options.pending.requests = new Map(options.pending.requests).set(slot, queue);
     options.updateSidebarLayout(layout);
-    void Promise.all([
-      customElements.whenDefined("openclaw-chat-sidebar-region"),
-      customElements.whenDefined(tagName),
-    ])
+    options.onOpenPanel?.(slot);
+    deliverPending(slot);
+  }
+
+  const delivering = new WeakSet<PendingSessionPanelToggle>();
+  function deliverPending(slot: SessionPanelToggleSlot): void {
+    const owner = options.current();
+    const queue = options.pending.requests.get(slot);
+    if (
+      owner &&
+      queue &&
+      (queue.owner !== owner.state ||
+        queue.sessionKey !== owner.state.sessionKey ||
+        !owner.state.sidebarLayout.columns.some((column) =>
+          column.panels.some((panel) => panel.slot === slot),
+        ))
+    ) {
+      deletePending(slot);
+      return;
+    }
+    if (!owner || !queue || delivering.has(queue) || !owner.sidebarRegion?.readPanelHost?.(slot)) {
+      return;
+    }
+    const isCurrent = () =>
+      options.pending.requests.get(slot) === queue &&
+      options.current()?.state === owner.state &&
+      owner.state.sessionKey === queue.sessionKey;
+    delivering.add(queue);
+    void owner
+      .awaitDomCommit()
       .then(async () => {
-        options.requestUpdate();
-        // requestUpdate schedules a new commit; the captured owner holds the previous promise.
-        await options.current()?.updateComplete;
         if (!isCurrent()) {
           return;
         }
-        const region = owner.renderRoot.querySelector<
-          HTMLElementTagNameMap["openclaw-chat-sidebar-region"]
-        >("openclaw-chat-sidebar-region");
-        await region?.updateComplete;
-        if (!isCurrent()) {
-          return;
-        }
-        // The region's sibling outlet can connect a panel before its owner has committed.
-        const recipient =
-          owner.renderRoot.querySelector<HTMLElementTagNameMap[PanelTagName]>(tagName);
-        await recipient?.updateComplete;
+        const region = options.current()?.sidebarRegion;
+        await region?.awaitPanelCommit(slot);
         if (!isCurrent()) {
           return;
         }
@@ -229,9 +256,9 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
         }
       })
       .finally(() => {
-        if (options.pending.get(slot) === queue) {
-          options.pending.delete(slot);
-          options.requestUpdate();
+        delivering.delete(queue);
+        if (options.pending.requests.get(slot) === queue) {
+          deletePending(slot);
         }
       });
   }
@@ -254,29 +281,39 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
         handlePluginPanel(event);
       }
     }
-    for (const [, slot, tagName] of panelToggleEvents) {
+    for (const [, slot] of panelToggleEvents) {
       let event: Event | null;
       while ((event = takeSessionPanelToggle(slot, owner.state.sessionKey))) {
-        handle(slot, tagName, event);
+        handle(slot, event);
       }
+    }
+    for (const slot of options.pending.requests.keys()) {
+      deliverPending(slot);
     }
   }
 
-  const stop = panelToggleEvents.map(([eventName, slot, tagName]) =>
-    listen(window, eventName, (event) => handle(slot, tagName, event)),
+  const stop = panelToggleEvents.map(([eventName, slot]) =>
+    listen(window, eventName, (event) => handle(slot, event)),
   );
   stop.push(
     listen(window, PLUGIN_PANEL_TOGGLE_EVENT, handlePluginPanel),
     listen(window, TERMINAL_PANEL_DOCK_BOTTOM_EVENT, () => {
       const owner = options.current();
       if (owner) {
-        owner.state.updateSidebarLayout(closeSlot(owner.state.sidebarLayout, "terminal"));
+        const layout = owner.state.sidebarLayout;
+        const next = closeSlot(layout, "terminal");
+        // Moving the terminal leaves the desktop panel open, even when its
+        // last tab becomes the launcher. Mobile keeps its existing dismissal.
+        if (owner.sidebarRegion?.presentation !== "mobile") {
+          next.open = layout.open;
+        }
+        owner.state.updateSidebarLayout(next);
       }
     }),
   );
   onCleanup(() => {
     stop.forEach((release) => release());
-    options.pending.clear();
+    options.pending.requests.clear();
   });
   return flush;
 }

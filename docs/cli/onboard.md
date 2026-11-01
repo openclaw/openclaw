@@ -90,6 +90,12 @@ not overwrite the existing skill.
 
 ## Flags
 
+Local non-interactive onboarding migrates legacy credential JSON before applying
+an auth choice. It uses Doctor's verified SQLite import and archives the original
+files. Migration warnings name any recovery still needed. Deployment wrappers
+should pass credentials through supported onboarding or model-auth commands
+instead of writing `auth-profiles.json` or modifying SQLite directly.
+
 - `--classic`: opens the full step-by-step wizard. It cannot be combined with
   `--non-interactive`; omit `--classic` for automated setup.
 - `--agent-name <name>`: names the first agent when no roster exists. Interactive
@@ -111,7 +117,7 @@ not overwrite the existing skill.
   still requires password mode. The mode selects the configured secret;
   clients can send it in either `auth.token` or `auth.password`.
 - `--flow import`: runs a detected migration provider (for example Hermes via `--import-from hermes`) against a fresh setup. After confirmation, onboarding stages config, credentials, workspace files, memory, and skills under private temporary targets; imported inference must pass a live completion before workspace and agent state are promoted and configuration is committed. Failure or cancellation before promotion leaves the live target untouched. External activation steps that cannot be rolled back, such as Codex plugin installation, run afterward and remain retryable from the migration report. Migration import options (`--flow import`, `--import-from`, `--import-source`, and `--import-secrets`) cannot be combined with `--reset`; run the import without `--reset`. Use [`openclaw migrate`](/cli/migrate) for dry-run plans, overwrite mode, verified backups, reports, and exact mappings.
-- `--remote-url`, `--remote-token`, and `--remote-password`: prefill the classic remote Gateway step and override stored remote values for this run. Pass either a token or a password, not both. Changing the URL does not reuse stored credentials unless you also provide a new token or password. The interactive step asks for one **Gateway secret**, whether the remote Gateway calls it a token or password, and stores it as `gateway.remote.token`. Credentials stay masked and follow the plaintext or SecretRef storage choice. Leave the secret blank and confirm to keep an existing credential. To connect without a shared secret, leave it blank, decline keeping an existing credential if offered, then explicitly confirm **Continue without a Gateway secret?**. Reference storage offers the same confirmation before asking for the reference.
+- `--remote-url`, `--remote-token`, and `--remote-password`: prefill the classic remote Gateway step and override stored remote values for this run. Pass either a token or a password, not both. Equivalent URL spellings, such as a trailing slash or an explicit default port, preserve saved credentials and transport settings. Changing the host, path, or query selects a different credential target. A newly discovered SSH tunnel also selects a new target, even with the same loopback URL. The interactive step asks for one **Gateway secret**, whether the remote Gateway calls it a token or password, and stores it as `gateway.remote.token`. Credentials stay masked and follow the plaintext or SecretRef storage choice. Leave the secret blank and confirm to keep an existing credential. To connect without a shared secret, leave it blank, decline keeping an existing credential if offered, then explicitly confirm **Continue without a Gateway secret?**. Reference storage offers the same confirmation before asking for the reference.
 - `--modern` is a compatibility alias for the OpenClaw conversational setup
   assistant. It uses the same live-inference gate as `openclaw setup` and
   accepts only `--workspace`, `--agent-name`, `--accept-risk`,
@@ -267,7 +273,13 @@ acknowledgement, so invoking `--reset` can move state to Trash before you can
 decline that prompt. After reset, the command runs guided, classic, or
 non-interactive onboarding according to the other flags.
 
-Session reset permanently removes stored SQLite history and its owned archive
+Onboarding reset requires readable configuration and SQLite storage. With
+PostgreSQL configured, rerun onboarding without `--reset`, or use
+`openclaw database port --to sqlite` before resetting. Reset keeps database
+state, so discarding PostgreSQL routing would leave that state inaccessible.
+For a file-only reset without starting onboarding, use `openclaw reset --scope config`.
+
+Session reset permanently removes stored history from the configured database and its owned archive
 files through the same cleanup as [`openclaw reset`](/cli/reset). It preserves
 auth profiles and unrelated database state. Stop any running Gateway first;
 onboarding refuses session cleanup while another process owns the state directory.
@@ -486,7 +498,7 @@ Token-based model auth (used with `--auth-choice token`):
 
 Cloudflare AI Gateway: `--cloudflare-ai-gateway-account-id <id>`, `--cloudflare-ai-gateway-gateway-id <id>`.
 
-Daemon install control: `--no-install-daemon` / `--skip-daemon` (aliases; skip gateway service install), `--daemon-runtime <node|bun>` (default: `node`). Bun 1.4.3+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
+Daemon install control: `--no-install-daemon` / `--skip-daemon` (aliases; skip gateway service install), `--daemon-runtime <node|bun>` (default: `node`). Bun 1.4.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
 
 Skills: `--node-manager <npm|pnpm|bun>` (default `npm`), `--skip-skills`.
 
