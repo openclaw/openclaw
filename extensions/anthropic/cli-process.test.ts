@@ -362,6 +362,14 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
       const diagnosticsStarted = createDeferred<void>();
       const releaseDiagnostics = createDeferred<void>();
       const inputErrors: unknown[] = [];
+      const expectPipeFailures = () => {
+        // A closed write and the queued stream error can both notify the adapter.
+        // Cancellation must survive every pipe failure, not depend on their count.
+        expect(inputErrors.length).toBeGreaterThan(0);
+        for (const error of inputErrors) {
+          expect(error).toMatchObject({ code: "EPIPE" });
+        }
+      };
       observeChild((child, owner) => {
         child.onError((error, source) => {
           if (source === "stdin") {
@@ -396,12 +404,12 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
       try {
         if (stage === "diagnostic drainage") {
           await withinTest(diagnosticsStarted.promise, signal);
-          expect(inputErrors).toMatchObject([{ code: "EPIPE" }]);
+          expectPipeFailures();
           controller.abort(reason);
           releaseDiagnostics.resolve();
         }
         await expect(result).rejects.toBe(reason);
-        expect(inputErrors).toMatchObject([{ code: "EPIPE" }]);
+        expectPipeFailures();
       } finally {
         releaseDiagnostics.resolve();
         await result.catch(() => {});

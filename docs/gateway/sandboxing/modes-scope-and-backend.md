@@ -75,6 +75,14 @@ execution placement remain independently enforced. See
 - `session`: one container per session.
 - `shared`: one container shared by all sandboxed sessions (per-agent `docker`/`ssh`/`browser` overrides are ignored under this scope).
 
+For ordinary `session` scope, `/new` and `/reset` reset conversation context
+under the same session key; they do not remove the existing container or its
+sandbox workspace. The next turn can reuse both. To replace the container, use
+`openclaw sandbox recreate --session "<scope key>"` with the key from
+`openclaw sandbox list`; host-backed workspace files remain. Managed project
+sessions instead retire their runtimes on reset (see
+[Workspace access](/gateway/sandboxing/workspace-access#managed-project-workspaces)).
+
 Required sandboxes with proven Gateway-profile creators use that profile as
 their isolation boundary. Different guests on the same agent receive separate
 environments and workspaces, regardless of configured scope. Sessions created
