@@ -513,8 +513,8 @@ describe("plugin discovery identity and local join", () => {
     ({ categories }) => {
       const plugin = {
         id: "calendar-local",
-        name: "Memory Calendar",
-        description: "Coordinate a local calendar.",
+        name: categories ? "Memory Cafe\u0301" : "Memory Café",
+        description: categories ? "Local 資料ガイド." : "Local 資料カ\u3099イド.",
         packageName: "@openclaw/calendar-local",
         installed: false,
         enabled: false,
@@ -531,10 +531,14 @@ describe("plugin discovery identity and local join", () => {
       } as const;
 
       const matches = joinClawHubPluginCatalog({ ...common, query: "memory" });
-      expect(matches.map((item) => item.catalog.name)).toEqual(["Memory Calendar", "Memory Plus"]);
-      expect(joinClawHubPluginCatalog({ ...common, remote: [], query: "unrelated" })).toHaveLength(
-        0,
-      );
+      expect(matches.map((item) => item.catalog.name)).toEqual([plugin.name, "Memory Plus"]);
+      for (const query of ["café", "CAFE\u0301", "ガイド", "カ\u3099イド"]) {
+        const filtered = joinClawHubPluginCatalog({ ...common, remote: [], query });
+        expect(filtered.map((item) => item.catalog.name)).toEqual([plugin.name]);
+      }
+      for (const query of ["unrelated", "cafè", "Ｃａｆé"]) {
+        expect(joinClawHubPluginCatalog({ ...common, remote: [], query })).toHaveLength(0);
+      }
       const bundled = joinClawHubPluginCatalog({
         ...common,
         remote: [],

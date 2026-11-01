@@ -241,6 +241,8 @@ it("bounds inventory and narrows it without hiding the omitted count", async () 
     id: `plugin-${index}`,
     version: "1.0.0",
     state: "enabled",
+    name: index === 23 ? "Café tools" : index === 24 ? "Cafe\u0301 tools" : undefined,
+    description: index === 23 ? "資料カ\u3099イド" : index === 24 ? "資料ガイド" : undefined,
   }));
   callGateway.mockResolvedValue({ plugins, mutationAllowed: true });
   const tool = createPluginsTool();
@@ -253,4 +255,16 @@ it("bounds inventory and narrows it without hiding the omitted count", async () 
     matching: 1,
     omitted: 0,
   });
+  for (const query of ["café", "CAFE\u0301", "ガイド", "カ\u3099イド"]) {
+    const result = await tool.execute("unicode-filter", { action: "list", query });
+    expect(result.details).toMatchObject({
+      plugins: [{ id: "plugin-23" }, { id: "plugin-24" }],
+      matching: 2,
+      omitted: 0,
+    });
+  }
+  for (const query of ["cafè", "Ｃａｆé"]) {
+    const result = await tool.execute("nonmatching-filter", { action: "list", query });
+    expect(result.details).toMatchObject({ plugins: [], matching: 0, omitted: 0 });
+  }
 });

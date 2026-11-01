@@ -24,7 +24,7 @@ const AdvancedSettings = lazy(() => import("./settings-advanced.tsx"), {
 });
 
 function InstalledInventory(props: InventoryProps): JSX.Element {
-  const query = createMemo(() => props.query.trim().toLocaleLowerCase());
+  const query = createMemo(() => props.query.trim().normalize("NFC").toLocaleLowerCase());
   const plugins = createMemo(() =>
     (props.result?.plugins ?? [])
       .filter(
@@ -32,7 +32,7 @@ function InstalledInventory(props: InventoryProps): JSX.Element {
           plugin.installed &&
           (!query() ||
             [plugin.name, plugin.id, plugin.description, plugin.packageName].some((value) =>
-              value?.toLocaleLowerCase().includes(query()),
+              value?.normalize("NFC").toLocaleLowerCase().includes(query()),
             )),
       )
       .toSorted((left, right) => left.name.localeCompare(right.name)),
