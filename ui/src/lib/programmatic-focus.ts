@@ -1,3 +1,5 @@
+import { listen } from "./reactive/listener.ts";
+
 const TEXT_ENTRY = 'input:not([type="checkbox"], [type="radio"]), textarea, select';
 const MODIFIER_KEYS = new Set(["Alt", "AltGraph", "CapsLock", "Control", "Meta", "Shift"]);
 
@@ -24,21 +26,26 @@ export function focusProgrammatically(element: HTMLElement, options?: FocusOptio
 }
 
 if (typeof window !== "undefined") {
-  window.addEventListener(
+  listen(
+    window,
     "keydown",
-    (event) => {
+    (event: KeyboardEvent) => {
       if (MODIFIER_KEYS.has(event.key)) {
         return;
       }
       keyboardInput = true;
-      if (unmarked && event.composedPath()[0] === unmarked) {
-        focusProgrammatically(unmarked, { preventScroll: true });
+      const target = event.composedPath()[0];
+      if (unmarked && target === unmarked) {
+        // Handlers run first: the key may move focus itself, and refocusing a menu row now would
+        // close the submenu this key is meant for.
+        setTimeout(() => {
+          if (unmarked === target && unmarked.matches(":focus")) {
+            focusProgrammatically(unmarked, { preventScroll: true });
+          }
+        }, 0);
       }
     },
     { capture: true, passive: true },
   );
-  window.addEventListener("pointerdown", () => (keyboardInput = false), {
-    capture: true,
-    passive: true,
-  });
+  listen(window, "pointerdown", () => (keyboardInput = false), { capture: true, passive: true });
 }
