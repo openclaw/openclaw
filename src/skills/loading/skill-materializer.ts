@@ -4,7 +4,7 @@ import type { ParsedSkillFrontmatter } from "../types.js";
 import { resolveSkillInvocationPolicy } from "./frontmatter.js";
 import { createSyntheticSourceInfo, type Skill } from "./skill-contract.js";
 
-const SKILL_TITLE_HEADING = /^#\s+(.+?)\s*#*\s*$/mu;
+const SKILL_TITLE_HEADING = /^#\s+(.+?)\s*#*\s*$/u;
 
 function humanizeSkillIdentifier(value: string): string {
   return value
@@ -17,7 +17,11 @@ function humanizeSkillIdentifier(value: string): string {
 
 function resolveSkillDisplayName(content: string, fallbackName: string): string {
   const body = extractFrontmatterBlock(content)?.body ?? content;
-  const heading = body.match(SKILL_TITLE_HEADING)?.[1]?.trim();
+  // Only a heading that opens the body titles the skill; a later heading can
+  // belong to embedded shared boilerplate, while the frontmatter name stays the
+  // skill identity per the Agent Skills spec.
+  const [firstLine = ""] = body.replace(/^(?:[ \t]*\r?\n)*/u, "").split("\n", 1);
+  const heading = SKILL_TITLE_HEADING.exec(firstLine)?.[1]?.trim();
   const displayName = heading || humanizeSkillIdentifier(fallbackName) || fallbackName;
   // A captured heading can retain the whole skill body in metadata caches.
   // Copy UTF-16 code units without changing lone surrogates.
