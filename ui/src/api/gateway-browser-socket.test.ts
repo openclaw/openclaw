@@ -169,7 +169,7 @@ describe("createBrowserGatewaySocket with an embedder transport", () => {
   it("uses the embedder's socket for URLs it carries and the browser socket otherwise", () => {
     vi.stubGlobal("document", {
       documentElement: {
-        getAttribute: () => JSON.stringify({ basePath: "", openclawIdEnabled: true }),
+        getAttribute: (name: string) => (name === "data-openclaw-id-enabled" ? "true" : ""),
       },
     });
     sockets.length = 0;
@@ -191,7 +191,10 @@ describe("createBrowserGatewaySocket with an embedder transport", () => {
   });
   it.each([undefined, false])("ignores a stale embedder while ID is %s", (openclawIdEnabled) => {
     vi.stubGlobal("document", {
-      documentElement: { getAttribute: () => JSON.stringify({ basePath: "", openclawIdEnabled }) },
+      documentElement: {
+        getAttribute: (name: string) =>
+          name === "data-openclaw-id-enabled" ? (openclawIdEnabled === false ? "false" : null) : "",
+      },
     });
     sockets.length = 0;
     vi.stubGlobal("WebSocket", MockWebSocket);

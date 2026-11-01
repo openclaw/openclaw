@@ -25,6 +25,9 @@ export const CONTROL_UI_BASE_PATH_ATTRIBUTE = "data-openclaw-control-ui-base-pat
 /** Marks whether the served document CSP permits the terminal WASM runtime. */
 export const CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE = "data-openclaw-terminal-enabled";
 
+/** Public feature opt-in for callback/loader startup; never carries viewer data or authority. */
+export const CONTROL_UI_OPENCLAW_ID_ENABLED_ATTRIBUTE = "data-openclaw-id-enabled";
+
 export const CONTROL_UI_ENVIRONMENT_ATTRIBUTE = "data-openclaw-environment";
 export const CONTROL_UI_ENVIRONMENT_COLORS = [
   "teal",

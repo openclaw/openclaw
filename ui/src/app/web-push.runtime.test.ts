@@ -189,10 +189,8 @@ it.each(["loading", "native denied", "storage unavailable"])(
 it.each([false, true])(
   "preserves ordinary push reads and protects the enabled ID loader: %s",
   async (enabled) => {
-    document.documentElement.setAttribute(
-      "data-openclaw-bootstrap-config",
-      JSON.stringify({ basePath: "", openclawIdEnabled: enabled }),
-    );
+    document.documentElement.setAttribute("data-openclaw-id-enabled", String(enabled));
+    document.documentElement.setAttribute("data-openclaw-control-ui-base-path", "");
     vi.stubGlobal("__openclawTransport", { createWebSocket: vi.fn() });
     vi.stubGlobal("Notification", { permission: "default" });
     const getSubscription = vi.fn().mockResolvedValue(null);
@@ -224,7 +222,8 @@ it.each([false, true])(
       expect(subscription).toBe("missing");
     } finally {
       runtime.dispose();
-      document.documentElement.removeAttribute("data-openclaw-bootstrap-config");
+      document.documentElement.removeAttribute("data-openclaw-id-enabled");
+      document.documentElement.removeAttribute("data-openclaw-control-ui-base-path");
     }
   },
 );

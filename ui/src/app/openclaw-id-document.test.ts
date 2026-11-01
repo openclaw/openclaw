@@ -1,30 +1,28 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { openClawIdDocumentConfig } from "./openclaw-id-document.ts";
 
-const attribute = "data-openclaw-bootstrap-config";
+const enabled = "data-openclaw-id-enabled";
+const base = "data-openclaw-control-ui-base-path";
 afterEach(() => {
-  document.documentElement.removeAttribute(attribute);
+  document.documentElement.removeAttribute(enabled);
+  document.documentElement.removeAttribute(base);
   vi.restoreAllMocks();
 });
 
-it.each([undefined, false, true])(
-  "reads only the served explicit ID opt-in: %s",
-  (openclawIdEnabled) => {
+it.each([null, "false", "true", "TRUE", "1"])(
+  "uses only an explicit public opt-in: %s",
+  (value) => {
     const fetch = vi.spyOn(globalThis, "fetch");
-    document.documentElement.setAttribute(
-      attribute,
-      JSON.stringify({ basePath: "/claw", openclawIdEnabled }),
-    );
-    expect(openClawIdDocumentConfig()).toEqual(
-      openclawIdEnabled ? { basePath: "/claw", openclawIdEnabled: true } : null,
-    );
+    document.documentElement.setAttribute(base, "/claw");
+    if (value !== null) {
+      document.documentElement.setAttribute(enabled, value);
+    }
+    expect(openClawIdDocumentConfig()).toEqual(value === "true" ? { basePath: "/claw" } : null);
     expect(fetch).not.toHaveBeenCalled();
   },
 );
 
-it.each([null, "{"])("keeps an absent or invalid bootstrap inert: %s", (raw) => {
-  if (raw !== null) {
-    document.documentElement.setAttribute(attribute, raw);
-  }
+it("requires the serving Gateway's base path even when opted in", () => {
+  document.documentElement.setAttribute(enabled, "true");
   expect(openClawIdDocumentConfig()).toBeNull();
 });
