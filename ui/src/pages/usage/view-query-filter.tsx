@@ -13,7 +13,7 @@ export function UsageQueryFilter(props: {
   queryDraft: string;
   queryTerms: ReturnType<typeof extractQueryTerms>;
   onQueryDraftChange: (value: string) => void;
-  placement: OverlayPlacement;
+  placement?: OverlayPlacement;
 }) {
   const selected = createMemo(() => {
     const normalized = normalizeLowercaseStringOrEmpty(props.filterKey);
@@ -62,7 +62,7 @@ export function UsageQueryFilter(props: {
       label={`${props.label} ${selected().length > 0 ? selected().length : t("usage.filters.all")}`}
       class="usage-filter-select"
       triggerClass="usage-filter-trigger"
-      placement={props.placement}
+      placement={props.placement ?? "bottom-start"}
       items={items}
       onSelect={(item) => {
         const value = item.id;
