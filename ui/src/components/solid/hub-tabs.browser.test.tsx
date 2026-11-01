@@ -110,7 +110,7 @@ it.each([
   }
 });
 
-it("drops the track and reveals a clipped active tab only at phone width", async () => {
+it("drops the track, fades clipped ends and reveals the active tab only at phone width", async () => {
   const viewport = { width: innerWidth, height: innerHeight };
   const styles = document.createElement("style");
   styles.textContent = [baseStyles, hubStyles, tabsStyles].join("\n");
@@ -129,20 +129,35 @@ it("drops the track and reveals a clipped active tab only at phone width", async
   const select = async (value: string) => {
     setActive(value);
     flush();
-    await Promise.resolve();
+    await nextFrame();
+    await nextFrame();
   };
+  const mask = () => getComputedStyle(strip).maskImage;
   try {
     await page.viewport(390, 844);
     expect(getComputedStyle(strip).boxShadow).toContain("rgba(0, 0, 0, 0)");
+    await vi.waitFor(() => expect(strip.dataset.atEnd).toBe("false"));
+    expect(mask()).toMatch(/^linear-gradient\(to right, rgb\(0, 0, 0\)/);
+
+    await select("charlie");
+    const charlie = view.getByRole("tab", { name: "Charlie" }).getBoundingClientRect();
+    expect(charlie.right).toBeLessThanOrEqual(strip.getBoundingClientRect().right - 32);
+
     await select("echo");
     const echo = view.getByRole("tab", { name: "Echo" }).getBoundingClientRect();
     expect(strip.scrollLeft).toBeGreaterThan(0);
     expect(echo.right).toBeLessThanOrEqual(strip.getBoundingClientRect().right + 1);
+    await vi.waitFor(() => expect(strip.dataset.atEnd).toBe("true"));
+    expect(mask()).toMatch(
+      /^linear-gradient\(to right, rgba\(0, 0, 0, 0\), rgb\(0, 0, 0\) 32px\)$/,
+    );
+
     await select("alpha");
     expect(strip.scrollLeft).toBe(0);
 
     await page.viewport(1440, 900);
     expect(getComputedStyle(strip).boxShadow).not.toContain("rgba(0, 0, 0, 0)");
+    expect(mask()).toBe("none");
     await select("echo");
     expect(strip.scrollLeft).toBe(0);
   } finally {
@@ -151,6 +166,12 @@ it("drops the track and reveals a clipped active tab only at phone width", async
     styles.remove();
   }
 });
+
+function nextFrame() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
 
 const hosts: HTMLElement[] = [];
 

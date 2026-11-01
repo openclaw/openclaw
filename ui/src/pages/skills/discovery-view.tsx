@@ -1,10 +1,10 @@
 import { createMemo, Errored, isPending, Loading, onSettled, Show } from "solid-js";
 import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { SkillStatusEntry } from "../../api/types.ts";
-import { isPhoneLayout } from "../../app/mobile-nav-layout.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { isPhoneLayout } from "../../lib/phone-layout.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
 import { PluginCatalogGrid } from "../plugins/catalog-grid.tsx";

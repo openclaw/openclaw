@@ -21,15 +21,6 @@ export function isMobileNavLayout(): boolean {
   return globalThis.matchMedia?.(mobileNavLayoutMediaQuery()).matches ?? false;
 }
 
-/** Matches the phone breakpoint the shared page-header styles use. */
-export function isPhoneLayout(): boolean {
-  return (
-    globalThis.matchMedia?.(
-      "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
-    ).matches ?? false
-  );
-}
-
 export function shouldMergeChatChrome(params: {
   mobileNavLayout: boolean;
   routeId: RouteId;

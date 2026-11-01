@@ -1,7 +1,10 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, onSettled } from "solid-js";
-import { isPhoneLayout } from "../../app/mobile-nav-layout.ts";
+import { createMemo, onSettled } from "solid-js";
+import { isPhoneLayout, PHONE_LAYOUT_QUERY } from "../../lib/phone-layout.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
+import { createScrollPosition } from "../../lib/reactive/scroll-state.ts";
 import { reclaimHubTabFocus, rememberHubTabFocus } from "../hub-tabs-focus.ts";
+import { useScrollState } from "./scroll-state.ts";
 import { Tabs } from "./tabs.tsx";
 import "../../styles/hub-tabs.css";
 import hubStyles from "../../styles/hub-tabs.css?inline";
@@ -25,20 +28,6 @@ export type HubTabsProps<T extends string> = {
   onSelect: (value: T) => void;
   onActivate?: (element: HTMLElement) => void;
 };
-
-/** Scrolls only the strip, so selecting a tab never moves the page around it. */
-function revealInStrip(strip: HTMLElement, tab: HTMLElement | undefined) {
-  if (!tab) {
-    return;
-  }
-  const bounds = strip.getBoundingClientRect();
-  const rect = tab.getBoundingClientRect();
-  if (rect.left < bounds.left) {
-    strip.scrollBy({ left: rect.left - bounds.left, behavior: "instant" });
-  } else if (rect.right > bounds.right) {
-    strip.scrollBy({ left: rect.right - bounds.right, behavior: "instant" });
-  }
-}
 
 export function HubTabs<T extends string>(props: HubTabsProps<T>) {
   const items = createMemo(() =>
@@ -67,20 +56,37 @@ export function HubTabs<T extends string>(props: HubTabsProps<T>) {
       reclaimHubTabFocus(props.id, props.active, tabElement(props.active));
     }
   });
+  const scrollState = useScrollState(true);
+  const phone = createMediaQuery(PHONE_LAYOUT_QUERY, isPhoneLayout());
+  // Keyed to a value, so re-rendered tab props can't cancel a reveal that is waiting for its frame.
   // Count badges arrive after mount and can push the active tab back out of view.
-  createEffect(
-    () => ({ active: props.active, counts: props.tabs.map((tab) => tab.count).join() }),
-    ({ active }) => {
-      if (active !== null && isPhoneLayout()) {
-        queueMicrotask(() => revealInStrip(strip, tabElement(active)));
-      }
+  const revealKey = createMemo(() =>
+    phone() && props.active !== null
+      ? `${props.active}|${props.tabs.map((tab) => tab.count).join(",")}`
+      : null,
+  );
+  // Only the strip scrolls, so the page never moves.
+  createScrollPosition(
+    () => {
+      const key = revealKey();
+      return {
+        reveal:
+          key === null
+            ? undefined
+            : {
+                identity: [key],
+                target: () => (props.active !== null ? tabElement(props.active) : undefined),
+              },
+      };
     },
+    { region: () => strip, revealTiming: "animation-frame", revealAxis: "inline" },
   );
   return (
     <Tabs
       ref={(element, findTab) => {
         strip = element;
         tabElement = findTab;
+        scrollState(element);
       }}
       id={`${props.id}-tabs`}
       shadowStyles={[hubStyles]}

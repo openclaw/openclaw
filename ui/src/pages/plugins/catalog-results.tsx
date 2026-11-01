@@ -1,7 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, latest, Loading, onSettled, Repeat, Reveal } from "solid-js";
 import { comparePluginCatalogEntries } from "../../../../packages/plugin-package-contract/src/catalog-order.js";
-import { isPhoneLayout } from "../../app/mobile-nav-layout.ts";
 import {
   CatalogDiscoveryChip,
   CatalogDiscoveryChips,
@@ -13,6 +12,7 @@ import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PageReadResult } from "../../lib/page-request.ts";
+import { isPhoneLayout } from "../../lib/phone-layout.ts";
 import type {
   PluginCatalogItem,
   PluginDiscoveryEntry,
@@ -547,7 +547,7 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
   const focusOnArrival = !isPhoneLayout();
   onSettled(() => {
     if (!focusOnArrival) {
-      return;
+      return undefined;
     }
     input.dataset.autofocused = "true";
     input.focus();
