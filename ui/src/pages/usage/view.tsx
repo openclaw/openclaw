@@ -19,7 +19,6 @@ import { createUsageRead, UsagePending, UsageReadStatus, type UsageRead } from "
 import type { UsageProps } from "./types.ts";
 import { DailyChartCompact, CostBreakdownCompact } from "./view-chart.tsx";
 import { UsageCreatorFilter, UsageCreators } from "./view-creators.tsx";
-import { SessionDetailPanel } from "./view-details.tsx";
 import { UsageHeatmap } from "./view-heatmap.tsx";
 import {
   CostWindowComparison,
@@ -29,7 +28,7 @@ import {
   usageOverview,
 } from "./view-overview.tsx";
 import { UsageQueryFilter } from "./view-query-filter.tsx";
-import { SessionsCard } from "./view-sessions-card.tsx";
+import { UsageSessionsGrid } from "./view-sessions-grid.tsx";
 
 registerEnglishCatalog(registerUsageEnglish);
 
@@ -672,37 +671,17 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
               onSelectHour={props.callbacks.filters.onSelectHour}
             />
 
-            <div class="usage-grid">
-              <div class="usage-grid-column">
-                <SessionsCard
-                  sessions={analyticsData().sessions}
-                  selectedRows={analyticsData().overview?.selectedRows ?? []}
-                  usage={props}
-                  totalSessions={analyticsData().overview?.total ?? analyticsTotalSessions()}
-                  overview={
-                    retainedChartSnapshot()?.overview ??
-                    props.data.sessionPage ??
-                    props.data.overview
-                  }
-                  loading={loading()}
-                />
-              </div>
-              <Show when={showAnalytics() && primarySelectedEntry()}>
-                {(selectedSession) => (
-                  // Details stack under the session list so the page stays one column.
-                  <aside class="usage-grid-column" aria-label={t("usage.sessions.details")}>
-                    <SessionDetailPanel
-                      session={selectedSession()}
-                      detail={props.detail}
-                      callbacks={props.callbacks.details}
-                      range={props.filters}
-                      contextExpanded={props.display.contextExpanded}
-                      onClose={() => props.callbacks.filters.onClearSessions()}
-                    />
-                  </aside>
-                )}
-              </Show>
-            </div>
+            <UsageSessionsGrid
+              usage={props}
+              sessions={analyticsData().sessions}
+              selectedRows={analyticsData().overview?.selectedRows ?? []}
+              totalSessions={analyticsData().overview?.total ?? analyticsTotalSessions()}
+              overview={
+                retainedChartSnapshot()?.overview ?? props.data.sessionPage ?? props.data.overview
+              }
+              loading={loading()}
+              selected={showAnalytics() ? primarySelectedEntry() : null}
+            />
           </div>
         </Show>
         {renderProviderUsage(
