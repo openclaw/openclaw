@@ -162,38 +162,46 @@ it("quotes carriage returns in formula-neutralized CSV cells", async () => {
   expect(output()).toContain('conferenceRecords/rec-1,"\'\r=1+1",users/alice');
 });
 
-it("writes an export bundle to the literal CLI output directory", async () => {
-  const outputDir = path.join(tempDir, process.platform === "win32" ? "out" : "out ");
-  const readBundleFile = (name: string) => readFileSync(path.join(outputDir, name), "utf8");
-  const flags = ["--include-doc-bodies", "--no-transcript-entries", "--zip"];
-  await runRecordCommand("export", [...flags, "--output", outputDir]);
-  expect(output()).toContain(`export: ${outputDir}`);
-  cli.expectText(
-    readBundleFile("summary.md"),
-    "# Google Meet Artifacts",
-    `## ${record}`,
-    "Transcript entries: 0",
-  );
-  expect(readBundleFile("attendance.csv")).toContain("conferenceRecords/rec-1,Alice,users/alice");
-  cli.expectText(
-    readBundleFile("transcript.md"),
-    "_No transcript entries._",
-    "Transcript document body.",
-  );
-  const manifest = JSON.parse(readBundleFile("manifest.json"));
-  expect(manifest).toMatchObject({
-    request: { conferenceRecord: "rec-1", includeDocumentBodies: true },
-    tokenSource: "cached-access-token",
-    counts: { attendanceRows: 1, warnings: 0 },
-  });
-  expect(manifest.files.toSorted()).toEqual(readdirSync(outputDir).toSorted());
-  expect(JSON.parse(readBundleFile("artifacts.json"))).toMatchObject({
-    conferenceRecords: [{ name: record }],
-    artifacts: [{ transcripts: [{ documentText: "Transcript document body." }] }],
-  });
-  const zip = await JSZip.loadAsync(readFileSync(`${outputDir}.zip`));
-  expect(await zip.file("summary.md")?.async("string")).toContain("# Google Meet Artifacts");
-});
+it.each([false, true])(
+  "writes an export bundle to the literal CLI output directory (skipEntries=%s)",
+  async (skipEntries) => {
+    const outputDir = path.join(tempDir, process.platform === "win32" ? "out" : "out ");
+    const readBundleFile = (name: string) => readFileSync(path.join(outputDir, name), "utf8");
+    const flags = ["--include-doc-bodies", "--zip"];
+    if (skipEntries) {
+      flags.push("--no-transcript-entries");
+    }
+    await runRecordCommand("export", [...flags, "--output", outputDir]);
+    expect(output()).toContain(`export: ${outputDir}`);
+    cli.expectText(
+      readBundleFile("summary.md"),
+      "# Google Meet Artifacts",
+      `## ${record}`,
+      ...(skipEntries
+        ? ["Transcript entries: 0"]
+        : [`### Transcript Entries: ${transcript}`, "Hello from the transcript."]),
+    );
+    expect(readBundleFile("attendance.csv")).toContain("conferenceRecords/rec-1,Alice,users/alice");
+    cli.expectText(
+      readBundleFile("transcript.md"),
+      skipEntries ? "_No transcript entries._" : "Hello from the transcript.",
+      "Transcript document body.",
+    );
+    const manifest = JSON.parse(readBundleFile("manifest.json"));
+    expect(manifest).toMatchObject({
+      request: { conferenceRecord: "rec-1", includeDocumentBodies: true },
+      tokenSource: "cached-access-token",
+      counts: { attendanceRows: 1, warnings: 0 },
+    });
+    expect(manifest.files.toSorted()).toEqual(readdirSync(outputDir).toSorted());
+    expect(JSON.parse(readBundleFile("artifacts.json"))).toMatchObject({
+      conferenceRecords: [{ name: record }],
+      artifacts: [{ transcripts: [{ documentText: "Transcript document body." }] }],
+    });
+    const zip = await JSZip.loadAsync(readFileSync(`${outputDir}.zip`));
+    expect(await zip.file("summary.md")?.async("string")).toContain("# Google Meet Artifacts");
+  },
+);
 
 it("includes artifact warnings in export summaries and manifests", async () => {
   cli.stubMeetArtifactsApi({ failSmartNoteDocumentBody: true });
