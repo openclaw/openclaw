@@ -35,7 +35,7 @@ openclaw-panel-loading-skeleton {
     background: currentColor;
     mask: var(--spinner-mask-large);
     border-radius: 50%;
-    animation: panel-skeleton-spin var(--spinner-duration) linear infinite;
+    animation: panel-skeleton-spin 1s linear infinite;
   }
 
   &[overlay] {

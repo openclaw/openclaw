@@ -162,6 +162,7 @@ openclaw-chat-summary-automations {
   flex: 0 0 12px;
   width: 12px;
   height: 12px;
+  animation-duration: 1.5s;
 }
 
 .chat-summary__automation-error {

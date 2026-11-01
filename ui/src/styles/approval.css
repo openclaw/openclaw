@@ -365,7 +365,7 @@
   background: currentColor;
   mask: var(--spinner-mask-large);
   border-radius: 50%;
-  animation: btn-spinner-spin var(--spinner-duration) linear infinite;
+  animation: btn-spinner-spin 800ms linear infinite;
 }
 
 .approval-page__state-mark {

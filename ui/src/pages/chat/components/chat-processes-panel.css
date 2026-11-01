@@ -92,7 +92,7 @@
   color: var(--accent);
   border-radius: 50%;
   background: var(--bg);
-  animation: btn-spinner-spin var(--spinner-duration) linear infinite;
+  animation: btn-spinner-spin 1.6s linear infinite;
 }
 
 /* The disc behind the ring stays opaque, so only this layer takes the mask. */

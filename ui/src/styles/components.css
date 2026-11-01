@@ -390,7 +390,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   stroke: var(--accent);
   stroke-linecap: round;
   stroke-dasharray: var(--spinner-trace-dash);
-  animation: session-run-trace var(--spinner-duration) linear infinite;
+  animation: session-run-trace 2s linear infinite;
 }
 
 .session-glyph__badge {
@@ -534,7 +534,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   background: currentColor;
   mask: var(--spinner-mask);
   border-radius: var(--radius-full);
-  animation: btn-spinner-spin var(--spinner-duration) linear infinite;
+  animation: btn-spinner-spin 0.7s linear infinite;
 }
 
 .settings-save-indicator__spinner svg {
@@ -3126,7 +3126,7 @@ td.data-table-key-col {
 
 .session-run-spinner,
 .session-glyph__ring {
-  animation: btn-spinner-spin var(--spinner-duration) linear infinite;
+  animation: btn-spinner-spin 1.6s linear infinite;
 }
 
 .session-glyph__ring--queued,
@@ -3142,7 +3142,7 @@ td.data-table-key-col {
 
 .session-glyph__ring--background,
 .session-glyph__trace--background .session-glyph__trace-run {
-  animation-duration: var(--spinner-duration-background);
+  animation-duration: 3.2s;
 }
 
 /* Forced colors would repaint the background these masks show through. */

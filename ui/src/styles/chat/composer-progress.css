@@ -596,6 +596,7 @@
   display: block;
   width: var(--session-progress-marker-size);
   height: var(--session-progress-marker-size);
+  animation-duration: 1.8s;
 }
 
 .session-progress-card__summary-count {

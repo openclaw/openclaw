@@ -33,7 +33,7 @@
   background: currentColor;
   mask: var(--spinner-mask-large);
   border-radius: 50%;
-  animation: btn-spinner-spin var(--spinner-duration) linear infinite;
+  animation: btn-spinner-spin 1.2s linear infinite;
 }
 
 .wizard-sign-in__title {

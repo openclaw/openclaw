@@ -160,12 +160,13 @@
   background: currentColor;
   mask: var(--spinner-mask);
   border-radius: 999px;
-  animation: btn-spinner-spin var(--spinner-duration) linear infinite;
+  animation: btn-spinner-spin 1.6s linear infinite;
 }
 .chat-activity-pills .activity-pill__badge .activity-pill__spinner {
   width: 9px;
   height: 9px;
   mask: var(--spinner-mask-small);
+  animation-duration: 1.5s;
 }
 .chat-activity-pills [data-family="progress"] {
   gap: 7px;

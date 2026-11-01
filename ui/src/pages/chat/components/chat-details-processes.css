@@ -95,7 +95,7 @@
   mask: var(--spinner-mask-small);
   border-radius: 50%;
   corner-shape: round;
-  animation: btn-spinner-spin var(--spinner-duration) linear infinite;
+  animation: btn-spinner-spin 1.5s linear infinite;
 
   @media (prefers-reduced-motion: reduce) {
     animation: none;
