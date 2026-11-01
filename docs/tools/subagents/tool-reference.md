@@ -398,9 +398,10 @@ turn are still running or still owe their completion, the tool returns
 `status: "already_pending"` with the pending children (session key, label,
 start time, `running`/`completing`/`paused` state, and whether an earlier
 yield already armed the wake) instead of an error. For running or completing
-children nothing else is required: end that turn normally, and the child's
-completion arrives in the session as a later turn. Do not re-spawn, re-send,
-or poll to wake them. A `paused` child yielded with `waitFor: "message"` and
+children need no new wake request: do not re-spawn, re-send, or poll to wake
+them. Continue any independent unfinished work, and end that turn normally
+only after that work is complete; the child's completion arrives in the session
+as a later turn. A `paused` child yielded with `waitFor: "message"` and
 will not complete until it receives a continuation; send one with
 `sessions_send` if this session owns that follow-up.
 

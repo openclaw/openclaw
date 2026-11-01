@@ -664,6 +664,11 @@ describe("requester yield ownership", () => {
           },
         ],
       });
+      expect(result.details).toMatchObject({
+        message: expect.stringContaining(
+          "Continue any independent unfinished work; end the turn normally only after that work is complete.",
+        ),
+      });
     }
     expect(turn2Yield).not.toHaveBeenCalled();
     // Reporting must not disturb the armed wake or claim the child for turn 2.
