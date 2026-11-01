@@ -43,8 +43,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_FIRECRAWL_BASE_URL,
-  resolveFirecrawlApiKey,
-  resolveFirecrawlBaseUrl,
+  resolveFirecrawlConnection,
   resolveFirecrawlMaxAgeMs,
   resolveFirecrawlOnlyMainContent,
   resolveFirecrawlScrapeTimeoutSeconds,
@@ -357,7 +356,8 @@ export async function runFirecrawlSearch(
   params.signal?.throwIfAborted();
   const keyless = params.access === "keyless";
   const providerId = keyless ? "firecrawl-free" : "firecrawl";
-  const apiKey = keyless ? undefined : resolveFirecrawlApiKey(params.cfg);
+  const connection = resolveFirecrawlConnection(params.cfg, "webSearch");
+  const apiKey = keyless ? undefined : connection.apiKey;
   if (!apiKey && !keyless) {
     throw new Error(
       "web_search (firecrawl) needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure plugins.entries.firecrawl.config.webSearch.apiKey.",
@@ -380,7 +380,7 @@ export async function runFirecrawlSearch(
   const tbs = normalizeOptionalString(params.tbs);
   const location = normalizeOptionalString(params.location);
   const country = normalizeOptionalString(params.country);
-  const baseUrl = resolveFirecrawlBaseUrl(params.cfg);
+  const baseUrl = connection.baseUrl;
   const cacheKey = normalizeCacheKey(
     JSON.stringify({
       type: "firecrawl-search",
@@ -555,7 +555,7 @@ export async function runFirecrawlScrape(params: FirecrawlScrapeParams) {
   params.signal?.throwIfAborted();
   assertFirecrawlScrapeTargetAllowed(params.url);
 
-  const apiKey = resolveFirecrawlApiKey(params.cfg);
+  const { apiKey, baseUrl } = resolveFirecrawlConnection(params.cfg, "webFetch");
   // Hosted v2/scrape accepts starter requests without a bearer token.
   // Only the selected web_fetch provider opts into that access mode.
   if (!apiKey && params.access !== "keyless") {
@@ -563,7 +563,6 @@ export async function runFirecrawlScrape(params: FirecrawlScrapeParams) {
       "firecrawl_scrape needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure plugins.entries.firecrawl.config.webFetch.apiKey.",
     );
   }
-  const baseUrl = resolveFirecrawlBaseUrl(params.cfg);
   const timeoutSeconds = resolveFirecrawlScrapeTimeoutSeconds(params.cfg, params.timeoutSeconds);
   const onlyMainContent = resolveFirecrawlOnlyMainContent(params.cfg, params.onlyMainContent);
   const maxAgeMs = resolveFirecrawlMaxAgeMs(params.cfg, params.maxAgeMs);

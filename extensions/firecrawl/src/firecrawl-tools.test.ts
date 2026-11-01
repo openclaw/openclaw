@@ -3,8 +3,7 @@ import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import {
-  resolveFirecrawlApiKey,
-  resolveFirecrawlBaseUrl,
+  resolveFirecrawlConnection,
   resolveFirecrawlMaxAgeMs,
   resolveFirecrawlOnlyMainContent,
   resolveFirecrawlScrapeTimeoutSeconds,
@@ -863,12 +862,75 @@ describe("firecrawl tools", () => {
     });
   });
 
+  it.each(["search", "scrape"] as const)(
+    "does not mix partial %s connection settings with its sibling",
+    async (operation) => {
+      vi.stubEnv("FIRECRAWL_API_KEY", "env-fixture");
+      vi.stubEnv("FIRECRAWL_BASE_URL", "http://127.0.0.1:8789");
+      const scope = operation === "search" ? "webSearch" : "webFetch";
+      const sibling = operation === "search" ? "webFetch" : "webSearch";
+      for (const [connection, expectedPort, expectedKey] of [
+        [{ baseUrl: "http://127.0.0.1:8787" }, 8787, "env-fixture"],
+        [{ apiKey: "own-fixture" }, 8789, "own-fixture"],
+        [undefined, 8788, "sibling-fixture"],
+      ] as const) {
+        mockJsonResponse({
+          success: true,
+          data: operation === "search" ? [] : { markdown: "scoped content" },
+        });
+        const cfg = firecrawlConfig(
+          {
+            [scope]: connection,
+            [sibling]: { apiKey: "sibling-fixture", baseUrl: "http://127.0.0.1:8788" },
+          },
+          { tools: { web: { search: { cacheTtlMinutes: 0 } } } },
+        );
+        if (operation === "search") {
+          await runActualFirecrawlSearch({ query: "partial scope", cfg });
+        } else {
+          await runActualFirecrawlScrape({ url: "https://example.com", cfg });
+        }
+        expect(global.fetch).toHaveBeenCalledExactlyOnceWith(
+          `http://127.0.0.1:${expectedPort}/v2/${operation}`,
+          expect.objectContaining({ headers: expect.anything() }),
+        );
+        const init = vi.mocked(global.fetch).mock.calls[0]?.[1];
+        expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${expectedKey}`);
+      }
+    },
+  );
+
+  it.each(["search", "scrape"] as const)(
+    "does not borrow sibling auth for a blocked %s credential",
+    async (operation) => {
+      vi.stubEnv("FIRECRAWL_API_KEY", "env-fixture");
+      mockJsonResponse({ success: true, data: [] });
+      const scope = operation === "search" ? "webSearch" : "webFetch";
+      const sibling = operation === "search" ? "webFetch" : "webSearch";
+      const cfg = firecrawlConfig({
+        [scope]: {
+          apiKey: { source: "file", provider: "vault", id: "/fixture/key" },
+          baseUrl: "http://127.0.0.1:8787",
+        },
+        [sibling]: { apiKey: "sibling-fixture", baseUrl: "http://127.0.0.1:8788" },
+      });
+      const result =
+        operation === "search"
+          ? runActualFirecrawlSearch({ cfg, query: "blocked" })
+          : runActualFirecrawlScrape({ cfg, url: "https://example.com" });
+      await expect(result).rejects.toThrow("needs a Firecrawl API key");
+      expect(global.fetch).not.toHaveBeenCalled();
+    },
+  );
+
   it("falls back to environment and defaults for fetch config values", () => {
     vi.stubEnv("FIRECRAWL_API_KEY", "env-key");
     vi.stubEnv("FIRECRAWL_BASE_URL", "https://env.firecrawl.test");
 
-    expect(resolveFirecrawlApiKey()).toBe("env-key");
-    expect(resolveFirecrawlBaseUrl()).toBe("https://env.firecrawl.test");
+    expect(resolveFirecrawlConnection(undefined, "webFetch").apiKey).toBe("env-key");
+    expect(resolveFirecrawlConnection(undefined, "webSearch").baseUrl).toBe(
+      "https://env.firecrawl.test",
+    );
     expect(resolveFirecrawlOnlyMainContent()).toBe(true);
     expect(resolveFirecrawlMaxAgeMs()).toBe(172_800_000);
     expect(resolveFirecrawlScrapeTimeoutSeconds()).toBe(60);
@@ -881,7 +943,7 @@ describe("firecrawl tools", () => {
       plugins: createSearchSecretRefPlugins("file", "vault", "/firecrawl/api-key"),
     } as OpenClawConfig;
 
-    expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
+    expect(resolveFirecrawlConnection(cfg, "webFetch").apiKey).toBeUndefined();
   });
 
   it("does not read arbitrary env SecretRef ids for Firecrawl API key resolution", () => {
@@ -890,7 +952,7 @@ describe("firecrawl tools", () => {
       plugins: createSearchSecretRefPlugins("env", "default", "UNRELATED_SECRET"),
     } as OpenClawConfig;
 
-    expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
+    expect(resolveFirecrawlConnection(cfg, "webFetch").apiKey).toBeUndefined();
   });
 
   it("does not resolve env SecretRefs when provider allowlist excludes FIRECRAWL_API_KEY", () => {
@@ -907,7 +969,7 @@ describe("firecrawl tools", () => {
       plugins: createSearchSecretRefPlugins("env", "firecrawl-env", "FIRECRAWL_API_KEY"),
     } as OpenClawConfig;
 
-    expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
+    expect(resolveFirecrawlConnection(cfg, "webFetch").apiKey).toBeUndefined();
   });
 
   it("does not resolve env SecretRefs when provider source is not env", () => {
@@ -924,7 +986,7 @@ describe("firecrawl tools", () => {
       plugins: createSearchSecretRefPlugins("env", "firecrawl-env", "FIRECRAWL_API_KEY"),
     } as OpenClawConfig;
 
-    expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
+    expect(resolveFirecrawlConnection(cfg, "webFetch").apiKey).toBeUndefined();
   });
 
   it("allows hosted Firecrawl and private self-hosted endpoints only", async () => {

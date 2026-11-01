@@ -51,44 +51,40 @@ function resolveConfiguredSecret(value: unknown, path: string, cfg?: OpenClawCon
   });
 }
 
-export function resolveFirecrawlApiKey(cfg?: OpenClawConfig): string | undefined {
-  const pluginConfig = cfg?.plugins?.entries?.firecrawl?.config as PluginEntryConfig;
-  const search = resolveFirecrawlSearchConfig(cfg);
-  const configuredCandidates: Array<{ value: unknown; path: string }> = [
-    {
-      value: pluginConfig?.webFetch?.apiKey,
-      path: "plugins.entries.firecrawl.config.webFetch.apiKey",
-    },
-    {
-      value: search?.apiKey,
-      path: "plugins.entries.firecrawl.config.webSearch.apiKey",
-    },
-  ];
-  let blockedConfiguredSecret = false;
-  for (const candidate of configuredCandidates) {
-    const resolved = resolveConfiguredSecret(candidate.value, candidate.path, cfg);
-    if (resolved.status === "available") {
-      return resolved.value;
-    }
-    if (resolved.status === "blocked") {
-      blockedConfiguredSecret = true;
-    }
-  }
-  if (blockedConfiguredSecret) {
-    return undefined;
-  }
-  return normalizeSecretInput(process.env[FIRECRAWL_API_KEY_ENV_VAR]) || undefined;
-}
-
-export function resolveFirecrawlBaseUrl(cfg?: OpenClawConfig): string {
-  const search = resolveFirecrawlSearchConfig(cfg);
-  const fetch = resolveFirecrawlFetchConfig(cfg);
-  const configured =
-    normalizeOptionalString(search?.baseUrl) ||
-    normalizeOptionalString(fetch?.baseUrl) ||
-    normalizeSecretInput(process.env.FIRECRAWL_BASE_URL) ||
-    "";
-  return configured || DEFAULT_FIRECRAWL_BASE_URL;
+export function resolveFirecrawlConnection(
+  cfg: OpenClawConfig | undefined,
+  scope: "webSearch" | "webFetch",
+) {
+  const scopes = {
+    webSearch: resolveFirecrawlSearchConfig(cfg),
+    webFetch: resolveFirecrawlFetchConfig(cfg),
+  };
+  const primary = scopes[scope];
+  // Borrow a sibling connection only as a whole; never send its key to our endpoint (or vice versa).
+  const selectedScope =
+    primary?.apiKey === undefined && !normalizeOptionalString(primary?.baseUrl)
+      ? scope === "webSearch"
+        ? "webFetch"
+        : "webSearch"
+      : scope;
+  const connection = scopes[selectedScope];
+  const resolved = resolveConfiguredSecret(
+    connection?.apiKey,
+    `plugins.entries.firecrawl.config.${selectedScope}.apiKey`,
+    cfg,
+  );
+  return {
+    apiKey:
+      resolved.status === "available"
+        ? resolved.value
+        : resolved.status === "blocked"
+          ? undefined
+          : normalizeSecretInput(process.env[FIRECRAWL_API_KEY_ENV_VAR]) || undefined,
+    baseUrl:
+      normalizeOptionalString(connection?.baseUrl) ||
+      normalizeSecretInput(process.env.FIRECRAWL_BASE_URL) ||
+      DEFAULT_FIRECRAWL_BASE_URL,
+  };
 }
 
 export function resolveFirecrawlOnlyMainContent(cfg?: OpenClawConfig, override?: boolean): boolean {
