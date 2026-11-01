@@ -82,6 +82,11 @@ describe("private selected Fast metadata", () => {
     expect(resolve(opus, { availability: undefined, routeResolution: null })).toBeUndefined();
     expect(resolve(sonnet, { availability: true, routeResolution: null }, "codex")).toBeUndefined();
   });
+  it("treats a config or environment API key like a profile API key", () => {
+    const resolve = resolver();
+    expect(resolve(opus, { ...available, selectedAuthMode: "api-key" })).toBe(true);
+    expect(resolve(sonnet, { ...available, selectedAuthMode: "api-key" })).toBe(false);
+  });
   it("uses the same model/agent parameter order as request construction", () => {
     const models = { "anthropic/claude-opus-5": { params: { serviceTier: "standard_only" } } };
     const cases: [OpenClawConfig["agents"], boolean][] = [
