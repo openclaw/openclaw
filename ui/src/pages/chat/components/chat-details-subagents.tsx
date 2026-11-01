@@ -44,6 +44,11 @@ function statusLabel(row: Subagent, workingLabel: string) {
   return row.status === "running" ? workingLabel : t(STATUS_KEYS[row.status]);
 }
 
+/** Settled rows recede in the list so working children stay prominent. */
+function isFinished(row: Subagent) {
+  return row.status === "done" || row.status === "failed" || row.status === "stopped";
+}
+
 function SubagentAvatar(props: { row: Subagent; summary?: boolean }) {
   return (
     <span
@@ -72,7 +77,10 @@ function SubagentRow(props: ChatDetailsSubagentsProps & { row: Subagent }) {
     <div role="listitem">
       <button
         type="button"
-        class="chat-details-subagents__row"
+        class={[
+          "chat-details-subagents__row",
+          { "chat-details-subagents__row--finished": isFinished(props.row) },
+        ]}
         data-subagent-session-key={props.row.key}
         aria-label={`${props.row.label} ${statusLabel(props.row, props.workingLabel)}`}
         onClick={() => props.onOpenSubagent(props.row.key)}

@@ -2130,6 +2130,9 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   background: transparent;
   color: var(--text);
   font-size: var(--chat-composer-chip-text, 13px);
+  /* Button triggers otherwise take the UA's normal tracking; summary triggers
+     already inherit the app's, so every chip label sets the same way. */
+  letter-spacing: inherit;
   line-height: 1.35;
   overflow: hidden;
   user-select: none;
@@ -2142,7 +2145,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 .agent-chat__composer-lead .chat-controls__permission-trigger {
   justify-content: center;
   min-width: 32px;
-  padding-inline: 6px;
 }
 
 .chat-controls__inline-select-trigger:hover,
@@ -2407,7 +2409,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
    14px accent glyph, so checks land on the same rail as 16px row icons. */
 .chat-talk-input-picker__check,
 .chat-controls__inline-select-check,
-.chat-controls__permission-trigger--full .chat-controls__permission-icon,
+.agent-chat__input .chat-controls__permission-trigger--full,
 .chat-controls__permission-option--full .chat-controls__permission-option-icon {
   color: var(--accent);
 }
@@ -3417,6 +3419,10 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   }
 }
 @container chat-composer (max-width: 560px) {
+  .chat-controls__permission-label {
+    display: none;
+  }
+
   .agent-chat__input--mobile-toolbar {
     & .chat-controls__inline-select-chevron,
     & .chat-controls__inline-select-chevron svg {
@@ -3572,10 +3578,10 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
     min-height: 44px;
   }
 
+  /* A floor, not a fixed width: a composer wider than 560px still shows the label. */
   .agent-chat__composer-meta .chat-controls__permission-trigger {
-    width: 44px;
+    min-width: 44px;
     justify-content: center;
-    padding-inline: 0;
   }
 
   .agent-chat__composer-controls {
