@@ -71,8 +71,11 @@ For authenticated, profile-bound Gateway conversations, the session also records
 the Workshop declaration's default target and profile-selection shape, alongside
 the independent ordinary or management Automations declaration. Internal and
 recovery turns can reuse these declarations after storage reopens. A new human
-request replaces or clears the saved presentation; changes to the profile,
-role configuration, session audience, or session incarnation invalidate it.
+request replaces or clears the saved presentation; a fresh human message from a
+channel clears it, while unaddressed group room events leave it unchanged.
+Changes to the profile, role configuration, session audience, or session
+incarnation invalidate it. Revoking a device or token does not; the next human
+request replaces the presentation, and execution checks apply in the meantime.
 Sessions without a valid saved presentation use their existing tool-discovery
 behavior. The saved facts carry no execution authority: personal Workshop calls
 still require current authoring authority, and Automations calls retain their

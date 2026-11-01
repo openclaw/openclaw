@@ -108,7 +108,13 @@ it.for([
                 sessionEventToolsAllow: ["read"],
                 ...(change === "restricted-sender"
                   ? {}
-                  : { sessionEventToolsAllowSessionScoped: true }),
+                  : {
+                      sessionEventToolsAllowSessionScoped: {
+                        agentId: scope.agentId,
+                        sessionKey: scope.sessionKey,
+                        sessionId: "scoped-effects",
+                      },
+                    }),
                 receiptAuthority: () => true,
               },
               () =>

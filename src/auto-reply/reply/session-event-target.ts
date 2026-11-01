@@ -192,8 +192,7 @@ export async function captureSessionEventTargetForHost(
     if (caller && callerAgentMatches) {
       assertCaptureCurrent();
       const sessionScopedSurface =
-        (caller.sessionEventToolsAllowSessionScoped === true ||
-          isOwnConversation(caller.sessionEventToolsAllowSessionScoped)) &&
+        isOwnConversation(caller.sessionEventToolsAllowSessionScoped) &&
         resolveSessionEventKey(agentId, caller.sessionKey) === sessionKey;
       if (caller.sessionEventToolsAllow && !sessionScopedSurface) {
         if (

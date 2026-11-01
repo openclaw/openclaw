@@ -4,7 +4,7 @@ type SessionScopedToolsAllowOwner = {
   agentId: string;
   sessionKey: string;
   sessionEventToolsAllow?: readonly string[];
-  sessionEventToolsAllowSessionScoped?: true | SessionEventSourcePolicy["conversationScope"];
+  sessionEventToolsAllowSessionScoped?: SessionEventSourcePolicy["conversationScope"];
 };
 
 /** Nested owners cannot erase a narrower ancestor's ceiling or transfer it across sessions. */

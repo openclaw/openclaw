@@ -278,7 +278,6 @@ export async function executeWorkerTurn(
     });
     assertActive();
     using discovery = await prepareWorkerTurnToolDiscovery(turn, transcriptTarget, assertActive);
-    discovery.completePreparation();
     const authority = runtimeIdentity.approvalAuthority;
     const authorityAbort = new AbortController();
     const signal = turn.abortSignal
@@ -657,6 +656,8 @@ export async function executeWorkerTurn(
         })();
       };
       let processResult: Awaited<ReturnType<NonNullable<typeof tunnel.launchTurn>>>;
+      discovery.assertCurrent();
+      discovery.completePreparation();
       try {
         processResult = await tunnel.launchTurn({
           assertCurrent: githubGrant?.assertCurrent ?? assertActive,

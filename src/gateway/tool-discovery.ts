@@ -196,8 +196,10 @@ export async function prepareSessionToolDiscovery(params: {
       }
     };
     if (capture) {
+      // Retries reuse the ingress capture; outdated requester facts clear rather than abort.
       const next: SessionToolDiscovery | undefined =
-        capture.kind === "profile"
+        capture.kind === "profile" &&
+        profileFactsKey(capture.profileId, params.getConfig()) === capture.profileFactsKey
           ? {
               version: 1,
               sessionId: params.sessionId,

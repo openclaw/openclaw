@@ -184,6 +184,20 @@ it("does not let a channel human turn inherit another requester's presentation",
   });
 });
 
+it("clears instead of aborting when a retried capture outlives its requester facts", async () => {
+  await withFixture(async ({ profileId, capture, prepare }) => {
+    const captured = await capture();
+    using first = await prepare(captured);
+    expect(first.presentation?.automations).toBe("management");
+    setUserProfileRole(profileId, "reader");
+    // Model fallback and overflow retries prepare again with the ingress capture.
+    using retry = await prepare(captured);
+    expect(retry.presentation).toBeUndefined();
+    using later = await prepare();
+    expect(later.presentation).toBeUndefined();
+  });
+});
+
 it("does not fence an admitted CLI run on later presentation changes", async () => {
   await withFixture(async ({ config, scope, profileId, capture }) => {
     let runAssertCurrent: (() => void) | undefined;

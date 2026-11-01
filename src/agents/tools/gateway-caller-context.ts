@@ -64,7 +64,7 @@ type GatewayToolCallerIdentity = {
   /** Restrict-only executable surface captured for internal follow-ups. */
   sessionEventToolsAllow?: readonly string[];
   /** This list restates the caller session's own policy, not an inbound execution cap. */
-  sessionEventToolsAllowSessionScoped?: true | SessionEventSourcePolicy["conversationScope"];
+  sessionEventToolsAllowSessionScoped?: SessionEventSourcePolicy["conversationScope"];
   /** An object with no mode retains the producer's default permission posture. */
   sessionEventSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   /** Follow-ups cannot add automatic delivery to a message-tool-only source. */
