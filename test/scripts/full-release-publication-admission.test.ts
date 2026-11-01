@@ -1738,9 +1738,9 @@ describe("FRV observation worker boundary", () => {
         (entry) => entry.kind === "settled" && entry.worker,
       );
       check(settlement).toMatchObject({ active: 0 });
-      check(settlement?.maximumActive).toBeLessThanOrEqual(8);
+      check(settlement?.maximumActive).toBeLessThanOrEqual(16);
       if (registry === "concurrency") {
-        check(settlement?.maximumActive).toBe(8);
+        check(settlement?.maximumActive).toBe(16);
       }
       for (const plan of [result.observations.plans.npm, result.observations.plans.clawhub]) {
         check(plan.all).toHaveLength(count);
