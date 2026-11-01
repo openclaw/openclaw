@@ -759,6 +759,27 @@
     padding-inline-start: var(--oc-space-4);
   }
 
+  /* Status takes its own line so it never squeezes the provider's meta into an ellipsis. */
+  .provider-row:not(.provider-row--quiet) .provider-row__summary {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    row-gap: 2px;
+  }
+
+  .provider-row:not(.provider-row--quiet) .provider-row__icon {
+    grid-row: 1 / span 2;
+  }
+
+  .provider-row:not(.provider-row--quiet) .provider-row__status {
+    grid-row: 2;
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+
+  .provider-row:not(.provider-row--quiet) .provider-row__chevron {
+    grid-row: 1 / span 2;
+    grid-column: 3;
+  }
+
   .provider-row--quiet .provider-row__summary {
     grid-template-columns: auto minmax(0, 1fr);
   }
