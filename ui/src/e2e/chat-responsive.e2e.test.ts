@@ -257,10 +257,9 @@ suite.define(() => {
         await page.setViewportSize({ width: 900, height: 800 });
         const textarea = page.locator(COMPOSER);
         await textarea.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
+        // Stay below the three-line mobile cap so narrowing still changes the measured height.
         await textarea.fill(
-          "Resize this populated draft across a narrow pane so its wrapped lines change height without waiting for another input event. ".repeat(
-            2,
-          ),
+          "Resize this populated draft across a narrow pane so its wrapped lines change height.",
         );
         await waitForLayoutSettled(page, COMPOSER);
         const wideHeight = (await textarea.boundingBox())?.height ?? 0;
