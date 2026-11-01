@@ -92,7 +92,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       historyLimit: 50,
       replyToMode: "first", // off | first | all | batched
       linkPreview: true,
-      streaming: { mode: "partial" }, // off | partial | block | progress (default: partial)
+      streaming: { mode: "partial" }, // off | partial | block | progress (default: progress)
       actions: { reactions: true, sendMessage: true },
       reactionNotifications: "own", // off | own | all
       mediaMaxMb: 100,
