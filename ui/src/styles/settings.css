@@ -1344,8 +1344,9 @@ textarea.settings-input {
     padding: var(--space-3) var(--space-4);
   }
 
+  /* Space alone separates records: well above the gap between a record's own fields. */
   .settings-table--stacked tbody tr + tr {
-    border-top: 1px solid var(--border);
+    margin-top: var(--space-4);
   }
 
   .settings-table--stacked tbody td {
