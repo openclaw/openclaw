@@ -457,9 +457,9 @@ describe("canonical proof on physical database validation", () => {
         if (race === "schema") {
           assert(original.schema);
           expectFlag(original.schema.valid, 0);
-          expect(() => adoptSchema(database, true, true)).toThrow(
-            "Agent schema admission changed before handle adoption",
-          );
+          const adoptAfterRace = () => adoptSchema(database, true, true);
+          expect(adoptAfterRace).toThrow(AdmissionChangedError);
+          expect(adoptAfterRace).toThrow("Agent schema admission changed before handle adoption");
         }
         for (const malformed of [
           undefined,
