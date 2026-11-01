@@ -73,11 +73,12 @@
 }
 
 .palette-session-settings .agent-select .agent-select__trigger:hover:not(:disabled),
+.palette-session-settings__row:hover:not(:disabled),
 .palette-session-settings__back:hover {
   background: var(--bg-hover);
 }
 
-.palette-session-settings__row:hover:not(:disabled) {
+.palette-session-settings__row[aria-pressed]:hover:not(:disabled) {
   background: var(--menu-hover);
 }
 
