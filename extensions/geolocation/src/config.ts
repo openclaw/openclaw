@@ -5,11 +5,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /** Resolved geolocation settings, including the credit its data license requires. */
-export type GeolocationSettings = {
-  databaseUrl: string;
-  attribution: { text: string; url: string };
-  refreshMs: number;
-};
+export type GeolocationSettings = ReturnType<typeof resolveGeolocationSettings>;
 
 // DB-IP City Lite is CC BY 4.0: usable commercially, redistribution-free because
 // we download at runtime, but the credit below is a license term, not decoration.
@@ -18,7 +14,7 @@ const DEFAULT_ATTRIBUTION_TEXT = "IP Geolocation by DB-IP";
 const DEFAULT_ATTRIBUTION_URL = "https://db-ip.com";
 const DEFAULT_REFRESH_DAYS = 30;
 
-export function resolveGeolocationSettings(pluginConfig: unknown): GeolocationSettings {
+export function resolveGeolocationSettings(pluginConfig: unknown) {
   const config = asOptionalRecord(pluginConfig);
   const refreshDays = asPositiveFiniteNumber(config?.refreshDays) ?? DEFAULT_REFRESH_DAYS;
   return {

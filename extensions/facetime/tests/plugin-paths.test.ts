@@ -1,70 +1,51 @@
-import { describe, expect, it, vi } from "vitest";
+import { access, readFile } from "node:fs/promises";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ensureCaptureBinary,
   ensureHelperArtifacts,
   inspectFaceTimeNativePackage,
 } from "../src/plugin-paths.js";
 
+vi.mock("node:fs/promises", () => ({ access: vi.fn(), readFile: vi.fn(), readdir: vi.fn() }));
+
 const homebrewDir = "/opt/homebrew/opt/openclaw-facetime/libexec";
 
-function installedAccess() {
-  return vi.fn(async (path: string) => {
-    if (!path.startsWith(homebrewDir) && !path.endsWith("FaceTimeHelper.dylib")) {
-      throw new Error("missing");
-    }
-  });
-}
-
-function installedReadFile() {
-  return vi.fn(async (path: string) => {
-    if (path.endsWith("native-protocol.env")) {
-      return "NATIVE_PROTOCOL_VERSION=1\n";
-    }
-    return `${"b".repeat(64)}\n`;
-  });
-}
-
 describe("plugin paths", () => {
-  it("uses the Homebrew capture helper", async () => {
-    await expect(
-      ensureCaptureBinary({
-        access: installedAccess() as never,
-        readFile: installedReadFile() as never,
-      }),
-    ).resolves.toBe(`${homebrewDir}/facetime-audio-capture`);
+  beforeEach(() => {
+    vi.mocked(access)
+      .mockReset()
+      .mockImplementation(async (path) => {
+        if (
+          !String(path).startsWith(homebrewDir) &&
+          !String(path).endsWith("FaceTimeHelper.dylib")
+        ) {
+          throw new Error("missing");
+        }
+      });
+    vi.mocked(readFile)
+      .mockReset()
+      .mockImplementation(async (path) =>
+        typeof path === "string" && path.endsWith("native-protocol.env")
+          ? "NATIVE_PROTOCOL_VERSION=1\n"
+          : `${"b".repeat(64)}\n`,
+      );
   });
 
   it("inspects native package readiness without staging runtime artifacts", async () => {
-    await expect(
-      inspectFaceTimeNativePackage({
-        access: installedAccess() as never,
-        readFile: installedReadFile() as never,
-      }),
-    ).resolves.toBe(true);
-    await expect(
-      inspectFaceTimeNativePackage({
-        access: vi.fn().mockRejectedValue(new Error("missing")) as never,
-        readFile: installedReadFile() as never,
-      }),
-    ).resolves.toBe(false);
-  });
-
-  it("fails with the install command when no compatible package exists", async () => {
-    await expect(
-      ensureCaptureBinary({
-        access: vi.fn().mockRejectedValue(new Error("missing")) as never,
-        readFile: installedReadFile() as never,
-      }),
-    ).rejects.toThrow("brew install openclaw/tap/openclaw-facetime");
+    await expect(inspectFaceTimeNativePackage()).resolves.toBe(true);
+    vi.mocked(access).mockRejectedValue(new Error("missing"));
+    await expect(inspectFaceTimeNativePackage()).resolves.toBe(false);
   });
 
   it("rejects an incompatible native protocol", async () => {
-    const readFile = vi.fn(async (path: string) =>
-      path.endsWith("native-protocol.env") ? "NATIVE_PROTOCOL_VERSION=2\n" : `${"b".repeat(64)}\n`,
+    vi.mocked(readFile).mockImplementation(async (path) =>
+      typeof path === "string" && path.endsWith("native-protocol.env")
+        ? "NATIVE_PROTOCOL_VERSION=2\n"
+        : `${"b".repeat(64)}\n`,
     );
-    await expect(
-      ensureCaptureBinary({ access: installedAccess() as never, readFile: readFile as never }),
-    ).rejects.toThrow("Compatible FaceTime native helpers are not installed");
+    await expect(ensureCaptureBinary()).rejects.toThrow(
+      "Compatible FaceTime native helpers are not installed. Run: brew install openclaw/tap/openclaw-facetime",
+    );
   });
 
   it("stages and validates the installed injected helper", async () => {
@@ -73,8 +54,6 @@ describe("plugin paths", () => {
       ensureHelperArtifacts({
         pluginRoot: "/tmp/facetime",
         runCommandWithTimeout: runCommandWithTimeout as never,
-        access: installedAccess() as never,
-        readFile: installedReadFile() as never,
       }),
     ).resolves.toMatchObject({ buildId: "b".repeat(64), ipcKey: "b".repeat(64) });
     expect(runCommandWithTimeout).toHaveBeenCalledWith(

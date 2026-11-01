@@ -1,28 +1,15 @@
+import { commonPrefixLength } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type {
+  RealtimeTalkConversationEntry,
+  RealtimeTalkConversationRole,
+  RealtimeTalkConversationState,
+} from "./conversation-state.ts";
 import type { RealtimeTalkTranscript } from "./shared.ts";
-
-type RealtimeTalkConversationRole = "user" | "assistant";
-
-export type RealtimeTalkConversationEntry = {
-  id: string;
-  role: RealtimeTalkConversationRole;
-  text: string;
-  isStreaming: boolean;
-  order?: number;
-  transcriptId?: string;
-};
-
-export type RealtimeTalkConversationState = {
-  entries: RealtimeTalkConversationEntry[];
-  nextEntryId: number;
-  userEntryId: string | null;
-  userEntryAwaitingFinal: boolean;
-  userEntryAwaitingFinalStartedAtMs: number | null;
-  assistantEntryId: string | null;
-};
 
 type RealtimeTalkTranscriptUpdate = RealtimeTalkTranscript & {
   nowMs?: number;
+  afterMessageId?: string | null;
 };
 
 const MAX_CONVERSATION_ENTRIES = 60;
@@ -31,32 +18,30 @@ const CONVERSATION_ENTRY_PREFIX_CHARS = 256;
 const CONVERSATION_ENTRY_TRUNCATION_MARKER = "\n…\n";
 const USER_FINAL_REWRITE_GRACE_MS = 1_500;
 
-export function createRealtimeTalkConversationState(): RealtimeTalkConversationState {
-  return {
-    entries: [],
-    nextEntryId: 1,
-    userEntryId: null,
-    userEntryAwaitingFinal: false,
-    userEntryAwaitingFinalStartedAtMs: null,
-    assistantEntryId: null,
-  };
-}
-
-export function continueRealtimeTalkConversation(
-  state: RealtimeTalkConversationState,
-): RealtimeTalkConversationState {
-  return {
-    ...createRealtimeTalkConversationState(),
-    nextEntryId: state.nextEntryId,
-    entries: state.entries.map((entry, order) => ({ ...entry, order, isStreaming: false })),
-  };
-}
-
 export function updateRealtimeTalkConversation(
   state: RealtimeTalkConversationState,
   update: RealtimeTalkTranscriptUpdate,
 ): RealtimeTalkConversationState {
-  const next = applyRealtimeTalkTranscript(state, update);
+  const applied = applyRealtimeTalkTranscript(state, update);
+  let next = applied;
+  if (applied !== state) {
+    // Only a caption's first update records where it started in history. Delayed
+    // speech the provider orders before an existing caption shares that caption's
+    // earlier position, so a question never renders below its own answer.
+    const known = new Set(state.entries.map((entry) => entry.id));
+    const entries = applied.entries.slice();
+    let following: RealtimeTalkConversationEntry | undefined;
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index]!;
+      if (known.has(entry.id)) {
+        following = entry;
+      } else {
+        const afterMessageId = following ? following.afterMessageId : update.afterMessageId;
+        entries[index] = { ...entry, afterMessageId };
+      }
+    }
+    next = { ...applied, entries };
+  }
   if (!update.transcriptId || next === state) {
     return next;
   }
@@ -89,6 +74,7 @@ function applyRealtimeTalkTranscript(
       order: update.order,
       text: boundRealtimeConversationText(update.final ? text : (previous?.text ?? "") + text),
       isStreaming: !update.final,
+      afterMessageId: previous?.afterMessageId,
     };
     // Provider identities survive delayed ASR and overlapping responses. Text and
     // wall-clock proximity cannot identify which utterance a final replaces.
@@ -125,15 +111,13 @@ function applyRealtimeTalkTranscript(
     entryId === null || shouldStartNewUserEntry
       ? finishRealtimeConversationEntry(state, "assistant", nowMs)
       : state;
-  const nextState =
-    shouldStartNewUserEntry && entryId !== null
-      ? {
-          ...finishRealtimeConversationEntry(assistantClosedState, "user", nowMs),
-          userEntryId: null,
-          userEntryAwaitingFinal: false,
-          userEntryAwaitingFinalStartedAtMs: null,
-        }
-      : assistantClosedState;
+  const nextState = shouldStartNewUserEntry
+    ? {
+        ...finishRealtimeConversationEntry(assistantClosedState, "user", nowMs),
+        userEntryId: null,
+        userEntryAwaitingFinalStartedAtMs: null,
+      }
+    : assistantClosedState;
   return upsertRealtimeConversationEntry(
     nextState,
     update.role,
@@ -165,7 +149,10 @@ function upsertRealtimeConversationEntry(
   isFinal: boolean,
   textMode?: RealtimeTalkTranscript["textMode"],
 ): RealtimeTalkConversationState {
-  if (entryId === null) {
+  const targetIndex =
+    entryId === null ? -1 : state.entries.findIndex((entry) => entry.id === entryId);
+  const entry = state.entries[targetIndex];
+  if (!entry) {
     const id = `rt-${state.nextEntryId}`;
     const entries = [
       ...state.entries,
@@ -184,19 +171,12 @@ function upsertRealtimeConversationEntry(
     );
   }
 
-  const targetIndex = state.entries.findIndex((entry) => entry.id === entryId);
-  const entry = state.entries[targetIndex];
-  if (!entry) {
-    return upsertRealtimeConversationEntry(state, role, null, text, isFinal, textMode);
-  }
   const mergedText =
     textMode === "snapshot"
       ? text
       : textMode === "verbatim"
         ? entry.text + text
-        : role === "assistant"
-          ? mergeAssistantTranscriptText(entry.text, text, isFinal)
-          : mergeRealtimeTranscriptText(entry.text, text, isFinal);
+        : mergeRealtimeTranscriptText(entry.text, text, isFinal, role);
   const updatedText = boundRealtimeConversationText(mergedText);
   const entries =
     entry.text === updatedText && entry.isStreaming === !isFinal
@@ -206,7 +186,7 @@ function upsertRealtimeConversationEntry(
             ? { ...candidate, text: updatedText, isStreaming: !isFinal }
             : candidate,
         );
-  return rememberRealtimeConversationEntry({ ...state, entries }, role, entryId, isFinal);
+  return rememberRealtimeConversationEntry({ ...state, entries }, role, entry.id, isFinal);
 }
 
 function rememberRealtimeConversationEntry(
@@ -219,7 +199,6 @@ function rememberRealtimeConversationEntry(
     return {
       ...state,
       userEntryId: isFinal ? null : entryId,
-      userEntryAwaitingFinal: false,
       userEntryAwaitingFinalStartedAtMs: null,
     };
   }
@@ -242,7 +221,6 @@ function finishRealtimeConversationEntry(
     return {
       ...state,
       entries,
-      userEntryAwaitingFinal: true,
       userEntryAwaitingFinalStartedAtMs: nowMs,
     };
   }
@@ -270,11 +248,8 @@ function shouldStartNewRealtimeUserEntry(
   if (incoming === existing || incoming.startsWith(existing) || existing.endsWith(incoming)) {
     return false;
   }
-  if (isFinal && state.userEntryAwaitingFinal) {
-    const elapsed =
-      state.userEntryAwaitingFinalStartedAtMs === null
-        ? Number.POSITIVE_INFINITY
-        : nowMs - state.userEntryAwaitingFinalStartedAtMs;
+  if (isFinal && state.userEntryAwaitingFinalStartedAtMs !== null) {
+    const elapsed = nowMs - state.userEntryAwaitingFinalStartedAtMs;
     if (
       elapsed <= USER_FINAL_REWRITE_GRACE_MS &&
       looksLikeTranscriptReplacement(existing, incoming)
@@ -285,42 +260,30 @@ function shouldStartNewRealtimeUserEntry(
   return true;
 }
 
-// Assistant transcripts are verbatim fragment streams: providers concatenate
-// deltas into the exact transcript (OpenAI audio-transcript deltas, Google Live
-// outputTranscription chunks). Never synthesize characters between fragments —
-// the user-side ASR spacing heuristic would mangle "ChatGPT" into "Chat G PT"
-// and "Version 1.2" into "Version 1. 2".
-function mergeAssistantTranscriptText(
+function mergeRealtimeTranscriptText(
   existing: string,
   incoming: string,
   isFinal: boolean,
+  role: RealtimeTalkConversationRole,
 ): string {
   if (existing.trim() === "") {
     return incoming.trimStart();
   }
-  if (!isFinal) {
-    return `${existing}${incoming}`;
+  if (role === "assistant") {
+    // Assistant transcripts are verbatim fragment streams: providers concatenate
+    // deltas into the exact transcript (OpenAI audio-transcript deltas, Google Live
+    // outputTranscription chunks). Never synthesize characters between fragments —
+    // the user-side ASR spacing heuristic would mangle "ChatGPT" into "Chat G PT"
+    // and "Version 1.2" into "Version 1. 2".
+    // Final shape differs by provider: OpenAI-style finals carry the full
+    // transcript (replace), Google Live finals carry only the last fragment
+    // (append). Replace only when incoming restates what already streamed.
+    return isFinal &&
+      (incoming.startsWith(existing) || looksLikeTranscriptReplacement(existing, incoming))
+      ? incoming
+      : `${existing}${incoming}`;
   }
-  // Final shape differs by provider: OpenAI-style finals carry the full
-  // transcript (replace), Google Live finals carry only the last fragment
-  // (append). Replace only when incoming restates what already streamed.
-  if (incoming === existing || incoming.startsWith(existing)) {
-    return incoming;
-  }
-  if (looksLikeTranscriptReplacement(existing, incoming)) {
-    return incoming;
-  }
-  return `${existing}${incoming}`;
-}
-
-function mergeRealtimeTranscriptText(existing: string, incoming: string, isFinal: boolean): string {
-  if (existing.trim() === "") {
-    return incoming.trimStart();
-  }
-  if (incoming === "") {
-    return existing;
-  }
-  if (incoming === existing || existing.endsWith(incoming)) {
+  if (existing.endsWith(incoming)) {
     return existing;
   }
   if (incoming.startsWith(existing)) {
@@ -391,15 +354,6 @@ function transcriptWords(value: string): string[] {
 
 function normalizeTranscriptText(value: string): string {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-function commonPrefixLength(left: string, right: string): number {
-  const max = Math.min(left.length, right.length);
-  let index = 0;
-  while (index < max && left[index] === right[index]) {
-    index += 1;
-  }
-  return index;
 }
 
 function findTextOverlap(base: string, next: string): number {

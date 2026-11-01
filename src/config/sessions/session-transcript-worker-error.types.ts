@@ -7,4 +7,5 @@ export type SessionTranscriptWorkerReadError =
   | { kind: "projection"; sessionId: string; reason?: "window-changed" }
   | { kind: "fence"; message: string }
   | { kind: "syntax"; message: string }
+  | { kind: "jsonl-budget"; message: string }
   | { kind: "storage"; reason?: SessionTranscriptStorageUnavailableError["reason"] };

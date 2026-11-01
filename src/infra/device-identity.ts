@@ -1,11 +1,6 @@
-// Gateway/device Ed25519 identity API backed by canonical shared SQLite state.
+// Client Ed25519 identity API backed by the local credential owner.
 import crypto from "node:crypto";
 import {
-  cacheProcessDeviceIdentity,
-  readProcessDeviceIdentity,
-} from "./device-identity-process-cache.js";
-import {
-  assertNoPendingLegacyIdentity,
   generateStoredDeviceIdentity,
   insertStoredDeviceIdentityIfAbsent,
   readStoredDeviceIdentity,
@@ -51,27 +46,11 @@ export function loadOrCreateDeviceIdentity(
   if (existing) {
     return toDeviceIdentity(existing);
   }
-  assertNoPendingLegacyIdentity(resolvedOptions);
 
   // Generate outside the write transaction. The transaction rereads the row
   // before inserting so concurrent runtimes converge on one authoritative key.
   const candidate = generateStoredDeviceIdentity();
   return toDeviceIdentity(insertStoredDeviceIdentityIfAbsent(candidate, resolvedOptions));
-}
-
-/** Keep one authoritative identity stable for the lifetime of a state-dir process. */
-export function loadOrCreateProcessDeviceIdentity(
-  options: DeviceIdentityStoreOptions = {},
-): DeviceIdentity {
-  const { databasePath, identityKey } = resolveDeviceIdentityStore(options);
-  const cacheKey = `${databasePath}\0${identityKey}`;
-  const cached = readProcessDeviceIdentity(cacheKey);
-  // A process-stable identity needs no database admission on a warm read.
-  if (cached) {
-    return cached;
-  }
-  const identity = loadOrCreateDeviceIdentity({ ...options, path: databasePath, identityKey });
-  return cacheProcessDeviceIdentity(cacheKey, identity);
 }
 
 /** Load a valid persisted identity without creating or mutating SQLite state. */
@@ -82,7 +61,6 @@ export function loadDeviceIdentityIfPresent(
   if (stored) {
     return toDeviceIdentity(stored);
   }
-  assertNoPendingLegacyIdentity(options);
   return null;
 }
 

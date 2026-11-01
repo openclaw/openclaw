@@ -7,6 +7,9 @@ Usage: wait-for-text.sh -t target -p pattern [options]
 
 Poll a tmux pane for text and exit when found.
 
+The search includes echoed input and scrollback. For command completion, use a
+unique marker whose full text does not appear in the command sent to tmux.
+
 Options:
   -t, --target    tmux target (session:window.pane), required
   -p, --pattern   regex pattern to look for, required

@@ -400,6 +400,37 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
     },
   );
 
+  void it("packs standard-builder lazy chunks for use without source or dependencies", async () => {
+    const { rootDir, parent } = await fixture();
+    const metadata = JSON.parse(await fs.readFile(path.join(rootDir, "package.json"), "utf8"));
+    const source = path.resolve(rootDir, metadata.openclaw.controlUi);
+    await fs.writeFile(
+      source,
+      'export async function loadPage() { return (await import("./lazy-page.js")).page; }',
+    );
+    await fs.writeFile(
+      path.join(path.dirname(source), "lazy-page.js"),
+      'export const page = "Packed page ready";',
+    );
+    await runPluginsBuildCommand({ root: rootDir });
+    const archive = path.join(parent, "lazy-page.tgz");
+    await runPluginsPackCommand({ root: rootDir, out: archive });
+    const extracted = path.join(parent, "extracted");
+    await fs.mkdir(extracted);
+    await extract({ file: archive, cwd: extracted, strict: true });
+    const packageRoot = path.join(extracted, "package");
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(packageRoot, "openclaw.plugin.json"), "utf8"),
+    );
+    const assets = await fs.readdir(path.dirname(path.join(packageRoot, manifest.controlUi.entry)));
+    assert.ok(assets.some((name) => name.startsWith("chunk-")));
+    const browser = await import(
+      pathToFileURL(path.join(packageRoot, manifest.controlUi.entry)).href
+    );
+    assert.equal(await browser.loadPage(), "Packed page ready");
+    await assert.rejects(fs.stat(path.join(packageRoot, "node_modules")), { code: "ENOENT" });
+  });
+
   void it("preserves prebuilt browser dependencies without packing unrelated files", async () => {
     const { rootDir, parent } = await fixture();
     const packagePath = path.join(rootDir, "package.json");

@@ -1,4 +1,3 @@
-// Live Docker Normalize Config script supports OpenClaw repository automation.
 import { loadAndMaybeMigrateDoctorConfig } from "../src/commands/doctor-config-flow.js";
 import { replaceConfigFile } from "../src/config/config.js";
 

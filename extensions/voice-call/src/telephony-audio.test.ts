@@ -1,6 +1,5 @@
-// Voice Call tests cover telephony audio plugin behavior.
+import { convertPcmToMulaw8k } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it } from "vitest";
-import { convertPcmToMulaw8k } from "./telephony-audio.js";
 
 function makeSinePcm(
   sampleRate: number,

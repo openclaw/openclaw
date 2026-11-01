@@ -1,6 +1,3 @@
-/**
- * Optional JSONL diagnostics for agent cache/session/prompt tracing.
- */
 import crypto from "node:crypto";
 import path from "node:path";
 import { sanitizeSurrogates } from "@openclaw/ai/internal/shared";
@@ -14,7 +11,7 @@ import { safeJsonStringify } from "../utils/safe-json.js";
 import { redactAgentDiagnosticPayload } from "./diagnostic-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 import type { AgentMessage, StreamFn } from "./runtime/index.js";
-import { buildAgentTraceBase } from "./trace-base.js";
+import { buildAgentTraceBase, type AgentTraceBase } from "./trace-base.js";
 
 // Payloads are redacted before JSONL output while stable digests preserve
 // correlation across prompt/session/cache stages.
@@ -30,17 +27,10 @@ type CacheTraceStage =
   | "stream:context"
   | "session:after";
 
-type CacheTraceEvent = {
+type CacheTraceEvent = AgentTraceBase & {
   ts: string;
   seq: number;
   stage: CacheTraceStage;
-  runId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  provider?: string;
-  modelId?: string;
-  modelApi?: string | null;
-  workspaceDir?: string;
   prompt?: unknown;
   system?: unknown;
   options?: unknown;
@@ -59,58 +49,11 @@ type CacheTracePayload = Partial<Omit<CacheTraceEvent, "messages">> & {
   messages?: AgentMessage[];
 };
 
-type CacheTrace = {
-  enabled: true;
-  filePath: string;
-  recordStage: (stage: CacheTraceStage, payload?: CacheTracePayload) => void;
-  wrapStreamFn: (streamFn: StreamFn) => StreamFn;
-};
-
-type CacheTraceInit = {
+type CacheTraceInit = AgentTraceBase & {
   cfg?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  runId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  provider?: string;
-  modelId?: string;
-  modelApi?: string | null;
-  workspaceDir?: string;
-  writer?: QueuedFileWriter;
-};
-
-type CacheTraceConfig = {
-  enabled: boolean;
-  filePath: string;
-  includeMessages: boolean;
-  includePrompt: boolean;
-  includeSystem: boolean;
 };
 
 const writers = new Map<string, QueuedFileWriter>();
-
-function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
-  const env = params.env ?? process.env;
-  const config = params.cfg?.diagnostics?.cacheTrace;
-  const envEnabled = parseBooleanValue(env.OPENCLAW_CACHE_TRACE);
-  const enabled = envEnabled ?? config?.enabled ?? false;
-  const fileOverride = env.OPENCLAW_CACHE_TRACE_FILE?.trim();
-  const filePath = fileOverride
-    ? resolveUserPath(fileOverride)
-    : path.join(resolveStateDir(env), "logs", "cache-trace.jsonl");
-
-  const includeMessages = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_MESSAGES);
-  const includePrompt = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_PROMPT);
-  const includeSystem = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_SYSTEM);
-
-  return {
-    enabled,
-    filePath,
-    includeMessages: includeMessages ?? true,
-    includePrompt: includePrompt ?? true,
-    includeSystem: includeSystem ?? true,
-  };
-}
 
 function digest(value: unknown): string {
   const serialized = stableStringify(value, sanitizeSurrogates);
@@ -134,19 +77,29 @@ function summarizeMessages(messages: AgentMessage[]): {
   };
 }
 
-/** Create a cache trace recorder when diagnostics config/env enables it. */
-export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
-  const cfg = resolveCacheTraceConfig(params);
-  if (!cfg.enabled || isIncognitoSessionKey(params.sessionKey)) {
+export function createCacheTrace(params: CacheTraceInit) {
+  const env = process.env;
+  const enabled =
+    parseBooleanValue(env.OPENCLAW_CACHE_TRACE) ??
+    params.cfg?.diagnostics?.cacheTrace?.enabled ??
+    false;
+  const fileOverride = env.OPENCLAW_CACHE_TRACE_FILE?.trim();
+  const filePath = fileOverride
+    ? resolveUserPath(fileOverride)
+    : path.join(resolveStateDir(env), "logs", "cache-trace.jsonl");
+  const includeMessages = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_MESSAGES) ?? true;
+  const includePrompt = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_PROMPT) ?? true;
+  const includeSystem = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_SYSTEM) ?? true;
+  if (!enabled || isIncognitoSessionKey(params.sessionKey)) {
     return null;
   }
 
-  const writer = params.writer ?? getQueuedFileWriter(writers, cfg.filePath);
+  const writer = getQueuedFileWriter(writers, filePath);
   let seq = 0;
 
   const base: Omit<CacheTraceEvent, "ts" | "seq" | "stage"> = buildAgentTraceBase(params);
 
-  const recordStage: CacheTrace["recordStage"] = (stage, payload = {}) => {
+  const recordStage = (stage: CacheTraceStage, payload: CacheTracePayload = {}) => {
     const event: CacheTraceEvent = {
       ...base,
       ts: new Date().toISOString(),
@@ -154,10 +107,10 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       stage,
     };
 
-    if (payload.prompt !== undefined && cfg.includePrompt) {
+    if (payload.prompt !== undefined && includePrompt) {
       event.prompt = redactAgentDiagnosticPayload(payload.prompt);
     }
-    if (payload.system !== undefined && cfg.includeSystem) {
+    if (payload.system !== undefined && includeSystem) {
       event.system = redactAgentDiagnosticPayload(payload.system);
       event.systemDigest = digest(payload.system);
     }
@@ -169,9 +122,9 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
     }
 
     const messages = payload.messages;
-    if (Array.isArray(messages)) {
+    if (messages) {
       Object.assign(event, summarizeMessages(messages));
-      if (cfg.includeMessages) {
+      if (includeMessages) {
         // Full messages are optional; summaries/digests are always recorded when
         // message payloads are supplied.
         event.messages = redactAgentDiagnosticPayload(messages);
@@ -192,28 +145,29 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
     writer.write(`${line}\n`);
   };
 
-  const wrapStreamFn: CacheTrace["wrapStreamFn"] = (streamFn) => (model, context, options) => {
-    const traceContext = context as {
-      messages?: AgentMessage[];
-      system?: unknown;
-      systemPrompt?: unknown;
+  const wrapStreamFn =
+    (streamFn: StreamFn): StreamFn =>
+    (model, context, options) => {
+      const traceContext = context as {
+        messages?: AgentMessage[];
+        system?: unknown;
+        systemPrompt?: unknown;
+      };
+      recordStage("stream:context", {
+        model: {
+          id: model?.id,
+          provider: model?.provider,
+          api: model?.api,
+        },
+        system: traceContext.systemPrompt ?? traceContext.system,
+        messages: traceContext.messages ?? [],
+        options: (options ?? {}) as Record<string, unknown>,
+      });
+      return streamFn(model, context, options);
     };
-    recordStage("stream:context", {
-      model: {
-        id: model?.id,
-        provider: model?.provider,
-        api: model?.api,
-      },
-      system: traceContext.systemPrompt ?? traceContext.system,
-      messages: traceContext.messages ?? [],
-      options: (options ?? {}) as Record<string, unknown>,
-    });
-    return streamFn(model, context, options);
-  };
 
   return {
-    enabled: true,
-    filePath: cfg.filePath,
+    filePath,
     recordStage,
     wrapStreamFn,
   };

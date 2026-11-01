@@ -1,3 +1,4 @@
+import type { ModelInferenceCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { z } from "zod";
 import type { ModelDataMediaInputConfig } from "../../packages/llm-core/src/model-data.js";
 import type { OpenAICompletionsCompat, RawModelCostConfig } from "../llm/types.js";
@@ -38,6 +39,12 @@ export type ModelDefinitionConfig = Omit<
   ModelDefinitionSchemaInput,
   "reasoning" | "input" | "cost" | "maxTokens" | "agentRuntime" | "mediaInput" | "compat"
 > & {
+  /** Route-bound discovery capabilities; not a user config option. */
+  inference?: ModelInferenceCapabilities;
+  /** Internal discovery metadata; not a user config option. */
+  parameterCount?: number;
+  /** Provider/catalog-declared canonical family; internal metadata, not a user config option. */
+  family?: string;
   /** Whether the model supports reasoning/thinking controls. */
   reasoning: boolean;
   /** Supported input modalities for routing and media-tool selection. */
@@ -58,7 +65,6 @@ export type ModelProviderConfig = Omit<
   ModelProviderSchemaInput,
   "baseUrl" | "models" | "apiKey" | "headers" | "request" | "agentRuntime"
 > & {
-  /** Provider API base URL. */
   baseUrl: string;
   /** API key or secret reference for this provider. */
   apiKey?: SecretInput;
@@ -76,16 +82,11 @@ export type ModelProviderConfig = Omit<
 export type ModelProviderDeclarationConfig = ModelProviderConfig;
 
 /** User config input shape before provider defaults/models are materialized. */
-export type ModelProviderConfigInput = Omit<Partial<ModelProviderConfig>, "models"> & {
-  models?: ModelDefinitionConfig[];
-};
+export type ModelProviderConfigInput = Partial<ModelProviderConfig>;
 
 export type BedrockDiscoveryConfig = {
-  /** Enable AWS Bedrock model discovery. */
   enabled?: boolean;
-  /** AWS region to query for models. */
   region?: string;
-  /** Optional provider id filters for discovery. */
   providerFilter?: string[];
   /** Discovery cache refresh interval in seconds. */
   refreshInterval?: number;

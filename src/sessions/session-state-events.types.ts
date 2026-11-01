@@ -1,5 +1,11 @@
 import type { SessionStateActorType, SessionStateEventKind } from "./session-state-event-kinds.js";
 
+export type SessionStateSweepAddress = {
+  watcherSessionKey: string;
+  targetSessionKey: string;
+  watcherStorePath: string | null;
+};
+
 export type SessionStateEventRecord = {
   sequence: number;
   sessionKey: string;

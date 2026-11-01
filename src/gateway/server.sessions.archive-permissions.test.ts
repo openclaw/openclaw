@@ -1,7 +1,10 @@
 import { expect, test, vi } from "vitest";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { registerChatAbortController } from "./chat-abort.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
@@ -9,12 +12,14 @@ import type { GatewayClient, GatewayRequestContext } from "./server-methods/type
 import { roleClient, rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
+  directSessionReq,
   expectNoSessionQueueCleanup,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+type Entry = Parameters<typeof sessionStoreEntry>[1];
 
 async function request(
   method: "sessions.patch" | "sessions.patchMany",
@@ -24,25 +29,14 @@ async function request(
   patch: Record<string, unknown>,
 ) {
   const respond = vi.fn();
+  const storePath = context.getRuntimeConfig().session?.store;
   const targets = keys.map((key) => ({
     key,
-    expectedSessionId: loadSessionEntry({
-      sessionKey: key,
-      storePath: context.getRuntimeConfig().session?.store,
-    })?.sessionId,
+    expectedSessionId: loadSessionEntry({ sessionKey: key, storePath })?.sessionId,
   }));
-  await handleGatewayRequest({
-    req: {
-      type: "req",
-      id: "archive-permissions",
-      method,
-      params: method === "sessions.patchMany" ? { targets, patch } : { ...targets[0], ...patch },
-    },
-    client,
-    context,
-    isWebchatConnect: () => false,
-    respond,
-  });
+  const params = method === "sessions.patchMany" ? { targets, patch } : { ...targets[0], ...patch };
+  const req = { type: "req" as const, id: "archive-permissions", method, params };
+  await handleGatewayRequest({ req, client, context, isWebchatConnect: () => false, respond });
   expect(respond).toHaveBeenCalledOnce();
   return respond.mock.calls[0];
 }
@@ -67,22 +61,19 @@ test.each(["sessions.patch", "sessions.patchMany"] as const)(
       agents: "*",
       scopes: ["operator.admin"],
     };
+    const shared = (id: string, actorId: string, extra: Entry = {}) =>
+      sessionStoreEntry(id, {
+        visibility: "shared",
+        createdActor: { type: "human", source: "profile", id: actorId },
+        ...extra,
+      });
     await writeSessionStore({
       entries: {
-        [ownKey]: sessionStoreEntry("member-created", {
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: memberId },
-        }),
-        [foreignKey]: sessionStoreEntry("foreign-created", {
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: creatorId },
+        [ownKey]: shared("member-created", memberId),
+        [foreignKey]: shared("foreign-created", creatorId, {
           owner: { actor: { type: "human", id: memberId } },
         }),
-        [restoredKey]: sessionStoreEntry("foreign-archived", {
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: creatorId },
-          archivedAt: 1,
-        }),
+        [restoredKey]: shared("foreign-archived", creatorId, { archivedAt: 1 }),
       },
     });
     const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
@@ -119,19 +110,47 @@ test.each(["sessions.patch", "sessions.patchMany"] as const)(
   },
 );
 
-test("keeps identityless solo archive and restore available", async () => {
+test("archiving a non-default agent ignores the compatibility owner's ownerless run", async () => {
   const { storePath } = await createSessionStoreDir();
-  const key = "agent:main:archive-solo";
-  await writeSessionStore({ entries: { [key]: sessionStoreEntry("solo") } });
-  const cfg = { session: { store: storePath } };
-  const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-  await initializeSessionReadContext(context);
-  for (const archived of [true, false]) {
-    expect(
-      (await request("sessions.patch", sharingPolicyClient({}), context, [key], { archived }))?.[0],
-    ).toBe(true);
-    expect(loadSessionEntry({ sessionKey: key, storePath })?.archivedAt).toEqual(
-      archived ? expect.any(Number) : undefined,
-    );
-  }
+  const cfg = retainLegacyDefaultAgentId(
+    {
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      session: { store: storePath },
+    },
+    "ops",
+  );
+  const sessionKey = "agent:research:archive-owner-scope";
+  const sessionId = "session-archive-owner-scope";
+  await writeSessionStore({
+    agentId: "research",
+    entries: { [sessionKey]: sessionStoreEntry(sessionId) },
+    storePath,
+  });
+
+  const compatibilityRun = registerChatAbortController({
+    runId: "run-ops-ownerless",
+    sessionId,
+    sessionKey: "legacy-unscoped",
+    target: captureSessionTarget({
+      storeScope: storePath,
+      sessionKey: "legacy-unscoped",
+      agentId: "ops",
+      incarnation: sessionId,
+    }),
+    timeoutMs: 60_000,
+  });
+
+  const archived = await directSessionReq(
+    "sessions.patch",
+    { key: sessionKey, archived: true, expectedSessionId: sessionId },
+    {
+      context: {
+        cancelRunBoundApprovals: vi.fn(),
+        getRuntimeConfig: () => cfg,
+      },
+    },
+  );
+
+  expect(archived.ok, JSON.stringify(archived)).toBe(true);
+  expect(compatibilityRun.controller.signal.aborted).toBe(false);
 });

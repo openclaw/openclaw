@@ -1,5 +1,14 @@
 import type { StateCore, Token } from "markdown-it";
 
+/** Yield each mutable inline token list without copying or precollecting blocks. */
+export function* markdownInlineChildren(tokens: readonly Token[]): Generator<Token[]> {
+  for (const token of tokens) {
+    if (token.type === "inline" && token.children) {
+      yield token.children;
+    }
+  }
+}
+
 /** Replace accepted prose matches once; generated tokens are not scanned again. */
 export function replaceMarkdownTextMatches(
   state: Pick<StateCore, "Token">,

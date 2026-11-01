@@ -1,4 +1,3 @@
-// Detects safe executable names or paths without shell evaluation.
 import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 import { isSafeExecutableValue } from "./exec-safety.js";
@@ -9,9 +8,6 @@ import { resolveEnvironmentValue } from "./process-env.js";
 // shell evaluation when probing PATH.
 /** Return true when a safe executable name/path can be found on this host. */
 export async function detectBinary(name: string): Promise<boolean> {
-  if (!name?.trim()) {
-    return false;
-  }
   if (!isSafeExecutableValue(name)) {
     return false;
   }

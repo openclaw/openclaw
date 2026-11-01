@@ -14,6 +14,10 @@ import {
   isAgentsApiOptionalHistoryReadFailure,
   isAgentsApiTransportDisconnect,
 } from "./agentsapi-errors.js";
+import {
+  createAgentsApiSessionHistory,
+  waitForAgentsApiEventOrRecovery,
+} from "./agentsapi-session-history.js";
 import type { AgentsApiToolExecutionResult } from "./agentsapi-tools.js";
 
 /** Native input receipts and session idle, together, establish Agents API completion. */
@@ -53,6 +57,7 @@ export function createAgentsApiSession(options: {
   let admittedMessageCount = submitted ? 1 : 0;
   let baselineTurnId: string | undefined;
   let baselineCaptured = submitted;
+  const priorInputItemIds = new Set<string>();
   let observedInputItems = new Set<string>();
   const coordinatorTurnIds = new Set<string>();
   const excludedTurnIds = new Set<string>();
@@ -61,6 +66,9 @@ export function createAgentsApiSession(options: {
   let latestInputTurnId: string | undefined;
   let usageTurns: Promise<Turn[]> | undefined;
   let terminatedByTool = false;
+  // Healthy streams remain event-driven. A terminal notification or transport gap
+  // needs saved-state recovery because the live stream cannot replay late records.
+  let reconciliationPending = options.initialInputSubmitted ?? false;
 
   const isAvailable = () =>
     submitted && !inputAdmissionClosed && !stopped && !settled && !rootTurn && !signal.aborted;
@@ -137,84 +145,6 @@ export function createAgentsApiSession(options: {
     cancelled = !terminatedByTool && latest?.status === "cancelled";
     return turns;
   };
-  const readItemsByTurn = async (readClient: AgentsApiClient, readSignal: AbortSignal) => {
-    const savedItems = await readClient.items(sessionId, undefined, readSignal);
-    readSignal.throwIfAborted();
-    const itemsByTurn = new Map<string, AgentsApiItem[]>();
-    for (const item of savedItems) {
-      if (!item.turn_id) {
-        continue;
-      }
-      const items = itemsByTurn.get(item.turn_id) ?? [];
-      items.push(item);
-      itemsByTurn.set(item.turn_id, items);
-    }
-    return itemsByTurn;
-  };
-  const readSavedState = async (readClient: AgentsApiClient, readSignal: AbortSignal) => {
-    const turns = await readAdmittedTurns(readClient, readSignal);
-    const entries: Array<{ turn: Turn; items: AgentsApiItem[] }> = [];
-    const inputItems = new Set<string>();
-    const itemsByTurn =
-      turns.length || baselineTurnId
-        ? await readItemsByTurn(readClient, readSignal)
-        : new Map<string, AgentsApiItem[]>();
-    for (const turn of turns) {
-      const items = itemsByTurn.get(turn.id) ?? [];
-      for (const item of items) {
-        rememberItemTurn(item.id, turn.id);
-        if (item.type === "message" && item.role === "user") {
-          inputItems.add(item.id);
-        }
-      }
-      entries.push({ turn, items });
-    }
-    observedInputItems = inputItems;
-    return { turns, entries, itemsByTurn };
-  };
-  const projectSavedState = async (
-    entries: Array<{ turn: Turn; items: AgentsApiItem[] }>,
-    readSignal: AbortSignal,
-  ) => {
-    let transcriptReady = true;
-    for (const { turn, items } of entries) {
-      readSignal.throwIfAborted();
-      const ready = await options.onReconcile?.(turn, items);
-      transcriptReady = ready !== false && transcriptReady;
-      readSignal.throwIfAborted();
-    }
-    return transcriptReady;
-  };
-  const reconcilePriorHistory = async (
-    readClient: AgentsApiClient,
-    readSignal: AbortSignal,
-    itemsByTurn: Map<string, AgentsApiItem[]>,
-  ) => {
-    if (!baselineTurnId || !options.onReconcileHistory) {
-      return;
-    }
-    const turns = await readClient.turns(sessionId, readSignal);
-    readSignal.throwIfAborted();
-    const baselineIndex = turns.findIndex((turn) => turn.id === baselineTurnId);
-    if (baselineIndex < 0) {
-      throw new Error("Agents API historical reconciliation lost its baseline turn");
-    }
-    const priorTurns = turns
-      .slice(0, baselineIndex + 1)
-      .filter((turn) => isAgentsApiTerminalTurn(turn.status));
-    if (!priorTurns.length) {
-      return;
-    }
-    // Historical facts repair the retained conversation without entering this
-    // attempt's admission, live presentation, tool lifecycle, or token accounting.
-    await options.onReconcileHistory(
-      priorTurns.map((turn) => ({
-        turn,
-        items: itemsByTurn.get(turn.id) ?? [],
-      })),
-    );
-    readSignal.throwIfAborted();
-  };
   const rememberItemTurn = (itemId: string, turnId: string) => {
     const previous = itemTurnIds.get(itemId);
     if (previous && previous !== turnId) {
@@ -223,6 +153,20 @@ export function createAgentsApiSession(options: {
     itemTurnIds.set(itemId, turnId);
     excludedItemIds.delete(itemId);
   };
+
+  const history = createAgentsApiSessionHistory({
+    sessionId,
+    cleanupClient,
+    getBaselineTurnId: () => baselineTurnId,
+    coordinatorTurnIds,
+    priorInputItemIds,
+    readAdmittedTurns,
+    rememberItemTurn,
+    observeInputItems: (items) => {
+      observedInputItems = items;
+    },
+    callbacks: options,
+  });
 
   return {
     isAvailable,
@@ -233,36 +177,32 @@ export function createAgentsApiSession(options: {
       if (!submitted || !settled) {
         return Promise.resolve([]);
       }
-      return (usageTurns ??= (async () => {
-        const usageSignal = AbortSignal.timeout(5_000);
-        let turns: Turn[] = [];
-        // Idle can precede the REST records and their usage. Give accounting
-        // a bounded settlement window, without treating unknown usage as zero.
-        try {
-          while (true) {
-            turns = await cleanupClient.turns(sessionId, usageSignal, baselineTurnId);
-            const recordedIds = new Set(turns.map((turn) => turn.id));
-            if (
-              turns.length > 0 &&
-              [...coordinatorTurnIds].every((id) => recordedIds.has(id)) &&
-              turns.every((turn) => turn.usage !== null)
-            ) {
-              return turns;
-            }
-            await delay(500, undefined, { signal: usageSignal });
-          }
-        } catch (error) {
-          if (!usageSignal.aborted) {
-            options.onUsageError?.(error);
-          }
-          return turns;
-        }
-      })());
+      return (usageTurns ??= history.readUsageTurns());
     },
     async run(prompt: string, persistInput: () => Promise<void>, onSubmitted: () => void) {
       signal.throwIfAborted();
       if (!options.initialInputSubmitted) {
-        baselineTurnId = (await client.turns(sessionId, signal, undefined, true))[0]?.id;
+        const latest = (await client.turns(sessionId, signal, undefined, true))[0];
+        assertCurrent();
+        baselineTurnId = latest?.id;
+        if (latest && !isAgentsApiTerminalTurn(latest.status)) {
+          // A recovery input can join the still-active native root. Retain its
+          // tools and output, but count only inputs admitted by this attempt.
+          const turns = await client.turns(sessionId, signal);
+          assertCurrent();
+          const latestIndex = turns.findIndex((turn) => turn.id === latest.id);
+          if (latestIndex < 0) {
+            throw new Error("Agents API continuation lost its active root turn");
+          }
+          baselineTurnId = turns[latestIndex - 1]?.id;
+          const items = await client.items(sessionId, latest.id, signal);
+          assertCurrent();
+          for (const item of items) {
+            if (item.type === "message" && item.role === "user") {
+              priorInputItemIds.add(item.id);
+            }
+          }
+        }
         baselineCaptured = true;
         if (baselineTurnId) {
           excludedTurnIds.add(baselineTurnId);
@@ -272,16 +212,16 @@ export function createAgentsApiSession(options: {
       const relayFunctions = async (): Promise<void> => {
         assertCurrent();
         signal.throwIfAborted();
-        if (!options.executeFunction) {
-          throw new Error("Agents API MVP cannot continue: agent.session.requires_action");
-        }
         let submissionFence = submission;
-        await submissionFence;
+        await awaitReceipt(submissionFence);
         assertCurrent();
         const inputCount = admittedMessageCount;
         const calls = await client.pendingFunctionCalls(sessionId, signal);
         if (!calls.length) {
           return;
+        }
+        if (!options.executeFunction) {
+          throw new Error("Agents API MVP cannot continue: agent.session.requires_action");
         }
         // Retain the input watermark for every sibling, including across re-reads.
         for (const call of calls) {
@@ -306,7 +246,7 @@ export function createAgentsApiSession(options: {
         // a transient read failure or wait indefinitely before a Gateway action.
         const prefixSignal = AbortSignal.any([signal, AbortSignal.timeout(5_000)]);
         try {
-          itemsByTurn = await readItemsByTurn(client, prefixSignal);
+          itemsByTurn = await history.readItemsByTurn(client, prefixSignal);
           assertCurrent();
         } catch (error) {
           signal.throwIfAborted();
@@ -345,7 +285,7 @@ export function createAgentsApiSession(options: {
             // A pending function can precede its saved item. Preserve the available
             // prefix; its existing readiness barrier still fences unresolved slots.
             const prefix = callIndex >= 0 ? items.slice(0, callIndex) : items;
-            const transcriptReady = await projectSavedState(
+            const transcriptReady = await history.projectSavedState(
               turns.map((turn) => ({
                 turn,
                 items: turn.id === call.turn_id ? prefix : (itemsByTurn!.get(turn.id) ?? []),
@@ -371,7 +311,7 @@ export function createAgentsApiSession(options: {
           const result = await options.executeFunction(call);
           assertCurrent();
           signal.throwIfAborted();
-          const terminate = result.terminate || result.sourceReplyDelivered;
+          const terminate = result.terminate;
           if (terminate) {
             // Fence new input before the acknowledgement can resume native work.
             // Already reserved input remains ahead of that acknowledgement.
@@ -390,7 +330,7 @@ export function createAgentsApiSession(options: {
           });
           void submission.catch(() => {});
           const acknowledgementFence = submission;
-          await acknowledgementFence;
+          await awaitReceipt(acknowledgementFence);
           submissionFence = acknowledgementFence;
           await options.onFunctionResult?.(call, result);
           assertCurrent();
@@ -424,12 +364,82 @@ export function createAgentsApiSession(options: {
       );
       let nextEvent = events.next();
       void nextEvent.catch(() => {});
+      const bufferedEvents: AgentsApiEvent[] = [];
+      const reconnectEvents = async () => {
+        reconciliationPending = true;
+        streamController.abort();
+        // A broken reader can reject return() as well as next(). Retire only
+        // this transport; the admitted native work remains in the session.
+        await events.return(undefined).catch((error: unknown) => {
+          if (!isAgentsApiTransportDisconnect(error)) {
+            throw error;
+          }
+        });
+        while (true) {
+          await delay(500, undefined, { signal });
+          assertCurrent();
+          streamController = new AbortController();
+          try {
+            // Subscribe before reconciliation: Agents API streams do not replay.
+            events = await client.subscribe(
+              sessionId,
+              AbortSignal.any([signal, streamController.signal]),
+            );
+            break;
+          } catch (error) {
+            streamController.abort();
+            signal.throwIfAborted();
+            assertCurrent();
+            if (!isAgentsApiTransportDisconnect(error)) {
+              throw error;
+            }
+          }
+        }
+        nextEvent = events.next();
+        void nextEvent.catch(() => {});
+      };
+      const disconnectedEvent = (error: unknown): IteratorReturnResult<undefined> => {
+        signal.throwIfAborted();
+        assertCurrent();
+        if (!isAgentsApiTransportDisconnect(error)) {
+          throw error;
+        }
+        return { done: true, value: undefined };
+      };
+      const awaitReceipt = async (receipt: Promise<void>) => {
+        const acknowledged = receipt.then(
+          () => ({ kind: "acknowledged" as const }),
+          (error: unknown) => ({ kind: "failed" as const, error }),
+        );
+        while (true) {
+          signal.throwIfAborted();
+          let chunk: IteratorResult<AgentsApiEvent> | Awaited<typeof acknowledged>;
+          try {
+            chunk = await Promise.race([acknowledged, nextEvent]);
+          } catch (error) {
+            chunk = disconnectedEvent(error);
+          }
+          if ("kind" in chunk) {
+            if (chunk.kind === "failed") {
+              throw chunk.error;
+            }
+            return;
+          }
+          if (chunk.done) {
+            await reconnectEvents();
+            continue;
+          }
+          bufferedEvents.push(chunk.value);
+          nextEvent = events.next();
+          void nextEvent.catch(() => {});
+        }
+      };
       const settleFromSavedState = async (recover = false): Promise<void> => {
         const submissionFence = submission;
-        await submissionFence;
+        await awaitReceipt(submissionFence);
         assertCurrent();
         const admittedCount = admittedMessageCount;
-        const snapshot = await readSavedState(client, signal);
+        const snapshot = await history.readSavedState(client, signal);
         assertCurrent();
         const session = await client.session(sessionId, signal);
         assertCurrent();
@@ -455,10 +465,10 @@ export function createAgentsApiSession(options: {
         }
         if (settled || recover) {
           if (settled) {
-            await reconcilePriorHistory(client, signal, snapshot.itemsByTurn);
+            await history.reconcilePriorHistory(client, signal, snapshot.itemsByTurn);
             assertCurrent();
           }
-          await projectSavedState(snapshot.entries, signal);
+          await history.projectSavedState(snapshot.entries, signal);
           assertCurrent();
         }
       };
@@ -485,13 +495,13 @@ export function createAgentsApiSession(options: {
               return false;
             }
             // Command deltas can omit their turn; saved admitted items retain that correlation.
-            const snapshot = await readSavedState(client, signal);
+            const snapshot = await history.readSavedState(client, signal);
             assertCurrent();
             if (!itemTurnIds.has(itemId)) {
               excludedItemIds.add(itemId);
               return false;
             }
-            await projectSavedState(snapshot.entries, signal);
+            await history.projectSavedState(snapshot.entries, signal);
             assertCurrent();
             return true;
           }
@@ -528,7 +538,7 @@ export function createAgentsApiSession(options: {
         assertCurrent();
         signal.throwIfAborted();
         if (!options.initialInputSubmitted) {
-          await submit(prompt);
+          await awaitReceipt(submit(prompt));
         }
         onSubmitted();
         if (options.initialInputSubmitted) {
@@ -540,72 +550,36 @@ export function createAgentsApiSession(options: {
             break;
           }
           let chunk: IteratorResult<AgentsApiEvent> | undefined;
+          let consumedBufferedEvent = false;
           try {
-            if (options.initialInputSubmitted) {
-              // Creation events are not replayed, and saved records can lag them.
-              const refresh = new AbortController();
-              try {
-                chunk = await Promise.race([
-                  nextEvent,
-                  delay(1_000, undefined, {
-                    signal: AbortSignal.any([signal, refresh.signal]),
-                  }),
-                ]);
-              } finally {
-                refresh.abort();
-              }
+            const buffered = bufferedEvents.shift();
+            if (buffered) {
+              consumedBufferedEvent = true;
+              chunk = { done: false, value: buffered };
+            } else if (reconciliationPending) {
+              // Terminal and disconnected-stream records may lag their last live event.
+              // Keep the next event in flight while reconciling within the attempt deadline.
+              chunk = await waitForAgentsApiEventOrRecovery(nextEvent, signal);
             } else {
               chunk = await nextEvent;
             }
           } catch (error) {
-            signal.throwIfAborted();
-            assertCurrent();
-            if (!isAgentsApiTransportDisconnect(error)) {
-              throw error;
-            }
-            chunk = { done: true, value: undefined };
+            chunk = disconnectedEvent(error);
           }
           if (!chunk) {
             await settleFromSavedState(true);
             continue;
           }
           if (chunk.done) {
-            streamController.abort();
-            // A broken reader can reject return() as well as next(). Retire only
-            // this transport; the admitted native work remains in the session.
-            await events.return(undefined).catch((error: unknown) => {
-              if (!isAgentsApiTransportDisconnect(error)) {
-                throw error;
-              }
-            });
-            while (true) {
-              await delay(500, undefined, { signal });
-              assertCurrent();
-              streamController = new AbortController();
-              try {
-                // Subscribe before reconciliation: Agents API streams do not replay.
-                events = await client.subscribe(
-                  sessionId,
-                  AbortSignal.any([signal, streamController.signal]),
-                );
-                break;
-              } catch (error) {
-                streamController.abort();
-                signal.throwIfAborted();
-                assertCurrent();
-                if (!isAgentsApiTransportDisconnect(error)) {
-                  throw error;
-                }
-              }
-            }
-            nextEvent = events.next();
-            void nextEvent.catch(() => {});
+            await reconnectEvents();
             await settleFromSavedState(true);
             continue;
           }
           const event = chunk.value;
-          nextEvent = events.next();
-          void nextEvent.catch(() => {});
+          if (!consumedBufferedEvent) {
+            nextEvent = events.next();
+            void nextEvent.catch(() => {});
+          }
           assertCurrent();
           if (!(await belongsToAttempt(event))) {
             continue;
@@ -614,6 +588,7 @@ export function createAgentsApiSession(options: {
           await options.onEvent(event);
           assertCurrent();
           if (event.type === "agent.session.idle") {
+            reconciliationPending = true;
             await settleFromSavedState();
             continue;
           }
@@ -623,6 +598,7 @@ export function createAgentsApiSession(options: {
             event.item?.type === "message" &&
             event.item.role === "user" &&
             event.item.id &&
+            !priorInputItemIds.has(event.item.id) &&
             !observedInputItems.has(event.item.id)
           ) {
             observedInputItems.add(event.item.id);
@@ -631,6 +607,8 @@ export function createAgentsApiSession(options: {
             if (!inputTurnId) {
               throw new Error("Agents API input item is missing its turn ID");
             }
+            // The input receipt can arrive after the final idle notification.
+            await settleFromSavedState();
           }
           if (event.type === "error") {
             throw new AgentsApiError(
@@ -642,7 +620,15 @@ export function createAgentsApiSession(options: {
             await relayFunctions();
             continue;
           }
-          if (["agent.session.failed", "agent.session.environment.failed"].includes(event.type)) {
+          if (event.type === "agent.session.failed") {
+            const session = await client.session(sessionId, signal);
+            assertCurrent();
+            if (session.status !== "failed") {
+              continue;
+            }
+            throw new AgentsApiError(session.error ?? "Agents API session failed", event.error);
+          }
+          if (event.type === "agent.session.environment.failed") {
             const nativeError = event.environment?.error ?? event.error;
             throw new AgentsApiError(
               nativeError?.message ??
@@ -658,6 +644,7 @@ export function createAgentsApiSession(options: {
             event.turn?.subagent_id === null &&
             event.turn.id === latestInputTurnId
           ) {
+            reconciliationPending = true;
             rootTurn = event.turn;
             turnFailure = event.type.endsWith(".failed")
               ? new AgentsApiError(
@@ -685,7 +672,7 @@ export function createAgentsApiSession(options: {
     },
     async reconcileAfterClose(cleanupSignal: AbortSignal): Promise<Turn | undefined> {
       if (!closed) {
-        throw new Error("Agents API canonical cleanup requires a closed session attempt");
+        throw new Error("Agents API session cleanup requires a closed session attempt");
       }
       if (!submitted || !baselineCaptured) {
         return undefined;
@@ -694,11 +681,11 @@ export function createAgentsApiSession(options: {
       const session = await cleanupClient.session(sessionId, cleanupSignal);
       cleanupSignal.throwIfAborted();
       if (session.status !== "idle" && session.status !== "failed") {
-        throw new Error("Agents API canonical cleanup requires native work to be retired");
+        throw new Error("Agents API session cleanup requires native work to be retired");
       }
-      const snapshot = await readSavedState(cleanupClient, cleanupSignal);
-      await reconcilePriorHistory(cleanupClient, cleanupSignal, snapshot.itemsByTurn);
-      await projectSavedState(snapshot.entries, cleanupSignal);
+      const snapshot = await history.readSavedState(cleanupClient, cleanupSignal);
+      await history.reconcilePriorHistory(cleanupClient, cleanupSignal, snapshot.itemsByTurn);
+      await history.projectSavedState(snapshot.entries, cleanupSignal);
       return snapshot.turns.at(-1);
     },
     async close() {

@@ -7,10 +7,11 @@ import {
   OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
   readAcpxProcessLeaseIdentity,
 } from "./process-lease.js";
-import type { AcpxProcessCleanupDeps } from "./process-reaper.js";
+import type { AcpxProcessSystemFixture } from "./process-reaper.test-support.js";
 import {
   CODEX_ACP_WRAPPER_COMMAND,
   makeEmptySessionStore,
+  makeLeasedRuntime,
   makeLeaseStore,
   makeRuntime,
   makeTurn,
@@ -21,23 +22,11 @@ import { ACPX_PROCESS_LEASE_MAX_ENTRIES } from "./state.js";
 
 function makeProbeRuntime(
   leases: ReturnType<typeof makeLeaseStore>,
-  cleanup?: AcpxProcessCleanupDeps,
+  cleanup?: AcpxProcessSystemFixture,
   command: AcpxAgentCommand = CODEX_ACP_WRAPPER_COMMAND,
   wrapperRoot = "/tmp/openclaw/acpx",
 ) {
-  return makeRuntime(
-    makeEmptySessionStore(),
-    {
-      openclawGatewayInstanceId: "gateway-test",
-      openclawProcessLeaseStore: leases.store,
-      openclawWrapperRoot: wrapperRoot,
-      agentRegistry: {
-        resolve: (agent) => (agent === "codex" ? command : agent),
-        list: () => ["codex"],
-      },
-    },
-    { openclawProcessCleanup: cleanup },
-  );
+  return makeLeasedRuntime(makeEmptySessionStore(), leases, cleanup, command, wrapperRoot);
 }
 
 describe("AcpxRuntime diagnostic probes", () => {

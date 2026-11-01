@@ -1,4 +1,5 @@
 import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOperatorRolePolicyForAssignment } from "../../gateway/operator-role-policy.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
@@ -20,27 +21,25 @@ export async function prepareSessionControlTarget(params: {
   expectedLifecycleRevision?: string | null;
   operation: "archive" | "restore" | "stop";
   authority?: AdmittedRunOperatorAuthority;
-}): Promise<{
-  sessionId: string;
-  lifecycleRevision: string | null;
-  assertCurrent(): void;
-  release(): void;
-}> {
+}) {
   // Identity-only callers compose their own invocation guard. In particular, accepted
   // continuations must acquire fresh authority instead of retaining a completed tool.
   const source = params.authority ? captureSessionControlAuthority(params.authority) : undefined;
   const gateway = getInProcessGatewayToolContext();
   const currentConfig = () =>
     gateway ? (gateway.getCommittedRuntimeConfig ?? gateway.getRuntimeConfig)() : params.cfg;
-  const assertSourceCurrent = () => {
-    if (gateway && getInProcessGatewayToolContext() !== gateway) {
-      throw new ToolAuthorizationError("Session control Gateway instance changed.");
-    }
-    source?.assertCurrent();
-    if (source && !source.allows("operator.write")) {
-      throw new ToolAuthorizationError("Session controls require operator.write.");
-    }
-  };
+  const assertSourceCurrent = composeSessionSourceAssertion(
+    [source?.assertCurrent],
+    (assertSource) => {
+      if (gateway && getInProcessGatewayToolContext() !== gateway) {
+        throw new ToolAuthorizationError("Session control Gateway instance changed.");
+      }
+      assertSource();
+      if (source && !source.allows("operator.write")) {
+        throw new ToolAuthorizationError("Session controls require operator.write.");
+      }
+    },
+  );
   assertSourceCurrent();
   const facts = await prepareSessionMutationFacts({
     cfg: params.cfg,
@@ -69,8 +68,7 @@ export async function prepareSessionControlTarget(params: {
       ? await prepareUserProfileRoleAuthority(source.authority.profileId)
       : undefined;
     const profileIds = new Set(profile ? [profile.profileId, ...profile.aliases] : []);
-    const assertCurrent = () => {
-      assertSourceCurrent();
+    const assertTargetCurrent = () => {
       const cfg = currentConfig();
       const currentFacts = facts.readCurrent(cfg);
       const current = currentFacts.target.entry;
@@ -103,7 +101,12 @@ export async function prepareSessionControlTarget(params: {
         },
         currentFacts,
         {
-          policy: resolveOperatorRolePolicyForAssignment(profile.profileId, profile.role, cfg),
+          policy: resolveOperatorRolePolicyForAssignment(
+            profile.profileId,
+            profile.role,
+            cfg,
+            profile.githubLogin ?? null,
+          ),
           aliases: new Set(profile.aliases),
         },
       );
@@ -126,6 +129,7 @@ export async function prepareSessionControlTarget(params: {
         );
       }
     };
+    const assertCurrent = composeSessionSourceAssertion([assertSourceCurrent, assertTargetCurrent]);
     assertCurrent();
     // Consume committed owner publications even when no action is executing. A later
     // reassignment must not revive a capture that lost its original target authority.
@@ -137,7 +141,7 @@ export async function prepareSessionControlTarget(params: {
         return;
       }
       try {
-        assertCurrent();
+        assertTargetCurrent();
       } catch {
         release();
       }

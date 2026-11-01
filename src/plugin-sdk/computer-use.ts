@@ -5,7 +5,6 @@ export {
   ComputerUseCapabilityDescriptorSchema,
   ScreenSnapshotParamsSchema,
   ScreenSnapshotResultSchema,
-  compileComputerUseValidator,
   parseComputerActParamsJSON,
   parseScreenSnapshotParamsJSON,
 } from "../plugins/computer-use-contract.js";

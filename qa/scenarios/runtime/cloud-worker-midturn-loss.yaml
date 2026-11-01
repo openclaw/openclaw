@@ -11,13 +11,13 @@ scenario:
   successCriteria:
     - A managed-worktree qa-channel session dispatches to a real paired-node worker through an isolated Gateway.
     - The mock model persists two assistant/tool-result checkpoints, then pauses during a fifth streamed message.
-    - Killing the proof-owned worker process leaves exactly the four completed checkpoint messages in Gateway history before its paired node disconnects.
-    - The volatile streamed message is absent from durable history while the turn emits a visible chat error and the placement records a bounded terminal reason.
-    - Reconnecting the same paired node and redispatching the session produces one successful recovery turn whose inference context contains each checkpoint exactly once.
+    - Killing the proof-owned worker process preserves the exact committed history prefix, including all four checkpoint messages once and in order, before its paired node disconnects.
+    - The interrupted streamed message and one same-run visible failure notice are appended to durable history in order, while the turn emits a chat error and the placement records a bounded terminal reason.
+    - Reconnecting the same paired node and redispatching the session produces one successful recovery turn whose inference context contains each checkpoint exactly once, excluding the display-only interrupted text and failure notice.
     - The real paired-node worker runs the disk-space probe and exposes its projection through `sessions.list`.
     - Reclaiming the worker causes a later `sessions.list` read to return the reclaimed placement without a stale disk-space projection.
   docsRefs:
-    - docs/gateway/cloud-workers.md
+    - docs/gateway/cloud-workers/session-lifecycle.md
     - docs/concepts/qa-e2e-automation.md
     - docs/channels/qa-channel.md
   codeRefs:
@@ -30,7 +30,7 @@ scenario:
   execution:
     kind: script
     path: test/e2e/qa-lab/runtime/cloud-worker-midturn-loss-proof.ts
-    summary: Dispatches a managed-worktree qa-channel session to a proof-owned paired-node worker, kills its process and disconnects its node during a streamed message, and verifies the durable cutoff, visible failure, and redispatch context.
+    summary: Dispatches a managed-worktree qa-channel session to a proof-owned paired-node worker, kills its process and disconnects its node during a streamed message, and verifies the exact committed prefix, interrupted-reply preservation, visible failure, and redispatch context.
     timeoutMs: 900000
     args:
       - --artifact-base

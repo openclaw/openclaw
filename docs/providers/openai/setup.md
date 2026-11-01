@@ -121,7 +121,8 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
         openclaw models auth login --provider openai --device-code
         ```
       </Step>
-      <Step title="Use the canonical OpenAI model route">
+      <Step title="Use the standard OpenAI model route">
+        <a id="use-the-canonical-openai-model-route" />
         ```bash
         openclaw config set agents.defaults.model.primary openai/gpt-6-astra
         ```
@@ -355,7 +356,7 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
     `openai/gpt-5.6-sol` configuration. Dense turns reached `295098`, `586562`,
     and `863664` prompt tokens. Turn three emitted and persisted a first-class
     server compaction item; the next request replayed that exact opaque item,
-    pruned its prefix, and used `9602` prompt tokens. A deterministic long
+    pruned its prefix, and used `9602` prompt tokens. A long
     response produced `5480` output tokens, durable markers survived compaction
     and Gateway restart, restart latency was `12081` ms, every call reported
     `serviceTier: priority`, and the full suite took `220.03` seconds. These

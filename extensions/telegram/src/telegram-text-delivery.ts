@@ -8,9 +8,7 @@ import {
   telegramHtmlToPlainTextFallback,
 } from "./format.js";
 import type { TelegramRichBlocksDegradationReason } from "./rich-block-model.js";
-import { splitTelegramRichBlocks } from "./rich-block-split.js";
 import {
-  buildTelegramRichBlocksPlan,
   buildTelegramRichMarkdownPlan,
   splitTelegramRichMessageTextChunks,
   type TelegramInputRichMessage,
@@ -52,12 +50,11 @@ function plainPage(text: string): TelegramTextDeliveryPage {
   };
 }
 
-function fallbackPage(text: string): TelegramTextDeliveryPage {
-  return {
-    plainText: text,
-    sourceText: escapeTelegramHtml(text),
-    sourceTextMode: "html",
-  };
+function htmlPage(
+  htmlText: string,
+  plainText = telegramHtmlToPlainTextFallback(htmlText),
+): TelegramTextDeliveryPage {
+  return { htmlText, plainText, sourceText: htmlText, sourceTextMode: "html" };
 }
 
 export function planTelegramTextDeliveryPages(
@@ -65,48 +62,46 @@ export function planTelegramTextDeliveryPages(
 ): TelegramTextDeliveryPage[] {
   const maxChars = Math.max(1, Math.floor(params.maxChars));
   if (params.richMessages && params.textMode !== "html" && params.textMode !== "plain") {
-    if (params.richMessage) {
-      const skipEntityDetection = params.richMessage.skip_entity_detection === true;
-      const pages = splitTelegramRichBlocks(params.richMessage.blocks, { textLimit: maxChars }).map(
-        (blocks, index) => {
-          const plan = buildTelegramRichBlocksPlan(blocks, { skipEntityDetection });
-          const page = plainPage(plan.plainText);
-          page.richMessage = plan.richMessage;
-          page.degradationReasons = index === 0 ? params.degradationReasons : undefined;
-          return page;
-        },
-      );
-      if (pages.length === 0 && params.text.trim()) {
-        return [
-          {
-            ...plainPage(params.text),
-            richMessage: {
-              blocks: [{ type: "paragraph", text: params.text }],
-              ...(skipEntityDetection ? { skip_entity_detection: true } : {}),
-            },
-            ...(params.degradationReasons?.length
-              ? { degradationReasons: params.degradationReasons }
-              : {}),
-          },
-        ];
-      }
-      return pages;
-    }
-    const richPlan = buildTelegramRichMarkdownPlan(params.text, {
-      tableMode: params.tableMode,
-      skipEntityDetection: params.skipEntityDetection,
-    });
-    if (richPlan.richMessage.blocks.length === 0 && params.text.trim()) {
+    const richPlan = params.richMessage
+      ? {
+          richMessage: params.richMessage,
+          plainText: params.text,
+          degradationReasons: params.degradationReasons ?? [],
+        }
+      : buildTelegramRichMarkdownPlan(params.text, {
+          tableMode: params.tableMode,
+          skipEntityDetection: params.skipEntityDetection,
+        });
+    if (!params.richMessage && richPlan.richMessage.blocks.length === 0 && params.text.trim()) {
       return [plainPage(params.text)];
     }
-    return splitTelegramRichMessageTextChunks({ plan: richPlan, textLimit: maxChars }).map(
-      (chunk) => {
+    const pages = splitTelegramRichMessageTextChunks({ plan: richPlan, textLimit: maxChars }).map(
+      (chunk, index) => {
         const page = plainPage(chunk.plainText);
         page.richMessage = chunk.richMessage;
-        page.degradationReasons = chunk.degradationReasons;
+        page.degradationReasons = params.richMessage
+          ? index === 0
+            ? params.degradationReasons
+            : undefined
+          : chunk.degradationReasons;
         return page;
       },
     );
+    if (params.richMessage && pages.length === 0 && params.text.trim()) {
+      return [
+        {
+          ...plainPage(params.text),
+          richMessage: {
+            blocks: [{ type: "paragraph", text: params.text }],
+            ...(params.richMessage.skip_entity_detection ? { skip_entity_detection: true } : {}),
+          },
+          ...(params.degradationReasons?.length
+            ? { degradationReasons: params.degradationReasons }
+            : {}),
+        },
+      ];
+    }
+    return pages;
   }
   if (params.textMode === "plain") {
     return splitTelegramPlainTextChunks(params.text, maxChars)
@@ -119,13 +114,11 @@ export function planTelegramTextDeliveryPages(
     try {
       const normalizedHtml = params.text.replace(/<br\s*\/?>/giu, "\n");
       const chunks = splitTelegramHtmlChunks(normalizedHtml, maxChars);
-      return chunks.map((htmlText) => ({
-        htmlText,
-        plainText: chunks.length === 1 ? plainText : telegramHtmlToPlainTextFallback(htmlText),
-        sourceText: htmlText,
-        sourceTextMode: "html",
-        fullSourceText: normalizedHtml,
-      }));
+      return chunks.map((htmlText) =>
+        Object.assign(htmlPage(htmlText, chunks.length === 1 ? plainText : undefined), {
+          fullSourceText: normalizedHtml,
+        }),
+      );
     } catch (error) {
       params.warn?.(`telegram HTML chunk planning failed; sending plain text: ${String(error)}`);
       return splitTelegramPlainTextChunks(plainText, maxChars).map(plainPage);
@@ -139,23 +132,12 @@ export function planTelegramTextDeliveryPages(
   for (const markdown of markdownParts) {
     const chunks = markdownToTelegramChunks(markdown, maxChars, { tableMode: params.tableMode });
     if (!chunks.length && markdown) {
-      const htmlText = markdownToTelegramHtml(markdown, { tableMode: params.tableMode });
-      pages.push({
-        htmlText,
-        plainText: markdown,
-        sourceText: htmlText,
-        sourceTextMode: "html",
-      });
+      pages.push(
+        htmlPage(markdownToTelegramHtml(markdown, { tableMode: params.tableMode }), markdown),
+      );
       continue;
     }
-    pages.push(
-      ...chunks.map((chunk) => ({
-        htmlText: chunk.html,
-        plainText: telegramHtmlToPlainTextFallback(chunk.html),
-        sourceText: chunk.html,
-        sourceTextMode: "html" as const,
-      })),
-    );
+    pages.push(...chunks.map((chunk) => htmlPage(chunk.html)));
   }
   return pages;
 }
@@ -173,6 +155,8 @@ type TelegramTextPageSender<TPlain, THtml, TRich> = {
     sendHtml: (html: string) => Promise<THtml>;
     sendRich: (richMessage: TelegramInputRichMessage) => Promise<TRich>;
   };
+  /** Drafts keep HTML transport for source-mode pages even when the rendered text is empty. */
+  html?: boolean;
   fallbackLimit?: number;
 };
 
@@ -182,7 +166,8 @@ export async function* sendTelegramTextPageParts<TPlain, THtml, TRich>(
   params: TelegramTextPageSender<TPlain, THtml, TRich>,
 ): AsyncGenerator<{ result: TPlain | THtml | TRich; page: TelegramTextDeliveryPage }> {
   const { page } = params;
-  if (!page.richMessage && !page.htmlText) {
+  const html = params.html ?? Boolean(page.htmlText);
+  if (!page.richMessage && !html) {
     yield { result: await params.sender.sendPlain(page.plainText), page };
     return;
   }
@@ -204,7 +189,7 @@ export async function* sendTelegramTextPageParts<TPlain, THtml, TRich>(
     sendFormatted: async () => ({
       result: page.richMessage
         ? await params.sender.sendRich(page.richMessage)
-        : await params.sender.sendHtml(page.htmlText!),
+        : await params.sender.sendHtml(page.htmlText ?? page.sourceText),
     }),
     sendPlain: async (plan, label) => ({
       chunks: page.richMessage ? plan.chunks : [plan.plainText],
@@ -222,7 +207,11 @@ export async function* sendTelegramTextPageParts<TPlain, THtml, TRich>(
         page.richMessage ? { index, count: delivery.chunks.length } : undefined,
         delivery.label,
       ),
-      page: fallbackPage(text),
+      page: {
+        plainText: text,
+        sourceText: escapeTelegramHtml(text),
+        sourceTextMode: "html",
+      },
     };
   }
 }

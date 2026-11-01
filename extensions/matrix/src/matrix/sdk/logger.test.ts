@@ -1,18 +1,25 @@
 // Matrix tests cover logger plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ConsoleLogger, setMatrixConsoleLogging } from "./logger.js";
+import { LogService, setMatrixConsoleLogging } from "./logger.js";
 
-describe("ConsoleLogger", () => {
+const runtimeLogger = vi.hoisted(() => ({ warn: vi.fn() }));
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
+  getMatrixRuntime: () => ({ logging: { getChildLogger: () => runtimeLogger } }),
+}));
+
+describe("Matrix logging", () => {
   afterEach(() => {
     setMatrixConsoleLogging(false);
     vi.restoreAllMocks();
+    vi.clearAllMocks();
   });
 
   it("redacts sensitive tokens in emitted log messages", () => {
     setMatrixConsoleLogging(true);
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    new ConsoleLogger().error(
+    LogService.warn(
       "MatrixHttpClient",
       "Authorization: Bearer 123456:abcdefghijklmnopqrstuvwxyzABCDEFG",
     );
@@ -21,5 +28,16 @@ describe("ConsoleLogger", () => {
     expect(message).toContain("[MatrixHttpClient] Authorization: Bearer ");
     expect(message).not.toContain("123456:abcdefghijklmnopqrstuvwxyzABCDEFG");
     expect(message).not.toContain("abcdefghijklmnopqrstuvwxyzABCDEFG");
+  });
+
+  it("leaves runtime records raw for the shared egress redactor", () => {
+    LogService.warn(
+      "MatrixHttpClient",
+      "Authorization: Bearer 123456:abcdefghijklmnopqrstuvwxyzABCDEFG",
+    );
+
+    expect(runtimeLogger.warn).toHaveBeenCalledExactlyOnceWith(
+      "[MatrixHttpClient] Authorization: Bearer 123456:abcdefghijklmnopqrstuvwxyzABCDEFG",
+    );
   });
 });

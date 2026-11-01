@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -14,321 +14,178 @@ import {
 } from "./dreaming.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const resolveConfig = (dreaming: Record<string, unknown>, cfg?: OpenClawConfig) =>
+  resolveMemoryDreamingConfig({ pluginConfig: { dreaming }, cfg });
+// Field, accepted decimal value, malformed input, fallback.
+const deepFields = [
+  ["limit", 5, "0x10", 10],
+  ["minScore", 0.9, undefined, 0.75],
+  ["minRecallCount", 4, "1e3", 3],
+  ["minUniqueQueries", 2, "2.5", 3],
+  ["recencyHalfLifeDays", 21, "1.5", 14],
+  ["maxAgeDays", 30, "0x20", 30],
+  ["maxPromotedSnippetTokens", 160, "1e2", 160],
+  ["maxPriorEntryLossFraction", 0.1, undefined, 0.25],
+] as const;
+const deepSettings = (column: 1 | 2 | 3) =>
+  Object.fromEntries(deepFields.map((row) => [row[0], row[column]]));
+const workspace = (workspaceDir: string, ...agentIds: string[]) => ({ workspaceDir, agentIds });
+const memoryPlugin = (slot: string, id: string, dreaming: Record<string, unknown>) => ({
+  plugins: { slots: { memory: slot }, entries: { [id]: { config: { dreaming } } } },
+});
 
-describe("memory dreaming host helpers", () => {
-  it("normalizes string settings from the dreaming config", () => {
-    const resolved = resolveMemoryDreamingConfig({
-      pluginConfig: {
-        dreaming: {
-          enabled: true,
-          frequency: "0 */4 * * *",
-          timezone: "Europe/London",
-          model: " anthropic/claude-sonnet-4-6 ",
-          storage: { mode: "inline", separateReports: true },
-          phases: {
-            deep: {
-              limit: "5",
-              minScore: "0.9",
-              minRecallCount: "4",
-              minUniqueQueries: "2",
-              recencyHalfLifeDays: "21",
-              maxAgeDays: "30",
-              maxPriorEntryLossFraction: 0.1,
-            },
-          },
+it("normalizes string settings from the dreaming config", () => {
+  const deep = deepSettings(1);
+  const resolved = resolveConfig({
+    enabled: true,
+    frequency: "0 */4 * * *",
+    timezone: "Europe/London",
+    verboseLogging: "false",
+    storage: { mode: "inline", separateReports: true },
+    phases: {
+      light: { enabled: " FALSE " },
+      deep: Object.fromEntries(Object.entries(deep).map(([key, value]) => [key, String(value)])),
+    },
+  });
+
+  expect(resolved.enabled).toBe(true);
+  expect(resolved.frequency).toBe("0 */4 * * *");
+  expect(resolved.timezone).toBe("Europe/London");
+  expect(resolved.verboseLogging).toBe(false);
+  expect(resolved.phases.light.enabled).toBe(false);
+  for (const phase of Object.values(resolved.phases)) {
+    expect(phase.cron).toBe("0 */4 * * *");
+  }
+  expect(resolved.storage).toEqual({ mode: "inline", separateReports: true });
+  expect(resolved.phases.deep).toMatchObject(deep);
+});
+
+it.each([
+  ["missing", {}],
+  [
+    "malformed",
+    {
+      enabled: " TRUE ",
+      storage: { separateReports: "invalid" },
+      phases: {
+        deep: {
+          ...deepSettings(2),
+          execution: { maxOutputTokens: "0x40", timeoutMs: "1e4" },
         },
+        light: { lookbackDays: "0x0a", limit: "1e2" },
       },
-    });
-
-    expect(resolved.enabled).toBe(true);
-    expect(resolved.frequency).toBe("0 */4 * * *");
-    expect(resolved.timezone).toBe("Europe/London");
-    expect(resolved.execution.defaults.model).toBe("anthropic/claude-sonnet-4-6");
-    for (const phase of Object.values(resolved.phases)) {
-      expect(phase.execution.model).toBe("anthropic/claude-sonnet-4-6");
-      expect(phase.cron).toBe("0 */4 * * *");
-    }
-    expect(resolved.storage).toEqual({ mode: "inline", separateReports: true });
-    expect(resolved.phases.deep.limit).toBe(5);
-    expect(resolved.phases.deep.minScore).toBe(0.9);
-    expect(resolved.phases.deep.minRecallCount).toBe(4);
-    expect(resolved.phases.deep.minUniqueQueries).toBe(2);
-    expect(resolved.phases.deep.recencyHalfLifeDays).toBe(21);
-    expect(resolved.phases.deep.maxAgeDays).toBe(30);
-    expect(resolved.phases.deep.maxPriorEntryLossFraction).toBe(0.1);
-  });
-
-  it("rejects hex and exponent integer strings for dreaming phase counts", () => {
-    const resolved = resolveMemoryDreamingConfig({
-      pluginConfig: {
-        dreaming: {
-          phases: {
-            deep: {
-              limit: "0x10",
-              minRecallCount: "1e3",
-              minUniqueQueries: "2.5",
-              recencyHalfLifeDays: "1.5",
-              maxAgeDays: "0x20",
-              maxPromotedSnippetTokens: "1e2",
-              execution: {
-                maxOutputTokens: "0x40",
-                timeoutMs: "1e4",
-              },
-            },
-            light: {
-              lookbackDays: "0x0a",
-              limit: "1e2",
-            },
-          },
-        },
+    },
+  ],
+] as const)("uses local defaults for %s settings", (_name, input) => {
+  const cfg = { agents: { defaults: { userTimezone: "America/Los_Angeles" } } };
+  const resolved = resolveConfig(input, cfg);
+  expect(resolved).toMatchObject({
+    enabled: true,
+    frequency: "0 3 * * *",
+    timezone: "America/Los_Angeles",
+    phases: {
+      light: { lookbackDays: 2, limit: 100 },
+      deep: {
+        cron: "0 3 * * *",
+        ...deepSettings(3),
       },
-    });
-
-    // Non-decimal forms fall back to shipped defaults / omit optional fields.
-    expect(resolved.phases.deep.limit).toBe(10);
-    expect(resolved.phases.deep.minRecallCount).toBe(3);
-    expect(resolved.phases.deep.minUniqueQueries).toBe(3);
-    expect(resolved.phases.deep.recencyHalfLifeDays).toBe(14);
-    expect(resolved.phases.deep.maxAgeDays).toBe(30);
-    expect(resolved.phases.deep.maxPromotedSnippetTokens).toBe(160);
-    expect(resolved.phases.deep.execution.maxOutputTokens).toBeUndefined();
-    expect(resolved.phases.deep.execution.timeoutMs).toBeUndefined();
-    expect(resolved.phases.light.lookbackDays).toBe(2);
-    expect(resolved.phases.light.limit).toBe(100);
+    },
   });
+  expect(resolved.phases.deep.execution.maxOutputTokens).toBeUndefined();
+  expect(resolved.phases.deep.execution.timeoutMs).toBeUndefined();
+  expect(resolved.storage).toEqual({ mode: "separate", separateReports: false });
+});
 
-  it("parses true/false strings while keeping invalid-value defaults local", () => {
-    const resolved = resolveMemoryDreamingConfig({
-      pluginConfig: {
-        dreaming: {
-          enabled: " TRUE ",
-          verboseLogging: "false",
-          storage: { separateReports: "invalid" },
-          phases: { light: { enabled: " FALSE " } },
-        },
+it.each([
+  [{ model: " top " }, ["top", "top", "top", "top"]],
+  [
+    {
+      model: "top",
+      execution: { defaults: { model: "default" } },
+      phases: { rem: { execution: { model: "phase" } } },
+    },
+    ["default", "default", "default", "phase"],
+  ],
+] as const)("resolves model inheritance for %j", (input, expected) => {
+  const resolved = resolveConfig(input);
+  const executions = [
+    resolved.execution.defaults,
+    ...Object.values(resolved.phases).map((p) => p.execution),
+  ];
+  expect(executions.map(({ model }) => model)).toEqual(expected);
+});
+
+it.each([
+  ["returns no workspaces for an explicitly empty roster", { agents: { entries: {} } }, []],
+  [
+    "uses default agent fallback",
+    { agents: { entries: { main: {} }, defaults: { workspace: "/workspace" } } },
+    [workspace("/workspace", "main")],
+  ],
+] as const)("%s", (_name, cfg, expected) => {
+  expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual(expected);
+});
+
+it("canonicalizes agents and dedupes non-adjacent symlinks without a default owner", async () => {
+  const root = tempDirs.make("openclaw-dreaming-workspace-");
+  const dir = path.join(root, "workspace");
+  const alias = path.join(root, "alias");
+  const other = path.join(root, "other");
+  await fs.mkdir(dir);
+  await fs.symlink(dir, alias, process.platform === "win32" ? "junction" : "dir");
+  const cfg: OpenClawConfig = {
+    agents: {
+      ownership: "explicit",
+      entries: {
+        "Team Alpha": { workspace: dir },
+        "team-alpha": { workspace: dir },
+        gamma: { workspace: other },
+        beta: { workspace: alias },
       },
-    });
+    },
+  };
+  expect(
+    resolveMemoryDreamingWorkspaces(cfg, {
+      primaryWorkspaceDir: "/main",
+      primaryAgentId: "main",
+    }),
+  ).toEqual([
+    workspace(dir, "team-alpha", "beta"),
+    workspace(other, "gamma"),
+    workspace("/main", "main"),
+  ]);
+  expect(resolveMemoryDreamingWorkspace(cfg, alias)).toEqual(workspace(dir, "team-alpha", "beta"));
+});
 
-    expect(resolved.enabled).toBe(true);
-    expect(resolved.verboseLogging).toBe(false);
-    expect(resolved.storage.separateReports).toBe(false);
-    expect(resolved.phases.light.enabled).toBe(false);
-  });
+it("preserves timezone-aware day selection and local fallback", () => {
+  const epochMs = Date.parse("2026-04-02T06:30:00.000Z");
+  const localDate = new Date(epochMs);
+  const localDay = `${localDate.getFullYear()}-${String(localDate.getMonth() + 1).padStart(2, "0")}-${String(localDate.getDate()).padStart(2, "0")}`;
+  for (const [timestamp, timezone, expected] of [
+    [epochMs, "America/Los_Angeles", "2026-04-01"],
+    [epochMs, "UTC", "2026-04-02"],
+    [epochMs, "America/Los_Angeles", "2026-04-01"],
+    [epochMs, "Invalid/Timezone", localDay],
+    [epochMs, undefined, localDay],
+    [Number.NaN, "America/Los_Angeles", "NaN-NaN-NaN"],
+    [epochMs, "America/Los_Angeles", "2026-04-01"],
+    [Date.parse("2026-04-02T07:00:00.000Z"), "America/Los_Angeles", "2026-04-02"],
+  ] as const) {
+    expect(formatMemoryDreamingDay(timestamp, timezone)).toBe(expected);
+  }
+  const sameDay = (first: string, second: string) =>
+    isSameMemoryDreamingDay(Date.parse(first), Date.parse(second), "America/Los_Angeles");
+  expect(sameDay("2026-04-02T06:30:00.000Z", "2026-04-02T06:50:00.000Z")).toBe(true);
+  expect(sameDay("2026-04-02T06:59:59.000Z", "2026-04-02T07:00:00.000Z")).toBe(false);
+});
 
-  it("lets execution defaults and phase execution override the top-level dreaming model", () => {
-    const resolved = resolveMemoryDreamingConfig({
-      pluginConfig: {
-        dreaming: {
-          model: "anthropic/claude-haiku-4-5",
-          execution: { defaults: { model: "openai/gpt-5.4" } },
-          phases: {
-            rem: { execution: { model: "xai/grok-4.1-fast" } },
-          },
-        },
-      },
-    });
-
-    expect(resolved.execution.defaults.model).toBe("openai/gpt-5.4");
-    expect(resolved.phases.light.execution.model).toBe("openai/gpt-5.4");
-    expect(resolved.phases.deep.execution.model).toBe("openai/gpt-5.4");
-    expect(resolved.phases.rem.execution.model).toBe("xai/grok-4.1-fast");
-  });
-
-  it("defaults to enabled dreaming with separate storage and the cfg timezone", () => {
-    const resolved = resolveMemoryDreamingConfig({
-      pluginConfig: {},
-      cfg: { agents: { defaults: { userTimezone: "America/Los_Angeles" } } },
-    });
-
-    expect(resolved.enabled).toBe(true);
-    expect(resolved.frequency).toBe("0 3 * * *");
-    expect(resolved.timezone).toBe("America/Los_Angeles");
-    expect(resolved.phases.deep.cron).toBe("0 3 * * *");
-    expect(resolved.phases.deep.limit).toBe(10);
-    expect(resolved.phases.deep.minScore).toBe(0.75);
-    expect(resolved.phases.deep.recencyHalfLifeDays).toBe(14);
-    expect(resolved.phases.deep.maxAgeDays).toBe(30);
-    expect(resolved.storage).toEqual({ mode: "separate", separateReports: false });
-  });
-
-  it("uses canonical roster identities when agent aliases share a workspace", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        list: [
-          { id: "Team Alpha", workspace: "/workspace/shared" },
-          { id: "team-alpha", workspace: "/workspace/shared" },
-        ],
-      },
-    };
-
-    expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
-      { workspaceDir: "/workspace/shared", agentIds: ["team-alpha"] },
-    ]);
-  });
-
-  it("does not require a default owner when no primary workspace is supplied", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        list: [
-          { id: "alpha", workspace: "/workspace/alpha" },
-          { id: "beta", workspace: "/workspace/beta" },
-        ],
-      },
-    };
-
-    expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
-      { workspaceDir: "/workspace/alpha", agentIds: ["alpha"] },
-      { workspaceDir: "/workspace/beta", agentIds: ["beta"] },
-    ]);
-  });
-
-  it("dedupes non-adjacent workspace symlink aliases across agents", async () => {
-    const rootDir = tempDirs.make("openclaw-dreaming-workspace-");
-    const workspaceDir = path.join(rootDir, "workspace");
-    const workspaceAliasDir = path.join(rootDir, "workspace-alias");
-    const otherWorkspaceDir = path.join(rootDir, "other-workspace");
-    await fs.mkdir(workspaceDir);
-    await fs.symlink(
-      workspaceDir,
-      workspaceAliasDir,
-      process.platform === "win32" ? "junction" : "dir",
-    );
-    const cfg: OpenClawConfig = {
-      agents: {
-        list: [
-          { id: "alpha", default: true, workspace: workspaceDir },
-          { id: "gamma", workspace: otherWorkspaceDir },
-          { id: "beta", workspace: workspaceAliasDir },
-        ],
-      },
-    };
-
-    expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
-      { workspaceDir, agentIds: ["alpha", "beta"] },
-      { workspaceDir: otherWorkspaceDir, agentIds: ["gamma"] },
-    ]);
-    expect(resolveMemoryDreamingWorkspace(cfg, workspaceAliasDir)).toEqual({
-      workspaceDir,
-      agentIds: ["alpha", "beta"],
-    });
-  });
-
-  it("includes the runtime primary workspace alongside configured subagent workspaces", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        list: [
-          { id: "agi-ceo", default: true, workspace: "/workspace/agi-ceo" },
-          { id: "agi-cdo", workspace: "/workspace/agi-cdo" },
-        ],
-      },
-    };
-
-    expect(
-      resolveMemoryDreamingWorkspaces(cfg, {
-        primaryWorkspaceDir: "/workspace/main",
-        primaryAgentId: "main",
-      }),
-    ).toEqual([
-      { workspaceDir: "/workspace/agi-ceo", agentIds: ["agi-ceo"] },
-      { workspaceDir: "/workspace/agi-cdo", agentIds: ["agi-cdo"] },
-      { workspaceDir: "/workspace/main", agentIds: ["main"] },
-    ]);
-  });
-
-  it("uses default agent fallback", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { workspace: "/workspace" },
-        entries: { main: { default: true } },
-      },
-    };
-
-    expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
-      { workspaceDir: "/workspace", agentIds: ["main"] },
-    ]);
-  });
-
-  it("preserves timezone-aware day selection and local fallback", () => {
-    const epochMs = Date.parse("2026-04-02T06:30:00.000Z");
-    const localDate = new Date(epochMs);
-    const localDay = [
-      localDate.getFullYear(),
-      String(localDate.getMonth() + 1).padStart(2, "0"),
-      String(localDate.getDate()).padStart(2, "0"),
-    ].join("-");
-    for (const [timestamp, timezone, expected] of [
-      [epochMs, "America/Los_Angeles", "2026-04-01"],
-      [epochMs, "UTC", "2026-04-02"],
-      [epochMs, "America/Los_Angeles", "2026-04-01"],
-      [epochMs, "Invalid/Timezone", localDay],
-      [epochMs, undefined, localDay],
-      [epochMs, "", localDay],
-      [Number.NaN, "America/Los_Angeles", "NaN-NaN-NaN"],
-      [epochMs, "America/Los_Angeles", "2026-04-01"],
-      [Date.parse("2026-04-02T07:00:00.000Z"), "America/Los_Angeles", "2026-04-02"],
-    ] as const) {
-      expect(formatMemoryDreamingDay(timestamp, timezone)).toBe(expected);
-    }
-    expect(
-      isSameMemoryDreamingDay(
-        Date.parse("2026-04-02T06:30:00.000Z"),
-        Date.parse("2026-04-02T06:50:00.000Z"),
-        "America/Los_Angeles",
-      ),
-    ).toBe(true);
-    expect(
-      isSameMemoryDreamingDay(
-        Date.parse("2026-04-02T06:59:59.000Z"),
-        Date.parse("2026-04-02T07:00:00.000Z"),
-        "America/Los_Angeles",
-      ),
-    ).toBe(false);
-  });
-
-  it("reads dreaming config from memory-lancedb when it owns the memory slot", () => {
-    expect(
-      resolveMemoryDreamingPluginConfig({
-        plugins: {
-          slots: { memory: "memory-lancedb" },
-          entries: {
-            "memory-lancedb": {
-              config: { dreaming: { enabled: true, frequency: "0 */6 * * *" } },
-            },
-          },
-        },
-      }),
-    ).toEqual({ dreaming: { enabled: true, frequency: "0 */6 * * *" } });
-  });
-
-  it("falls back to memory-core when no memory slot override is configured", () => {
-    expect(
-      resolveMemoryDreamingPluginConfig({
-        plugins: {
-          entries: {
-            "memory-core": { config: { dreaming: { enabled: true } } },
-          },
-        },
-      }),
-    ).toEqual({ dreaming: { enabled: true } });
-  });
-
-  it('falls back to memory-core when memory slot is "none" or blank', () => {
-    expect(
-      resolveMemoryDreamingPluginId({
-        plugins: { slots: { memory: "none" } },
-      }),
-    ).toBe("memory-core");
-
-    expect(
-      resolveMemoryDreamingPluginConfig({
-        plugins: {
-          slots: { memory: "   " },
-          entries: {
-            "memory-core": { config: { dreaming: { enabled: true } } },
-          },
-        },
-      }),
-    ).toEqual({ dreaming: { enabled: true } });
-  });
+it.each([
+  ["memory-lancedb", "memory-lancedb"],
+  ["none", "memory-core"],
+  ["   ", "memory-core"],
+])("reads the owning memory plugin for slot %j", (slot, id) => {
+  const dreaming = { enabled: true, frequency: "0 */6 * * *" };
+  const cfg = memoryPlugin(slot, id, dreaming);
+  expect(resolveMemoryDreamingPluginId(cfg)).toBe(id);
+  expect(resolveMemoryDreamingPluginConfig(cfg)).toEqual({ dreaming });
 });

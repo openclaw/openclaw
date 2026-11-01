@@ -1,11 +1,9 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { fetchChannelMessage, stripHtmlFromTeamsMessage } from "./graph-thread.js";
 import type { GraphThreadMessage } from "./graph-thread.js";
+import type { MSTeamsRequestDeadline } from "./request-timeout.js";
 
 const PARENT_CACHE_TTL_MS = 5 * 60 * 1000;
 const PARENT_CACHE_MAX = 100;
@@ -21,28 +19,10 @@ const parentCache = new Map<string, ParentCacheEntry>();
 const INJECTED_MAX = 200;
 const injectedParents = new Map<string, string>();
 
-type ThreadParentContextFetcher = (
-  token: string,
-  groupId: string,
-  channelId: string,
-  messageId: string,
-) => Promise<GraphThreadMessage | undefined>;
-
 function touchLru<K, V>(map: Map<K, V>, key: K, value: V, max: number): void {
   map.delete(key);
   map.set(key, value);
   pruneMapToMaxSize(map, max);
-}
-
-function buildParentCacheKey(groupId: string, channelId: string, parentId: string): string {
-  return `${groupId}\u0000${channelId}\u0000${parentId}`;
-}
-
-function resolveParentCacheExpiresAt(nowRaw: number): number | undefined {
-  const nowMs = asDateTimestampMs(nowRaw);
-  return nowMs === undefined
-    ? undefined
-    : resolveExpiresAtMsFromDurationMs(PARENT_CACHE_TTL_MS, { nowMs });
 }
 
 export async function fetchParentMessageCached(
@@ -50,40 +30,30 @@ export async function fetchParentMessageCached(
   groupId: string,
   channelId: string,
   parentId: string,
-  fetchParent: ThreadParentContextFetcher = fetchChannelMessage,
+  deadline?: MSTeamsRequestDeadline,
 ): Promise<GraphThreadMessage | undefined> {
-  const key = buildParentCacheKey(groupId, channelId, parentId);
-  const now = asDateTimestampMs(Date.now());
+  const key = JSON.stringify([sha256Hex(token), groupId, channelId, parentId]);
   const cached = parentCache.get(key);
-  const cachedExpiresAt = cached ? asDateTimestampMs(cached.expiresAt) : undefined;
-  if (cached && now !== undefined && cachedExpiresAt !== undefined && cachedExpiresAt > now) {
+  if (cached && cached.expiresAt > Date.now()) {
     parentCache.delete(key);
     parentCache.set(key, cached);
     return cached.message;
   }
-  if (cached) {
-    parentCache.delete(key);
-  }
-  const message = await fetchParent(token, groupId, channelId, parentId);
-  const expiresAt = resolveParentCacheExpiresAt(Date.now());
-  if (expiresAt !== undefined) {
-    touchLru(parentCache, key, { message, expiresAt }, PARENT_CACHE_MAX);
-  }
+  const message = await fetchChannelMessage(token, groupId, channelId, parentId, deadline);
+  touchLru(
+    parentCache,
+    key,
+    { message, expiresAt: Date.now() + PARENT_CACHE_TTL_MS },
+    PARENT_CACHE_MAX,
+  );
   return message;
 }
 
-type ParentContextSummary = {
-  /** Display name of the parent message author, or "unknown". */
-  sender: string;
-  /** Stripped, single-line parent body text (or empty if unresolved). */
-  text: string;
-};
-
 const PARENT_TEXT_MAX_CHARS = 400;
 
-export function summarizeParentMessage(
+export function formatParentContextEvent(
   message: GraphThreadMessage | undefined,
-): ParentContextSummary | undefined {
+): string | undefined {
   if (!message) {
     return undefined;
   }
@@ -96,17 +66,11 @@ export function summarizeParentMessage(
   if (!text) {
     return undefined;
   }
-  return {
-    sender,
-    text:
-      text.length > PARENT_TEXT_MAX_CHARS
-        ? `${truncateUtf16Safe(text, PARENT_TEXT_MAX_CHARS - 1)}…`
-        : text,
-  };
-}
-
-export function formatParentContextEvent(summary: ParentContextSummary): string {
-  return `Replying to @${summary.sender}: ${summary.text}`;
+  const summaryText =
+    text.length > PARENT_TEXT_MAX_CHARS
+      ? `${truncateUtf16Safe(text, PARENT_TEXT_MAX_CHARS - 1)}…`
+      : text;
+  return `Replying to @${sender}: ${summaryText}`;
 }
 
 export function shouldInjectParentContext(sessionKey: string, parentId: string): boolean {

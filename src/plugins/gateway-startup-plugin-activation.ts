@@ -17,6 +17,7 @@ import type {
 import { manifestOwnsConfiguredModelProvider } from "./gateway-startup-plugin-providers.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { manifestOwnsStorageProvider } from "./storage-provider-manifest.js";
 import { manifestOwnsWorkerProvider } from "./worker-provider-manifest.js";
 
@@ -36,6 +37,7 @@ type GatewayStartupActivationParams = PluginStartupActivationParams & {
   configuredStorageProviderIds: ReadonlySet<string>;
   configuredSpeechProviderIds: ReadonlySet<string>;
   configuredWebSearchProviderIds: ReadonlySet<string>;
+  autoSelectWebSearchProvider: boolean;
   configuredModelProviderIds: ReadonlySet<string>;
   configuredGenerationProviderIds: ConfiguredGenerationProviderIds;
   configuredVoiceProviderIds: ConfiguredVoiceProviderIds;
@@ -53,7 +55,8 @@ type StartupActivationPolicy =
   | "root"
   | "harness"
   | "hook"
-  | "tool";
+  | "tool"
+  | "web-search-auto";
 type StartupContractKey =
   | keyof ConfiguredGenerationProviderIds
   | keyof ConfiguredVoiceProviderIds
@@ -147,6 +150,7 @@ function passesPluginStartupPolicy(
   policy: StartupActivationPolicy,
 ): boolean {
   const { activationSource, plugin, pluginsConfig } = params;
+  const policyId = normalizePluginPolicyId(plugin.pluginId);
   // Bundled speech contracts remain available even when global plugin activation is disabled.
   if (
     (policy !== "speech" && (!pluginsConfig.enabled || !activationSource.plugins.enabled)) ||
@@ -161,7 +165,7 @@ function passesPluginStartupPolicy(
   if (
     policy === "harness" &&
     [pluginsConfig, activationSource.plugins].some(
-      (config) => config.allow.length > 0 && !config.allow.includes(plugin.pluginId),
+      (config) => config.allow.length > 0 && !config.allow.includes(policyId),
     )
   ) {
     return false;
@@ -175,7 +179,7 @@ function passesPluginStartupPolicy(
   if (
     policy === "root" &&
     activationSource.plugins.allow.length > 0 &&
-    !activationSource.plugins.allow.includes(plugin.pluginId)
+    !activationSource.plugins.allow.includes(policyId)
   ) {
     return false;
   }
@@ -201,10 +205,15 @@ function passesPluginStartupPolicy(
   if (policy === "harness" || policy === "implicit-external" || policy === "decision") {
     return true;
   }
+  // Auto-detection may pick any enabled search owner, but only authored enablement justifies a
+  // startup load; default-enabled bundled owners stay lazy.
+  if (policy === "web-search-auto") {
+    return activationState.explicitlyEnabled;
+  }
   if (policy === "hook") {
     return (
       activationState.explicitlyEnabled ||
-      hasExplicitHookPolicyConfig(activationSource.plugins.entries[plugin.pluginId])
+      hasExplicitHookPolicyConfig(activationSource.plugins.entries[policyId])
     );
   }
   return bundled || activationState.explicitlyEnabled;
@@ -233,95 +242,67 @@ function manifestOwnsConfiguredContractGroup(
   );
 }
 
-// Earlier ownership wins; evaluating descriptors lazily preserves startup precedence and imports.
-const GATEWAY_STARTUP_ACTIVATION_POLICIES: readonly {
-  policy: StartupActivationPolicy;
-  matches: (params: GatewayStartupActivationParams) => boolean;
-}[] = [
-  {
-    policy: "decision",
-    matches: ({ manifest, configuredDecisionProviderIds }) =>
-      manifestOwnsConfiguredContract(manifest, "decisionProviders", configuredDecisionProviderIds),
-  },
-  {
-    policy: "harness",
-    matches: ({ plugin, requiredAgentHarnessRuntimes }) =>
-      plugin.startup.agentHarnesses.some((runtime) => requiredAgentHarnessRuntimes.has(runtime)),
-  },
-  {
-    policy: "root",
-    matches: ({ manifest, activationSource, config }) =>
-      hasConfiguredActivationPath({ manifest, config: activationSource.rootConfig ?? config }),
-  },
-  {
-    policy: "worker",
-    matches: ({ manifest, configuredWorkerProviderIds }) =>
-      manifestOwnsWorkerProvider(manifest, configuredWorkerProviderIds),
-  },
-  {
-    policy: "storage",
-    matches: ({ manifest, configuredStorageProviderIds }) =>
-      manifestOwnsStorageProvider(manifest, configuredStorageProviderIds),
-  },
-  {
-    policy: "speech",
-    matches: ({ manifest, configuredSpeechProviderIds }) =>
-      manifestOwnsConfiguredContract(manifest, "speechProviders", configuredSpeechProviderIds),
-  },
-  {
-    policy: "implicit-external",
-    matches: ({ manifest, configuredWebSearchProviderIds }) =>
-      manifestOwnsConfiguredContract(
-        manifest,
-        "webSearchProviders",
-        configuredWebSearchProviderIds,
-      ),
-  },
-  {
-    policy: "provider",
-    matches: ({ manifest, configuredModelProviderIds }) =>
-      manifestOwnsConfiguredModelProvider({ manifest, configuredModelProviderIds }),
-  },
-  {
-    policy: "provider",
-    matches: ({ manifest, configuredGenerationProviderIds }) =>
-      manifestOwnsConfiguredContractGroup(manifest, configuredGenerationProviderIds),
-  },
-  {
-    policy: "provider",
-    matches: ({ manifest, configuredVoiceProviderIds }) =>
-      manifestOwnsConfiguredContractGroup(manifest, configuredVoiceProviderIds),
-  },
-  {
-    policy: "implicit-external",
-    matches: ({ manifest, configuredMemoryEmbeddingProviderIds }) =>
-      manifestOwnsConfiguredContract(
-        manifest,
-        "embeddingProviders",
-        configuredMemoryEmbeddingProviderIds,
-      ),
-  },
-  {
-    policy: "hook",
-    matches: ({ activationSource, manifest, plugin }) =>
-      manifest?.activation?.onCapabilities?.includes("hook") === true ||
-      hasExplicitHookPolicyConfig(activationSource.plugins.entries[plugin.pluginId]),
-  },
-  {
-    policy: "tool",
-    // Tool factories execute synchronously while an agent surface is built. Load enabled owners
-    // at the Gateway lifecycle boundary so a first concurrent turn cannot block control traffic.
-    matches: ({ manifest }) => (manifest?.contracts?.tools?.length ?? 0) > 0,
-  },
-  {
-    policy: "provider",
-    matches: ({ manifest }) => (manifest?.contracts?.trustedToolPolicies?.length ?? 0) > 0,
-  },
-];
-
 /** Evaluates manifest-owned startup surfaces in their original precedence order. */
 export function canStartGatewayStartupPlugin(params: GatewayStartupActivationParams): boolean {
-  return GATEWAY_STARTUP_ACTIVATION_POLICIES.some(
-    ({ matches, policy }) => matches(params) && passesPluginStartupPolicy(params, policy),
+  const { manifest, plugin, activationSource, config } = params;
+  return (
+    (manifestOwnsConfiguredContract(
+      manifest,
+      "decisionProviders",
+      params.configuredDecisionProviderIds,
+    ) &&
+      passesPluginStartupPolicy(params, "decision")) ||
+    (plugin.startup.agentHarnesses.some((runtime) =>
+      params.requiredAgentHarnessRuntimes.has(runtime),
+    ) &&
+      passesPluginStartupPolicy(params, "harness")) ||
+    (hasConfiguredActivationPath({ manifest, config: activationSource.rootConfig ?? config }) &&
+      passesPluginStartupPolicy(params, "root")) ||
+    (manifestOwnsWorkerProvider(manifest, params.configuredWorkerProviderIds) &&
+      passesPluginStartupPolicy(params, "worker")) ||
+    (manifestOwnsStorageProvider(manifest, params.configuredStorageProviderIds) &&
+      passesPluginStartupPolicy(params, "storage")) ||
+    (manifestOwnsConfiguredContract(
+      manifest,
+      "speechProviders",
+      params.configuredSpeechProviderIds,
+    ) &&
+      passesPluginStartupPolicy(params, "speech")) ||
+    (manifestOwnsConfiguredContract(
+      manifest,
+      "webSearchProviders",
+      params.configuredWebSearchProviderIds,
+    ) &&
+      passesPluginStartupPolicy(params, "implicit-external")) ||
+    // Prepared generations answer web_search provider lookups, so an unpinned search must see
+    // search-only owners that would otherwise wait for an explicit provider selection.
+    (params.autoSelectWebSearchProvider &&
+      (manifest?.contracts?.webSearchProviders?.length ?? 0) > 0 &&
+      passesPluginStartupPolicy(params, "web-search-auto")) ||
+    (manifestOwnsConfiguredModelProvider({
+      manifest,
+      configuredModelProviderIds: params.configuredModelProviderIds,
+    }) &&
+      passesPluginStartupPolicy(params, "provider")) ||
+    (manifestOwnsConfiguredContractGroup(manifest, params.configuredGenerationProviderIds) &&
+      passesPluginStartupPolicy(params, "provider")) ||
+    (manifestOwnsConfiguredContractGroup(manifest, params.configuredVoiceProviderIds) &&
+      passesPluginStartupPolicy(params, "provider")) ||
+    (manifestOwnsConfiguredContract(
+      manifest,
+      "embeddingProviders",
+      params.configuredMemoryEmbeddingProviderIds,
+    ) &&
+      passesPluginStartupPolicy(params, "implicit-external")) ||
+    ((manifest?.activation?.onCapabilities?.includes("hook") === true ||
+      hasExplicitHookPolicyConfig(
+        activationSource.plugins.entries[normalizePluginPolicyId(plugin.pluginId)],
+      )) &&
+      passesPluginStartupPolicy(params, "hook")) ||
+    // Tool factories execute synchronously while an agent surface is built. Load enabled owners
+    // at the Gateway lifecycle boundary so a first concurrent turn cannot block control traffic.
+    ((manifest?.contracts?.tools?.length ?? 0) > 0 && passesPluginStartupPolicy(params, "tool")) ||
+    ((manifest?.contracts?.trustedToolPolicies?.length ?? 0) > 0 &&
+      passesPluginStartupPolicy(params, "provider"))
   );
 }

@@ -17,7 +17,6 @@ title: "Gateway architecture"
 - One Gateway per host. It is the only place that opens a WhatsApp session.
 - The **hosted widget surface** is served by the Gateway HTTP server under:
   - `/__openclaw__/canvas/` (hosted widget documents)
-  - `/__openclaw__/a2ui/` (A2UI renderer assets)
 
   It uses the same port as the Gateway (default `18789`).
 
@@ -161,6 +160,12 @@ shutdown. `stop()` joins callbacks already running and work tracked by their asy
 scope; the Gateway lifecycle owns the outer shutdown budget and resource teardown.
 Request deadlines, stream-local timers, and child-process cleanup stay with their
 operation owners. SQLite WAL checkpoint timers stay with the storage owner.
+
+Plugins receive the versioned `PluginServiceSchedulerV1` capability through their
+service or channel-account lifetime. Its `beginClose()` cancels pending work and
+closes admission; `stop()` joins running callbacks and child scopes before the host
+releases the lifetime. Plugins still own domain cleanup ordering, including socket
+closure and durable flushes. See [Service scheduling](/plugins/sdk-runtime/gateway-and-nodes#service-scheduling).
 
 ## Invariants
 

@@ -12,19 +12,10 @@ import {
 import { peerKindMatches } from "./peer-kind-match.js";
 import { normalizeAgentId } from "./session-key.js";
 
-function resolveNormalizedBoundAccountMatch(binding: AgentRouteBinding): {
-  agentId: string;
-  accountId: string;
-  channelId: string;
-  peerId?: string;
-  peerKind?: ChatType;
-  guildId?: string | null;
-  teamId?: string | null;
-  roles?: string[] | null;
-} | null {
+function resolveNormalizedBoundAccountMatch(binding: AgentRouteBinding) {
   const baseMatch = resolveNormalizedRouteBindingMatch(binding);
   const match = binding.match;
-  if (!baseMatch || !match || typeof match !== "object") {
+  if (!baseMatch) {
     return null;
   }
   const peerId = match.peer && typeof match.peer.id === "string" ? match.peer.id.trim() : undefined;
@@ -32,22 +23,11 @@ function resolveNormalizedBoundAccountMatch(binding: AgentRouteBinding): {
   return {
     ...baseMatch,
     peerId: peerId || undefined,
-    peerKind: peerKind ?? undefined,
+    peerKind,
     guildId: normalizeRouteBindingId(match.guildId) || null,
     teamId: normalizeRouteBindingId(match.teamId) || null,
     roles: normalizeRouteBindingRoles(match.roles),
   };
-}
-
-function buildExactPeerIdSet(params: {
-  peerId?: string;
-  exactPeerIdAliases?: string[];
-}): Set<string> {
-  return new Set(
-    [params.peerId ?? "", ...(params.exactPeerIdAliases ?? [])]
-      .map((peerId) => peerId.trim())
-      .filter(Boolean),
-  );
 }
 
 export function resolveFirstBoundAccountId(params: {
@@ -65,9 +45,13 @@ export function resolveFirstBoundAccountId(params: {
     return undefined;
   }
   const normalizedAgentId = normalizeAgentId(params.agentId);
-  const exactPeerIds = buildExactPeerIdSet(params);
+  const exactPeerIds = new Set(
+    [params.peerId ?? "", ...(params.exactPeerIdAliases ?? [])]
+      .map((peerId) => peerId.trim())
+      .filter(Boolean),
+  );
   const hasPeerContext = exactPeerIds.size > 0;
-  const normalizedPeerKind = normalizeChatType(params.peerKind) ?? undefined;
+  const normalizedPeerKind = normalizeChatType(params.peerKind);
   let memberRoleIds: Set<string> | undefined;
   const scope = {
     groupSpace: params.groupSpace,

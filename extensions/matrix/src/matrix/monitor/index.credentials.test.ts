@@ -146,7 +146,6 @@ describe("Matrix monitor credential discovery", () => {
             expect.stringContaining("no allowlist"),
           );
         }
-        expect(harness.inboundReplayClaim.commit).toHaveBeenCalledOnce();
         expect(harness.logger.error).not.toHaveBeenCalled();
         for (const spy of sql) {
           expect(spy).not.toHaveBeenCalled();

@@ -1,211 +1,119 @@
 import { spawnSync } from "node:child_process";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { readWindowsProcessSnapshot } from "./schtasks-process-snapshot.js";
 import {
   listScheduledTasks,
-  probeScheduledTaskExists,
-  probeScheduledTaskState,
+  probeScheduledTaskExists as probeExists,
+  probeScheduledTaskState as probeState,
+  probeScheduledTaskUpdateAccess as probeAccess,
   ScheduledTaskInspectionError,
 } from "./schtasks-state-probe.js";
 
 vi.mock("node:child_process", () => ({ spawnSync: vi.fn() }));
 
-beforeEach(() => vi.mocked(spawnSync).mockReset());
-
-it("reads nested native action metadata without localized field names", () => {
-  const snapshot = {
-    taskPath: "\\Ops\\Backup 任务",
-    state: 1,
-    enabled: false,
-    actions: [
-      {
-        type: 0,
-        path: "C:\\Services\\Backup\\gateway.cmd",
-        arguments: "literal argument",
-        workingDirectory: "C:\\Services\\Backup",
-      },
-    ],
-  };
-  vi.mocked(spawnSync).mockReturnValue({
-    pid: 0,
-    output: [null, "", ""],
-    status: 0,
-    stdout: JSON.stringify(snapshot),
-    stderr: "",
-    signal: null,
-  });
-  expect(probeScheduledTaskState(snapshot.taskPath)).toEqual({ status: "found", ...snapshot });
+const native = vi.mocked(spawnSync);
+const respond = (value: unknown) => native.mockReturnValue(nativeResult(JSON.stringify(value)));
+const timeout = Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), {
+  code: "ETIMEDOUT",
 });
+beforeEach(() => native.mockReset());
 
-it("reads task state when PowerShell rejects a no-console launch", () => {
-  vi.mocked(spawnSync).mockImplementation((_command, _args, options) => {
-    const hidden = options?.windowsHide === true;
-    const stdout = hidden ? "" : JSON.stringify({ state: 4, lastRunResult: 267009 });
-    return {
-      pid: 0,
-      output: [null, stdout, ""],
-      stdout,
-      stderr: "",
-      status: hidden ? 2 : 0,
-      signal: null,
+it.each([
+  [true, "S-1-5-18", 1, "allowed"],
+  [false, null, 0, "allowed"],
+  [false, "unresolved account", 0, "unknown"],
+] as const)(
+  "keeps native task access uncertainty distinct from elevation: %j",
+  (callerElevated, taskUserSid, taskRunLevel, expected) => {
+    respond({ callerSid: "S-1-5-21-111-222-333-1001", callerElevated, taskUserSid, taskRunLevel });
+    expect(probeAccess("Synthetic Gateway").status).toBe(expected);
+  },
+);
+
+function nativeResult(stdout = "", status: number | null = 0, error?: Error) {
+  return { pid: 0, output: [null, stdout, ""], stdout, stderr: "", status, signal: null, error };
+}
+
+it.each([false, true])(
+  "reads task actions without a hidden console (inventory=%s)",
+  (inventory) => {
+    const snapshot = {
+      taskPath: "\\Ops\\Backup 任务",
+      state: 1,
+      enabled: false,
+      actions: [
+        {
+          type: 0,
+          path: "C:\\Services\\Backup\\gateway.cmd",
+          arguments: "literal argument",
+          workingDirectory: "C:\\Services\\Backup",
+        },
+      ],
     };
-  });
+    native.mockImplementation((_command, _args, options) =>
+      options?.windowsHide === true
+        ? nativeResult("", 2)
+        : nativeResult(JSON.stringify(inventory ? [snapshot] : snapshot)),
+    );
+    expect(inventory ? listScheduledTasks() : probeState(snapshot.taskPath)).toEqual(
+      inventory ? [snapshot] : { status: "found", ...snapshot },
+    );
+    expect(spawnSync).toHaveBeenCalledTimes(1);
+  },
+);
 
-  expect(probeScheduledTaskState("OpenClaw Gateway")).toEqual({
-    status: "found",
-    state: 4,
-    lastRunResult: "267009",
-  });
-  expect(spawnSync).toHaveBeenCalledTimes(1);
-});
-
-it.each(["", " \r\n"])("explains an empty exit-2 result: %j", (output) => {
-  vi.mocked(spawnSync).mockReturnValue({
-    pid: 0,
-    output: [null, output, output],
-    stdout: output,
-    stderr: output,
-    status: 2,
-    signal: null,
-  });
-  expect(probeScheduledTaskState("OpenClaw Gateway")).toEqual({
+it("explains an empty exit-2 result", () => {
+  native.mockReturnValue(nativeResult(" \r\n", 2));
+  expect(probeState("OpenClaw Gateway")).toEqual({
     status: "unknown",
-    detail: "Scheduled Task probe failed (exit 2): no output from PowerShell.",
+    detail: "Scheduled Task check failed (exit 2): no output from PowerShell.",
     diagnostic: { kind: "native", exitCode: 2 },
   });
 });
 
-describe("Scheduled Task probe timeout", () => {
-  it.each([0, -1, 0.5, 0.75, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
-    "does not spawn or infer absence with unavailable allowance %s",
-    (timeoutMs) => {
-      vi.mocked(spawnSync).mockReturnValue({
-        pid: 0,
-        output: [null, "-2147024894", ""],
-        stdout: "-2147024894",
-        stderr: "",
-        status: 1,
-        signal: null,
-      });
-
-      expect(probeScheduledTaskState("OpenClaw Gateway", timeoutMs)).toEqual({
-        status: "unknown",
-        detail: "Scheduled Task inspection deadline expired.",
-        timeoutMs: 0,
-        diagnostic: { kind: "timeout", timeoutMs: 0 },
-      });
-      expect(probeScheduledTaskExists("OpenClaw Gateway", timeoutMs)).toBeNull();
-      expect(spawnSync).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    { budget: undefined, expected: 60_000 },
-    { budget: 1, expected: 1 },
-    { budget: 899.75, expected: 899 },
-    { budget: 457.0681, expected: 457 },
-    { budget: 200, expected: 200 },
-    { budget: 30_000, expected: 30_000 },
-  ])("uses a bounded caller budget: $budget -> $expected ms", ({ budget, expected }) => {
-    vi.mocked(spawnSync).mockImplementation((_command, _args, options) => {
-      const timeout = options?.timeout;
-      // Node 24.21.0 child_process.validateTimeout rejects before native spawn.
-      if (timeout != null && !(Number.isInteger(timeout) && timeout >= 0)) {
-        throw Object.assign(new RangeError("timeout must be an unsigned integer"), {
-          code: "ERR_OUT_OF_RANGE",
-        });
-      }
-      return {
-        pid: 0,
-        output: [null, "", ""],
-        stdout: "",
-        stderr: "",
-        status: null,
-        signal: "SIGTERM",
-        error: Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), {
-          code: "ETIMEDOUT",
-        }),
-      };
-    });
-
-    const result = probeScheduledTaskState("OpenClaw Gateway", budget);
-
-    expect(vi.mocked(spawnSync).mock.calls[0]?.[2]?.timeout).toBe(expected);
-    expect(result).toEqual({
-      status: "unknown",
-      detail: `Scheduled Task probe timed out after ${expected} ms (ETIMEDOUT).`,
-      timeoutMs: expected,
-      diagnostic: { kind: "timeout", timeoutMs: expected },
-    });
-    expect(spawnSync).toHaveBeenCalledTimes(1);
-  });
-});
-
-it("retains disabled nested task actions when decoding the inventory", () => {
-  const snapshot = {
-    taskPath: "\\Ops\\Backup 任务",
-    state: 1,
-    enabled: false,
-    actions: [{ type: 0, path: "C:\\Services\\gateway.cmd", arguments: "", workingDirectory: "" }],
-  };
-  const stdout = JSON.stringify([snapshot]);
-  vi.mocked(spawnSync).mockReturnValue({
-    pid: 0,
-    output: [null, stdout, ""],
-    status: 0,
-    stdout,
-    stderr: "",
-    signal: null,
-  });
-  expect(listScheduledTasks()).toEqual([snapshot]);
-});
-
 it.each([
-  { budget: undefined, expected: 60_000 },
-  { budget: 47_000, expected: 47_000 },
-])("preserves a timed-out inventory and its $expected ms budget", ({ budget, expected }) => {
-  vi.mocked(spawnSync).mockReturnValue({
-    pid: 0,
-    output: [null, "", ""],
-    stdout: "",
-    stderr: "",
-    status: null,
-    signal: "SIGTERM",
-    error: Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), { code: "ETIMEDOUT" }),
-  });
-  expect(() => listScheduledTasks(budget)).toThrow(ScheduledTaskInspectionError);
-  expect(vi.mocked(spawnSync).mock.calls[0]?.[2]?.timeout).toBe(expected);
-});
-
-it.each([
-  { allowance: 699.5, expected: 699 },
-  { allowance: 0.75, expected: undefined },
-  { allowance: 10_000, expected: 5_000 },
-])(
-  "bounds process snapshot allowance $allowance without extending the native cap",
-  ({ allowance, expected }) =>
-    withMockedPlatform("win32", () => {
-      const stdout = JSON.stringify([{ ProcessId: 1234, CommandLine: "fixture process" }]);
-      vi.mocked(spawnSync).mockReturnValue({
-        pid: 0,
-        output: [null, stdout, ""],
-        stdout,
-        stderr: "",
-        status: 0,
-        signal: null,
-      });
-      const result = readWindowsProcessSnapshot(allowance);
-      if (expected === undefined) {
-        expect(result).toBeNull();
-        expect(spawnSync).not.toHaveBeenCalled();
+  ["task", undefined, 60_000],
+  ["task", 899.75, 899],
+  ["task", 0.75, 0],
+  ["task", Number.NaN, 0],
+  ["inventory", 47_000, 47_000],
+  ["task", 2_400_000, 60_000],
+  ["inventory", 2_400_000, 60_000],
+  ["process", 699.5, 699],
+  ["process", 0.75, 0],
+  ["process", 10_000, 5_000],
+] as const)("bounds %s inspection (budget=%s, timeout=%s)", (scope, budget, expected) =>
+  withMockedPlatform("win32", () => {
+    if (scope === "process") {
+      respond([{ ProcessId: 1234 }]);
+      const result = readWindowsProcessSnapshot(budget);
+      expect(result).toEqual(expected === 0 ? null : [{ ProcessId: 1234 }]);
+    } else {
+      native.mockReturnValue(nativeResult("", null, timeout));
+      if (scope === "inventory") {
+        expect(() => listScheduledTasks(budget)).toThrow(ScheduledTaskInspectionError);
       } else {
-        expect(result).toHaveLength(1);
-        expect(spawnSync).toHaveBeenCalledWith(
-          expect.any(String),
-          expect.any(Array),
-          expect.objectContaining({ timeout: expected }),
-        );
+        expect(probeState("OpenClaw Gateway", budget)).toEqual({
+          status: "unknown",
+          timeoutMs: expected,
+          detail:
+            expected === 0
+              ? "Scheduled Task inspection deadline expired."
+              : `Scheduled Task check timed out after ${expected} ms (ETIMEDOUT).`,
+          diagnostic: { kind: "timeout", timeoutMs: expected },
+        });
+        if (expected === 0) {
+          expect(probeExists("OpenClaw Gateway", budget)).toBeNull();
+        }
       }
-    }),
+    }
+    if (expected === 0) {
+      expect(spawnSync).not.toHaveBeenCalled();
+    } else {
+      expect(native.mock.calls).toEqual([
+        [expect.any(String), expect.any(Array), expect.objectContaining({ timeout: expected })],
+      ]);
+    }
+  }),
 );

@@ -12,6 +12,7 @@ import { withSqliteSourceReadDatabase } from "./sqlite-source-handle.js";
 export function tryInspectSqliteReadOnlyInProcess<T>(
   pathname: string,
   inspect: (database: DatabaseSync) => T,
+  options: { allowClosedWal?: boolean } = {},
 ): { value: T } | undefined {
   const canonicalPath = fs.realpathSync.native(pathname);
   let mode: ReturnType<typeof readSourceJournalMode>;
@@ -24,9 +25,10 @@ export function tryInspectSqliteReadOnlyInProcess<T>(
     throw error;
   }
   const sidecars = readSourceSidecars(canonicalPath);
-  // Incomplete WAL families need private recovery. A live rollback journal
-  // still permits a committed read; only SQLite's recovery refusal falls back.
-  if (mode === "empty" || (mode === "wal" && !(sidecars.wal && sidecars.shm))) {
+  // A certified clean close needs no private recovery. Let SQLite create empty
+  // WAL sidecars and acquire real read locks; never use immutable mode on a live path.
+  const closedWal = options.allowClosedWal && !sidecars.wal && !sidecars.shm && !sidecars.journal;
+  if (mode === "empty" || (mode === "wal" && !(sidecars.wal && sidecars.shm) && !closedWal)) {
     return undefined;
   }
   return withSqliteSourceReadDatabase(canonicalPath, "source", (database) => {

@@ -1,5 +1,5 @@
 import type { MeetingBrowserCandidateTab } from "openclaw/plugin-sdk/meeting-runtime";
-import { slackHuddlesInvalidRequest } from "../errors.js";
+import { SlackHuddlesInvalidRequestError } from "../errors.js";
 
 type SlackHuddleIdentity = { channel: string; team?: string };
 
@@ -42,7 +42,7 @@ function parseSlackHuddleIdentity(input: string | undefined): SlackHuddleIdentit
 export function normalizeSlackHuddleUrl(input: unknown): string {
   const identity = typeof input === "string" ? parseSlackHuddleIdentity(input) : undefined;
   if (!identity) {
-    throw slackHuddlesInvalidRequest(
+    throw new SlackHuddlesInvalidRequestError(
       "Use a Slack Copy huddle link (https://app.slack.com/huddle/TEAM/CHANNEL), an uppercase channel id such as C0123ABCD or channel:C0123ABCD, or team:T0123ABCD:channel:C0123ABCD. Message permalinks, user ids, and slack:// links are not huddle links.",
     );
   }

@@ -22,19 +22,6 @@ function buildMatrixThreadRelation(threadRootEventId: string, replyToEventId?: s
   };
 }
 
-function buildMatrixReplacementRelation(targetEventId: string) {
-  const normalizedTargetEventId = targetEventId.trim();
-  if (!normalizedTargetEventId) {
-    throw new Error("Matrix replacement requires a target event id");
-  }
-  return {
-    "m.relates_to": {
-      rel_type: "m.replace" as const,
-      event_id: normalizedTargetEventId,
-    },
-  };
-}
-
 export function buildMatrixReactionRelation(messageId: string, emoji: string) {
   const normalizedMessageId = messageId.trim();
   const normalizedEmoji = emoji.trim();
@@ -106,11 +93,18 @@ export function buildMatrixQaReplacementMessageContent(params: {
     body: params.body,
     mentionUserIds: params.mentionUserIds,
   });
+  const targetEventId = params.targetEventId.trim();
+  if (!targetEventId) {
+    throw new Error("Matrix replacement requires a target event id");
+  }
   return {
     body: `* ${params.body}`,
     msgtype: "m.text" as const,
     "m.new_content": newContent,
-    ...buildMatrixReplacementRelation(params.targetEventId),
+    "m.relates_to": {
+      rel_type: "m.replace" as const,
+      event_id: targetEventId,
+    },
   };
 }
 
@@ -118,14 +112,10 @@ function resolveMatrixQaMediaMsgtype(params: {
   contentType?: string;
   kind?: "audio" | "file" | "image" | "video";
 }): MatrixQaMediaMessageType {
-  if (params.kind === "audio" || params.contentType?.startsWith("audio/")) {
-    return "m.audio";
-  }
-  if (params.kind === "video" || params.contentType?.startsWith("video/")) {
-    return "m.video";
-  }
-  if (params.kind === "image" || params.contentType?.startsWith("image/")) {
-    return "m.image";
+  for (const kind of ["audio", "video", "image"] as const) {
+    if (params.kind === kind || params.contentType?.startsWith(`${kind}/`)) {
+      return `m.${kind}`;
+    }
   }
   return "m.file";
 }

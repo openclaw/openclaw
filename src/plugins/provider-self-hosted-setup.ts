@@ -1,21 +1,15 @@
-import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
-import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
+import { upsertAuthProfileWithLockOrThrow } from "../agents/auth-profiles/upsert-with-lock.js";
 import { CUSTOM_LOCAL_AUTH_MARKER, isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
-import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../agents/self-hosted-provider-defaults.js";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -24,7 +18,6 @@ import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import type {
   ProviderAuthMethodNonInteractiveContext,
   ProviderAuthResult,
-  ProviderCatalogContext,
   ProviderNonInteractiveApiKeyResult,
 } from "./types.js";
 
@@ -116,11 +109,14 @@ type OpenAICompatibleSelfHostedProviderSetupParams = OpenAICompatibleSelfHostedP
 export async function promptAndConfigureOpenAICompatibleSelfHostedProviderAuth(
   params: OpenAICompatibleSelfHostedProviderSetupParams,
 ): Promise<ProviderAuthResult> {
+  const configuredBaseUrl =
+    resolveMergedModelProviderConfig(params.cfg, params.providerId)?.baseUrl?.trim() ?? "";
   const baseUrlRaw = await params.prompter.text({
     message: `${params.providerLabel} base URL`,
-    initialValue: params.defaultBaseUrl,
+    // Prefilling the default makes typed input append to it. Hint it instead, and
+    // prefill only a stored URL the operator may want to edit.
+    initialValue: configuredBaseUrl || undefined,
     placeholder: params.defaultBaseUrl,
-    validate: (value) => (value?.trim() ? undefined : "Required"),
   });
   const apiKeyRaw = await params.prompter.text({
     message: `${params.providerLabel} API key`,
@@ -134,7 +130,10 @@ export async function promptAndConfigureOpenAICompatibleSelfHostedProviderAuth(
     validate: (value) => (value?.trim() ? undefined : "Required"),
   });
 
-  const baseUrl = (baseUrlRaw ?? "").trim().replace(/\/+$/, "");
+  const baseUrl = (baseUrlRaw?.trim() || configuredBaseUrl || params.defaultBaseUrl).replace(
+    /\/+$/,
+    "",
+  );
   const apiKey = normalizeStringifiedOptionalString(apiKeyRaw) ?? "";
   const modelId = normalizeStringifiedOptionalString(modelIdRaw) ?? "";
   const credential: AuthProfileCredential = {
@@ -153,39 +152,6 @@ export async function promptAndConfigureOpenAICompatibleSelfHostedProviderAuth(
     profiles: [{ profileId: configured.profileId, credential }],
     configPatch: configured.config,
     defaultModel: configured.modelRef,
-  };
-}
-
-export async function discoverOpenAICompatibleSelfHostedProvider<
-  T extends Record<string, unknown>,
->(params: {
-  ctx: ProviderCatalogContext;
-  providerId: string;
-  buildProvider: (params: { apiKey?: string; baseUrl?: string }) => Promise<T>;
-}): Promise<{ provider: T & { apiKey: string } } | null> {
-  const configuredProvider = findNormalizedProviderValue(
-    params.ctx.config.models?.providers,
-    params.providerId,
-  );
-  const configuredBaseUrl = normalizeOptionalString(configuredProvider?.baseUrl);
-  if (configuredProvider) {
-    const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.ctx.config });
-    if (!visibility.providerWildcards.has(normalizeProviderId(params.providerId))) {
-      return null;
-    }
-  }
-  const { apiKey, discoveryApiKey } = params.ctx.resolveProviderApiKey(params.providerId);
-  if (!apiKey) {
-    return null;
-  }
-  return {
-    provider: {
-      ...(await params.buildProvider({
-        apiKey: discoveryApiKey,
-        ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
-      })),
-      apiKey,
-    },
   };
 }
 
@@ -262,7 +228,7 @@ export async function configureOpenAICompatibleSelfHostedProviderNonInteractive(
     if (!credential) {
       return null;
     }
-    await upsertAuthProfileWithLock({
+    await upsertAuthProfileWithLockOrThrow({
       profileId: configured.profileId,
       credential,
       agentDir: params.ctx.agentDir,

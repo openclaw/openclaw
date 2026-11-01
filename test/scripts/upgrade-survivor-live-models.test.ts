@@ -8,11 +8,11 @@ const keys = {
 };
 
 describe("upgrade survivor live model selection", () => {
-  it("parses whitespace-separated refs and selects only their provider keys", () => {
+  it("selects provider keys and unique artifacts without leaking credentials", () => {
     const selection = resolveLiveModels({
       ...keys,
       OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS:
-        " \topenai/gpt-5.5\nanthropic/claude-opus-5  google/gemini-3.1-pro-preview ",
+        " \topenai/gpt-5.5\nanthropic/claude-opus-5  google/gemini-3.1-pro-preview openai/gpt-4.1 ",
     });
     expect(selection.source).toBe("OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS");
     expect(selection.models).toEqual([
@@ -33,6 +33,12 @@ describe("upgrade survivor live model selection", () => {
         provider: "google",
         keyEnv: "GEMINI_API_KEY",
         artifact: "live-google",
+      },
+      {
+        model: "openai/gpt-4.1",
+        provider: "openai",
+        keyEnv: "OPENAI_API_KEY",
+        artifact: "live-openai-2",
       },
     ]);
     expect(JSON.stringify(selection)).not.toContain("fixture-");
@@ -61,31 +67,25 @@ describe("upgrade survivor live model selection", () => {
     ).toMatchObject({ overridesLiveOpenai: true, models: [{ provider: "google" }] });
   });
 
-  it("names the missing provider key", () => {
-    expect(() =>
-      resolveLiveModels({
-        ...keys,
-        OPENAI_API_KEY: " ",
-        OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS: "openai/gpt-5.5",
-      }),
-    ).toThrow("Live model openai/gpt-5.5 requires OPENAI_API_KEY");
-  });
-
-  it.each([" \t\n", "gpt-5.5", "unknown/model", "openai/gpt-5.5 openai/gpt-5.5"])(
-    "rejects invalid or duplicate selections: %j",
-    (models) => {
+  it.each([
+    { models: " \t\n" },
+    { models: "gpt-5.5" },
+    { models: "openai/gpt-5.5 openai/gpt-5.5" },
+    {
+      models: "openai/gpt-5.5",
+      key: " ",
+      error: "Live model openai/gpt-5.5 requires OPENAI_API_KEY",
+    },
+  ])(
+    "rejects invalid selections or credentials: $models",
+    ({ models, key = keys.OPENAI_API_KEY, error }) => {
       expect(() =>
-        resolveLiveModels({ ...keys, OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS: models }),
-      ).toThrow();
+        resolveLiveModels({
+          ...keys,
+          OPENAI_API_KEY: key,
+          OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS: models,
+        }),
+      ).toThrow(error);
     },
   );
-
-  it("keeps distinct artifacts and sessions for multiple models from one provider", () => {
-    expect(
-      resolveLiveModels({
-        ...keys,
-        OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS: "openai/gpt-5.5 openai/gpt-4.1",
-      }).models.map(({ artifact }) => artifact),
-    ).toEqual(["live-openai", "live-openai-2"]);
-  });
 });

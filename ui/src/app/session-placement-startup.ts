@@ -1,10 +1,11 @@
+import { registerListener } from "../../../src/shared/listeners.js";
 import { t } from "../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../lib/chat/chat-types.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import {
   listSessionPlacementRecoveryStorageKeys,
-  sessionPlacementRecoveryExactStorageKey,
+  sessionPlacementRecoveryExactStorageKeys,
 } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import type {
   SessionPlacementRecovery,
@@ -28,6 +29,7 @@ import {
 } from "./stale-chunk-reload.ts";
 
 export type ApplicationPlacementStartupStatus = {
+  readonly startStatus?: import("../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
   readonly sessionKey: string;
   // A restored key holds admission before the lazy runtime validates its target and payload.
   readonly targetKind?: SessionPlacementTarget["kind"];
@@ -47,7 +49,7 @@ export type ApplicationPlacementStartupStatus = {
   readonly retryable?: boolean;
   readonly discardAndReload?: () => void;
   readonly initialTurn?: ChatQueueItem;
-  readonly action?: "retry" | "check-delivery";
+  readonly action?: "retry";
 };
 
 type PlacementStartupInput = {
@@ -69,18 +71,19 @@ type PlacementStartupRecoveryAccess = Pick<
   "readSessionPlacementRecovery" | "pauseSessionPlacementRecovery"
 >;
 
-export type ApplicationPlacementStartupRuntime = {
+export type ApplicationPlacementStartup = {
   get: (sessionKey: string) => ApplicationPlacementStartupStatus | null;
   hasPendingTurn: (sessionKey: string) => boolean;
   resumeRecovery: () => void;
   start: (input: PlacementStartupInput) => void;
   retry: (sessionKey: string) => void;
+  discard: (sessionKey: string) => void;
   pause: (sessionKey: string, error: string, recovery: PlacementStartupRecoveryAccess) => void;
   subscribe: (listener: () => void) => () => void;
   dispose: () => void;
 };
 
-export type ApplicationPlacementStartup = ApplicationPlacementStartupRuntime;
+export type ApplicationPlacementStartupRuntime = Omit<ApplicationPlacementStartup, "subscribe">;
 
 // Submitted display survives transport loss; a changed connection owner revokes it.
 export function capturePlacementStartupConnection(
@@ -125,7 +128,7 @@ export function createApplicationPlacementStartup(
   let pendingStoredRecovery:
     | {
         current: () => boolean;
-        refresh: () => void;
+        refresh: () => boolean;
         read: (sessionKey: string) => { startedAt: number } | undefined;
       }
     | undefined;
@@ -182,6 +185,7 @@ export function createApplicationPlacementStartup(
     if (disposed) {
       return;
     }
+    // Resume retained starts from connection receipts even while no page is mounted.
     stopGateway ??= gateway.subscribe(() => resumeRecovery());
     if ((pending || retry) && runtimeLoad?.error) {
       runtimeLoad = undefined;
@@ -232,6 +236,7 @@ export function createApplicationPlacementStartup(
       }
       return;
     }
+    let hasStoredRecovery = false;
     if (client && !pending) {
       // Keys hold admission until runtime validation, even if import finishes offline.
       // They carry neither payload content nor execution permission.
@@ -247,18 +252,24 @@ export function createApplicationPlacementStartup(
           current,
           refresh: () => {
             keys = listSessionPlacementRecoveryStorageKeys(owner.gatewayUrl, owner.recoveryScope);
+            return keys.length > 0;
           },
           read: (key) =>
             current() &&
-            keys.includes(
-              sessionPlacementRecoveryExactStorageKey(owner.gatewayUrl, owner.recoveryScope, key),
-            )
+            sessionPlacementRecoveryExactStorageKeys(
+              owner.gatewayUrl,
+              owner.recoveryScope,
+              key,
+            ).some((storageKey) => keys.includes(storageKey))
               ? restored
               : undefined,
         };
       }
       // Reset can remove a creating draft while the lazy runtime is unavailable.
-      pendingStoredRecovery.refresh();
+      hasStoredRecovery = pendingStoredRecovery.refresh();
+    }
+    if (!hasStoredRecovery && pendingInputs().length === 0) {
+      return;
     }
     // Snapshot changes retain the attempt and its observed start time. Only an
     // explicit Start or Retry can replace a failed lazy-module load.
@@ -272,8 +283,7 @@ export function createApplicationPlacementStartup(
         if (disposed) {
           return;
         }
-        runtime = createApplicationPlacementStartupRuntime(dependencies);
-        runtime.subscribe(publish);
+        runtime = createApplicationPlacementStartupRuntime(dependencies, publish);
         resumeRecovery();
       },
       (error: unknown) => {
@@ -329,6 +339,51 @@ export function createApplicationPlacementStartup(
     },
     // New Session confirms its initial save before handing a persistent start to this owner.
     start: (input) => resumeRecovery({ input, persisted: input.persistRecovery }),
+    discard(sessionKey) {
+      if (runtime) {
+        runtime.discard(sessionKey);
+        return;
+      }
+      const pending = preRuntimeEntries.get(sessionKey)?.();
+      if (!pending) {
+        return;
+      }
+      const current = capturePlacementStartupConnection(gateway, pending.input.recovery);
+      const discardPending = async () => {
+        try {
+          const { clearSessionPlacementRecovery } =
+            await import("../lib/sessions/session-placement-recovery.ts");
+          if (disposed || !current()) {
+            return;
+          }
+          if (runtime) {
+            if (
+              runtime.get(sessionKey)?.initialTurn?.sendRunId === pending.input.recovery.messageId
+            ) {
+              runtime.discard(sessionKey);
+            }
+            return;
+          }
+          if (preRuntimeEntries.get(sessionKey)?.() !== pending) {
+            return;
+          }
+          clearSessionPlacementRecovery(
+            gateway.connection.gatewayUrl,
+            pending.input.recovery.recoveryScope,
+            sessionKey,
+            pending.input.recovery.messageId,
+          );
+          preRuntimeEntries.delete(sessionKey);
+          pendingStoredRecovery?.refresh();
+          publish();
+        } catch (error) {
+          if (!disposed && current()) {
+            showToast({ message: formatUiError(error) });
+          }
+        }
+      };
+      void discardPending();
+    },
     pause(sessionKey, error, recoveryAccess) {
       const client = readyClient();
       if (disposed || !client) {
@@ -402,10 +457,7 @@ export function createApplicationPlacementStartup(
       runtime?.retry(sessionKey);
     },
     resumeRecovery,
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       stopGateway?.();
       stopReloadGuard();

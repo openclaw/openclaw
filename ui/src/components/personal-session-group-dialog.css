@@ -1,0 +1,96 @@
+/* Lazy dialog styles; everything else reuses shared dialog, field, chip and btn classes. */
+.personal-section-dialog {
+  /* One height for both steps, so moving between them never resizes the dialog. */
+  height: min(540px, var(--openclaw-modal-height-limit, calc(100dvh - 48px)));
+  gap: 14px;
+}
+
+.personal-section-dialog__row,
+.personal-section-dialog__option,
+.personal-section-dialog__chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.personal-section-dialog__head {
+  height: 34px;
+  margin-bottom: -6px;
+}
+
+.personal-section-dialog__chip {
+  display: inline-flex;
+  gap: 4px;
+  padding: 1px 8px;
+}
+
+.personal-section-dialog__chip svg {
+  width: 12px;
+  height: 12px;
+}
+
+.personal-section-dialog__list {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.personal-section-dialog__option {
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+  cursor: var(--cursor-action);
+}
+
+.personal-section-dialog__option:hover {
+  background: var(--surface-hover);
+}
+
+.personal-section-dialog__scopes > * {
+  min-height: 44px;
+  padding-inline: 12px;
+  border-radius: 0;
+}
+
+.personal-section-dialog__scopes > * + * {
+  border-top: 1px solid var(--border);
+}
+
+.personal-section-dialog__label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.personal-section-dialog__aside,
+.personal-section-dialog__note {
+  font-size: 13px;
+}
+
+.personal-section-dialog__aside {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 50%;
+}
+
+.personal-session-group-dialog__sessions {
+  min-height: 0;
+  flex: 1;
+  padding: 6px;
+  overflow-y: auto;
+}
+
+.personal-section-dialog__note {
+  margin: 0;
+  padding: 6px 8px 2px;
+}
+
+.personal-section-dialog__lead {
+  margin-inline-end: auto;
+}
+
+.personal-section-dialog > openclaw-modal-actions {
+  margin-top: auto;
+}

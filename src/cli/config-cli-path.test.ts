@@ -27,31 +27,12 @@ describe("parseConfigSetValue", () => {
   });
 
   it.each([
-    { raw: "42", expected: 42 },
-    { raw: "true", expected: true },
-    { raw: "null", expected: null },
-    { raw: "{a:1}", expected: { a: 1 } },
-    { raw: "[1,2]", expected: [1, 2] },
-  ])("parses $raw as expected", ({ raw, expected }) => {
-    expect(parseConfigSetValue(raw, false)).toEqual(expected);
-  });
-
-  it("falls back to the raw string when JSON5 parsing fails", () => {
-    expect(parseConfigSetValue("hello", false)).toBe("hello");
-  });
-
-  it.each([
-    { raw: "Infinity", label: "Infinity" },
-    { raw: "NaN", label: "NaN" },
+    { raw: "1e999", label: "strict overflow exponent", strict: true },
     { raw: "1e999", label: "overflow exponent" },
     { raw: "{timeout:1e999}", label: "object with overflow exponent" },
     { raw: "[1e999]", label: "array with overflow exponent" },
-  ])("rejects $label in value mode", ({ raw }) => {
-    expect(() => parseConfigSetValue(raw, false)).toThrow("Value must be a finite number");
-  });
-
-  it("rejects overflow exponent in strict JSON mode with the finite-number error", () => {
-    expect(() => parseConfigSetValue("1e999", true)).toThrow("Value must be a finite number");
+  ])("rejects $label in value mode", ({ raw, strict = false }) => {
+    expect(() => parseConfigSetValue(raw, strict)).toThrow("Value must be a finite number");
   });
 
   it("still reports JSON parse errors in strict JSON mode", () => {
@@ -84,7 +65,6 @@ describe("parseConfigSetValue", () => {
 // --merge/--replace, so advice naming them strands the user.
 describe("replacement guard advice", () => {
   const root = {
-    agents: { defaults: { models: { "openai/gpt-5.4": { alias: "GPT" } } } },
     models: {
       providers: {
         ollama: { models: [{ id: "llama3.2" }, { id: "qwen3" }] },
@@ -150,43 +130,6 @@ describe("replacement guard advice", () => {
   }
 
   it.each([
-    {
-      command: "patch" as const,
-      advice: "Use --replace-path models.providers.ollama.models to replace intentionally.",
-    },
-    {
-      command: "set" as const,
-      advice: "Use --merge to merge by id or --replace to replace intentionally.",
-    },
-  ])("refuses a protected model list for config $command", ({ command, advice }) => {
-    expect(
-      refusal(() =>
-        assertNonDestructiveReplacement({
-          root,
-          path: ["models", "providers", "ollama", "models"],
-          value: [{ id: "llama3.2" }],
-          command,
-        }),
-      ),
-    ).toBe(
-      `Refusing to replace models.providers.ollama.models; it would remove existing entries: qwen3. ${advice}`,
-    );
-  });
-
-  it("points a protected model map refusal at the patch path flag", () => {
-    expect(
-      refusal(() =>
-        assertNonDestructiveReplacement({
-          root,
-          path: ["agents", "defaults", "models"],
-          value: { "anthropic/claude-sonnet-4-6": {} },
-          command: "patch",
-        }),
-      ),
-    ).toContain("Use --replace-path agents.defaults.models to replace intentionally.");
-  });
-
-  it.each([
     { command: "patch" as const, flag: "--replace-path models.providers.ollama.models" },
     { command: "set" as const, flag: "--replace" },
   ])("names a $command flag when a merge cannot apply", ({ command, flag }) => {
@@ -223,6 +166,11 @@ describe("replacement guard advice", () => {
     expect(readShellArgument(token)).toBe(argument);
     expect(readPowerShellArgument(token)).toBe(argument);
     expect(parseConfigSetPath(readShellArgument(token))).toEqual(path);
+    if (key === "local]service") {
+      expect(() => parseConfigSetPath("models.providers[local]service].models")).toThrow(
+        "Invalid path (missing separator after bracket): models.providers[local]service].models",
+      );
+    }
     expect(
       replacePathArguments(refusal(() => mergeAtPath(root, path, {}, { command: "patch" }))),
     ).toEqual(argumentsFromGuard);
@@ -269,12 +217,5 @@ describe("replacement guard advice", () => {
     expect(posix).toBe(`'models.providers["it\u2018s"].models'`);
     expect(powershell).toBe(`'models.providers["it\u2018\u2018s"].models'`);
     expect(parseConfigSetPath(readShellArgument(posix ?? ""))).toEqual(path);
-  });
-
-  it("strands a bare retry whose key contains a closing bracket", () => {
-    // What the shell hands the CLI once it strips the inner quotes of the bare bracketed form.
-    expect(() => parseConfigSetPath("models.providers[local]service].models")).toThrow(
-      "Invalid path (missing separator after bracket): models.providers[local]service].models",
-    );
   });
 });

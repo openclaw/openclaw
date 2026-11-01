@@ -16,9 +16,9 @@ export const QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV = "OPENCLAW_QA_LIVE_ANTHROPIC_SET
 export const QA_LIVE_SETUP_TOKEN_VALUE_ENV = "OPENCLAW_LIVE_SETUP_TOKEN_VALUE";
 const QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ENV = "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE";
 const QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ID = "anthropic:qa-setup-token";
-const QA_LIVE_API_KEY_AGENT_IDS = Object.freeze(["main", "qa"] as const);
+const QA_LIVE_API_KEY_AGENT_IDS = ["main", "qa"] as const;
 const QA_OPENAI_PROVIDER_ID = "openai";
-const QA_LIVE_API_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = Object.freeze({
+const QA_LIVE_API_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = {
   anthropic: ["OPENCLAW_LIVE_ANTHROPIC_KEY"],
   gemini: ["OPENCLAW_LIVE_GEMINI_KEY"],
   openai: [
@@ -27,7 +27,7 @@ const QA_LIVE_API_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = Obj
     "OPENCLAW_LIVE_OPENAI_KEY",
     "OPENAI_API_KEY",
   ],
-});
+};
 
 function buildQaLiveApiKeyProfileId(provider: string): string {
   return `qa-live-${provider.replaceAll(/[^a-z0-9_-]/giu, "-")}-env`;
@@ -41,24 +41,14 @@ function isQaLiveOfficialOpenAiBaseUrl(baseUrl: unknown): boolean {
   if (typeof baseUrl !== "string" || !baseUrl.trim()) {
     return true;
   }
-  try {
-    const url = new URL(baseUrl.trim());
-    return (
-      url.protocol === "https:" &&
-      url.hostname.toLowerCase() === "api.openai.com" &&
-      (url.pathname === "" ||
-        url.pathname === "/" ||
-        url.pathname === "/v1" ||
-        url.pathname === "/v1/")
-    );
-  } catch {
-    return false;
-  }
-}
-
-function qaLiveOpenAiUsesCodexByDefault(cfg: OpenClawConfig): boolean {
-  return isQaLiveOfficialOpenAiBaseUrl(
-    resolveQaLiveProviderConfig({ cfg, providerId: "openai" })?.baseUrl,
+  const url = URL.parse(baseUrl.trim());
+  return (
+    url?.protocol === "https:" &&
+    url.hostname.toLowerCase() === "api.openai.com" &&
+    (url.pathname === "" ||
+      url.pathname === "/" ||
+      url.pathname === "/v1" ||
+      url.pathname === "/v1/")
   );
 }
 
@@ -114,14 +104,6 @@ function resolveQaLiveConfiguredApiKey(params: {
   return { apiKey: normalized, source: "models.json" };
 }
 
-function resolveQaLiveApiKey(params: {
-  providerId: string;
-  env: NodeJS.ProcessEnv;
-  cfg: OpenClawConfig;
-}) {
-  return resolveQaLiveEnvApiKey(params) ?? resolveQaLiveConfiguredApiKey(params);
-}
-
 function resolveQaLiveProviderConfig(params: { cfg: OpenClawConfig; providerId: string }) {
   const providers = params.cfg.models?.providers;
   if (!providers) {
@@ -131,10 +113,6 @@ function resolveQaLiveProviderConfig(params: { cfg: OpenClawConfig; providerId: 
     providers[params.providerId] ??
     Object.entries(providers).find(([providerId]) => providerId.trim() === params.providerId)?.[1]
   );
-}
-
-function hasQaLiveStagedApiKeyProfile(params: { cfg: OpenClawConfig; providerId: string }) {
-  return Boolean(params.cfg.auth?.profiles?.[buildQaLiveApiKeyProfileId(params.providerId)]);
 }
 
 function qaLiveRequiresCodexAuth(params: {
@@ -153,7 +131,9 @@ function qaLiveRequiresCodexAuth(params: {
   if (forcedRuntime === "codex") {
     return true;
   }
-  return qaLiveOpenAiUsesCodexByDefault(params.cfg);
+  return isQaLiveOfficialOpenAiBaseUrl(
+    resolveQaLiveProviderConfig({ cfg: params.cfg, providerId: "openai" })?.baseUrl,
+  );
 }
 
 function resolveQaLiveAnthropicSetupToken(env: NodeJS.ProcessEnv = process.env) {
@@ -178,9 +158,8 @@ function resolveQaLiveAnthropicSetupToken(env: NodeJS.ProcessEnv = process.env) 
 export async function stageQaLiveAnthropicSetupToken(params: {
   cfg: OpenClawConfig;
   stateDir: string;
-  env?: NodeJS.ProcessEnv;
 }): Promise<OpenClawConfig> {
-  const resolved = resolveQaLiveAnthropicSetupToken(params.env);
+  const resolved = resolveQaLiveAnthropicSetupToken();
   if (!resolved) {
     return params.cfg;
   }
@@ -208,7 +187,6 @@ export async function stageQaLiveApiKeyProfiles(params: {
   stateDir: string;
   providerIds: readonly string[];
   env?: NodeJS.ProcessEnv;
-  agentIds?: readonly string[];
 }): Promise<OpenClawConfig> {
   const env = params.env ?? process.env;
   const providerIds = normalizeQaLiveProviderIds(params.providerIds);
@@ -223,7 +201,9 @@ export async function stageQaLiveApiKeyProfiles(params: {
   > = {};
   let next = params.cfg;
   for (const providerId of providerIds) {
-    const resolved = resolveQaLiveApiKey({ providerId, env, cfg: next });
+    const credentials = { providerId, env, cfg: next };
+    const resolved =
+      resolveQaLiveEnvApiKey(credentials) ?? resolveQaLiveConfiguredApiKey(credentials);
     if (!resolved?.apiKey) {
       continue;
     }
@@ -245,9 +225,8 @@ export async function stageQaLiveApiKeyProfiles(params: {
   if (Object.keys(profiles).length === 0) {
     return next;
   }
-  const agentIds = uniqueStrings(params.agentIds ?? QA_LIVE_API_KEY_AGENT_IDS);
   await Promise.all(
-    agentIds.map((agentId) =>
+    QA_LIVE_API_KEY_AGENT_IDS.map((agentId) =>
       writeQaAuthProfiles({
         agentId,
         profiles,
@@ -270,7 +249,7 @@ export function assertQaLiveCodexAuthAvailable(params: {
   }
   if (
     resolveQaLiveEnvApiKey({ providerId: QA_OPENAI_PROVIDER_ID, env, cfg: params.cfg })?.apiKey ||
-    hasQaLiveStagedApiKeyProfile({ cfg: params.cfg, providerId: QA_OPENAI_PROVIDER_ID })
+    params.cfg.auth?.profiles?.[buildQaLiveApiKeyProfileId(QA_OPENAI_PROVIDER_ID)]
   ) {
     return;
   }

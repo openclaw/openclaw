@@ -5,18 +5,19 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { subscribeToSharedRequest } from "./shared-request-subscription.ts";
 
 type Entry = {
+  generation: number;
+  preview?: ControlUiLinkPreview;
   expiresAt: number;
   promise: Promise<ControlUiLinkPreview>;
   controller: AbortController;
   subscribers: Set<object>;
 };
 type PreviewCache = {
-  generation: number;
   recoveryScope: string;
   entries: Map<string, Entry>;
 };
 // Browser cards and hovercards share one bounded projection of the Gateway's
-// anonymous metadata cache. A reconnect cannot reuse an old authority's flight.
+// anonymous metadata cache. Settled metadata survives a reconnect, never an identity change.
 const previews = new WeakMap<GatewayBrowserClient, PreviewCache>();
 
 export function clearLinkPreviews(client: GatewayBrowserClient): void {
@@ -54,16 +55,12 @@ export function loadLinkPreview(
   signal?: AbortSignal,
 ): Promise<ControlUiLinkPreview> {
   let cache = previews.get(client);
-  if (
-    cache?.generation !== client.connectionGeneration ||
-    cache?.recoveryScope !== client.recoveryScope
-  ) {
+  if (cache?.recoveryScope !== client.recoveryScope || client.offlineRecoveryRetired) {
     clearLinkPreviews(client);
     cache = undefined;
   }
   if (!cache) {
     cache = {
-      generation: client.connectionGeneration,
       recoveryScope: client.recoveryScope,
       entries: new Map(),
     };
@@ -82,11 +79,23 @@ export function loadLinkPreview(
   const key = parsed.href;
   const owner = cache;
   const cached = owner.entries.get(key);
-  if (cached && !cached.controller.signal.aborted && cached.expiresAt > Date.now()) {
+  if (
+    cached &&
+    !cached.controller.signal.aborted &&
+    ((!client.connected && cached.preview) ||
+      (cached.expiresAt > Date.now() && cached.generation === client.connectionGeneration))
+  ) {
     return subscribeToSharedRequest(cached, {}, signal);
+  }
+  if (cached?.expiresAt === Number.POSITIVE_INFINITY) {
+    cached.controller.abort();
+  }
+  if (!client.connected || client.offlineRecoveryRetired) {
+    return Promise.resolve({});
   }
   const controller = new AbortController();
   const entry: Entry = {
+    generation: client.connectionGeneration,
     expiresAt: Number.POSITIVE_INFINITY,
     controller,
     subscribers: new Set(),
@@ -97,12 +106,13 @@ export function loadLinkPreview(
           if (
             controller.signal.aborted ||
             previews.get(client) !== owner ||
-            owner.generation !== client.connectionGeneration ||
+            entry.generation !== client.connectionGeneration ||
             owner.recoveryScope !== client.recoveryScope
           ) {
             return {};
           }
           const preview = parsePreview(value);
+          entry.preview = preview;
           entry.expiresAt =
             Date.now() + (Object.values(preview).some(Boolean) ? 5 * 60_000 : 30_000);
           return preview;
@@ -110,9 +120,13 @@ export function loadLinkPreview(
         () => {
           // Transport failures are not missing metadata; reconnect/reentry may retry.
           if (owner.entries.get(key) === entry) {
-            owner.entries.delete(key);
+            if (cached?.preview) {
+              owner.entries.set(key, cached);
+            } else {
+              owner.entries.delete(key);
+            }
           }
-          return {};
+          return cached?.preview ?? {};
         },
       ),
   };

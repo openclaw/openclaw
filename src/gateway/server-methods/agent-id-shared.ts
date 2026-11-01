@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   AgentSelectionRequiredError,
@@ -30,10 +31,9 @@ export function resolveAgentIdOrRespondError(params: {
   rawAgentId: unknown;
   respond: RespondFn;
   cfg: OpenClawConfig;
-  normalize: (rawAgentId: unknown) => string | undefined;
 }) {
   const knownAgents = listAgentIds(params.cfg);
-  const requestedAgentId = params.normalize(params.rawAgentId) ?? "";
+  const requestedAgentId = normalizeOptionalString(params.rawAgentId) ?? "";
   let agentId: string;
   try {
     agentId =

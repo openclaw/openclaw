@@ -138,12 +138,12 @@ vi.mock("../commands/agents.commands.add.js", () => {
   return { agentsAddCommand: vi.fn(async () => {}) };
 });
 
-vi.mock("../commands/agents.commands.bind.js", () => {
+vi.mock("../commands/agents.commands.bind.js", async (importOriginal) => {
   loaded.mark("agents-bind-command");
   return {
+    ...(await importOriginal<typeof import("../commands/agents.commands.bind.js")>()),
     agentsBindingsCommand: vi.fn(async () => {}),
-    agentsBindCommand: vi.fn(async () => {}),
-    agentsUnbindCommand: vi.fn(async () => {}),
+    agentsUpdateBindingsCommand: vi.fn(async () => {}),
   };
 });
 

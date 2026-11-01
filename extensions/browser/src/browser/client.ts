@@ -1,5 +1,7 @@
 import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
+import { resolveBrowserOperationRequestTimeoutMs } from "./client-actions.js";
 import {
   browserClientTimeout,
   postBrowserJson,
@@ -16,9 +18,11 @@ import type {
 } from "./client.types.js";
 import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDoctorReport } from "./doctor.js";
+import type { RoleSnapshotResult } from "./pw-role-snapshot.js";
 import type { AnnotationItem } from "./screenshot-annotate.js";
 import type {
   ImportSystemProfileResult as BrowserImportProfileResult,
+  ImportSystemProfileParams,
   SystemProfileInfo,
 } from "./system-profiles.js";
 
@@ -52,25 +56,11 @@ async function sendProfilePost(
   baseUrl: BrowserClientTarget,
   path: string,
   opts: BrowserClientProfileOptions | undefined,
-  fallbackTimeoutMs: number,
 ): Promise<void> {
   await requestBrowserJson(baseUrl, path, {
     profile: opts?.profile,
     method: "POST",
-    timeoutMs: browserClientTimeout(baseUrl, opts?.timeoutMs, fallbackTimeoutMs),
-    signal: opts?.signal,
-  });
-}
-
-async function sendTabCloseRequest(
-  baseUrl: BrowserClientTarget,
-  path: string,
-  opts: BrowserClientProfileOptions | undefined,
-): Promise<{ ok: true; targetId?: string }> {
-  return await requestBrowserJson(baseUrl, path, {
-    profile: opts?.profile,
-    method: "DELETE",
-    timeoutMs: browserClientTimeout(baseUrl, opts?.timeoutMs, 5000),
+    timeoutMs: browserClientTimeout(baseUrl, opts?.timeoutMs, 15000),
     signal: opts?.signal,
   });
 }
@@ -82,32 +72,24 @@ export type BrowserResetProfileResult = {
   to?: string;
 };
 
-export type SnapshotResult =
+export type SnapshotResult = {
+  ok: true;
+  targetId: string;
+  url: string;
+  truncated?: boolean;
+  blockedByDialog?: boolean;
+  browserState?: unknown;
+} & (
   | {
-      ok: true;
       format: "aria";
-      targetId: string;
-      url: string;
       nodes: SnapshotAriaNode[];
-      truncated?: boolean;
-      blockedByDialog?: boolean;
-      browserState?: unknown;
     }
   | {
-      ok: true;
       format: "ai";
-      targetId: string;
-      url: string;
-      snapshot: string;
-      truncated?: boolean;
-      newElements?: number;
-      refs?: Record<string, { role: string; name?: string; nth?: number }>;
-      stats?: {
-        lines: number;
-        chars: number;
-        refs: number;
-        interactive: number;
-      };
+      snapshot: RoleSnapshotResult["snapshot"];
+      newElements?: RoleSnapshotResult["newElements"];
+      refs?: RoleSnapshotResult["refs"];
+      stats?: RoleSnapshotResult["stats"];
       labels?: boolean;
       labelsCount?: number;
       labelsSkipped?: number;
@@ -118,9 +100,8 @@ export type SnapshotResult =
       annotations?: AnnotationItem[];
       imagePath?: string;
       imageType?: "png" | "jpeg";
-      blockedByDialog?: boolean;
-      browserState?: unknown;
-    };
+    }
+);
 
 export async function browserStatus(
   baseUrl?: BrowserClientTarget,
@@ -162,13 +143,12 @@ export async function browserProfiles(
 
 export async function browserSystemProfiles(
   baseUrl?: BrowserClientTarget,
-  opts?: { browser?: string; timeoutMs?: number; signal?: AbortSignal },
+  opts?: BrowserClientTimeoutOptions,
 ): Promise<SystemProfileInfo[]> {
   const res = await requestBrowserJson<{ systemProfiles: SystemProfileInfo[] }>(
     baseUrl,
     "/system-profiles",
     {
-      query: opts?.browser ? { browser: opts.browser } : undefined,
       timeoutMs: browserClientTimeout(baseUrl, opts?.timeoutMs, 3000),
       signal: opts?.signal,
     },
@@ -178,11 +158,7 @@ export async function browserSystemProfiles(
 
 export async function browserImportProfile(
   baseUrl: BrowserClientTarget,
-  opts: {
-    browser?: string;
-    systemProfile?: string;
-    into?: string;
-    domains?: string[];
+  opts: Omit<ImportSystemProfileParams, "makeDefault"> & {
     signal?: AbortSignal;
   },
 ): Promise<BrowserImportProfileResult> {
@@ -204,14 +180,14 @@ export async function browserStart(
   baseUrl?: BrowserClientTarget,
   opts?: BrowserClientProfileOptions,
 ): Promise<void> {
-  await sendProfilePost(baseUrl, "/start", opts, 15000);
+  await sendProfilePost(baseUrl, "/start", opts);
 }
 
 export async function browserStop(
   baseUrl?: BrowserClientTarget,
   opts?: BrowserClientProfileOptions,
 ): Promise<void> {
-  await sendProfilePost(baseUrl, "/stop", opts, 15000);
+  await sendProfilePost(baseUrl, "/stop", opts);
 }
 
 export type BrowserCreateProfileResult = {
@@ -263,8 +239,12 @@ export async function browserOpenTab(
     timeoutMs?: number;
     signal?: AbortSignal;
     managedOnly?: boolean;
+    /** Backend attachment allowance, independent of the navigation budget. */
+    requestTimeoutMs?: number;
   },
 ): Promise<BrowserOpenResult> {
+  const timeoutMs =
+    opts?.timeoutMs === undefined ? undefined : resolveBrowserNavigationTimeoutMs(opts.timeoutMs);
   return await postBrowserJson(
     baseUrl,
     "/tabs/open",
@@ -272,8 +252,12 @@ export async function browserOpenTab(
       url,
       ...(opts?.label ? { label: opts.label } : {}),
       ...(opts?.managedOnly ? { managedOnly: true } : {}),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
     },
-    browserClientTimeout(baseUrl, opts?.timeoutMs, 15000),
+    Math.max(
+      clampPositiveTimerTimeoutMs(opts?.requestTimeoutMs) ?? 0,
+      resolveBrowserOperationRequestTimeoutMs(timeoutMs ?? 30_000),
+    ),
     opts,
   );
 }
@@ -298,17 +282,12 @@ export async function browserCloseTab(
   opts?: BrowserClientProfileOptions,
 ): Promise<{ ok: true; targetId?: string }> {
   const path = `/tabs/${encodeURIComponent(targetId)}`;
-  return await sendTabCloseRequest(baseUrl, path, opts);
-}
-
-/** Close a canonical raw target id selected by OpenClaw's internal tab bookkeeping. */
-export async function browserCloseTabByRawTargetId(
-  baseUrl: BrowserClientTarget,
-  targetId: string,
-  opts?: BrowserClientProfileOptions,
-): Promise<void> {
-  const path = `/tabs/${encodeURIComponent(targetId)}?targetIdMode=raw`;
-  await sendTabCloseRequest(baseUrl, path, opts);
+  return await requestBrowserJson(baseUrl, path, {
+    profile: opts?.profile,
+    method: "DELETE",
+    timeoutMs: browserClientTimeout(baseUrl, opts?.timeoutMs, 5000),
+    signal: opts?.signal,
+  });
 }
 
 export async function browserSnapshot(

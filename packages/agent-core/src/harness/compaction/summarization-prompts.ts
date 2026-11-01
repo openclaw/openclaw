@@ -8,3 +8,16 @@ export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assi
 ${SENDER_PROVENANCE_SUMMARIZATION_INSTRUCTIONS}
 
 Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
+
+export function createSummarizationContext(promptText: string) {
+  return {
+    systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
+    messages: [
+      {
+        role: "user" as const,
+        content: [{ type: "text" as const, text: promptText }],
+        timestamp: Date.now(),
+      },
+    ],
+  };
+}

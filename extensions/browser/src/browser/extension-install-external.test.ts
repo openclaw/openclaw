@@ -1,79 +1,49 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { chromeProductRoots } from "./extension-install-layout.js";
 import {
-  installChromeExtensionBootstrap,
+  useInstallFixture,
+  withAdvancingInstallClock,
+  chromeStoreInstallRequests,
   removeChromeStoreInstallRequests,
   uninstallChromeExtensionNativeHosts,
-} from "./extension-install.js";
-import {
-  FOUNDATION_STORE_ID,
-  useExtensionInstallFixture,
-  writeChromePreferences,
-} from "./extension-install.test-support.js";
+} from "./extension-install-fixture.test-support.js";
+import { FOUNDATION_STORE_ID } from "./extension-install.test-support.js";
 
-const fixture = useExtensionInstallFixture();
+const fixture = useInstallFixture();
 
 async function setup(platform: NodeJS.Platform = "darwin") {
   const value = await fixture(platform);
-  const chrome = chromeProductRoots(value.deps).find((root) => root.product === "chrome");
-  if (!chrome) {
-    throw new Error("missing Chrome fixture root");
-  }
-  const preferences = await writeChromePreferences({
-    userDataDir: chrome.userDataDir,
-    profile: "Default",
-    entries: {
-      [FOUNDATION_STORE_ID]: { location: 6, from_webstore: true, disable_reasons: [8_192] },
-    },
+  const { deps } = value;
+  const chrome = value.productRoot();
+  const preferences = await value.preferences({
+    [FOUNDATION_STORE_ID]: { location: 6, from_webstore: true, disable_reasons: [8_192] },
   });
   const requestPath = path.join(
     chrome.userDataDir,
     "External Extensions",
     `${FOUNDATION_STORE_ID}.json`,
   );
-  const install = (requestStoreInstall?: boolean) =>
-    installChromeExtensionBootstrap({
-      bundledDir: value.bundledDir,
-      pluginRoot: value.pluginRoot,
-      waitMs: 1_000,
-      deps: value.deps,
-      requestStoreInstall,
-    });
+  const install = (requestStoreInstall?: boolean) => value.install({ deps, requestStoreInstall });
   return { ...value, chrome, preferences, requestPath, install };
 }
 
 describe("Chrome Store installation request", () => {
   it("prepares macOS Chrome before its first launch without creating or approving a profile", async () => {
     const value = await fixture("darwin");
-    const chrome = chromeProductRoots(value.deps).find((root) => root.product === "chrome");
-    if (!chrome) {
-      throw new Error("missing Chrome fixture root");
-    }
+    const chrome = value.productRoot();
     await expect(fs.access(chrome.userDataDir)).rejects.toMatchObject({ code: "ENOENT" });
-    let now = 0;
-    const status = await installChromeExtensionBootstrap({
-      bundledDir: value.bundledDir,
-      pluginRoot: value.pluginRoot,
-      waitMs: 1_000,
-      deps: {
-        ...value.deps,
-        now: () => now,
-        sleep: async (ms) => {
-          now += ms;
-        },
-      },
-    });
-
+    const status = await value.install({ deps: withAdvancingInstallClock(value.deps) });
     expect(status.registrations.find((entry) => entry.product === "chrome")).toMatchObject({
       state: "owned",
       extensionIds: expect.arrayContaining([FOUNDATION_STORE_ID]),
     });
-    expect(status.storeInstallRequests).toEqual([expect.objectContaining({ state: "requested" })]);
-    expect(status.storeDiscovered).toEqual([]);
-    expect(status.manualSetupRequired).toBe(true);
-    expect(status.issues).toEqual([]);
+    expect(status).toMatchObject({
+      storeInstallRequests: [{ state: "requested" }],
+      storeDiscovered: [],
+      manualSetupRequired: true,
+      issues: [],
+    });
     expect((await fs.readdir(chrome.userDataDir)).toSorted()).toEqual([
       "External Extensions",
       "NativeMessagingHosts",
@@ -93,19 +63,14 @@ describe("Chrome Store installation request", () => {
     expect(JSON.parse(request)).toMatchObject({
       external_update_url: "https://clients2.google.com/service/update2/crx",
     });
-    expect(status.storeInstallRequests).toEqual([
-      expect.objectContaining({ path: value.requestPath, state: "requested" }),
-    ]);
-    expect(status.storeDiscovered).toEqual([
-      expect.objectContaining({ enabled: false, awaitingApproval: true }),
-    ]);
-    expect(status.manualSetupRequired).toBe(true);
-    expect(status.registrations.find((entry) => entry.product === "chrome")?.state).toBe("owned");
+    expect(status).toMatchObject({
+      storeInstallRequests: [{ path: value.requestPath, state: "requested" }],
+      storeDiscovered: [{ enabled: false, awaitingApproval: true }],
+      manualSetupRequired: true,
+    });
     const before = await fs.stat(value.requestPath);
     await value.install();
     expect((await fs.stat(value.requestPath)).mtimeMs).toBe(before.mtimeMs);
-    expect(await fs.readFile(value.preferences, "utf8")).toBe(preferencesBefore);
-
     await uninstallChromeExtensionNativeHosts({ deps: value.deps });
     expect(await fs.readFile(value.requestPath, "utf8")).toBe(request);
     expect(await removeChromeStoreInstallRequests(value.deps)).toEqual({
@@ -163,14 +128,13 @@ describe("Chrome Store installation request", () => {
     await expect(fs.access(value.requestPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.each(["linux", "win32"] as const)(
-    "leaves %s external installation unchanged",
-    async (platform) => {
-      const value = await setup(platform);
-      expect((await value.install()).storeInstallRequests).toEqual([]);
-      await expect(fs.access(value.requestPath)).rejects.toMatchObject({ code: "ENOENT" });
-    },
-  );
+  it("leaves Linux external installation unchanged", async () => {
+    const value = await setup("linux");
+    const installed = await value.install();
+    expect(await chromeStoreInstallRequests(value.deps)).toEqual([]);
+    expect(installed.storeInstallRequests).toEqual([]);
+    await expect(fs.access(value.requestPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
 
   it("allows native-bootstrap-only setup without registering a Store installation", async () => {
     const value = await setup();

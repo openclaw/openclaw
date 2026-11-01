@@ -1,12 +1,14 @@
+import { describeOpenAiCompatibleVideo } from "openclaw/plugin-sdk/media-understanding";
+import type { ProviderCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildOpenAICompatibleLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   defineSingleProviderPluginEntry,
   type SingleProviderPluginApiKeyAuthOptions,
 } from "openclaw/plugin-sdk/provider-entry";
+import { createProviderConnectionPresetAppliers } from "openclaw/plugin-sdk/provider-onboard";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { classifyQwenFailoverReason } from "./failover.js";
-import { buildQwenMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {
   isQwen38ModelId,
   isQwenCodingPlanBaseUrl,
@@ -14,26 +16,25 @@ import {
   isQwenTokenPlanDeepSeekV4ModelId,
   isQwenTokenPlanGlmModelId,
   isQwenTokenPlanThinkingOnlyModelId,
-  QWEN_BASE_URL,
   QWEN_DEFAULT_MODEL_REF,
+  QWEN_CN_BASE_URL,
+  QWEN_GLOBAL_BASE_URL,
+  QWEN_STANDARD_CN_BASE_URL,
+  QWEN_STANDARD_GLOBAL_BASE_URL,
   QWEN_TOKEN_PLAN_DEFAULT_MODEL_REF,
   QWEN_TOKEN_PLAN_LEGACY_PROVIDER_ID,
   QWEN_TOKEN_PLAN_PROVIDER_ID,
+  resolveQwenTokenPlanBaseUrl,
   supportsQwenTokenPlanGlmMaxThinking,
 } from "./models.js";
-import {
-  applyQwenConfig,
-  applyQwenConfigCn,
-  applyQwenStandardConfig,
-  applyQwenStandardConfigCn,
-  applyQwenTokenPlanConfig,
-} from "./onboard.js";
 import { buildQwenProvider, buildQwenTokenPlanProvider } from "./provider-catalog.js";
 import { wrapQwenProviderStream } from "./stream.js";
 import { qwenVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "qwen";
 const LEGACY_PROVIDER_ID = "modelstudio";
+const DEFAULT_QWEN_MEDIA_MODEL = "qwen3.6-plus";
+const DEFAULT_QWEN_VIDEO_PROMPT = "Describe the video in detail.";
 const QWEN_TOKEN_PLAN_THINKING_LEVEL_IDS = [
   "off",
   "minimal",
@@ -46,6 +47,40 @@ const QWEN_TOKEN_PLAN_THINKING_LEVEL_IDS = [
 const QWEN_TOKEN_PLAN_GLM_NO_MAX_THINKING_LEVEL_IDS = QWEN_TOKEN_PLAN_THINKING_LEVEL_IDS.filter(
   (id) => id !== "max",
 );
+
+const qwenPresetAppliers = createProviderConnectionPresetAppliers<[string]>({
+  primaryModelRef: QWEN_DEFAULT_MODEL_REF,
+  resolveParams: (_cfg, baseUrl) => {
+    const provider = buildQwenProvider({ baseUrl });
+    return {
+      providerId: "qwen",
+      api: provider.api ?? "openai-completions",
+      baseUrl,
+      catalogModels: provider.models,
+      aliases: [
+        ...provider.models.flatMap((model) => [`qwen/${model.id}`, `modelstudio/${model.id}`]),
+        { modelRef: QWEN_DEFAULT_MODEL_REF, alias: "Qwen" },
+      ],
+    };
+  },
+});
+
+const qwenTokenPlanPresetAppliers = createProviderConnectionPresetAppliers<[string]>({
+  primaryModelRef: QWEN_TOKEN_PLAN_DEFAULT_MODEL_REF,
+  resolveParams: (_cfg, baseUrl) => {
+    const provider = buildQwenTokenPlanProvider({ baseUrl });
+    return {
+      providerId: QWEN_TOKEN_PLAN_PROVIDER_ID,
+      api: provider.api ?? "openai-completions",
+      baseUrl,
+      catalogModels: provider.models,
+      aliases: [
+        ...provider.models.map((model) => `${QWEN_TOKEN_PLAN_PROVIDER_ID}/${model.id}`),
+        { modelRef: QWEN_TOKEN_PLAN_DEFAULT_MODEL_REF, alias: "Qwen Token Plan" },
+      ],
+    };
+  },
+});
 
 function resolveConfiguredQwenBaseUrl(
   config: { models?: { providers?: Record<string, { baseUrl?: string } | undefined> } } | undefined,
@@ -61,6 +96,29 @@ function resolveConfiguredQwenBaseUrl(
     }
   }
   return undefined;
+}
+
+async function resolveQwenCatalog(
+  ctx: ProviderCatalogContext,
+  providerId: typeof PROVIDER_ID | typeof QWEN_TOKEN_PLAN_PROVIDER_ID,
+) {
+  const auth = ctx.resolveProviderApiKey(providerId);
+  if (!auth.apiKey) {
+    return null;
+  }
+  const baseUrl = resolveConfiguredQwenBaseUrl(
+    ctx.config,
+    providerId === PROVIDER_ID ? [PROVIDER_ID, LEGACY_PROVIDER_ID] : [providerId],
+  );
+  const buildProvider = providerId === PROVIDER_ID ? buildQwenProvider : buildQwenTokenPlanProvider;
+  return await buildOpenAICompatibleLiveProviderCatalog({
+    discoveryMode: "strict",
+    providerId,
+    providerConfig: buildProvider({ baseUrl }),
+    apiKey: auth.apiKey,
+    discoveryApiKey: auth.discoveryApiKey,
+    profileId: auth.profileId,
+  });
 }
 
 function createQwenAuthMethod(
@@ -91,13 +149,17 @@ function createQwenAuthMethod(
       ? `Enter Qwen Cloud API key (${regionLabel} standard endpoint)`
       : `Enter Qwen Cloud Coding Plan API key (${regionLabel})`,
     defaultModel: QWEN_DEFAULT_MODEL_REF,
-    applyConfig: isStandard
-      ? isCn
-        ? applyQwenStandardConfigCn
-        : applyQwenStandardConfig
-      : isCn
-        ? applyQwenConfigCn
-        : applyQwenConfig,
+    applyConfig: (cfg) =>
+      qwenPresetAppliers.applyConfig(
+        cfg,
+        isStandard
+          ? isCn
+            ? QWEN_STANDARD_CN_BASE_URL
+            : QWEN_STANDARD_GLOBAL_BASE_URL
+          : isCn
+            ? QWEN_CN_BASE_URL
+            : QWEN_GLOBAL_BASE_URL,
+      ),
     noteMessage: [
       "Manage API keys: https://home.qwencloud.com/api-keys",
       "Docs: https://docs.qwencloud.com/",
@@ -131,7 +193,8 @@ function createQwenTokenPlanAuthMethod(region: "global" | "cn") {
     envVar: "QWEN_TOKEN_PLAN_API_KEY",
     promptMessage: `Enter Alibaba Qwen Token Plan API key (${regionLabel}, sk-sp-...)`,
     defaultModel: QWEN_TOKEN_PLAN_DEFAULT_MODEL_REF,
-    applyConfig: (cfg) => applyQwenTokenPlanConfig(cfg, region),
+    applyConfig: (cfg) =>
+      qwenTokenPlanPresetAppliers.applyConfig(cfg, resolveQwenTokenPlanBaseUrl(region)),
     wizard: {
       choiceId: isCn ? "qwen-token-plan-cn" : "qwen-token-plan",
       choiceLabel: `Qwen Token Plan (${regionLabel})`,
@@ -191,6 +254,7 @@ export default defineSingleProviderPluginEntry({
     label: "Qwen Cloud",
     docsPath: "/providers/qwen",
     aliases: ["modelstudio", "qwencloud"],
+    hookAliases: ["dashscope", "modelstudio-native"],
     auth: [
       createQwenAuthMethod("standard", "cn"),
       createQwenAuthMethod("standard", "global"),
@@ -198,23 +262,7 @@ export default defineSingleProviderPluginEntry({
       createQwenAuthMethod("coding", "global"),
     ],
     catalog: {
-      run: async (ctx) => {
-        const auth = ctx.resolveProviderApiKey(PROVIDER_ID);
-        if (!auth.apiKey) {
-          return null;
-        }
-        const baseUrl =
-          resolveConfiguredQwenBaseUrl(ctx.config, [PROVIDER_ID, LEGACY_PROVIDER_ID]) ??
-          QWEN_BASE_URL;
-        return await buildOpenAICompatibleLiveProviderCatalog({
-          discoveryMode: "strict",
-          providerId: PROVIDER_ID,
-          providerConfig: buildQwenProvider({ baseUrl }),
-          apiKey: auth.apiKey,
-          discoveryApiKey: auth.discoveryApiKey,
-          profileId: auth.profileId,
-        });
-      },
+      run: (ctx) => resolveQwenCatalog(ctx, PROVIDER_ID),
       staticRun: async () => ({ provider: buildQwenProvider() }),
     },
     wrapStreamFn: wrapQwenProviderStream,
@@ -240,21 +288,7 @@ export default defineSingleProviderPluginEntry({
       auth: [createQwenTokenPlanAuthMethod("global"), createQwenTokenPlanAuthMethod("cn")],
       catalog: {
         order: "simple",
-        run: async (ctx) => {
-          const auth = ctx.resolveProviderApiKey(QWEN_TOKEN_PLAN_PROVIDER_ID);
-          if (!auth.apiKey) {
-            return null;
-          }
-          const baseUrl = resolveConfiguredQwenBaseUrl(ctx.config, [QWEN_TOKEN_PLAN_PROVIDER_ID]);
-          return await buildOpenAICompatibleLiveProviderCatalog({
-            discoveryMode: "strict",
-            providerId: QWEN_TOKEN_PLAN_PROVIDER_ID,
-            providerConfig: buildQwenTokenPlanProvider({ baseUrl }),
-            apiKey: auth.apiKey,
-            discoveryApiKey: auth.discoveryApiKey,
-            profileId: auth.profileId,
-          });
-        },
+        run: (ctx) => resolveQwenCatalog(ctx, QWEN_TOKEN_PLAN_PROVIDER_ID),
       },
       staticCatalog: {
         order: "simple",
@@ -276,7 +310,28 @@ export default defineSingleProviderPluginEntry({
       wrapSimpleCompletionStreamFn: wrapQwenProviderStream,
       classifyFailoverReason: classifyQwenFailoverReason,
     });
-    api.registerMediaUnderstandingProvider(buildQwenMediaUnderstandingProvider());
+    api.registerMediaUnderstandingProvider({
+      id: "qwen",
+      capabilities: ["image", "video"],
+      defaultModels: {
+        image: DEFAULT_QWEN_MEDIA_MODEL,
+        video: DEFAULT_QWEN_MEDIA_MODEL,
+      },
+      autoPriority: {
+        video: 15,
+      },
+      describeImage: undefined,
+      describeImages: undefined,
+      describeVideo: (params) =>
+        describeOpenAiCompatibleVideo({
+          ...params,
+          defaultBaseUrl: QWEN_STANDARD_GLOBAL_BASE_URL,
+          defaultModel: DEFAULT_QWEN_MEDIA_MODEL,
+          defaultPrompt: DEFAULT_QWEN_VIDEO_PROMPT,
+          provider: "qwen",
+          providerLabel: "Qwen",
+        }),
+    });
     api.registerVideoGenerationProvider(qwenVideoGenerationProvider);
   },
 });

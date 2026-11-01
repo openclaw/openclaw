@@ -1,6 +1,7 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { SessionCapability } from "./index.ts";
 import { fetchPagedSessionRows } from "./paged-session-rows.ts";
+import type { SessionListSnapshot } from "./session-capability.ts";
 
 // Matches the Gateway default and covers the default 50-child Swarm roster.
 // Custom larger groups keep paging through the bounded retry loop below.
@@ -19,23 +20,30 @@ export function childSessionListQuery(parentKey: string, pageSize = CHILD_SESSIO
 export async function fetchChildSessionRows(params: {
   sessions: Pick<SessionCapability, "refreshList" | "listSnapshot">;
   parentKey: string;
+  agentId?: string;
   isCurrent: () => boolean;
-  pageSize?: number;
   initialResult?: SessionsListResult;
 }): Promise<GatewaySessionRow[] | null> {
-  const pageSize = params.pageSize ?? CHILD_SESSION_LIST_PAGE_SIZE;
-  const query = childSessionListQuery(params.parentKey, pageSize);
+  const query = {
+    ...childSessionListQuery(params.parentKey),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  };
+  let pagination: SessionListSnapshot["pagination"];
   const readResult = () => {
     const snapshot = params.sessions.listSnapshot(query);
     if (snapshot.error) {
       throw new Error(snapshot.error);
     }
+    pagination = snapshot.pagination;
     return snapshot.result;
   };
   if (params.initialResult) {
     // Observation callbacks run before their first read settles. Join that
     // owner before appending; a concurrent append does not queue another page.
     await params.sessions.refreshList(query);
+    if (!params.isCurrent()) {
+      return null;
+    }
   }
   return fetchPagedSessionRows({
     list: async (offset) => {
@@ -47,6 +55,7 @@ export async function fetchChildSessionRows(params: {
     },
     initialResult: params.initialResult ? readResult() : undefined,
     resultKind: "window",
+    windowPagination: () => pagination,
     isCurrent: params.isCurrent,
     missingResultError: "child session list returned no result",
     incompletePaginationError: "The child session list kept changing. Try again.",

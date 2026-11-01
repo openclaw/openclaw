@@ -4,24 +4,11 @@ import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { ProviderResolveDynamicModelContext } from "./types.js";
 
-type FamilyForwardCompatTemplateSource = {
-  providerId?: string;
-  templateIds: readonly string[];
-};
 type FamilyForwardCompatContext = {
   modelId: string;
   normalizedModelId: string;
   providerId: string;
   template?: ProviderRuntimeModel;
-};
-
-type FamilyForwardCompatCase = {
-  match: readonly string[] | ((normalizedModelId: string) => boolean);
-  patch?:
-    | Partial<ProviderRuntimeModel>
-    | ((context: FamilyForwardCompatContext) => Partial<ProviderRuntimeModel> | undefined);
-  templateIds?: readonly string[];
-  templateSources?: readonly FamilyForwardCompatTemplateSource[];
 };
 
 type ConstructedModelNormalizer = (model: ProviderRuntimeModel) => ProviderRuntimeModel;
@@ -53,7 +40,17 @@ export function buildFamilyForwardCompatModel(
   params: {
     providerId: string;
     ctx: ProviderResolveDynamicModelContext;
-    cases: readonly FamilyForwardCompatCase[];
+    cases: readonly {
+      match: readonly string[] | ((normalizedModelId: string) => boolean);
+      patch?:
+        | Partial<ProviderRuntimeModel>
+        | ((context: FamilyForwardCompatContext) => Partial<ProviderRuntimeModel> | undefined);
+      templateIds?: readonly string[];
+      templateSources?: readonly {
+        providerId?: string;
+        templateIds: readonly string[];
+      }[];
+    }[];
     modelId?: string;
     normalizedModelId?: string;
     patch?: Partial<ProviderRuntimeModel>;
@@ -118,9 +115,9 @@ export function buildFamilyForwardCompatModel(
     id: modelId,
     name: modelId,
     ...patch,
-    cost: patch?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: patch?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
-    maxTokens: patch?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+    cost: patch.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: patch.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+    maxTokens: patch.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
     // SAFETY: Synthesis patches supply api/provider/baseUrl/reasoning/input; defaults above are host-owned.
   } as ProviderRuntimeModel);
 }

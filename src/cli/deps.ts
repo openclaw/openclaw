@@ -1,12 +1,11 @@
 // Default CLI dependency surface with lazy outbound channel send adapters.
 import { normalizeChatChannelId } from "../channels/registry.js";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
 import type { CliDeps } from "./deps.types.js";
+import type { RuntimeSendOpts } from "./send-runtime/channel-outbound-send.js";
 
 export type { CliDeps } from "./deps.types.js";
-type RuntimeSend = ReturnType<
-  typeof import("./send-runtime/channel-outbound-send.js").createChannelOutboundRuntimeSend
->;
+const loadSendRuntime = createLazyPromise(() => import("./send-runtime/channel-outbound-send.js"));
 
 const NON_CHANNEL_DEP_KEYS = new Set([
   "__proto__",
@@ -14,19 +13,24 @@ const NON_CHANNEL_DEP_KEYS = new Set([
   "cron",
   "cronConfig",
   "cronEnabled",
+  "captureSessionEventTarget",
   "defaultAgentId",
+  "deferSessionEvent",
+  "enqueueSessionEvent",
   "enqueueSystemEvent",
   "getQueueSize",
   "hasOwnProperty",
   "inspect",
+  "isExecutionIdle",
   "log",
   "migrateOrphanedSessionKeys",
   "nowMs",
   "onEvent",
-  "requestHeartbeat",
+  "resolveSessionEventTarget",
   "resolveSessionStorePath",
-  "runHeartbeatOnce",
+  "resolveUserTimezone",
   "runIsolatedAgentJob",
+  "runSessionEvent",
   "runtime",
   "sendCronFailureAlert",
   "sessionStorePath",
@@ -36,27 +40,6 @@ const NON_CHANNEL_DEP_KEYS = new Set([
   "toString",
   "valueOf",
 ]);
-
-const senderCache = new Map<string, Promise<RuntimeSend>>();
-
-function createLazySender(channelId: string): RuntimeSend["sendMessage"] {
-  return async (...args) => {
-    const runtimeSend = await getOrCreatePromise(
-      senderCache,
-      channelId,
-      async () => {
-        const { createChannelOutboundRuntimeSend } =
-          await import("./send-runtime/channel-outbound-send.js");
-        return createChannelOutboundRuntimeSend({
-          channelId,
-          unavailableMessage: `${channelId} outbound adapter is unavailable.`,
-        });
-      },
-      { cacheRejections: false },
-    );
-    return await runtimeSend.sendMessage(...args);
-  };
-}
 
 export function createDefaultDeps(): CliDeps {
   // Proxy lookup preserves the historic deps.channelName shape without eagerly importing plugins.
@@ -76,7 +59,8 @@ export function createDefaultDeps(): CliDeps {
       }
       // Synthesized senders re-enter the full channel adapter. Keep them off the
       // enumerable target so transport dependency mapping cannot inject them back into it.
-      return createLazySender(channelId);
+      return async (to: string, text: string, opts?: RuntimeSendOpts) =>
+        await (await loadSendRuntime()).sendChannelOutboundMessage(channelId, to, text, opts);
     },
   });
 }

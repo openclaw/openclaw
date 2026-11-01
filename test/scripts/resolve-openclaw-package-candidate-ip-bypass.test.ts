@@ -1,9 +1,16 @@
 // Resolve Openclaw Package Candidate Ip Bypass tests cover resolve openclaw package candidate ip bypass script behavior.
 import { mkdtemp, rm } from "node:fs/promises";
+import { request as httpsRequest } from "node:https";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { downloadUrl } from "../../scripts/resolve-openclaw-package-candidate.mts";
+
+vi.mock("node:https", () => ({
+  request: vi.fn(() => {
+    throw new Error("unexpected package download request");
+  }),
+}));
 
 const tempDirs: string[] = [];
 const dotted = (...parts: number[]) => parts.join(".");
@@ -12,10 +19,6 @@ type LookupAddress = { address: string; family: number };
 
 function lookupAddresses(addresses: LookupAddress[]) {
   return async () => addresses;
-}
-
-function unexpectedFetch(): never {
-  throw new Error("downloadUrl should reject before fetching");
 }
 
 afterEach(async () => {
@@ -43,10 +46,10 @@ describe("package URL IPv6 transition address blocking", () => {
 
     await expect(
       downloadUrl("https://packages.example/openclaw.tgz", target, {
-        fetchImpl: unexpectedFetch,
         lookupHost: lookupAddresses([{ address, family: 6 }]),
       }),
     ).rejects.toThrow(/private\/internal\/special-use/iu);
+    expect(httpsRequest).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -59,9 +62,9 @@ describe("package URL IPv6 transition address blocking", () => {
 
     await expect(
       downloadUrl(url, target, {
-        fetchImpl: unexpectedFetch,
         lookupHost: lookupAddresses([{ address: dotted(93, 184, 216, 34), family: 4 }]),
       }),
     ).rejects.toThrow(/private\/internal\/special-use/iu);
+    expect(httpsRequest).not.toHaveBeenCalled();
   });
 });

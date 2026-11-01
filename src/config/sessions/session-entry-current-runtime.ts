@@ -1,51 +1,34 @@
-import {
-  assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
-} from "../../infra/sqlite-worker-identity.js";
-import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
-import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { readIncognitoSessionEntryCurrent } from "./session-accessor.sqlite-incognito-sharing.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
 import type {
   CapturedSessionEntryCurrentRead,
   SessionEntryCurrentSource,
 } from "./session-entry-current.types.js";
+import { captureSessionExecutionPolicy } from "./session-entry-execution-policy.js";
 import type { SessionEntryReadWorkerOwner } from "./session-entry-read-runtime.js";
-import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import { isSessionStoreReadCandidateCurrent } from "./session-store-read-candidates.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
-/** Process-held currency consumes its original writer's published facts, never a native query. */
+/** Read live effect facts from the memory owner selected at acquisition. */
 export function captureNativeSessionEntryCurrentRead(
   scope: SessionEntryReadScope,
 ): Exclude<CapturedSessionEntryCurrentRead, { kind: "file" }> {
-  const sessionKey = scope.sessionKey;
-  const agentId = scope.agentId ?? parseAgentSessionKey(sessionKey)?.agentId;
-  assertCanonicalSessionKeyWrite(sessionKey, agentId);
-  if (!agentId) {
-    throw new Error("Session currency requires its original agent");
+  const memory = captureMemoryExactSessionReader(scope);
+  if (!memory) {
+    throw new Error("Session current facts require a memory owner");
   }
-  const env = captureSessionTranscriptStorageEnvironment(scope.env ?? process.env);
-  const storePath = isIncognitoSessionKey(sessionKey)
-    ? resolveIncognitoOpenClawAgentSqlitePath({ agentId, env })
-    : scope.storePath;
-  if (!storePath) {
-    throw new Error("Session currency requires its original incognito store");
-  }
-  const database = getOpenIncognitoAgentDatabase(agentId, storePath);
-  const assertSourceCurrent = () => {
-    if (getOpenIncognitoAgentDatabase(agentId, storePath) !== database) {
-      throw new Error("Session currency incognito owner changed");
-    }
-  };
   return {
-    kind: database ? "native" : "missing",
-    assertSourceCurrent,
+    kind: memory.source ? "incognito" : "missing",
+    assertSourceCurrent: () => memory.assertCurrent(),
     readCurrent() {
-      assertSourceCurrent();
-      return database ? readIncognitoSessionEntryCurrent(database.db, sessionKey) : undefined;
+      const entry = memory.read(scope.sessionKey, "list");
+      return entry
+        ? { ...entry, executionPolicy: captureSessionExecutionPolicy(entry) }
+        : undefined;
     },
   };
 }
@@ -59,7 +42,7 @@ export function captureSessionEntryCurrentRead(
   const sessionKey = scope.sessionKey;
   const agentId = scope.agentId ?? parseAgentSessionKey(sessionKey)?.agentId;
   assertCanonicalSessionKeyWrite(sessionKey, agentId);
-  if (owner.kind === "native") {
+  if (owner.kind === "incognito") {
     return captureNativeSessionEntryCurrentRead(scope);
   }
   if (owner.kind !== "file" || !owner.scope || !owner.selectedStore) {
@@ -76,7 +59,7 @@ export function captureSessionEntryCurrentRead(
   const identity = readDatabasePathIdentitySync(readScope.storePath);
   owner.assertCurrent();
   const assertLogicalSourceCurrent = () => {
-    if (captureSessionStoreReadCandidate(candidate.path).physicalPath !== candidate.physicalPath) {
+    if (!isSessionStoreReadCandidateCurrent(candidate)) {
       throw new Error("Session currency logical source changed");
     }
   };
@@ -105,20 +88,16 @@ export function captureSessionEntryCurrentRead(
     databaseBirthtime: identity.birthtime,
     sessionKey,
   });
-  const assertSourceCurrent = () => {
-    assertExistingDatabaseIdentity(source.path, identity.key, identity.birthtime);
-    assertLogicalSourceCurrent();
-  };
   const options = { agentId: source.agentId, path: source.path, env: readScope.env };
   return {
     kind: "file",
     source,
-    assertSourceCurrent,
+    assertSourceCurrent: assertLogicalSourceCurrent,
     async readCurrent() {
       const entry = await withSessionHistoryWorkerDatabase(options, (reader) =>
         reader.readEntryCurrent({ scope: readScope, source }),
       );
-      assertSourceCurrent();
+      assertLogicalSourceCurrent();
       return entry;
     },
   };

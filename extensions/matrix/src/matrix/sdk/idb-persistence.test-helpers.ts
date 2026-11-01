@@ -1,5 +1,13 @@
-// Matrix helper module supports idb persistence helpers behavior.
+import { indexedDB } from "fake-indexeddb";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+
+export function requestResult<T>(request: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    request.addEventListener("success", () => resolve(request.result), { once: true });
+    const fail = () => reject(toErrorObject(request.error, "Non-Error rejection"));
+    request.addEventListener("error", fail, { once: true });
+  });
+}
 
 export async function clearAllIndexedDbState(params?: { databasePrefix?: string }): Promise<void> {
   const databases = await indexedDB.databases();
@@ -13,12 +21,7 @@ export async function clearAllIndexedDbState(params?: { databasePrefix?: string 
         (name) =>
           new Promise<void>((resolve, reject) => {
             const req = indexedDB.deleteDatabase(name);
-            req.addEventListener("success", () => resolve(), { once: true });
-            req.addEventListener(
-              "error",
-              () => reject(toErrorObject(req.error, "Non-Error rejection")),
-              { once: true },
-            );
+            void requestResult(req).then(() => resolve(), reject);
             req.addEventListener("blocked", () => resolve(), { once: true });
           }),
       ),
@@ -31,30 +34,23 @@ export async function seedDatabase(params: {
   storeName: string;
   records: Array<{ key: IDBValidKey; value: unknown }>;
 }): Promise<void> {
+  const req = indexedDB.open(params.name, params.version ?? 1);
+  req.addEventListener("upgradeneeded", () => {
+    if (!req.result.objectStoreNames.contains(params.storeName)) {
+      req.result.createObjectStore(params.storeName);
+    }
+  });
+  const db = await requestResult(req);
+  const tx = db.transaction(params.storeName, "readwrite");
+  for (const { key, value } of params.records) {
+    tx.objectStore(params.storeName).put(value, key);
+  }
   await new Promise<void>((resolve, reject) => {
-    const req = indexedDB.open(params.name, params.version ?? 1);
-    req.addEventListener("upgradeneeded", () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(params.storeName)) {
-        db.createObjectStore(params.storeName);
-      }
+    tx.addEventListener("complete", () => {
+      db.close();
+      resolve();
     });
-    req.addEventListener("success", () => {
-      const db = req.result;
-      const tx = db.transaction(params.storeName, "readwrite");
-      const store = tx.objectStore(params.storeName);
-      for (const record of params.records) {
-        store.put(record.value, record.key);
-      }
-      tx.addEventListener("complete", () => {
-        db.close();
-        resolve();
-      });
-      tx.addEventListener("error", () => reject(toErrorObject(tx.error, "Non-Error rejection")), {
-        once: true,
-      });
-    });
-    req.addEventListener("error", () => reject(toErrorObject(req.error, "Non-Error rejection")), {
+    tx.addEventListener("error", () => reject(toErrorObject(tx.error, "Non-Error rejection")), {
       once: true,
     });
   });
@@ -65,47 +61,12 @@ export async function readDatabaseRecords(params: {
   version?: number;
   storeName: string;
 }): Promise<Array<{ key: IDBValidKey; value: unknown }>> {
-  return await new Promise((resolve, reject) => {
-    const req = indexedDB.open(params.name, params.version ?? 1);
-    req.addEventListener("success", () => {
-      const db = req.result;
-      const tx = db.transaction(params.storeName, "readonly");
-      const store = tx.objectStore(params.storeName);
-      const keysReq = store.getAllKeys();
-      const valuesReq = store.getAll();
-      let keys: IDBValidKey[] | null = null;
-      let values: unknown[] | null = null;
-
-      const maybeResolve = () => {
-        if (!keys || !values) {
-          return;
-        }
-        db.close();
-        const resolvedValues = values;
-        resolve(keys.map((key, index) => ({ key, value: resolvedValues[index] })));
-      };
-
-      keysReq.addEventListener("success", () => {
-        keys = keysReq.result;
-        maybeResolve();
-      });
-      valuesReq.addEventListener("success", () => {
-        values = valuesReq.result;
-        maybeResolve();
-      });
-      keysReq.addEventListener(
-        "error",
-        () => reject(toErrorObject(keysReq.error, "Non-Error rejection")),
-        { once: true },
-      );
-      valuesReq.addEventListener(
-        "error",
-        () => reject(toErrorObject(valuesReq.error, "Non-Error rejection")),
-        { once: true },
-      );
-    });
-    req.addEventListener("error", () => reject(toErrorObject(req.error, "Non-Error rejection")), {
-      once: true,
-    });
-  });
+  const db = await requestResult(indexedDB.open(params.name, params.version ?? 1));
+  const store = db.transaction(params.storeName, "readonly").objectStore(params.storeName);
+  const [keys, values] = await Promise.all([
+    requestResult(store.getAllKeys()),
+    requestResult<unknown[]>(store.getAll()),
+  ]);
+  db.close();
+  return keys.map((key, index) => ({ key, value: values[index] }));
 }

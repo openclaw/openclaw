@@ -204,7 +204,7 @@ struct BundledRuntimeTests {
         #expect(try FileManager.default.destinationOfSymbolicLink(
             atPath: runtimeRoot.appendingPathComponent("previous").path) == "build-0")
         let shellText = try String(contentsOf: shellProfile, encoding: .utf8)
-        #expect(shellText == "export PATH=\"\(state.path)/bin:$PATH\"\n# existing settings\n")
+        #expect(shellText == "# existing settings\n")
 
         let brokenApp = home.appendingPathComponent("Broken.app")
         _ = try self.makeBundle(
@@ -278,7 +278,7 @@ struct BundledRuntimeTests {
         try "# existing bash settings\n".write(to: bashrc, atomically: true, encoding: .utf8)
         let unsupportedProfile = home.appendingPathComponent(".profile")
         try FileManager.default.createDirectory(at: unsupportedProfile, withIntermediateDirectories: true)
-        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "shell-conflict"])
+        let profile = AppProfile(environment: [:])
         let state = profile.stateDirectoryURL(homeDirectory: home)
         let macCLI = state.appendingPathComponent("bin/openclaw-mac")
         try FileManager.default.createDirectory(
@@ -346,6 +346,43 @@ struct BundledRuntimeTests {
         #expect(FileManager.default.isExecutableFile(atPath: shim.path))
         let seeded = try #require(try BundledRuntime.seeded(profile: profile, homeDirectory: home))
         #expect(seeded.root.path == runtime.root.path)
+    }
+
+    @Test(arguments: [(false, true), (true, true), (false, false)])
+    func `only the persistent default profile adds its CLI to shell startup files`(
+        namedProfile: Bool,
+        allowsPersistentIntegration: Bool) throws
+    {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let shellProfile = home.appendingPathComponent(".zshrc")
+        try "# existing settings\n".write(to: shellProfile, atomically: true, encoding: .utf8)
+        let profile = AppProfile(environment: namedProfile ? ["OPENCLAW_PROFILE": "shell-fixture"] : [:])
+        let state = profile.stateDirectoryURL(homeDirectory: home)
+        let app = root.appendingPathComponent("Fixture.app")
+        _ = try self.makeBundle(
+            at: app, builtAt: "2026-08-27T00:00:00.000Z", buildID: "shell-build", command: "unused")
+        let bundle = try #require(Bundle(url: app))
+        let runtime = BundledRuntime(root: app.appendingPathComponent("Contents/Resources/runtime"))
+
+        for _ in 0..<2 {
+            runtime.installCLI(
+                bundle: bundle,
+                profile: profile,
+                homeDirectory: home,
+                allowsPersistentIntegration: allowsPersistentIntegration)
+            #expect(FileManager.default.isExecutableFile(atPath: state.appendingPathComponent("bin/openclaw").path))
+            let shellText = try String(contentsOf: shellProfile, encoding: .utf8)
+            if allowsPersistentIntegration, !namedProfile {
+                #expect(shellText == "export PATH=\"\(home.path)/.openclaw/bin:$PATH\"\n# existing settings\n")
+            } else {
+                #expect(shellText == "# existing settings\n")
+                #expect(try Set(FileManager.default.contentsOfDirectory(atPath: home.path)) ==
+                    Set([".zshrc", state.lastPathComponent]))
+            }
+        }
     }
 
     @Test func `owned mac CLI link follows app moves without seeding or creating terminal commands`() throws {

@@ -23,15 +23,12 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasLineCredentials } from "./account-helpers.js";
 import { resolveLineAccount } from "./accounts.js";
-import { messageAction, postbackAction, type Action } from "./actions.js";
+import { messageAction, postbackAction, truncateLineActionLabel, type Action } from "./actions.js";
 import { createActionCard } from "./flex-templates/basic-cards.js";
-import {
-  createAppleTvRemoteCard,
-  createDeviceControlCard,
-  createMediaPlayerCard,
-} from "./flex-templates/media-control-cards.js";
+import { cardBox, cardText, createCardBubble, createCardTitle } from "./flex-templates/common.js";
 import { fitsLineFlexBubble } from "./flex-templates/message.js";
 import { createAgendaCard, createEventCard } from "./flex-templates/schedule-cards.js";
+import type { FlexBox, FlexBubble, FlexButton, FlexComponent } from "./flex-templates/types.js";
 import { inferLineTargetChatType } from "./messaging-target.js";
 import { buildLineQuestionPostbackData } from "./question-postback.js";
 import { lineChannelDataSchema, type LineRichCard } from "./rich-message-schema.js";
@@ -141,7 +138,7 @@ export function renderLinePresentation(
   const hasCard = presentation.blocks.some(
     (block) => block.type === "buttons" && block.buttons.length > 0,
   );
-  const buttons: Array<{ label: string; action: Action }> = [];
+  const buttons: Action[] = [];
   const quickReplyItems: LineQuickReplyItem[] = [];
   const carriedBlocks: MessagePresentationBlock[] = [];
   const cardBody: string[] = [];
@@ -173,7 +170,7 @@ export function renderLinePresentation(
           }
           questionLabels.add(button.label);
         }
-        buttons.push({ label: button.label, action });
+        buttons.push(action);
       }
     } else if (block.type === "select") {
       const overflow: typeof block.options = [];
@@ -284,24 +281,90 @@ const toSlug = (value: string): string =>
 const lineActionData = (action: string, device: string): string =>
   `line.action=${encodeURIComponent(action)}&line.device=${encodeURIComponent(device)}`;
 
-export function renderLineCard(card: LineRichCard): { altText: string; contents: unknown } {
+function createControlButton(
+  label: string,
+  data: string,
+  style: "primary" | "secondary" = "secondary",
+): FlexButton {
+  return { type: "button", action: postbackAction(label, data), style, height: "sm", flex: 1 };
+}
+
+export function renderLineCard(card: LineRichCard): { altText: string; contents: FlexBubble } {
   if (card.type === "media_player") {
     const device = toSlug(card.source || card.title);
+    const isPlaying = card.status ? card.status === "playing" : undefined;
+    const trackInfo: FlexComponent[] = [createCardTitle(card.title)];
+    if (card.artist) {
+      trackInfo.push(
+        cardText(card.artist, { size: "md", color: "#666666", wrap: true, margin: "sm" }),
+      );
+    }
+    const statusItems: FlexComponent[] = [];
+    if (isPlaying !== undefined) {
+      statusItems.push(
+        cardBox(
+          "horizontal",
+          [
+            cardBox("vertical", [], {
+              width: "8px",
+              height: "8px",
+              backgroundColor: isPlaying ? "#06C755" : "#CCCCCC",
+              cornerRadius: "4px",
+            }),
+            cardText(isPlaying ? "Now Playing" : "Paused", {
+              size: "xs",
+              color: isPlaying ? "#06C755" : "#888888",
+              weight: "bold",
+              margin: "sm",
+            }),
+          ],
+          { alignItems: "center" },
+        ),
+      );
+    }
+    if (card.source) {
+      statusItems.push(
+        cardText(card.source, {
+          size: "xs",
+          color: "#AAAAAA",
+          margin: statusItems.length > 0 ? "lg" : undefined,
+        }),
+      );
+    }
+    const bodyContents: FlexComponent[] = [cardBox("vertical", trackInfo)];
+    if (statusItems.length > 0) {
+      bodyContents.push(cardBox("horizontal", statusItems, { margin: "lg", alignItems: "center" }));
+    }
+    const bubble = createCardBubble(bodyContents);
+    if (card.imageUrl) {
+      bubble.hero = {
+        type: "image",
+        url: card.imageUrl,
+        size: "full",
+        aspectRatio: "1:1",
+        aspectMode: "cover",
+      };
+    }
+    const controlButtons: FlexComponent[] = [];
+    for (const [key, label, style] of [
+      ["previous", "⏮", "secondary"],
+      ["play", "▶", isPlaying ? "secondary" : "primary"],
+      ["pause", "⏸", isPlaying ? "primary" : "secondary"],
+      ["next", "⏭", "secondary"],
+    ] as const) {
+      const button = createControlButton(label, lineActionData(key, device), style);
+      if (key !== "previous") {
+        button.margin = "md";
+      }
+      controlButtons.push(button);
+    }
+    bubble.footer = cardBox("vertical", [cardBox("horizontal", controlButtons)], {
+      paddingAll: "lg",
+      backgroundColor: "#FAFAFA",
+    });
     return {
       altText: `🎵 ${card.title}${card.artist ? ` - ${card.artist}` : ""}`,
-      contents: createMediaPlayerCard({
-        title: card.title,
-        subtitle: card.artist,
-        source: card.source,
-        imageUrl: card.imageUrl,
-        isPlaying: card.status ? card.status === "playing" : undefined,
-        controls: Object.fromEntries(
-          ["previous", "play", "pause", "next"].map((action) => [
-            action,
-            { data: lineActionData(action, device) },
-          ]),
-        ),
-      }),
+      contents: bubble,
     };
   }
   if (card.type === "event") {
@@ -318,40 +381,126 @@ export function renderLineCard(card: LineRichCard): { altText: string; contents:
   }
   const device = toSlug(card.type === "device" ? card.name : card.name || "apple_tv");
   if (card.type === "device") {
+    const headerContents: FlexComponent[] = [
+      cardBox(
+        "horizontal",
+        [
+          cardBox("vertical", [], {
+            width: "10px",
+            height: "10px",
+            backgroundColor: "#06C755",
+            cornerRadius: "5px",
+          }),
+          { ...createCardTitle(card.name), flex: 1, margin: "md" },
+        ],
+        { alignItems: "center" },
+      ),
+    ];
+    if (card.deviceType) {
+      headerContents.push(
+        cardText(card.deviceType, { size: "sm", color: "#888888", margin: "sm" }),
+      );
+    }
+    if (card.status) {
+      headerContents.push(
+        cardBox("vertical", [cardText(card.status, { size: "sm", color: "#444444", wrap: true })], {
+          margin: "lg",
+          paddingAll: "md",
+          backgroundColor: "#F8F9FA",
+          cornerRadius: "md",
+        }),
+      );
+    }
+    const bubble = createCardBubble(headerContents);
+    const controls = card.controls ?? [];
+    if (controls.length > 0) {
+      const rows: FlexComponent[] = [];
+      const limitedControls = controls.slice(0, 6);
+      for (let i = 0; i < limitedControls.length; i += 2) {
+        const rowButtons: FlexComponent[] = [];
+        for (const [offset, ctrl] of limitedControls.slice(i, i + 2).entries()) {
+          rowButtons.push({
+            ...createControlButton(
+              truncateLineActionLabel(ctrl.label, 18),
+              lineActionData(ctrl.action, device),
+            ),
+            margin: offset > 0 ? "md" : undefined,
+          });
+        }
+        if (rowButtons.length === 1) {
+          rowButtons.push({ type: "filler" });
+        }
+        rows.push(cardBox("horizontal", rowButtons, { margin: i > 0 ? "md" : undefined }));
+      }
+      bubble.footer = cardBox("vertical", rows, { paddingAll: "lg", backgroundColor: "#FAFAFA" });
+    }
     return {
       altText: `📱 ${card.name}${card.status ? `: ${card.status}` : ""}`,
-      contents: createDeviceControlCard({
-        deviceName: card.name,
-        deviceType: card.deviceType,
-        status: card.status,
-        controls: (card.controls ?? []).map((control) => ({
-          label: control.label,
-          data: lineActionData(control.action, device),
-        })),
-      }),
+      contents: bubble,
     };
   }
-  const actionData: Parameters<typeof createAppleTvRemoteCard>[0]["actionData"] = {
-    up: lineActionData("up", device),
-    down: lineActionData("down", device),
-    left: lineActionData("left", device),
-    right: lineActionData("right", device),
-    select: lineActionData("select", device),
-    menu: lineActionData("menu", device),
-    home: lineActionData("home", device),
-    play: lineActionData("play", device),
-    pause: lineActionData("pause", device),
-    volumeUp: lineActionData("volume_up", device),
-    volumeDown: lineActionData("volume_down", device),
-    mute: lineActionData("mute", device),
-  };
+  const headerContents: FlexComponent[] = [createCardTitle(card.name || "Apple TV")];
+  if (card.status) {
+    headerContents.push(
+      cardText(card.status, { size: "sm", color: "#666666", wrap: true, margin: "sm" }),
+    );
+  }
+  const rows: [FlexBox["margin"], Array<[label: string, action: string] | null>][] = [
+    [undefined, [null, ["↑", "up"], null]],
+    [
+      "md",
+      [
+        ["←", "left"],
+        ["OK", "select"],
+        ["→", "right"],
+      ],
+    ],
+    ["md", [null, ["↓", "down"], null]],
+    [
+      "lg",
+      [
+        ["Menu", "menu"],
+        ["Home", "home"],
+      ],
+    ],
+    [
+      "md",
+      [
+        ["Play", "play"],
+        ["Pause", "pause"],
+      ],
+    ],
+    [
+      "md",
+      [
+        ["Vol +", "volume_up"],
+        ["Mute", "mute"],
+        ["Vol -", "volume_down"],
+      ],
+    ],
+  ];
+  const controlRows = rows.map(([margin, buttons]) =>
+    cardBox(
+      "horizontal",
+      buttons.map((button) =>
+        button
+          ? createControlButton(
+              button[0],
+              lineActionData(button[1], device),
+              button[1] === "select" ? "primary" : "secondary",
+            )
+          : { type: "filler" },
+      ),
+      margin ? { margin } : {},
+    ),
+  );
   return {
     altText: `📺 ${card.name || "Apple TV"} Remote`,
-    contents: createAppleTvRemoteCard({
-      deviceName: card.name || "Apple TV",
-      status: card.status,
-      actionData,
-    }),
+    contents: createCardBubble([
+      cardBox("vertical", headerContents),
+      { type: "separator", margin: "lg", color: "#EEEEEE" },
+      ...controlRows,
+    ]),
   };
 }
 

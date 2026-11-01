@@ -1,10 +1,11 @@
-// Bounded asynchronous JSONL file transport for the process logger.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { appendRegularFile, appendRegularFileSync } from "@openclaw/fs-safe/advanced";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { formatConsoleDiagnosticLine } from "./json-console-line.js";
-import { redactSensitiveText, serializeRedactedFileLogRecord } from "./redact.js";
+import { redactSensitiveText } from "./redact.js";
 import { formatTimestamp } from "./timestamps.js";
 
 // Keep burst memory bounded while one equally bounded batch is in flight.
@@ -25,21 +26,16 @@ type FileCursor = {
   bytes: number;
 };
 
-type FileLogAppender = typeof appendRegularFile;
-
 let queue: FileLogQueueEntry[] = [];
 let queueStart = 0;
 let activeBatch: FileLogQueueEntry[] | null = null;
 let activeIndex = 0;
 let droppedCount = 0;
 let droppedTarget: FileLogQueueEntry | null = null;
-let maxQueuedRecords = DEFAULT_MAX_QUEUED_RECORDS;
 let scheduledFlush: NodeJS.Immediate | null = null;
 let flushPromise: Promise<void> | null = null;
-let drainGeneration = 0;
 let processExiting = false;
 let processHooksInstalled = false;
-let appendFile: FileLogAppender = appendRegularFile;
 const warnedRotationFiles = new Map<string, number>();
 const warnedAppendFiles = new Set<string>();
 let appendFailureTrackingSaturated = false;
@@ -50,9 +46,33 @@ function rotatedLogPath(file: string, index: number): string {
   return `${base}.${index}${ext}`;
 }
 
+/**
+ * Creates a log directory and its missing parents with a bounded number of mkdir calls.
+ * Node's recursive mkdirSync retries forever when a parent exists but refuses new
+ * children (a deleted directory that is still mounted, such as a stale systemd
+ * PrivateTmp), which would block the event loop inside the logger.
+ */
+export function ensureLogDirectorySync(dir: string, createParents = true): void {
+  try {
+    fs.mkdirSync(dir);
+  } catch (error) {
+    const code = extractErrorCode(error);
+    if (code === "EEXIST" && fs.statSync(dir).isDirectory()) {
+      return;
+    }
+    const parent = path.dirname(dir);
+    if (!createParents || code !== "ENOENT" || parent === dir) {
+      throw error;
+    }
+    ensureLogDirectorySync(parent);
+    // One retry once the parents exist; a second ENOENT is final.
+    ensureLogDirectorySync(dir, false);
+  }
+}
+
 function rotateLogFile(file: string): boolean {
   try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
+    ensureLogDirectorySync(path.dirname(file));
     fs.rmSync(rotatedLogPath(file, MAX_ROTATED_LOG_FILES), { force: true });
     for (let index = MAX_ROTATED_LOG_FILES - 1; index >= 1; index -= 1) {
       const from = rotatedLogPath(file, index);
@@ -103,7 +123,7 @@ function buildDroppedMarker(target: FileLogQueueEntry, count: number): FileLogQu
   };
   return {
     ...target,
-    payload: `${serializeRedactedFileLogRecord(record)}\n`,
+    payload: `${JSON.stringify(record)}\n`,
   };
 }
 
@@ -214,10 +234,10 @@ function prepareWrite(
   return { payload: payloads.join(""), payloadBytes, nextIndex };
 }
 
-async function writeEntries(entries: FileLogQueueEntry[], generation: number): Promise<void> {
+async function writeEntries(entries: FileLogQueueEntry[]): Promise<void> {
   const cursors = new Map<string, FileCursor>();
   for (let index = 0; index < entries.length;) {
-    if (generation !== drainGeneration || processExiting) {
+    if (processExiting) {
       return;
     }
     const entry = entries[index];
@@ -227,7 +247,7 @@ async function writeEntries(entries: FileLogQueueEntry[], generation: number): P
     let cursor = cursors.get(entry.file);
     if (!cursor) {
       cursor = { bytes: await getCurrentLogFileBytes(entry.file) };
-      if (generation !== drainGeneration || processExiting) {
+      if (processExiting) {
         return;
       }
       cursors.set(entry.file, cursor);
@@ -236,7 +256,7 @@ async function writeEntries(entries: FileLogQueueEntry[], generation: number): P
     // Forced drains must skip the whole issued append, which cannot be safely replayed.
     activeIndex = batch.nextIndex;
     try {
-      await appendFile({ filePath: entry.file, content: batch.payload });
+      await appendRegularFile({ filePath: entry.file, content: batch.payload });
       cursor.bytes += batch.payloadBytes;
       clearAppendFailure(entry);
     } catch {
@@ -279,9 +299,8 @@ function writeEntriesSync(entries: FileLogQueueEntry[]): void {
 }
 
 async function runFlushLoop(): Promise<void> {
-  const generation = drainGeneration;
   for (;;) {
-    if (generation !== drainGeneration || processExiting) {
+    if (processExiting) {
       return;
     }
     const entries = claimQueuedEntries();
@@ -290,10 +309,7 @@ async function runFlushLoop(): Promise<void> {
     }
     activeBatch = entries;
     activeIndex = 0;
-    await writeEntries(entries, generation);
-    if (generation !== drainGeneration) {
-      return;
-    }
+    await writeEntries(entries);
     activeBatch = null;
     activeIndex = 0;
   }
@@ -306,9 +322,7 @@ function startFlush(): void {
   const running = runFlushLoop().catch(() => undefined);
   flushPromise = running;
   void running.then(() => {
-    if (flushPromise === running) {
-      flushPromise = null;
-    }
+    flushPromise = null;
     if (queue.length > 0 || droppedCount > 0) {
       scheduleFlush();
     }
@@ -343,21 +357,6 @@ function installProcessHooks(): void {
   process.on("exit", handleProcessExit);
 }
 
-function removeProcessHooks(): void {
-  if (!processHooksInstalled) {
-    return;
-  }
-  process.removeListener("beforeExit", handleProcessBeforeExit);
-  process.removeListener("exit", handleProcessExit);
-  processHooksInstalled = false;
-}
-
-// Production installs eagerly so logs emitted by another exit listener are still rescued.
-// Vitest shared workers reload modules, so defer there until file logging is actually used.
-if (process.env.VITEST !== "true") {
-  installProcessHooks();
-}
-
 /** Enqueues one serialized record without waiting for filesystem I/O. */
 function enqueueFileLog(entry: FileLogQueueEntry): void {
   if (processExiting) {
@@ -366,7 +365,7 @@ function enqueueFileLog(entry: FileLogQueueEntry): void {
   }
   installProcessHooks();
   // Keep the newest diagnostics and report every eviction once in the next drain batch.
-  if (queue.length >= maxQueuedRecords) {
+  if (queue.length >= DEFAULT_MAX_QUEUED_RECORDS) {
     const dropped = queue[queueStart];
     if (dropped) {
       // The overflow marker retains this entry's metadata, so release its discarded text now.
@@ -406,7 +405,6 @@ function drainFileLogQueueSync(): void {
     clearImmediate(scheduledFlush);
     scheduledFlush = null;
   }
-  drainGeneration += 1;
   // An issued append cannot be cancelled or safely replayed. Graceful exits await it; forced
   // exits rescue the still-queued tail without risking duplicate or interleaved JSONL records.
   const entries = activeBatch ? activeBatch.slice(activeIndex) : [];
@@ -416,30 +414,18 @@ function drainFileLogQueueSync(): void {
   writeEntriesSync(entries);
 }
 
-function setFileLogQueueMaxRecordsForTests(value?: number): void {
-  maxQueuedRecords = Math.max(1, value ?? DEFAULT_MAX_QUEUED_RECORDS);
-}
-
-function setFileLogAppenderForTests(value?: FileLogAppender): void {
-  appendFile = value ?? appendRegularFile;
-}
-
-function resetFileLogTransportForTests(): void {
-  drainFileLogQueueSync();
-  removeProcessHooks();
-  processExiting = false;
-  appendFile = appendRegularFile;
-  maxQueuedRecords = DEFAULT_MAX_QUEUED_RECORDS;
-  warnedRotationFiles.clear();
-  warnedAppendFiles.clear();
-  appendFailureTrackingSaturated = false;
-}
-
-export const fileLogTransport = {
-  drainSync: drainFileLogQueueSync,
-  enqueue: enqueueFileLog,
-  flush: flushFileLogQueue,
-  resetForTests: resetFileLogTransportForTests,
-  setAppenderForTests: setFileLogAppenderForTests,
-  setMaxQueuedRecordsForTests: setFileLogQueueMaxRecordsForTests,
-};
+// Source backends and compiled worker carriers must enqueue and flush through one owner.
+export const fileLogTransport = resolveGlobalSingleton(
+  Symbol.for("openclaw.fileLogTransport"),
+  () => {
+    // Production rescues logs from other exit listeners; tests install hooks when logging starts.
+    if (process.env.VITEST !== "true") {
+      installProcessHooks();
+    }
+    return {
+      drainSync: drainFileLogQueueSync,
+      enqueue: enqueueFileLog,
+      flush: flushFileLogQueue,
+    };
+  },
+);

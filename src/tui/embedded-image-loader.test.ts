@@ -1,20 +1,26 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import * as managedMedia from "../gateway/managed-image-attachments.js";
 import * as sessionAgent from "../gateway/session-request-agent.js";
-import * as sessions from "../gateway/session-utils.js";
+import * as sessions from "../gateway/session-utils-store-worker.js";
 import { loadEmbeddedImage } from "./embedded-image-loader.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  vi.restoreAllMocks();
+});
 
 it("keeps a cancelled local image load pending until the thumbnail owner settles", async () => {
+  setRuntimeConfigSnapshot({});
   const sessionKey = "agent:main:images";
   const attachmentId = "11111111-1111-4111-8111-111111111111";
   vi.spyOn(sessionAgent, "resolveRequestedSessionAgentId").mockReturnValue({
     ok: true,
     agentId: "main",
   });
-  vi.spyOn(sessions, "loadGatewaySessionEntryReadOnly").mockReturnValue({
+  vi.spyOn(sessions, "loadGatewaySessionEntryReadOnlyInWorker").mockResolvedValue({
     cfg: {},
     agentId: "main",
     canonicalKey: sessionKey,
@@ -24,14 +30,8 @@ it("keeps a cancelled local image load pending until the thumbnail owner settles
     storeKeys: [sessionKey],
     legacyKey: undefined,
   });
-  let completeThumbnail!: (value: Buffer) => void;
-  const thumbnail = new Promise<Buffer>((resolve) => {
-    completeThumbnail = resolve;
-  });
-  let startThumbnail!: () => void;
-  const started = new Promise<void>((resolve) => {
-    startThumbnail = resolve;
-  });
+  const { promise: thumbnail, resolve: completeThumbnail } = createDeferred<Buffer>();
+  const { promise: started, resolve: startThumbnail } = createDeferred();
   vi.spyOn(managedMedia, "readManagedOutgoingImageThumbnail").mockImplementation(() => {
     startThumbnail();
     return thumbnail;

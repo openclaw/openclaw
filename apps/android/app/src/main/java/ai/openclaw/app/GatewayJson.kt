@@ -1,6 +1,8 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -22,3 +24,5 @@ internal fun JsonObject?.nonBlankString(key: String): String? =
     ?.takeIf(String::isNotEmpty)
 
 internal fun JsonObject?.long(key: String): Long? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toLongOrNull()
+
+internal inline fun <T : Any> JsonArray?.mapObjects(transform: (JsonObject) -> T?): List<T> = this?.mapNotNull { item -> item.asObjectOrNull()?.let(transform) }.orEmpty()

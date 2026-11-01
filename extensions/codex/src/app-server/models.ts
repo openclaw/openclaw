@@ -1,13 +1,22 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { floorPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeOptionalString,
   normalizeUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CodexAppServerAuthRequirement } from "./auth-bridge.js";
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-profile.js";
+import type { CodexAppServerAuthRequirement } from "./auth-types.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { assertCodexModelListResponse } from "./protocol-validators.js";
 import type { CodexModel } from "./protocol.js";
 import type { CodexAppServerScopedRequest } from "./request.js";
+
+const loadSharedClient = createLazyRuntimeModule(() => import("./shared-client.js"));
+const loadRequest = createLazyRuntimeModule(() => import("./request.js"));
+
+type CyberAccessProgram = NonNullable<
+  import("openclaw/plugin-sdk/provider-catalog-shared").ProviderCatalogOutcome["modelAccessPrograms"]
+>[number]["cyber"][number];
 
 // Allow Codex's five-second remote catalog refresh to finish or fall back,
 // with headroom for client acquisition, response transit, and account/read.
@@ -23,6 +32,7 @@ export type CodexAppServerModel = {
   inputModalities: string[];
   supportedReasoningEfforts: string[];
   serviceTiers?: string[];
+  availableAccessPrograms?: { cyber: CyberAccessProgram[] };
   defaultReasoningEffort?: string;
   multiAgentVersion?: "disabled" | "v1" | "v2" | null;
 };
@@ -45,7 +55,6 @@ type CodexAppServerListModelsOptions = {
   authRequirement?: CodexAppServerAuthRequirement;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
-  sharedClient?: boolean;
 };
 
 export async function listCodexAppServerModels(
@@ -59,22 +68,20 @@ export async function listCodexAppServerModels(
 export async function listAllCodexAppServerModels(
   options: CodexAppServerListModelsOptions & { maxPages?: number } = {},
 ): Promise<CodexAppServerModelListResult> {
-  const maxPages = normalizeMaxPages(options.maxPages);
+  const maxPages = floorPositiveFiniteNumber(options.maxPages) ?? 20;
   return await withCodexAppServerModelRequest(options, async (request) => {
     const models: CodexAppServerModel[] = [];
-    let cursor = options.cursor;
     let nextCursor: string | undefined;
     for (let page = 0; page < maxPages; page += 1) {
       const result = await requestModelListPage(request, {
         ...options,
-        cursor,
+        cursor: page === 0 ? options.cursor : nextCursor,
       });
       models.push(...result.models);
       nextCursor = result.nextCursor;
       if (!nextCursor) {
         return { models };
       }
-      cursor = nextCursor;
     }
     return { models, nextCursor, truncated: true };
   });
@@ -88,19 +95,12 @@ async function withCodexAppServerModelRequest<T>(
     return await run(options.request);
   }
   const timeoutMs = options.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS;
-  const useSharedClient = options.sharedClient !== false;
-  const {
-    createIsolatedCodexAppServerClient,
-    getLeasedSharedCodexAppServerClient,
-    releaseLeasedSharedCodexAppServerClient,
-  } = await import("./shared-client.js");
-  const { requestCodexAppServerClientJson } = await import("./request.js");
-  const acquireClient = useSharedClient
-    ? getLeasedSharedCodexAppServerClient
-    : createIsolatedCodexAppServerClient;
+  const { getLeasedSharedCodexAppServerClient, releaseLeasedSharedCodexAppServerClient } =
+    await loadSharedClient();
+  const { requestCodexAppServerClientJson } = await loadRequest();
   // Standalone listing retains the initialize diagnostic and per-page budget;
   // catalog/account callers supply their shared operation scope above.
-  const client = await acquireClient({
+  const client = await getLeasedSharedCodexAppServerClient({
     startOptions: options.startOptions,
     timeoutMs,
     authProfileId: options.authProfileId,
@@ -113,11 +113,7 @@ async function withCodexAppServerModelRequest<T>(
       requestCodexAppServerClientJson({ ...request, client, timeoutMs, config: options.config }),
     );
   } finally {
-    if (useSharedClient) {
-      releaseLeasedSharedCodexAppServerClient(client);
-    } else {
-      await client.closeAndWait();
-    }
+    releaseLeasedSharedCodexAppServerClient(client);
   }
 }
 
@@ -139,7 +135,7 @@ async function requestModelListPage(
 export function readModelListResult(value: unknown): CodexAppServerModelListResult {
   const response = assertCodexModelListResponse(value);
   const models = response.data.map(readCodexModel);
-  const nextCursor = response.nextCursor ?? undefined;
+  const nextCursor = response.nextCursor;
   return { models, ...(nextCursor ? { nextCursor } : {}) };
 }
 
@@ -160,8 +156,21 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
     ...(displayName ? { displayName } : {}),
     ...(description ? { description } : {}),
     hidden: value.hidden,
+    ...(value.availableAccessPrograms
+      ? {
+          availableAccessPrograms: {
+            cyber: value.availableAccessPrograms.cyber.map((program) =>
+              program === "daybreakBlue"
+                ? "daybreak_blue"
+                : program === "daybreakRed"
+                  ? "daybreak_red"
+                  : "standard",
+            ),
+          },
+        }
+      : {}),
     isDefault: value.isDefault,
-    inputModalities: value.inputModalities,
+    inputModalities: value.inputModalities ?? ["text", "image"],
     serviceTiers: normalizeUniqueTrimmedStringList(
       (value.serviceTiers ?? []).map((tier) => tier.id),
     ),
@@ -173,8 +182,4 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
       ? { multiAgentVersion: value.multiAgentVersion }
       : {}),
   };
-}
-
-function normalizeMaxPages(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 20;
 }

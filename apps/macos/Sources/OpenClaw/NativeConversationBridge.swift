@@ -366,6 +366,7 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
     func webView(_ webView: WKWebView, didFail _: WKNavigation!, withError error: Error) {
         guard webView === self.document.webView else { return }
         let failure = error as NSError
+        if self.document.consumeDownloadPolicyInterruption(failure) { return }
         guard failure.domain != NSURLErrorDomain || failure.code != NSURLErrorCancelled else { return }
         self.fail(error.localizedDescription)
     }
@@ -391,6 +392,10 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
         decidePolicyFor navigationResponse: WKNavigationResponse,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void)
     {
+        if self.document.shouldDownload(navigationResponse) {
+            decisionHandler(.download)
+            return
+        }
         if navigationResponse.isForMainFrame, let response = navigationResponse.response as? HTTPURLResponse,
            response.statusCode >= 400
         {
@@ -399,6 +404,14 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
             return
         }
         decisionHandler(.allow)
+    }
+
+    func webView(_: WKWebView, navigationAction _: WKNavigationAction, didBecome download: WKDownload) {
+        self.document.adoptDownload(download)
+    }
+
+    func webView(_: WKWebView, navigationResponse _: WKNavigationResponse, didBecome download: WKDownload) {
+        self.document.adoptDownload(download)
     }
 
     func webView(
@@ -424,6 +437,17 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
         self.document.authenticationChallenge(
             challenge,
             completionHandler: completionHandler)
+    }
+
+    /// WebKit defaults to prompting when this delegate method is absent.
+    func webView(
+        _: WKWebView,
+        requestMediaCapturePermissionFor _: WKSecurityOrigin,
+        initiatedByFrame _: WKFrameInfo,
+        type _: WKMediaCaptureType,
+        decisionHandler: @escaping @MainActor @Sendable (WKPermissionDecision) -> Void)
+    {
+        decisionHandler(ControlUIDocumentHost.mediaCaptureDecision(.prompt))
     }
 
     func webView(
@@ -461,7 +485,7 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
             for: navigationAction.request.url,
             sourceIsNativeReadingTab: false)
         {
-            NSWorkspace.shared.open(url)
+            AppActivation.shared.open(url)
         }
         return nil
     }

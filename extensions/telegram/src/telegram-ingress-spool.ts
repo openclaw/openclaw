@@ -10,16 +10,12 @@ const TELEGRAM_SPOOLED_COMPLETION_RETRY_POLICY: BackoffPolicy = {
   jitter: 0.2,
 };
 
-function isValidUpdateId(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
 export function resolveTelegramUpdateId(update: unknown): number | null {
   if (!update || typeof update !== "object") {
     return null;
   }
   const value = (update as { update_id?: unknown }).update_id;
-  return isValidUpdateId(value) ? value : null;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 export function telegramQueueEventId(updateId: number): string {

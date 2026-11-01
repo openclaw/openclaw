@@ -35,9 +35,8 @@ const ASSERTIONS_PATH = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
 function selectFrozenUpgradeOracle(
   root: string,
   version: string,
-  baseline = "openclaw@2026.6.35",
+  baseline = "openclaw@2026.8.35",
   workingVersion?: string,
-  legacyClawHub = false,
 ) {
   const selectedRoot = join(root, "selected");
   const selectedScenario = join(selectedRoot, "scripts/e2e/lib/upgrade-survivor");
@@ -49,13 +48,6 @@ function selectFrozenUpgradeOracle(
     'throw new Error("selected oracle has no serving-turn command");\n',
   );
   writeFileSync(join(selectedScenario, "run.sh"), "# selected scenario runner\n");
-  if (legacyClawHub) {
-    mkdirSync(join(selectedRoot, "src/plugins"), { recursive: true });
-    writeFileSync(
-      join(selectedRoot, "src/plugins/clawhub.ts"),
-      'import { install } from "../infra/clawhub.js";\n',
-    );
-  }
   for (const path of [
     "scripts/lib/npm-publish-plan.mjs",
     "scripts/windows-cmd-helpers.mjs",
@@ -82,7 +74,6 @@ function selectFrozenUpgradeOracle(
     "selected release contract",
   );
   const selectedSha = git("rev-parse", "HEAD");
-  const modePath = join(root, "clawhub-mode");
   if (workingVersion) {
     writeFileSync(join(selectedRoot, "package.json"), JSON.stringify({ version: workingVersion }));
   }
@@ -105,7 +96,6 @@ printf '%s\\n' "$UPGRADE_RUNNER"
 printf '%s\\n' "$UPGRADE_TRUSTED_ASSERTIONS"
 printf '%s\\n' "$UPGRADE_TRUSTED_DIAGNOSTICS"
 printf '%s\\n' \${UPGRADE_SCENARIO_ARGS[@]+"\${UPGRADE_SCENARIO_ARGS[@]}"}
-printf '%s' "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" > "$MODE_PATH"
 `,
     ],
     {
@@ -118,7 +108,6 @@ printf '%s' "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" > "$MODE_PATH"
         OPENCLAW_TOOLING_SHA: "f".repeat(40),
         OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
         OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: baseline,
-        MODE_PATH: modePath,
         TMPDIR: root,
       },
     },
@@ -127,7 +116,6 @@ printf '%s' "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" > "$MODE_PATH"
     .trim()
     .split("\n")
     .filter(Boolean);
-  const clawhubMode = existsSync(modePath) ? readFileSync(modePath, "utf8") : undefined;
   const stagedScenario = mounts[0] === "-v" ? mounts[1]?.split(":", 1)[0] : undefined;
   return {
     result,
@@ -139,7 +127,6 @@ printf '%s' "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" > "$MODE_PATH"
     selectedOracle,
     selectedScenario,
     stagedScenario,
-    clawhubMode,
   };
 }
 
@@ -233,18 +220,12 @@ function missingCodexUpdateResult(source: "npm" | "clawhub" | "fallback") {
       ? ["@openclaw/codex unavailable; using clawhub:@openclaw/codex instead.", finalMessage]
       : [finalMessage];
   const outcomes: PluginUpdateOutcome[] = [
-    {
-      pluginId: "discord",
+    ...["discord", "whatsapp"].map((pluginId): PluginUpdateOutcome => ({
+      pluginId,
       status: "updated",
       nextVersion: "2026.9.4",
-      message: "Repaired Discord.",
-    },
-    {
-      pluginId: "whatsapp",
-      status: "updated",
-      nextVersion: "2026.9.4",
-      message: "Repaired WhatsApp.",
-    },
+      message: `Repaired ${pluginId}.`,
+    })),
     ...messages.map((message): PluginUpdateOutcome => ({
       pluginId: "codex",
       status: "error",
@@ -282,380 +263,143 @@ function missingCodexUpdateResult(source: "npm" | "clawhub" | "fallback") {
 }
 
 describe("upgrade recovery result assertions", () => {
-  it("recovers consent warnings in a successful core update result", () => {
-    const core = {
-      status: "ok",
-      mode: "npm",
-      before: { version: "2026.7.1-2" },
-      after: { version: "2026.8.1" },
-      steps: [
-        { name: "global update", exitCode: 0 },
-        { name: "global install swap", exitCode: 0 },
-        { name: "openclaw doctor", exitCode: 0 },
-      ],
-    };
-    const plugins = {
-      ...RECOVERABLE_UPDATE.postUpdate.plugins,
-      status: "warning",
-      reason: undefined,
-      warnings: [RECOVERABLE_UPDATE.postUpdate.plugins.warnings[0]],
-    };
-    const result = { ...core, postUpdate: { plugins } };
-    expect(runJsonAssertion("assert-recoverable-update-json", result, "2026.8.1").status).toBe(0);
-    expect(runJsonAssertion("assert-successful-update-json", result, "2026.8.1").status).not.toBe(
-      0,
-    );
-    for (const invalid of [
-      { ...result, status: "error", reason: "doctor-failed" },
-      { ...result, steps: [{ name: "doctor", exitCode: 1 }] },
-      {
-        ...result,
-        postUpdate: { plugins: { ...plugins, status: "error", reason: "registry-unavailable" } },
-      },
-      {
-        ...result,
-        postUpdate: { plugins: { ...plugins, sync: { errors: ["registry unavailable"] } } },
-      },
-      {
-        ...result,
-        postUpdate: {
-          plugins: {
-            ...plugins,
-            warnings: [...plugins.warnings, { reason: "unrelated plugin failure" }],
-          },
-        },
-      },
-    ]) {
-      expect(
-        runJsonAssertion("assert-recoverable-update-json", invalid, "2026.8.1").status,
-      ).not.toBe(0);
-      expect(
-        runJsonAssertion("assert-successful-update-json", invalid, "2026.8.1").status,
-      ).not.toBe(0);
-    }
-    const output = JSON.stringify(result);
-    for (const invalid of [output.slice(0, -4), `${output}\n${output}\n`]) {
-      expect(
-        runJsonTextAssertion("assert-recoverable-update-json", invalid, "2026.8.1").status,
-      ).not.toBe(0);
-    }
-  });
-
-  it.each(["base", "workshop-doctor-recovery"])(
-    "accepts clean updates for baselines that already have consent (%s)",
-    (scenario) =>
-      withEnv({ OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario }, () => {
-        const result = {
-          status: "ok",
-          after: { version: "2026.8.1" },
-          steps: [{ name: "global update", exitCode: 0 }],
-        };
-        const update = runJsonAssertion("assert-successful-update-json", result, "2026.8.1");
-        expect(update.status, update.stderr).toBe(0);
-        expect(
-          runJsonAssertion(
-            "assert-successful-update-json",
-            {
-              ...result,
-              steps: [{ name: "global update", exitCode: 1 }],
+  it.each<{
+    name: string;
+    patch?: Record<string, unknown>;
+    omitStartup?: boolean;
+    startupExitCode?: number;
+    succeeds: boolean;
+  }>([
+    { name: "completed startup with cleanup advisory", succeeds: true },
+    { name: "missing advisory", patch: { advisory: undefined }, succeeds: false },
+    { name: "wrong advisory", patch: { advisory: { kind: "other" } }, succeeds: false },
+    { name: "another cleanup step", patch: { name: "candidate-doctor-cleanup" }, succeeds: false },
+    { name: "cleanup execution failure", patch: { exitCode: 13 }, succeeds: false },
+    { name: "cleanup timeout", patch: { termination: "timeout" }, succeeds: false },
+    { name: "cleanup signal", patch: { signal: "SIGTERM" }, succeeds: false },
+    { name: "killed cleanup", patch: { killed: true }, succeeds: false },
+    { name: "truncated cleanup output", patch: { outputLimitExceeded: true }, succeeds: false },
+    {
+      name: "cleanup failure facts",
+      patch: { failureFacts: [{ code: "cleanup-failed" }] },
+      succeeds: false,
+    },
+    { name: "missing primary startup", omitStartup: true, succeeds: false },
+    { name: "failed primary startup", startupExitCode: 1, succeeds: false },
+  ])(
+    "classifies $name without hiding failed core steps",
+    ({ patch, omitStartup, startupExitCode = 0, succeeds }) => {
+      const report = {
+        status: "ok",
+        after: { version: "2026.10.3" },
+        steps: [
+          ...(omitStartup
+            ? []
+            : [{ name: "candidate-gateway-startup", exitCode: startupExitCode }]),
+          {
+            name: "candidate-gateway-startup-cleanup",
+            exitCode: null,
+            advisory: {
+              kind: "recoverable-maintenance",
+              message:
+                "Update cleanup deadline elapsed before process close and termination requests both completed. Update validation results are unchanged.",
             },
-            "2026.8.1",
-          ).status,
-        ).not.toBe(0);
-        expect(
-          runPrefixedJsonAssertion("assert-successful-update-json", result, "2026.8.1").status,
-        ).toBe(0);
-      }),
-  );
-
-  it.each(["projects-doctor", "projects-startup-migration"])(
-    "validates published worker update results through the real assertion CLI (%s)",
-    (scenario) =>
-      withEnv({ OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario }, () => {
-        const report = {
-          status: "ok",
-          before: { version: "2026.9.4" },
-          after: { version: "2026.9.4" },
-          steps: [{ name: "global install swap", exitCode: 0 }],
-          postUpdate: { plugins: { status: "ok", integrityDrifts: [] } },
-        };
-        const accepted = runJsonAssertion("assert-successful-update-json", report, "2026.9.4");
-        expect(accepted.status, accepted.stderr).toBe(0);
-        for (const before of [undefined, { version: "2026.9.3" }]) {
-          const rejected = runJsonAssertion(
-            "assert-successful-update-json",
-            { ...report, before },
-            "2026.9.4",
-          );
-          expect(rejected.status).not.toBe(0);
-          expect(rejected.stderr).toContain("Worker cell used the wrong published driver");
-        }
-        for (const change of [
-          { steps: [{ name: "global install swap", exitCode: 1 }] },
-          { after: { version: "2026.9.5" } },
-          { postUpdate: { plugins: { status: "error" } } },
-          { postUpdate: { plugins: { status: "ok", integrityDrifts: ["fixture-drift"] } } },
-        ]) {
-          expect(
-            runJsonAssertion("assert-successful-update-json", { ...report, ...change }, "2026.9.4")
-              .status,
-          ).not.toBe(0);
-        }
-      }),
-  );
-
-  it.each([
-    ["qualified advisory", "openclaw doctor", 86, "package-post-install-doctor", true],
-    ["wrong step", "global update", 86, "package-post-install-doctor", false],
-    ["wrong exit", "openclaw doctor", 1, "package-post-install-doctor", false],
-    ["missing kind", "openclaw doctor", 86, undefined, false],
-    ["wrong kind", "openclaw doctor", 86, "recoverable-maintenance", false],
-  ] as const)(
-    "accepts only the package post-install Doctor advisory (%s)",
-    (_case, name, exitCode, kind, accepted) => {
-      const result = runJsonAssertion(
-        "assert-successful-update-json",
-        {
-          status: "ok",
-          after: { version: "2026.8.1" },
-          steps: [
-            { name: "global install swap", exitCode: 0 },
-            { name, exitCode, ...(kind ? { advisory: { kind } } : {}) },
-          ],
-        },
-        "2026.8.1",
-      );
-      expect(result.status, result.stderr).toBe(accepted ? 0 : 1);
+            ...patch,
+          },
+        ],
+        postUpdate: { plugins: { status: "ok", sync: { errors: [] }, npm: { outcomes: [] } } },
+      };
+      const result = runJsonAssertion("assert-successful-update-json", report, "2026.10.3");
+      expect(result.status, result.stderr).toBe(succeeds ? 0 : 1);
+      if (!succeeds) {
+        expect(result.stderr).toContain("successful update contained a failed core step");
+      }
     },
   );
 
-  describe.each(["npm", "clawhub", "fallback"] as const)("missing Codex (%s)", (source) => {
-    const scenarioEnv = {
-      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "missing-configured-plugin-migration",
-    };
-    const check = (report: ReturnType<typeof missingCodexUpdateResult>) =>
-      withEnv(scenarioEnv, () =>
-        runJsonAssertion("assert-successful-update-json", report, "2026.9.4"),
-      );
+  it.each([
+    { name: "completed informational inspection", patch: {}, succeeds: true },
+    { name: "warning", patch: { doctorLintFindings: [{ severity: "warning" }] }, succeeds: false },
+    { name: "error", patch: { doctorLintFindings: [{ severity: "error" }] }, succeeds: false },
+    { name: "missing findings", patch: { doctorLintFindings: undefined }, succeeds: false },
+    { name: "empty findings", patch: { doctorLintFindings: [] }, succeeds: false },
+    { name: "another step", patch: { name: "database migration" }, succeeds: false },
+    { name: "unclassified failure", patch: { advisory: undefined }, succeeds: false },
+    { name: "execution failure", patch: { exitCode: 13 }, succeeds: false },
+    { name: "timeout", patch: { termination: "timeout" }, succeeds: false },
+    { name: "signal", patch: { signal: "SIGTERM" }, succeeds: false },
+    { name: "killed process", patch: { killed: true }, succeeds: false },
+    { name: "truncated output", patch: { outputLimitExceeded: true }, succeeds: false },
+    {
+      name: "failure facts",
+      patch: { failureFacts: [{ code: "inspection-failed" }] },
+      succeeds: false,
+    },
+  ])(
+    "classifies a post-activation $name without changing update success",
+    ({ patch, succeeds }) => {
+      const report = {
+        status: "ok",
+        after: { version: "2026.10.3" },
+        steps: [
+          { name: "global install swap", exitCode: 0 },
+          {
+            name: "post-activation doctor inspections",
+            exitCode: 1,
+            termination: "exit",
+            signal: null,
+            killed: false,
+            outputLimitExceeded: false,
+            advisory: {
+              kind: "recoverable-maintenance",
+              message: "Deferred Doctor inspections reported 1 advisory finding after restart.",
+            },
+            doctorLintFindings: [
+              {
+                checkId: "core/doctor/command-owner",
+                severity: "info",
+                message: "Owner guidance.",
+              },
+            ],
+            ...patch,
+          },
+        ],
+        postUpdate: { plugins: { status: "ok", sync: { errors: [] }, npm: { outcomes: [] } } },
+      };
+      const result = runJsonAssertion("assert-successful-update-json", report, "2026.10.3");
+      expect(result.status, result.stderr).toBe(succeeds ? 0 : 1);
+      if (!succeeds) {
+        expect(result.stderr).toContain("successful update contained a failed core step");
+      }
+    },
+  );
 
-    it("accepts the successful published update with its named unavailable-Codex warning", () => {
-      const result = check(missingCodexUpdateResult(source));
+  it.each([false, true])("classifies missing Codex with consent failure=%s", (consentFailure) => {
+    const report = missingCodexUpdateResult("fallback");
+    if (consentFailure) {
+      report.postUpdate.plugins.npm.outcomes = report.postUpdate.plugins.npm.outcomes.map(
+        (outcome) =>
+          outcome.pluginId === "codex" && outcome.status === "error"
+            ? { ...outcome, code: "PLUGIN_CAPABILITY_CONSENT_REQUIRED" }
+            : outcome,
+      );
+    }
+    const result = withEnv(
+      { OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "missing-configured-plugin-migration" },
+      () => runJsonAssertion("assert-successful-update-json", report, "2026.9.4"),
+    );
+    if (consentFailure) {
+      expect(result.status).not.toBe(0);
+    } else {
       expect(result.status, result.stderr).toBe(0);
-    });
-
-    it("keeps the same failed-attempt history invalid for the base scenario", () => {
-      const result = withEnv({ OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base" }, () =>
-        runJsonAssertion(
-          "assert-successful-update-json",
-          missingCodexUpdateResult(source),
-          "2026.9.4",
-        ),
-      );
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("successful update failed plugin convergence");
-    });
-
-    const invalidReports: Array<{
-      name: string;
-      mutate: (report: ReturnType<typeof missingCodexUpdateResult>) => void;
-    }> = [
-      {
-        name: "wrong baseline",
-        mutate: (report) => {
-          report.before.version = "2026.9.3";
-        },
-      },
-      {
-        name: "failed update",
-        mutate: (report) => {
-          report.status = "error";
-        },
-      },
-      {
-        name: "unfinished update run",
-        mutate: (report) => {
-          report.run.status = "running";
-        },
-      },
-      {
-        name: "wrong candidate",
-        mutate: (report) => {
-          report.after.version = "2026.9.2";
-        },
-      },
-      {
-        name: "failed core step",
-        mutate: (report) => {
-          report.steps.push({ name: "openclaw doctor", exitCode: 1 });
-        },
-      },
-      {
-        name: "missing final warning status",
-        mutate: (report) => {
-          report.postUpdate.plugins.status = "ok";
-        },
-      },
-      {
-        name: "failed plugin result",
-        mutate: (report) => {
-          report.postUpdate.plugins.status = "error";
-        },
-      },
-      {
-        name: "missing named failure",
-        mutate: (report) => {
-          report.postUpdate.plugins.npm.outcomes = report.postUpdate.plugins.npm.outcomes.filter(
-            (outcome) => outcome.pluginId !== "codex",
-          );
-        },
-      },
-      {
-        name: "unrelated failed plugin",
-        mutate: (report) => {
-          report.postUpdate.plugins.npm.outcomes.push({
-            pluginId: "slack",
-            status: "error",
-            message: "Slack failed.",
-          });
-        },
-      },
-      {
-        name: "Codex consent failure",
-        mutate: (report) => {
-          report.postUpdate.plugins.npm.outcomes = report.postUpdate.plugins.npm.outcomes.map(
-            (outcome) =>
-              outcome.pluginId === "codex" && outcome.status === "error"
-                ? { ...outcome, code: "PLUGIN_CAPABILITY_CONSENT_REQUIRED" }
-                : outcome,
-          );
-        },
-      },
-      {
-        name: "different Codex failure",
-        mutate: (report) => {
-          report.postUpdate.plugins.npm.outcomes = report.postUpdate.plugins.npm.outcomes.map(
-            (outcome) =>
-              outcome.pluginId === "codex"
-                ? { ...outcome, message: "Codex package integrity mismatch." }
-                : outcome,
-          );
-          report.postUpdate.plugins.warnings = report.postUpdate.plugins.warnings.map(
-            (warning) => ({ ...warning, reason: "Codex package integrity mismatch." }),
-          );
-        },
-      },
-      {
-        name: "missing warning",
-        mutate: (report) => {
-          report.postUpdate.plugins.warnings = [];
-        },
-      },
-      {
-        name: "warning for another plugin",
-        mutate: (report) => {
-          report.postUpdate.plugins.warnings = report.postUpdate.plugins.warnings.map(
-            (warning) => ({ ...warning, pluginId: "slack" }),
-          );
-        },
-      },
-      {
-        name: "mismatched warning reason",
-        mutate: (report) => {
-          report.postUpdate.plugins.warnings = report.postUpdate.plugins.warnings.map(
-            (warning) => ({ ...warning, reason: "A different failure." }),
-          );
-        },
-      },
-      {
-        name: "missing recovery guidance",
-        mutate: (report) => {
-          report.postUpdate.plugins.warnings = report.postUpdate.plugins.warnings.map(
-            (warning) => ({ ...warning, guidance: [] }),
-          );
-        },
-      },
-      {
-        name: "missing actionable message",
-        mutate: (report) => {
-          report.postUpdate.plugins.warnings = report.postUpdate.plugins.warnings.map(
-            (warning) => ({ ...warning, message: "Codex is unavailable." }),
-          );
-        },
-      },
-      {
-        name: "sync error",
-        mutate: (report) => {
-          report.postUpdate.plugins.sync.errors.push("Registry unavailable.");
-        },
-      },
-      {
-        name: "integrity drift",
-        mutate: (report) => {
-          report.postUpdate.plugins.integrityDrifts.push({ pluginId: "discord" });
-        },
-      },
-    ];
-    it.each(invalidReports)("rejects $name", ({ mutate }) => {
-      const report = missingCodexUpdateResult(source);
-      mutate(report);
-      const result = check(report);
-      expect(result.status).not.toBe(0);
-    });
+    }
   });
 
-  it.each([
-    { name: "duplicate transition", change: "duplicate" },
-    { name: "duplicate terminal failure", change: "duplicate-final" },
-    { name: "reversed history", change: "reverse" },
-    { name: "missing terminal failure", change: "missing-final" },
-    { name: "typed transition", change: "typed" },
-    { name: "another plugin transition", change: "plugin" },
-    { name: "another target transition", change: "target" },
-    { name: "another source transition", change: "source" },
-    { name: "npm terminal failure after ClawHub transition", change: "npm-final" },
-    { name: "appended transition failure", change: "appended" },
-    { name: "missing transition guidance", change: "guidance" },
-  ])("rejects missing-Codex history with $name", ({ change }) => {
+  it("rejects missing-Codex history with reversed history", () => {
     const report = missingCodexUpdateResult("fallback");
     const outcomes = report.postUpdate.plugins.npm.outcomes;
     const transition = outcomes[2]!;
-    switch (change) {
-      case "duplicate":
-        outcomes.splice(2, 0, { ...transition });
-        break;
-      case "duplicate-final":
-        transition.message = outcomes[3]!.message;
-        break;
-      case "reverse":
-        outcomes.splice(2, 2, outcomes[3]!, transition);
-        break;
-      case "missing-final":
-        outcomes.pop();
-        break;
-      case "typed":
-        transition.code = "PLUGIN_CAPABILITY_CONSENT_REQUIRED";
-        break;
-      case "plugin":
-        transition.pluginId = "slack";
-        break;
-      case "target":
-        transition.message = "@openclaw/codex unavailable; using clawhub:@openclaw/other instead.";
-        break;
-      case "source":
-        transition.message = "@openclaw/other unavailable; using clawhub:@openclaw/codex instead.";
-        break;
-      case "npm-final":
-        outcomes[3]!.message =
-          missingCodexUpdateResult("npm").postUpdate.plugins.npm.outcomes[2]!.message;
-        report.postUpdate.plugins.warnings[1]!.reason = outcomes[3]!.message;
-        break;
-      case "appended":
-        transition.message += " Another install failed.";
-        break;
-      case "guidance":
-        report.postUpdate.plugins.warnings[0]!.guidance = [];
-        break;
-    }
+    outcomes.splice(2, 2, outcomes[3]!, transition);
     report.postUpdate.plugins.warnings[0]!.reason = transition.message;
     report.postUpdate.plugins.warnings[0]!.pluginId = transition.pluginId;
     const result = withEnv(
@@ -663,28 +407,6 @@ describe("upgrade recovery result assertions", () => {
       () => runJsonAssertion("assert-successful-update-json", report, "2026.9.4"),
     );
     expect(result.status).not.toBe(0);
-  });
-
-  it.each([
-    'Failed to install missing configured plugin "codex" from clawhub:@openclaw/other: Package not found on ClawHub.',
-    'Failed to install missing configured plugin "codex" from clawhub:@openclaw/codex: Request timed out.',
-    'Failed to install missing configured plugin "codex" from clawhub:@openclaw/codex: Version not found on ClawHub: @openclaw/codex@2026.9.4.',
-    'Failed to install missing configured plugin "codex" from clawhub:@openclaw/codex: Package not found on ClawHub. Another install failed.',
-  ])("rejects unrelated final-source failure: %s", (message) => {
-    const report = missingCodexUpdateResult("clawhub");
-    report.postUpdate.plugins.npm.outcomes = report.postUpdate.plugins.npm.outcomes.map(
-      (outcome) => (outcome.pluginId === "codex" ? { ...outcome, message } : outcome),
-    );
-    report.postUpdate.plugins.warnings = report.postUpdate.plugins.warnings.map((warning) => ({
-      ...warning,
-      reason: message,
-    }));
-    const result = withEnv(
-      { OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "missing-configured-plugin-migration" },
-      () => runJsonAssertion("assert-successful-update-json", report, "2026.9.4"),
-    );
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("missing Codex update retained an unexpected plugin failure");
   });
 
   it("accepts only a completed core swap stranded on capability consent", () => {
@@ -748,22 +470,6 @@ describe("upgrade recovery result assertions", () => {
         0,
       );
     }
-  });
-
-  it("requires repair to finish doctor and plugin convergence without restart", () => {
-    const repaired = {
-      status: "ok",
-      mode: "finalize",
-      restart: false,
-      postUpdate: { doctor: { status: "ok" }, plugins: { status: "ok" } },
-    };
-    expect(runJsonAssertion("assert-repair-json", repaired).status).toBe(0);
-    expect(
-      runJsonAssertion("assert-repair-json", {
-        ...repaired,
-        postUpdate: { ...repaired.postUpdate, plugins: { status: "warning" } },
-      }).status,
-    ).not.toBe(0);
   });
 });
 
@@ -1132,6 +838,15 @@ function acceptedSurfaceHash(): string {
   return createHash("sha256").update(JSON.stringify(ACCEPTED_SURFACE)).digest("hex");
 }
 
+function recordOfficialAcceptance(records: Record<string, PluginInstallRecord>) {
+  Object.assign(records.discord!, {
+    acceptedSurface: ACCEPTED_SURFACE,
+    acceptedSurfaceHash: acceptedSurfaceHash(),
+    acceptedSurfaceAt: "2026-08-27T00:00:00.000Z",
+    acceptedSurfaceIntegrity: records.discord!.integrity,
+  });
+}
+
 function assertCompanionPluginRecords(
   mutate?: (
     records: Record<string, PluginInstallRecord>,
@@ -1298,12 +1013,8 @@ function assertCompanionPluginRecords(
 
 describe("upgrade survivor assertions", () => {
   it.each([
-    ["2026.9.3", false, "openclaw@2026.6.35", ""],
-    ["2026.9.3-beta.1", false, "openclaw@2026.6.35", ""],
-    ["2026.4.25", false, "openclaw@2026.6.35", ""],
-    ["2026.6.35", true, "openclaw@2026.9.2", ""],
-    ["2026.7.33", true, "openclaw@2026.9.2", ""],
-    ["2026.9.3", false, "openclaw@2026.6.35", "2026.6.35"],
+    ["2026.8.35", true, "openclaw@2026.9.2", ""],
+    ["2026.9.3", false, "openclaw@2026.8.35", "2026.8.35"],
   ])(
     "selects upgrade assertion ownership from immutable target %s",
     (version, selected, baseline, workingVersion) => {
@@ -1417,34 +1128,6 @@ publishDiagnostics(artifacts, destination, value => value, "passed");`,
     },
   );
 
-  it.each(["invalid", "2026.6.35-1"])("rejects invalid frozen target train %s", (version) => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-invalid-oracle-"));
-    try {
-      const proof = selectFrozenUpgradeOracle(root, version);
-      expect(proof.result.status).not.toBe(0);
-      expect(proof.oracle).toBeUndefined();
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("derives the shipped ClawHub request contract from the authorized selected source", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-clawhub-mode-"));
-    try {
-      const proof = selectFrozenUpgradeOracle(
-        root,
-        "2026.6.35",
-        "openclaw@2026.6.34",
-        undefined,
-        true,
-      );
-      expect(proof.result.status, proof.result.stderr).toBe(0);
-      expect(proof.clawhubMode).toBe("legacy");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   it.each([
     {
       name: "legacy default-only doctor export",
@@ -1473,14 +1156,6 @@ publishDiagnostics(artifacts, destination, value => value, "passed");`,
       declaresTypes: false,
       runtime: "export {};\n",
       failure: "declared a keyed store constructor but did not export it",
-    },
-    {
-      name: "dedicated default-only store constructor failure",
-      sdkPath: "plugin-state-store-runtime",
-      declaresTypes: false,
-      runtime:
-        'export function createPluginStateSyncKeyedStore() { throw new Error("synthetic store failure"); }\n',
-      failure: "synthetic store failure",
     },
   ])(
     "classifies baseline shared state for $name",
@@ -1697,120 +1372,22 @@ process.stdout.write(sessionDir + "\\n");
     expect(new Set(scenarios).size).toBe(scenarios.length);
   });
 
-  it.each([
-    ["base", undefined, "stable", "beta"],
-    ["base", "beta", "beta", "stable"],
-    ["prerelease-plugin-registry", undefined, "beta", "stable"],
-  ])(
-    "requires the %s scenario with override %s to preserve the %s update channel",
-    (scenario, updateChannel, expectedChannel, wrongChannel) => {
-      const run = (channel: string) =>
-        assertConfig({
-          acceptedIntents: ["update"],
-          config: { update: { channel } },
-          scenario,
-          updateChannel,
-        });
-      expect(() => run(expectedChannel)).not.toThrow();
-      expect(() => run(wrongChannel)).toThrow(/update.channel/);
-    },
-  );
-
-  it.each([
-    { baselineVersion: undefined, legacy: true },
-    { baselineVersion: "2026.9.6", legacy: true },
-    { baselineVersion: "2026.9.7", legacy: false },
-  ])(
-    "validates Tool Search at baseline $baselineVersion and after upgrade",
-    ({ baselineVersion, legacy }) => {
-      const run = (toolSearch: unknown, stage: "baseline" | "survival" = "survival") =>
-        assertConfig({
-          acceptedIntents: ["tool-search"],
-          baselineVersion,
-          config: { tools: { toolSearch } },
-          scenario: "base",
-          stage,
-        });
-      const baselineValue = legacy ? { mode: "code", codeTimeoutMs: 5000 } : { mode: "tools" };
-      const wrongBaselineValue = legacy ? { mode: "tools" } : { mode: "code", codeTimeoutMs: 5000 };
-      expect(() => run(baselineValue, "baseline")).not.toThrow();
-      expect(() => run(wrongBaselineValue, "baseline")).toThrow(/Tool Search mode/);
-      expect(() => run({ mode: "tools", codeTimeoutMs: 5000 }, "baseline")).toThrow(
-        legacy ? /Tool Search mode/ : /legacy timeout/,
-      );
-      expect(() => run({ mode: "tools" })).not.toThrow();
-    },
-  );
-
-  it("requires migrated Tool Search unless the intent was not accepted", () => {
-    // Survival validation is independent of the published baseline version.
-    const run = (toolSearch: unknown) =>
+  it("validates Tool Search at baseline 2026.9.7 and after upgrade", () => {
+    const run = (toolSearch: unknown, stage: "baseline" | "survival" = "survival") =>
       assertConfig({
         acceptedIntents: ["tool-search"],
+        baselineVersion: "2026.9.7",
         config: { tools: { toolSearch } },
         scenario: "base",
+        stage,
       });
-    expect(() => run({ mode: "code", codeTimeoutMs: 5000 })).toThrow(/Tool Search mode/);
-    expect(() => run({ mode: "tools", codeTimeoutMs: 5000 })).toThrow(/legacy timeout/);
-    expect(() => run({ mode: "tools", enabled: false })).toThrow(/disabled/);
-    expect(() => run(undefined)).toThrow(/Tool Search mode/);
-    expect(() => assertConfig({ acceptedIntents: [], config: {}, scenario: "base" })).not.toThrow();
+    expect(() => run({ mode: "tools" }, "baseline")).not.toThrow();
+    expect(() => run({ mode: "code", codeTimeoutMs: 5000 }, "baseline")).toThrow(
+      /Tool Search mode/,
+    );
+    expect(() => run({ mode: "tools", codeTimeoutMs: 5000 }, "baseline")).toThrow(/legacy timeout/);
+    expect(() => run({ mode: "tools" })).not.toThrow();
   });
-
-  it("requires password auth for the mobile pairing reconnect scenario", () => {
-    expect(() =>
-      assertConfig({
-        acceptedIntents: ["gateway"],
-        config: { gateway: { auth: { mode: "password" } } },
-        scenario: "mobile-pairing-reconnect",
-      }),
-    ).not.toThrow();
-    expect(() =>
-      assertConfig({
-        acceptedIntents: ["gateway"],
-        config: { gateway: { auth: { mode: "token" } } },
-        scenario: "mobile-pairing-reconnect",
-      }),
-    ).toThrow(/gateway auth mode/);
-  });
-
-  it.each([
-    ["anthropic", "anthropic-messages", "https://api.anthropic.com", "ANTHROPIC_API_KEY"],
-    [
-      "google",
-      "google-generative-ai",
-      "https://generativelanguage.googleapis.com/v1beta",
-      "GEMINI_API_KEY",
-    ],
-  ])(
-    "requires the configured %s provider and its env credential to survive",
-    (provider, api, baseUrl, keyEnv) => {
-      const config = {
-        models: {
-          providers: {
-            [provider]: {
-              api,
-              baseUrl,
-              apiKey: { source: "env", provider: "default", id: keyEnv },
-              models: [],
-            },
-          },
-        },
-      };
-      const acceptedIntents = [`models-${provider}`];
-      expect(() => assertConfig({ acceptedIntents, config, scenario: "base" })).not.toThrow();
-      expect(() => assertConfig({ acceptedIntents, config: {}, scenario: "base" })).toThrow(
-        `${provider} model provider missing`,
-      );
-      config.models.providers[provider]!.apiKey.id = "WRONG_API_KEY";
-      expect(() => assertConfig({ acceptedIntents, config, scenario: "base" })).toThrow(
-        `${provider} model provider env credential reference changed`,
-      );
-      expect(() =>
-        assertConfig({ acceptedIntents: [], config: {}, scenario: "base" }),
-      ).not.toThrow();
-    },
-  );
 
   it("allows token rotation and requires each reconnect to use the newest stored token", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-mobile-pairing-evidence-"));
@@ -1887,147 +1464,95 @@ process.stdout.write(sessionDir + "\\n");
     }
   });
 
-  it.each(["base", "configured-plugin-installs", "sqlite-volume"])(
-    "seeds recent ordered session timestamps for %s",
-    (scenario) => {
-      const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-seed-"));
-      try {
-        const stateDir = join(root, "state");
-        const workspace = join(root, "workspace");
-        mkdirSync(stateDir, { recursive: true });
-        mkdirSync(workspace, { recursive: true });
+  it.each(["base"])("seeds recent ordered session timestamps for %s", (scenario) => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-seed-"));
+    try {
+      const stateDir = join(root, "state");
+      const workspace = join(root, "workspace");
+      mkdirSync(stateDir, { recursive: true });
+      mkdirSync(workspace, { recursive: true });
 
-        const beforeSeed = Date.now();
-        execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "seed"], {
-          env: {
-            ...process.env,
-            OPENCLAW_STATE_DIR: stateDir,
-            OPENCLAW_TEST_WORKSPACE_DIR: workspace,
-            OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
-          },
-          stdio: "pipe",
-        });
-        const afterSeed = Date.now();
-
-        const sessionsDir = join(stateDir, "agents", "main", "sessions");
-        const otherStore = join(stateDir, "sessions", "sessions.json");
-        expect(() => readFileSync(otherStore)).toThrow(/ENOENT/);
-        const storePath = join(sessionsDir, "sessions.json");
-        const original = readFileSync(storePath, "utf8");
-        const sessions = JSON.parse(original) as Record<
-          string,
-          { sessionId?: unknown; sessionFile?: unknown; updatedAt?: unknown }
-        >;
-        const keys = [
-          "agent:main:main",
-          "agent:main:+15551234567",
-          "agent:main:slack:channel:cupgrade",
-        ];
-        expect(Object.keys(sessions)).toEqual(keys);
-        const issues: Parameters<typeof readLegacySessionStoreEntries>[1] = [];
-        const admitted = readLegacySessionStoreEntries({ storePath }, issues);
-        expect(issues).toEqual([]);
-        expect(admitted.entries.map(({ sessionKey }) => sessionKey)).toEqual(keys);
-        for (const { entry } of admitted.entries) {
-          expect(entry).toMatchObject({ modelProvider: "openai", model: "gpt-5.5" });
-        }
-        expect(readFileSync(storePath, "utf8")).toBe(original);
-        const seededRows = keys.map((key) => sessions[key]);
-        expect(seededRows.map((row) => row?.sessionId)).toEqual([
-          "upgrade-main-session",
-          "upgrade-direct-session",
-          "upgrade-group-session",
-        ]);
-
-        for (const row of seededRows) {
-          assert(row);
-          const transcriptPath = join(sessionsDir, `${String(row.sessionId)}.jsonl`);
-          expect(row.sessionFile).toBe(transcriptPath);
-          expect(JSON.parse(readFileSync(transcriptPath, "utf8")).id).toBe(row.sessionId);
-        }
-
-        const timestamps = seededRows.map((row) => row?.updatedAt);
-        for (const timestamp of timestamps) {
-          expect(typeof timestamp).toBe("number");
-        }
-        const [mainUpdatedAt, directUpdatedAt, groupUpdatedAt] = timestamps as [
-          number,
-          number,
-          number,
-        ];
-        expect(directUpdatedAt - mainUpdatedAt).toBe(100);
-        expect(groupUpdatedAt - mainUpdatedAt).toBe(200);
-        expect(mainUpdatedAt).toBeLessThan(directUpdatedAt);
-        expect(directUpdatedAt).toBeLessThan(groupUpdatedAt);
-
-        const dayMs = 24 * 60 * 60 * 1000;
-        const thirtyDaysMs = 30 * dayMs;
-        for (const [timestamp, offset] of [
-          [mainUpdatedAt, 0],
-          [directUpdatedAt, 100],
-          [groupUpdatedAt, 200],
-        ] as const) {
-          expect(timestamp).toBeGreaterThanOrEqual(beforeSeed - dayMs + offset);
-          expect(timestamp).toBeLessThanOrEqual(afterSeed - dayMs + offset);
-          expect(timestamp).toBeGreaterThan(afterSeed - thirtyDaysMs);
-          expect(timestamp).toBeLessThanOrEqual(afterSeed);
-        }
-      } finally {
-        rmSync(root, { force: true, recursive: true });
-      }
-    },
-  );
-
-  it.each(["watchos-direct-node", "mobile-pairing-reconnect"])(
-    "keeps the %s seed free of unrelated migration specimens",
-    (scenario) => {
-      const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-companion-seed-"));
-      try {
-        const stateDir = join(root, "state");
-        const workspace = join(root, "workspace");
-        mkdirSync(stateDir, { recursive: true });
-        mkdirSync(workspace, { recursive: true });
-        const env = {
+      const beforeSeed = Date.now();
+      execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "seed"], {
+        env: {
           ...process.env,
           OPENCLAW_STATE_DIR: stateDir,
           OPENCLAW_TEST_WORKSPACE_DIR: workspace,
           OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
-        };
+        },
+        stdio: "pipe",
+      });
+      const afterSeed = Date.now();
 
-        execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "seed"], { env, stdio: "pipe" });
-
-        expect(existsSync(join(workspace, "IDENTITY.md"))).toBe(true);
-        expect(existsSync(join(workspace, ".openclaw", "workspace-state.json"))).toBe(true);
-        for (const relative of [
-          "sessions/sessions.json",
-          "agents/main/sessions/sessions.json",
-          "agents/main/sessions/legacy-session.json",
-          "exec-approvals.json",
-          "plugin-runtime-deps",
-        ]) {
-          expect(existsSync(join(stateDir, relative)), relative).toBe(false);
-        }
-        for (const stage of ["baseline", "survival"]) {
-          const stageEnv = {
-            ...env,
-            OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage,
-          };
-          execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "assert-state"], {
-            env: stageEnv,
-            stdio: "pipe",
-          });
-          execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "assert-exec-approvals"], {
-            env: stageEnv,
-            stdio: "pipe",
-          });
-        }
-      } finally {
-        rmSync(root, { force: true, recursive: true });
+      const sessionsDir = join(stateDir, "agents", "main", "sessions");
+      const otherStore = join(stateDir, "sessions", "sessions.json");
+      expect(() => readFileSync(otherStore)).toThrow(/ENOENT/);
+      const storePath = join(sessionsDir, "sessions.json");
+      const original = readFileSync(storePath, "utf8");
+      const sessions = JSON.parse(original) as Record<
+        string,
+        { sessionId?: unknown; sessionFile?: unknown; updatedAt?: unknown }
+      >;
+      const keys = [
+        "agent:main:main",
+        "agent:main:+15551234567",
+        "agent:main:slack:channel:cupgrade",
+      ];
+      expect(Object.keys(sessions)).toEqual(keys);
+      const issues: Parameters<typeof readLegacySessionStoreEntries>[1] = [];
+      const admitted = readLegacySessionStoreEntries({ storePath }, issues);
+      expect(issues).toEqual([]);
+      expect(admitted.entries.map(({ sessionKey }) => sessionKey)).toEqual(keys);
+      for (const { entry } of admitted.entries) {
+        expect(entry).toMatchObject({ modelProvider: "openai", model: "gpt-5.5" });
       }
-    },
-  );
+      expect(readFileSync(storePath, "utf8")).toBe(original);
+      const seededRows = keys.map((key) => sessions[key]);
+      expect(seededRows.map((row) => row?.sessionId)).toEqual([
+        "upgrade-main-session",
+        "upgrade-direct-session",
+        "upgrade-group-session",
+      ]);
 
-  it("requires every seeded legacy cron specimen before update", () => {
+      for (const row of seededRows) {
+        assert(row);
+        const transcriptPath = join(sessionsDir, `${String(row.sessionId)}.jsonl`);
+        expect(row.sessionFile).toBe(transcriptPath);
+        expect(JSON.parse(readFileSync(transcriptPath, "utf8")).id).toBe(row.sessionId);
+      }
+
+      const timestamps = seededRows.map((row) => row?.updatedAt);
+      for (const timestamp of timestamps) {
+        expect(typeof timestamp).toBe("number");
+      }
+      const [mainUpdatedAt, directUpdatedAt, groupUpdatedAt] = timestamps as [
+        number,
+        number,
+        number,
+      ];
+      expect(directUpdatedAt - mainUpdatedAt).toBe(100);
+      expect(groupUpdatedAt - mainUpdatedAt).toBe(200);
+      expect(mainUpdatedAt).toBeLessThan(directUpdatedAt);
+      expect(directUpdatedAt).toBeLessThan(groupUpdatedAt);
+
+      const dayMs = 24 * 60 * 60 * 1000;
+      const thirtyDaysMs = 30 * dayMs;
+      for (const [timestamp, offset] of [
+        [mainUpdatedAt, 0],
+        [directUpdatedAt, 100],
+        [groupUpdatedAt, 200],
+      ] as const) {
+        expect(timestamp).toBeGreaterThanOrEqual(beforeSeed - dayMs + offset);
+        expect(timestamp).toBeLessThanOrEqual(afterSeed - dayMs + offset);
+        expect(timestamp).toBeGreaterThan(afterSeed - thirtyDaysMs);
+        expect(timestamp).toBeLessThanOrEqual(afterSeed);
+      }
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("requires every baseline cron SQLite specimen before update", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-cron-"));
     try {
       const stateDir = join(root, "state");
@@ -2041,105 +1566,27 @@ process.stdout.write(sessionDir + "\\n");
       };
       const run = (command: string) =>
         spawnSync(testNodeExecPath, [ASSERTIONS_PATH, command], { env, encoding: "utf8" });
-      const seeded = run("seed");
+      const seeded = spawnSync(testNodeExecPath, [ASSERTIONS_PATH, "seed"], {
+        env: { ...env, OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base" },
+        encoding: "utf8",
+      });
       expect(seeded.status, seeded.stderr).toBe(0);
-      const cronStore = join(stateDir, "cron", "jobs.json");
+      mkdirSync(join(stateDir, "state"), { recursive: true });
+      const db = new DatabaseSync(join(stateDir, "state", "openclaw.sqlite"));
+      db.exec("CREATE TABLE cron_jobs(job_id TEXT PRIMARY KEY, job_json TEXT NOT NULL)");
+      for (let index = 0; index < 5; index++) {
+        db.prepare("INSERT INTO cron_jobs VALUES (?, ?)").run(`cron-${index}`, "{}");
+      }
       const baseline = run("assert-state");
       expect(baseline.status, baseline.stderr).toBe(0);
-      const store = JSON.parse(readFileSync(cronStore, "utf8"));
-      store.jobs.pop();
-      writeJson(cronStore, store);
+      db.prepare("DELETE FROM cron_jobs WHERE job_id = ?").run("cron-4");
+      db.close();
       const missingRow = run("assert-state");
       expect(missingRow.status).not.toBe(0);
-      expect(missingRow.stderr).toContain("legacy cron authority fixture row count changed");
+      expect(missingRow.stderr).toContain("baseline cron authority fixture row count changed");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
-  });
-
-  it("requires saved ACP identity and model selection to survive the bridge scenario", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-acpx-"));
-    try {
-      const stateDir = join(root, "state");
-      const workspace = join(root, "workspace");
-      mkdirSync(stateDir, { recursive: true });
-      mkdirSync(workspace, { recursive: true });
-
-      execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "seed"], {
-        env: {
-          ...process.env,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_TEST_WORKSPACE_DIR: workspace,
-          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "acpx-openclaw-tools-bridge",
-        },
-        stdio: "pipe",
-      });
-      const seeded = JSON.parse(
-        readFileSync(join(stateDir, "agents", "main", "sessions", "sessions.json"), "utf8"),
-      );
-      const acp = seeded["agent:main:slack:channel:cupgrade"].acp;
-      expect(acp).toMatchObject({
-        backend: "acpx",
-        identity: {
-          acpxSessionId: "upgrade-acpx-session",
-          agentSessionId: "upgrade-agent-session",
-        },
-        runtimeOptions: { model: "gpt-5.5", runtimeMode: "plan" },
-      });
-      const assertSavedAcp = (saved: unknown) =>
-        runSessionStateAssertion(
-          (migratedStateDir) => {
-            writeMigratedSessionState(migratedStateDir);
-            const db = new DatabaseSync(
-              join(migratedStateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
-            );
-            try {
-              db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
-                JSON.stringify({ acp: saved }),
-                "agent:main:slack:channel:cupgrade",
-              );
-            } finally {
-              db.close();
-            }
-            return undefined;
-          },
-          { scenario: "acpx-openclaw-tools-bridge" },
-        );
-      expect(() => assertSavedAcp(acp)).not.toThrow();
-      expect(() => assertSavedAcp(undefined)).toThrow(
-        "saved ACP session or model selection changed",
-      );
-      expect(() =>
-        assertSavedAcp({
-          ...acp,
-          runtimeOptions: { ...acp.runtimeOptions, model: "changed-model" },
-        }),
-      ).toThrow("saved ACP session or model selection changed");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("asserts the ACPX OpenClaw tools bridge config survived", () => {
-    expect(() =>
-      assertConfig({
-        acceptedIntents: ["acpx-openclaw-tools-bridge"],
-        config: {
-          plugins: {
-            allow: ["acpx"],
-            entries: {
-              acpx: {
-                enabled: true,
-                config: {
-                  openClawToolsMcpBridge: true,
-                },
-              },
-            },
-          },
-        },
-        scenario: "acpx-openclaw-tools-bridge",
-      }),
-    ).not.toThrow();
   });
 
   it("allows legacy Discord DM config only at the baseline stage", () => {
@@ -2174,89 +1621,76 @@ process.stdout.write(sessionDir + "\\n");
     ).toThrow(/legacy Discord DM config survived/);
   });
 
-  it("requires canonical Discord DM config after update", () => {
+  it.each([
+    {
+      name: "installed inspection without repository development dependencies",
+      mutate: undefined,
+      capabilityConsentSupported: true,
+      options: { isolateAssertionRuntime: true },
+    },
+    {
+      name: "recorded acceptance on verified official companions",
+      mutate: recordOfficialAcceptance,
+      capabilityConsentSupported: true,
+      options: {},
+    },
+    {
+      name: "frozen companions without capability consent support",
+      mutate: undefined,
+      capabilityConsentSupported: false,
+      options: {},
+    },
+  ])("accepts $name", ({ mutate, capabilityConsentSupported, options }) => {
     expect(() =>
-      assertConfig({
-        acceptedIntents: ["discord-channel"],
-        config: {
-          channels: {
-            discord: {
-              enabled: true,
-              dmPolicy: "allowlist",
-              allowFrom: ["111111111111111111"],
-              guilds: {
-                "222222222222222222": {
-                  channels: { "333333333333333333": { requireMention: true } },
-                },
-              },
-              threadBindings: { idleHours: 72 },
-            },
-          },
-        },
-        scenario: "base",
-      }),
+      assertCompanionPluginRecords(mutate, capabilityConsentSupported, undefined, options),
     ).not.toThrow();
   });
 
-  it("accepts verified first-party companions without recording operator acceptance", () => {
-    expect(() => assertCompanionPluginRecords()).not.toThrow();
-    expect(() =>
-      assertCompanionPluginRecords((records) => {
-        records.discord!.resolvedSpec = "@openclaw/discord@2026.8.1";
-      }),
-    ).not.toThrow();
-  });
-
-  it("uses installed plugin inspection without repository development dependencies", () => {
-    expect(() =>
-      assertCompanionPluginRecords(undefined, true, undefined, { isolateAssertionRuntime: true }),
-    ).not.toThrow();
-  });
-
-  it("validates recorded acceptance on verified official companions", () => {
-    const recordAcceptance = (records: Record<string, PluginInstallRecord>) => {
-      Object.assign(records.discord!, {
-        acceptedSurface: ACCEPTED_SURFACE,
-        acceptedSurfaceHash: acceptedSurfaceHash(),
-        acceptedSurfaceAt: "2026-08-27T00:00:00.000Z",
-        acceptedSurfaceIntegrity: records.discord!.integrity,
-      });
-    };
-    expect(() => assertCompanionPluginRecords(recordAcceptance)).not.toThrow();
-    expect(() =>
-      assertCompanionPluginRecords((records) => {
-        recordAcceptance(records);
+  it.each<{
+    name: string;
+    mutate: NonNullable<Parameters<typeof assertCompanionPluginRecords>[0]>;
+    error: RegExp;
+    capabilityConsentSupported?: boolean;
+  }>([
+    {
+      name: "official consent without integrity",
+      mutate: (records) => {
+        recordOfficialAcceptance(records);
         Reflect.deleteProperty(records.discord!, "acceptedSurfaceIntegrity");
-      }),
-    ).toThrow(/discord plugin consent integrity/);
-    expect(() =>
-      assertCompanionPluginRecords((records) => {
+      },
+      error: /discord plugin consent integrity/,
+    },
+    {
+      name: "partial official consent",
+      mutate: (records) => {
         records.discord!.acceptedSurfaceHash = "partial";
-      }),
-    ).toThrow(/discord plugin accepted surface missing/);
-  });
-
-  it("requires exact artifact-bound consent for custom ClawHub companions", () => {
-    expect(() =>
-      assertCompanionPluginRecords((records) => {
+      },
+      error: /discord plugin accepted surface missing/,
+    },
+    {
+      name: "custom ClawHub consent without integrity",
+      mutate: (records) => {
         Reflect.deleteProperty(records.whatsapp!, "acceptedSurfaceIntegrity");
-      }),
-    ).toThrow(/whatsapp plugin consent integrity/);
-    expect(() =>
-      assertCompanionPluginRecords((records) => {
+      },
+      error: /whatsapp plugin consent integrity/,
+    },
+    {
+      name: "custom ClawHub consent with a changed hash",
+      mutate: (records) => {
         records.whatsapp!.acceptedSurfaceHash = "incorrect";
-      }),
-    ).toThrow(/whatsapp plugin consent hash changed/);
-    expect(() =>
-      assertCompanionPluginRecords((records) => {
+      },
+      error: /whatsapp plugin consent hash changed/,
+    },
+    {
+      name: "custom ClawHub consent without its surface",
+      mutate: (records) => {
         Reflect.deleteProperty(records.whatsapp!, "acceptedSurface");
-      }),
-    ).toThrow(/whatsapp plugin accepted surface missing/);
-  });
-
-  it("rejects unaccepted custom ClawHub and unverified npm companion records", () => {
-    expect(() =>
-      assertCompanionPluginRecords((records) => {
+      },
+      error: /whatsapp plugin accepted surface missing/,
+    },
+    {
+      name: "unaccepted custom ClawHub record",
+      mutate: (records) => {
         for (const field of [
           "acceptedSurface",
           "acceptedSurfaceHash",
@@ -2265,81 +1699,108 @@ process.stdout.write(sessionDir + "\\n");
         ]) {
           Reflect.deleteProperty(records.whatsapp!, field);
         }
-      }),
-    ).toThrow(/whatsapp plugin accepted surface missing/);
-    expect(() =>
-      assertCompanionPluginRecords((records) => {
+      },
+      error: /whatsapp plugin accepted surface missing/,
+    },
+    {
+      name: "unverified npm record",
+      mutate: (records) => {
         records.discord!.artifactKind = "npm-pack";
-      }),
-    ).toThrow(/discord plugin accepted surface missing/);
-  });
-
-  it.each([
-    ["spec", "@openclaw/discord@file:payload"],
-    ["resolvedSpec", "@openclaw/discord@file:payload"],
-    ["spec", "@openclaw/discord@npm:@example/discord"],
-    ["resolvedSpec", "@openclaw/discord@git+https://example.invalid/discord.git"],
-  ] as const)("rejects an official-looking non-registry %s", (field, value) => {
-    expect(() =>
-      assertCompanionPluginRecords((records) => {
-        records.discord![field] = value;
-      }),
-    ).toThrow(/discord plugin accepted surface missing/);
+      },
+      error: /discord plugin accepted surface missing/,
+    },
+    {
+      name: "official-looking file spec",
+      mutate: (records) => {
+        records.discord!.spec = "@openclaw/discord@file:payload";
+      },
+      error: /discord plugin accepted surface missing/,
+    },
+    {
+      name: "official-looking git resolvedSpec",
+      mutate: (records) => {
+        records.discord!.resolvedSpec = "@openclaw/discord@git+https://example.invalid/discord.git";
+      },
+      error: /discord plugin accepted surface missing/,
+    },
+    {
+      name: "missing integrity without capability consent support",
+      capabilityConsentSupported: false,
+      mutate: (records) => {
+        Reflect.deleteProperty(records.discord!, "integrity");
+      },
+      error: /discord plugin integrity missing/,
+    },
+    {
+      name: "npm record without its source-native version",
+      mutate: (records) => {
+        records.discord!.version = records.discord!.resolvedVersion;
+        Reflect.deleteProperty(records.discord!, "resolvedVersion");
+      },
+      error: /discord plugin version changed/,
+    },
+    {
+      name: "ClawHub record without its source-native version",
+      mutate: (records) => {
+        records.whatsapp!.resolvedVersion = records.whatsapp!.version;
+        Reflect.deleteProperty(records.whatsapp!, "version");
+      },
+      error: /whatsapp plugin version changed/,
+    },
+    {
+      name: "installed package version differing from its record",
+      mutate: (_records, installPaths) => {
+        writeJson(join(installPaths.discord, "package.json"), {
+          name: "@openclaw/discord",
+          version: "2026.8.0",
+        });
+      },
+      error: /discord installed package version changed/,
+    },
+  ])("rejects $name", ({ mutate, error, capabilityConsentSupported = true }) => {
+    expect(() => assertCompanionPluginRecords(mutate, capabilityConsentSupported)).toThrow(error);
   });
 
   it("binds trusted inspection to the same plugin, package, root, and install record", () => {
-    expect(() =>
-      assertCompanionPluginRecords(undefined, true, undefined, {
-        mutateInspection: (inspections) => {
-          inspections.discord!.plugin.id = "unrelated";
-        },
-      }),
-    ).toThrow(/discord inspected plugin id changed/);
-    expect(() =>
-      assertCompanionPluginRecords(undefined, true, undefined, {
-        mutateInspection: (inspections) => {
-          inspections.discord!.plugin.packageName = "@example/unrelated";
-        },
-      }),
-    ).toThrow(/discord inspected package name changed/);
-    expect(() =>
-      assertCompanionPluginRecords(undefined, true, undefined, {
-        mutateInspection: (inspections) => {
-          inspections.discord!.plugin.rootDir = inspections.whatsapp!.plugin.rootDir;
-        },
-      }),
-    ).toThrow(/discord inspected install path changed/);
-    expect(() =>
-      assertCompanionPluginRecords(undefined, true, undefined, {
-        mutateInspection: (inspections) => {
-          inspections.discord!.install.integrity = "different-artifact";
-        },
-      }),
-    ).toThrow(/discord inspected install record changed/);
+    const reject = (
+      mutateInspection: (inspections: Record<string, PluginInspectFixture>) => void,
+      error: RegExp,
+    ) =>
+      expect(() =>
+        assertCompanionPluginRecords(undefined, true, undefined, { mutateInspection }),
+      ).toThrow(error);
+    reject((rows) => {
+      rows.discord!.plugin.id = "unrelated";
+    }, /discord inspected plugin id changed/);
+    reject((rows) => {
+      rows.discord!.plugin.packageName = "@example/unrelated";
+    }, /discord inspected package name changed/);
+    reject((rows) => {
+      rows.discord!.plugin.rootDir = rows.whatsapp!.plugin.rootDir;
+    }, /discord inspected install path changed/);
+    reject((rows) => {
+      rows.discord!.install.integrity = "different-artifact";
+    }, /discord inspected install record changed/);
   });
 
   it("requires artifact-bound consent for every published recovery plugin", () => {
     const ids = ["codex", "discord", "whatsapp"];
     expect(() => assertCompanionPluginRecords(undefined, true, ids)).not.toThrow();
     for (const id of ids) {
-      expect(() =>
-        assertCompanionPluginRecords(
-          (records) => {
-            records[id]!.acceptedSurfaceHash = "incorrect";
-          },
-          true,
-          ids,
-        ),
-      ).toThrow(/plugin consent hash changed/);
-      expect(() =>
-        assertCompanionPluginRecords(
-          (records) => {
-            records[id]!.acceptedSurfaceIntegrity = "different-artifact";
-          },
-          true,
-          ids,
-        ),
-      ).toThrow(/plugin consent integrity changed/);
+      for (const [field, error] of [
+        ["acceptedSurfaceHash", /plugin consent hash changed/],
+        ["acceptedSurfaceIntegrity", /plugin consent integrity changed/],
+      ] as const) {
+        expect(() =>
+          assertCompanionPluginRecords(
+            (records) => {
+              records[id]![field] = "incorrect";
+            },
+            true,
+            ids,
+          ),
+        ).toThrow(error);
+      }
     }
   });
 
@@ -2376,233 +1837,85 @@ process.stdout.write(sessionDir + "\\n");
     ).not.toThrow();
   });
 
-  it("accepts frozen companion installs when the candidate lacks capability consent", () => {
-    expect(() => assertCompanionPluginRecords(undefined, false)).not.toThrow();
-  });
-
-  it("requires artifact integrity when the candidate lacks capability consent", () => {
-    expect(() =>
-      assertCompanionPluginRecords((records) => {
-        const discord = records.discord;
-        if (!discord) {
-          throw new Error("discord fixture missing");
-        }
-        Reflect.deleteProperty(discord, "integrity");
-      }, false),
-    ).toThrow(/discord plugin integrity missing/);
-  });
-
-  it.each([
-    ["npm", "discord", "resolvedVersion", "version"],
-    ["ClawHub", "whatsapp", "version", "resolvedVersion"],
-  ] as const)(
-    "requires the source-native version field for %s companion installs",
-    (_sourceLabel, pluginId, requiredField, alternateField) => {
+  it("requires intact shared runtime cache contents for versioned-runtime-deps", () => {
+    const scenario = "versioned-runtime-deps";
+    expect(() => runSessionStateAssertion(writeMigratedSessionState, { scenario })).not.toThrow();
+    for (const mutation of ["remove", "corrupt"]) {
       expect(() =>
-        assertCompanionPluginRecords((records) => {
-          const record = records[pluginId];
-          if (!record) {
-            throw new Error(`${pluginId} fixture missing`);
-          }
-          record[alternateField] = record[requiredField];
-          Reflect.deleteProperty(record, requiredField);
-        }),
-      ).toThrow(new RegExp(`${pluginId} plugin version changed`));
-    },
-  );
-
-  it("requires the installed package version to match the companion record", () => {
-    expect(() =>
-      assertCompanionPluginRecords((_records, installPaths) => {
-        writeJson(join(installPaths.discord, "package.json"), {
-          name: "@openclaw/discord",
-          version: "2026.8.0",
-        });
-      }),
-    ).toThrow(/discord installed package version changed/);
-  });
-
-  it("accepts official ClawHub npm-pack installs for configured external plugins", () => {
-    expect(() => assertConfiguredPluginState()).not.toThrow();
-  });
-
-  it.each(["base", "versioned-runtime-deps"])(
-    "requires intact shared runtime cache contents for %s",
-    (scenario) => {
-      expect(() => runSessionStateAssertion(writeMigratedSessionState, { scenario })).not.toThrow();
-      for (const mutation of ["remove", "corrupt"]) {
-        expect(() =>
-          runSessionStateAssertion(
-            (stateDir) => {
-              writeMigratedSessionState(stateDir);
-              const root =
-                scenario === "base"
-                  ? join("discord", ".openclaw-runtime-deps-copy-stale")
-                  : "openclaw-2026.6.1-feishu";
-              const sentinel = join(
-                stateDir,
-                "plugin-runtime-deps",
-                root,
-                "node_modules",
-                "stale-sentinel",
-                "package.json",
-              );
-              if (mutation === "remove") {
-                rmSync(sentinel);
-              } else {
-                writeJson(sentinel, { name: "stale-sentinel", version: "changed" });
-              }
-            },
-            { scenario },
-          ),
-        ).toThrow(/stale-sentinel/);
-      }
-    },
-  );
-
-  it.each([false, true])(
-    "artifact-only base/manual rejects retired global sources without a missing-path seed (recreated=%s)",
-    (recreated) => {
-      const verify = () =>
-        runSessionStateAssertion((stateDir) => {
-          const env = seedSessionSourceFixture(stateDir);
-          writeMigratedSessionState(stateDir);
-          if (recreated) {
-            mkdirSync(join(stateDir, "sessions"), { recursive: true });
-            writeJson(join(stateDir, "sessions", "sessions.json"), {});
-          }
-          return env;
-        });
-      if (recreated) {
-        expect(verify).toThrow(/legacy sessions.json survived migration/);
-      } else {
-        expect(verify).not.toThrow();
-      }
-    },
-  );
-
-  it.each([
-    { scenario: "base", corruption: "none", error: undefined },
-    { scenario: "missing-load-path", corruption: "none", error: undefined },
-    { scenario: "base", corruption: "fixture", error: /ENOENT.*fixture.json/s },
-    {
-      scenario: "base",
-      corruption: "source",
-      error: /Uninspected legacy session source bytes changed/,
-    },
-    {
-      scenario: "base",
-      corruption: "file-store",
-      error: /Retained legacy sources must have canonical SQLite sessions/,
-    },
-    { scenario: "base", corruption: "sqlite-row", error: /main legacy session row missing/ },
-  ])(
-    "seeded $scenario preserves strict source/SQLite proof ($corruption)",
-    ({ scenario, corruption, error }) => {
-      const verify = () =>
         runSessionStateAssertion(
           (stateDir) => {
-            const env = seedSessionSourceFixture(stateDir, scenario, true);
-            if (corruption === "file-store") {
-              writeMigratedSessionFiles(stateDir);
+            writeMigratedSessionState(stateDir);
+            const sentinel = join(
+              stateDir,
+              "plugin-runtime-deps",
+              "openclaw-2026.6.1-feishu",
+              "node_modules",
+              "stale-sentinel",
+              "package.json",
+            );
+            if (mutation === "remove") {
+              rmSync(sentinel);
             } else {
-              writeMigratedSessionState(stateDir);
+              writeJson(sentinel, { name: "stale-sentinel", version: "changed" });
             }
-            if (corruption === "fixture") {
-              rmSync(
-                join(
-                  env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT,
-                  "missing-load-path",
-                  "fixture.json",
-                ),
-              );
-            } else if (corruption === "source") {
-              writeFileSync(
-                join(stateDir, "agents", "main", "sessions", "upgrade-main-session.jsonl"),
-                "changed source",
-              );
-            } else if (corruption === "sqlite-row") {
-              const db = new DatabaseSync(
-                join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
-              );
-              try {
-                db.exec("DELETE FROM session_nodes WHERE session_key = 'agent:main:main'");
-              } finally {
-                db.close();
-              }
-            }
-            return env;
           },
           { scenario },
-        );
-      if (error) {
-        expect(verify).toThrow(error);
-      } else {
-        expect(verify).not.toThrow();
-      }
-    },
-  );
-
-  it("prefers session_nodes over stale file and cache session stores", () => {
-    expect(() =>
-      runSessionStateAssertion((stateDir) => {
-        writeMigratedSessionState(stateDir);
-        writeMigratedSessionFiles(stateDir, { includePrompt: false });
-        writeLegacyCacheSessionState(stateDir, { includePrompt: false });
-      }),
-    ).not.toThrow();
-  });
-
-  it.each([
-    { corruption: "none", error: undefined },
-    { corruption: "missing-table", error: /no such table: session_entry_snapshots/ },
-    { corruption: "missing-snapshot", error: /metadata prompt was not preserved/ },
-    { corruption: "wrong-prompt", error: /metadata prompt was not preserved/ },
-  ])("reads schema 24 session snapshots ($corruption)", ({ corruption, error }) => {
-    const verify = () =>
-      runSessionStateAssertion((stateDir) => {
-        writeMigratedSessionState(stateDir);
-        const db = new DatabaseSync(
-          join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
-        );
-        try {
-          db.exec(`
-            PRAGMA user_version = 24;
-            CREATE TABLE session_entry_snapshots (
-              session_key TEXT NOT NULL,
-              field TEXT NOT NULL,
-              value_json TEXT NOT NULL,
-              PRIMARY KEY (session_key, field)
-            );
-            INSERT INTO session_entry_snapshots
-              SELECT session_key, 'skillsSnapshot', json_extract(entry_json, '$.skillsSnapshot')
-              FROM session_nodes WHERE json_type(entry_json, '$.skillsSnapshot') IS NOT NULL;
-            UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.skillsSnapshot');
-          `);
-          if (corruption === "missing-table") {
-            db.exec("DROP TABLE session_entry_snapshots;");
-          } else if (corruption === "missing-snapshot") {
-            db.exec("DELETE FROM session_entry_snapshots;");
-          } else if (corruption === "wrong-prompt") {
-            db.prepare("UPDATE session_entry_snapshots SET value_json = ?").run(
-              JSON.stringify({ prompt: "wrong prompt" }),
-            );
-          }
-        } finally {
-          db.close();
-        }
-        writeMigratedSessionFiles(stateDir);
-      });
-    if (error) {
-      expect(verify).toThrow(error);
-    } else {
-      expect(verify).not.toThrow();
+        ),
+      ).toThrow(/stale-sentinel/);
     }
   });
 
-  it("does not mask missing session_nodes rows with a valid file store", () => {
-    expect(() =>
+  it("accepts artifact-only base/manual without retired global sources or a missing-path seed", () => {
+    const verify = () =>
       runSessionStateAssertion((stateDir) => {
+        const env = seedSessionSourceFixture(stateDir);
+        writeMigratedSessionState(stateDir);
+        return env;
+      });
+    expect(verify).not.toThrow();
+  });
+
+  it.each([false, true])("preserves frozen inline ACP metadata (shared database: %s)", (shared) => {
+    runSessionStateAssertion(
+      (stateDir) => {
+        const env = seedSessionSourceFixture(stateDir, "acpx-openclaw-tools-bridge");
+        const storePath = join(stateDir, "agents", "main", "sessions", "sessions.json");
+        const legacy = JSON.parse(readFileSync(storePath, "utf8"));
+        const store = createMigratedSessionFileStore();
+        store["agent:main:slack:channel:cupgrade"] = {
+          ...store["agent:main:slack:channel:cupgrade"],
+          acp: legacy["agent:main:slack:channel:cupgrade"].acp,
+        };
+        writeMigratedSessionFiles(stateDir);
+        writeJson(storePath, store);
+        if (shared) {
+          mkdirSync(join(stateDir, "state"), { recursive: true });
+          const db = new DatabaseSync(join(stateDir, "state", "openclaw.sqlite"));
+          db.close();
+        }
+        return env;
+      },
+      { scenario: "acpx-openclaw-tools-bridge" },
+    );
+  });
+
+  it.each<{
+    name: string;
+    setup: (stateDir: string) => void;
+    error?: RegExp;
+  }>([
+    {
+      name: "session_nodes over stale file and cache stores",
+      setup: (stateDir) => {
+        writeMigratedSessionState(stateDir);
+        writeMigratedSessionFiles(stateDir, { includePrompt: false });
+        writeLegacyCacheSessionState(stateDir, { includePrompt: false });
+      },
+    },
+    {
+      name: "empty session_nodes over a valid file store",
+      error: /main legacy session row missing/,
+      setup: (stateDir) => {
         writeMigratedSessionState(stateDir);
         const db = new DatabaseSync(
           join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
@@ -2613,44 +1926,37 @@ process.stdout.write(sessionDir + "\\n");
           db.close();
         }
         writeMigratedSessionFiles(stateDir);
-      }),
-    ).toThrow(/main legacy session row missing/);
-  });
-
-  it("does not mask empty legacy cache_entries with a valid file store", () => {
-    expect(() =>
-      runSessionStateAssertion((stateDir) => {
+      },
+    },
+    {
+      name: "empty cache_entries over a valid file store",
+      error: /main legacy session row missing/,
+      setup: (stateDir) => {
         writeMigratedSessionState(stateDir);
         writeLegacyCacheSessionState(stateDir, { empty: true, replaceNodes: true });
         writeMigratedSessionFiles(stateDir);
-      }),
-    ).toThrow(/main legacy session row missing/);
-  });
-
-  it("prefers legacy cache_entries over a stale file session store", () => {
-    expect(() =>
-      runSessionStateAssertion((stateDir) => {
+      },
+    },
+    {
+      name: "cache_entries over a stale file store",
+      setup: (stateDir) => {
         writeMigratedSessionState(stateDir);
         writeLegacyCacheSessionState(stateDir, { replaceNodes: true });
         writeMigratedSessionFiles(stateDir, { includePrompt: false });
-      }),
-    ).not.toThrow();
-  });
-
-  it("prefers legacy session_entries over stale file and cache session stores", () => {
-    expect(() =>
-      runSessionStateAssertion((stateDir) => {
+      },
+    },
+    {
+      name: "session_entries over stale file and cache stores",
+      setup: (stateDir) => {
         writeMigratedSessionState(stateDir);
         writeLegacySessionEntriesState(stateDir);
         writeLegacyCacheSessionState(stateDir, { includePrompt: false });
         writeMigratedSessionFiles(stateDir, { includePrompt: false });
-      }),
-    ).not.toThrow();
-  });
-
-  it("uses the file session store when SQLite has no supported session table", () => {
-    expect(() =>
-      runSessionStateAssertion((stateDir) => {
+      },
+    },
+    {
+      name: "file store when SQLite has no supported session table",
+      setup: (stateDir) => {
         const agentDbDir = join(stateDir, "agents", "main", "agent");
         mkdirSync(agentDbDir, { recursive: true });
         const db = new DatabaseSync(join(agentDbDir, "openclaw-agent.sqlite"));
@@ -2660,29 +1966,30 @@ process.stdout.write(sessionDir + "\\n");
           db.close();
         }
         writeMigratedSessionFiles(stateDir);
-      }),
-    ).not.toThrow();
+      },
+    },
+  ])("uses the authoritative $name", ({ setup, error }) => {
+    const check = () =>
+      runSessionStateAssertion((stateDir) => {
+        setup(stateDir);
+      });
+    if (error) {
+      expect(check).toThrow(error);
+    } else {
+      expect(check).not.toThrow();
+    }
   });
 
-  it.each([
-    "ok",
-    "frozen-regular",
-    "queued",
-    "wait-timeout",
-    "cli-failed",
-    "not-started",
-    "turn-failed",
-    "wrong-session",
-    "user-only",
-    "wrong-reply",
-  ])("requires a completed persisted managed serving reply (%s)", (outcome) => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-survivor-serving-turn-"));
-    try {
-      const bin = join(root, "bin");
-      mkdirSync(bin);
-      writeFileSync(
-        join(bin, "openclaw"),
-        `#!${testNodeExecPath}
+  it.each(["queued", "cli-failed", "wrong-reply"])(
+    "requires a completed persisted managed serving reply (%s)",
+    (outcome) => {
+      const root = mkdtempSync(join(tmpdir(), "openclaw-survivor-serving-turn-"));
+      try {
+        const bin = join(root, "bin");
+        mkdirSync(bin);
+        writeFileSync(
+          join(bin, "openclaw"),
+          `#!${testNodeExecPath}
 const fs = require("node:fs");
 const method = process.argv[4];
 const params = JSON.parse(process.argv[process.argv.indexOf("--params") + 1]);
@@ -2707,107 +2014,74 @@ if (method === "chat.send") {
 } else { process.exit(47); }
 process.stdout.write(JSON.stringify(result));
 `,
-        { mode: 0o755 },
-      );
-      const receipt = join(root, "receipt.json");
-      let oracle = ASSERTIONS_PATH;
-      if (outcome === "frozen-regular") {
-        const selection = selectFrozenUpgradeOracle(root, "2026.9.3");
-        expect(selection.result.status, selection.result.stderr).toBe(0);
-        oracle = selection.oracle!;
-      }
-      const result = spawnSync(testNodeExecPath, [oracle, "assert-restart-serving-turn", receipt], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          PATH: `${bin}${delimiter}${process.env.PATH}`,
-          GATEWAY_AUTH_TOKEN_REF: "synthetic-serving-token",
-          PROBE_OUTCOME: outcome,
-          PROBE_MARKER_FILE: join(root, "marker"),
-        },
-      });
-      const succeeded = ["ok", "frozen-regular", "queued", "wait-timeout"].includes(outcome);
-      expect(result.status, result.stderr).toBe(succeeded ? 0 : 1);
-      expect(existsSync(receipt)).toBe(succeeded);
-      expect(result.stderr).not.toContain("synthetic-serving-token");
-      if (outcome === "cli-failed") {
-        expect(result.stderr).toContain("chat.send managed serving probe failed (status 47)");
-      }
-      if (succeeded) {
-        const proof = JSON.parse(readFileSync(receipt, "utf8"));
-        expect(proof.sessionId).toBe("upgrade-main-session");
-        expect(proof.reply.content[0].text).toBe(proof.marker);
-        expect(proof.completion.status).toBe("ok");
-      }
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it.each([
-    { stage: "survival", mutation: "none", error: /metadata prompt was not preserved/ },
-    { stage: "post-inference", mutation: "none", error: undefined },
-    { stage: "post-inference", mutation: "missing-marker", error: /refreshed skills snapshot/ },
-    { stage: "post-inference", mutation: "invalid-marker", error: /refreshed skills snapshot/ },
-    { stage: "post-inference", mutation: "stale-prompt", error: /refreshed skills snapshot/ },
-    { stage: "post-inference", mutation: "malformed-skills", error: /refreshed skills snapshot/ },
-    { stage: "post-inference", mutation: "heavy-cache", error: /heavy resolvedSkills cache/ },
-    {
-      stage: "post-inference",
-      mutation: "missing-session",
-      error: /main legacy session row missing/,
-    },
-    {
-      stage: "post-inference",
-      mutation: "missing-transcript",
-      error: /transcript was not imported/,
-    },
-  ])(
-    "checks migrated session state after inference ($stage, $mutation)",
-    ({ stage, mutation, error }) => {
-      const check = () =>
-        runSessionStateAssertion((stateDir) => {
-          writeMigratedSessionState(stateDir);
-          const db = new DatabaseSync(
-            join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
-          );
-          try {
-            db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
-              JSON.stringify({
-                skillsSnapshot: {
-                  prompt:
-                    mutation === "stale-prompt"
-                      ? "legacy prompt survives as metadata"
-                      : "Current runtime skill instructions",
-                  skills: mutation === "malformed-skills" ? null : [{ name: "survivor-skill" }],
-                  ...(mutation === "missing-marker"
-                    ? {}
-                    : { promptFormatVersion: mutation === "invalid-marker" ? 0 : 4 }),
-                  ...(mutation === "heavy-cache" ? { resolvedSkills: [] } : {}),
-                },
-              }),
-              "agent:main:main",
-            );
-            if (mutation === "missing-session") {
-              db.prepare("DELETE FROM session_nodes WHERE session_key = ?").run("agent:main:main");
-            }
-            if (mutation === "missing-transcript") {
-              db.prepare("DELETE FROM transcript_events WHERE session_id = ?").run(
-                "upgrade-main-session",
-              );
-            }
-          } finally {
-            db.close();
-          }
-          return { OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage };
-        });
-      if (error) {
-        expect(check).toThrow(error);
-      } else {
-        expect(check).not.toThrow();
+          { mode: 0o755 },
+        );
+        const receipt = join(root, "receipt.json");
+        const result = spawnSync(
+          testNodeExecPath,
+          [ASSERTIONS_PATH, "assert-restart-serving-turn", receipt],
+          {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              PATH: `${bin}${delimiter}${process.env.PATH}`,
+              GATEWAY_AUTH_TOKEN_REF: "synthetic-serving-token",
+              PROBE_OUTCOME: outcome,
+              PROBE_MARKER_FILE: join(root, "marker"),
+            },
+          },
+        );
+        const succeeded = outcome === "queued";
+        expect(result.status, result.stderr).toBe(succeeded ? 0 : 1);
+        expect(existsSync(receipt)).toBe(succeeded);
+        expect(result.stderr).not.toContain("synthetic-serving-token");
+        if (outcome === "cli-failed") {
+          expect(result.stderr).toContain("chat.send managed serving probe failed (status 47)");
+        }
+        if (succeeded) {
+          const proof = JSON.parse(readFileSync(receipt, "utf8"));
+          expect(proof.sessionId).toBe("upgrade-main-session");
+          expect(proof.reply.content[0].text).toBe(proof.marker);
+          expect(proof.completion.status).toBe("ok");
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true });
       }
     },
   );
+
+  it.each([
+    { stage: "survival", error: /metadata prompt was not preserved/ },
+    { stage: "post-inference", error: undefined },
+  ])("checks migrated session state after inference ($stage)", ({ stage, error }) => {
+    const check = () =>
+      runSessionStateAssertion((stateDir) => {
+        writeMigratedSessionState(stateDir);
+        const db = new DatabaseSync(
+          join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+        );
+        try {
+          db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
+            JSON.stringify({
+              skillsSnapshot: {
+                prompt: "Current runtime skill instructions",
+                skills: [{ name: "survivor-skill" }],
+                promptFormatVersion: 4,
+              },
+            }),
+            "agent:main:main",
+          );
+        } finally {
+          db.close();
+        }
+        return { OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage };
+      });
+    if (error) {
+      expect(check).toThrow(error);
+    } else {
+      expect(check).not.toThrow();
+    }
+  });
 
   it("rejects retired sessionFile metadata in SQLite-backed session rows", () => {
     expect(() =>

@@ -1,12 +1,14 @@
 import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/access-groups";
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
+import type {
+  ChannelGatewayContext,
+  ChannelOutboundAdapter,
+} from "openclaw/plugin-sdk/channel-contract";
 import type { StableChannelIngressIdentityParams } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   runPassiveAccountLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-plugin-common";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
@@ -16,22 +18,11 @@ import {
   sanitizeAssistantVisibleText,
   stripMarkdown,
 } from "openclaw/plugin-sdk/text-chunking";
-import type { MetricEvent } from "./metrics.js";
 import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
 import { normalizePubkey } from "./nostr-key-utils.js";
 import { getNostrRuntime } from "./runtime.js";
 import { resolveDefaultNostrAccountId, type ResolvedNostrAccount } from "./types.js";
 
-type NostrGatewayStart = NonNullable<
-  NonNullable<ChannelPlugin<ResolvedNostrAccount>["gateway"]>["startAccount"]
->;
-type NostrOutboundAdapter = Pick<
-  ChannelOutboundAdapter,
-  "chunker" | "deliveryCapabilities" | "deliveryMode" | "textChunkLimit" | "sendText"
-> & {
-  sendText: NonNullable<ChannelOutboundAdapter["sendText"]>;
-  sanitizeText: NonNullable<ChannelOutboundAdapter["sanitizeText"]>;
-};
 const activeBuses = new Map<string, NostrBusHandle>();
 
 function normalizeRelayLifecycleKey(relay: string): string {
@@ -65,6 +56,25 @@ function normalizeNostrSenderPubkey(value: string): string | null {
   }
 }
 
+function resolveAdmissionPubkeys(account: ResolvedNostrAccount): string[] | undefined {
+  if (account.config.dmPolicy !== "allowlist" || !account.config.allowFrom?.length) {
+    return undefined;
+  }
+  const pubkeys: string[] = [];
+  for (const entry of account.config.allowFrom) {
+    if (typeof entry !== "string") {
+      return undefined;
+    }
+    const normalized = normalizeNostrAllowEntry(entry);
+    // Dynamic, wildcard, and invalid entries must keep the full canonical policy path.
+    if (!normalized || !/^[0-9a-f]{64}$/.test(normalized)) {
+      return undefined;
+    }
+    pubkeys.push(normalized);
+  }
+  return [...new Set(pubkeys)];
+}
+
 const nostrIngressIdentity = {
   key: "nostr-pubkey",
   normalizeEntry: normalizeNostrAllowEntry,
@@ -73,11 +83,14 @@ const nostrIngressIdentity = {
   entryIdPrefix: "nostr-entry",
 } satisfies StableChannelIngressIdentityParams;
 
-export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
+export async function startNostrGatewayAccount(
+  ctx: ChannelGatewayContext<ResolvedNostrAccount>,
+): Promise<void> {
   const account = ctx.account;
   ctx.setStatus({
     accountId: account.accountId,
     publicKey: account.publicKey,
+    profile: account.profile,
     lifecycle: "starting",
   });
   ctx.log?.info?.(`[${account.accountId}] starting Nostr provider (pubkey: ${account.publicKey})`);
@@ -125,24 +138,26 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
   const connectedRelays = new Set<string>();
 
   const authorizeSender = async (input: {
-    senderId: string;
+    senderPubkey: string;
     reply: (text: string) => Promise<void>;
   }): Promise<"allow" | "block" | "pairing"> => {
-    const resolved = await resolveInboundAccess(input.senderId, "");
+    const resolved = await resolveInboundAccess(input.senderPubkey, "");
     if (resolved.senderAccess.decision === "allow") {
       return "allow";
     }
     if (resolved.senderAccess.decision === "pairing") {
       await pairing.issueChallenge({
-        senderId: input.senderId,
-        senderIdLine: `Your Nostr pubkey: ${input.senderId}`,
+        senderId: input.senderPubkey,
+        senderIdLine: `Your Nostr pubkey: ${input.senderPubkey}`,
         sendPairingReply: input.reply,
         onCreated: () => {
-          ctx.log?.debug?.(`[${account.accountId}] nostr pairing request sender=${input.senderId}`);
+          ctx.log?.debug?.(
+            `[${account.accountId}] nostr pairing request sender=${input.senderPubkey}`,
+          );
         },
         onReplyError: (err) => {
           ctx.log?.warn?.(
-            `[${account.accountId}] nostr pairing reply failed for ${input.senderId}: ${String(
+            `[${account.accountId}] nostr pairing reply failed for ${input.senderPubkey}: ${String(
               err,
             )}`,
           );
@@ -151,7 +166,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
       return "pairing";
     }
     ctx.log?.debug?.(
-      `[${account.accountId}] blocked Nostr sender ${input.senderId} (${resolved.senderAccess.reasonCode})`,
+      `[${account.accountId}] blocked Nostr sender ${input.senderPubkey} (${resolved.senderAccess.reasonCode})`,
     );
     return "block";
   };
@@ -163,8 +178,8 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
         accountId: account.accountId,
         privateKey: account.privateKey,
         relays: account.relays,
-        authorizeSender: async ({ senderPubkey, reply }) =>
-          await authorizeSender({ senderId: senderPubkey, reply }),
+        authorizeSender,
+        admissionPubkeys: resolveAdmissionPubkeys(account),
         onMessage: async (senderPubkey, text, reply, meta, lifecycle) => {
           const resolvedAccess = await resolveInboundAccess(senderPubkey, text);
           if (resolvedAccess.senderAccess.decision !== "allow") {
@@ -242,8 +257,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
         },
         onConnect: (relay) => {
           connectedRelays.add(normalizeRelayLifecycleKey(relay));
-          // Treat >=1 connected relay as ready. This favors partial availability over quorum
-          // fidelity; circuit-breaker health stays private to nostr-bus, so ready is not all-relays.
+          // One connected relay is enough for partial availability, not an all-relay quorum.
           ctx.setStatus(channelReadyPatch({ accountId: account.accountId }));
           ctx.log?.debug?.(`[${account.accountId}] Connected to relay: ${relay}`);
         },
@@ -261,22 +275,8 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
         onEose: (relays) => {
           ctx.log?.debug?.(`[${account.accountId}] EOSE received from relays: ${relays}`);
         },
-        onMetric: (event: MetricEvent) => {
-          if (event.name.startsWith("event.rejected.")) {
-            ctx.log?.debug?.(
-              `[${account.accountId}] Metric: ${event.name} ${JSON.stringify(event.labels)}`,
-            );
-          } else if (event.name === "relay.circuit_breaker.open") {
-            ctx.log?.warn?.(
-              `[${account.accountId}] Circuit breaker opened for relay: ${event.labels?.relay}`,
-            );
-          } else if (event.name === "relay.circuit_breaker.close") {
-            ctx.log?.info?.(
-              `[${account.accountId}] Circuit breaker closed for relay: ${event.labels?.relay}`,
-            );
-          } else if (event.name === "relay.error") {
-            ctx.log?.debug?.(`[${account.accountId}] Relay error: ${event.labels?.relay}`);
-          }
+        onRejected: (reason) => {
+          ctx.log?.debug?.(`[${account.accountId}] Event rejected: ${reason}`);
         },
       });
       activeBuses.set(account.accountId, bus);
@@ -300,7 +300,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
       await monitor.stop();
     },
   });
-};
+}
 
 export const nostrPairingTextAdapter = {
   idLabel: "nostrPubkey",
@@ -323,14 +323,16 @@ export const nostrPairingTextAdapter = {
     message: string;
     accountId?: string;
   }) => {
-    const bus = activeBuses.get(accountId ?? resolveDefaultNostrAccountId(cfg));
-    if (bus) {
-      await bus.sendDm(id, message);
+    const aid = accountId ?? resolveDefaultNostrAccountId(cfg);
+    const bus = activeBuses.get(aid);
+    if (!bus) {
+      throw new Error(`Nostr bus not running for account ${aid}`);
     }
+    await bus.sendDm(id, message);
   },
 };
 
-export const nostrOutboundAdapter: NostrOutboundAdapter = {
+export const nostrOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 4000,
   // The outbound planner ignores textChunkLimit unless the adapter also
@@ -376,8 +378,8 @@ export const nostrOutboundAdapter: NostrOutboundAdapter = {
       messageId: eventId,
     });
   },
-};
+} satisfies ChannelOutboundAdapter;
 
-export function getActiveNostrBuses(): Map<string, NostrBusHandle> {
-  return new Map(activeBuses);
+export function getActiveNostrBuses(): ReadonlyMap<string, NostrBusHandle> {
+  return activeBuses;
 }

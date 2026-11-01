@@ -46,9 +46,7 @@ export async function runSecondaryRoomOpenTriggerScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
   return await runTopologyScopedTopLevelScenario({
-    accessToken: context.driverAccessToken,
     actorId: "driver",
-    actorUserId: context.driverUserId,
     context,
     roomKey: MATRIX_QA_SECONDARY_ROOM_KEY,
     tokenPrefix: "MATRIX_QA_SECONDARY_OPEN",

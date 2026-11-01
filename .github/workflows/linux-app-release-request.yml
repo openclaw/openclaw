@@ -6,11 +6,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing OpenClaw release tag to receive Linux companion bundles, for example v2026.7.1
+        description: Existing OpenClaw release tag to receive Linux and Windows desktop bundles, for example v2026.7.1
         required: true
         type: string
       desktop-test-bundles:
-        description: Also build unsigned macOS/Windows test bundles
+        description: Also build unsigned macOS test bundles
         default: false
         type: boolean
 

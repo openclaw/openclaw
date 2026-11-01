@@ -1,15 +1,13 @@
 import {
   type WorkerAdmissionFailureReason,
-  type WorkerAdmissionHandshake,
   type WorkerConnectParams,
   type WorkerProtocolCloseReason,
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import {
   sameWorkerProtocolFeatures,
+  supportsCurrentWorkerLaunch,
   type ExpectedWorkerBuild,
 } from "../../worker/worker-build-identity.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -19,6 +17,7 @@ import type {
   WorkerEnvironmentRecord,
 } from "./environment-record.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
+import { isWorkerEnvironmentAttachedTo } from "./placement-target.js";
 import type { WorkerEnvironmentStore } from "./store.js";
 
 export type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -33,16 +32,6 @@ export class StaleWorkerBuildError extends Error {
   constructor() {
     super(STALE_WORKER_BUILD_REASON);
   }
-}
-
-/** Fence persisted builds that cannot parse the exact current launch descriptor. */
-export function supportsCurrentWorkerLaunch(
-  handshake: Pick<WorkerAdmissionHandshake, "protocolFeatures"> | null | undefined,
-): boolean {
-  return (
-    handshake?.protocolFeatures.includes(WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE) === true &&
-    handshake.protocolFeatures.includes(WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE)
-  );
 }
 
 export function requireCurrentWorkerTurnEnvironment(params: {
@@ -66,13 +55,9 @@ export function requireCurrentWorkerTurnEnvironment(params: {
     throw new StaleWorkerBuildError();
   }
   if (
-    !environment ||
-    environment.state !== "attached" ||
-    environment.ownerEpoch !== placement.activeOwnerEpoch ||
+    !isWorkerEnvironmentAttachedTo(environment, placement) ||
     !bootstrapReceipt ||
-    bootstrapReceipt.bundleHash !== placement.workerBundleHash ||
-    environment.attachedSessionIds.length !== 1 ||
-    environment.attachedSessionIds[0] !== placement.sessionId
+    bootstrapReceipt.bundleHash !== placement.workerBundleHash
   ) {
     throw new Error("Active worker placement does not match its attached environment");
   }
@@ -154,9 +139,6 @@ export function admitWorkerConnection(params: {
     return { ok: false, reason: "version-mismatch" };
   }
   if (admission.sessionId !== credential.sessionId) {
-    return { ok: false, reason: "session-mismatch" };
-  }
-  if ((admission.sessionId === null) !== (admission.runId === null)) {
     return { ok: false, reason: "session-mismatch" };
   }
   if (

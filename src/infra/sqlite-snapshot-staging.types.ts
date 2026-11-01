@@ -1,6 +1,6 @@
 import type { MessagePort } from "node:worker_threads";
+import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
-import type { RetainedOperation } from "./retained-operation.js";
 import type { DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 export type SqliteSnapshotStagingDirectory = {

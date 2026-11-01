@@ -1,0 +1,82 @@
+import { afterEach, expect, it, onTestFinished } from "vitest";
+import { page } from "vitest/browser";
+import { syncControlUiSystemChrome } from "../../app/control-ui-presentation.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { releaseChatAttachmentPayload } from "../chat/attachment-payload-store.ts";
+import { buildLocalUserMessage } from "../chat/user-message-content.ts";
+import { NewSessionBody } from "./draft-body.solid.tsx";
+import baseStyles from "../../styles/base.css?inline";
+
+const container = document.createElement("div");
+const styles = document.createElement("style");
+let unmount: (() => void) | undefined;
+
+afterEach(() => {
+  unmount?.();
+  container.remove();
+  styles.remove();
+  releaseChatAttachmentPayload("startup-notes");
+});
+
+it.each([
+  { width: 390, text: "Read this document before we discuss it." },
+  { width: 1280, text: "" },
+])("keeps submitted files outside the painted text at $width px", async ({ width, text }) => {
+  await page.viewport(width, 800);
+  const root = document.documentElement;
+  for (const name of ["data-theme", "data-theme-mode"]) {
+    const previous = root.getAttribute(name);
+    root.setAttribute(name, "dark");
+    onTestFinished(() => {
+      if (previous === null) {
+        root.removeAttribute(name);
+      } else {
+        root.setAttribute(name, previous);
+      }
+    });
+  }
+  styles.textContent = baseStyles;
+  document.head.append(styles);
+  syncControlUiSystemChrome(true);
+  container.className = "new-session-page chat";
+  document.body.append(container);
+  ({ unmount } = mountSolid(
+    () => (
+      <NewSessionBody
+        error={null}
+        pendingMessage={buildLocalUserMessage({
+          createdAt: Date.now(),
+          text,
+          attachments: [
+            {
+              id: "startup-notes",
+              fileName: "notes.md",
+              mimeType: "text/markdown",
+              dataUrl: "data:text/markdown;base64,IyBOb3Rlcw==",
+            },
+          ],
+        })}
+        submitting={true}
+        renderDraft={() => null}
+        onOpenImage={() => {}}
+      />
+    ),
+    { container },
+  ));
+  await expect.element(page.getByText("notes.md", { exact: true })).toBeVisible();
+  const bubble = container.querySelector<HTMLElement>(".chat-group.user .chat-bubble")!;
+  const card = bubble.querySelector<HTMLElement>(".chat-assistant-attachment-card")!;
+  expect(getComputedStyle(bubble).backgroundColor).toBe("rgba(0, 0, 0, 0)");
+  expect(getComputedStyle(bubble).padding).toBe("0px");
+  const cardBox = card.getBoundingClientRect();
+  expect(cardBox.width).toBeGreaterThan(200);
+  expect(cardBox.right).toBeLessThanOrEqual(width);
+  const message = bubble.querySelector<HTMLElement>(".chat-text");
+  if (text) {
+    expect(message?.textContent).toContain(text);
+    expect(getComputedStyle(message!).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+    expect(cardBox.bottom).toBeLessThanOrEqual(message!.getBoundingClientRect().top);
+  } else {
+    expect(message).toBeNull();
+  }
+});

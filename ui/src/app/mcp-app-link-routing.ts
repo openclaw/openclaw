@@ -1,11 +1,6 @@
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationContext } from "./context.ts";
-
-function looksLikeMcpAppLink(href: string): boolean {
-  return /^(?:(?:codex|chatgpt|openclaw):\/\/plugins\/|https:\/\/chatgpt\.com\/plugins\/)[^/?#]+\/app\/[^/?#]+\/?(?:[?#]|$)/iu.test(
-    href,
-  );
-}
 
 export function startMcpAppRouting(context: Pick<ApplicationContext, "navigate">) {
   let disposed = false;
@@ -20,11 +15,15 @@ export function startMcpAppRouting(context: Pick<ApplicationContext, "navigate">
       return;
     }
     const href = anchor.href;
-    if (!looksLikeMcpAppLink(href)) {
+    if (
+      !/^(?:(?:codex|chatgpt|openclaw):\/\/plugins\/|https:\/\/chatgpt\.com\/plugins\/)[^/?#]+\/app\/[^/?#]+\/?(?:[?#]|$)/iu.test(
+        href,
+      )
+    ) {
       return;
     }
-    // Chat links use target=_blank by default. Shape matches that fail strict parsing
-    // (userinfo, port, bad deep link, control characters) are dropped; other links navigate normally.
+    // Chat links use target=_blank. Suppress navigation for app-shaped links even
+    // when strict parsing later rejects them.
     event.preventDefault();
     void import("./mcp-app-routing.ts")
       .then(({ navigateMcpAppLink }) => {
@@ -38,11 +37,11 @@ export function startMcpAppRouting(context: Pick<ApplicationContext, "navigate">
         }
       });
   };
-  document.addEventListener("click", click);
+  const stopClick = listen(document, "click", click);
   return {
     dispose: () => {
       disposed = true;
-      document.removeEventListener("click", click);
+      stopClick();
     },
   };
 }

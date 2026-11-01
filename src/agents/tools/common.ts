@@ -31,6 +31,12 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   catalogMode?: "direct-only";
   /** Gateway client capabilities required before this tool can be assembled. */
   requiredClientCaps?: string[];
+  /**
+   * Allow a result's `details.sourceReply` to be delivered to the current source as the
+   * user-visible reply, without another model turn. Only the tool author can declare this;
+   * tool results alone never grant it.
+   */
+  canDeliverSourceReply?: boolean;
   /** Tool-owned execution and transport wait budget, before any harness completion grace. */
   getExecutionTimeoutMs?: (args: unknown) => number | undefined;
   prepareBeforeToolCallParams?: (
@@ -40,18 +46,21 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   finalizeBeforeToolCallParams?: (params: unknown, preparedParams: unknown) => unknown;
 };
 
-type ErasedAgentToolExecute = {
+type ErasedAgentToolExecute<TDetails> = {
   execute(
     this: void,
     toolCallId: string,
     params: unknown,
     signal?: AbortSignal,
-    onUpdate?: AgentToolUpdateCallback,
-  ): Promise<AgentToolResult<unknown>>;
+    onUpdate?: AgentToolUpdateCallback<TDetails>,
+  ): Promise<AgentToolResult<TDetails>>;
 };
 
-export type AnyAgentTool = Omit<AgentToolWithMeta<TSchema, unknown>, "execute"> &
-  ErasedAgentToolExecute;
+export type AnyAgentTool<TDetails = unknown> = Omit<
+  AgentToolWithMeta<TSchema, TDetails>,
+  "execute"
+> &
+  ErasedAgentToolExecute<TDetails>;
 
 type StringParamOptions = {
   required?: boolean;
@@ -75,12 +84,6 @@ export function createActionGate<T extends Record<string, boolean | undefined>>(
     }
     return value !== false;
   };
-}
-
-// Models may emit blank defaults for optional numeric fields. Treat them as
-// absent while still rejecting nonblank invalid input.
-function isBlankParamValue(raw: unknown): boolean {
-  return typeof raw === "string" && raw.trim() === "";
 }
 
 export function readToolStringParam(
@@ -192,6 +195,23 @@ export function readNumberParam(
   return integer ? Math.trunc(value) : value;
 }
 
+// Blank optional numbers are absent; nonblank invalid input keeps the caller's error.
+function readStrictNumberParam(
+  params: Record<string, unknown>,
+  key: string,
+  message: string,
+  nonNegativeInteger = false,
+): number | undefined {
+  const value = readNumberParam(params, key, { strict: true, nonNegativeInteger });
+  if (value === undefined) {
+    const raw = readSnakeCaseParamRaw(params, key);
+    if (raw != null && !(typeof raw === "string" && raw.trim() === "")) {
+      throw new ToolInputError(message);
+    }
+  }
+  return value;
+}
+
 export function readPositiveIntegerParam(
   params: Record<string, unknown>,
   key: string,
@@ -216,18 +236,10 @@ export function readNonNegativeIntegerParam(
     max?: number;
   } = {},
 ): number | undefined {
-  const value = readNumberParam(params, key, {
-    nonNegativeInteger: true,
-    strict: true,
-  });
-  if (value === undefined) {
-    const raw = readSnakeCaseParamRaw(params, key);
-    if (raw != null && !isBlankParamValue(raw)) {
-      throw new ToolInputError(options.message ?? `${key} must be a non-negative integer`);
-    }
-  }
+  const message = options.message ?? `${key} must be a non-negative integer`;
+  const value = readStrictNumberParam(params, key, message, true);
   if (value !== undefined && options.max !== undefined && value > options.max) {
-    throw new ToolInputError(options.message ?? `${key} must be a non-negative integer`);
+    throw new ToolInputError(message);
   }
   return value;
 }
@@ -243,14 +255,9 @@ export function readFiniteNumberParam(
     maxExclusive?: boolean;
   } = {},
 ): number | undefined {
-  const value = readNumberParam(params, key, {
-    strict: true,
-  });
+  const message = options.message ?? `${key} must be a finite number`;
+  const value = readStrictNumberParam(params, key, message);
   if (value === undefined) {
-    const raw = readSnakeCaseParamRaw(params, key);
-    if (raw != null && !isBlankParamValue(raw)) {
-      throw new ToolInputError(options.message ?? `${key} must be a finite number`);
-    }
     return undefined;
   }
   if (
@@ -259,7 +266,7 @@ export function readFiniteNumberParam(
     (options.max !== undefined &&
       (options.maxExclusive ? value >= options.max : value > options.max))
   ) {
-    throw new ToolInputError(options.message ?? `${key} must be a finite number`);
+    throw new ToolInputError(message);
   }
   return value;
 }
@@ -345,32 +352,6 @@ export function payloadTextResult<TDetails>(payload: TDetails): AgentToolResult<
 
 type PublicToolProgress = Pick<AgentToolProgress, "text" | "id">;
 
-// Tool progress is a UI side channel. The model-facing tool result remains in
-// `content`; progress text must already be safe to show in channel previews.
-function emitToolProgress(
-  onUpdate: AgentToolUpdateCallback | undefined,
-  progress: PublicToolProgress,
-): void {
-  const text = progress.text.trim();
-  if (!onUpdate || !text) {
-    return;
-  }
-  try {
-    onUpdate({
-      content: [],
-      details: undefined,
-      progress: {
-        text,
-        visibility: "channel",
-        privacy: "public",
-        ...(progress.id ? { id: progress.id } : {}),
-      },
-    });
-  } catch {
-    // Progress is best-effort UI state; tool execution must not depend on subscribers.
-  }
-}
-
 // Long-running tools can arm delayed progress and cancel it on completion or
 // abort. This avoids stale "still working" lines after a fast or canceled call.
 export function scheduleToolProgress(
@@ -382,18 +363,30 @@ export function scheduleToolProgress(
   if (!onUpdate || options.signal?.aborted) {
     return () => {};
   }
-  let cleared = false;
   const clear = () => {
-    if (cleared) {
-      return;
-    }
-    cleared = true;
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", clear);
   };
   const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
     clear();
-    emitToolProgress(onUpdate, progress);
+    const text = progress.text.trim();
+    if (!text) {
+      return;
+    }
+    try {
+      onUpdate({
+        content: [],
+        details: undefined,
+        progress: {
+          text,
+          visibility: "channel",
+          privacy: "public",
+          ...(progress.id ? { id: progress.id } : {}),
+        },
+      });
+    } catch {
+      // Progress is best-effort UI state; tool execution must not depend on subscribers.
+    }
   }, delayMs);
   options.signal?.addEventListener("abort", clear, { once: true });
   return clear;
@@ -445,11 +438,6 @@ type AvailableTag = {
   emoji_name?: string | null;
 };
 
-/**
- * Validate and parse an `availableTags` parameter from untrusted input.
- * Returns `undefined` when the value is missing or not an array.
- * Entries that lack a string `name` are silently dropped.
- */
 export function parseAvailableTags(raw: unknown): AvailableTag[] | undefined {
   if (!Array.isArray(raw)) {
     return undefined;

@@ -21,12 +21,10 @@ export async function reportClawHubInstallTelemetry(
   }
   await withClawHubResponse(
     {
-      baseUrl: params.baseUrl,
+      ...params,
       path: "/api/cli/telemetry/install",
       method: "POST",
       token,
-      timeoutMs: params.timeoutMs,
-      fetchImpl: params.fetchImpl,
       json,
     },
     async ({ response, url, hasToken }) => {

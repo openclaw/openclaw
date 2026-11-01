@@ -18,24 +18,20 @@ export function resolveAttemptDispatchApiKey(params: {
 
 export function createScopedAuthProfileStore(
   store: AuthProfileStore,
-  profileIds: string | undefined | string[],
+  profileIds: readonly string[],
 ): AuthProfileStore {
   const profiles = store.profiles ?? {};
-  const normalizedProfileIds = (Array.isArray(profileIds) ? profileIds : [profileIds])
-    .map((profileId) => profileId?.trim())
-    .filter((profileId): profileId is string => Boolean(profileId));
+  const normalizedProfileIds = profileIds.map((profileId) => profileId.trim()).filter(Boolean);
   const scopedProfiles = Object.fromEntries(
     normalizedProfileIds.flatMap((profileId) => {
       const credential = profiles[profileId];
       return credential ? [[profileId, credential] as const] : [];
     }),
   );
-  const scopedRuntimeExternalProfileIds = (store.runtimeExternalProfileIds ?? []).filter(
-    (profileId) => scopedProfiles[profileId],
-  );
-  const scopedRuntimePersistedProfileIds = (store.runtimePersistedProfileIds ?? []).filter(
-    (profileId) => scopedProfiles[profileId],
-  );
+  const filterProfiles = (ids?: readonly string[]) =>
+    (ids ?? []).filter((profileId) => scopedProfiles[profileId]);
+  const scopedRuntimeExternalProfileIds = filterProfiles(store.runtimeExternalProfileIds);
+  const scopedRuntimePersistedProfileIds = filterProfiles(store.runtimePersistedProfileIds);
   return Object.keys(scopedProfiles).length > 0
     ? {
         version: store.version,

@@ -11,6 +11,9 @@ import { formatHumanList } from "../../shared/human-list.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatDocsHelp } from "../help-format.js";
 
+type AuditCliOptions = AuditListCommandOptions &
+  Partial<Record<"agent" | "session" | "run" | "execution", string>>;
+
 /** Register the bounded operator audit query command. */
 export function registerAuditCommand(program: Command): void {
   program
@@ -34,24 +37,15 @@ export function registerAuditCommand(program: Command): void {
     .option("--explain", "Inspect execution identity and run-admission reasoning", false)
     .option("--json", "Output a bounded JSON page", false)
     .addHelpText("after", () => formatDocsHelp("/cli/audit"))
-    .action(async (opts) => {
+    .action(async ({ agent, session, run, execution, ...opts }: AuditCliOptions) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         await auditListCommand(
           {
-            agentId: opts.agent as string | undefined,
-            sessionKey: opts.session as string | undefined,
-            runId: opts.run as string | undefined,
-            executionId: opts.execution as string | undefined,
-            kind: opts.kind as AuditListCommandOptions["kind"],
-            status: opts.status as AuditListCommandOptions["status"],
-            direction: opts.direction as AuditListCommandOptions["direction"],
-            channel: opts.channel as string | undefined,
-            after: opts.after as string | undefined,
-            before: opts.before as string | undefined,
-            cursor: opts.cursor as string | undefined,
-            limit: opts.limit as string | undefined,
-            explain: Boolean(opts.explain),
-            json: Boolean(opts.json),
+            ...opts,
+            agentId: agent,
+            sessionKey: session,
+            runId: run,
+            executionId: execution,
           },
           defaultRuntime,
         );

@@ -134,6 +134,43 @@ struct MacGatewayChatTransportMappingTests {
         }
     }
 
+    @MainActor
+    @Test func `card requests reach only the Gateway the window is pinned to`() async throws {
+        try await self.withSessionTransport(capabilities: ["progress-card-agent-scope-v1"]) { base, recorder in
+            let transport = MacGatewayChatTransport(connection: base.connection, outboxGatewayID: "fixture")
+            try await transport.clearProgressCard(sessionKey: "global", agentID: "agent-a", expectedRevision: 3)
+            _ = try await transport.refreshProgressCard(
+                sessionKey: "agent:agent-a:main", agentID: "agent-a", idempotencyKey: "refresh-1")
+            let frames = try await recorder.snapshot().map {
+                try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
+            }
+            #expect(frames.map { $0["method"] as? String } == ["progressCard.put", "progressCard.refresh"])
+            let clearParams = try #require(frames.first?["params"] as? [String: Any])
+            #expect(NSDictionary(dictionary: clearParams).isEqual(to: [
+                "sessionKey": "global", "agentId": "agent-a", "expectedRevision": 3,
+            ]))
+            #expect(frames.last?["params"] as? [String: String] == [
+                "sessionKey": "agent:agent-a:main", "idempotencyKey": "refresh-1",
+            ])
+        }
+        // The app-wide connection follows the configured Gateway. A window pinned to another Gateway
+        // fails before that connection is asked for a socket.
+        try await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": TestIsolation.tempConfigPath()]) {
+            let retired = MacGatewayChatTransport(connection: .shared, outboxGatewayID: "retired-gateway")
+            await #expect(throws: OpenClawChatTransportSendError.notDispatched) {
+                try await retired.clearProgressCard(
+                    sessionKey: "agent:main:main", agentID: "main", expectedRevision: 3)
+            }
+            await #expect(throws: OpenClawChatTransportSendError.notDispatched) {
+                _ = try await retired.refreshProgressCard(
+                    sessionKey: "agent:main:main", agentID: "main", idempotencyKey: "refresh-2")
+            }
+            await #expect(throws: OpenClawChatTransportSendError.notDispatched) {
+                _ = try await retired.fetchProgressCard(sessionKey: "agent:main:main", agentID: "main")
+            }
+        }
+    }
+
     private func withSessionTransport(
         connectInitially: Bool = true,
         mainSessionKey: String? = nil,
@@ -179,6 +216,7 @@ struct MacGatewayChatTransportMappingTests {
                         #""agentRuntime":{"id":"pi","source":"agent"}},"sessions":[]}"#
                 case "sessions.search": #"{"results":[],"sessions":[]}"#
                 case "chat.send": #"{"runId":"native-send","status":"ok"}"#
+                case "progressCard.refresh": #"{"runId":"fixture-refresh","status":"accepted","revision":3}"#
                 default: #"{"ok":true}"#
                 }
                 socket.emitReceiveSuccess(.data(Data(
@@ -534,10 +572,7 @@ struct MacGatewayChatTransportMappingTests {
             let result: OpenClawChatModelPatchResult?
             if leased {
                 let lease = try #require(await transport.acquireSessionSettingsRouteLease())
-                result = try await lease.patchSessionSettings(
-                    sessionKey: "global",
-                    agentID: "reviewer",
-                    patch: patch)
+                result = try await lease.patchSessionSettings("global", "reviewer", patch)
             } else {
                 result = try await transport.patchSessionSettings(
                     sessionKey: "global",
@@ -577,7 +612,7 @@ struct MacGatewayChatTransportMappingTests {
             do {
                 if leased {
                     let lease = try #require(await transport.acquireSessionSettingsRouteLease())
-                    _ = try await lease.patchSessionSettings(sessionKey: "global", agentID: nil, patch: patch)
+                    _ = try await lease.patchSessionSettings("global", nil, patch)
                 } else {
                     _ = try await transport.patchSessionSettings(sessionKey: "global", agentID: nil, patch: patch)
                 }
@@ -605,7 +640,7 @@ struct MacGatewayChatTransportMappingTests {
             await #expect(throws: OpenClawChatTransportSendError.notDispatched) {
                 if leased {
                     let lease = try #require(await transport.acquireSessionSettingsRouteLease())
-                    _ = try await lease.patchSessionSettings(sessionKey: "global", agentID: nil, patch: patch)
+                    _ = try await lease.patchSessionSettings("global", nil, patch)
                 } else {
                     _ = try await transport.patchSessionSettings(sessionKey: "global", agentID: nil, patch: patch)
                 }
@@ -622,7 +657,7 @@ struct MacGatewayChatTransportMappingTests {
                 fastMode: .some(.on), verboseLevel: .some("full"))
             if leased {
                 let lease = try #require(await transport.acquireSessionSettingsRouteLease())
-                _ = try await lease.patchSessionSettings(sessionKey: "global", agentID: "reviewer", patch: patch)
+                _ = try await lease.patchSessionSettings("global", "reviewer", patch)
             } else {
                 _ = try await transport.patchSessionSettings(sessionKey: "global", agentID: "reviewer", patch: patch)
             }

@@ -1,0 +1,48 @@
+[
+  {
+    "name": "reset with opaque keys independent of row identity",
+    "payload": {"reset": true, "version": 10, "keys": ["1", "opaque:β"], "presence": [{"ts": 1, "connectionId": "alpha", "watchedSessions": ["old"], "user": {"name": "Before", "avatar": "old"}}, {"ts": 2, "connectionId": "beta"}]},
+    "expected": [{"ts": 1, "connectionId": "alpha", "watchedSessions": ["old"], "user": {"name": "Before", "avatar": "old"}}, {"ts": 2, "connectionId": "beta"}]
+  },
+  {
+    "name": "patch clears fields replaces nested values inserts and reorders",
+    "payload": {"base": 10, "version": 11, "upsert": [{"key": "1", "set": {"ts": 3, "user": {"name": "After"}}, "unset": ["watchedSessions"]}, {"key": "z", "presence": {"ts": 4, "connectionId": "gamma"}}], "remove": [], "order": ["z", "opaque:β", "1"]},
+    "expected": [{"ts": 4, "connectionId": "gamma"}, {"ts": 2, "connectionId": "beta"}, {"ts": 3, "connectionId": "alpha", "user": {"name": "After"}}]
+  },
+  {
+    "name": "remove preserves complete server order",
+    "payload": {"base": 11, "version": 12, "upsert": [], "remove": ["opaque:β", "z"], "order": ["1"]},
+    "expected": [{"ts": 3, "connectionId": "alpha", "user": {"name": "After"}}]
+  },
+  {
+    "name": "version gap requires recovery",
+    "payload": {"base": 13, "version": 14, "upsert": [], "remove": [], "order": ["1"]},
+    "expected": null
+  },
+  {
+    "name": "recovery reset replaces the roster",
+    "payload": {"reset": true, "version": 15, "keys": ["new"], "presence": [{"ts": 5, "connectionId": "delta"}]},
+    "expected": [{"ts": 5, "connectionId": "delta"}]
+  },
+  {
+    "name": "patching an unknown row requires recovery",
+    "payload": {"base": 15, "version": 16, "upsert": [{"key": "missing", "set": {"ts": 6}, "unset": []}], "remove": [], "order": ["new", "missing"]},
+    "expected": null
+  },
+  {
+    "name": "duplicate order requires recovery",
+    "payload": {"base": 15, "version": 16, "upsert": [], "remove": [], "order": ["new", "new"]},
+    "expected": null
+  },
+  {
+    "name": "reconnect retires the previous keyed baseline",
+    "reconnect": true,
+    "payload": {"base": 15, "version": 16, "upsert": [], "remove": [], "order": ["new"]},
+    "expected": null
+  },
+  {
+    "name": "fresh empty reset is authoritative",
+    "payload": {"reset": true, "version": 1, "keys": [], "presence": []},
+    "expected": []
+  }
+]

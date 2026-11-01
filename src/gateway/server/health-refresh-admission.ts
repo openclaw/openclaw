@@ -1,4 +1,3 @@
-import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 
@@ -13,11 +12,7 @@ export function shouldScheduleBackgroundHealthRefresh(
   now: number,
 ): boolean {
   const startedAt = backgroundRefreshStartedAt.get(refresh);
-  if (
-    startedAt !== undefined &&
-    !isFutureDateTimestampMs(startedAt, { nowMs: now }) &&
-    now - startedAt < HEALTH_REFRESH_INTERVAL_MS
-  ) {
+  if (startedAt !== undefined && now - startedAt < HEALTH_REFRESH_INTERVAL_MS) {
     return false;
   }
   // The lifecycle-owned function isolates independent Gateways without retaining them.

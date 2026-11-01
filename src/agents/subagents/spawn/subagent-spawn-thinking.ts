@@ -1,52 +1,37 @@
-import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { ResolvedAgentConfig } from "../../agent-scope-config.js";
 
 export function resolveSubagentThinkingOverride(params: {
   cfg: OpenClawConfig;
-  requesterAgentConfig?: unknown;
-  targetAgentConfig?: unknown;
+  requesterAgentConfig?: ResolvedAgentConfig;
+  targetAgentConfig?: ResolvedAgentConfig;
   thinkingOverrideRaw?: string;
   callerThinkingRaw?: string;
+  callerThinkingExplicit?: boolean;
 }) {
-  const requesterSubagents = asOptionalObjectRecord(
-    asOptionalObjectRecord(params.requesterAgentConfig)?.subagents,
-  );
-  const targetSubagents = asOptionalObjectRecord(
-    asOptionalObjectRecord(params.targetAgentConfig)?.subagents,
-  );
-  const defaultSubagents = asOptionalObjectRecord(params.cfg.agents?.defaults?.subagents);
   const resolvedThinkingDefaultRaw =
-    normalizeOptionalString(requesterSubagents?.thinking) ??
-    normalizeOptionalString(targetSubagents?.thinking) ??
-    normalizeOptionalString(defaultSubagents?.thinking);
+    normalizeOptionalString(params.requesterAgentConfig?.subagents?.thinking) ??
+    normalizeOptionalString(params.targetAgentConfig?.subagents?.thinking) ??
+    normalizeOptionalString(params.cfg.agents?.defaults?.subagents?.thinking);
 
   const overrideCandidateRaw = params.thinkingOverrideRaw || resolvedThinkingDefaultRaw;
-  if (overrideCandidateRaw) {
-    const normalizedThinking = normalizeThinkLevel(overrideCandidateRaw);
-    if (!normalizedThinking) {
-      return {
-        status: "error" as const,
-        thinkingCandidateRaw: overrideCandidateRaw,
-      };
-    }
-
+  // An automatic parent tier must not become a saved explicit child preference.
+  const candidate =
+    overrideCandidateRaw ||
+    (params.callerThinkingExplicit === false ? undefined : params.callerThinkingRaw);
+  const normalizedThinking = candidate ? normalizeThinkLevel(candidate) : undefined;
+  if (overrideCandidateRaw && !normalizedThinking) {
     return {
-      status: "ok" as const,
-      thinkingOverride: normalizedThinking,
-      initialSessionPatch: {
-        thinkingLevel: normalizedThinking,
-      },
+      status: "error" as const,
+      thinkingCandidateRaw: overrideCandidateRaw,
     };
   }
 
-  const normalizedThinking = params.callerThinkingRaw
-    ? normalizeThinkLevel(params.callerThinkingRaw)
-    : undefined;
   return {
     status: "ok" as const,
-    thinkingOverride: undefined,
+    thinkingOverride: overrideCandidateRaw ? normalizedThinking : undefined,
     initialSessionPatch: normalizedThinking ? { thinkingLevel: normalizedThinking } : {},
   };
 }

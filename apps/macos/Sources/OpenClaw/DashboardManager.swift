@@ -36,6 +36,8 @@ final class DashboardManager {
     @ObservationIgnored let connectionProvider: @Sendable (DashboardGatewayTarget) async -> GatewayConnection
     @ObservationIgnored let browserIdentityURLProvider:
         @Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws -> URL?
+    @ObservationIgnored let controlUiBasePathProvider:
+        @Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws -> String?
     @ObservationIgnored let legacyCredentialsProvider:
         @Sendable (DashboardGatewayTarget, GatewayConnection.EndpointSnapshot) async throws
         -> DashboardNativeGatewayAuth.LegacyCredentials
@@ -73,6 +75,8 @@ final class DashboardManager {
         },
         browserIdentityURLProvider: (@Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws
             -> URL?)? = nil,
+        controlUiBasePathProvider: (@Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws
+            -> String?)? = nil,
         legacyCredentialsProvider: (@Sendable (DashboardGatewayTarget, GatewayConnection.EndpointSnapshot) async throws
             -> DashboardNativeGatewayAuth.LegacyCredentials)? = nil,
         routeProbe: @escaping @Sendable (DashboardRouteProbePurpose) async -> Void = { purpose in
@@ -104,6 +108,10 @@ final class DashboardManager {
         self.browserIdentityURLProvider = browserIdentityURLProvider ?? { target, config in
             let connection = await connectionProvider(target)
             return try await connection.controlUiBrowserIdentityURL(config: config)
+        }
+        self.controlUiBasePathProvider = controlUiBasePathProvider ?? { target, config in
+            let connection = await connectionProvider(target)
+            return try await connection.controlUiBasePath(config: config)
         }
         self.legacyCredentialsProvider = legacyCredentialsProvider ?? { target, endpoint in
             let connection = await connectionProvider(target)
@@ -185,11 +193,10 @@ final class DashboardManager {
                     }
                 }
             }
-            let windowNames: [Notification.Name] = [
+            self.gatewayRefreshObservers += [
                 NSWindow.didBecomeKeyNotification,
                 NSWindow.willCloseNotification,
-            ]
-            self.gatewayRefreshObservers += windowNames.map { name in
+            ].map { name in
                 NotificationCenter.default.addObserver(
                     forName: name,
                     object: nil,
@@ -315,7 +322,7 @@ final class DashboardManager {
         let configuration: WindowConfiguration
         do {
             configuration = try await dashboardConfiguration(
-                endpoint: endpoint, mode: mode, target: .primary, token: authToken)
+                endpoint: endpoint, mode: mode, target: .primary, token: authToken).configuration
         } catch {
             guard self.endpointGeneration == generation else { return }
             for controller in currentControllers() {
@@ -328,13 +335,12 @@ final class DashboardManager {
             return
         }
         guard self.endpointGeneration == generation else { return }
-        let dashboardURL = configuration.url
         let auth = configuration.auth
         for controller in currentControllers() {
             let key = ObjectIdentifier(controller)
             let previousRoute = self.displayedPrimaryRoutes[key]
             let revisionChanged = (previousRoute?.revision).map { $0 != routeRevision } ?? (routeRevision > 0)
-            let routeChanged = revisionChanged || controller.tlsParams != configuration.tlsParams ||
+            let routeChanged = revisionChanged || controller.documentHost.tlsParams != configuration.tlsParams ||
                 controller.auth.gatewayUrl != auth.gatewayUrl
             let credentialChanged = controller.auth != auth
             if routeChanged || credentialChanged {
@@ -354,10 +360,12 @@ final class DashboardManager {
                 controller.documentHost.nativeGatewayAuthProvider = configuration.nativeAuthProvider
                 controller.documentHost.legacyNativeCredentials = configuration.legacyNativeCredentials
                 let updateBridgeEnabled = controller === self.controller && Self.updateBridgeEnabled(mode: mode)
-                if dashboardURL == controller.currentURL {
+                // Reconcile failed documents even when the route is unchanged;
+                // update preserves live content and loads already in flight.
+                if auth.hasCredential || auth.hasAcceptedNativeBinding || auth.usesBrowserIdentity {
+                    controller.update(url: configuration.url, auth: auth, updateBridgeEnabled: updateBridgeEnabled)
+                } else if configuration.url == controller.currentURL {
                     controller.setUpdateBridgeEnabled(updateBridgeEnabled)
-                } else if auth.hasCredential || auth.hasAcceptedNativeBinding || auth.usesBrowserIdentity {
-                    controller.update(url: dashboardURL, auth: auth, updateBridgeEnabled: updateBridgeEnabled)
                 }
                 self.displayedPrimaryRoutes[key] = (routeRevision, previousRoute?.authority)
             }
@@ -370,7 +378,7 @@ final class DashboardManager {
             current,
             configuration: WindowConfiguration(
                 url: Self.failureURL,
-                auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+                auth: .unauthenticated,
                 tlsParams: nil,
                 mode: .unconfigured,
                 displayName: "OpenClaw"),
@@ -418,10 +426,20 @@ final class DashboardManager {
         return controller.auth
     }
 
+    /// Reopen restores the last focused Dashboard window instead of raising the main window over it.
+    /// A closed main window is still reopened by an explicit presentation.
+    private var lastFocusedDashboardToReopen: DashboardWindowController? {
+        guard let previous = self.lastFrontmostWindow?.windowController as? DashboardWindowController
+        else { return nil }
+        if previous.isHiddenForExperience { return previous }
+        guard previous !== self.controller, previous.isWindowOpen, self.controller?.isWindowOpen == true
+        else { return nil }
+        return previous
+    }
+
     @discardableResult
     func showConfiguredWindowIfPossible() -> Bool {
-        if let previous = self.lastFrontmostWindow?.windowController as? DashboardWindowController,
-           previous.isHiddenForExperience { return false }
+        if self.lastFocusedDashboardToReopen != nil { return false }
         guard self.mainTarget == .primary, self.controller?.pendingGatewaySwitch == nil else { return false }
         // Remote dashboards must resolve the server's sign-in route before any
         // document receives native credentials, including the synchronous fast path.
@@ -508,16 +526,19 @@ final class DashboardManager {
         }
     }
 
+    @discardableResult
     func show(
         atPath path: String,
         search: String? = nil,
         target requestedTarget: DashboardGatewayTarget? = nil,
-        ifCurrent: @escaping @MainActor () -> Bool = { true }) async
+        ifCurrent: @escaping @MainActor () -> Bool = { true },
+        waitForLoad: Bool = false,
+        reportErrors: Bool = true) async -> Result<Void, Error>
     {
-        guard ifCurrent() else { return }
+        guard ifCurrent() else { return .failure(CancellationError()) }
         let target = requestedTarget ?? self.frontmostDashboard()?.target ?? self.mainTarget
         let source = self.dashboardController(for: target) ?? (self.mainTarget == target ? self.controller : nil)
-        let windowIntent = WindowIntent(source)
+        var windowIntent = WindowIntent(source)
         let lifetime = self.windowLifetime
         let intent = self.beginNavigation(for: target, source: source)
         defer { self.finishNavigation(intent, for: target) }
@@ -533,11 +554,11 @@ final class DashboardManager {
             let destination: DashboardWindowController?
             if requestedTarget == nil, source == nil {
                 try await self.show()
-                guard isCurrent(), self.mainTarget == target else { return }
+                guard isCurrent(), self.mainTarget == target else { return .failure(CancellationError()) }
                 destination = self.controller
             } else {
                 let (configuration, endpoint) = try await self.windowConfiguration(for: target, userGesture: true)
-                guard isCurrent() else { return }
+                guard isCurrent() else { return .failure(CancellationError()) }
                 destination = self.presentDashboard(
                     configuration: configuration, endpoint: endpoint, target: target, source: currentSource())
             }
@@ -546,14 +567,33 @@ final class DashboardManager {
                       byAppendingSameAppPath: path,
                       search: search,
                       to: destination.currentURL)
-            else { return }
+            else { return .failure(CancellationError()) }
             destination.dispatchNativeNavigation(DashboardNativeNavigation(
                 path: path,
                 search: search,
                 fallbackURL: fallbackURL))
+            // Dispatch advances the window's intent; follow that intent through document replacement.
+            windowIntent = WindowIntent(destination)
+            if waitForLoad {
+                do {
+                    try await destination.waitForDocumentLoad()
+                } catch {
+                    guard self.navigationIntents[target]?.id == intent,
+                          let current = windowIntent.currentController(for: target, in: self)
+                    else { throw error }
+                    // Retire the document too, so cancelled setup cannot continue behind native onboarding.
+                    self.retireNavigation(for: target, from: current)
+                    current.closeDashboard()
+                    throw error
+                }
+            }
+            guard isCurrent() else { return .failure(CancellationError()) }
+            return .success(())
         } catch {
-            guard isCurrent(), !(error is CancellationError) else { return }
-            self.presentGatewayError(error, title: "Could Not Open Dashboard", over: currentSource()?.window)
+            if reportErrors, isCurrent(), !(error is CancellationError) {
+                self.presentGatewayError(error, title: "Could Not Open Dashboard", over: currentSource()?.window)
+            }
+            return .failure(error)
         }
     }
 
@@ -563,7 +603,7 @@ final class DashboardManager {
         let controller = self.controller ?? makeController(
             configuration: WindowConfiguration(
                 url: Self.failureURL,
-                auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+                auth: .unauthenticated,
                 tlsParams: nil,
                 mode: .unconfigured,
                 displayName: "OpenClaw"),
@@ -629,17 +669,13 @@ final class DashboardManager {
             // This also invalidates a handoff still suspended in show(atPath:).
             self.retireNavigation(for: target)
         }
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.shared.activate()
         if let source {
             // Admit once to the native window; replacements transfer its ordered queue before loading.
             let needsRecovery = !source.isWindowOpen || !source.canDeliverNativeCommands
             source.dispatchNativeCommand(command)
             source.show()
-            guard needsRecovery, source.pendingGatewaySwitch == nil else { return }
-            if source === self.controller, target == .primary, self.showConfiguredWindowIfPossible() {
-                return
-            }
-            self.switchTarget(target, in: source, forceReload: true)
+            if needsRecovery { self.recoverDashboard(source) }
             return
         }
         self.pendingOpenCommands.append(command)
@@ -662,6 +698,15 @@ final class DashboardManager {
                 self.showFailure(error)
             }
         }
+    }
+
+    func recoverDashboard(_ source: DashboardWindowController) {
+        guard source.pendingGatewaySwitch == nil else { return }
+        let target = self.target(for: source) ?? self.mainTarget
+        if source === self.controller, target == .primary, self.showConfiguredWindowIfPossible() {
+            return
+        }
+        self.switchTarget(target, in: source, forceReload: true)
     }
 
     private func installMainController(_ controller: DashboardWindowController) {
@@ -867,8 +912,9 @@ extension DashboardManager {
         guard isMainWindow || windowID != nil else { return nil }
         let preserveNavigation = self.target(for: source) == target &&
             Self.notificationRoute(source.currentURL) == Self.notificationRoute(configuration.url)
-        let signInReturnURL = source.browserSignInReturnURL(
-            session: configuration.browserSession, dashboardURL: configuration.url)
+        let restoringRoute = source.browserSignInReturnURL(
+            session: configuration.browserSession, dashboardURL: configuration.url) ??
+            (preserveNavigation ? source.webView.url : nil)
         let pendingActions = source.takePendingNativeActions()
         self.displayedPrimaryRoutes[ObjectIdentifier(source)] = nil
         // Background reconciliation must not resurrect a window the user closed;
@@ -891,7 +937,7 @@ extension DashboardManager {
         } else if let windowID {
             self.auxiliaryWindows[windowID] = AuxiliaryWindowInstance(target: target, controller: replacement)
         }
-        self.loadWindow(replacement, configuration: configuration, present: false, restoringRoute: signInReturnURL)
+        self.loadWindow(replacement, configuration: configuration, present: false, restoringRoute: restoringRoute)
         if shouldPresent, present == true || !replacement.isWindowOpen {
             replacement.show()
         }
@@ -1032,10 +1078,12 @@ extension DashboardManager {
     {
         self.profileCredentialRevisions[profileID, default: 0] &+= 1
         for instance in dashboardControllers() where instance.target == .profile(profileID) &&
-            (instance.controller.browserSession != nil || instance.controller.signedOut != nil || retireManualDocuments)
+            (instance.controller.documentHost.browserSession != nil || instance.controller
+                .signedOut != nil || retireManualDocuments)
         {
             if error == .expired {
-                guard let session = instance.controller.browserSession, session.expiresAt <= Date() else { continue }
+                guard let session = instance.controller.documentHost.browserSession,
+                      session.expiresAt <= Date() else { continue }
                 self.profileBrowserStores[profileID]?.expire(session)
             }
             instance.controller.invalidateBrowserSession(error: error)
@@ -1079,7 +1127,8 @@ extension DashboardManager {
             observation.needsRefresh = false
             if case let .profile(profileID) = target,
                dashboardControllers().contains(where: {
-                   $0.target == target && $0.controller.browserSession.map { $0.expiresAt <= Date() } == true
+                   $0.target == target && $0.controller.documentHost.browserSession
+                       .map { $0.expiresAt <= Date() } == true
                })
             {
                 self.invalidateProfileDocument(profileID: profileID, error: .expired)
@@ -1336,9 +1385,7 @@ extension DashboardManager {
 
     private func showResolvedDashboard(userGesture: Bool) async throws {
         try Task.checkCancellation()
-        if let previous = self.lastFrontmostWindow?.windowController as? DashboardWindowController,
-           previous.isHiddenForExperience, let target = self.target(for: previous)
-        {
+        if let previous = self.lastFocusedDashboardToReopen, let target = self.target(for: previous) {
             await self.openWindow(for: target, reuseExisting: true).value
             return
         }
@@ -1437,7 +1484,7 @@ extension DashboardManager {
         if available.count == 1 {
             return .profile(available[0].id)
         }
-        switch WebChatManager.promptForGatewayProfile(profiles: available, preferredID: nil) {
+        switch await WebChatManager.promptForGatewayProfile(profiles: available, preferredID: nil) {
         case let .profile(profile): return .profile(profile.id)
         case .local: return .local
         case .manage:

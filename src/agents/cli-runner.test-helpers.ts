@@ -6,11 +6,12 @@ import { expect, vi } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
-  appendTranscriptEventSync,
   appendTranscriptMessageSync,
   replaceSessionEntrySync,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
+import { appendTranscriptEventSync } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import type { CliSessionBinding } from "../config/sessions/types.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { McpLoopbackRequestContext } from "../gateway/mcp-grant-store.js";
 import {
@@ -26,6 +27,8 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureEnv } from "../test-utils/env.js";
+import { drainSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
@@ -160,17 +163,13 @@ type PreparedCliRunContextOverrides = {
   backend?: Partial<PreparedCliRunContext["preparedBackend"]["backend"]>;
   preparedEnv?: PreparedCliRunContext["preparedBackend"]["env"];
   resolveExecutionArgs?: PreparedCliRunContext["backendResolved"]["resolveExecutionArgs"];
-  toolAvailabilityEnforcement?: PreparedCliRunContext["backendResolved"]["toolAvailabilityEnforcement"];
   config?: PreparedCliRunContext["params"]["config"];
-  mcpConfigHash?: string;
-  mcpResumeHash?: string;
   mcpDeliveryCapture?: boolean;
   skillsSnapshot?: PreparedCliRunContext["params"]["skillsSnapshot"];
   thinkLevel?: PreparedCliRunContext["params"]["thinkLevel"];
   fastMode?: PreparedCliRunContext["params"]["fastMode"];
   executionMode?: PreparedCliRunContext["params"]["executionMode"];
   cliToolAvailability?: PreparedCliRunContext["params"]["cliToolAvailability"];
-  emitCommentaryText?: boolean;
   workspaceDir?: string;
   systemPrompt?: string;
   timeoutMs?: number;
@@ -251,7 +250,6 @@ export function buildPreparedCliRunContext(
       fastMode: overrides.fastMode,
       executionMode: overrides.executionMode,
       cliToolAvailability: overrides.cliToolAvailability,
-      emitCommentaryText: overrides.emitCommentaryText,
       onSuccessfulAuthBinding: overrides.onSuccessfulAuthBinding,
       timeoutMs: overrides.timeoutMs ?? 1_000,
       runId,
@@ -272,8 +270,7 @@ export function buildPreparedCliRunContext(
             : "openai",
       resolveExecutionArgs: overrides.resolveExecutionArgs,
       toolAvailabilityEnforcement:
-        overrides.toolAvailabilityEnforcement ??
-        (provider === "google-gemini-cli" ? "prepare-execution" : "execution-args"),
+        provider === "google-gemini-cli" ? "prepare-execution" : "execution-args",
       runtimeArtifact: overrides.runtimeArtifact,
     },
     executionTarget: resolveCliExecutionTarget({
@@ -283,8 +280,6 @@ export function buildPreparedCliRunContext(
     preparedBackend: {
       backend,
       env: overrides.preparedEnv ?? {},
-      ...(overrides.mcpConfigHash ? { mcpConfigHash: overrides.mcpConfigHash } : {}),
-      ...(overrides.mcpResumeHash ? { mcpResumeHash: overrides.mcpResumeHash } : {}),
     },
     reusableCliSession: { mode: "none" },
     hadSessionFile: false,
@@ -294,7 +289,7 @@ export function buildPreparedCliRunContext(
     systemPrompt: overrides.systemPrompt ?? "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     authEpochVersion: 2,
-    claudeSkillsPluginArgs: [],
+    claudeSkillsPlugin: { args: [] },
     ...(overrides.mcpDeliveryCapture ? { mcpDeliveryCapture: true } : {}),
   };
 }
@@ -360,21 +355,42 @@ export async function expectPathMissing(targetPath: string) {
   throw new Error(`expected ${targetPath} to be missing`);
 }
 
+export function createTestCliSessionBinding(
+  context: PreparedCliRunContext,
+  sessionId: string,
+): CliSessionBinding {
+  return {
+    sessionId,
+    authEpoch: context.authEpoch,
+    authEpochVersion: context.authEpochVersion,
+    extraSystemPromptHash: context.extraSystemPromptHash,
+    messageToolPolicyHash: context.messageToolPolicyHash,
+    promptToolNamesHash: context.promptToolNamesHash,
+    cwdHash: context.cwdHash,
+    mcpConfigHash: context.preparedBackend.mcpConfigHash,
+    mcpResumeHash: context.preparedBackend.mcpResumeHash,
+  };
+}
+
 type PrepareCliRun = (params: RunCliAgentParams) => Promise<PreparedCliRunContext>;
 
-export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
+export function createCliRunnerPrepareFixture(
+  prepareCliRun: PrepareCliRun,
+  suiteSessionDirs?: { make(): string },
+) {
   const lifetime = createFixtureLifetime();
   const admissions: PreparedAgentRunAdmission[] = [];
   const tempDirs = new Set<string>();
-  const hadStateDir = Object.hasOwn(process.env, "OPENCLAW_STATE_DIR");
-  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+  const environment = captureEnv(["OPENCLAW_STATE_DIR"]);
   let defaultSession:
     | { dir: string; sessionFile: string; sessionTarget: SessionTranscriptRuntimeTarget }
     | undefined;
   const databasePaths = new Set<string>();
 
   const createSession = () => {
-    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-prepare-")));
+    const dir =
+      suiteSessionDirs?.make() ??
+      fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-prepare-")));
     tempDirs.add(dir);
     process.env.OPENCLAW_STATE_DIR = dir;
     const sessionTarget = {
@@ -459,24 +475,27 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
     async cleanup() {
       await lifetime.cleanup();
       admissions.splice(0).forEach((admission) => admission.close());
+      if (suiteSessionDirs) {
+        for (const dir of tempDirs) {
+          await drainSessionStateForTest({ stateDir: dir });
+        }
+      }
       for (const databasePath of databasePaths) {
         await closeOpenClawAgentDatabaseByPathAsync(databasePath);
       }
       databasePaths.clear();
       for (const dir of tempDirs) {
         closeAuthProfileReadPool({ kind: "root", rootPath: dir });
-        await closeOpenClawStateDatabaseByPathAsync(
-          resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }),
-        );
-        fs.rmSync(dir, { recursive: true, force: true });
+        if (!suiteSessionDirs) {
+          await closeOpenClawStateDatabaseByPathAsync(
+            resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }),
+          );
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
       }
       tempDirs.clear();
       defaultSession = undefined;
-      if (hadStateDir) {
-        process.env.OPENCLAW_STATE_DIR = originalStateDir;
-      } else {
-        delete process.env.OPENCLAW_STATE_DIR;
-      }
+      environment.restore();
     },
   };
 }
@@ -562,6 +581,29 @@ export function createContextEngineCustodyFixture() {
     async cleanup() {
       await resources.release();
       close();
+    },
+  };
+}
+
+export function createPersistedCompletionHandoff(
+  sourceSessionKey: string,
+  sourceSessionId: string,
+  target: { sessionKey: string; sessionId: string },
+) {
+  return {
+    trustedInternalHandoff: {
+      kind: "subagent-completion" as const,
+      sourceSessionKey,
+      sourceSessionId,
+      targetSessionKey: target.sessionKey,
+      targetSessionId: target.sessionId,
+      provider: "claude-cli",
+      model: "opus",
+    },
+    inputProvenance: {
+      kind: "inter_session" as const,
+      sourceTool: "subagent_announce",
+      sourceSessionKey,
     },
   };
 }

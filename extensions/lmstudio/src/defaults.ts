@@ -1,4 +1,3 @@
-/** Shared LM Studio defaults used by setup, runtime discovery, and embeddings paths. */
 export const LMSTUDIO_DEFAULT_BASE_URL = "http://localhost:1234";
 export const LMSTUDIO_DEFAULT_INFERENCE_BASE_URL = `${LMSTUDIO_DEFAULT_BASE_URL}/v1`;
 export const LMSTUDIO_DOCKER_HOST_BASE_URL = "http://host.docker.internal:1234";

@@ -5,7 +5,7 @@ import {
   coerceTransportToolCallArguments,
   sanitizeTransportPayloadText,
 } from "../transports/transport-stream-shared.js";
-import type { Tool } from "../types.js";
+import { hasRuntimeContextMarker, type Tool } from "../types.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
@@ -45,14 +45,6 @@ function sanitizeGeminiThoughtSignature(value: string | undefined): string | und
   return trimmed && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(trimmed)
     ? trimmed
     : undefined;
-}
-
-function toolCallThoughtSignatureReplayKey(
-  id: string,
-  name: string,
-  args: Record<string, unknown>,
-): string {
-  return [id, name, stableStringifyGoogleToolCallValue(args)].join("\u0000");
 }
 
 export function requiresGoogleToolCallId(modelId: string): boolean {
@@ -95,40 +87,44 @@ export function projectGoogleMessages(params: {
       flushToolResultRun();
     }
     if (msg.role === "user") {
-      if (typeof msg.content === "string") {
-        contents.push({
-          role: "user",
-          parts: [{ text: sanitizeText(msg.content) || " " }],
-        });
-      } else {
-        const parts: GoogleContentPart[] = msg.content.map((item) => {
-          if (item.type === "text") {
-            return { text: sanitizeText(item.text) || " " };
-          }
-          if (managed && item.type === "video") {
-            return (
-              params.videoPart?.(item) ?? { text: "(video omitted: native video slot unavailable)" }
-            );
-          }
-          return {
-            inlineData: {
-              mimeType: item.mimeType,
-              data: item.data,
-            },
-          };
-        });
-        const visibleParts =
-          managed && !model.input.includes("image")
-            ? parts.filter((part) => !part.inlineData)
-            : parts;
-        if (visibleParts.length === 0) {
-          visibleParts.push({ text: " " });
+      const sourceContent =
+        typeof msg.content === "string"
+          ? [{ type: "text" as const, text: msg.content }]
+          : msg.content;
+      const parts: GoogleContentPart[] = sourceContent.map((item) => {
+        if (item.type === "text") {
+          return { text: sanitizeText(item.text) || " " };
         }
-        contents.push({
-          role: "user",
-          parts: visibleParts,
+        if (managed && item.type === "video") {
+          return (
+            params.videoPart?.(item) ?? { text: "(video omitted: native video slot unavailable)" }
+          );
+        }
+        return {
+          inlineData: {
+            mimeType: item.mimeType,
+            data: item.data,
+          },
+        };
+      });
+      const visibleParts =
+        managed && !model.input.includes("image")
+          ? parts.filter((part) => !part.inlineData)
+          : parts;
+      if (visibleParts.length === 0) {
+        visibleParts.push({ text: " " });
+      }
+      if (hasRuntimeContextMarker(msg)) {
+        // Keep context separate: merging into a user turn rewrites its replayed
+        // bytes when turn-scoped context expires. Google has no developer role.
+        visibleParts.unshift({
+          text: "The following is runtime context, not a user request. Do not respond to or acknowledge this context.",
+        });
+        visibleParts.push({
+          text: "Use this context to continue responding to the user's request.",
         });
       }
+      contents.push({ role: "user", parts: visibleParts });
     } else if (msg.role === "assistant") {
       const parts: GoogleContentPart[] = [];
       let sawFunctionCall = false;
@@ -165,7 +161,7 @@ export function projectGoogleMessages(params: {
               (params.requiresToolCallSignature &&
                 isSameProviderAndModel &&
                 replaySignatures.size > 0))
-              ? toolCallThoughtSignatureReplayKey(block.id, block.name, args)
+              ? [block.id, block.name, stableStringifyGoogleToolCallValue(args)].join("\u0000")
               : "";
           if (managed && ownSignature) {
             nextReplaySignatures.set(replayKey, ownSignature);
@@ -220,7 +216,7 @@ export function projectGoogleMessages(params: {
 
       const modelSupportsMultimodalFunctionResponse = supportsMultimodalFunctionResponse(model.id);
 
-      const responseValue = hasText ? sanitizeText(textResult) : (mediaPlaceholder ?? "");
+      const responseValue = hasText ? textResult : (mediaPlaceholder ?? "");
 
       const imageParts: GoogleContentPart[] = imageContent.map((imageBlock) => ({
         inlineData: {

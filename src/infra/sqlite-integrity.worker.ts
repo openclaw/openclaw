@@ -1,8 +1,10 @@
 import { on } from "node:events";
+import fs from "node:fs";
 import { performance } from "node:perf_hooks";
+import { deserialize, serialize } from "node:v8";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { serializeNativeErrorResponse } from "./native-error-response.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { readSqliteIntegrityFileIdentity } from "./sqlite-file-generation.js";
 import type {
   SqliteIntegrityWorkerInput,
@@ -10,25 +12,22 @@ import type {
   SqliteIntegrityWorkerPhase,
   SqliteIntegrityWorkerResult,
 } from "./sqlite-integrity-worker.js";
-import { assertSqliteIntegrity, type SqliteIntegrityCheckTiming } from "./sqlite-integrity.js";
+import { assertSqliteIntegrity, SqliteIntegrityError } from "./sqlite-integrity.js";
 import { configureSqliteMaintenanceCache } from "./sqlite-maintenance-cache.js";
 
-function nativeErrorDetails(error: Error) {
-  // SAFETY: Node's filesystem and SQLite errors attach these optional diagnostic fields.
-  const nativeError = error as Error & { code?: string; errcode?: number };
-  return { message: error.message, code: nativeError.code, errcode: nativeError.errcode };
-}
-
-if (!process.send || !process.disconnect) {
+const synchronous = process.argv[2] === "--check-sync";
+if (!synchronous && (!process.send || !process.disconnect)) {
   throw new Error("SQLite integrity child requires parent IPC.");
 }
-const sendMessage = process.send.bind(process);
-const disconnect = process.disconnect.bind(process);
 
-function sendPhase(phase: SqliteIntegrityWorkerPhase): Promise<void> {
+function send(message: SqliteIntegrityWorkerMessage): Promise<void> {
+  if (!process.send) {
+    throw new Error("SQLite integrity child requires parent IPC.");
+  }
+  const sendMessage = process.send.bind(process);
   return new Promise((resolve, reject) => {
     // Flush each phase before native work can block this child's event loop.
-    sendMessage({ type: "phase", phase } satisfies SqliteIntegrityWorkerMessage, (error) => {
+    sendMessage(message, (error) => {
       if (error) {
         reject(error);
       } else {
@@ -38,22 +37,27 @@ function sendPhase(phase: SqliteIntegrityWorkerPhase): Promise<void> {
   });
 }
 
+function sendPhase(phase: SqliteIntegrityWorkerPhase): Promise<void> {
+  return synchronous ? Promise.resolve() : send({ type: "phase", phase });
+}
+
 async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrityWorkerResult> {
   let database: import("node:sqlite").DatabaseSync | undefined;
   let failure: Error | undefined;
   let checkElapsedMs: number | undefined;
-  const timing: SqliteIntegrityCheckTiming = {};
   try {
     await sendPhase("opening");
     readSqliteIntegrityFileIdentity(input.pathname, input.identity);
-    database = openNodeSqliteDatabase(input.pathname, { readOnly: true });
-    setSqliteBusyTimeout(database, input.busyTimeoutMs);
+    database = openNodeSqliteDatabase(input.pathname, {
+      readOnly: true,
+      timeout: input.busyTimeoutMs,
+    });
     configureSqliteMaintenanceCache(database);
     readSqliteIntegrityFileIdentity(input.pathname, input.identity);
     await sendPhase("checking");
     const startedAt = performance.now();
     try {
-      assertSqliteIntegrity(database, input.databaseLabel, "integrity_check", input.tables, timing);
+      assertSqliteIntegrity(database, input.databaseLabel, input.integrity);
     } finally {
       checkElapsedMs = performance.now() - startedAt;
     }
@@ -79,36 +83,36 @@ async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrity
     result = {
       ok: false,
       error: {
-        name: failure.name,
-        ...nativeErrorDetails(failure),
-        ...(failure.cause instanceof Error ? { cause: nativeErrorDetails(failure.cause) } : {}),
+        ...serializeNativeErrorResponse(failure),
+        ...(failure instanceof SqliteIntegrityError ? { findings: failure.findings } : {}),
       },
     };
   }
   if (checkElapsedMs !== undefined) {
     result.checkElapsedMs = checkElapsedMs;
   }
-  if (timing.tables) {
-    result.tables = timing.tables;
-  }
   return result;
 }
 
-// Plain inputs and results remain compatible with published one-shot parents.
-// SAFETY: Only the private integrity parent sends these requests; node:events leaves IPC payloads untyped.
-for await (const [input] of on(process, "message") as AsyncIterable<
-  [SqliteIntegrityWorkerInput | { type: "close" }]
->) {
-  if ("type" in input) {
-    disconnect();
-    break;
-  }
-  const result = await check(input);
-  await new Promise<void>((resolve, reject) => {
-    sendMessage(result, (error) => (error ? reject(error) : resolve()));
-  });
-  if (!input.reuse || !result.ok) {
-    disconnect();
-    break;
+if (synchronous) {
+  // SAFETY: Only the owning integrity parent supplies this private native payload.
+  const input = deserialize(fs.readFileSync(0)) as SqliteIntegrityWorkerInput;
+  fs.writeFileSync(1, serialize(await check(input)));
+} else {
+  // Plain inputs and results remain compatible with published one-shot parents.
+  // SAFETY: Only the private integrity parent sends these requests; node:events leaves IPC payloads untyped.
+  for await (const [input] of on(process, "message") as AsyncIterable<
+    [SqliteIntegrityWorkerInput | { type: "close" }]
+  >) {
+    if ("type" in input) {
+      process.disconnect?.();
+      break;
+    }
+    const result = await check(input);
+    await send(result);
+    if (!input.reuse || !result.ok) {
+      process.disconnect?.();
+      break;
+    }
   }
 }

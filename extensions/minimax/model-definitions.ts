@@ -1,5 +1,6 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { MINIMAX_DEFAULT_MODEL_ID, MINIMAX_TEXT_MODEL_CATALOG } from "./provider-models.js";
+import { MINIMAX_M31_MODEL_ID, MINIMAX_M31_PREVIEW_MODEL_ID } from "./thinking.js";
 
 export const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1";
 export const MINIMAX_API_BASE_URL = "https://api.minimax.io/anthropic";
@@ -14,30 +15,6 @@ export const MINIMAX_API_COST = {
   output: 2.4,
   cacheRead: 0.12,
   cacheWrite: 0,
-};
-const MINIMAX_M27_API_COST = {
-  input: 0.3,
-  output: 1.2,
-  cacheRead: 0.06,
-  cacheWrite: 0.375,
-};
-const MINIMAX_API_HIGHSPEED_COST = {
-  input: 0.6,
-  output: 2.4,
-  cacheRead: 0.06,
-  cacheWrite: 0.375,
-};
-const MINIMAX_M25_API_COST = {
-  input: 0.3,
-  output: 1.2,
-  cacheRead: 0.03,
-  cacheWrite: 0.375,
-};
-const MINIMAX_M25_API_HIGHSPEED_COST = {
-  input: 0.6,
-  output: 2.4,
-  cacheRead: 0.03,
-  cacheWrite: 0.375,
 };
 export const MINIMAX_HOSTED_COST = {
   input: 0,
@@ -57,21 +34,14 @@ type MinimaxTextModelDefinition = Omit<ModelDefinitionConfig, "input"> & {
   input: Array<"text" | "image">;
 };
 
-function resolveMinimaxApiCost(modelId: string): ModelDefinitionConfig["cost"] {
-  if (modelId === "MiniMax-M2.7") {
-    return MINIMAX_M27_API_COST;
-  }
-  if (modelId === "MiniMax-M2.5-highspeed") {
-    return MINIMAX_M25_API_HIGHSPEED_COST;
-  }
-  if (modelId === "MiniMax-M2.5") {
-    return MINIMAX_M25_API_COST;
-  }
-  if (modelId === "MiniMax-M2.7-highspeed") {
-    return MINIMAX_API_HIGHSPEED_COST;
-  }
-  return MINIMAX_API_COST;
-}
+const MINIMAX_API_COSTS = new Map<string, ModelDefinitionConfig["cost"]>([
+  [MINIMAX_M31_MODEL_ID, { input: 0.15, output: 0.6, cacheRead: 0.015, cacheWrite: 0 }],
+  [MINIMAX_M31_PREVIEW_MODEL_ID, MINIMAX_HOSTED_COST],
+  ["MiniMax-M2.7", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 }],
+  ["MiniMax-M2.5-highspeed", { input: 0.6, output: 2.4, cacheRead: 0.03, cacheWrite: 0.375 }],
+  ["MiniMax-M2.5", { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.375 }],
+  ["MiniMax-M2.7-highspeed", { input: 0.6, output: 2.4, cacheRead: 0.06, cacheWrite: 0.375 }],
+]);
 
 export function buildMinimaxModelDefinition(params: {
   id: string;
@@ -98,7 +68,7 @@ export function buildMinimaxModelDefinition(params: {
 export function buildMinimaxApiModelDefinition(modelId: string): MinimaxTextModelDefinition {
   return buildMinimaxModelDefinition({
     id: modelId,
-    cost: resolveMinimaxApiCost(modelId),
+    cost: MINIMAX_API_COSTS.get(modelId) ?? MINIMAX_API_COST,
     contextWindow:
       MINIMAX_TEXT_MODEL_CATALOG[modelId as MinimaxCatalogId]?.contextWindow ??
       DEFAULT_MINIMAX_CONTEXT_WINDOW,

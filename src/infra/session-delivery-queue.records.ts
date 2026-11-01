@@ -2,6 +2,7 @@ import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/source-reply-delivery-mode.types.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { sha256Hex } from "./crypto-digest.js";
 import type { DeliveryQueueCompletionRetention } from "./delivery-queue-sqlite.types.js";
 import { generateSecureUuid } from "./secure-random.js";
@@ -18,12 +19,7 @@ type SessionDeliveryOwnerReference = {
   deadlineAt: number;
 };
 
-type SessionDeliveryContext = {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
-};
+type SessionDeliveryContext = Pick<DeliveryContext, "channel" | "to" | "accountId" | "threadId">;
 
 type SessionDeliveryRetryPolicy = {
   maxRetries?: number;
@@ -65,7 +61,8 @@ export type QueuedSessionDeliveryPayload =
   | ({
       kind: "agentTurn";
       sessionKey: string;
-      message: string;
+      /** Legacy inference text is readable but never executed by the delivery queue. */
+      message?: string;
       messageId: string;
       expectedSessionId?: string;
       requesterBinding?: SessionDeliveryRequesterBinding;
@@ -84,8 +81,8 @@ export type QueuedSessionDeliveryPayload =
 export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
   id: string;
   enqueuedAt: number;
+  /** Legacy attempt suffix preserves transcript idempotency for produced media. */
   agentRunAttempt?: number;
-  lastChargedAgentRunAttempt?: number;
   retryCount: number;
   lastAttemptAt?: number;
   lastError?: string;
@@ -95,6 +92,11 @@ export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
   availableAt?: number;
   retainOnFailure?: true;
 };
+
+/** Old queued inference remains readable but cannot launch work after restart. */
+export function isProducedSessionDelivery(entry: QueuedSessionDelivery): boolean {
+  return entry.kind === "agentTurn" && (entry.expectedMediaUrls?.length ?? 0) > 0;
+}
 
 export function prepareClaimedSessionDelivery(
   params: QueuedSessionDeliveryPayload,
@@ -140,18 +142,6 @@ function buildEntryId(idempotencyKey?: string): string {
     return generateSecureUuid();
   }
   return sha256Hex(idempotencyKey);
-}
-
-export function prepareSessionDelivery(
-  params: QueuedSessionDeliveryPayload,
-): QueuedSessionDelivery {
-  return {
-    ...params,
-    ...(params.completionRetention === "permanent" ? { retainOnFailure: true as const } : {}),
-    id: buildEntryId(params.idempotencyKey),
-    enqueuedAt: Date.now(),
-    retryCount: 0,
-  };
 }
 
 /** Signals that a delivered result still needs durable settlement finalization. */

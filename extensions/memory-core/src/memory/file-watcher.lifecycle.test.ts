@@ -1,9 +1,10 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoryFileWatcher } from "./file-watcher.js";
+import { MemoryFileWatcher, type MemoryFileWatcherOptions } from "./file-watcher.js";
 import { MemoryWatchPolicy } from "./watch-policy.js";
 
 const observer = await vi.hoisted(async () => {
@@ -15,9 +16,14 @@ vi.mock("openclaw/plugin-sdk/file-access-runtime", async (original) => ({
   watch: observer.watch,
 }));
 const warnings = vi.hoisted(() => vi.fn());
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async (original) => {
-  const actual =
-    await original<typeof import("openclaw/plugin-sdk/memory-core-host-engine-foundation")>();
+type Observation = (typeof observer.observations)[number];
+const calls = (...spies: { mock: { calls: unknown[] } }[]) =>
+  spies.map((spy) => spy.mock.calls.length);
+function unavailable(entry: Observation, operation: "scan" | "watch", error: Error, code?: string) {
+  entry.health({ state: "unavailable", failure: { operation, error, code } });
+}
+vi.mock("openclaw/plugin-sdk/diagnostic-runtime", async (original) => {
+  const actual = await original<typeof import("openclaw/plugin-sdk/diagnostic-runtime")>();
   return {
     ...actual,
     createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => ({
@@ -47,64 +53,353 @@ describe("Memory observation lifecycle", () => {
     vi.unstubAllGlobals();
     await state.cleanup();
   });
-  function owner(
+  function owner({
+    images = false,
+    extraPaths = [],
     onChange = vi.fn<() => void | Promise<void>>(),
-    debounce = 0,
-    extraPaths: string[] = [],
-  ) {
+    ...options
+  }: Partial<
+    Pick<MemoryFileWatcherOptions, "agentId" | "workspaceDir" | "runInBackgroundContext">
+  > & {
+    onChange?: ReturnType<typeof vi.fn<() => void | Promise<void>>>;
+    extraPaths?: MemoryFileWatcherOptions["settings"]["extraPaths"];
+    images?: boolean;
+  } = {}) {
     const onDirty = vi.fn();
     const onUnavailable = vi.fn();
     const watcher = new MemoryFileWatcher({
+      runInBackgroundContext: AsyncLocalStorage.snapshot(),
       workspaceDir: state.workspaceDir,
       agentId: "main",
       settings: {
         extraPaths,
-        multimodal: { enabled: false, modalities: [], maxFileBytes: 10485760 },
-        sync: { watchDebounceMs: debounce },
+        multimodal: {
+          enabled: images,
+          modalities: images ? ["image"] : [],
+          maxFileBytes: 10485760,
+        },
+        sync: { watchDebounceMs: 0 },
       },
       onChange,
       onDirty,
       onUnavailable,
+      ...options,
     });
     owners.push(watcher);
     return { watcher, onChange, onDirty, onUnavailable };
   }
-
-  it.each([
-    ["false", undefined, 30_000],
-    ["false", "40", 40],
-    ["true", undefined, 30_000],
-    ["true", "40", 40],
-    ["true", "60000", 60_000],
-  ] as const)(
-    "honors background polling defaults and overrides with polling=%s interval=%s",
-    async (poll, interval, expected) => {
-      vi.stubEnv("CHOKIDAR_USEPOLLING", poll);
-      vi.stubEnv("CHOKIDAR_INTERVAL", interval);
-      const { watcher } = owner();
-      await watcher.start();
-      expect(observer.observations.length).toBeGreaterThan(0);
-      for (const entry of observer.observations) {
-        expect(entry.options.mode).toBe(poll === "true" ? "poll" : "auto");
-        expect(entry.options.pollIntervalMs).toBe(expected);
-        entry.health({ state: "ready", mode: "poll" });
+  async function start(options: Parameters<typeof owner>[0] = {}) {
+    const result = owner(options);
+    await result.watcher.start();
+    return { ...result, entry: observer.observations[0]! };
+  }
+  function dirty(entry: Observation, file: string, type: "content" | "structural" = "content") {
+    entry.dirty([{ path: file, type }]);
+  }
+  function selectedPath(entry: Observation, file: string) {
+    return path.relative(entry.root.rootDir, path.join(state.workspaceDir, file));
+  }
+  function pauseDiscovery() {
+    const entered = createDeferred<void>();
+    const resume = createDeferred<void>();
+    // oxlint-disable-next-line typescript/unbound-method -- Called with the intercepted policy receiver.
+    const original = MemoryWatchPolicy.prototype.observations;
+    const implementation: typeof original = async function (this: MemoryWatchPolicy, signal) {
+      const groups = await original.call(this, signal);
+      entered.resolve();
+      await resume.promise;
+      return groups;
+    };
+    vi.spyOn(MemoryWatchPolicy.prototype, "observations").mockImplementationOnce(implementation);
+    return { entered, resume };
+  }
+  function admissionGate() {
+    let accepting = true;
+    return {
+      runInBackgroundContext: <T>(run: () => T): T => {
+        if (!accepting) {
+          throw new Error("plugin instance retired");
+        }
+        return run();
+      },
+      reject(run: () => void) {
+        accepting = false;
+        try {
+          expect(run).not.toThrow();
+        } finally {
+          accepting = true;
+        }
+      },
+    };
+  }
+  function createdWhen(predicate = () => true) {
+    const created = createDeferred<void>();
+    observer.created = () => {
+      if (predicate()) {
+        created.resolve();
       }
-      expect(watcher.health()).toEqual(
-        observer.observations.map(() =>
-          expect.objectContaining({
-            mode: "poll",
-            pollingFallback: poll !== "true",
-            pollIntervalMs: expected,
-          }),
-        ),
-      );
+    };
+    return created.promise;
+  }
+
+  it("shares roots across agents, fans out selected events, and joins the last release", async () => {
+    const extra = state.path("shared", "notes");
+    await fs.mkdir(extra, { recursive: true });
+    const indexed = Array.from({ length: 2 }, () => createDeferred<void>());
+    const agents = await Promise.all(
+      indexed.map((done, index) =>
+        start({
+          onChange: vi.fn(() => done.resolve()),
+          extraPaths: [extra],
+          agentId: `agent-${index}`,
+        }),
+      ),
+    );
+    for (const { onDirty } of agents) {
+      onDirty.mockClear();
+    }
+    const shared = observer.observations.filter((entry) =>
+      entry.options.scopes.some((scope) => path.resolve(entry.root.rootDir, scope.path) === extra),
+    );
+    expect(shared).toHaveLength(1);
+    expect(observer.observations).toHaveLength(2);
+    const entry = shared[0]!;
+    const invalidate = () =>
+      dirty(entry, path.relative(entry.root.rootDir, path.join(extra, "deleted.md")), "structural");
+    invalidate();
+    expect(agents.map(({ onDirty }) => onDirty.mock.calls.length)).toEqual([1, 1]);
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.all(indexed.map((done) => done.promise));
+    await agents[0]!.watcher.close();
+    expect(entry.close).not.toHaveBeenCalled();
+    invalidate();
+    expect(agents.map(({ onDirty }) => onDirty.mock.calls.length)).toEqual([1, 2]);
+    const joined = createDeferred<void>();
+    entry.close.mockImplementationOnce(() => joined.promise);
+    let closed = false;
+    const closing = agents[1]!.watcher.close().then(() => {
+      closed = true;
+    });
+    expect(entry.close).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(closed).toBe(false);
+    invalidate();
+    expect(agents.map(({ onDirty }) => onDirty.mock.calls.length)).toEqual([1, 2]);
+    joined.resolve();
+    await closing;
+    await start({ extraPaths: [extra] });
+    expect(observer.observations).toHaveLength(4);
+  });
+
+  it("retains the shared baseline when a text-only peer joins an image watcher", async () => {
+    const { entry, ...first } = await start({ images: true });
+    const peer = await start({ agentId: "peer" });
+    expect(observer.observations).toHaveLength(1);
+    expect(calls(entry.setScopes, first.onDirty, peer.onDirty)).toEqual([0, 0, 1]);
+    expect(peer.watcher.health()[0]?.state).toBe("ready");
+
+    await peer.watcher.close();
+    expect(calls(entry.setScopes, entry.close)).toEqual([0, 0]);
+    entry.dirty();
+    expect(calls(first.onDirty, peer.onDirty)).toEqual([1, 1]);
+  });
+
+  it("rebaselines changed file kinds even when the shared scopes stay the same", async () => {
+    const { entry, ...text } = await start();
+    const image = {
+      path: selectedPath(entry, "memory/photo.png"),
+      kind: "file" as const,
+    };
+    expect(entry.options.exclude?.(image)).toBe(true);
+    const media = await start({ agentId: "media", images: true });
+    expect(entry.options.exclude?.(image)).toBe(false);
+    dirty(entry, image.path);
+    expect(calls(text.onDirty, media.onDirty)).toEqual([0, 1]);
+    await media.watcher.close();
+    expect(entry.options.exclude?.(image)).toBe(true);
+  });
+
+  it("does not share a replaced root with an agent admitted to the new directory", async () => {
+    const parent = state.path("shared");
+    const notes = path.join(parent, "notes");
+    await fs.mkdir(notes, { recursive: true });
+    const original = await start({ extraPaths: [notes], agentId: "original" });
+    await fs.rename(parent, state.path("retired"));
+    await fs.mkdir(notes, { recursive: true });
+    const replacement = await start({ extraPaths: [notes], agentId: "replacement" });
+    replacement.onDirty.mockClear();
+    const entries = observer.observations.filter((entry) => entry.root.rootDir === parent);
+    expect(entries).toHaveLength(2);
+    dirty(entries[1]!, "notes/new.md");
+    expect(calls(replacement.onDirty, original.onDirty, replacement.onUnavailable)).toEqual([
+      1, 0, 0,
+    ]);
+  });
+
+  it.each(["invalidate", "health", "unavailable"] as const)(
+    "retires rejected %s delivery without stranding a shared peer or retrying",
+    async (notification) => {
+      const gate = admissionGate();
+      const retired = await start(gate);
+      const healthy = await start({ agentId: "healthy" });
+      expect(observer.observations).toHaveLength(1);
+      const shared = observer.observations[0]!;
+      gate.reject(() => {
+        if (notification === "invalidate") {
+          shared.dirty();
+        } else {
+          shared.health({ state: notification === "health" ? "ready" : "unavailable" });
+        }
+      });
+      expect(calls(retired.onUnavailable, retired.onDirty)).toEqual([1, 1]);
+      expect(retired.watcher.health()).toEqual([]);
+      if (notification !== "unavailable") {
+        expect(calls(healthy.onUnavailable, shared.close)).toEqual([0, 0]);
+      }
+
+      // Cleanup may enter the owner again; that must not restart ordinary observation.
+      const recovered = notification === "unavailable" ? createdWhen() : undefined;
+      await vi.advanceTimersByTimeAsync(20_000);
+      await recovered;
+      expect(observer.observations).toHaveLength(notification === "unavailable" ? 2 : 1);
+      expect(retired.watcher.health()).toEqual([]);
+      expect(retired.onChange).not.toHaveBeenCalled();
+      const before = healthy.onDirty.mock.calls.length;
+      observer.observations.at(-1)!.dirty();
+      expect(healthy.onDirty).toHaveBeenCalledTimes(before + 1);
+      expect(retired.onDirty).toHaveBeenCalledOnce();
     },
   );
 
-  it.each([undefined, "ENOTSUP"])("reports fallback polling once with reason %s", async (code) => {
-    const { watcher, onUnavailable } = owner();
-    await watcher.start();
+  it("joins physical retirement failures after background admission closes", async () => {
+    const physical = createDeferred<void>();
+    observer.closeBarrier = physical.promise;
+    const gate = admissionGate();
+    const { watcher } = await start(gate);
+    try {
+      gate.reject(() => observer.observations[0]!.dirty());
+    } catch (error) {
+      physical.resolve();
+      throw error;
+    }
+    let settled = false;
+    const closing = watcher.close().finally(() => {
+      settled = true;
+    });
+    const failure = new Error("physical teardown failed");
+    const rejected = expect(closing).rejects.toMatchObject({ errors: [failure] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    physical.reject(failure);
+    await rejected;
+  });
+
+  it("preserves errors from an admitted notification callback", async () => {
+    const { onDirty, onUnavailable } = await start();
+    const failure = new Error("admitted callback failed");
+    onDirty.mockImplementationOnce(() => {
+      throw failure;
+    });
+    expect(() => observer.observations[0]!.dirty()).toThrow(failure);
+    expect(onUnavailable).not.toHaveBeenCalled();
+  });
+
+  it("unions shared scopes and exclusions without widening an agent's selections", async () => {
+    const notes = state.path("shared", "notes");
+    const images = state.path("shared", "images");
+    await fs.mkdir(notes, { recursive: true });
+    await fs.mkdir(images);
+    const text = await start({
+      extraPaths: [{ path: notes, pattern: "text/*.md" }],
+      agentId: "text",
+    });
+    const media = await start({ extraPaths: [notes, images], agentId: "media", images: true });
+    const entry = observer.observations.find(
+      (observation) => observation.root.rootDir === path.dirname(notes),
+    )!;
+    expect(observer.observations).toHaveLength(2);
+    const image = { path: "notes/photo.png", kind: "file" as const };
+    expect(entry.options.exclude?.(image)).toBe(false);
+    for (const file of [image.path, "images/photo.png", "notes/other.md"]) {
+      dirty(entry, file);
+    }
+    expect(calls(text.onDirty, media.onDirty)).toEqual([0, 3]);
+    dirty(entry, "notes/text/shared.md");
+    expect(calls(text.onDirty, media.onDirty)).toEqual([1, 4]);
+    await media.watcher.close();
+    expect(entry.options.exclude?.(image)).toBe(true);
+    expect(entry.close).not.toHaveBeenCalled();
+  });
+
+  it.each(["scan", "watch-limit"] as const)(
+    "isolates shared %s failures so a failing scope cannot disable healthy peers",
+    async (failureKind) => {
+      const parent = state.path("shared");
+      const healthyPath = path.join(parent, "healthy");
+      const failingPath = path.join(parent, "unreadable");
+      await fs.mkdir(healthyPath, { recursive: true });
+      await fs.mkdir(failingPath);
+      const healthy = await start({ extraPaths: [healthyPath] });
+      const shared = observer.observations.find((entry) => entry.root.rootDir === parent)!;
+      const failure = new Error("new scope cannot be observed");
+      vi.spyOn(shared.subscription, "setScopes").mockImplementationOnce(async () => {
+        if (failureKind === "watch-limit") {
+          unavailable(shared, "watch", failure, "watch-limit");
+        }
+        throw failure;
+      });
+      const failing = await start({ extraPaths: [failingPath], agentId: "failing" });
+      expect(calls(healthy.onUnavailable, failing.onUnavailable, shared.close)).toEqual([1, 1, 1]);
+      expect([healthy.watcher.capacityDegraded, failing.watcher.capacityDegraded]).toEqual([
+        false,
+        false,
+      ]);
+
+      const entries = () => observer.observations.filter((entry) => entry.root.rootDir === parent);
+      const recovered = createdWhen(() => entries().length === 3);
+      await vi.advanceTimersByTimeAsync(500);
+      await recovered;
+      const independent = entries().slice(1);
+      const healthyEntry = independent.find(
+        (entry) => entry.options.scopes[0]?.path === "healthy",
+      )!;
+      const failingEntry = independent.find(
+        (entry) => entry.options.scopes[0]?.path === "unreadable",
+      )!;
+      unavailable(failingEntry, "watch", failure, "watch-limit");
+      expect(failing.watcher.capacityDegraded).toBe(true);
+      const before = healthy.onDirty.mock.calls.length;
+      dirty(healthyEntry, "healthy/note.md");
+      expect(calls(healthy.onDirty, healthy.onUnavailable)).toEqual([before + 1, 1]);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(entries()).toHaveLength(3);
+      expect(healthyEntry.close).not.toHaveBeenCalled();
+      await healthy.watcher.close();
+      expect(healthyEntry.close).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("routes selected structural and ancestor changes to the affected agents", async () => {
+    const first = await start();
+    const secondWorkspace = path.join(path.dirname(state.workspaceDir), "second-workspace");
+    await fs.mkdir(path.join(secondWorkspace, "memory"), { recursive: true });
+    const second = await start({
+      agentId: "second",
+      workspaceDir: secondWorkspace,
+    });
+    expect(observer.observations).toHaveLength(1);
     const entry = observer.observations[0]!;
+    dirty(entry, selectedPath(entry, "memory/gone.md"), "structural");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls(first.onDirty, second.onDirty)).toEqual([1, 0]);
+    dirty(entry, ".", "structural");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls(first.onDirty, second.onDirty)).toEqual([2, 1]);
+  });
+
+  it.each([undefined, "ENOTSUP"])("reports fallback polling once with reason %s", async (code) => {
+    const { watcher, onUnavailable, entry } = await start();
+    expect(entry.options).toMatchObject({ mode: "auto", intervalMs: 300_000 });
     const failure = code
       ? { operation: "watch" as const, code, error: new Error("native backend unsupported") }
       : undefined;
@@ -118,8 +413,8 @@ describe("Memory observation lifecycle", () => {
     expect(warnings).toHaveBeenCalledWith(
       expect.stringContaining(code ?? "fs-safe did not report a reason"),
     );
-    expect(watcher.health()).toEqual([
-      expect.objectContaining({ mode: "poll", pollingFallback: true, pollIntervalMs: 30_000 }),
+    expect(watcher.health()).toMatchObject([
+      { mode: "poll", pollingFallback: true, pollIntervalMs: 30_000 },
     ]);
     expect(onUnavailable).not.toHaveBeenCalled();
     if (failure) {
@@ -145,8 +440,7 @@ describe("Memory observation lifecycle", () => {
       entered.resolve();
       return first.promise;
     });
-    const { watcher } = owner(onChange);
-    await watcher.start();
+    const { watcher } = await start({ onChange });
     observer.observations[0]!.dirty();
     await vi.advanceTimersByTimeAsync(0);
     await entered.promise;
@@ -163,19 +457,7 @@ describe("Memory observation lifecycle", () => {
   });
 
   it("does not admit a late observer when close races initial Root discovery", async () => {
-    const entered = createDeferred<void>();
-    const resume = createDeferred<void>();
-    // oxlint-disable-next-line typescript/unbound-method -- Invoked below with the intercepted policy receiver via .call.
-    const original = MemoryWatchPolicy.prototype.observations;
-    vi.spyOn(MemoryWatchPolicy.prototype, "observations").mockImplementation(async function (
-      this: MemoryWatchPolicy,
-      signal,
-    ) {
-      const groups = await original.call(this, signal);
-      entered.resolve();
-      await resume.promise;
-      return groups;
-    });
+    const { entered, resume } = pauseDiscovery();
     const { watcher } = owner();
     const starting = watcher.start();
     await entered.promise;
@@ -191,24 +473,18 @@ describe("Memory observation lifecycle", () => {
       .fn<() => void | Promise<void>>()
       .mockRejectedValueOnce(failure)
       .mockResolvedValue(undefined);
-    const { watcher, onUnavailable } = owner(onChange);
-    await watcher.start();
-    const entry = observer.observations[0]!;
+    const { watcher, onUnavailable, entry } = await start({ onChange });
 
     entry.dirty();
     await vi.advanceTimersByTimeAsync(0);
-    expect(onChange).toHaveBeenCalledOnce();
-    expect(onUnavailable).not.toHaveBeenCalled();
+    expect(calls(onChange, onUnavailable)).toEqual([1, 0]);
     expect(warnings).toHaveBeenCalledWith("memory sync failed (watch): " + String(failure));
     expect(vi.getTimerCount()).toBe(0);
 
     entry.dirty();
     await vi.advanceTimersByTimeAsync(0);
-    expect(onChange).toHaveBeenCalledTimes(2);
-    expect(onUnavailable).not.toHaveBeenCalled();
+    expect(calls(onChange, onUnavailable)).toEqual([2, 0]);
     expect(entry.subscription.health().state).toBe("ready");
-    expect(observer.watch).toHaveBeenCalledOnce();
-    expect(entry.close).not.toHaveBeenCalled();
     await watcher.close();
     expect(entry.close).toHaveBeenCalledOnce();
   });
@@ -230,29 +506,12 @@ describe("Memory observation lifecycle", () => {
   });
 
   it("does not rearm when watch-limit retires observation during source discovery", async () => {
-    const { watcher } = owner();
-    await watcher.start();
-    const entered = createDeferred<void>();
-    const resume = createDeferred<void>();
-    // oxlint-disable-next-line typescript/unbound-method -- Invoked with the intercepted policy receiver.
-    const original = MemoryWatchPolicy.prototype.observations;
-    vi.spyOn(MemoryWatchPolicy.prototype, "observations").mockImplementationOnce(async function (
-      this: MemoryWatchPolicy,
-      signal,
-    ) {
-      const groups = await original.call(this, signal);
-      entered.resolve();
-      await resume.promise;
-      return groups;
-    });
-    const entry = observer.observations[0]!;
+    const { watcher, entry } = await start();
+    const { entered, resume } = pauseDiscovery();
     entry.dirty();
     await entered.promise;
     try {
-      entry.health({
-        state: "unavailable",
-        failure: { operation: "watch", code: "watch-limit", error: new Error("watch limit") },
-      });
+      unavailable(entry, "watch", new Error("watch limit"), "watch-limit");
       await vi.advanceTimersByTimeAsync(0);
       expect(entry.close).toHaveBeenCalledOnce();
       expect(watcher.capacityDegraded).toBe(true);
@@ -271,9 +530,7 @@ describe("Memory observation lifecycle", () => {
       await fs.writeFile(file, "First write.");
       const indexed = createDeferred<void>();
       const onChange = vi.fn(() => indexed.resolve());
-      const { watcher } = owner(onChange);
-      await watcher.start();
-      const entry = observer.observations[0]!;
+      const { entry } = await start({ onChange });
       const samples = Array.from({ length: 3 }, () => createDeferred<void>());
       const open = entry.root.open.bind(entry.root);
       let sample = 0;
@@ -290,7 +547,7 @@ describe("Memory observation lifecycle", () => {
       if (order === "before") {
         entry.dirty();
       }
-      entry.dirty([{ path: path.relative(entry.root.rootDir, file), type: "content" }]);
+      dirty(entry, path.relative(entry.root.rootDir, file));
       if (order === "after") {
         entry.dirty();
       }
@@ -317,24 +574,17 @@ describe("Memory observation lifecycle", () => {
   it("invalidates before slow retirement and reacquires scan failures under the same pinned Root", async () => {
     const physical = createDeferred<void>();
     observer.closeBarrier = physical.promise;
-    const { watcher, onChange, onUnavailable } = owner();
-    await watcher.start();
-    const old = observer.observations[0]!;
-    old.health({
-      state: "unavailable",
-      failure: { operation: "scan", code: "ENOSPC", error: new Error("full disk") },
-    });
+    const { watcher, onChange, onUnavailable, entry: old } = await start();
+    unavailable(old, "scan", new Error("full disk"), "ENOSPC");
     expect(watcher.capacityDegraded).toBe(false);
     expect(onUnavailable).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(500);
-    expect(onChange).toHaveBeenCalledOnce();
-    expect(observer.watch).toHaveBeenCalledOnce();
-    const acquired = createDeferred<void>();
-    observer.created = () => acquired.resolve();
+    expect(calls(onChange, observer.watch)).toEqual([1, 1]);
+    const acquired = createdWhen();
     observer.closeBarrier = undefined;
     physical.resolve();
     await vi.advanceTimersByTimeAsync(500);
-    await acquired.promise;
+    await acquired;
     expect(observer.observations[1]!.root).toBe(old.root);
     const count = onChange.mock.calls.length;
     observer.observations[1]!.dirty();
@@ -342,47 +592,34 @@ describe("Memory observation lifecycle", () => {
     expect(onChange).toHaveBeenCalledTimes(count + 1);
   });
 
-  it("resets recovery only for changed polling facts, not unchanged whole-scope reconciliation", async () => {
+  it("resets recovery only for selected polling facts, not peer or whole-scope invalidations", async () => {
     vi.stubEnv("CHOKIDAR_USEPOLLING", "true");
     const planning = vi.spyOn(MemoryWatchPolicy.prototype, "observations");
-    const { watcher } = owner();
-    await watcher.start();
+    await start();
     // Keep admission real, then reuse its unchanged plan to isolate retry timing.
     const groups = await planning.mock.results[0]!.value;
     planning.mockResolvedValue(groups);
     const fail = () =>
-      observer.observations.at(-1)!.health({
-        state: "unavailable",
-        failure: {
-          operation: "scan",
-          code: "EACCES",
-          error: new Error("temporary metadata failure"),
-        },
-      });
+      unavailable(
+        observer.observations.at(-1)!,
+        "scan",
+        new Error("temporary metadata failure"),
+        "EACCES",
+      );
     for (let round = 0; round < 4; round++) {
       fail();
       await vi.advanceTimersByTimeAsync(500);
       expect(observer.watch).toHaveBeenCalledTimes(round + 2);
       const entry = observer.observations.at(-1)!;
       expect(entry.options.mode).toBe("poll");
-      entry.dirty(
-        [
-          {
-            path: path.relative(
-              entry.root.rootDir,
-              path.join(state.workspaceDir, "memory", "note.md"),
-            ),
-            type: "content",
-          },
-        ],
-        "reconcile",
-      );
+      entry.dirty([{ path: selectedPath(entry, "memory/note.md"), type: "content" }], "reconcile");
       await vi.advanceTimersByTimeAsync(0);
     }
     fail();
     await vi.advanceTimersByTimeAsync(500);
     expect(observer.watch).toHaveBeenCalledTimes(6);
     observer.observations.at(-1)!.dirty(undefined, "reconcile");
+    dirty(observer.observations.at(-1)!, "other-agent/note.md");
     await vi.advanceTimersByTimeAsync(0);
     fail();
     await vi.advanceTimersByTimeAsync(500);
@@ -395,16 +632,17 @@ describe("Memory observation lifecycle", () => {
     "warns once from aggregated ready %s health with profile and agent remediation",
     async (mode) => {
       vi.stubEnv("CHOKIDAR_USEPOLLING", mode === "poll" ? "true" : "false");
+      vi.stubEnv("CHOKIDAR_INTERVAL", "40");
       vi.stubEnv("OPENCLAW_PROFILE", "research");
       vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
       await fs.mkdir(state.path("extra-parent", "notes"), { recursive: true });
-      const { watcher } = owner(undefined, 0, [state.path("extra-parent", "notes")]);
-      await watcher.start();
+      const { watcher } = await start({ extraPaths: [state.path("extra-parent", "notes")] });
       expect(observer.observations).toHaveLength(2);
       const [first, second] = observer.observations;
-      expect(
-        observer.observations.every((entry) => entry.subscription.health().mode === mode),
-      ).toBe(true);
+      expect(watcher.health()).toMatchObject([
+        { mode, pollingFallback: false, pollIntervalMs: 40 },
+        { mode, pollingFallback: false, pollIntervalMs: 40 },
+      ]);
       first!.health({ state: "starting", directories: 9_000 });
       expect(warnings).not.toHaveBeenCalled();
       const facts = (count: number) => ({
@@ -433,12 +671,8 @@ describe("Memory observation lifecycle", () => {
     const failure = new Error("physical teardown failed");
     const physical = createDeferred<void>();
     observer.closeBarrier = physical.promise;
-    const { watcher } = owner();
-    await watcher.start();
-    observer.observations[0]!.health({
-      state: "unavailable",
-      failure: { operation: "scan", error: new Error("scan") },
-    });
+    const { watcher } = await start();
+    unavailable(observer.observations[0]!, "scan", new Error("scan"));
     physical.reject(failure);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(observer.watch).toHaveBeenCalledOnce();

@@ -48,14 +48,8 @@ export function normalizeManifestCommandAliases(
   }
 
   const normalized: PluginManifestCommandAlias[] = [];
-  for (const entry of value) {
-    if (typeof entry === "string") {
-      const name = normalizeOptionalString(entry) ?? "";
-      if (name) {
-        normalized.push({ name });
-      }
-      continue;
-    }
+  for (const rawEntry of value) {
+    const entry = typeof rawEntry === "string" ? { name: rawEntry } : rawEntry;
     if (!isRecord(entry)) {
       continue;
     }

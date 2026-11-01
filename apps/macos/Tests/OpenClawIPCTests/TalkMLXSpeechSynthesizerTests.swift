@@ -17,6 +17,7 @@ struct TalkMLXSpeechSynthesizerTests {
         let helper = directory.appendingPathComponent("openclaw-mlx-tts-test-helper")
         let pidFile = directory.appendingPathComponent("helper.pid")
         let readyFrame = directory.appendingPathComponent("ready.frame")
+        let requestByte = directory.appendingPathComponent("request.byte")
         defer { TestProcessSupport.killLeakedProcesses(in: [pidFile]) }
         try MLXTTSFrameCodec.encode(MLXTTSEvent.ready).write(to: readyFrame)
         try Data("""
@@ -24,6 +25,7 @@ struct TalkMLXSpeechSynthesizerTests {
         trap '' TERM
         printf '%s\\n' "$$" > "$OPENCLAW_MLX_TTS_PID_FILE"
         /bin/cat "$OPENCLAW_MLX_TTS_READY_FILE"
+        /bin/dd bs=1 count=1 of="$OPENCLAW_MLX_TTS_REQUEST_FILE" 2>/dev/null
         exec /bin/sleep 30
         """.utf8).write(to: helper)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
@@ -32,6 +34,7 @@ struct TalkMLXSpeechSynthesizerTests {
             "OPENCLAW_MLX_TTS_BIN": helper.path,
             "OPENCLAW_MLX_TTS_PID_FILE": pidFile.path,
             "OPENCLAW_MLX_TTS_READY_FILE": readyFrame.path,
+            "OPENCLAW_MLX_TTS_REQUEST_FILE": requestByte.path,
         ]) {
             let synthesizer = TalkMLXSpeechSynthesizer.shared
             await synthesizer.shutdown()
@@ -39,6 +42,10 @@ struct TalkMLXSpeechSynthesizerTests {
                 try await self.collectSynthesis(synthesizer, text: "hold transport open")
             }
             let pid = try await TestProcessSupport.waitForPID(in: pidFile)
+            // A spawned PID precedes transport publication; receiving a request proves ownership.
+            try await TestWait.state("MLX helper synthesis request") {
+                (try? Data(contentsOf: requestByte).count) == 1
+            }
 
             await synthesizer.shutdown()
             let reapDeadline = ContinuousClock.now.advanced(by: .milliseconds(100))

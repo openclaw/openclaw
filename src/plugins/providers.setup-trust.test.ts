@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
+import { writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import { resolvePluginProvidersCore } from "./providers.runtime.js";
 import {
@@ -27,16 +28,13 @@ describe("setup provider workspace trust", () => {
     for (const dir of [pluginRoot, stateDir, markerDir]) {
       mkdirSafeDir(dir);
     }
-    fs.writeFileSync(
-      path.join(pluginRoot, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: pluginId,
-        name: "Setup Trust Provider",
-        description: "Test workspace provider plugin",
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-        providers: ["setup"],
-      }),
-    );
+    writeFixtureJson(pluginRoot, "openclaw.plugin.json", {
+      id: pluginId,
+      name: "Setup Trust Provider",
+      description: "Test workspace provider plugin",
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+      providers: ["setup"],
+    });
     fs.writeFileSync(
       path.join(pluginRoot, "index.cjs"),
       `
@@ -60,14 +58,19 @@ module.exports = {
     };
     const expected = { id: "setup", label: "Setup Trust Provider", auth: [], pluginId, pluginRoot };
     withEnv(env, () => {
+      const providers = resolvePluginProvidersCore({
+        config: { plugins: trusted ? { allow: [pluginId] } : { enabled: true } },
+        workspaceDir,
+        env,
+        mode: "setup",
+        cache: false,
+        onlyPluginIds: [pluginId],
+      });
       expect(
-        resolvePluginProvidersCore({
-          config: { plugins: trusted ? { allow: [pluginId] } : { enabled: true } },
-          workspaceDir,
-          env,
-          mode: "setup",
-          cache: false,
-          onlyPluginIds: [pluginId],
+        providers.map(({ auth, ...metadata }) => {
+          expect(Array.isArray(auth)).toBe(true);
+          // Compare descriptor data without requiring a native constructor on the managed array.
+          return Object.assign(metadata, { auth: [...auth] });
         }),
       ).toStrictEqual(trusted ? [expected] : []);
     });

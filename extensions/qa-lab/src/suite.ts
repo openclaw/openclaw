@@ -6,8 +6,6 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaGatewayChild, QaGatewayStopResult } from "./gateway-child.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
-import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
-import { splitQaModelRef } from "./model-selection.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import {
   createQaTransportAdapter,
@@ -20,7 +18,7 @@ import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 import type { QaSuiteGatewayHeapSnapshot, QaSuiteGatewayRssSample } from "./suite-artifacts.js";
 import { waitForQaHttpReady } from "./suite-http-readiness.js";
 import { shouldUseIsolatedQaSuiteScenarioWorkers } from "./suite-planning.js";
-import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
+import { runQaSuiteScenarioDefinition } from "./suite-runtime-flow.js";
 import type { QaSuiteSummaryJson } from "./suite-summary.js";
 import {
   rejectRemovedQaChannelDriverSelection,
@@ -230,16 +228,13 @@ export function throwQaSuiteCleanupErrors(params: {
   cleanupFailures: readonly QaSuiteCleanupFailure[];
   runFailed: boolean;
   runError: unknown;
-  result?: QaSuiteResult;
   scenarios?: readonly QaSuiteScenarioResult[];
-  evidenceWritten?: boolean;
 }) {
   if (params.cleanupFailures.length === 0) {
     return;
   }
-  const result = params.result;
-  const scenarios = result?.scenarios ?? params.scenarios ?? [];
-  const scenariosCompleted = result !== undefined || params.scenarios !== undefined;
+  const scenarios = params.scenarios ?? [];
+  const scenariosCompleted = params.scenarios !== undefined;
   const failed = scenarios.filter((scenario) => scenario.status === "fail").length;
   const skipped = scenarios.filter((scenario) => scenario.status === "skip").length;
   const passed = scenarios.length - failed - skipped;
@@ -263,11 +258,6 @@ export function throwQaSuiteCleanupErrors(params: {
           `${sanitizeQaSuiteProgressValue(phase)}: ${sanitizeQaSuiteProgressValue(formatErrorMessage(error))}`,
       )
       .join("; ")}`,
-    ...(result
-      ? [
-          `retained artifacts: output=${sanitizeQaSuiteProgressValue(result.outputDir)} report=${sanitizeQaSuiteProgressValue(result.reportPath)} summary=${sanitizeQaSuiteProgressValue(result.summaryPath)}${params.evidenceWritten ? ` evidence=${sanitizeQaSuiteProgressValue(result.evidencePath)}` : ""}`,
-        ]
-      : []),
   ].join("\n");
   const errors = params.cleanupFailures.map((failure) => failure.error);
   if (params.runFailed) {
@@ -320,11 +310,6 @@ export async function runQaSuiteScenarioDefinitionForRuntime(
   return await runQaSuiteScenarioDefinition({
     env,
     scenario,
-    runScenario: runQaSuiteScenarioSteps,
-    splitModelRef: splitQaModelRef,
-    formatErrorMessage,
-    liveTurnTimeoutMs: resolveQaLiveTurnTimeoutMs,
-    resolveQaLiveTurnTimeoutMs,
     constants: {
       imageUnderstandingPngBase64: QA_IMAGE_UNDERSTANDING_PNG_BASE64,
       imageUnderstandingLargePngBase64: QA_IMAGE_UNDERSTANDING_LARGE_PNG_BASE64,
@@ -399,19 +384,13 @@ async function listGatewayHeapSnapshotFiles(tempRoot: string) {
 }
 
 export async function captureGatewayHeapSnapshotCheckpoint(params: {
-  gateway: Pick<QaGatewayChild, "tempRoot" | "pid" | "signalProcess" | "call">;
+  gateway: Pick<QaGatewayChild, "tempRoot" | "signalProcess" | "call">;
   outputDir: string;
   label: string;
 }): Promise<QaSuiteGatewayHeapSnapshot | undefined> {
   const before = new Set(
     (await listGatewayHeapSnapshotFiles(params.gateway.tempRoot)).map((file) => file.pathName),
   );
-  const pid = params.gateway.pid;
-  const assertSameGateway = () => {
-    if (params.gateway.pid !== pid) {
-      throw new Error("Gateway changed during heap snapshot capture");
-    }
-  };
   const deadlineMs = Date.now() + 20_000;
   await params.gateway.signalProcess("SIGQUIT");
   let snapshotPath: string | undefined;
@@ -431,9 +410,7 @@ export async function captureGatewayHeapSnapshotCheckpoint(params: {
 
   // Node opens the file before synchronous serialization. A same-process RPC after
   // file appearance cannot respond until the signal handler has closed the writer.
-  assertSameGateway();
   await params.gateway.call("health", {}, { deadlineMs });
-  assertSameGateway();
   const { size: bytes } = await fs.stat(snapshotPath);
   const snapshotsDir = path.join(params.outputDir, "artifacts", "gateway-heap-snapshots");
   await fs.mkdir(snapshotsDir, { recursive: true });

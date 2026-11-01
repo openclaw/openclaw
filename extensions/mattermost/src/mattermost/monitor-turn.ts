@@ -1,6 +1,8 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   isChannelPartialDeliveryError,
+  type BuiltChannelInboundEventContext,
+  type ChannelBotLoopProtectionFacts,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -11,13 +13,9 @@ import {
   listMessageReceiptPlatformIds,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
-import type { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import type { MattermostPost } from "./client.js";
-import {
-  createMattermostDraftPreviewBoundaryController,
-  createMattermostDraftStream,
-} from "./draft-stream.js";
+import { createMattermostDraftStream } from "./draft-stream.js";
 import { normalizeMattermostAllowEntry } from "./ingress-identity.js";
 import {
   formatMattermostFinalDeliveryOutcomeLog,
@@ -40,32 +38,15 @@ import { recordMattermostThreadParticipation } from "./thread-participation.js";
 type MattermostInboundTurnParams = {
   post: MattermostPost;
   rawText: string;
-  ctxPayload: ReturnType<typeof finalizeInboundContext>;
+  ctxPayload: BuiltChannelInboundEventContext;
   eventPlan: MattermostEventPlan;
   historyKey: string | null;
   historyLimit: number;
   channelHistories: Map<string, HistoryEntry[]>;
   pinnedMainDmOwner: string | null;
+  botLoopProtection?: ChannelBotLoopProtectionFacts;
   turnAdoptionLifecycle?: MattermostIngressLifecycle;
 };
-
-function createDisabledMattermostDraftStream(): ReturnType<typeof createMattermostDraftStream> {
-  const noopAsync = async () => {};
-  return {
-    update: () => {},
-    updateAssistantText: () => {},
-    flush: noopAsync,
-    postId: () => undefined,
-    clear: noopAsync,
-    deleteCurrentMessage: noopAsync,
-    discardPending: noopAsync,
-    seal: noopAsync,
-    stop: noopAsync,
-    forceNewMessage: noopAsync,
-    settleBoundaries: noopAsync,
-    resolveFinalText: (text) => ({ kind: "full", text, publishedParts: [] }),
-  };
-}
 
 export async function dispatchMattermostInboundTurn(
   monitor: MattermostMonitorContext,
@@ -73,6 +54,7 @@ export async function dispatchMattermostInboundTurn(
 ): Promise<void> {
   const { account, cfg, client, core, runtime } = monitor;
   const {
+    botLoopProtection,
     channelHistories,
     ctxPayload,
     eventPlan,
@@ -116,7 +98,6 @@ export async function dispatchMattermostInboundTurn(
         client,
         channelId,
         rootId: effectiveReplyToId,
-        throttleMs: 1200,
         chunkText: (value) =>
           core.channel.text.chunkMarkdownTextWithMode(
             core.channel.text.convertMarkdownTables(value, tableMode),
@@ -126,11 +107,8 @@ export async function dispatchMattermostInboundTurn(
         log: monitor.logVerboseMessage,
         warn: monitor.logVerboseMessage,
       })
-    : createDisabledMattermostDraftStream();
-  const previewBoundaryController = createMattermostDraftPreviewBoundaryController({
-    enabled: draftPreviewEnabled && account.streamingMode === "block",
-    forceNewMessage: draftStream.forceNewMessage,
-  });
+    : undefined;
+  let hasStreamedPreview = false;
   let lastPartialText = "";
   let firstAssistantPreviewPrefix: string | undefined;
   let firstAssistantPreviewPrefixPending = true;
@@ -145,12 +123,12 @@ export async function dispatchMattermostInboundTurn(
     seed: `${account.accountId}:${channelId}`,
     shouldStartNow: (line) => typeof line === "object" && line.kind === "item",
     update: async (previewText, options) => {
-      draftStream.update(previewText);
+      draftStream?.update(previewText);
       if (options?.flush) {
-        await draftStream.flush();
+        await draftStream?.flush();
       }
     },
-    deleteCurrent: () => draftStream.deleteCurrentMessage(),
+    deleteCurrent: () => draftStream?.deleteCurrentMessage(),
   });
   const enterBlockPreviewActivity = (activity: "reasoning" | "text" | "tool") => {
     if (account.streamingMode !== "block") {
@@ -170,9 +148,11 @@ export async function dispatchMattermostInboundTurn(
     if (startsNewGeneration) {
       currentAssistantPreviewUsesPrefix = false;
     }
-    const boundarySettled = startsNewGeneration
-      ? previewBoundaryController.noteBoundary()
-      : undefined;
+    let boundarySettled: Promise<void> | undefined;
+    if (startsNewGeneration && draftStream && hasStreamedPreview) {
+      hasStreamedPreview = false;
+      boundarySettled = draftStream.forceNewMessage();
+    }
     // Message-start is only a candidate boundary: consecutive tools stay together, while the first visible text or reasoning starts a new block.
     if (!continuesCurrentActivity) {
       progressDraft.resetActivity();
@@ -185,7 +165,7 @@ export async function dispatchMattermostInboundTurn(
     return boundarySettled;
   };
   const previewLifecycle = createLivePreviewLifecycle<ReplyPayload, string>({
-    draft: draftPreviewEnabled
+    draft: draftStream
       ? {
           flush: draftStream.flush,
           id: draftStream.postId,
@@ -201,7 +181,12 @@ export async function dispatchMattermostInboundTurn(
   });
 
   const resolvePreviewFinalText = (text?: string): MattermostPreviewFinalResolution | undefined => {
-    const resolution = draftStream.resolveFinalText(typeof text === "string" ? text : "");
+    const finalText = text ?? "";
+    const resolution = draftStream?.resolveFinalText(finalText) ?? {
+      kind: "full",
+      text: finalText,
+      publishedParts: [],
+    };
     const confirmedDelivery =
       resolution.publishedParts.length > 0
         ? (() => {
@@ -280,8 +265,8 @@ export async function dispatchMattermostInboundTurn(
           ? cleaned
           : `${firstAssistantPreviewPrefix} ${cleaned}`
         : cleaned;
-    draftStream.updateAssistantText(previewText);
-    previewBoundaryController.noteUpdate();
+    draftStream?.updateAssistantText(previewText);
+    hasStreamedPreview = true;
     return boundarySettled;
   };
 
@@ -296,7 +281,7 @@ export async function dispatchMattermostInboundTurn(
       if (info.kind === "final") {
         await enterBlockPreviewActivity("text");
         // Final text uses only confirmed-visible generations, so join prior boundary work before deciding whether to edit in place.
-        await draftStream.settleBoundaries();
+        await draftStream?.settleBoundaries();
       }
       // A visible same-thread final can be a send or an in-place draft edit; either path records participation.
       let threadParticipationRecorded = false;
@@ -307,9 +292,6 @@ export async function dispatchMattermostInboundTurn(
             account.accountId,
             channelId,
             effectiveReplyToId,
-            {
-              agentId: route.agentId,
-            },
           );
         }
       };
@@ -323,12 +305,13 @@ export async function dispatchMattermostInboundTurn(
         resolvePreviewFinalText,
         logVerboseMessage: monitor.logVerboseMessage,
         recordThreadParticipation: markThreadParticipation,
+        findPostAfterPreview: draftStream?.findPostAfter,
         deliverPayload: async (payloadToDeliver) => {
           const finalTextResolution =
             info.kind === "final" &&
             !payloadToDeliver.isError &&
-            typeof payloadToDeliver.text === "string"
-              ? draftStream.resolveFinalText(payloadToDeliver.text)
+            payloadToDeliver.text !== undefined
+              ? draftStream?.resolveFinalText(payloadToDeliver.text)
               : undefined;
           const resolvedPayload = finalTextResolution
             ? {
@@ -390,6 +373,13 @@ export async function dispatchMattermostInboundTurn(
       channel: "mattermost",
       accountId: route.accountId,
       raw: post,
+      log: (event) => {
+        if (event.reason === "bot-loop-protection") {
+          runtime.log?.(
+            `mattermost: drop bot post (bot-loop-protection channel=${channelId} sender=${senderId})`,
+          );
+        }
+      },
       adapter: {
         ingest: () => ({
           id: post.id ?? `${to}:${Date.now()}`,
@@ -409,6 +399,7 @@ export async function dispatchMattermostInboundTurn(
             sessionKey: route.sessionKey,
           },
           ctxPayload,
+          botLoopProtection,
           record: {
             updateLastRoute:
               kind === "direct"
@@ -490,8 +481,8 @@ export async function dispatchMattermostInboundTurn(
               }
               if (!lastPartialText) {
                 const boundarySettled = enterBlockPreviewActivity("reasoning");
-                draftStream.update("Thinking…");
-                previewBoundaryController.noteUpdate();
+                draftStream?.update("Thinking…");
+                hasStreamedPreview = true;
                 await boundarySettled;
               }
               return false;
@@ -505,7 +496,7 @@ export async function dispatchMattermostInboundTurn(
                 explanation: payloadValue.explanation,
                 explanationFormat: payloadValue.explanationFormat,
               });
-              previewBoundaryController.noteUpdate();
+              hasStreamedPreview = true;
               const [, visible] = await Promise.all([boundarySettled, progressSettled]);
               return visible;
             },
@@ -519,7 +510,7 @@ export async function dispatchMattermostInboundTurn(
               }
               const boundarySettled = enterBlockPreviewActivity("tool");
               const progressSettled = progressDraft.pushItemEvent(payloadLocal);
-              previewBoundaryController.noteUpdate();
+              hasStreamedPreview = true;
               const [, visible] = await Promise.all([boundarySettled, progressSettled]);
               return visible;
             },
@@ -529,7 +520,7 @@ export async function dispatchMattermostInboundTurn(
     });
   } finally {
     try {
-      await draftStream.stop();
+      await draftStream?.stop();
       await previewLifecycle.cleanup();
     } catch (err) {
       monitor.logVerboseMessage(`mattermost draft preview cleanup failed: ${String(err)}`);

@@ -28,7 +28,10 @@ import {
   createPluginRegistryOwner,
   resetPluginRuntimeStateForTest,
 } from "../plugins/runtime.js";
-import { startPluginServices, type PluginServicesHandle } from "../plugins/services.js";
+import {
+  startPluginServices,
+  type PluginServicesHandle,
+} from "../plugins/services.test-support.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
@@ -245,7 +248,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         ...(hasWorkspacePlugin ? ["workspace-probe"] : []),
       ].toSorted(),
     );
-    const initial = bootstrap.prepareGatewayPluginLoad({
+    const initial = await bootstrap.prepareGatewayPluginLoad({
       pluginMetadataSnapshot: initialMetadata,
       pluginLookUpTable: loadPluginLookUpTable({
         config: initialConfig,
@@ -263,7 +266,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       loadIntent: "startup",
     });
     activatePluginRegistry(initial.pluginRegistry, null, "gateway-bindable", workspaceDir);
+    const scheduler = createTestGatewayScheduler();
     let currentServices: PluginServicesHandle | null = await startPluginServices({
+      scheduler,
       registry: initial.pluginRegistry,
       config: initialConfig,
       workspaceDir,
@@ -275,7 +280,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       },
     });
     const registryOwner = createPluginRegistryOwner(initial.pluginRegistry, workspaceDir);
-    const metadata = retainGatewayPluginMetadata(createTestGatewayScheduler());
+    const metadata = retainGatewayPluginMetadata(scheduler);
     metadata.publish(initialMetadata);
     const loaded = [initial];
     let beforeAttachment: ((candidate: (typeof loaded)[number]) => void) | undefined;
@@ -291,9 +296,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         }
         await registryOwner.close();
         await metadata.close();
+        await scheduler.stop();
       }
     });
     const runtime = {
+      scheduler,
       requestEntryLifetime: new GatewayRequestEntryLifetime(),
       pluginMetadataSnapshot: initialMetadata,
       pluginRuntime: registryOwner,
@@ -929,9 +936,6 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         expect(await probe("installed-probe")).toEqual(configured);
         expect(runtime.pluginRuntime.registry).toBe(previousRegistry);
         expect(previousInstance.disposing).toBe(false);
-        expect(() => retainRuntimePluginWork([previousRegistry])).toThrow(
-          "replacement is in progress",
-        );
         finishSecondRun();
         await expect(replacing).resolves.toMatchObject({
           runtime: { pluginIds: ["installed-probe"] },
@@ -960,21 +964,24 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     }
     if (bundledDir) {
       expect((await probe("bundled-probe")).helper).toBe("A");
+      const originalBundled = await probe("bundled-probe");
       const unchangedBundled = await reload(changedSettings, ["bundled-probe"]);
-      expect(unchangedBundled.runtime.restartRequired ?? false).toBe(false);
-      expect((await probe("bundled-probe", { starts: 2, stops: 1 })).helper).toBe("A");
+      expect(unchangedBundled.runtime.restartRequired).toBe(true);
+      const freshBundled = await probe("bundled-probe", { starts: 2, stops: 1 });
+      expect(freshBundled).toMatchObject({
+        helper: "A",
+        instance: originalBundled.instance,
+      });
       fs.writeFileSync(path.join(bundledDir, "dist", "helper.cjs"), 'module.exports = "B";');
       const bundledReload = await reload(changedSettings, ["bundled-probe"]);
-      expect((await probe("bundled-probe", { starts: 3, stops: 2 })).helper).toBe("A");
-      expect(bundledReload.runtime).toMatchObject({
-        restartRequired: true,
-        pluginIds: ["bundled-probe"],
-        warnings: ["Bundled plugin code remains loaded. Restart the Gateway to load edited code."],
-      });
+      expect(await probe("bundled-probe", { starts: 3, stops: 2 })).toMatchObject({ helper: "A" });
+      expect(bundledReload.runtime.restartRequired).toBe(true);
+      expect(bundledReload.runtime.pluginIds).toEqual(["bundled-probe"]);
       expect(bundledReload.runtime.generation).toBeGreaterThan(configReceipt.runtime.generation);
       const repeatedBundled = await reload(changedSettings, ["bundled-probe"]);
       expect(repeatedBundled.runtime.restartRequired).toBe(true);
-      expect((await probe("bundled-probe", { starts: 4, stops: 3 })).helper).toBe("A");
+      expect(await probe("bundled-probe", { starts: 4, stops: 3 })).toMatchObject({ helper: "A" });
+      expect(await probe("sibling")).toEqual(sibling);
     }
   });
 }

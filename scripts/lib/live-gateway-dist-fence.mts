@@ -261,7 +261,13 @@ export async function resolveLiveManagedGatewayDistFence(
         );
         continue;
       }
-      if (!runtime.isGatewayServiceStateLive(state)) {
+      // Scheduler occupancy can hold old argv or a pending launch without proving
+      // the current command is running. It fences overlapping outputs, not service control.
+      const occupiedWindowsTask =
+        process.platform === "win32" &&
+        !binding.windowsStartupEntry &&
+        (state.runtime?.state === "Running" || state.runtime?.state === "Queued");
+      if (!runtime.isGatewayServiceStateLive(state) && !occupiedWindowsTask) {
         unverified ||= state.runtime?.status !== "stopped" || state.loadState.status === "unknown";
         continue;
       }

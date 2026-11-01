@@ -70,7 +70,10 @@ export function visitBrowserProxyFilePaths(
   if (!root) {
     return;
   }
-  const visitPath = (owner: Record<string, unknown>, key: "path" | "imagePath") => {
+  const visitPath = (owner: Record<string, unknown> | null, key: "path" | "imagePath") => {
+    if (!owner) {
+      return;
+    }
     const filePath = owner[key];
     if (typeof filePath !== "string" || !filePath.trim()) {
       return;
@@ -84,19 +87,13 @@ export function visitBrowserProxyFilePaths(
   visitPath(root, "path");
   visitPath(root, "imagePath");
 
-  const download = asNullableRecord(root.download);
-  if (download) {
-    visitPath(download, "path");
-  }
+  visitPath(asNullableRecord(root.download), "path");
 
   // Stay shallow: evaluate results contain page-controlled objects whose
   // path-like fields must never become node filesystem reads.
   if (Array.isArray(root.downloads)) {
     for (const entry of root.downloads) {
-      const record = asNullableRecord(entry);
-      if (record) {
-        visitPath(record, "path");
-      }
+      visitPath(asNullableRecord(entry), "path");
     }
   }
 }

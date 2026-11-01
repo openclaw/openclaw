@@ -150,10 +150,7 @@ export function watchCodexNativeCompactionCompletion(params: {
     completionTimeout.unref?.();
   };
   removeNotificationHandler = params.client.addNotificationHandler((notification) => {
-    if (!requestStarted) {
-      return;
-    }
-    if (!isJsonObject(notification.params)) {
+    if (!requestStarted || !isJsonObject(notification.params)) {
       return;
     }
     if (readCodexNotificationThreadId(notification.params) !== params.threadId) {
@@ -206,22 +203,15 @@ export function watchCodexNativeCompactionCompletion(params: {
     const status = typeof turn?.status === "string" ? turn.status : undefined;
     if (admissionFailure) {
       fail(admissionFailure);
-      return;
-    }
-    if (status !== "completed") {
+    } else if (status !== "completed") {
       fail(`codex app-server compaction turn ended with status ${status ?? "unknown"}`);
-      return;
+    } else if (!compactionItemId) {
+      fail("codex app-server compaction turn completed without a compaction item");
+    } else if (!compactionItemCompleted) {
+      fail("codex app-server compaction turn completed before its compaction item");
+    } else {
+      complete();
     }
-    const incompleteReason = !compactionItemId
-      ? "codex app-server compaction turn completed without a compaction item"
-      : !compactionItemCompleted
-        ? "codex app-server compaction turn completed before its compaction item"
-        : undefined;
-    if (incompleteReason) {
-      fail(incompleteReason);
-      return;
-    }
-    complete();
   });
   removeCloseHandler = params.client.addCloseHandler(() => {
     retireUnconfirmed("codex app-server closed before native compaction completed");

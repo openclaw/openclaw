@@ -1,16 +1,18 @@
-// Whatsapp tests cover doctor plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { normalizeCompatibilityConfig } from "./doctor.js";
+
+function normalize(
+  whatsapp: NonNullable<OpenClawConfig["channels"]>["whatsapp"],
+  cfg: OpenClawConfig = {},
+) {
+  return normalizeCompatibilityConfig({ cfg: { ...cfg, channels: { whatsapp } } });
+}
 
 describe("whatsapp doctor compatibility", () => {
   it("does not add whatsapp config when the channel is not configured", () => {
     const result = normalizeCompatibilityConfig({
-      cfg: {
-        messages: {
-          ackReaction: "👀",
-          ackReactionScope: "group-mentions",
-        },
-      },
+      cfg: { messages: { ackReaction: "👀", ackReactionScope: "group-mentions" } },
     });
 
     expect(result.config.channels?.whatsapp).toBeUndefined();
@@ -18,19 +20,10 @@ describe("whatsapp doctor compatibility", () => {
   });
 
   it("reports acknowledgement behavior that the global settings cannot preserve", () => {
-    const result = normalizeCompatibilityConfig({
-      cfg: {
-        agents: { entries: { main: { default: true, identity: { emoji: "🔥" } } } },
-        channels: {
-          whatsapp: {
-            ackReaction: {
-              direct: true,
-              group: "mentions",
-            },
-          },
-        },
-      },
-    });
+    const result = normalize(
+      { ackReaction: { direct: true, group: "mentions" } },
+      { agents: { entries: { main: { identity: { emoji: "🔥" } } } } },
+    );
 
     expect(result.config.channels?.whatsapp?.ackReaction).toBeUndefined();
     expect(result.config.messages).toEqual({ ackReaction: "🔥" });
@@ -40,17 +33,9 @@ describe("whatsapp doctor compatibility", () => {
   });
 
   it("reports scope conflicts after root settings win", () => {
-    const result = normalizeCompatibilityConfig({
-      cfg: {
-        channels: {
-          whatsapp: {
-            ackReaction: { emoji: "👀", direct: false, group: "always" },
-            accounts: {
-              work: { ackReaction: { emoji: "✅", direct: true, group: "never" } },
-            },
-          },
-        },
-      },
+    const result = normalize({
+      ackReaction: { emoji: "👀", direct: false, group: "always" },
+      accounts: { work: { ackReaction: { emoji: "✅", direct: true, group: "never" } } },
     });
 
     expect(result.config.messages).toMatchObject({
@@ -63,16 +48,10 @@ describe("whatsapp doctor compatibility", () => {
   });
 
   it('treats legacy "off" and canonical "none" scopes as equivalent', () => {
-    const result = normalizeCompatibilityConfig({
-      cfg: {
-        messages: { ackReaction: "👀", ackReactionScope: "none" },
-        channels: {
-          whatsapp: {
-            ackReaction: { emoji: "👀", direct: false, group: "never" },
-          },
-        },
-      },
-    });
+    const result = normalize(
+      { ackReaction: { emoji: "👀", direct: false, group: "never" } },
+      { messages: { ackReaction: "👀", ackReactionScope: "none" } },
+    );
 
     expect(result.config.messages?.ackReactionScope).toBe("none");
     expect(result.changes).toStrictEqual([
@@ -94,13 +73,13 @@ describe("whatsapp doctor compatibility", () => {
         'channels.whatsapp.ackReaction used a route-dependent agent identity acknowledgement emoji before migration; the final messages.ackReaction is "🔥".',
     },
   ])("$name in the migration receipt", ({ ackReaction, expected }) => {
-    const result = normalizeCompatibilityConfig({
-      cfg: {
+    const result = normalize(
+      { ackReaction },
+      {
         messages: { ackReaction: "🔥", ackReactionScope: "direct" },
         agents: { entries: { main: { identity: { emoji: "🤖" } } } },
-        channels: { whatsapp: { ackReaction } },
       },
-    });
+    );
 
     expect(result.changes).toContainEqual(expect.stringContaining(expected));
   });

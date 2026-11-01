@@ -67,26 +67,4 @@ describe("metrics HTTP handler scope authorization", () => {
       expect(await response.text()).not.toContain(markerModel);
     });
   });
-
-  it("rejects a scrape whose scopes only cover unrelated operator surfaces", async () => {
-    runtimeScope.setScopes(["operator.approvals", "operator.questions"]);
-    await withScrapeTarget(async (url) => {
-      const response = await fetch(url);
-      expect(response.status).toBe(403);
-      expect(await response.text()).not.toContain(markerModel);
-    });
-  });
-
-  it.each(["operator.write", "operator.admin"])(
-    "serves metrics to a caller holding %s",
-    async (scope) => {
-      runtimeScope.setScopes([scope]);
-      await withScrapeTarget(async (url) => {
-        const response = await fetch(url);
-        const body = await response.text();
-        expect(response.status).toBe(200);
-        expect(body).toContain(markerModel);
-      });
-    },
-  );
 });

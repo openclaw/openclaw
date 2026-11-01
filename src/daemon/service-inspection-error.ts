@@ -7,15 +7,15 @@ const SERVICE_INSPECTION_MESSAGES = {
   "service-membership-unverified": UPDATE_PREFLIGHT_DETAILS["service-membership-unverified"],
   "service-ancestry-unverified": UPDATE_PREFLIGHT_DETAILS["service-ancestry-unverified"],
   "service-manager-unavailable":
-    "No supported service manager detected. Restart the Gateway you launched manually after the update.",
+    "No supported service manager detected. Manage the Gateway through the supervisor or terminal that started it.",
   "systemd-user-bus-unavailable":
     "The systemd user session bus is unavailable. Check XDG_RUNTIME_DIR for the service account. Log in once or enable the user manager with sudo loginctl enable-linger <user>, then verify systemctl --user status. On Debian/Ubuntu, install dbus-user-session and run systemctl --user start dbus.socket if the runtime bus is missing. Verify busctl --user list with DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus, then retry.",
   "systemd-inspection-deadline-exceeded":
-    "The systemd manager inspection deadline expired while probing the manager or checking custody/admission guards. This does not establish that the user session bus is unavailable. Run openclaw gateway status --deep to inspect the service after recovery.",
+    "The systemd manager inspection deadline expired while checking the manager or checking custody/admission guards. This does not establish that the user session bus is unavailable. Run openclaw gateway status --deep to inspect the service after recovery.",
   "systemd-busctl-unavailable":
     "The busctl executable is unavailable. Install the systemd package providing busctl and verify busctl --user list from the service account, then retry.",
   "service-manager-access-denied":
-    "The service-manager probe could not start (EACCES/EPERM). Check executable permissions and directory access for the service account, then retry from an accessible directory.",
+    "The service-manager check could not start (EACCES/EPERM). Check executable permissions and directory access for the service account, then retry from an accessible directory.",
   "windows-task-inspection-failed":
     "Effective Scheduled Task service command could not be inspected. Verify that Windows Task Scheduler is available and that this account can query the task, then run openclaw gateway status --deep before retrying.",
   "launchd-gui-domain-unavailable":
@@ -57,12 +57,12 @@ function formatServiceInspectionDiagnostic(
   switch (diagnostic.kind) {
     case "timeout":
       return Number.isSafeInteger(diagnostic.timeoutMs) && diagnostic.timeoutMs > 0
-        ? `Task Scheduler probe timed out after ${diagnostic.timeoutMs} ms.`
-        : "Task Scheduler probe timed out.";
+        ? `Task Scheduler check timed out after ${diagnostic.timeoutMs} ms.`
+        : "Task Scheduler check timed out.";
     case "spawn":
-      return `Task Scheduler probe could not start${Number.isSafeInteger(diagnostic.errno) ? ` (errno ${diagnostic.errno})` : ""}.`;
+      return `Task Scheduler check could not start${Number.isSafeInteger(diagnostic.errno) ? ` (errno ${diagnostic.errno})` : ""}.`;
     case "invalid-response":
-      return "Task Scheduler probe returned an invalid response.";
+      return "Task Scheduler check returned an invalid response.";
     case "native": {
       const facts: string[] = [];
       if (Number.isSafeInteger(diagnostic.exitCode)) {
@@ -76,7 +76,7 @@ function formatServiceInspectionDiagnostic(
       ) {
         facts.push(`HRESULT 0x${(diagnostic.hresult >>> 0).toString(16).padStart(8, "0")}`);
       }
-      return `Task Scheduler probe failed${facts.length ? ` (${facts.join(", ")})` : ""}.`;
+      return `Task Scheduler check failed${facts.length ? ` (${facts.join(", ")})` : ""}.`;
     }
   }
   return undefined;
@@ -84,7 +84,7 @@ function formatServiceInspectionDiagnostic(
 
 export class ServiceInspectionError extends Error {
   constructor(
-    readonly reason: ServiceInspectionReason,
+    readonly reason: ServiceInspectionReason | undefined,
     diagnostic?: ServiceInspectionDiagnostic,
   ) {
     const detail =
@@ -92,10 +92,17 @@ export class ServiceInspectionError extends Error {
         ? formatServiceInspectionDiagnostic(diagnostic)
         : undefined;
     super(
-      [detail, formatServiceInspectionReason(reason)].filter(Boolean).join(" "),
+      [detail, reason && formatServiceInspectionReason(reason)].filter(Boolean).join(" "),
       diagnostic ? { cause: diagnostic } : undefined,
     );
     this.name = "ServiceInspectionError";
+  }
+}
+
+export class SystemdInspectionTimeout extends ServiceInspectionError {
+  constructor(check: string, detail = "") {
+    super("systemd-inspection-deadline-exceeded");
+    this.message = `${detail ? `${detail}\n` : ""}Stalled check: ${check}. ${this.message}`;
   }
 }
 
@@ -150,6 +157,19 @@ export function assertServiceInspectionFallbackAllowed(error: unknown): void {
   }
 }
 
+export type SystemdServiceStartRefusal = {
+  reason: "masked" | "refuse-manual-start" | "disabled-no-start";
+  message: string;
+};
+
+/** A known native start restriction must not collapse into unavailable inspection. */
+export class ServiceStartRefusalError extends Error {
+  constructor(readonly refusal: SystemdServiceStartRefusal) {
+    super(refusal.message);
+    this.name = "ServiceStartRefusalError";
+  }
+}
+
 export class ServiceDefinitionInspectionError extends Error {
   constructor(pathname: string) {
     super(
@@ -160,10 +180,7 @@ export class ServiceDefinitionInspectionError extends Error {
 }
 
 export class GatewayServiceStopUnsafeError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "GatewayServiceStopUnsafeError";
-  }
+  override name = "GatewayServiceStopUnsafeError";
 }
 
 /** Native preparation can wrap a custody refusal alongside an authority or cleanup failure. */
@@ -176,6 +193,7 @@ export function hasGatewayServiceStopUnsafeError(error: unknown): boolean {
 export function sanitizeServiceInspectionError(error: unknown): Error {
   return error instanceof ServiceInspectionError ||
     error instanceof ServiceDefinitionInspectionError ||
+    error instanceof ServiceStartRefusalError ||
     error instanceof ServiceOwnershipRefusalError
     ? error
     : new Error("SERVICE_DEFINITION_UNKNOWN: Service definition cannot be safely inspected.");

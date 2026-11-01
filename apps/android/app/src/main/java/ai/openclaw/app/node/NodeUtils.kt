@@ -23,6 +23,17 @@ internal fun nodeInvokeError(
   message: String,
 ): GatewaySession.InvokeResult = GatewaySession.InvokeResult.error(code, "$code: $message")
 
+internal inline fun nodeInvokeJson(
+  unavailableCode: String,
+  fallbackMessage: String,
+  encode: () -> String,
+): GatewaySession.InvokeResult =
+  try {
+    GatewaySession.InvokeResult.ok(encode())
+  } catch (err: Throwable) {
+    nodeInvokeError(unavailableCode, err.message ?: fallbackMessage)
+  }
+
 /** Parses invoke params into a JSON object, returning null for absent/malformed input. */
 fun parseJsonParamsObject(paramsJson: String?): JsonObject? {
   if (paramsJson.isNullOrBlank()) return null
@@ -90,28 +101,21 @@ fun resolveProfileAccentArgb(entries: JsonObject?): Long? {
 }
 
 fun resolveGatewayThemeFamily(config: JsonObject?): AppearanceThemeFamily {
-  val raw =
-    config
-      ?.get("ui")
-      .asObjectOrNull()
-      ?.get("prefs")
-      .asObjectOrNull()
-      ?.get("theme")
-      .asStringOrNull()
+  val raw = gatewayUiPrefs(config)?.get("theme").asStringOrNull()
   return AppearanceThemeFamily.entries.firstOrNull { it.rawValue == raw } ?: AppearanceThemeFamily.Claw
 }
 
 fun resolveGatewayThemeMode(config: JsonObject?): AppearanceThemeMode {
-  val raw =
-    config
-      ?.get("ui")
-      .asObjectOrNull()
-      ?.get("prefs")
-      .asObjectOrNull()
-      ?.get("themeMode")
-      .asStringOrNull()
+  val raw = gatewayUiPrefs(config)?.get("themeMode").asStringOrNull()
   return AppearanceThemeMode.entries.firstOrNull { it.rawValue == raw } ?: AppearanceThemeMode.System
 }
+
+private fun gatewayUiPrefs(config: JsonObject?): JsonObject? =
+  config
+    ?.get("ui")
+    .asObjectOrNull()
+    ?.get("prefs")
+    .asObjectOrNull()
 
 fun resolveGatewayAccentArgb(config: JsonObject?): Long? {
   val ui = config?.get("ui").asObjectOrNull()

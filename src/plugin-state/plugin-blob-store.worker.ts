@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type {
   WorkerOperationContext,
@@ -19,7 +19,7 @@ import { pluginBlobWorkerOperations } from "./plugin-blob-worker-contract.js";
 function write<Result>(
   type: keyof typeof pluginBlobWorkerOperations,
   { open, stateOptions }: WorkerOperationContext,
-  apply: (db: DatabaseSync, env: NodeJS.ProcessEnv) => Result,
+  apply: (db: EngineConnection, env: NodeJS.ProcessEnv) => Result,
 ): Result {
   const options = stateOptions();
   const description = pluginBlobWorkerOperations[type];
@@ -43,7 +43,10 @@ function write<Result>(
   }
 }
 
-type Input<Fn extends (db: DatabaseSync, input: never) => unknown> = Omit<Parameters<Fn>[1], "env">;
+type Input<Fn extends (db: EngineConnection, input: never) => unknown> = Omit<
+  Parameters<Fn>[1],
+  "env"
+>;
 
 export const pluginBlobOperations = {
   "pluginBlob.register": (input: Input<typeof pluginBlobRegisterInDatabase>, context) =>

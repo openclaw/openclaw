@@ -1,5 +1,7 @@
 import { createDeferredCore } from "../shared/deferred.js";
+import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 import type {
+  PreparedSqliteWorkerOpen,
   SqliteWorkerInputPreparation,
   SqliteWorkerInputRetention,
 } from "./sqlite-worker-broker.types.js";
@@ -8,9 +10,9 @@ import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 /** Retained inputs share the broker budget before they become queued jobs. */
 export class SqliteWorkerInputAdmission {
   private bytes = 0;
-  private inputPreparationGeneration = {};
+  private readonly opens = new Set<Promise<void>>();
   private readonly inputPreparations = new Set<Promise<void>>();
-  private openTail: Promise<void> = Promise.resolve();
+  private readonly openQueue = new Map<string, StoreWriterQueue>();
 
   constructor(
     private readonly owner: {
@@ -19,6 +21,7 @@ export class SqliteWorkerInputAdmission {
       maxQueuedBytes: number;
       maxQueuedInputBytes: number;
       maxMessageBytes: number;
+      maxPendingOpens: number;
     },
   ) {}
 
@@ -37,8 +40,15 @@ export class SqliteWorkerInputAdmission {
     };
   }
 
-  open<T>(bytes: number, dispatch: () => Promise<T>): Promise<T> {
+  open<T>(
+    bytes: number,
+    dispatch: () => Promise<T>,
+    signal?: AbortSignal,
+    reuse?: () => Promise<T | undefined>,
+    carrierClass?: PreparedSqliteWorkerOpen["carrierClass"],
+  ): Promise<T> {
     if (
+      this.opens.size >= this.owner.maxPendingOpens ||
       bytes > this.owner.maxMessageBytes ||
       this.owner.queuedBytes() + this.bytes + bytes > this.owner.maxQueuedBytes
     ) {
@@ -46,23 +56,37 @@ export class SqliteWorkerInputAdmission {
         new SqliteWorkerError("SQLite worker open input capacity reached", "overloaded"),
       );
     }
-    const previous = this.openTail;
     const settled = createDeferredCore();
-    this.openTail = settled.promise;
+    this.opens.add(settled.promise);
     const release = this.retain(bytes);
-    // Physical-file identity must be published before admitting another open alias.
-    return previous.then(dispatch).finally(() => {
+    // Serialize aliases within each owner class without holding unrelated stores behind agent scans.
+    const enqueue = () =>
+      runQueuedStoreWrite({
+        queues: this.openQueue,
+        storePath: carrierClass ?? "generic",
+        label: "SQLite worker open",
+        fn: dispatch,
+        signal,
+      });
+    // Unknown actors enter the FIFO synchronously. A published actor can attach
+    // independently, but still retains its input budget and participates in drainage.
+    return (
+      reuse
+        ? Promise.resolve()
+            .then(reuse)
+            .then((store) => (store === undefined ? enqueue() : store))
+        : enqueue()
+    ).finally(() => {
+      this.opens.delete(settled.promise);
       release();
       settled.resolve();
     });
   }
 
-  joinOpens(): Promise<void> {
-    return this.openTail;
-  }
-
-  invalidatePreparations(): void {
-    this.inputPreparationGeneration = {};
+  async joinOpens(): Promise<void> {
+    while (this.opens.size > 0) {
+      await Promise.allSettled(this.opens);
+    }
   }
 
   async joinPreparations(): Promise<void> {
@@ -86,39 +110,27 @@ export class SqliteWorkerInputAdmission {
     if (this.owner.queuedBytes() + this.bytes + bytes > this.owner.maxQueuedBytes) {
       throw new SqliteWorkerError("SQLite worker input preparation capacity reached", "overloaded");
     }
-    const generation = this.inputPreparationGeneration;
     this.bytes += bytes;
     const settled = createDeferredCore();
     this.inputPreparations.add(settled.promise);
-    let released = false;
     let handedOff = false;
     const release = () => {
-      if (!released) {
-        released = true;
+      if (this.inputPreparations.delete(settled.promise)) {
         this.bytes -= bytes;
-        this.inputPreparations.delete(settled.promise);
         settled.resolve();
       }
     };
     const assertCurrent = () => {
-      if (
-        !handedOff &&
-        (released || this.owner.isClosing() || generation !== this.inputPreparationGeneration)
-      ) {
+      if (!handedOff && (!this.inputPreparations.has(settled.promise) || this.owner.isClosing())) {
         throw new SqliteWorkerError("SQLite worker input preparation is closed", "closed");
       }
     };
     return {
       assertCurrent,
       handoff: (dispatch) => {
-        try {
-          if (released) {
-            throw new SqliteWorkerError("SQLite worker input preparation is closed", "closed");
-          }
-          assertCurrent();
-        } catch (error) {
+        if (!this.inputPreparations.has(settled.promise) || this.owner.isClosing()) {
           release();
-          throw error;
+          throw new SqliteWorkerError("SQLite worker input preparation is closed", "closed");
         }
         // Enqueue takes custody in this same synchronous turn, including its oversized checks.
         handedOff = true;

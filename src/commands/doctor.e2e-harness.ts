@@ -80,7 +80,7 @@ const {
   serviceUninstall,
   uninstallLegacyGatewayServices,
 } = createDoctorServiceMocks();
-export { callGateway, serviceIsLoaded, serviceRestart };
+export { callGateway };
 
 export const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
   migrated: false,
@@ -157,9 +157,16 @@ function createLegacyStateMigrationDetectionResult(params?: {
       hasLegacy: false,
     },
     deviceIdentity: {
-      sourcePath: "/tmp/state/identity/device.json",
-      claimPath: "/tmp/state/identity/device.json.doctor-importing",
-      nativeClaimPath: "/tmp/state/identity/device.json.native-importing",
+      sources: [
+        {
+          identityKey: "primary",
+          sourcePath: "/tmp/state/identity/device.json",
+          claimPath: "/tmp/state/identity/device.json.doctor-importing",
+          nativeClaimPath: "/tmp/state/identity/device.json.native-importing",
+          hasLegacy: false,
+          hasInvalidCanonical: false,
+        },
+      ],
       hasLegacy: false,
       hasInvalidCanonical: false,
     },
@@ -209,30 +216,8 @@ function createLegacyStateMigrationDetectionResult(params?: {
       hasLegacy: false,
     },
     worktrees: { hasLegacy: false, legacyIds: [], pathRewrites: [] },
-    deliveryQueues: {
-      outboundPath: "/tmp/state/delivery-queue",
-      sessionPath: "/tmp/state/session-delivery-queue",
-      hasLegacy: false,
-    },
-    voiceWake: {
-      triggersPath: "/tmp/state/settings/voicewake.json",
-      routingPath: "/tmp/state/settings/voicewake-routing.json",
-      hasLegacy: false,
-    },
-    updateCheck: {
-      sourcePath: "/tmp/state/update-check.json",
-      hasLegacy: false,
-    },
     configHealth: {
       sourcePath: "/tmp/state/logs/config-health.json",
-      hasLegacy: false,
-    },
-    pluginBindingApprovals: {
-      sourcePath: "/tmp/state/plugin-binding-approvals.json",
-      hasLegacy: false,
-    },
-    currentConversationBindings: {
-      sourcePath: "/tmp/state/bindings/current-conversations.json",
       hasLegacy: false,
     },
     tuiLastSessions: {
@@ -241,10 +226,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
     },
     auditLogs: {
       sources: [],
-      hasLegacy: false,
-    },
-    acpReplayLedger: {
-      sourcePath: "/tmp/state/acp/event-ledger.json",
       hasLegacy: false,
     },
     managedOutgoingImages: {
@@ -377,7 +358,8 @@ vi.mock("../gateway/call.js", async () => {
   };
 });
 
-vi.mock("../process/exec.js", () => ({
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
   runExec,
   runCommandWithTimeout,
 }));
@@ -431,12 +413,15 @@ vi.mock("../flows/doctor-tool-schema-runtime.js", () => ({
   collectRuntimeToolSchemaFindings: vi.fn().mockResolvedValue([]),
 }));
 
+// Physical-store inspection has its own suites; these fixtures exercise command/config routing.
+vi.mock("./doctor-database-engine.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-database-engine.js")>()),
+  noteDatabaseEngines: vi.fn().mockResolvedValue([]),
+}));
+
+// mock-isolation: Doctor fixtures isolate host browser probes; the real browser owner has its production-path permission proof.
 vi.mock("./doctor-browser.js", () => ({
-  maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
-    changes: [],
-    warnings: [],
-  }),
-  noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
+  collectBrowserReadinessFindings: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("./doctor-memory-recall.js", () => ({
@@ -448,13 +433,16 @@ vi.mock("./doctor-memory-search.js", () => ({
   noteMemorySearchHealth,
 }));
 
-vi.mock("../plugins/doctor-contract-registry.js", () => ({
+// mock-isolation: Isolate config repair discovery; recovery inventory remains real.
+vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>()),
   withDeferredPluginDoctorMigrations: (_pluginIds: readonly string[], run: () => unknown) => run(),
   applyPluginDoctorCompatibilityMigrations: (config: unknown) => ({
     config,
     changes: [],
   }),
   collectDoctorConfigRepairPluginIds: () => [],
+  resolvePluginDoctorProviderRenames: () => [],
   listPluginDoctorLegacyConfigRules,
 }));
 
@@ -558,7 +546,8 @@ vi.mock("../infra/state-migrations.plugin-doctor.js", () => ({
   autoMigrateLegacyPluginDoctorState,
 }));
 
-vi.mock("../infra/state-migrations.state-dir.js", () => ({
+vi.mock("../infra/state-migrations.state-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/state-migrations.state-dir.js")>()),
   autoMigrateLegacyStateDir,
   resolvePendingLegacyStateDirMigrationPaths: vi.fn().mockReturnValue(null),
   prepareLegacyStateDirMigration: vi.fn(),

@@ -1,5 +1,4 @@
 import { listAgentEntries } from "../agents/agent-scope-config.js";
-// Resolves filesystem policy for exec and sandbox tool use.
 import { resolveConfiguredToolPolicies } from "../agents/agent-tools.policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
@@ -18,19 +17,6 @@ type ExecFilesystemPolicyDriftHit = {
   sandboxWorkspaceAccess: "none" | "ro" | "rw";
   execHost: NonNullable<ExecToolConfig["host"]>;
 };
-
-function isExecFilesystemConstrained(params: {
-  sandboxMode: "off" | "non-main" | "all";
-  sandboxWorkspaceAccess: "none" | "ro" | "rw";
-  execHost: NonNullable<ExecToolConfig["host"]>;
-}): boolean {
-  return (
-    params.sandboxMode === "all" &&
-    params.execHost !== "gateway" &&
-    params.execHost !== "node" &&
-    params.sandboxWorkspaceAccess !== "rw"
-  );
-}
 
 /** Find policy scopes where exec can still mutate files despite disabled fs tools. */
 export function collectExecFilesystemPolicyDriftHits(
@@ -61,11 +47,10 @@ export function collectExecFilesystemPolicyDriftHits(
     // Sandboxed all-mode with non-rw workspace access constrains local exec
     // mutations enough that disabling write/edit/apply_patch is not misleading.
     if (
-      isExecFilesystemConstrained({
-        sandboxMode: sandbox.mode,
-        sandboxWorkspaceAccess: sandbox.workspaceAccess,
-        execHost,
-      })
+      sandbox.mode === "all" &&
+      execHost !== "gateway" &&
+      execHost !== "node" &&
+      sandbox.workspaceAccess !== "rw"
     ) {
       continue;
     }

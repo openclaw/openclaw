@@ -1,4 +1,3 @@
-// Filesystem session transcript helpers.
 // Resolves, archives, and cleans up transcript files owned by Gateway sessions.
 import fs from "node:fs";
 import path from "node:path";
@@ -13,6 +12,7 @@ import {
 } from "../config/sessions/artifacts.js";
 import { extractGeneratedTranscriptSessionId } from "../config/sessions/generated-transcript-session-id.js";
 import {
+  resolveSessionArtifactDirectory,
   resolveSessionFilePathCore,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
@@ -41,17 +41,6 @@ const resetArchiveDiscoveryCache = new Map<
   }
 >();
 
-function classifySessionTranscriptCandidate(
-  sessionId: string,
-  sessionFile?: string,
-): "current" | "stale" | "custom" {
-  const transcriptSessionId = extractGeneratedTranscriptSessionId(sessionFile);
-  if (!transcriptSessionId) {
-    return "custom";
-  }
-  return transcriptSessionId === sessionId ? "current" : "stale";
-}
-
 export function resolveSessionTranscriptCandidates(
   sessionId: string,
   storePath: string | undefined,
@@ -59,7 +48,8 @@ export function resolveSessionTranscriptCandidates(
   agentId?: string,
 ): string[] {
   const candidates: string[] = [];
-  const sessionFileState = classifySessionTranscriptCandidate(sessionId, sessionFile);
+  const transcriptSessionId = extractGeneratedTranscriptSessionId(sessionFile);
+  const staleSessionFile = Boolean(transcriptSessionId && transcriptSessionId !== sessionId);
   const pushCandidate = (resolve: () => string): void => {
     try {
       candidates.push(resolve());
@@ -69,21 +59,21 @@ export function resolveSessionTranscriptCandidates(
   };
 
   if (storePath) {
-    const sessionsDir = path.dirname(storePath);
-    if (sessionFile && sessionFileState !== "stale") {
+    const sessionsDir = resolveSessionArtifactDirectory(storePath);
+    if (sessionFile && !staleSessionFile) {
       pushCandidate(() =>
         resolveSessionFilePathCore(sessionId, { sessionFile }, { sessionsDir, agentId }),
       );
     }
     pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, sessionsDir));
-    if (sessionFile && sessionFileState === "stale") {
+    if (sessionFile && staleSessionFile) {
       pushCandidate(() =>
         resolveSessionFilePathCore(sessionId, { sessionFile }, { sessionsDir, agentId }),
       );
     }
   } else if (sessionFile) {
     if (agentId) {
-      if (sessionFileState !== "stale") {
+      if (!staleSessionFile) {
         pushCandidate(() => resolveSessionFilePathCore(sessionId, { sessionFile }, { agentId }));
       }
     } else {
@@ -96,7 +86,7 @@ export function resolveSessionTranscriptCandidates(
 
   if (agentId) {
     pushCandidate(() => resolveSessionTranscriptPath(sessionId, agentId));
-    if (sessionFile && sessionFileState === "stale") {
+    if (sessionFile && staleSessionFile) {
       pushCandidate(() => resolveSessionFilePathCore(sessionId, { sessionFile }, { agentId }));
     }
   }
@@ -200,17 +190,6 @@ async function resolveLatestResetArchiveForTranscriptAsync(
   return undefined;
 }
 
-function transcriptArchiveIdentity(
-  sessionId: string,
-  transcriptPath: string,
-): { key: string; requireSessionHeader: boolean } {
-  const generatedSessionId = extractGeneratedTranscriptSessionId(transcriptPath);
-  return {
-    key: path.basename(transcriptPath),
-    requireSessionHeader: !generatedSessionId || generatedSessionId !== sessionId,
-  };
-}
-
 export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -227,11 +206,14 @@ export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
     sessionFile,
     agentId,
   )) {
-    const identity = transcriptArchiveIdentity(sessionId, candidate);
-    candidatesByIdentity.set(identity.key, [
-      ...(candidatesByIdentity.get(identity.key) ?? []),
-      { path: candidate, requireSessionHeader: identity.requireSessionHeader },
-    ]);
+    const key = path.basename(candidate);
+    const generatedSessionId = extractGeneratedTranscriptSessionId(candidate);
+    const candidates = candidatesByIdentity.get(key) ?? [];
+    candidates.push({
+      path: candidate,
+      requireSessionHeader: !generatedSessionId || generatedSessionId !== sessionId,
+    });
+    candidatesByIdentity.set(key, candidates);
   }
   const archives = (
     await Promise.all(
@@ -295,7 +277,6 @@ export function archiveSessionTranscriptsDetailed(opts: {
   sessionId: string;
   storePath: string | undefined;
   sessionFile?: string;
-  agentId?: string;
   reason: "reset" | "deleted";
   /**
    * When true, only archive files resolved under the session store directory.
@@ -317,7 +298,6 @@ export function archiveSessionTranscriptsDetailed(opts: {
     opts.sessionId,
     opts.storePath,
     opts.sessionFile,
-    opts.agentId,
   )) {
     const candidatePath = canonicalizePathForComparison(candidate);
     if (storeDir) {
@@ -394,19 +374,18 @@ async function ignoreMissingArchivePath<T>(operation: () => Promise<T>, fallback
 // listing per reason would multiply READDIR load on networked filesystems.
 export async function cleanupArchivedSessionTranscripts(opts: {
   directories: string[];
-  rules: SessionArchiveCleanupRule[];
+  rules: readonly SessionArchiveCleanupRule[];
   nowMs?: number;
-}): Promise<{ removed: number; scanned: number }> {
+  removeFile?: (filePath: string) => Promise<void>;
+}): Promise<void> {
   const rules = opts.rules.filter(
     (rule) => Number.isFinite(rule.olderThanMs) && rule.olderThanMs >= 0,
   );
   if (rules.length === 0) {
-    return { removed: 0, scanned: 0 };
+    return;
   }
   const now = opts.nowMs ?? Date.now();
   const directories = uniqueStrings(opts.directories.map((dir) => path.resolve(dir)));
-  let removed = 0;
-  let scanned = 0;
 
   for (const dir of directories) {
     const entries = await ignoreMissingArchivePath(() => fs.promises.readdir(dir), []);
@@ -416,18 +395,14 @@ export async function cleanupArchivedSessionTranscripts(opts: {
         if (timestamp == null) {
           continue;
         }
-        scanned += 1;
         if (now - timestamp > rule.olderThanMs) {
           const fullPath = path.join(dir, entry);
           const stat = await ignoreMissingArchivePath(() => fs.promises.stat(fullPath), null);
           if (stat?.isFile()) {
-            const removedFile = await ignoreMissingArchivePath(async () => {
-              await fs.promises.rm(fullPath);
-              return true;
-            }, false);
-            if (removedFile) {
-              removed += 1;
-            }
+            await ignoreMissingArchivePath(
+              () => opts.removeFile?.(fullPath) ?? fs.promises.rm(fullPath),
+              undefined,
+            );
           }
         }
         // An archive name carries exactly one `.{reason}.{timestamp}` suffix,
@@ -436,6 +411,4 @@ export async function cleanupArchivedSessionTranscripts(opts: {
       }
     }
   }
-
-  return { removed, scanned };
 }

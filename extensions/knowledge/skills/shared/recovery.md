@@ -1,0 +1,41 @@
+# Recover from uncertain or failed writes
+
+## Receipt states
+
+- `accepted`: durable intent, not yet saved. `published`: saved.
+- `indexed: false` is publication-time state; search reconciles later. A
+  pending Git checkpoint does not undo publication or justify another save.
+- `conflict`: recovery material is retained. Inspect `knowledge_mutation` and
+  `knowledge_history`, then report it. Resume does not resolve conflicts. Never
+  overwrite, bypass preconditions or loop.
+
+## Lost or uncertain response
+
+1. Call `knowledge_mutation({requestId, includeFiles: false})`.
+2. Replay the exact payload under the same ID, or call
+   `knowledge_resume({requestId})` for an accepted publication.
+3. Never retry under a new ID. A null receipt while a call may still be in flight
+   is not failure; wait, then replay.
+
+Uploads use their chunk receipts, not `knowledge_mutation`.
+
+## Rejected requests
+
+- Rejected before acceptance: nothing was saved. Keep your draft, reread,
+  reconcile, then send the new payload with a new ID.
+- Validation error: fix the payload against the tool schema and ontology
+  definition. Don't retry an unchanged failure.
+- Vault or storage unavailable: not a credential problem. Inspect, retry the
+  exact request when it returns, otherwise report the blocker.
+- Stale revision: reread and reconcile. Never rebase blindly.
+
+## Work log for multi-record jobs
+
+Keep an itemized log: source identity, upload IDs and evidence, each write's
+request ID and payload, returned record IDs and outcomes. If you lose it, inspect
+history and existing pages before continuing. If you can't tell whether an item
+was published, stop that item rather than risk a duplicate.
+
+`knowledge_publish_batch` is atomic per batch only. There is no whole-workflow
+rollback, semantic dedup or extraction-job resume. Request `knowledge_mutation`
+files only when needed (at most 3 per call; follow `nextOffset`).

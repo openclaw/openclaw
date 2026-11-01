@@ -4,9 +4,6 @@ import type { ChannelMeta } from "./types.core.js";
 
 type ArrayFieldMode = "defined" | "non-empty";
 
-/**
- * Builds normalized channel metadata from a plugin manifest channel declaration.
- */
 export function buildManifestChannelMeta(params: {
   id: string;
   channel: PluginPackageChannel;

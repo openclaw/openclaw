@@ -4,24 +4,6 @@ import { join } from "node:path";
 export const REVIEWED_PR = 42;
 export const REVIEWED_HEAD = "b".repeat(40);
 
-export function validClawsweeperReviewCommentPages(pr: number, headSha: string) {
-  const commentId = 9002;
-  const reviewedAt = new Date(Date.now() - 60_000).toISOString();
-  return [
-    [
-      {
-        id: commentId,
-        user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
-        body: [
-          `<!-- clawsweeper-review-version item=${pr} reviewed_at=${reviewedAt} sha=${headSha} source_revision=${"c".repeat(64)} lease_owner=github-run-fixture lease_comment_id=${commentId - 1} v=1 -->`,
-          "",
-          `<!-- clawsweeper-review item=${pr} -->`,
-        ].join("\n"),
-      },
-    ],
-  ];
-}
-
 export function validReview(headSha = REVIEWED_HEAD) {
   return {
     pr: { number: REVIEWED_PR, headSha },
@@ -64,7 +46,6 @@ export function validReview(headSha = REVIEWED_HEAD) {
 export type ReviewArtifactFixtureOptions = {
   files?: string[];
   prNumber?: number;
-  markdownIdentityLine?: string;
   metaEnvPrNumber?: number;
   mode?: "pr" | "main";
   headSha?: string;
@@ -83,7 +64,7 @@ export function writeReviewArtifacts(
   writeFileSync(
     join(localDir, "review.md"),
     [
-      options.markdownIdentityLine ?? `Review artifact for PR #${prNumber} at ${headSha}`,
+      `Review artifact for PR #${prNumber} at ${headSha}`,
       "A)",
       "B)",
       "C)",

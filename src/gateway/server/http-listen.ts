@@ -48,7 +48,13 @@ export async function listenGatewayHttpServer(params: {
         };
         httpServer.once("error", onError);
         httpServer.once("listening", onListening);
-        httpServer.listen(port, bindHost);
+        try {
+          httpServer.listen(port, bindHost);
+        } catch (error) {
+          httpServer.off("error", onError);
+          httpServer.off("listening", onListening);
+          throw error;
+        }
       });
       return;
     } catch (err) {

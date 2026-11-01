@@ -74,6 +74,7 @@ enum ChatInlineMathScanner {
                 pieces.append(.literal(source))
             }
             cursor = candidate.end
+            codeSpanIndex = candidate.nextCodeSpanIndex
             textStart = cursor
         }
 
@@ -87,6 +88,7 @@ enum ChatInlineMathScanner {
         let closeStart: String.Index
         let end: String.Index
         let containsNewline: Bool
+        let nextCodeSpanIndex: Int
     }
 
     private static func candidate(
@@ -115,7 +117,8 @@ enum ChatInlineMathScanner {
                 return Candidate(
                     closeStart: cursor,
                     end: markdown.index(cursor, offsetBy: 2),
-                    containsNewline: containsNewline)
+                    containsNewline: containsNewline,
+                    nextCodeSpanIndex: codeSpanIndex)
             }
             cursor = markdown.index(after: cursor)
         }
@@ -144,12 +147,11 @@ enum ChatInlineMathScanner {
 /// repeating SwiftMath parsing as later streaming deltas rerender old blocks.
 @MainActor
 enum ChatMathParseCache {
-    private enum Result {
-        case parsed(MTMathList)
-        case invalid
+    private struct Entry {
+        let mathList: MTMathList?
     }
 
-    private static var cache: [String: Result] = [:]
+    private static var cache: [String: Entry] = [:]
     private static let capacity = 80
     private static let maxNestingDepth = 64
     private static let maxCommandCount = 128
@@ -167,22 +169,15 @@ enum ChatMathParseCache {
         // Chat owns the surrounding color, so preserve these as raw source.
         guard !self.unsafeCommands.contains(where: latex.contains) else { return nil }
         if let hit = self.cache[latex] {
-            if case let .parsed(mathList) = hit {
-                return mathList
-            }
-            return nil
+            return hit.mathList
         }
 
-        let result = MTMathListBuilder.build(fromString: latex)
-            .map(Result.parsed) ?? .invalid
+        let result = Entry(mathList: MTMathListBuilder.build(fromString: latex))
         if self.cache.count >= self.capacity {
             self.cache.removeAll(keepingCapacity: true)
         }
         self.cache[latex] = result
-        if case let .parsed(mathList) = result {
-            return mathList
-        }
-        return nil
+        return result.mathList
     }
 
     private static func isWithinParserLimits(_ latex: String) -> Bool {

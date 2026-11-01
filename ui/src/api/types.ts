@@ -1,3 +1,4 @@
+import type { ChannelsStatusResult } from "@openclaw/gateway-client/browser";
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   ArtifactSummary as ProtocolArtifactSummary,
@@ -8,11 +9,11 @@ import type {
   ErrorShape,
   SessionsFilesListResult as ProtocolSessionsFilesListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
 import type {
   SessionEntryArchiveReason,
   SessionRow,
 } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type { projectCronRunHistoryPage } from "../../../src/cron/run-history.js";
 import type { CronListPageResult } from "../../../src/cron/service/list-page-types.js";
 import type { CronStatusSummary } from "../../../src/cron/service/state.js";
 import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.types.js";
@@ -23,7 +24,6 @@ import type {
 } from "../../../src/gateway/session-utils.types.js";
 import type {
   GatewayContextWindowOption,
-  GatewayThinkingLevelOption,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
@@ -41,6 +41,7 @@ export type {
   CronJob,
   CronRunLogEntry,
   CronScratchGetResult,
+  CronScratchSetResult,
   UpdateAvailable,
   UpdateHoldResult,
   UpdateReportResult,
@@ -76,131 +77,18 @@ export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-
 export type { SessionGoal } from "../../../src/config/sessions/types.js";
 export type { FastMode } from "@openclaw/normalization-core/string-coerce";
 export type {
+  AgentsCreateResult,
   AgentsListResult,
   ModelChoice as ModelCatalogEntry,
   ModelCatalogProviderOutcome,
 } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 export type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 export type ChannelsStatusSnapshot = ChannelsStatusResult;
-export type ChannelUiMetaEntry = NonNullable<ChannelsStatusResult["channelMeta"]>[number];
 export type ChannelAccountSnapshot = ChannelsStatusResult["channelAccounts"][string][number];
 
-type WhatsAppSelf = {
-  e164?: string | null;
-  jid?: string | null;
+export type ChannelStatus = Omit<ChannelAccountSnapshot, "accountId" | "probe"> & {
+  probe?: { ok?: boolean; status?: number | string | null; error?: string | null } | null;
 };
-
-type WhatsAppDisconnect = {
-  at: number;
-  status?: number | null;
-  error?: string | null;
-  loggedOut?: boolean | null;
-};
-
-export type WhatsAppStatus = {
-  configured: boolean;
-  linked: boolean;
-  authAgeMs?: number | null;
-  self?: WhatsAppSelf | null;
-  running: boolean;
-  connected: boolean;
-  lastConnectedAt?: number | null;
-  lastDisconnect?: WhatsAppDisconnect | null;
-  reconnectAttempts: number;
-  lastMessageAt?: number | null;
-  lastEventAt?: number | null;
-  lastError?: string | null;
-};
-
-type ChannelProbe = {
-  ok: boolean;
-  status?: number | null;
-  error?: string | null;
-  elapsedMs?: number | null;
-};
-
-type ChannelStatus<Probe = ChannelProbe> = {
-  configured: boolean;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  probe?: Probe | null;
-  lastProbeAt?: number | null;
-};
-
-type TelegramProbe = ChannelProbe & {
-  bot?: { id?: number | null; username?: string | null } | null;
-  webhook?: { url?: string | null; hasCustomCert?: boolean | null } | null;
-};
-
-export type TelegramStatus = ChannelStatus<TelegramProbe> & {
-  tokenSource?: string | null;
-  mode?: string | null;
-};
-
-type DiscordProbe = ChannelProbe & {
-  bot?: { id?: string | null; username?: string | null } | null;
-};
-
-export type DiscordStatus = ChannelStatus<DiscordProbe> & {
-  tokenSource?: string | null;
-};
-
-export type GoogleChatStatus = ChannelStatus & {
-  credentialSource?: string | null;
-  audienceType?: string | null;
-  audience?: string | null;
-  webhookPath?: string | null;
-  webhookUrl?: string | null;
-};
-
-type SlackIdentity = {
-  id?: string | null;
-  name?: string | null;
-};
-
-type SlackProbe = ChannelProbe & {
-  bot?: SlackIdentity | null;
-  team?: SlackIdentity | null;
-};
-
-export type SlackStatus = ChannelStatus<SlackProbe> & {
-  botTokenSource?: string | null;
-  appTokenSource?: string | null;
-};
-
-export type SignalStatus = ChannelStatus<ChannelProbe & { version?: string | null }> & {
-  baseUrl: string;
-};
-
-export type IMessageStatus = ChannelStatus<Pick<ChannelProbe, "ok" | "error">> & {
-  cliPath?: string | null;
-  dbPath?: string | null;
-};
-
-export type NostrProfile = {
-  name?: string | null;
-  displayName?: string | null;
-  about?: string | null;
-  picture?: string | null;
-  banner?: string | null;
-  website?: string | null;
-  nip05?: string | null;
-  lud16?: string | null;
-};
-
-export type NostrStatus = {
-  configured: boolean;
-  publicKey?: string | null;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  profile?: NostrProfile | null;
-};
-
-type ConfigSnapshotIssue = { path: string; message: string };
 
 export type ConfigSnapshot = {
   writeError?: ErrorShape;
@@ -216,18 +104,20 @@ export type ConfigSnapshot = {
   resolved?: Record<string, unknown> | null;
   runtimeConfig?: Record<string, unknown> | null;
   config?: Record<string, unknown> | null;
-  issues?: ConfigSnapshotIssue[] | null;
+  issues?: { path: string; message: string }[] | null;
 };
 
 export type { PresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
 export type { GatewayWireSessionsDefaults as GatewaySessionsDefaults };
 export type { GatewayAgentRow } from "../../../src/shared/session-types.js";
-export type { GatewayContextWindowOption, GatewayThinkingLevelOption };
+export type { GatewayContextWindowOption };
 
 // The workspace view joins file results with separately fetched artifacts.
 export type SessionWorkspaceListResult = ProtocolSessionsFilesListResult & {
   artifacts?: ProtocolArtifactSummary[];
 };
+
+export type CyberAccessProgram = NonNullable<GatewayWireSessionRow["cyberAccessProgram"]>;
 
 export type GatewaySessionRow = Omit<GatewayWireSessionRow, "archivedBy" | "updatedAt"> &
   Pick<SessionRow, "archivedBy" | "updatedAt"> & {
@@ -251,6 +141,8 @@ export type SessionsListResult = SessionsListResultBase<
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
   label?: GatewaySessionRow["label"];
+  icon?: GatewaySessionRow["icon"];
+  color?: GatewaySessionRow["color"];
   category?: GatewaySessionRow["category"];
   updatedAt?: number;
   createdAt?: number;
@@ -272,13 +164,14 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   contextWindow?: string;
   thinkingLevel?: string;
   fastMode?: FastMode;
+  cyberAccessProgram?: CyberAccessProgram;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
 }> &
   Pick<GatewayWireSessionsPatchResult, "resolved">;
 
-export type { CostUsageSummary, SessionsUsageResult } from "../pages/usage/data-types.ts";
+export type { SessionsUsageResult } from "../pages/usage/data-types.ts";
 
 export type CronRunStatus = NonNullable<ProtocolCronRunLogEntry["status"]>;
 export type CronDeliveryStatus = NonNullable<ProtocolCronRunLogEntry["deliveryStatus"]>;
@@ -288,7 +181,6 @@ export type CronJobsTriggerFilter = NonNullable<CronListParams["trigger"]>;
 export type CronJobsSortBy = NonNullable<CronListParams["sortBy"]>;
 export type CronRunScope = NonNullable<CronRunsParams["scope"]>;
 export type CronRunsStatusValue = NonNullable<CronRunsParams["statuses"]>[number];
-export type CronRunsStatusFilter = NonNullable<CronRunsParams["status"]>;
 export type CronSortDir = NonNullable<CronListParams["sortDir"]>;
 export type CronPayload = ProtocolCronJob["payload"];
 
@@ -301,14 +193,7 @@ export type CronJobsListResult<Row = ProtocolCronJob> = Omit<CronListPageResult,
   jobs: Row[];
 };
 
-export type CronRunsResult = {
-  entries: ProtocolCronRunLogEntry[];
-  total?: number;
-  limit?: number;
-  offset?: number;
-  nextOffset?: number | null;
-  hasMore?: boolean;
-};
+export type CronRunsResult = ReturnType<typeof projectCronRunHistoryPage>;
 
 export type {
   SkillStatusEntry,

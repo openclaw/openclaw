@@ -2,6 +2,7 @@ import { mkdir, open, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { CliArgumentError } from "../lib/error-format.mts";
 import { terminateManagedChild } from "../lib/managed-child-process.mts";
 import { sleep as delay } from "../lib/sleep.mjs";
 import { resolveVitestHomeSelection } from "../lib/vitest-home-selection.mts";
@@ -32,10 +33,6 @@ const MIRROR_READ_CHUNK_BYTES = 1024 * 1024;
 const CHILD_OUTPUT_TAIL_BYTES = 128 * 1024;
 const BOOLEAN_OPTIONS = new Set(["--help", "-h", "--no-alt-screen"]);
 const VALUE_OPTIONS = new Set(["--mode", "--mirror-path"]);
-
-class CliArgumentError extends Error {
-  override name = "CliArgumentError";
-}
 
 type KillableChild = {
   pid?: number;

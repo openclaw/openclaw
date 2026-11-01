@@ -1,29 +1,16 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  inspectDiscordAccountTokenState,
-  resolveDiscordAccountAvailability,
-} from "./account-token-inspect.js";
+import { resolveDiscordAccountAvailability } from "./account-token-inspect.js";
 import {
   listDiscordAccountIds,
-  mergeDiscordAccountConfig,
-  resolveDefaultDiscordAccountId,
-  resolveDiscordAccountConfig,
+  inspectDiscordAccountConfig,
+  type ResolvedDiscordAccount,
 } from "./accounts.js";
-import type { DiscordCredentialStatus } from "./token.js";
 
-export type InspectedDiscordAccount = {
-  accountId: string;
-  enabled: boolean;
-  name?: string;
-  token: string;
-  tokenSource: "env" | "config" | "none";
-  tokenStatus: DiscordCredentialStatus;
+export type InspectedDiscordAccount = ResolvedDiscordAccount & {
   configured: boolean;
   stateReason?: string;
-  config: DiscordAccountConfig;
 };
 
 function inspectDiscordAccountPrimary(params: {
@@ -31,27 +18,10 @@ function inspectDiscordAccountPrimary(params: {
   accountId?: string | null;
   envToken?: string | null;
 }): InspectedDiscordAccount {
-  const accountId = normalizeAccountId(
-    params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
-  );
-  const merged = mergeDiscordAccountConfig(params.cfg, accountId);
-  const enabled = params.cfg.channels?.discord?.enabled !== false && merged.enabled !== false;
-  const accountConfig = resolveDiscordAccountConfig(params.cfg, accountId);
-  const hasAccountToken = Boolean(
-    accountConfig && Object.hasOwn(accountConfig as Record<string, unknown>, "token"),
-  );
-  return inspectDiscordAccountTokenState({
-    base: {
-      accountId,
-      enabled,
-      name: normalizeOptionalString(merged.name),
-    },
-    config: merged,
-    accountToken: accountConfig?.token,
-    hasAccountToken,
-    channelToken: params.cfg.channels?.discord?.token,
+  return inspectDiscordAccountConfig(params, {
+    includeName: true,
     // Known divergence: doctor inspection must use its injected environment snapshot.
-    resolveFallbackToken: () => {
+    resolveFallbackToken: (accountId) => {
       const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
       const envToken = allowEnv
         ? normalizeSecretInputString(params.envToken ?? process.env.DISCORD_BOT_TOKEN)

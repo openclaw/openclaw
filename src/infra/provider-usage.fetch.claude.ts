@@ -1,4 +1,3 @@
-// Fetches Claude provider usage windows.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -128,13 +127,16 @@ async function fetchClaudeWebUsage(
     Accept: "application/json",
   };
 
-  const parsedOrgs = await fetchUsageJson({
-    provider: "anthropic",
-    url: "https://claude.ai/api/organizations",
-    init: { headers },
-    timeoutMs,
-    fetchFn,
-  });
+  const fetchWebUsage = (url: string) =>
+    fetchUsageJson({
+      provider: "anthropic",
+      url,
+      init: { headers },
+      timeoutMs,
+      fetchFn,
+    });
+
+  const parsedOrgs = await fetchWebUsage("https://claude.ai/api/organizations");
   if (!parsedOrgs.ok) {
     return null;
   }
@@ -144,13 +146,7 @@ async function fetchClaudeWebUsage(
     return null;
   }
 
-  const parsedUsage = await fetchUsageJson({
-    provider: "anthropic",
-    url: `https://claude.ai/api/organizations/${orgId}/usage`,
-    init: { headers },
-    timeoutMs,
-    fetchFn,
-  });
+  const parsedUsage = await fetchWebUsage(`https://claude.ai/api/organizations/${orgId}/usage`);
   if (!parsedUsage.ok) {
     return null;
   }
@@ -197,9 +193,7 @@ export async function fetchClaudeUsage(
       if (typeof raw === "string" && raw.trim()) {
         message = raw.trim();
       }
-    } catch {
-      // ignore parse errors
-    }
+    } catch {}
 
     // Claude Code CLI setup-token yields tokens that can be used for inference, but may not
     // include user:profile scope required by the OAuth usage endpoint. When a claude.ai

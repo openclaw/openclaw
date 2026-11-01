@@ -1,9 +1,9 @@
-// Shared process-test harness: mock Gateway servers used by CLI exit-code proofs.
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
 import { isLoopbackIpAddress, isPrivateOrLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { expect } from "vitest";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, type WebSocket } from "ws";
 import {
   buildMinimalGatewayHelloOkPayload,
   closeMinimalGatewayServer,
@@ -11,28 +11,30 @@ import {
   sendMinimalGatewayConnectChallenge,
   sendMinimalGatewayResponse,
 } from "../gateway/minimal-gateway.test-helpers.js";
-import {
-  pickMatchingExternalInterfaceAddress,
-  readNetworkInterfaces,
-} from "../infra/network-interfaces.js";
+import { pickMatchingExternalInterfaceAddress } from "../infra/network-interfaces.js";
 
 const activeServers = new Set<WebSocketServer>();
-
+type CliResult = Awaited<
+  ReturnType<typeof import("./gateway-backed-exit.process.test-support.js").runIsolatedGatewayCli>
+>;
+export function expectCliResult(result: CliResult, code = 0): unknown {
+  expect(result, result.stderr).toMatchObject({ code, signal: null, stderr: "" });
+  return JSON.parse(result.stdout);
+}
+type Request = ReturnType<typeof parseMinimalGatewayRequestFrame> & { id: string };
+type Hello = NonNullable<Parameters<typeof buildMinimalGatewayHelloOkPayload>[0]>;
 // Cached device credentials must not also claim shared auth and suppress human identity.
 type ExpectedGatewayAuth =
   | { token: string; deviceToken?: never }
   | { token?: never; deviceToken: string };
 
-export const EMPTY_STABILITY_SNAPSHOT = {
-  capacity: 100,
-  count: 0,
-  dropped: 0,
-  events: [],
-  summary: { byType: {} },
-};
-
-export async function startCliReadGateway(token?: string): Promise<{ url: string }> {
-  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+export async function startGateway(
+  handle: ((ws: WebSocket, frame: Request) => void) | Record<string, unknown>,
+  connect?: (frame: Request) => Hello,
+  host = "127.0.0.1",
+) {
+  const calls: string[] = [];
+  const wss = new WebSocketServer({ host, port: 0 });
   activeServers.add(wss);
   wss.on("connection", (ws) => {
     sendMinimalGatewayConnectChallenge(ws);
@@ -41,29 +43,87 @@ export async function startCliReadGateway(token?: string): Promise<{ url: string
       if (frame.type !== "req" || !frame.id) {
         return;
       }
-      if (frame.method === "connect") {
-        expect(frame.params?.auth?.token).toBe(token);
+      const request = { ...frame, id: frame.id };
+      if (frame.method === "connect" && connect) {
         sendMinimalGatewayResponse(
           ws,
           frame.id,
-          buildMinimalGatewayHelloOkPayload({
-            methods: ["cron.list", "cron.status", "message.action"],
-            auth: { role: "operator", scopes: ["operator.admin"] },
-          }),
+          buildMinimalGatewayHelloOkPayload(connect(request)),
         );
-        return;
+      } else {
+        if (typeof frame.method === "string") {
+          calls.push(frame.method);
+        }
+        if (typeof handle === "function") {
+          handle(ws, request);
+        } else if (frame.method && Object.hasOwn(handle, frame.method)) {
+          sendMinimalGatewayResponse(ws, frame.id, handle[frame.method]);
+        }
       }
+    });
+  });
+  await once(wss, "listening");
+  const { port } = wss.address() as AddressInfo;
+  return {
+    calls,
+    url: "ws://" + host + ":" + port,
+    port,
+    close: async () => {
+      await closeMinimalGatewayServer(wss);
+      activeServers.delete(wss);
+    },
+  };
+}
+
+function authenticate(
+  expected: ExpectedGatewayAuth | string | undefined,
+  methods: string[],
+  deviceToken?: string,
+): (frame: Request) => Hello {
+  return (frame) => {
+    if (typeof expected === "object") {
+      expect(frame.params?.auth).toEqual(expected);
+    } else {
+      expect(frame.params?.auth?.token).toBe(expected);
+    }
+    return {
+      methods,
+      auth: {
+        role: "operator",
+        scopes: ["operator.admin"],
+        ...(deviceToken ? { deviceToken } : {}),
+      },
+    };
+  };
+}
+
+const emptyCronList = {
+  jobs: [],
+  snapshotRevision: "test-revision",
+  total: 0,
+  offset: 0,
+  limit: 50,
+  hasMore: false,
+  nextOffset: null,
+  deliveryPreviews: {},
+};
+export const EMPTY_STABILITY_SNAPSHOT = {
+  capacity: 100,
+  count: 0,
+  dropped: 0,
+  events: [],
+  summary: { byType: {} },
+};
+
+function sendFailure(ws: WebSocket, id: string, error: unknown, sent?: () => void) {
+  ws.send(JSON.stringify({ type: "res", id, ok: false, error }), sent);
+}
+
+export async function startCliReadGateway(token?: string): Promise<{ url: string }> {
+  return await startGateway(
+    (ws, frame) => {
       if (frame.method === "cron.list") {
-        sendMinimalGatewayResponse(ws, frame.id, {
-          jobs: [],
-          snapshotRevision: "test-revision",
-          total: 0,
-          offset: 0,
-          limit: 50,
-          hasMore: false,
-          nextOffset: null,
-          deliveryPreviews: {},
-        });
+        sendMinimalGatewayResponse(ws, frame.id, emptyCronList);
       }
       if (frame.method === "cron.status") {
         sendMinimalGatewayResponse(ws, frame.id, { enabled: true, jobs: 0 });
@@ -77,239 +137,100 @@ export async function startCliReadGateway(token?: string): Promise<{ url: string
         });
         sendMinimalGatewayResponse(ws, frame.id, { messages: [] });
       }
-    });
-  });
-  await once(wss, "listening");
-  const address = wss.address() as AddressInfo;
-  return { url: `ws://127.0.0.1:${address.port}` };
+    },
+    authenticate(token, ["cron.list", "cron.status", "message.action"]),
+  );
 }
 
-/** Fake Gateway whose automation store never contains the requested job id. */
-export async function startCronLookupMissGateway(
-  token: string,
-  jobId: string,
-): Promise<{ calls: string[]; url: string }> {
-  const calls: string[] = [];
-  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  activeServers.add(wss);
-  wss.on("connection", (ws) => {
-    sendMinimalGatewayConnectChallenge(ws);
-    ws.on("message", (data) => {
-      const frame = parseMinimalGatewayRequestFrame(data);
-      if (frame.type !== "req" || !frame.id) {
-        return;
-      }
-      if (frame.method === "connect") {
-        expect(frame.params?.auth?.token).toBe(token);
-        sendMinimalGatewayResponse(
-          ws,
-          frame.id,
-          buildMinimalGatewayHelloOkPayload({
-            methods: ["cron.get", "cron.list"],
-            auth: { role: "operator", scopes: ["operator.admin"] },
-          }),
-        );
-        return;
-      }
-      if (typeof frame.method !== "string") {
-        return;
-      }
-      calls.push(frame.method);
+export async function startCronLookupMissGateway(token: string, jobId: string) {
+  const gateway = await startGateway(
+    (ws, frame) => {
       if (frame.method === "cron.get") {
-        // The typed lookup miss a real Gateway emits for an unknown automation id.
-        ws.send(
-          JSON.stringify({
-            type: "res",
-            id: frame.id,
-            ok: false,
-            error: {
-              code: "INVALID_REQUEST",
-              message: `cron job not found: ${jobId}`,
-              details: { code: "CRON_JOB_NOT_FOUND", jobId },
-            },
-          }),
-        );
-        return;
-      }
-      if (frame.method === "cron.list") {
-        sendMinimalGatewayResponse(ws, frame.id, {
-          jobs: [],
-          snapshotRevision: "test-revision",
-          total: 0,
-          offset: 0,
-          limit: 50,
-          hasMore: false,
-          nextOffset: null,
-          deliveryPreviews: {},
+        sendFailure(ws, frame.id, {
+          code: "INVALID_REQUEST",
+          message: "cron job not found: " + jobId,
+          details: { code: "CRON_JOB_NOT_FOUND", jobId },
         });
       }
-    });
-  });
-  await once(wss, "listening");
-  const address = wss.address() as AddressInfo;
-  return { calls, url: `ws://127.0.0.1:${address.port}` };
+      if (frame.method === "cron.list") {
+        sendMinimalGatewayResponse(ws, frame.id, emptyCronList);
+      }
+    },
+    authenticate(token, ["cron.get", "cron.list"]),
+  );
+  return { calls: gateway.calls, url: gateway.url };
 }
 
 export async function startRateLimitedGateway(): Promise<{ url: string }> {
-  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  activeServers.add(wss);
-  wss.on("connection", (ws) => {
-    sendMinimalGatewayConnectChallenge(ws);
-    ws.on("message", (data) => {
-      const frame = parseMinimalGatewayRequestFrame(data);
-      if (frame.type !== "req" || !frame.id || frame.method !== "connect") {
-        return;
-      }
-      const message = "unauthorized: too many failed authentication attempts (retry later)";
-      ws.send(
-        JSON.stringify({
-          type: "res",
-          id: frame.id,
-          ok: false,
-          error: {
-            code: "INVALID_REQUEST",
-            message,
-            retryable: true,
-            retryAfterMs: 60_000,
-            details: {
-              code: "AUTH_RATE_LIMITED",
-              authReason: "rate_limited",
-              recommendedNextStep: "wait_then_retry",
-            },
-          },
-        }),
-        () => ws.close(1008, message),
-      );
-    });
+  return await startGateway((ws, frame) => {
+    if (frame.method !== "connect") {
+      return;
+    }
+    const message = "unauthorized: too many failed authentication attempts (retry later)";
+    sendFailure(
+      ws,
+      frame.id,
+      {
+        code: "INVALID_REQUEST",
+        message,
+        retryable: true,
+        retryAfterMs: 60_000,
+        details: {
+          code: "AUTH_RATE_LIMITED",
+          authReason: "rate_limited",
+          recommendedNextStep: "wait_then_retry",
+        },
+      },
+      () => ws.close(1008, message),
+    );
   });
-  await once(wss, "listening");
-  const address = wss.address() as AddressInfo;
-  return { url: `ws://127.0.0.1:${address.port}` };
 }
 
 export async function startNodePairingGateway(
   expectedAuth: ExpectedGatewayAuth,
   issuedDeviceToken?: string,
-): Promise<{
-  calls: string[];
-  readonly connectionCount: number;
-  url: string;
-}> {
-  const calls: string[] = [];
-  let connectionCount = 0;
-  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  activeServers.add(wss);
-  wss.on("connection", (ws) => {
-    connectionCount += 1;
-    sendMinimalGatewayConnectChallenge(ws);
-    ws.on("message", (data) => {
-      const frame = parseMinimalGatewayRequestFrame(data);
-      if (frame.type !== "req" || !frame.id) {
-        return;
-      }
-      if (frame.method === "connect") {
-        expect(frame.params?.auth).toEqual(expectedAuth);
-        sendMinimalGatewayResponse(
-          ws,
-          frame.id,
-          buildMinimalGatewayHelloOkPayload({
-            methods: ["node.pair.list", "node.pair.approve", "node.list"],
-            auth: {
-              role: "operator",
-              scopes: ["operator.admin"],
-              ...(issuedDeviceToken ? { deviceToken: issuedDeviceToken } : {}),
-            },
-          }),
-        );
-        return;
-      }
-      if (typeof frame.method !== "string") {
-        return;
-      }
-      calls.push(frame.method);
-      if (frame.method === "node.pair.list") {
-        sendMinimalGatewayResponse(ws, frame.id, {
-          pending: [{ requestId: "request-1", nodeId: "node-1", commands: [] }],
-          paired: [],
-        });
-        return;
-      }
-      if (frame.method === "node.list") {
-        sendMinimalGatewayResponse(ws, frame.id, { nodes: [] });
-        return;
-      }
-      if (frame.method === "node.pair.approve") {
-        sendMinimalGatewayResponse(ws, frame.id, { approved: true });
-      }
-    });
-  });
-  await once(wss, "listening");
-  const address = wss.address() as AddressInfo;
-  return {
-    calls,
-    get connectionCount() {
-      return connectionCount;
+) {
+  return await startGateway(
+    {
+      "node.pair.list": {
+        pending: [{ requestId: "request-1", nodeId: "node-1", commands: [] }],
+        paired: [],
+      },
+      "node.list": { nodes: [] },
+      "node.pair.approve": { approved: true },
     },
-    url: `ws://127.0.0.1:${address.port}`,
-  };
+    authenticate(
+      expectedAuth,
+      ["node.pair.list", "node.pair.approve", "node.list"],
+      issuedDeviceToken,
+    ),
+  );
 }
 
 export async function startGatewayStabilityRpcServer(
   expectedAuth: ExpectedGatewayAuth,
   issuedDeviceToken: string,
-): Promise<{
-  authInputs: unknown[];
-  calls: string[];
-  url: string;
-}> {
+) {
   const authInputs: unknown[] = [];
-  const calls: string[] = [];
-  const wss = new WebSocketServer({ host: "0.0.0.0", port: 0 });
-  activeServers.add(wss);
-  wss.on("connection", (ws) => {
-    sendMinimalGatewayConnectChallenge(ws);
-    ws.on("message", (data) => {
-      const frame = parseMinimalGatewayRequestFrame(data);
-      if (frame.type !== "req" || !frame.id) {
-        return;
-      }
-      if (frame.method === "connect") {
-        expect(frame.params?.auth).toEqual(expectedAuth);
-        authInputs.push(frame.params?.auth);
-        sendMinimalGatewayResponse(
-          ws,
-          frame.id,
-          buildMinimalGatewayHelloOkPayload({
-            methods: ["diagnostics.stability", "status"],
-            auth: {
-              role: "operator",
-              scopes: ["operator.admin"],
-              deviceToken: issuedDeviceToken,
-            },
-          }),
-        );
-        return;
-      }
-      if (typeof frame.method !== "string") {
-        return;
-      }
-      calls.push(frame.method);
-      if (frame.method === "diagnostics.stability") {
-        sendMinimalGatewayResponse(ws, frame.id, EMPTY_STABILITY_SNAPSHOT);
-        return;
-      }
-      if (frame.method === "status") {
-        sendMinimalGatewayResponse(ws, frame.id, {
-          runtimeVersion: "2026.8.17-test",
-          status: "ok",
-        });
-      }
-    });
-  });
-  await once(wss, "listening");
-  const address = wss.address() as AddressInfo;
+  const connect = authenticate(
+    expectedAuth,
+    ["diagnostics.stability", "status"],
+    issuedDeviceToken,
+  );
+  const gateway = await startGateway(
+    {
+      "diagnostics.stability": EMPTY_STABILITY_SNAPSHOT,
+      status: { runtimeVersion: "2026.8.17-test", status: "ok" },
+    },
+    (frame) => {
+      const hello = connect(frame);
+      authInputs.push(frame.params?.auth);
+      return hello;
+    },
+    "0.0.0.0",
+  );
   // A private non-loopback target keeps shared-secret auth from bypassing device identity.
-  const host = pickMatchingExternalInterfaceAddress(readNetworkInterfaces(), {
+  const host = pickMatchingExternalInterfaceAddress(os.networkInterfaces(), {
     family: "IPv4",
     matches: (candidate) =>
       isPrivateOrLoopbackIpAddress(candidate) && !isLoopbackIpAddress(candidate),
@@ -317,67 +238,23 @@ export async function startGatewayStabilityRpcServer(
   if (!host) {
     throw new Error("test host has no non-loopback private IPv4 address");
   }
-  return { authInputs, calls, url: `ws://${host}:${address.port}` };
+  return { authInputs, calls: gateway.calls, url: "ws://" + host + ":" + gateway.port };
 }
 
 export async function startStateDirStatusGateway(target: {
   stateDir: string;
   configPath: string;
 }): Promise<{ url: string }> {
-  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  activeServers.add(wss);
-  wss.on("connection", (ws) => {
-    sendMinimalGatewayConnectChallenge(ws);
-    ws.on("message", (data) => {
-      const frame = parseMinimalGatewayRequestFrame(data);
-      if (frame.type !== "req" || !frame.id) {
-        return;
-      }
-      if (frame.method === "connect") {
-        sendMinimalGatewayResponse(
-          ws,
-          frame.id,
-          buildMinimalGatewayHelloOkPayload({ methods: ["status"], snapshot: target }),
-        );
-        return;
-      }
-      if (frame.method === "status") {
-        sendMinimalGatewayResponse(ws, frame.id, { status: "ok" });
-      }
-    });
-  });
-  await once(wss, "listening");
-  const address = wss.address() as AddressInfo;
-  return { url: `ws://127.0.0.1:${address.port}` };
+  return await startGateway({ status: { status: "ok" } }, () => ({
+    methods: ["status"],
+    snapshot: target,
+  }));
 }
 
-/** Mock Gateway that answers one agent turn with the requested terminal status. */
-export async function startAgentTurnGateway(params: {
-  status: "ok" | "error";
-  text: string;
-}): Promise<{ url: string; token: string }> {
+export async function startAgentTurnGateway(params: { status: "ok" | "error"; text: string }) {
   const token = "agent-turn-token";
-  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  activeServers.add(wss);
-  wss.on("connection", (ws) => {
-    sendMinimalGatewayConnectChallenge(ws);
-    ws.on("message", (data) => {
-      const frame = parseMinimalGatewayRequestFrame(data);
-      if (frame.type !== "req" || !frame.id) {
-        return;
-      }
-      if (frame.method === "connect") {
-        expect(frame.params?.auth?.token).toBe(token);
-        sendMinimalGatewayResponse(
-          ws,
-          frame.id,
-          buildMinimalGatewayHelloOkPayload({
-            methods: ["agent"],
-            auth: { role: "operator", scopes: ["operator.admin"] },
-          }),
-        );
-        return;
-      }
+  const gateway = await startGateway(
+    (ws, frame) => {
       if (frame.method !== "agent") {
         return;
       }
@@ -388,29 +265,24 @@ export async function startAgentTurnGateway(params: {
         sessionKey: "agent:main:main",
       });
       setImmediate(() => {
-        sendMinimalGatewayResponse(ws, frame.id!, {
+        sendMinimalGatewayResponse(ws, frame.id, {
           runId,
           status: params.status,
           summary: params.status === "ok" ? "completed" : "failed",
           result: {
             payloads: [
-              {
-                text: params.text,
-                ...(params.status === "error" ? { isError: true } : {}),
-              },
+              { text: params.text, ...(params.status === "error" ? { isError: true } : {}) },
             ],
             meta: {},
           },
         });
       });
-    });
-  });
-  await once(wss, "listening");
-  const address = wss.address() as AddressInfo;
-  return { url: `ws://127.0.0.1:${address.port}`, token };
+    },
+    authenticate(token, ["agent"]),
+  );
+  return { url: gateway.url, token };
 }
 
-/** Closes every mock Gateway started by these helpers; call from the suite afterEach. */
 export async function closeActiveGatewayServers(): Promise<void> {
   await Promise.all(Array.from(activeServers, closeMinimalGatewayServer));
   activeServers.clear();

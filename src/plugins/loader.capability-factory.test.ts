@@ -17,7 +17,9 @@ import type {
   PluginCapabilityCatalogContext,
   PluginCapabilityCatalogHostContext,
 } from "./capability-catalog-context.types.js";
+import { createCatalogContextFixture } from "./capability-catalog.test-support.js";
 import { isPluginRegistryLoadInFlight, resolvePluginRegistryLoadCacheKey } from "./loader-cache.js";
+import { pluginFixtureConfig, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import { loadOpenClawPluginsWithInternalOverrides } from "./loader-runtime-load.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
@@ -56,24 +58,8 @@ function createContext(): PluginCapabilityCatalogHostContext {
     throw new Error("registration invoked a host operation");
   };
   return {
-    isProviderApiKeyConfigured: unavailable,
-    isProviderAuthProfileConfigured: unavailable,
-    resolveAgentDir: unavailable,
-    createRealtimeTranscriptionWebSocketSession: unavailable,
-    resolveProviderRequestHeaders: unavailable,
-    resolveProviderAuthProfileApiKey: unavailable,
-    resolveApiKeyForProvider: unavailable,
-    captureWsEvent: unavailable,
-    captureWsEventAsync: unavailable,
-    createDebugProxyWebSocketAgent: unavailable,
-    resolveDebugProxySettings: unavailable,
-    fetchWithSsrFGuard: unavailable,
-    createProviderHttpError: unavailable,
-    readProviderJsonResponse: unavailable,
-    readProviderTextResponse: unavailable,
+    ...createCatalogContextFixture(unavailable),
     formatErrorMessage: vi.fn(() => "ready"),
-    warn: unavailable,
-    redactSensitiveText: unavailable,
   };
 }
 
@@ -95,14 +81,11 @@ async function withFactoryPlugin(
     };`,
   });
   if (manifest) {
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: plugin.id,
-        configSchema: { type: "object", additionalProperties: false },
-        ...manifest,
-      }),
-    );
+    writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+      id: plugin.id,
+      configSchema: { type: "object", additionalProperties: false },
+      ...manifest,
+    });
   }
   await withEnvAsync(
     {
@@ -114,13 +97,7 @@ async function withFactoryPlugin(
     async () =>
       await run(
         {
-          config: {
-            plugins: {
-              allow: [plugin.id],
-              load: { paths: [plugin.file] },
-              slots: { memory: "none" },
-            },
-          },
+          config: pluginFixtureConfig(plugin),
           pluginSdkResolution: "src",
           activate: false,
         },
@@ -437,13 +414,22 @@ it.each([false, true])(
       async (options, root) => {
         fs.writeFileSync(
           path.join(root, "plugin", "catalog.cjs"),
-          `let attempts = 0;
+          `const { createPluginRuntimeStore } = require("openclaw/plugin-sdk/runtime-store");
+          const store = createPluginRuntimeStore("catalog scope missing");
+          let attempts = 0;
           module.exports = () => {
             if (++attempts === ${priorSuccess ? 2 : 1}) throw new Error("catalog construction failed");
-            return { speechProviders: [{
-              id: "factory-owner", label: "Catalog owner", isConfigured: () => true,
+            store.setRuntime("Catalog owner");
+            return { get speechProviders() { return [{
+              id: "factory-owner", label: store.getRuntime(),
+              isConfigured: () => store.getRuntime() === "Catalog owner",
               synthesize: async () => { throw new Error("inspection cannot synthesize"); },
-            }] };
+              streamSynthesize: async () => ({
+                outputFormat: "pcm", fileExtension: ".pcm", voiceCompatible: true,
+                audioStream: new ReadableStream({ start(controller) { controller.close(); } }),
+                release() { store.getRuntime(); return Promise.resolve(); },
+              }),
+            }]; } };
           };`,
         );
         const cache = createPluginCache();
@@ -458,8 +444,16 @@ it.each([false, true])(
         const context = { cfg: {}, providerConfig: {}, timeoutMs: 1000 };
         try {
           const retained = priorSuccess ? load().speechProviders[0]?.provider : undefined;
+          const stream = await retained?.streamSynthesize?.({
+            ...context,
+            text: "synthetic",
+            target: "audio-file",
+          });
+          const release = stream?.release;
           if (priorSuccess) {
             expect(retained?.isConfigured(context)).toBe(true);
+            expect(release).toEqual(expect.any(Function));
+            await release?.();
           }
           expect(load).toThrow(/capabilityCatalogEntry failed.*catalog construction failed/);
           const retried = priorSuccess ? load().speechProviders[0]?.provider : undefined;
@@ -474,6 +468,7 @@ it.each([false, true])(
           if (priorSuccess) {
             expect(() => retained?.isConfigured(context)).toThrow(/reloaded|disabled|retir/);
             expect(() => retried?.isConfigured(context)).toThrow(/reloaded|disabled|retir/);
+            expect(() => release?.()).toThrow(/reloaded|disabled|retir/);
           }
         } finally {
           await retirePluginCache(cache);

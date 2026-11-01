@@ -22,17 +22,17 @@ const failures = {
 };
 
 it.each([
-  ["model", "", "model.getFailed", "list", "error"],
+  ["model", "", "model.getFailed", "describe", "error"],
   ["model", "example/model", "model.setFailed", "patch", "string"],
-  ["think", "", "thinking.getFailed", "list", "error"],
+  ["think", "", "thinking.getFailed", "describe", "error"],
   ["think", "default", "thinking.resetFailed", "patch", "empty"],
   ["think", "high", "thinking.setFailed", "patch", "error"],
-  ["verbose", "", "verbose.getFailed", "list", "string"],
+  ["verbose", "", "verbose.getFailed", "describe", "string"],
   ["verbose", "on", "verbose.setFailed", "patch", "error"],
-  ["fast", "", "fast.getFailed", "list", "structured"],
+  ["fast", "", "fast.getFailed", "describe", "structured"],
   ["fast", "default", "fast.resetFailed", "patch", "error"],
   ["fast", "on", "fast.setFailed", "patch", "string"],
-  ["usage", "", "usage.failed", "list", "error"],
+  ["usage", "", "usage.failed", "describe", "error"],
   ["agents", "", "agents.failed", "request", "structured"],
   ["steer", "try again", "steer.requestFailed", "request", "error"],
   ["redirect", "start over", "redirect.requestFailed", "request", "string"],
@@ -52,17 +52,13 @@ it.each([
       subscribe: () => () => undefined,
       subscribeEvents: () => () => undefined,
     });
-    const list = vi.spyOn(sessions, "list");
+    const describe = vi.spyOn(sessions, "describe");
     const patch = vi.spyOn(sessions, "patch").mockRejectedValue(failure.value);
-    if (boundary === "list") {
-      list.mockRejectedValue(failure.value);
+    if (boundary === "describe") {
+      describe.mockRejectedValue(failure.value);
     } else {
-      list.mockResolvedValue({
-        ts: 0,
-        path: "",
-        count: 0,
-        sessions: [],
-        defaults: { modelProvider: null, model: null, contextTokens: null },
+      describe.mockResolvedValue({
+        session: { key: "agent:main:main", kind: "direct" },
       });
     }
 
@@ -77,8 +73,8 @@ it.each([
       failed: true,
     });
     expect(Object.keys(result)).toEqual(["content", "failed"]);
-    if (boundary === "list") {
-      expect(list).toHaveBeenCalledOnce();
+    if (boundary === "describe") {
+      expect(describe).toHaveBeenCalledOnce();
     }
     expect(patch).toHaveBeenCalledTimes(boundary === "patch" ? 1 : 0);
     expect(request).toHaveBeenCalledTimes(boundary === "request" ? 1 : 0);

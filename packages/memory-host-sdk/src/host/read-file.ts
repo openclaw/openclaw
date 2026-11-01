@@ -14,11 +14,7 @@ import {
   normalizeExtraMemoryPathEntries,
 } from "./internal.js";
 import { getAgentWorkspaceAccess } from "./openclaw-runtime-workspace.js";
-import {
-  buildMemoryReadResult,
-  DEFAULT_MEMORY_READ_LINES,
-  type MemoryReadResult,
-} from "./read-file-shared.js";
+import { buildMemoryReadResult, type MemoryReadResult } from "./read-file-shared.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
 import type { MemoryExtraPath } from "./types.js";
 
@@ -64,11 +60,11 @@ export async function readMemoryFile(params: {
           try {
             return await filesystem.read(`./${path.relative(directory, absPath)}`);
           } catch (err) {
-            // Keep read-time I/O errors visible to the existing retry predicate.
+            // Keep native I/O errors visible to memory callers and the retry predicate.
             if (
               err instanceof Error &&
               "code" in err &&
-              err.code === "outside-workspace" &&
+              (err.code === "outside-workspace" || err.code === "permission-denied") &&
               err.cause instanceof Error &&
               "code" in err.cause &&
               !isFileMissingError(err.cause) &&
@@ -96,7 +92,7 @@ export async function readMemoryFile(params: {
       relPath,
       from: params.from,
       lines: params.lines,
-      defaultLines: params.defaultLines ?? DEFAULT_MEMORY_READ_LINES,
+      defaultLines: params.defaultLines,
       maxChars: params.maxChars,
       suggestReadFallback: allowedWorkspace,
     });

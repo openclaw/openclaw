@@ -1,23 +1,17 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { policyRoutingRules } from "../policy-routing.js";
+import type { PolicyRoutingRules } from "../policy-routing.js";
 import type { PolicyEvidence } from "../policy-state.js";
 import { CHECK_IDS } from "./check-ids.js";
-import { routingPolicyShapeFinding } from "./routing-shapes.js";
 import { ocPathSegment } from "./utils.js";
 
 export function routingFindings(
-  policy: unknown,
+  rules: PolicyRoutingRules | undefined,
   policyPath: string,
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
-  const rules = policyRoutingRules(policy);
-  if (
-    rules === undefined ||
-    evidence.routing === undefined ||
-    routingPolicyShapeFinding(rules, { policyPath, policyDocName }) !== undefined
-  ) {
+  if (rules === undefined || evidence.routing === undefined) {
     return [];
   }
   const findings: HealthFinding[] = [];
@@ -63,7 +57,7 @@ export function routingFindings(
       findings.push({
         checkId: CHECK_IDS.policyRoutingAgentMismatch,
         severity: "error",
-        message: `Routing probe ${probe.id} resolved to agent ${result.agentId}, not ${probe.expect.agentId}.`,
+        message: `Routing check ${probe.id} resolved to agent ${result.agentId}, not ${probe.expect.agentId}.`,
         source: "policy",
         path: policyPath,
         target: resultTarget,
@@ -78,7 +72,7 @@ export function routingFindings(
       findings.push({
         checkId: CHECK_IDS.policyRoutingMatchKindMismatch,
         severity: "error",
-        message: `Routing probe ${probe.id} matched by ${result.matchedBy}, which is not an expected match kind.`,
+        message: `Routing check ${probe.id} matched by ${result.matchedBy}, which is not an expected match kind.`,
         source: "policy",
         path: policyPath,
         target: resultTarget,

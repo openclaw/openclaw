@@ -10,22 +10,22 @@ import {
   type TalkTransport,
 } from "./talk-events.js";
 
-export type TalkTurnFailureReason = "no_active_turn" | "stale_turn";
+type TalkTurnFailureReason = "no_active_turn" | "stale_turn";
 
-export type TalkTurnSuccess = {
+type TalkTurnSuccess = {
   event: TalkEvent;
   ok: true;
   turnId: string;
 };
 
-export type TalkTurnFailure = {
+type TalkTurnFailure = {
   ok: false;
   reason: TalkTurnFailureReason;
 };
 
 export type TalkTurnResult = TalkTurnSuccess | TalkTurnFailure;
 
-export type TalkEnsureTurnResult = {
+type TalkEnsureTurnResult = {
   event?: TalkEvent;
   turnId: string;
 };

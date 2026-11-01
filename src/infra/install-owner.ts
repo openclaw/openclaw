@@ -8,12 +8,14 @@ import { JsonFileReadError, readJsonIfExists } from "./json-files.js";
 const log = createSubsystemLogger("install-owner");
 const InstallOwnerSchema = z.object({
   schemaVersion: z.literal(1),
-  owner: z.literal("macos-app"),
+  owner: z.enum(["macos-app", "desktop-app"]),
   displayName: z.string().trim().min(1),
   updateHint: z.string().trim().min(1),
 });
 
-export type InstallOwner = z.infer<typeof InstallOwnerSchema>;
+export type InstallOwner = Omit<z.infer<typeof InstallOwnerSchema>, "owner"> & {
+  owner: z.infer<typeof InstallOwnerSchema>["owner"] | "immutable-deployer";
+};
 
 /** Packaging owns this marker; absent or invalid files preserve normal install discovery. */
 export async function readInstallOwner(root: string | null): Promise<InstallOwner | null> {

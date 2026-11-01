@@ -1,11 +1,14 @@
+import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { zstdDecompressSync } from "node:zlib";
+import type { Compilable } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { recordAcpParentStreamEvents } from "../../agents/subagents/spawn/acp-parent-stream-store.sqlite.js";
+import { recordAcpParentStreamEventsForTest as recordAcpParentStreamEvents } from "../../agents/subagents/spawn/acp-parent-stream-store.sqlite.test-support.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.js";
+import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.test-support.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -13,9 +16,11 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
-import type { TrajectoryEvent } from "../../trajectory/types.js";
-import { decodeSessionArchiveBytes, readSessionArchiveContentSync } from "./archive-compression.js";
+import {
+  appendSqliteTrajectoryRuntimeEvents,
+  createTrajectoryEvent,
+} from "../../trajectory/runtime-store.test-support.js";
+import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -26,40 +31,29 @@ import {
 } from "./session-accessor.js";
 import { writeTranscriptArchive } from "./session-accessor.sqlite-archive-artifact.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
-import {
-  deleteMaterializedSessionStatePlans,
-  planSessionStateDeleteIfUnreferenced,
-} from "./session-accessor.sqlite-lifecycle-state.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
+import { deleteMaterializedSessionStatePlans } from "./session-accessor.sqlite-lifecycle-state.js";
 import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
   waitForSessionTranscriptIndexReconcilesInStateDir,
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
+import { prepareTranscriptPayload } from "./transcript-payload.js";
 
 type TestEvent = { id: string; [key: string]: unknown };
 const event = (id: string, content = "archive me"): TestEvent => ({ type: "session", id, content });
 const sha256 = (content: string | Uint8Array) => createHash("sha256").update(content).digest("hex");
+const jsonl = (events: TestEvent[]) => `${events.map((row) => JSON.stringify(row)).join("\n")}\n`;
 
-function trajectory(sessionId: string): TrajectoryEvent {
-  return {
-    traceSchema: "openclaw-trajectory",
-    schemaVersion: 1,
-    traceId: sessionId,
-    source: "runtime",
-    type: "test.concurrent-delete",
-    ts: "2026-07-22T00:00:00.000Z",
-    seq: 1,
-    sessionId,
-  };
-}
+const trajectory = (sessionId: string) =>
+  createTrajectoryEvent({ sessionId, type: "test.concurrent-delete" });
 
-function archiveLines(archivePath: string | undefined) {
-  expect(archivePath).toBeTruthy();
-  return readSessionArchiveContentSync(archivePath ?? "")
-    .trim()
-    .split("\n");
+function expectArchive(archivePath: string | undefined, expected: TestEvent) {
+  assert.ok(archivePath, "expected archive path");
+  const lines = readSessionArchiveContentSync(archivePath).trim().split("\n");
+  expect(lines).toEqual([JSON.stringify(expected)]);
 }
 
 describe("SQLite transcript archive worker", () => {
@@ -82,20 +76,42 @@ describe("SQLite transcript archive worker", () => {
     sessionKey: `agent:main:${sessionId}`,
     storePath,
   });
+  const entry = async (target: ReturnType<typeof scope>, updatedAt = Date.now()) =>
+    replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt });
   async function seed(sessionId: string, events = [event(sessionId)], withEntry = true) {
     const target = scope(sessionId);
     if (withEntry) {
-      await replaceSessionEntry(target, { sessionId, updatedAt: Date.now() });
+      await entry(target);
     }
     await replaceTranscriptEvents(target, events);
     return target;
   }
   function database() {
     const target = resolveSqliteTargetFromSessionStorePath(storePath);
-    if (!target.path) {
-      throw new Error("expected SQLite database path");
-    }
+    assert.ok(target.path, "expected SQLite database path");
     return openOpenClawAgentDatabase({ agentId: target.agentId ?? "main", path: target.path });
+  }
+  function databaseQueries() {
+    const db = database();
+    const query = getNodeSqliteKysely<DB>(db.db);
+    return {
+      db,
+      query,
+      rows: <Row>(statement: Compilable<Row>) => executeSqliteQuerySync(db.db, statement).rows,
+      archives: query.selectFrom("session_transcript_archives").selectAll(),
+      write: (run: Parameters<typeof runOpenClawAgentWriteTransaction>[0]) =>
+        runOpenClawAgentWriteTransaction(run, { agentId: db.agentId, path: db.path }),
+    };
+  }
+  async function acp(target: ReturnType<typeof scope>, text: string, runId: string) {
+    const db = database();
+    await recordAcpParentStreamEvents({
+      agentId: db.agentId,
+      path: db.path,
+      sessionId: target.sessionId,
+      runId,
+      events: [{ event: { type: "output", text }, createdAt: Date.now() }],
+    });
   }
   function deletion(sessionKey: string) {
     return deleteSessionEntryLifecycle({
@@ -112,20 +128,15 @@ describe("SQLite transcript archive worker", () => {
       referencedSessionIds: new Set(),
       sessionId,
     });
-    if (!result) {
-      throw new Error(`expected archive plan for ${sessionId}`);
-    }
+    assert.ok(result, `expected archive plan for ${sessionId}`);
     return result;
   }
   function deletePlans(
     plans: Parameters<typeof deleteMaterializedSessionStatePlans>[1],
     sessionKey: string,
   ) {
-    const db = database();
-    return runOpenClawAgentWriteTransaction(
-      (transaction) =>
-        deleteMaterializedSessionStatePlans(transaction, plans, undefined, new Set([sessionKey])),
-      { agentId: db.agentId, path: db.path },
+    return databaseQueries().write((transaction) =>
+      deleteMaterializedSessionStatePlans(transaction, plans, undefined, new Set([sessionKey])),
     );
   }
 
@@ -142,7 +153,6 @@ describe("SQLite transcript archive worker", () => {
     const archivedPath = writeTranscriptArchive({
       archiveDirectory,
       content,
-      reason: "deleted",
       sessionId,
     });
     expect(archivedPath).not.toBe(stagedPath);
@@ -181,16 +191,10 @@ describe("SQLite transcript archive worker", () => {
     const archive = materialized[0]?.archive;
     expect(archive).toBeTruthy();
     expect(fs.existsSync(materialized[0]?.archivedTranscript?.archivedPath ?? "")).toBe(false);
-    const expectedContent = `${events.map((row) => JSON.stringify(row)).join("\n")}\n`;
-    const content = decodeSessionArchiveBytes(
-      archive?.bytes ?? new Uint8Array(),
-      archive?.encoding === "zstd",
-    );
-    expect(Buffer.byteLength(content)).toBe(Buffer.byteLength(expectedContent));
-    expect(sha256(content)).toBe(sha256(expectedContent));
-    const lines = content.trim().split("\n");
-    expect(lines).toHaveLength(events.length);
-    expect(lines.map((line) => JSON.parse(line))).toEqual(events);
+    expect(archive?.encoding).toBe("zstd");
+    expect(
+      zstdDecompressSync(Buffer.from(archive?.bytes ?? new Uint8Array())).toString("utf8"),
+    ).toBe(jsonl(events));
   });
 
   it("caps private sessions across the archive byte limit without truncating their archives", async () => {
@@ -202,20 +206,14 @@ describe("SQLite transcript archive worker", () => {
       event: event(`worker-byte-session-${index}`, `${index}:${largeContent}`),
     }));
     for (const [index, session] of sessions.entries()) {
-      await replaceSessionEntry(session, {
-        sessionId: session.sessionId,
-        updatedAt: Date.now() + index,
-      });
+      await entry(session, Date.now() + index);
       await replaceTranscriptEvents(session, [session.event]);
     }
     const retained = {
       ...scope("subagent:worker-byte-retained"),
       sessionId: "worker-byte-session-retained",
     };
-    await replaceSessionEntry(retained, {
-      sessionId: retained.sessionId,
-      updatedAt: Date.now() + sessions.length,
-    });
+    await entry(retained, Date.now() + sessions.length);
     const result = await applySessionEntryLifecycleMutation({
       storePath,
       maintenanceOverride: {
@@ -224,38 +222,24 @@ describe("SQLite transcript archive worker", () => {
         pruneAfterMs: Number.MAX_SAFE_INTEGER,
       },
     });
-    expect(result).toMatchObject({
-      afterCount: 1,
-      beforeCount: 3,
-      capped: 2,
-      modelRunPruned: 0,
-      pruned: 0,
-    });
+    const expected = { afterCount: 1, beforeCount: 3, capped: 2, modelRunPruned: 0, pruned: 0 };
+    expect(result).toMatchObject(expected);
     expect(result.archivedTranscriptDirectories).toEqual([path.dirname(storePath)]);
     expect(loadSessionEntry(retained)).toBeDefined();
-    const db = database();
-    const archives = executeSqliteQuerySync(
-      db.db,
-      getNodeSqliteKysely<DB>(db.db)
-        .selectFrom("session_transcript_archives")
-        .select(["archive_name", "archive_sha256", "published_at", "session_id"])
-        .orderBy("session_id"),
-    ).rows;
-    expect(archives).toHaveLength(2);
+    const { archives, rows } = databaseQueries();
+    const registered = rows(archives.orderBy("session_id"));
+    expect(registered).toHaveLength(2);
     for (const session of sessions) {
       expect(loadSessionEntry(session)).toBeUndefined();
       await expect(loadTranscriptEvents(session)).resolves.toEqual([]);
-      const archive = archives.find((row) => row.session_id === session.sessionId);
+      const archive = registered.find((row) => row.session_id === session.sessionId);
       expect(archive).toMatchObject({
         archive_sha256: expect.any(String),
         published_at: expect.any(Number),
       });
       const archivePath = path.join(path.dirname(storePath), archive?.archive_name ?? "");
       expect(sha256(fs.readFileSync(archivePath))).toBe(archive?.archive_sha256);
-      const content = readSessionArchiveContentSync(archivePath);
-      const expected = `${JSON.stringify(session.event)}\n`;
-      expect(Buffer.byteLength(content)).toBe(Buffer.byteLength(expected));
-      expect(sha256(content)).toBe(sha256(expected));
+      expect(readSessionArchiveContentSync(archivePath)).toBe(jsonl([session.event]));
     }
   });
 
@@ -269,47 +253,40 @@ describe("SQLite transcript archive worker", () => {
     expect(fs.realpathSync.native(path.dirname(archivePath))).toBe(
       fs.realpathSync.native(path.join(tempDir, "backup", "sessions")),
     );
-    expect(archiveLines(archivePath)).toEqual([JSON.stringify(transcript)]);
+    expectArchive(archivePath, transcript);
     const bytes = fs.statSync(archivePath).size;
     for (const selector of [storePath, resolveSqliteTargetFromSessionStorePath(storePath).path]) {
       const usage = await measureSessionPhysicalDiskUsage(selector);
-      expect(usage.sessionFilesBytes).toBe(bytes);
-      expect(usage.totalBytes).toBe(usage.databaseMainBytes + usage.databaseWalBytes + bytes);
+      const databaseBytes = fs.statSync(
+        resolveSqliteTargetFromSessionStorePath(selector).path,
+      ).size;
+      expect(usage.totalBytes).toBe(databaseBytes + usage.databaseWalBytes + bytes);
     }
   });
 
   it("retains distinct transcript generations after a physical session id is restored", async () => {
-    const target = await seed("restored-archive-session", [
-      event("restored-archive-session", "first generation"),
-    ]);
+    const sessionId = "restored-archive-session";
+    const target = await seed(sessionId, [event(sessionId, "first generation")]);
     const first = (await deletion(target.sessionKey)).archivedTranscripts[0];
-    if (!first) {
-      throw new Error("expected first transcript archive");
-    }
+    assert.ok(first, "expected first transcript archive");
     fs.rmSync(first.archivedPath);
     database()
       .db.prepare(
         "UPDATE session_transcript_archives SET published_at = NULL WHERE session_id = ? AND generation = ?",
       )
       .run(target.sessionId, first.generation);
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 2 });
+    await entry(target, 2);
     await replaceTranscriptEvents(target, [event(target.sessionId, "second generation")]);
     const second = await deletion(target.sessionKey);
     expect(second.archivedTranscripts).toHaveLength(1);
     expect(second.archivedTranscripts[0]?.archivedPath).not.toBe(first.archivedPath);
-    expect(archiveLines(first.archivedPath)).toEqual([
-      JSON.stringify(event(target.sessionId, "first generation")),
-    ]);
-    expect(archiveLines(second.archivedTranscripts[0]?.archivedPath)).toEqual([
-      JSON.stringify(event(target.sessionId, "second generation")),
-    ]);
-    expect(
-      database()
-        .db.prepare(
-          "SELECT generation FROM session_transcript_archives WHERE session_id = ? ORDER BY generation",
-        )
-        .all(target.sessionId),
-    ).toHaveLength(2);
+    expectArchive(first.archivedPath, event(target.sessionId, "first generation"));
+    expectArchive(
+      second.archivedTranscripts[0]?.archivedPath,
+      event(target.sessionId, "second generation"),
+    );
+    const { archives, rows } = databaseQueries();
+    expect(rows(archives.where("session_id", "=", sessionId))).toHaveLength(2);
   });
 
   it("bounds oversized archive names and retries their pending export after deletion commits", async () => {
@@ -319,22 +296,14 @@ describe("SQLite transcript archive worker", () => {
     expect(first.deleted).toBe(true);
     expect(loadSessionEntry(target)).toBeUndefined();
     const archivePath = first.archivedTranscripts[0]?.archivedPath;
-    if (!archivePath) {
-      throw new Error("expected published archive");
-    }
+    assert.ok(archivePath, "expected published archive");
     expect(Buffer.byteLength(path.basename(archivePath), "utf8")).toBeLessThan(256);
     expect(path.basename(archivePath)).toMatch(/^session-[a-f0-9]{64}\.jsonl\.deleted\./);
-    expect(archiveLines(archivePath)).toEqual([
-      JSON.stringify(event(sessionId, "retry pending export")),
+    expectArchive(archivePath, event(sessionId, "retry pending export"));
+    const { db, archives, rows } = databaseQueries();
+    expect(rows(archives.where("archive_name", "=", path.basename(archivePath)))).toMatchObject([
+      { session_id: sessionId, session_key: target.sessionKey },
     ]);
-    const db = database();
-    expect(
-      db.db
-        .prepare(
-          "SELECT session_id, session_key FROM session_transcript_archives WHERE archive_name = ?",
-        )
-        .get(path.basename(archivePath)),
-    ).toEqual({ session_id: sessionId, session_key: target.sessionKey });
     await expect(listUsageCountedTranscriptStats("main", { storePath })).resolves.toEqual([
       expect.objectContaining({ sessionId }),
     ]);
@@ -349,21 +318,16 @@ describe("SQLite transcript archive worker", () => {
       archivedTranscripts: [],
       deleted: false,
     });
-    const persisted = db.db
-      .prepare(
-        "SELECT archive_name, published_at FROM session_transcript_archives WHERE session_id = ?",
-      )
-      .get(sessionId);
-    if (typeof persisted?.archive_name !== "string") {
-      throw new Error("expected republished archive name");
-    }
+    const [persisted] = rows(archives.where("session_id", "=", sessionId));
+    assert.ok(typeof persisted?.archive_name === "string", "expected republished archive name");
     expect(persisted).toMatchObject({
       archive_name: expect.stringMatching(/^session-[a-f0-9]{64}\.jsonl\.deleted\./),
       published_at: expect.any(Number),
     });
-    expect(archiveLines(path.join(path.dirname(storePath), persisted.archive_name))).toEqual([
-      JSON.stringify(event(sessionId, "retry pending export")),
-    ]);
+    expectArchive(
+      path.join(path.dirname(storePath), persisted.archive_name),
+      event(sessionId, "retry pending export"),
+    );
   });
 
   it("archives a logical agent transcript through the exact database's physical owner", async () => {
@@ -376,25 +340,16 @@ describe("SQLite transcript archive worker", () => {
       defaultAgentId: "main",
     };
     for (const target of [main, ops]) {
-      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
+      await entry(target);
       await replaceTranscriptEvents(target, [event(target.sessionId)]);
     }
-    expect(resolveSqliteTargetFromSessionStorePath(storePath, ops)).toMatchObject({
-      agentId: "main",
-      path: storePath,
-      shared: true,
-    });
-    expect(database().agentId).toBe("main");
-    expect(database().agentId).not.toBe(ops.agentId);
     const result = await deleteSessionEntryLifecycle({
       agentId: ops.agentId,
       archiveTranscript: true,
       storePath,
       target: { canonicalKey: ops.sessionKey, storeKeys: [ops.sessionKey] },
     });
-    expect(archiveLines(result.archivedTranscripts[0]?.archivedPath)).toEqual([
-      JSON.stringify(event(ops.sessionId)),
-    ]);
+    expectArchive(result.archivedTranscripts[0]?.archivedPath, event(ops.sessionId));
     await expect(loadTranscriptEvents(ops)).resolves.toEqual([]);
     await expect(loadTranscriptEvents(main)).resolves.toEqual([event(main.sessionId)]);
     expect(loadSessionEntry(main)).toMatchObject({ sessionId: main.sessionId });
@@ -416,12 +371,12 @@ describe("SQLite transcript archive worker", () => {
   });
 
   it.each(["empty", "nonempty"] as const)(
-    "rejects changes to a planned %s transcript before publishing an archive",
+    "preserves events appended after a planned %s transcript snapshot",
     async (initial) => {
       const target = scope("changed-before-worker-snapshot");
       const original = event(target.sessionId, "original transcript");
       if (initial === "empty") {
-        await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
+        await entry(target);
       } else {
         await replaceTranscriptEvents(target, [original]);
       }
@@ -432,9 +387,16 @@ describe("SQLite transcript archive worker", () => {
       const appended = event("concurrent-event", "concurrent append");
       const events = initial === "empty" ? [appended] : [original, appended];
       await replaceTranscriptEvents(target, events);
-      await expect(materializeSessionStateDeletePlans([planned])).rejects.toThrow(
-        `SQLite session state changed before archive materialization for ${target.sessionId}`,
-      );
+      if (initial === "empty") {
+        const materialized = await materializeSessionStateDeletePlans([planned]);
+        expect(() => deletePlans(materialized, target.sessionKey)).toThrow(
+          `SQLite session state changed before deletion for ${target.sessionId}`,
+        );
+      } else {
+        await expect(materializeSessionStateDeletePlans([planned])).rejects.toThrow(
+          `SQLite session state changed before archive materialization for ${target.sessionId}`,
+        );
+      }
       await expect(loadTranscriptEvents(target)).resolves.toEqual(events);
       const directory = path.dirname(storePath);
       const names = fs.existsSync(directory) ? fs.readdirSync(directory) : [];
@@ -444,98 +406,59 @@ describe("SQLite transcript archive worker", () => {
     },
   );
 
-  it("preserves all lifecycle state when the archive worker rejects publication", async () => {
-    const target = await seed("nested/archive-worker-lifecycle-failure", [
-      {
-        type: "message",
-        id: "failure-message",
-        parentId: null,
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "preserve every lifecycle row" }],
+  it.each([false, true])(
+    "preserves lifecycle state on publication failure (capture=%s)",
+    async (capture) => {
+      const target = await seed("nested/archive-worker-lifecycle-failure", [
+        {
+          type: "message",
+          id: "failure-message",
+          message: { role: "user", content: "preserve every lifecycle row" },
         },
-        timestamp: Date.now(),
-      },
-    ]);
-    appendSqliteTrajectoryRuntimeEvents(target, [trajectory(target.sessionId)]);
-    const db = database();
-    recordAcpParentStreamEvents({
-      agentId: db.agentId,
-      path: db.path,
-      sessionId: target.sessionId,
-      runId: "failure-run",
-      events: [{ event: { type: "output", text: "preserve ACP state" }, createdAt: Date.now() }],
-    });
-    const query = getNodeSqliteKysely<DB>(db.db);
-    function count(
-      table:
-        | "acp_parent_stream_events"
-        | "session_transcript_fts"
-        | "session_transcript_index_state"
-        | "transcript_rewrite_watermarks"
-        | "trajectory_runtime_events"
-        | "transcript_events"
-        | "session_windows",
-    ) {
-      return (
-        executeSqliteQuerySync(
-          db.db,
-          query
-            .selectFrom(table)
-            .select(({ fn }) => fn.countAll<number>().as("count"))
-            .where("session_id", "=", target.sessionId),
-        ).rows[0]?.count ?? 0
-      );
-    }
-    const counts = () => ({
-      acp: count("acp_parent_stream_events"),
-      fts: count("session_transcript_fts"),
-      indexState: count("session_transcript_index_state"),
-      rewriteWatermarks: count("transcript_rewrite_watermarks"),
-      trajectory: count("trajectory_runtime_events"),
-      transcript: count("transcript_events"),
-      windows: count("session_windows"),
-      nodes: executeSqliteQuerySync(
-        db.db,
-        query
-          .selectFrom("session_nodes")
-          .select("current_session_id")
-          .where("current_session_id", "=", target.sessionId),
-      ).rows.length,
-    });
-    await waitForSessionTranscriptProjection(target);
-    const before = counts();
-    await expect(deletion(target.sessionKey)).rejects.toThrow(
-      "Cannot archive SQLite transcript outside",
-    );
-    expect(loadSessionEntry(target)?.sessionId).toBe(target.sessionId);
-    await expect(loadTranscriptEvents(target)).resolves.toHaveLength(1);
-    expect(counts()).toEqual(before);
-    expect(before).toEqual({
-      acp: 1,
-      fts: 1,
-      indexState: 1,
-      nodes: 1,
-      rewriteWatermarks: 1,
-      trajectory: 1,
-      transcript: 1,
-      windows: 1,
-    });
-  });
-
-  it("captures archive materialization failure without deleting the requested entry", async () => {
-    const target = await seed("nested/captured-archive-failure");
-    const result = await applySessionEntryLifecycleMutation({
-      captureArtifactCleanupError: true,
-      removals: [{ archiveRemovedTranscript: true, sessionKey: target.sessionKey }],
-      skipMaintenance: true,
-      storePath,
-    });
-    expect(result.removedEntries).toBe(0);
-    expect(result.artifactCleanupError).toBeInstanceOf(Error);
-    expect(loadSessionEntry(target)).toMatchObject({ sessionId: target.sessionId });
-    await expect(loadTranscriptEvents(target)).resolves.toHaveLength(1);
-  });
+      ]);
+      appendSqliteTrajectoryRuntimeEvents(target, [trajectory(target.sessionId)]);
+      await acp(target, "preserve ACP state", "failure-run");
+      const { db } = databaseQueries();
+      const tables = [
+        "acp_parent_stream_events",
+        "session_transcript_fts",
+        "session_transcript_index_state",
+        "transcript_rewrite_watermarks",
+        "trajectory_runtime_events",
+        "transcript_events",
+        "session_windows",
+      ] as const;
+      const counts = () =>
+        [...tables, "session_nodes"].map(
+          (table) =>
+            db.db
+              .prepare(
+                `SELECT COUNT(*) AS count FROM ${table} WHERE ${table === "session_nodes" ? "current_session_id" : "session_id"} = ?`,
+              )
+              .get(target.sessionId)?.count ?? 0,
+        );
+      await waitForSessionTranscriptProjection(target);
+      const before = counts();
+      if (capture) {
+        expect(
+          await applySessionEntryLifecycleMutation({
+            captureArtifactCleanupError: true,
+            removals: [{ archiveRemovedTranscript: true, sessionKey: target.sessionKey }],
+            skipMaintenance: true,
+            storePath,
+          }),
+        ).toMatchObject({ removedEntries: 0, artifactCleanupError: expect.any(Error) });
+      } else {
+        await expect(deletion(target.sessionKey)).rejects.toThrow(
+          "Cannot archive SQLite transcript outside",
+        );
+      }
+      expect(loadSessionEntry(target)).toMatchObject({ sessionId: target.sessionId });
+      await expect(loadTranscriptEvents(target)).resolves.toHaveLength(1);
+      expect(counts()).toEqual(before);
+      expect(before).toEqual(Array(8).fill(1));
+    },
+  );
 
   it.each([
     "rewrite generation",
@@ -547,70 +470,46 @@ describe("SQLite transcript archive worker", () => {
   ] as const)("keeps rows when %s changes after deletion planning", async (kind) => {
     const target = await seed("stale-snapshot", undefined, false);
     const { sessionId, sessionKey } = target;
-    const db = database();
-    const query = getNodeSqliteKysely<DB>(db.db);
+    const { query: sql, rows, write } = databaseQueries();
     const planned = plan(sessionId, kind !== "non-archive append");
-    expect(planned.snapshot.generation).not.toBeNull();
-    expect(planned.snapshot.sessionUpdatedAt).not.toBeNull();
-    expect(planned.snapshot.transcriptUpdatedAt).not.toBeNull();
+    const { generation, sessionUpdatedAt, transcriptUpdatedAt } = planned.snapshot;
+    expect([generation, sessionUpdatedAt, transcriptUpdatedAt]).not.toContain(null);
     const materialized = await materializeSessionStateDeletePlans([planned]);
-    switch (kind) {
-      case "rewrite generation":
-        executeSqliteQuerySync(
-          db.db,
-          query
+    const updateWindow = (change: { transcript_updated_at?: number; updated_at?: number }) =>
+      rows(sql.updateTable("session_windows").set(change).where("session_id", "=", sessionId));
+    const mutations = {
+      "rewrite generation": () =>
+        rows(
+          sql
             .updateTable("transcript_rewrite_watermarks")
             .set({
-              generation: `${planned.snapshot.generation ?? "missing"}-changed`,
+              generation: `${generation ?? "missing"}-changed`,
               updated_at: Date.now(),
             })
             .where("session_id", "=", sessionId),
-        );
-        break;
-      case "transcript mutation watermark":
-      case "window metadata": {
-        const update =
-          kind === "transcript mutation watermark"
-            ? { transcript_updated_at: (planned.snapshot.transcriptUpdatedAt ?? 0) + 1 }
-            : { updated_at: (planned.snapshot.sessionUpdatedAt ?? 0) + 1 };
-        executeSqliteQuerySync(
-          db.db,
-          query.updateTable("session_windows").set(update).where("session_id", "=", sessionId),
-        );
-        break;
-      }
-      case "non-archive append":
-        runOpenClawAgentWriteTransaction(
-          (transaction) => {
-            executeSqliteQuerySync(
-              transaction.db,
-              getNodeSqliteKysely<DB>(transaction.db)
-                .insertInto("transcript_events")
-                .values({
-                  session_id: sessionId,
-                  seq: 1,
-                  event_json: JSON.stringify(event("concurrent-event", "concurrent append")),
-                  created_at: Date.now(),
-                }),
-            );
-            touchTranscriptMutationInTransaction(transaction, sessionId);
-          },
-          { agentId: db.agentId, path: db.path },
-        );
-        break;
-      case "trajectory":
-        appendSqliteTrajectoryRuntimeEvents(target, [trajectory(sessionId)]);
-        break;
-      case "ACP parent-stream":
-        recordAcpParentStreamEvents({
-          agentId: db.agentId,
-          path: db.path,
-          sessionId,
-          runId: "run-1",
-          events: [{ event: { type: "output", text: "concurrent" }, createdAt: Date.now() }],
-        });
-        break;
-    }
+        ),
+      "transcript mutation watermark": () =>
+        updateWindow({ transcript_updated_at: (transcriptUpdatedAt ?? 0) + 1 }),
+      "window metadata": () => updateWindow({ updated_at: (sessionUpdatedAt ?? 0) + 1 }),
+      "non-archive append": () =>
+        write((transaction) => {
+          rows(
+            sql.insertInto("transcript_events").values({
+              session_id: sessionId,
+              seq: 1,
+              ...prepareTranscriptPayload(
+                transaction.db,
+                JSON.stringify(event("concurrent-event")),
+              ),
+              created_at: Date.now(),
+            }),
+          );
+          touchTranscriptMutationInTransaction(transaction, sessionId);
+        }),
+      trajectory: () => appendSqliteTrajectoryRuntimeEvents(target, [trajectory(sessionId)]),
+      "ACP parent-stream": () => acp(target, "concurrent", "run-1"),
+    };
+    await mutations[kind]();
     expect(() => deletePlans(materialized, sessionKey)).toThrow(
       `SQLite session state changed before deletion for ${sessionId}`,
     );
@@ -620,10 +519,8 @@ describe("SQLite transcript archive worker", () => {
         : kind === "ACP parent-stream"
           ? "acp_parent_stream_events"
           : "transcript_events";
-    const rows = executeSqliteQuerySync(
-      db.db,
-      query.selectFrom(table).select("seq").where("session_id", "=", sessionId),
-    ).rows;
-    expect(rows).toHaveLength(kind === "non-archive append" ? 2 : 1);
+    expect(
+      rows(sql.selectFrom(table).select("seq").where("session_id", "=", sessionId)),
+    ).toHaveLength(kind === "non-archive append" ? 2 : 1);
   });
 });

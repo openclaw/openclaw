@@ -15,6 +15,7 @@ const TSDOWN_PACKAGE_NAMES = [
   "retry",
   "sdk",
   "terminal-core",
+  "worker-runtime",
   "acp-core",
 ] as const;
 

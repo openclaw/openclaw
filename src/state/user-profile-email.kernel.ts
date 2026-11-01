@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { publishUserProfilesChange } from "./user-profile-list.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
 import {
@@ -21,7 +21,7 @@ export function normalizeProfileEmail(email: string): string {
 
 /** The caller owns the transaction; alias uniqueness and creation settle together. */
 export function ensureProfileForEmailInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   email: string,
   initialDisplayName: string | null,
   now: number,

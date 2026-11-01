@@ -26,22 +26,13 @@ const entryViews = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginHttpRouteEntryOwners"),
   () => new WeakMap<PluginHttpRouteRegistration, { owner: RouteOwner; views: RouteViews }>(),
 );
-const routeChangeListeners = resolveGlobalSingleton(
+export const pluginHttpRouteChanges = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginHttpRouteChangeListeners"),
-  () => new Set<() => void>(),
+  (): { onChange?: () => void } => ({}),
 );
 
-export function onPluginHttpRoutesChanged(listener: () => void): () => void {
-  routeChangeListeners.add(listener);
-  return () => {
-    routeChangeListeners.delete(listener);
-  };
-}
-
 export function notifyPluginHttpRoutesChanged(): void {
-  for (const listener of routeChangeListeners) {
-    listener();
-  }
+  pluginHttpRouteChanges.onChange?.();
 }
 
 export function respondPluginHttpRouteHandoff(_req: IncomingMessage, res: ServerResponse): true {

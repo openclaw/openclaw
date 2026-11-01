@@ -272,7 +272,7 @@ Test updates and rollbacks against a separate R2 bucket first. Preserve current 
 
 **Deployment succeeds but every request times out** -- The Container helper waits for `GET /healthz`. Check that the Gateway inside the Container listens on port `8080` and that no bootstrap step changed the port.
 
-**A probe passes but the Gateway is not actually serving** -- The Control UI answers unknown paths with a catch-all `200`, so probing a route your image does not serve looks permanently healthy. Verify the response body is JSON, not HTML, before trusting a probe.
+**A check passes but the Gateway is not actually serving** -- The Control UI answers unknown paths with a catch-all `200`, so checking a route your image does not serve looks permanently healthy. Verify the response body is JSON, not HTML, before trusting a check.
 
 **Litestream logs authentication or signature errors** -- Litestream needs R2 S3 API credentials, which are not the same as a Cloudflare API token. Create an R2 API token and use its access key ID and secret access key, and confirm `LITESTREAM_ENDPOINT` contains your account ID.
 

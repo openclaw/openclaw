@@ -1,6 +1,9 @@
 /** Builds and revalidates system.run approval plans for cwd and executable paths. */
 import fs from "node:fs";
-import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeNullableString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
 import {
@@ -83,7 +86,6 @@ export function hardenApprovedExecutionPaths(params: {
   | {
       ok: true;
       argv: string[];
-      argvChanged: boolean;
       cwd: string | undefined;
       approvedCwdSnapshot: ApprovedCwdSnapshot | undefined;
     }
@@ -92,7 +94,6 @@ export function hardenApprovedExecutionPaths(params: {
     return {
       ok: true,
       argv: params.argv,
-      argvChanged: false,
       cwd: params.cwd,
       approvedCwdSnapshot: undefined,
     };
@@ -107,7 +108,6 @@ export function hardenApprovedExecutionPaths(params: {
   const hardened = {
     ok: true as const,
     argv: params.argv,
-    argvChanged: false,
     cwd: canonicalCwd.snapshot.cwd,
     approvedCwdSnapshot: canonicalCwd.snapshot,
   };
@@ -136,7 +136,7 @@ export function hardenApprovedExecutionPaths(params: {
   }
   const argv = [...params.argv];
   argv[0] = pinnedExecutable;
-  return { ...hardened, argv, argvChanged: true };
+  return { ...hardened, argv };
 }
 
 export function buildSystemRunApprovalPlan(
@@ -166,7 +166,8 @@ export function buildSystemRunApprovalPlan(
       message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
     };
   }
-  let cwd = normalizeNullableString(params.cwd) ?? undefined;
+  let cwd = readNonBlankString(params.cwd);
+  // Node-host cwd preserves whitespace; see resolveExecWorkdir.
   if (!bindApproval) {
     // Ordinary execution follows aliases once; approval binding keeps its stricter path checks.
     try {
@@ -189,9 +190,7 @@ export function buildSystemRunApprovalPlan(
   }
   const commandText = formatExecCommand(hardening.argv);
   const commandPreview =
-    command.previewText?.trim() && command.previewText.trim() !== commandText
-      ? command.previewText.trim()
-      : null;
+    command.previewText && command.previewText !== commandText ? command.previewText : null;
   const mutableFileOperand = bindApproval
     ? resolveMutableFileOperandSnapshotSync({
         argv: hardening.argv,

@@ -1,13 +1,13 @@
-// Verifies sandbox config merge precedence across global, agent, and shared scopes.
 import { describe, expect, it } from "vitest";
-import {
-  resolveSandboxBrowserConfig,
-  resolveSandboxConfigForAgent,
-  resolveSandboxDockerConfig,
-  resolveSandboxPruneConfig,
-  resolveSandboxScope,
-  resolveSandboxSshConfig,
-} from "./sandbox/config.js";
+import type { AgentSandboxConfig } from "../config/types.agents-shared.js";
+import { resolveSandboxConfigForAgent, resolveSandboxScope } from "./sandbox/config.js";
+
+function resolve(defaults: AgentSandboxConfig, agent: AgentSandboxConfig = {}) {
+  return resolveSandboxConfigForAgent(
+    { agents: { defaults: { sandbox: defaults }, entries: { test: { sandbox: agent } } } },
+    "test",
+  );
+}
 
 describe("sandbox config merges", () => {
   it("resolves sandbox scope deterministically", () => {
@@ -18,174 +18,89 @@ describe("sandbox config merges", () => {
   });
 
   it("merges sandbox docker env and ulimits (agent wins)", () => {
-    const resolved = resolveSandboxDockerConfig({
-      scope: "agent",
-      globalDocker: {
-        env: { LANG: "C.UTF-8", FOO: "1" },
-        ulimits: { nofile: { soft: 10, hard: 20 } },
+    const resolved = resolve(
+      {
+        scope: "agent",
+        docker: {
+          env: { LANG: "C.UTF-8", FOO: "1" },
+          ulimits: { nofile: { soft: 10, hard: 20 } },
+        },
       },
-      agentDocker: {
-        env: { FOO: "2", BAR: "3" },
-        ulimits: { nproc: 256 },
-      },
-    });
+      { docker: { env: { FOO: "2", BAR: "3" }, ulimits: { nproc: 256 } } },
+    ).docker;
 
     expect(resolved.env).toEqual({ LANG: "C.UTF-8", FOO: "2", BAR: "3" });
-    expect(resolved.ulimits).toEqual({
-      nofile: { soft: 10, hard: 20 },
-      nproc: 256,
-    });
-  });
-
-  it("resolves sandbox docker GPU passthrough with agent precedence", () => {
-    const inherited = resolveSandboxDockerConfig({
-      scope: "agent",
-      globalDocker: { gpus: "all" },
-      agentDocker: {},
-    });
-    expect(inherited.gpus).toBe("all");
-
-    const overridden = resolveSandboxDockerConfig({
-      scope: "agent",
-      globalDocker: { gpus: "all" },
-      agentDocker: { gpus: "device=GPU-123" },
-    });
-    expect(overridden.gpus).toBe("device=GPU-123");
-
-    const sharedScope = resolveSandboxDockerConfig({
-      scope: "shared",
-      globalDocker: { gpus: "all" },
-      agentDocker: { gpus: "device=GPU-123" },
-    });
-    expect(sharedScope.gpus).toBe("all");
+    expect(resolved.ulimits).toEqual({ nofile: { soft: 10, hard: 20 }, nproc: 256 });
   });
 
   it("resolves docker binds and shared-scope override behavior", () => {
     // Shared scope intentionally ignores agent-specific Docker overrides.
-    for (const scenario of [
-      {
-        name: "merges sandbox docker binds (global + agent combined)",
-        input: {
-          scope: "agent" as const,
-          globalDocker: {
-            binds: ["/var/run/docker.sock:/var/run/docker.sock"],
-          },
-          agentDocker: {
-            binds: ["/home/user/source:/source:rw"],
-          },
-        },
-        assert: (resolved: ReturnType<typeof resolveSandboxDockerConfig>) => {
-          expect(resolved.binds).toEqual([
-            "/var/run/docker.sock:/var/run/docker.sock",
-            "/home/user/source:/source:rw",
-          ]);
-        },
-      },
-      {
-        name: "returns undefined binds when neither global nor agent has binds",
-        input: {
-          scope: "agent" as const,
-          globalDocker: {},
-          agentDocker: {},
-        },
-        assert: (resolved: ReturnType<typeof resolveSandboxDockerConfig>) => {
-          expect(resolved.binds).toBeUndefined();
-        },
-      },
-      {
-        name: "ignores agent binds under shared scope",
-        input: {
-          scope: "shared" as const,
-          globalDocker: {
-            binds: ["/var/run/docker.sock:/var/run/docker.sock"],
-          },
-          agentDocker: {
-            binds: ["/home/user/source:/source:rw"],
-          },
-        },
-        assert: (resolved: ReturnType<typeof resolveSandboxDockerConfig>) => {
-          expect(resolved.binds).toEqual(["/var/run/docker.sock:/var/run/docker.sock"]);
-        },
-      },
-      {
-        name: "ignores agent docker overrides under shared scope",
-        input: {
-          scope: "shared" as const,
-          globalDocker: { image: "global" },
-          agentDocker: { image: "agent" },
-        },
-        assert: (resolved: ReturnType<typeof resolveSandboxDockerConfig>) => {
-          expect(resolved.image).toBe("global");
-        },
-      },
-    ]) {
-      const resolved = resolveSandboxDockerConfig(scenario.input);
-      scenario.assert(resolved);
+    const globalBind = "/var/run/docker.sock:/var/run/docker.sock";
+    const agentBind = "/home/user/source:/source:rw";
+    for (const [scope, globalBinds, agentBinds, expected] of [
+      ["agent", [globalBind], [agentBind], [globalBind, agentBind]],
+      ["agent", undefined, undefined, undefined],
+      ["shared", [globalBind], [agentBind], [globalBind]],
+    ] as const) {
+      expect(
+        resolve(
+          { scope, docker: { binds: globalBinds && [...globalBinds] } },
+          { docker: { binds: agentBinds && [...agentBinds] } },
+        ).docker.binds,
+      ).toEqual(expected);
     }
+    expect(
+      resolve({ scope: "shared", docker: { image: "global" } }, { docker: { image: "agent" } })
+        .docker.image,
+    ).toBe("global");
   });
 
   it("applies per-agent browser and prune overrides (ignored under shared scope)", () => {
-    const browser = resolveSandboxBrowserConfig({
-      scope: "agent",
-      globalBrowser: { enabled: false, headless: false, noVncEnabled: true },
-      agentBrowser: { enabled: true, headless: true, noVncEnabled: false },
-    });
-    expect(browser.enabled).toBe(true);
-    expect(browser.headless).toBe(true);
-    expect(browser.noVncEnabled).toBe(false);
-
-    const prune = resolveSandboxPruneConfig({
-      scope: "agent",
-      globalPrune: { idleHours: 24, maxAgeDays: 7 },
-      agentPrune: { idleHours: 0, maxAgeDays: 1 },
-    });
-    expect(prune).toEqual({ idleHours: 0, maxAgeDays: 1 });
-
-    const browserShared = resolveSandboxBrowserConfig({
-      scope: "shared",
-      globalBrowser: { enabled: false },
-      agentBrowser: { enabled: true },
-    });
-    expect(browserShared.enabled).toBe(false);
-
-    const pruneShared = resolveSandboxPruneConfig({
-      scope: "shared",
-      globalPrune: { idleHours: 24, maxAgeDays: 7 },
-      agentPrune: { idleHours: 0, maxAgeDays: 1 },
-    });
-    expect(pruneShared).toEqual({ idleHours: 24, maxAgeDays: 7 });
+    const browser = { enabled: false, headless: false, noVncEnabled: true };
+    const agentBrowser = { enabled: true, headless: true, noVncEnabled: false };
+    const prune = { idleHours: 24, maxAgeDays: 7 };
+    const agentPrune = { idleHours: 0, maxAgeDays: 1 };
+    for (const scope of ["agent", "shared"] as const) {
+      const resolved = resolve(
+        { scope, browser, prune },
+        { browser: agentBrowser, prune: agentPrune },
+      );
+      expect(resolved.browser).toMatchObject(scope === "agent" ? agentBrowser : browser);
+      expect(resolved.prune).toEqual(scope === "agent" ? agentPrune : prune);
+    }
   });
 
   it("merges sandbox ssh settings and ignores agent overrides under shared scope", () => {
-    const ssh = resolveSandboxSshConfig({
-      scope: "agent",
-      globalSsh: {
-        target: "global@example.com:22",
-        command: "ssh",
-        identityFile: "~/.ssh/global",
-        strictHostKeyChecking: true,
+    const ssh = resolve(
+      {
+        scope: "agent",
+        ssh: {
+          target: "global@example.com:22",
+          command: "ssh",
+          identityFile: "~/.ssh/global",
+          strictHostKeyChecking: true,
+        },
       },
-      agentSsh: {
-        target: "agent@example.com:2222",
-        certificateFile: "~/.ssh/agent-cert.pub",
-        strictHostKeyChecking: false,
+      {
+        ssh: {
+          target: "agent@example.com:2222",
+          certificateFile: "~/.ssh/agent-cert.pub",
+          strictHostKeyChecking: false,
+        },
       },
+    ).ssh;
+    expect(ssh).toMatchObject({
+      target: "agent@example.com:2222",
+      command: "ssh",
+      identityFile: "~/.ssh/global",
+      certificateFile: "~/.ssh/agent-cert.pub",
+      strictHostKeyChecking: false,
     });
-    expect(ssh.target).toBe("agent@example.com:2222");
-    expect(ssh.command).toBe("ssh");
-    expect(ssh.identityFile).toBe("~/.ssh/global");
-    expect(ssh.certificateFile).toBe("~/.ssh/agent-cert.pub");
-    expect(ssh.strictHostKeyChecking).toBe(false);
 
-    const sshShared = resolveSandboxSshConfig({
-      scope: "shared",
-      globalSsh: {
-        target: "global@example.com:22",
-      },
-      agentSsh: {
-        target: "agent@example.com:2222",
-      },
-    });
+    const sshShared = resolve(
+      { scope: "shared", ssh: { target: "global@example.com:22" } },
+      { ssh: { target: "agent@example.com:2222" } },
+    ).ssh;
     expect(sshShared.target).toBe("global@example.com:22");
   });
 

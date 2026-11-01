@@ -14,7 +14,7 @@ Who may reach the bot, which guild channels it answers in, and which Discord act
 
 <Tabs>
   <Tab title="DM policy">
-    `channels.discord.dmPolicy` controls DM access. `channels.discord.allowFrom` is the canonical DM allowlist.
+    `channels.discord.dmPolicy` controls DM access. `channels.discord.allowFrom` is the DM allowlist.
 
     - `pairing` (default)
     - `allowlist` (requires at least one `allowFrom` sender)
@@ -111,7 +111,7 @@ Who may reach the bot, which guild channels it answers in, and which Discord act
 }
 ```
 
-    Lookups fail closed. If Discord returns `Missing Access`, the member lookup fails, or the channel belongs to a different guild, the DM sender is treated as unauthorized.
+    Failed lookups grant no access. If Discord returns `Missing Access`, the member lookup fails, or the channel belongs to a different guild, the DM sender is treated as unauthorized.
 
     Enable the Discord Developer Portal **Server Members Intent** when using channel-audience access groups. DMs do not include guild member state, so OpenClaw resolves the member through Discord REST at authorization time.
 
@@ -174,7 +174,7 @@ Who may reach the bot, which guild channels it answers in, and which Discord act
     - configured mention patterns (`agents.entries.*.groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
     - implicit reply-to-bot behavior in supported cases
 
-    When writing outbound Discord messages, use canonical mention syntax: `<@USER_ID>` for users, `<#CHANNEL_ID>` for channels, and `<@&ROLE_ID>` for roles. Do not use the legacy `<@!USER_ID>` nickname mention form.
+    When writing outbound Discord messages, use the supported mention syntax: `<@USER_ID>` for users, `<#CHANNEL_ID>` for channels, and `<@&ROLE_ID>` for roles. Do not use the legacy `<@!USER_ID>` nickname mention form.
 
     `requireMention` is configured per guild/channel (`channels.discord.guilds...`).
 
@@ -241,6 +241,12 @@ This surprises people who add one channel to give it special settings and find t
 ```
 
 Channel entries override guild-level values, so a channel entry with `users: ["*"]` opens that one room to any sender even when the guild `users` list is narrow. Entries match by channel ID, name, or slug, and a thread falls back to its parent channel's entry.
+
+Channel ID entries win; name or slug keys resolved at startup or on a policy reload bind tool and mention policies to that channel ID, so a thread or renamed channel with the same name does not inherit them. Unresolved name keys still match by name, so use channel IDs for entries that grant extra tools.
+
+When a thread or forum post matches a parent channel entry, that entry's configured tool policy, including sender overrides, carries into the agent. An explicit thread ID entry takes precedence over the parent.
+
+Resolved guild-name entries also keep their tool policies bound to the guild ID. An explicit guild ID entry takes precedence over a resolved name, and each account replaces its bindings on policy reload.
 
 ### Applying access-policy changes
 
@@ -334,6 +340,8 @@ Use `emoji-list` to discover the current server's custom emoji:
 Pass `identifier` directly to `react`. Discord accepts Unicode emoji, custom `name:id` identifiers, and the `<:name:id>` or `<a:name:id>` forms. `emoji-list`, `react`, and `reactions` are all controlled by `channels.discord.actions.reactions`.
 
 The `event-create` action accepts an optional `image` parameter (URL or local file path) to set the scheduled event cover image.
+
+The `list-pins` action retrieves all pinned messages across Discord's paginated pin list. Pin actions are controlled by `channels.discord.actions.pins`.
 
 Action gates live under `channels.discord.actions.*`.
 

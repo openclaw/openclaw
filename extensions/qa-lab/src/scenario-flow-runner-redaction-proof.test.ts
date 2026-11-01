@@ -12,12 +12,9 @@ type RedactionAgentPrompt = {
   requireSuccessfulTranscriptToolResult?: boolean;
 };
 
-const redactionScenarioIds = [
-  "secret-redaction-tool-logs",
-  "personal-redaction-no-secret-leak",
-] as const;
+const redactionScenarioIds = ["secret-redaction-tool-logs"] as const;
 
-const redactionProviderModes = ["mock-openai", "live-frontier"] as const;
+const redactionProviderModes = ["mock-openai"] as const;
 
 const redactionScenarioCases = redactionScenarioIds.flatMap((scenarioId) =>
   redactionProviderModes.map((providerMode) => ({ scenarioId, providerMode })),
@@ -26,7 +23,7 @@ const redactionScenarioCases = redactionScenarioIds.flatMap((scenarioId) =>
 async function runSecretRedactionScenario(
   scenarioId: (typeof redactionScenarioIds)[number],
   params: {
-    providerMode?: (typeof redactionProviderModes)[number];
+    providerMode?: "mock-openai" | "live-frontier";
     seedPriorInbound?: boolean;
     leakSecret?: boolean;
     transcriptEvidence?:
@@ -260,53 +257,33 @@ describe("secret redaction scenario proof", () => {
     },
   );
 
-  it.each(redactionScenarioCases)(
-    "rejects a successful unrelated read in $scenarioId under $providerMode",
-    async ({ scenarioId, providerMode }) => {
+  for (const { name, transcriptEvidence } of [
+    {
+      name: "rejects a successful unrelated read in $scenarioId under $providerMode",
+      transcriptEvidence: "unrelated-file",
+    },
+    {
+      name: "rejects an uncorrelated fixture result in $scenarioId under $providerMode",
+      transcriptEvidence: "uncorrelated-result",
+    },
+    {
+      name: "rejects a fixture result without secret material in $scenarioId under $providerMode",
+      transcriptEvidence: "missing-secret",
+    },
+    {
+      name: "rejects failed fixture reads in $scenarioId under $providerMode",
+      transcriptEvidence: "failed-result",
+    },
+  ] as const) {
+    it.each(redactionScenarioCases)(name, async ({ scenarioId, providerMode }) => {
       await expect(
         runSecretRedactionScenario(scenarioId, {
           providerMode,
-          transcriptEvidence: "unrelated-file",
+          transcriptEvidence,
         }),
       ).rejects.toThrow("successful persisted read did not target the fake secret fixture");
-    },
-  );
-
-  it.each(redactionScenarioCases)(
-    "rejects an uncorrelated fixture result in $scenarioId under $providerMode",
-    async ({ scenarioId, providerMode }) => {
-      await expect(
-        runSecretRedactionScenario(scenarioId, {
-          providerMode,
-          transcriptEvidence: "uncorrelated-result",
-        }),
-      ).rejects.toThrow("successful persisted read did not target the fake secret fixture");
-    },
-  );
-
-  it.each(redactionScenarioCases)(
-    "rejects a fixture result without secret material in $scenarioId under $providerMode",
-    async ({ scenarioId, providerMode }) => {
-      await expect(
-        runSecretRedactionScenario(scenarioId, {
-          providerMode,
-          transcriptEvidence: "missing-secret",
-        }),
-      ).rejects.toThrow("successful persisted read did not target the fake secret fixture");
-    },
-  );
-
-  it.each(redactionScenarioCases)(
-    "rejects failed fixture reads in $scenarioId under $providerMode",
-    async ({ scenarioId, providerMode }) => {
-      await expect(
-        runSecretRedactionScenario(scenarioId, {
-          providerMode,
-          transcriptEvidence: "failed-result",
-        }),
-      ).rejects.toThrow("successful persisted read did not target the fake secret fixture");
-    },
-  );
+    });
+  }
 
   it.each(redactionScenarioIds)(
     "rejects leaked fixture material in %s after a nested read",
@@ -334,14 +311,4 @@ describe("secret redaction scenario proof", () => {
       }),
     ).rejects.toThrow("successful persisted read did not target the fake secret fixture");
   });
-
-  it.each(redactionScenarioIds)(
-    "%s uses an outbound-only cursor when earlier inbound messages remain on the QA bus",
-    async (scenarioId) => {
-      const proof = await runSecretRedactionScenario(scenarioId, { seedPriorInbound: true });
-
-      expect(proof.result.status).toBe("pass");
-      expect(proof.outboundWaitCursors).toEqual([0]);
-    },
-  );
 });

@@ -1,103 +1,157 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
-import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
-import { renderComposerQuestionDock } from "./chat-composer-question.ts";
+import {
+  cancelStaleChunkRecovery,
+  installStaleChunkReloadListener,
+} from "../../../app/stale-chunk-reload.ts";
+import * as localStorage from "../../../local-storage.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { ComposerQuestionDock } from "./chat-composer-question.tsx";
 import { questionPanelIn } from "./chat-question-card.test-support.ts";
 import type { ChatQuestionCard, QuestionPanelProps } from "./chat-question-card.ts";
 
-afterEach(() => {
-  document.body.replaceChildren();
-  vi.doUnmock("./chat-question-panel.ts");
-  vi.restoreAllMocks();
+const { retryStale } = vi.hoisted(() => ({
+  retryStale: vi.fn<(options: { canReload: () => boolean }) => Promise<boolean>>(),
+}));
+vi.mock("../../../app/stale-chunk-reload.ts", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../../app/stale-chunk-reload.ts")>();
+  return {
+    ...original,
+    // Vitest wraps rejected module factories; browsers reject with the import error itself.
+    isStaleChunkImportError: (error: unknown) =>
+      original.isStaleChunkImportError(error instanceof Error ? (error.cause ?? error) : error),
+    retryStaleChunkReloadWhenReachable: retryStale,
+  };
 });
 
-it("defers the question controls, retries failed loading, and mounts only the current connected request", async () => {
+let stopPreloadListener: (() => void) | undefined;
+afterEach(() => {
+  stopPreloadListener?.();
+  stopPreloadListener = undefined;
+  cancelStaleChunkRecovery();
+  vi.doUnmock("./chat-question-panel.tsx");
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+function model(key: string, text: string, defaults?: string[]): QuestionPanelProps["model"] {
+  const form = defaults ? { presentation: "form" as const, defaultAnswers: defaults } : {};
+  return {
+    requestKey: key,
+    title: "Question",
+    questions: [{ questionId: "answer", header: "Answer", question: text, options: [], ...form }],
+    collapsed: false,
+    disabled: false,
+    drafts: new Map(),
+  };
+}
+function mountDock(initial: QuestionPanelProps | null = null) {
+  let updatePanel!: (value: QuestionPanelProps | null) => void;
+  const { container } = mountSolid(() => {
+    const [panel, setPanel] = createSignal(initial);
+    updatePanel = setPanel;
+    return createComponent(ComposerQuestionDock, {
+      get panel() {
+        return panel();
+      },
+    });
+  });
+  flush();
+  return { container, updatePanel };
+}
+
+it("defers controls, retries loading, and mounts only the current connected request", async () => {
+  const probe = createDeferred<Response>();
+  const fetchMock = vi.fn<typeof fetch>().mockReturnValue(probe.promise);
+  vi.stubGlobal("fetch", fetchMock);
+  const guardKey = "openclaw.controlUi.staleChunkReloadBuildId";
+  window.sessionStorage.removeItem(guardKey);
+  vi.spyOn(localStorage, "getSafeSessionStorage").mockReturnValue(window.sessionStorage);
+  const persist = vi.spyOn(Storage.prototype, "setItem");
+  stopPreloadListener = installStaleChunkReloadListener();
   const initialLoad = createDeferred();
+  const staleLoad = createDeferred();
   const retryLoad = createDeferred();
   const loadStarted = createDeferred();
-  const load = vi
-    .fn<() => Promise<void>>()
-    .mockReturnValueOnce(initialLoad.promise)
-    .mockReturnValueOnce(retryLoad.promise);
-  vi.doMock(import("./chat-question-panel.ts"), async (importOriginal) => {
+  const load = vi.fn<() => Promise<void>>();
+  load.mockReturnValueOnce(initialLoad.promise);
+  load.mockReturnValueOnce(staleLoad.promise);
+  load.mockReturnValueOnce(retryLoad.promise);
+  const recovery = createDeferred<boolean>();
+  retryStale.mockReturnValueOnce(recovery.promise).mockResolvedValueOnce(false);
+  vi.doMock(import("./chat-question-panel.tsx"), async (importOriginal) => {
     const pending = load();
     loadStarted.resolve();
     await pending;
     return importOriginal();
   });
-  const container = document.body.appendChild(document.createElement("div"));
-  render(renderComposerQuestionDock(null), container);
-  expect(customElements.get("openclaw-chat-question-panel")).toBeUndefined();
+  const { container, updatePanel } = mountDock();
   expect(load).not.toHaveBeenCalled();
-
   const onSubmit = vi.fn();
-  const props: QuestionPanelProps = {
-    model: {
-      requestKey: "old-request",
-      title: "Question",
-      questions: [
-        { questionId: "answer", header: "Answer", question: "Old question", options: [] },
-      ],
-      collapsed: false,
-      disabled: false,
-      drafts: new Map(),
-    },
-    onSubmit,
-  };
-  render(renderComposerQuestionDock(props), container);
+  const props = { model: model("old-request", "Old question"), onSubmit };
+  updatePanel(props);
+  flush();
   const card = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
-  await card.updateComplete;
-  await loadStarted.promise;
-  expect(card.querySelector('[role="status"]')).not.toBeNull();
-  expect(card.querySelector("openclaw-chat-question-panel")).toBeNull();
-  const loadError = new Error("Synthetic load failure");
-  const failed = expect(
-    ensureCustomElementDefined("openclaw-chat-question-panel", async () => {
-      throw new Error("Expected the question card to start loading its panel");
-    }),
-  ).rejects.toMatchObject({ cause: loadError });
-  initialLoad.reject(loadError);
-  await failed;
-  await card.updateComplete;
-  expect(card.querySelector('[role="alert"]')?.textContent).toContain("Synthetic load failure");
-  expect(onSubmit).not.toHaveBeenCalled();
-  expect(load).toHaveBeenCalledOnce();
-
-  card.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
-  await card.updateComplete;
-  expect(card.querySelector('[role="status"]')).not.toBeNull();
-  const current: QuestionPanelProps = {
-    ...props,
-    model: {
-      ...props.model,
-      requestKey: "current-request",
-      questions: [
-        {
-          questionId: "answer",
-          header: "Answer",
-          question: "Current question",
-          options: [],
-          presentation: "form",
-          defaultAnswers: ["  current value  "],
-        },
-      ],
-      drafts: new Map(),
-    },
+  const status = () => card.querySelector('[role="status"]');
+  const alert = () => card.querySelector('[role="alert"]');
+  const retry = async () => {
+    card.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
+    await waitForSolid(() => expect(status()).not.toBeNull());
   };
-  render(renderComposerQuestionDock(current), container);
+  const expectError = (message: string) =>
+    waitForSolid(() => expect(alert()?.textContent).toContain(message));
+  await Promise.all([card.updateComplete, loadStarted.promise]);
+  expect(status()).not.toBeNull();
+  expect(card.querySelector("openclaw-chat-question-panel")).toBeNull();
+  initialLoad.reject(new Error("Synthetic load failure"));
+  await expectError("Synthetic load failure");
   await card.updateComplete;
-  const removed = document.body.appendChild(document.createElement("div"));
-  render(renderComposerQuestionDock(props), removed);
+  expect(onSubmit).not.toHaveBeenCalled();
+
+  await retry();
+  const staleError = new Error("Failed to fetch dynamically imported module");
+  staleLoad.reject(staleError);
+  const preloadError = new Event("vite:preloadError", { cancelable: true });
+  Object.defineProperty(preloadError, "payload", { value: staleError });
+  window.dispatchEvent(preloadError);
+  await expectError(staleError.message);
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+  await retry();
+  const canReload = retryStale.mock.calls[0]![0].canReload;
+  expect(canReload()).toBe(true);
+  updatePanel({ ...props, model: { ...props.model } });
+  flush();
+  await card.updateComplete;
+  expect(canReload()).toBe(true);
+  updatePanel({
+    model: model("current-request", "Current question", ["  current value  "]),
+    onSubmit,
+  });
+  flush();
+  await card.updateComplete;
+  expect(canReload()).toBe(false);
+  probe.resolve(new Response("", { status: 200 }));
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  expect(persist).not.toHaveBeenCalledWith(guardKey, expect.any(String));
+  recovery.resolve(false);
+  await waitForSolid(() => expect(alert()).not.toBeNull());
+  expect(load).toHaveBeenCalledTimes(2);
+  card.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
+  await waitForSolid(() => expect(load).toHaveBeenCalledTimes(3));
+  const { container: removed } = mountDock(props);
   const removedCard = removed.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
   await removedCard.updateComplete;
   removed.remove();
 
+  const ready = questionPanelIn(container);
   retryLoad.resolve();
-  const panel = await questionPanelIn(container);
-  expect(load).toHaveBeenCalledTimes(2);
+  const panel = await ready;
   expect(card.textContent).toContain("Current question");
   expect(card.textContent).not.toContain("Old question");
   expect(removedCard.querySelector(".chat-question-panel")).toBeNull();
@@ -110,5 +164,5 @@ it("defers the question controls, retries failed loading, and mounts only the cu
   document.body.append(removed);
   await questionPanelIn(removed);
   expect(removedCard.textContent).toContain("Old question");
-  expect(load).toHaveBeenCalledTimes(2);
+  expect(load).toHaveBeenCalledTimes(3);
 });

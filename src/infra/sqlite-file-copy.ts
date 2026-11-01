@@ -51,13 +51,17 @@ export async function copySqliteFile(
     );
   if (beforeByteCopy) {
     try {
-      // A filesystem name or an automatic-copy receipt cannot establish sharing.
+      // Automatic fallback cannot pause for the owner's byte-copy space admission.
       await copy("always");
     } catch (error) {
       if (
         published ||
         !(error instanceof FsSafeError) ||
-        (error.code !== "helper-unavailable" && error.code !== "unsupported-platform")
+        !(
+          error.code === "unsupported-platform" ||
+          (error.code === "helper-unavailable" &&
+            error.message === "native file cloning is unavailable")
+        )
       ) {
         throw error;
       }

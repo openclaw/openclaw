@@ -1,5 +1,5 @@
 import path from "node:path";
-import { tempWorkspaceSync, withTempWorkspace } from "@openclaw/fs-safe/temp";
+import { tempWorkspace, withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -11,20 +11,6 @@ const DEFAULT_OPUS_BITRATE = "64k";
 const DEFAULT_OPUS_CHANNELS = 1;
 const DEFAULT_TEMP_PREFIX = "audio-opus-";
 const DEFAULT_OUTPUT_FILE_NAME = "voice.opus";
-
-function normalizeAudioExtension(params: {
-  inputExtension?: string;
-  inputFileName?: string;
-}): string {
-  const fromExtension = params.inputExtension?.trim();
-  const candidate = fromExtension
-    ? fromExtension.startsWith(".")
-      ? fromExtension
-      : `.${fromExtension}`
-    : path.extname(params.inputFileName ?? "");
-  const normalized = candidate.toLowerCase();
-  return /^\.[a-z0-9]{1,12}$/.test(normalized) ? normalized : ".audio";
-}
 
 function normalizeTempPrefix(value?: string): string {
   const sanitized = value?.trim().replace(/[^a-zA-Z0-9._-]/g, "-");
@@ -42,16 +28,6 @@ function normalizeOutputFileName(value?: string): string {
   return DEFAULT_OUTPUT_FILE_NAME;
 }
 
-function resolveMaxDurationSeconds(value?: number): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new Error("maxDurationSeconds must be a positive finite number");
-  }
-  return value;
-}
-
 /** Transcodes arbitrary audio input into mono Opus using a scoped temp workspace. */
 export async function transcodeAudioBufferToOpus(params: {
   audioBuffer: Buffer;
@@ -66,17 +42,30 @@ export async function transcodeAudioBufferToOpus(params: {
   /** Maximum output duration passed to ffmpeg's `-t` option. */
   maxDurationSeconds?: number;
 }): Promise<Buffer> {
-  const maxDurationSeconds = resolveMaxDurationSeconds(params.maxDurationSeconds);
+  const maxDurationSeconds = params.maxDurationSeconds;
+  if (
+    maxDurationSeconds !== undefined &&
+    (!Number.isFinite(maxDurationSeconds) || maxDurationSeconds <= 0)
+  ) {
+    throw new Error("maxDurationSeconds must be a positive finite number");
+  }
   return await withTempWorkspace(
     {
       rootDir: resolvePreferredOpenClawTmpDir(),
       prefix: normalizeTempPrefix(params.tempPrefix),
     },
     async (workspace) => {
-      const inputPath = await workspace.write(
-        `input${normalizeAudioExtension(params)}`,
-        params.audioBuffer,
-      );
+      const fromExtension = params.inputExtension?.trim();
+      const candidate = fromExtension
+        ? fromExtension.startsWith(".")
+          ? fromExtension
+          : `.${fromExtension}`
+        : path.extname(params.inputFileName ?? "");
+      const normalized = candidate.toLowerCase();
+      const inputExtension = /^\.[a-z0-9]{1,12}$/.test(normalized) ? normalized : ".audio";
+      const inputPath = await workspace.store.write(`input${inputExtension}`, params.audioBuffer, {
+        durable: false,
+      });
       const outputFileName = normalizeOutputFileName(params.outputFileName);
       await writeExternalFileWithinRoot({
         rootDir: workspace.dir,
@@ -152,26 +141,26 @@ export async function transcodeAudioBuffer(params: {
   }
 
   // afconvert is macOS-only and writes native Messages-compatible voice containers.
-  const tmp = tempWorkspaceSync({
+  const tmp = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "tts-transcode-",
   });
   try {
-    const inPath = tmp.write(`in.${source}`, params.audioBuffer);
+    const inPath = await tmp.store.write(`in.${source}`, params.audioBuffer, { durable: false });
     const outPath = tmp.path(`out.${target}`);
-    const result = await runAfconvert({
+    const failure = await runAfconvert(
       // Opus-in-CAF matches native Messages voice memo attachments.
-      args: ["-f", "caff", "-d", "opus@24000", "-c", "1", inPath, outPath],
-      timeoutMs: params.timeoutMs ?? 5000,
-    });
-    if (!result.ok) {
-      return { ok: false, reason: "transcoder-failed", detail: result.detail };
+      ["-f", "caff", "-d", "opus@24000", "-c", "1", inPath, outPath],
+      params.timeoutMs ?? 5000,
+    );
+    if (failure !== undefined) {
+      return { ok: false, reason: "transcoder-failed", detail: failure };
     }
-    return { ok: true, buffer: tmp.read(`out.${target}`) };
+    return { ok: true, buffer: await tmp.read(`out.${target}`) };
   } catch (err) {
     return { ok: false, reason: "transcoder-failed", detail: (err as Error).message };
   } finally {
-    tmp.cleanup();
+    await tmp.cleanup();
   }
 }
 
@@ -180,22 +169,17 @@ function normalizeContainerExt(ext: string): string | undefined {
   return /^[a-z0-9]{1,12}$/.test(trimmed) ? trimmed : undefined;
 }
 
-async function runAfconvert(params: {
-  args: string[];
-  timeoutMs: number;
-}): Promise<{ ok: true } | { ok: false; detail: string }> {
+async function runAfconvert(args: string[], timeoutMs: number): Promise<string | undefined> {
   try {
-    const result = await runCommandWithTimeout(["/usr/bin/afconvert", ...params.args], {
+    const result = await runCommandWithTimeout(["/usr/bin/afconvert", ...args], {
       maxOutputBytes: 1024,
-      timeoutMs: params.timeoutMs,
+      timeoutMs,
     });
     if (result.termination === "timeout") {
-      return { ok: false, detail: `timeout-${params.timeoutMs}ms` };
+      return `timeout-${timeoutMs}ms`;
     }
-    return result.code === 0
-      ? { ok: true }
-      : { ok: false, detail: `exit-${result.code ?? "unknown"}` };
+    return result.code === 0 ? undefined : `exit-${result.code ?? "unknown"}`;
   } catch (err) {
-    return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    return err instanceof Error ? err.message : String(err);
   }
 }

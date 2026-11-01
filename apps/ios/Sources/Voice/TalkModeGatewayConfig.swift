@@ -1,7 +1,7 @@
 import Foundation
 import OpenClawKit
 
-struct TalkRuntimeIssue: Equatable {
+struct TalkRuntimeIssue {
     enum Code: String {
         case audioInputUnavailable = "audio_input_unavailable"
         case realtimeOutputCancelFailed = "realtime_output_cancel_failed"
@@ -10,25 +10,10 @@ struct TalkRuntimeIssue: Equatable {
 
     let code: Code
     let message: String
-    let provider: String?
-    let model: String?
-    let transport: String?
-    let phase: String?
 
-    init(
-        code: Code,
-        message: String,
-        provider: String? = nil,
-        model: String? = nil,
-        transport: String? = nil,
-        phase: String? = nil)
-    {
+    init(code: Code = .realtimeUnavailable, message: String) {
         self.code = code
         self.message = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.provider = provider?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.model = model?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.transport = transport?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.phase = phase?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     var displayMessage: String {
@@ -38,100 +23,6 @@ struct TalkRuntimeIssue: Equatable {
 
     var fallbackStatusText: String {
         String(localized: "Listening (iOS Speech fallback)")
-    }
-
-    var diagnosticSummary: String {
-        var parts = [displayMessage]
-        if let provider, !provider.isEmpty { parts.append("provider: \(provider)") }
-        if let model, !model.isEmpty { parts.append("model: \(model)") }
-        if let transport, !transport.isEmpty { parts.append("transport: \(transport)") }
-        if let phase, !phase.isEmpty { parts.append("phase: \(phase)") }
-        return parts.joined(separator: " • ")
-    }
-}
-
-struct TalkVoiceModeDescriptor: Equatable {
-    let title: String
-    let subtitle: String?
-
-    var accessibilityValue: String {
-        if let subtitle, !subtitle.isEmpty {
-            return "\(self.title), \(subtitle)"
-        }
-        return self.title
-    }
-}
-
-enum TalkVoiceModeDescriptorBuilder {
-    static func build(
-        providerId: String,
-        providerLabel: String,
-        modelId: String?,
-        voiceId: String?,
-        transport: String?,
-        isRealtime: Bool) -> TalkVoiceModeDescriptor
-    {
-        let normalizedProvider = providerId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let trimmedModel = modelId?.trimmedNonEmpty
-        let trimmedVoice = voiceId?.trimmedNonEmpty
-        let trimmedTransport = transport?.trimmedNonEmpty
-        let title = if isRealtime, normalizedProvider == "openai", trimmedModel == "gpt-realtime-2" {
-            "GPT Realtime 2.0"
-        } else if isRealtime, normalizedProvider == "openai" {
-            "OpenAI Realtime"
-        } else if isRealtime {
-            providerLabel.isEmpty ? "Realtime Voice" : providerLabel
-        } else if normalizedProvider == "system" {
-            "iOS System Voice"
-        } else {
-            providerLabel.isEmpty ? "Talk Voice" : providerLabel
-        }
-
-        var details: [String] = []
-        if isRealtime, normalizedProvider != "openai", !providerLabel.isEmpty, providerLabel != title {
-            details.append(providerLabel)
-        }
-        if let trimmedTransport {
-            details.append(Self.transportLabel(trimmedTransport))
-        }
-        if let trimmedModel, title != "GPT Realtime 2.0" || trimmedModel != "gpt-realtime-2" {
-            details.append(trimmedModel)
-        }
-        if let trimmedVoice {
-            details.append(Self.voiceLabel(trimmedVoice))
-        }
-
-        return TalkVoiceModeDescriptor(
-            title: title,
-            subtitle: details.isEmpty ? nil : details.joined(separator: " • "))
-    }
-
-    private static func voiceLabel(_ voice: String) -> String {
-        switch voice {
-        case "alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse":
-            voice.prefix(1).uppercased() + String(voice.dropFirst())
-        default:
-            voice
-        }
-    }
-
-    private static func transportLabel(_ transport: String) -> String {
-        switch transport.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "webrtc":
-            "Native WebRTC"
-        case "gateway-relay":
-            "Gateway Relay"
-        case "provider-websocket":
-            "Provider WebSocket"
-        case "managed-room":
-            "Managed Room"
-        case "native":
-            "Native"
-        case let value where !value.isEmpty:
-            value
-        default:
-            "Native"
-        }
     }
 }
 

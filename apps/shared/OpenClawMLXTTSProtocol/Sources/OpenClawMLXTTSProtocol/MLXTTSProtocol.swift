@@ -54,17 +54,6 @@ public struct MLXTTSSynthesizeRequest: Codable, Equatable, Sendable {
     public let referenceText: String?
     public let stream: Bool
 
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case text
-        case modelRepo
-        case language
-        case voice
-        case referenceAudioPath
-        case referenceText
-        case stream
-    }
-
     public init(
         id: String,
         text: String,
@@ -261,9 +250,6 @@ public enum MLXTTSFrameCodec {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let payload = try encoder.encode(value)
-        guard !payload.isEmpty else {
-            throw MLXTTSFrameError.emptyFrame
-        }
         guard payload.count <= self.maximumPayloadSize else {
             throw MLXTTSFrameError.frameTooLarge(payload.count)
         }

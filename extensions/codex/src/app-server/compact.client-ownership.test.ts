@@ -1,6 +1,10 @@
 import path from "node:path";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   claimCodexAppServerLiveThread,
@@ -9,8 +13,11 @@ import {
 } from "./client-runtime.js";
 import { CodexAppServerClient } from "./client.js";
 import { threadStartResult } from "./codex-app-server.test-fixtures.js";
-import { compactCodexSessionWithTestHost as maybeCompactCodexAppServerSession } from "./compact.test-support.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import {
+  compactCodexSessionWithTestHost as maybeCompactCodexAppServerSession,
+  compactionItemEvent,
+} from "./compact.test-support.js";
+import { resolveCodexAppServerRuntimeOptions, type CodexPluginConfig } from "./config.js";
 import {
   registerCodexTestSessionIdentity,
   resetCodexTestBindingStore,
@@ -22,9 +29,9 @@ import {
   releaseLeasedSharedCodexAppServerClient,
   retainSharedCodexAppServerClientIfCurrent,
   retireSharedCodexAppServerClientIfCurrent,
-  resetSharedCodexAppServerClientForTests,
 } from "./shared-client.js";
 import * as sharedClientRuntime from "./shared-client.js";
+import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
 import { createInferenceReadyClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
 import {
   createParams,
@@ -42,7 +49,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let directory: string;
 let agentDir: string;
 let sessionFile: string;
-const pluginConfig = {
+const pluginConfig: CodexPluginConfig = {
   appServer: { command: process.execPath, args: ["app-server"], homeScope: "user" },
 };
 let runtime: ReturnType<typeof resolveCodexAppServerRuntimeOptions>;
@@ -52,6 +59,7 @@ beforeEach(() => {
   directory = tempDirs.make("codex-compact-owner-");
   agentDir = path.join(directory, "agent");
   sessionFile = path.join(directory, "session.jsonl");
+  setRuntimeConfigSnapshot({});
   runtime = resolveCodexAppServerRuntimeOptions({
     pluginConfig,
     codexConfigToml: null,
@@ -64,6 +72,7 @@ afterEach(async () => {
   await Promise.all(transports.splice(0).map(({ client }) => client.closeAndWait()));
   resetCodexTestBindingStore();
   resetThreadLifecycleTestFixtures();
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
 });
 
@@ -103,24 +112,46 @@ function sendCompactionCompleted(
     method: "turn/started",
     params: { threadId, turn: { ...turn, status: "inProgress" } },
   });
-  for (const method of ["item/started", "item/completed"]) {
-    send({
-      method,
-      params: {
-        threadId,
-        turnId,
-        item: { id: "compacted", type: "contextCompaction" },
-      },
-    });
+  for (const method of ["item/started", "item/completed"] as const) {
+    send(compactionItemEvent(method, turnId, "compacted", threadId));
   }
   send({ method: "turn/completed", params: { threadId, turn } });
 }
 
-it.each(["closed", "detached", "unconfirmed-close", "rejected-close"])(
+function leaseClient(preparedShell = false) {
+  return getLeasedSharedCodexAppServerClient({
+    startOptions: preparedShell
+      ? { ...runtime.start, env: { ...runtime.start.env, COMPACTION_TEST_SHELL: "prepared" } }
+      : runtime.start,
+    agentDir,
+    authProfileId: null,
+  });
+}
+
+function compact(sessionId: string, sessionKey: string, abortSignal?: AbortSignal) {
+  return maybeCompactCodexAppServerSession(
+    {
+      sessionId,
+      sessionKey,
+      sessionFile,
+      agentDir,
+      workspaceDir: directory,
+      trigger: "manual",
+      abortSignal,
+    },
+    { bindingStore: testCodexAppServerBindingStore, pluginConfig },
+  );
+}
+
+function resume(client: CodexAppServerClient, threadId: string) {
+  return client.request("thread/resume", { threadId, excludeTurns: true }, { timeoutMs: 1000 });
+}
+
+it.each(["detached", "unconfirmed-close", "rejected-close"])(
   "supports repeated compaction and the next turn (owner %s)",
   async (ownerState) => {
     const closeFails = ownerState === "unconfirmed-close" || ownerState === "rejected-close";
-    const ownerClosed = ownerState === "closed" || closeFails;
+    const ownerClosed = closeFails;
     const sessionKey = "agent:main:compact-owner";
     const owners = new Map<string, number>();
     const operations: { client: number; method: string; threadId?: string }[] = [];
@@ -184,26 +215,11 @@ it.each(["closed", "detached", "unconfirmed-close", "rejected-close"])(
       }
       return harness.client;
     });
-    const owner = await getLeasedSharedCodexAppServerClient({
-      startOptions: {
-        ...runtime.start,
-        env: { ...runtime.start.env, COMPACTION_TEST_SHELL: "prepared" },
-      },
-      agentDir,
-      authProfileId: null,
-    });
-    await owner.request(
-      "thread/resume",
-      { threadId: "owned-thread", excludeTurns: true },
-      { timeoutMs: 1000 },
-    );
+    const owner = await leaseClient(true);
+    await resume(owner, "owned-thread");
     await owner.request("turn/start", { threadId: "owned-thread", input: [] }, { timeoutMs: 1000 });
     await retainCodexAppServerLiveThread(owner, "owned-thread");
-    await owner.request(
-      "thread/resume",
-      { threadId: "sibling-thread", excludeTurns: true },
-      { timeoutMs: 1000 },
-    );
+    await resume(owner, "sibling-thread");
     await retainCodexAppServerLiveThread(owner, "sibling-thread");
     registerCodexTestSessionIdentity(sessionFile, "session-1", sessionKey, "main");
     await writeCodexAppServerBinding(sessionFile, {
@@ -223,17 +239,7 @@ it.each(["closed", "detached", "unconfirmed-close", "rejected-close"])(
     }
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const compaction = maybeCompactCodexAppServerSession(
-        {
-          sessionId: "session-1",
-          sessionKey,
-          sessionFile,
-          agentDir,
-          workspaceDir: directory,
-          trigger: "manual",
-        },
-        { bindingStore: testCodexAppServerBindingStore, pluginConfig },
-      );
+      const compaction = compact("session-1", sessionKey);
 
       if (closeFails) {
         await expect(compaction).rejects.toThrow(
@@ -273,23 +279,9 @@ it.each(["closed", "detached", "unconfirmed-close", "rejected-close"])(
       expect(await consumeCodexAppServerLiveThread(owner, "owned-thread")).toBeDefined();
       expect(await consumeCodexAppServerLiveThread(owner, "sibling-thread")).toBeDefined();
     }
-    const nextOwner =
-      ownerState === "detached"
-        ? owner
-        : await getLeasedSharedCodexAppServerClient({
-            startOptions: {
-              ...runtime.start,
-              env: { ...runtime.start.env, COMPACTION_TEST_SHELL: "prepared" },
-            },
-            agentDir,
-            authProfileId: null,
-          });
+    const nextOwner = ownerState === "detached" ? owner : await leaseClient(true);
     try {
-      await nextOwner.request(
-        "thread/resume",
-        { threadId: "owned-thread", excludeTurns: true },
-        { timeoutMs: 1000 },
-      );
+      await resume(nextOwner, "owned-thread");
       await expect(
         nextOwner.request(
           "turn/start",
@@ -310,7 +302,6 @@ it.each(["closed", "detached", "unconfirmed-close", "rejected-close"])(
 it.each([
   ["success", false, "untracked"],
   ["success", true, "untracked"],
-  ["success", "during-resume", "untracked"],
   ["failure", "during-resume", "claimed"],
   ["success", "during-resume", "idle"],
 ] as const)(
@@ -321,6 +312,8 @@ it.each([
     const ownerClaimed = subscription === "claimed";
     const ownerWrites = subscription === "untracked" ? [0, 0] : [0, 0, 0];
     let ownerExited = false;
+    let retirementReleased = false;
+    const retiredOwnerRead = createDeferred<void>();
     const resumes: number[] = [];
     const compactStarted = createDeferred<{
       id: number;
@@ -334,8 +327,17 @@ it.each([
         if (request.method === "thread/read") {
           send({
             id: request.id,
-            result: { thread: { ...result.thread, status: { type: "notLoaded" } } },
+            result: {
+              thread: {
+                ...result.thread,
+                // A live writer cannot also report that its thread has unloaded.
+                status: { type: index === 0 && !ownerExited ? "idle" : "notLoaded" },
+              },
+            },
           });
+          if (index === 0 && retirementReleased) {
+            retiredOwnerRead.resolve();
+          }
           return;
         }
         if (request.method === "thread/resume" || request.method === "thread/start") {
@@ -368,17 +370,14 @@ it.each([
       return harness.client;
     });
 
-    const owner = await getLeasedSharedCodexAppServerClient({
-      startOptions: runtime.start,
-      agentDir,
-      authProfileId: null,
-    });
+    const owner = await leaseClient();
     registerCodexTestSessionIdentity(sessionFile, "session-final-owner", sessionKey, "main");
     const prepareThread = (client: CodexAppServerClient) =>
       startOrResumeThread({
         client,
         params: {
           ...createParams(sessionFile, directory),
+          disableTools: false,
           sessionId: "session-final-owner",
           sessionKey,
           agentDir,
@@ -398,17 +397,7 @@ it.each([
       closed: false,
     });
 
-    const compaction = maybeCompactCodexAppServerSession(
-      {
-        sessionId: "session-final-owner",
-        sessionKey,
-        sessionFile,
-        agentDir,
-        workspaceDir: directory,
-        trigger: "manual",
-      },
-      { bindingStore: testCodexAppServerBindingStore, pluginConfig },
-    );
+    const compaction = compact("session-final-owner", sessionKey);
     const pendingCompact = await compactStarted.promise;
     if (!lateRelease) {
       releaseRetirementLease?.();
@@ -443,11 +432,7 @@ it.each([
         expect(await retainCodexAppServerBindingSubscription(owner, threadId)).toBe(true);
       }
     }
-    const nextOwner = await getLeasedSharedCodexAppServerClient({
-      startOptions: runtime.start,
-      agentDir,
-      authProfileId: null,
-    });
+    const nextOwner = await leaseClient();
     const entered = createDeferred<void>();
     const released = createDeferred<void>();
     let acquired = false;
@@ -463,6 +448,7 @@ it.each([
           const release = lease.release;
           vi.spyOn(lease, "release").mockImplementation((wait) => {
             const exit = release(wait);
+            retirementReleased = true;
             released.resolve();
             return exit;
           });
@@ -493,6 +479,9 @@ it.each([
         expect(acquired).toBe(lateRelease === "during-resume");
         if (lateRelease === "during-resume") {
           await released.promise;
+          if (!ownerClaimed) {
+            await retiredOwnerRead.promise;
+          }
           await setImmediate();
           if (ownerClaimed) {
             expect(
@@ -541,11 +530,7 @@ it("cancels compaction waiting for a closing owner without releasing its thread 
   const harness = createOwnershipHarness(() => {}, false);
   transports.push(harness);
   const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-  const owner = await getLeasedSharedCodexAppServerClient({
-    startOptions: runtime.start,
-    agentDir,
-    authProfileId: null,
-  });
+  const owner = await leaseClient();
   const sessionKey = "agent:main:closing-owner";
   registerCodexTestSessionIdentity(sessionFile, "closing-session", sessionKey, "main");
   await writeCodexAppServerBinding(sessionFile, {
@@ -565,18 +550,7 @@ it("cancels compaction waiting for a closing owner without releasing its thread 
     },
   );
   const abort = new AbortController();
-  const compaction = maybeCompactCodexAppServerSession(
-    {
-      sessionId: "closing-session",
-      sessionKey,
-      sessionFile,
-      agentDir,
-      workspaceDir: directory,
-      trigger: "manual",
-      abortSignal: abort.signal,
-    },
-    { bindingStore: testCodexAppServerBindingStore, pluginConfig },
-  );
+  const compaction = compact("closing-session", sessionKey, abort.signal);
   let queueEntered = false;
   let queued: Promise<void> | undefined;
   try {

@@ -5,7 +5,7 @@ import {
 import { buildMatrixQaCliE2eeAccountConfig } from "./scenario-runtime-e2ee-cli-config.js";
 import {
   loginMatrixQaCliDevice,
-  parseMatrixQaCliJson,
+  parseMatrixQaCliVerificationStatus,
   type MatrixQaCliBackupRestoreStatus,
   type MatrixQaCliVerificationStatus,
   writeMatrixQaCliOutputArtifacts,
@@ -13,13 +13,6 @@ import {
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 export type MatrixQaCliRuntime = Awaited<ReturnType<typeof createMatrixQaOpenClawCliRuntime>>;
-
-export function requireMatrixQaE2eeOutputDir(context: MatrixQaScenarioContext) {
-  if (!context.outputDir) {
-    throw new Error("Matrix E2EE destructive QA scenarios require an output directory");
-  }
-  return context.outputDir;
-}
 
 function requireMatrixQaCliRuntimeEnv(context: MatrixQaScenarioContext) {
   if (!context.gatewayRuntimeEnv) {
@@ -58,7 +51,7 @@ export async function createMatrixQaRecoveryCliRuntime(params: {
       name: `Matrix QA ${params.label}`,
       userId: params.userId,
     }),
-    outputDir: requireMatrixQaE2eeOutputDir(params.context),
+    outputDir: params.context.outputDir,
     runtimeEnv: requireMatrixQaCliRuntimeEnv(params.context),
   });
 }
@@ -68,12 +61,7 @@ export async function loginMatrixQaRecoveryDevice(params: {
   deviceName: string;
   userId: string;
   password: string;
-}): Promise<{
-  accessToken: string;
-  deviceId: string;
-  password?: string;
-  userId: string;
-}> {
+}) {
   return await loginMatrixQaCliDevice(
     params.context.baseUrl,
     params,
@@ -82,10 +70,9 @@ export async function loginMatrixQaRecoveryDevice(params: {
   );
 }
 
-export async function runMatrixQaCliJson<T>(params: {
+export async function runMatrixQaCliJson(params: {
   allowNonZero?: boolean;
   args: string[];
-  decode?: (payload: unknown) => T;
   label: string;
   runtime: MatrixQaCliRuntime;
   stdin?: string;
@@ -101,10 +88,9 @@ export async function runMatrixQaCliJson<T>(params: {
     result,
     rootDir: params.runtime.artifactDir,
   });
-  const parsed = parseMatrixQaCliJson(result);
   return {
     artifacts,
-    payload: params.decode ? params.decode(parsed) : (parsed as T),
+    payload: parseMatrixQaCliVerificationStatus(result),
     result,
   };
 }

@@ -4,13 +4,21 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareRetainedUpdateRuntimeCleanup } from "../commands/doctor-retained-runtime.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
+import * as containerEnvironment from "../infra/container-environment.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import * as processArgv from "../infra/gateway-process-argv.js";
 import type { inspectOtherOpenClawProcesses } from "../infra/openclaw-process-census.js";
 import {
-  createDoctorHealthFlowContext,
-  resolveDoctorHealthContributions,
-  runDoctorHealthContributionList,
+  resolvePackageActivationAnchor,
+  resolvePackageActivationJournalPath,
+} from "../infra/package-update-activation-paths.js";
+import * as processGroups from "../process/supervisor/service-child-group-ownership.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import {
+  createDoctorRuntimeProjection,
+  doctorRuntimeProjectedPath as projectedPath,
 } from "./doctor-health-contributions.test-support.js";
 
 const mocks = vi.hoisted(() => ({
@@ -54,43 +62,22 @@ afterEach(() => {
   mocks.serviceCommand.mockReset();
 });
 
-function projectedPath(directory: string, source: string): string {
-  const base = path.parse(source).root;
-  return path.join(
-    directory,
-    "tree",
-    Buffer.from(base).toString("hex"),
-    path.relative(base, source),
-  );
-}
-
 function projection(suffix: string, root = parent): string {
-  const directory = path.join(root, `openclaw-update-runtime-${suffix}`);
-  const projectedRoot = projectedPath(directory, packageRoot);
-  fs.mkdirSync(projectedRoot, { recursive: true });
-  fs.copyFileSync(path.join(packageRoot, "package.json"), path.join(projectedRoot, "package.json"));
-  return directory;
+  return createDoctorRuntimeProjection(root, packageRoot, suffix);
 }
 
 async function runDoctor(repair: boolean, maintenance = true): Promise<string> {
-  const contributions = resolveDoctorHealthContributions().filter(
-    (entry) => entry.id === "doctor:retained-update-runtimes",
-  );
-  const ctx = createDoctorHealthFlowContext({
-    env: {
-      HOME: parent,
-      OPENCLAW_HOME: parent,
-      OPENCLAW_STATE_DIR: path.join(parent, "state"),
-      OPENCLAW_UPDATE_IN_PROGRESS: "1",
-      TMPDIR: path.join(parent, "shell-tmp"),
-    },
-    options: { repair },
-  });
-  ctx.prompter.shouldRepair = repair;
-  const run = () => runDoctorHealthContributionList(ctx, contributions);
+  const env = {
+    HOME: parent,
+    OPENCLAW_HOME: parent,
+    OPENCLAW_STATE_DIR: path.join(parent, "state"),
+    OPENCLAW_UPDATE_IN_PROGRESS: "1",
+    TMPDIR: path.join(parent, "shell-tmp"),
+  };
+  const run = async () => (await prepareRetainedUpdateRuntimeCleanup(env))(repair);
   if (maintenance) {
     const lock = await acquireGatewayLock({
-      env: ctx.env,
+      env,
       role: "sqlite-maintenance",
       allowInTests: true,
     });
@@ -108,65 +95,56 @@ async function runDoctor(repair: boolean, maintenance = true): Promise<string> {
   return mocks.note.mock.calls.map(([message]) => String(message)).join("\n");
 }
 
-it("Doctor removes an abandoned marked projection and releases checkout hardlinks", async () => {
-  const abandoned = projection("Old001");
-  const manifest = path.join(packageRoot, "extensions/discord/openclaw.plugin.json");
-  const retainedManifest = projectedPath(abandoned, manifest);
-  fs.mkdirSync(path.dirname(manifest), { recursive: true });
-  fs.mkdirSync(path.dirname(retainedManifest), { recursive: true });
-  fs.writeFileSync(manifest, JSON.stringify({ id: "discord" }));
-  fs.linkSync(manifest, retainedManifest);
-  const preview = await runDoctor(false);
-  expect(fs.existsSync(abandoned)).toBe(true);
-  expect(fs.statSync(manifest).nlink).toBe(2);
-  mocks.note.mockClear();
-  const output = await runDoctor(true);
-  expect(fs.existsSync(abandoned)).toBe(false);
-  expect(fs.statSync(manifest).nlink).toBe(1);
-  expect(fs.readFileSync(manifest, "utf8")).toBe('{"id":"discord"}');
-  expect(preview).toContain("openclaw doctor --fix");
-  expect(output).toContain(`Removed abandoned updater runtime: ${abandoned}`);
-});
-
-it.each([
-  { definition: "command", key: "TMPDIR" },
-  { definition: "managed definition", key: "TEMP" },
-])(
-  "Doctor reports and cleans retained runtimes in the $definition $key from another shell",
-  async ({ definition, key }) => {
+it.each(["checkout", "command TMPDIR", "managed TEMP", "service unavailable", "missing manifest"])(
+  "Doctor reports and reclaims an abandoned projection and its hardlinks (%s)",
+  async (source) => {
     const serviceTmp = path.join(parent, "service-tmp");
-    const directory = projection("Svc001", serviceTmp);
-    mocks.serviceCommand.mockResolvedValue(
-      definition === "command"
-        ? { programArguments: [], environment: { [key]: serviceTmp } }
-        : {
-            programArguments: [],
-            managedDefinition: {
-              programArguments: [],
-              workingDirectory: parent,
-              environment: { [key]: "service-tmp" },
-            },
-          },
+    const abandoned = projection(
+      "Old001",
+      source === "command TMPDIR" || source === "managed TEMP" ? serviceTmp : parent,
     );
+    if (source === "command TMPDIR") {
+      mocks.serviceCommand.mockResolvedValue({
+        programArguments: [],
+        environment: { TMPDIR: serviceTmp },
+      });
+    } else if (source === "managed TEMP") {
+      mocks.serviceCommand.mockResolvedValue({
+        programArguments: [],
+        managedDefinition: {
+          programArguments: [],
+          workingDirectory: parent,
+          environment: { TEMP: "service-tmp" },
+        },
+      });
+    } else if (source === "service unavailable") {
+      mocks.serviceCommand.mockRejectedValue(new Error("fixture service inspection unavailable"));
+    } else if (source === "missing manifest") {
+      fs.unlinkSync(path.join(packageRoot, "package.json"));
+    }
+    const manifest = path.join(packageRoot, "extensions/discord/openclaw.plugin.json");
+    const retainedManifest = projectedPath(abandoned, manifest);
+    fs.mkdirSync(path.dirname(manifest), { recursive: true });
+    fs.mkdirSync(path.dirname(retainedManifest), { recursive: true });
+    fs.writeFileSync(manifest, JSON.stringify({ id: "discord" }));
+    fs.linkSync(manifest, retainedManifest);
     const preview = await runDoctor(false);
-    expect(fs.existsSync(directory)).toBe(true);
-    expect(preview).toContain(`Runtime retained at ${directory}:`);
+    expect(fs.existsSync(abandoned)).toBe(true);
+    expect(fs.statSync(manifest).nlink).toBe(2);
     mocks.note.mockClear();
     const output = await runDoctor(true);
-    expect(fs.existsSync(directory)).toBe(false);
-    expect(output).toContain(`Removed abandoned updater runtime: ${directory}`);
+    expect(fs.existsSync(abandoned)).toBe(false);
+    expect(fs.statSync(manifest).nlink).toBe(1);
+    expect(fs.readFileSync(manifest, "utf8")).toBe('{"id":"discord"}');
+    expect(preview).toContain("openclaw doctor --fix");
+    expect(preview).toContain(`Runtime retained at ${abandoned}:`);
+    expect(output).toContain(`Removed abandoned updater runtime: ${abandoned}`);
+    if (source === "service unavailable") {
+      expect(output).toContain("Could not inspect the managed service temporary directory");
+      expect(output).toContain("fixture service inspection unavailable");
+    }
   },
 );
-
-it("Doctor warns about service inspection failure while reclaiming a known runtime", async () => {
-  const directory = projection("Svc002");
-  mocks.serviceCommand.mockRejectedValue(new Error("fixture service inspection unavailable"));
-  const output = await runDoctor(true);
-  expect(fs.existsSync(directory)).toBe(false);
-  expect(output).toContain(`Removed abandoned updater runtime: ${directory}`);
-  expect(output).toContain("Could not inspect the managed service temporary directory");
-  expect(output).toContain("fixture service inspection unavailable");
-});
 
 it("Doctor does not search unrelated checkout ancestors", async () => {
   const original = packageRoot;
@@ -180,46 +158,104 @@ it("Doctor does not search unrelated checkout ancestors", async () => {
   expect(output).not.toContain(directory);
 });
 
-it("Doctor reclaims its marked projection when the source manifest is missing", async () => {
-  const directory = projection("Edit01");
-  fs.unlinkSync(path.join(packageRoot, "package.json"));
+it("Doctor scopes holders to each runtime and reports unknown custody once", async () => {
+  const held = projection("Held01");
+  const free = projection("Free01");
+  const warning = "Could not verify runtime custody for PID 4242: working directory is unavailable";
+  mocks.census.mockReturnValue({ pids: [4242], warnings: [warning] });
+  expect((await runDoctor(true)).split(warning)).toHaveLength(2);
+  expect(fs.existsSync(held)).toBe(true);
+  expect(fs.existsSync(free)).toBe(true);
+  mocks.note.mockClear();
+  mocks.census.mockImplementation((directory) => ({ pids: directory === held ? [4243] : [] }));
   const output = await runDoctor(true);
-  expect(fs.existsSync(directory)).toBe(false);
-  expect(output).toContain(`Removed abandoned updater runtime: ${directory}`);
+  expect(fs.existsSync(held)).toBe(true);
+  expect(fs.existsSync(free)).toBe(false);
+  expect(output).toContain(`Removed abandoned updater runtime: ${free}`);
 });
 
-it("Doctor preserves a runtime still registered by its creator", async () => {
-  const { registerRetainedUpdateRuntime } = await import("../infra/temp-artifact-cleanup.js");
-  const active = projection("Live01");
-  const release = registerRetainedUpdateRuntime(active);
-  try {
-    const output = await runDoctor(true);
-    expect(fs.existsSync(active)).toBe(true);
-    expect(output).toContain(
-      `Runtime retained at ${active}: the creating update still owns this runtime`,
-    );
-  } finally {
-    release();
-  }
+it("Doctor reclaims an abandoned runtime despite unrelated helpers with unreadable cwd", async () => {
+  const held = projection("Held01");
+  const free = projection("Free01");
+  const actual = await vi.importActual<typeof import("../infra/openclaw-process-census.js")>(
+    "../infra/openclaw-process-census.js",
+  );
+  mocks.census.mockImplementation(actual.inspectOtherOpenClawProcesses);
+  mockProcessPlatform("linux");
+  vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(false);
+  vi.spyOn(processGroups, "readProcessGroupMembers").mockImplementation(function* () {
+    for (const [pid, argv] of [
+      [process.pid, ["openclaw-doctor"]],
+      [4242, ["/usr/bin/gpg-agent", "--supervised"]],
+      [4243, ["/usr/bin/fusermount3", "-o", "subtype=portal"]],
+      [4244, ["/bin/sleep", "600"]],
+    ] as const) {
+      yield { pid, pgid: process.pid, state: "S", command: { ppid: 0, argv: [...argv] } };
+    }
+  });
+  vi.spyOn(processArgv, "readProcessWorkingDirectories").mockReturnValue(
+    new Map([
+      [process.pid, parent],
+      [4244, held],
+    ]),
+  );
+  const output = await runDoctor(true);
+  expect(fs.existsSync(free)).toBe(false);
+  expect(fs.existsSync(held)).toBe(true);
+  expect(output).toContain(`Removed abandoned updater runtime: ${free}`);
+  expect(output).toContain("PIDs: 4244");
+  expect(output).not.toContain("4242");
+  expect(output).not.toContain("4243");
+});
+
+it("Doctor reclaims an npm-prefix runtime and releases its activation journal hardlink", async () => {
+  const installed = path.join(parent, "prefix/lib/node_modules/openclaw");
+  fs.mkdirSync(path.dirname(installed), { recursive: true });
+  fs.renameSync(packageRoot, installed);
+  packageRoot = installed;
+  mocks.packageRoots.mockReturnValue([packageRoot]);
+  const abandoned = projection("Npm001", path.join(parent, "prefix/lib"));
+  const journal = resolvePackageActivationJournalPath(resolvePackageActivationAnchor(packageRoot));
+  fs.mkdirSync(path.dirname(journal), { mode: 0o700 });
+  fs.writeFileSync(journal, "activation recovery evidence", { mode: 0o600 });
+  const retainedJournal = projectedPath(abandoned, journal);
+  fs.mkdirSync(path.dirname(retainedJournal), { recursive: true });
+  fs.linkSync(journal, retainedJournal);
+  expect(fs.statSync(journal).nlink).toBe(2);
+  expect(await runDoctor(false)).toContain(`Runtime retained at ${abandoned}:`);
+  expect(fs.statSync(journal).nlink).toBe(2);
+  expect(await runDoctor(true)).toContain(`Removed abandoned updater runtime: ${abandoned}`);
+  expect(fs.existsSync(abandoned)).toBe(false);
+  expect(fs.statSync(journal).nlink).toBe(1);
+  expect(fs.readFileSync(journal, "utf8")).toBe("activation recovery evidence");
 });
 
 it.each([
-  { reason: "Doctor does not hold Gateway maintenance", maintenance: false, census: { pids: [] } },
-  { reason: "PIDs: 4242", maintenance: true, census: { pids: [4242] } },
-  {
-    reason: "fixture census unavailable",
-    maintenance: true,
-    census: { error: "fixture census unavailable" },
+  ["Doctor does not hold Gateway maintenance", false, { pids: [] }, false],
+  ["PIDs: 4242", true, { pids: [4242] }, false],
+  ["fixture census unavailable", true, { error: "fixture census unavailable" }, false],
+  ["the creating update still owns this runtime", true, { pids: [] }, true],
+] as const)(
+  "Doctor preserves a projection when %s",
+  async (reason, maintenance, census, creator) => {
+    const directory = projection("Old002");
+    mocks.census.mockReturnValue("error" in census ? census : { pids: [...census.pids] });
+    const { registerRetainedUpdateRuntime } = await import("../infra/temp-artifact-cleanup.js");
+    const release = creator ? registerRetainedUpdateRuntime(directory) : undefined;
+    try {
+      const output = await runDoctor(true, maintenance);
+      expect(fs.existsSync(directory)).toBe(true);
+      expect(output).toContain(`Runtime retained at ${directory}:`);
+      expect(output).toContain(reason);
+      if (creator) {
+        expect(output).toContain(`Runtime retained at ${directory}: ${reason}`);
+      }
+      expect(output).not.toContain("Removed abandoned updater runtime");
+    } finally {
+      release?.();
+    }
   },
-])("Doctor preserves a projection when $reason", async ({ reason, maintenance, census }) => {
-  const directory = projection("Old002");
-  mocks.census.mockReturnValue(census);
-  const output = await runDoctor(true, maintenance);
-  expect(fs.existsSync(directory)).toBe(true);
-  expect(output).toContain(`Runtime retained at ${directory}:`);
-  expect(output).toContain(reason);
-  expect(output).not.toContain("Removed abandoned updater runtime");
-});
+);
 
 it("Doctor preserves unmarked directories and symbolic-link targets", async () => {
   const foreign = path.join(parent, "openclaw-update-runtime-Odd001");

@@ -26,6 +26,7 @@ export const PLUGIN_NPM_RELEASE_AUTHORITY_PATHS = [
   ".github/workflows/plugin-npm-release.yml",
   "scripts/generate-npm-package-lock.mjs",
   "scripts/generate-npm-package-lock.mts",
+  "scripts/lib/npm-lock-package-selection.mjs",
   "scripts/lib/actions-artifact-archive.mjs",
   "scripts/lib/local-check-runtime.mts",
   "scripts/lib/npm-json-output.mts",

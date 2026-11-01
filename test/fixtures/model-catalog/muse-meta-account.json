@@ -1,0 +1,111 @@
+{
+  "providerId": "meta",
+  "profileId": "sanitized",
+  "source": "providerCatalog",
+  "models": [
+    {
+      "modelId": "muse-wonder-1.0",
+      "displayLabel": "muse-wonder-1.0",
+      "providerId": "meta",
+      "profileId": "sanitized",
+      "releaseDate": "2026-10-12",
+      "description": null,
+      "contextLimit": 1007997,
+      "outputLimit": 128000,
+      "cost": null,
+      "isActive": false,
+      "isDefault": false
+    },
+    {
+      "modelId": "muse-wonder-1.0-contributor",
+      "displayLabel": "muse-wonder-1.0-contributor",
+      "providerId": "meta",
+      "profileId": "sanitized",
+      "releaseDate": "2026-10-12",
+      "description": "Your content, including inter-session messages, may be used for product improvement.",
+      "contextLimit": 1007997,
+      "outputLimit": 128000,
+      "cost": null,
+      "isActive": false,
+      "isDefault": true
+    },
+    {
+      "modelId": "muse-wonder-full-1.0-contributor",
+      "displayLabel": "muse-wonder-1.0-contributor",
+      "providerId": "meta",
+      "profileId": "sanitized",
+      "releaseDate": "2026-10-12",
+      "description": "Your content, including inter-session messages, may be used for product improvement.",
+      "contextLimit": 1007997,
+      "outputLimit": 128000,
+      "cost": null,
+      "isActive": false,
+      "isDefault": false
+    },
+    {
+      "modelId": "muse-wonder-full-1.0",
+      "displayLabel": "muse-wonder-full-1.0",
+      "providerId": "meta",
+      "profileId": "sanitized",
+      "releaseDate": "2026-10-12",
+      "description": null,
+      "contextLimit": 1007997,
+      "outputLimit": 128000,
+      "cost": null,
+      "isActive": false,
+      "isDefault": false
+    },
+    {
+      "modelId": "muse-spark-1.3",
+      "displayLabel": "muse-spark-1.3",
+      "providerId": "meta",
+      "profileId": "sanitized",
+      "releaseDate": "2026-09-02",
+      "description": null,
+      "contextLimit": 1007997,
+      "outputLimit": 128000,
+      "cost": null,
+      "isActive": false,
+      "isDefault": false
+    },
+    {
+      "modelId": "muse-spark-1.3-contributor",
+      "displayLabel": "muse-spark-1.3-contributor",
+      "providerId": "meta",
+      "profileId": "sanitized",
+      "releaseDate": "2026-09-02",
+      "description": "Your content, including inter-session messages, may be used for product improvement.",
+      "contextLimit": 1007997,
+      "outputLimit": 128000,
+      "cost": null,
+      "isActive": false,
+      "isDefault": false
+    },
+    {
+      "modelId": "muse-spark-1.2",
+      "displayLabel": "muse-spark-1.2",
+      "providerId": "meta",
+      "profileId": "sanitized",
+      "releaseDate": "2026-08-05",
+      "description": null,
+      "contextLimit": 1007997,
+      "outputLimit": 128000,
+      "cost": null,
+      "isActive": false,
+      "isDefault": false
+    },
+    {
+      "modelId": "muse-spark-1.2-contributor",
+      "displayLabel": "muse-spark-1.2-contributor",
+      "providerId": "meta",
+      "profileId": "sanitized",
+      "releaseDate": "2026-08-05",
+      "description": "Your content, including inter-session messages, may be used for product improvement.",
+      "contextLimit": 1007997,
+      "outputLimit": 128000,
+      "cost": null,
+      "isActive": false,
+      "isDefault": false
+    }
+  ]
+}

@@ -7,6 +7,9 @@
     "configRepair": true,
     "stateMigrations": [
       {
+        "id": "discord-retired-state"
+      },
+      {
         "id": "discord-legacy-state"
       }
     ]
@@ -41,8 +44,5 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
-  },
-  "controlUi": {
-    "entry": "dist/control-ui/2afbdab1d3aa65a789d8a3eba666f4b1ec5df07073538fe30d6cf32093a1fb2d/index.js"
   }
 }

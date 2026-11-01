@@ -12,22 +12,7 @@ extension AppState {
         case remoteToken = "gateway.remote.token"
 
         var remoteKey: String? {
-            switch self {
-            case .mode:
-                nil
-            case .remoteTransport:
-                "transport"
-            case .remoteUrl:
-                "url"
-            case .remoteTarget:
-                "sshTarget"
-            case .remoteIdentity:
-                "sshIdentity"
-            case .remoteHostKeyPolicy:
-                "sshHostKeyPolicy"
-            case .remoteToken:
-                "token"
-            }
+            self == .mode ? nil : self.rawValue.components(separatedBy: ".").last
         }
 
         var displayName: String {
@@ -54,20 +39,6 @@ extension AppState {
         let fields: [GatewayConfigField]
         let fieldNames: [String]
         let message: String
-    }
-
-    enum GatewayConfigValue: Equatable {
-        case missing
-        case json(Data)
-    }
-
-    struct GatewayConfigSnapshot {
-        static let empty = GatewayConfigSnapshot(values: [:])
-        let values: [GatewayConfigField: GatewayConfigValue]
-
-        subscript(field: GatewayConfigField) -> GatewayConfigValue {
-            self.values[field] ?? .missing
-        }
     }
 
     struct RemoteGatewayConfigDraft {

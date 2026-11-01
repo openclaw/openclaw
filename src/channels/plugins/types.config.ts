@@ -21,20 +21,17 @@ export type ChannelConfigRuntimeIssue = {
   code?: string;
 } & Record<string, unknown>;
 
-/** Minimal safeParse result shape accepted from channel-owned validators. */
-export type ChannelConfigRuntimeParseResult =
-  | {
-      success: true;
-      data: unknown;
-    }
-  | {
-      success: false;
-      issues: ChannelConfigRuntimeIssue[];
-    };
-
 /** Runtime validator contract paired with the JSON Schema config surface. */
 export type ChannelConfigRuntimeSchema = {
-  safeParse: (value: unknown) => ChannelConfigRuntimeParseResult;
+  safeParse: (value: unknown) =>
+    | {
+        success: true;
+        data: unknown;
+      }
+    | {
+        success: false;
+        issues: ChannelConfigRuntimeIssue[];
+      };
 };
 
 /** Complete channel config schema description exposed to host tooling. */

@@ -1,100 +1,79 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { createJiti } from "jiti";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildPluginLoaderJitiOptions, createPluginLoaderModuleCacheKey } from "./sdk-alias.js";
 
+const temp = useAutoCleanupTempDirTracker(afterEach);
+
 describe("buildPluginLoaderJitiOptions alias normalization", () => {
-  it("keeps plugin loader module cache keys stable across alias insertion order", () => {
-    expect(
-      createPluginLoaderModuleCacheKey({
-        tryNative: true,
-        aliasMap: {
-          zeta: "/repo/zeta.js",
-          alpha: "/repo/alpha.js",
-        },
+  it("redirects Windows source paths into the captured generation", () => {
+    const capturedRoot = temp.make("plugin-windows-source-alias-");
+    const captured = path.join(capturedRoot, "lazy.ts");
+    fs.writeFileSync(captured, "export const value: string = 'captured';");
+    const nestedRoot = path.join(capturedRoot, "nested-override");
+    fs.mkdirSync(nestedRoot);
+    const nested = path.join(nestedRoot, "lazy.ts");
+    fs.writeFileSync(nested, "export const value: string = 'nested';");
+    const loader = createJiti(import.meta.url, {
+      ...buildPluginLoaderJitiOptions({
+        [String.raw`C:\plugin\source`]: capturedRoot,
+        [String.raw`C:\plugin\source\nested`]: nestedRoot,
       }),
-    ).toBe(
+      fsCache: false,
+      moduleCache: false,
+      tryNative: false,
+    });
+
+    expect(fileURLToPath(loader.esmResolve(String.raw`C:\plugin\source\lazy.ts`))).toBe(captured);
+    expect(fileURLToPath(loader.esmResolve(String.raw`C:\plugin\source\nested\lazy.ts`))).toBe(
+      nested,
+    );
+  });
+
+  it("keeps plugin loader module cache keys stable across alias insertion order", () => {
+    const aliasMap = { zeta: "/repo/zeta.js", alpha: "/repo/alpha.js" };
+    expect(createPluginLoaderModuleCacheKey({ tryNative: true, aliasMap })).toBe(
       createPluginLoaderModuleCacheKey({
         tryNative: true,
-        aliasMap: {
-          alpha: "/repo/alpha.js",
-          zeta: "/repo/zeta.js",
-        },
+        aliasMap: Object.fromEntries(Object.entries(aliasMap).toReversed()),
       }),
     );
   });
 
-  it("pre-normalizes and marks alias maps for source transforms", () => {
+  it.each<{ aliasMap: Record<string, string>; expected: Record<string, string> }>([
+    {
+      aliasMap: { alpha: "/repo/alpha", beta: "alpha/sub" },
+      expected: { beta: "/repo/alpha/sub" },
+    },
+    {
+      aliasMap: { alpha: "/repo/alpha", gamma: "beta/gamma", beta: "alpha/beta" },
+      expected: { gamma: "/repo/alpha/beta/gamma" },
+    },
+    {
+      aliasMap: { beta: "C:/repo/beta", "C:": "/wrong", alpha: "beta/alpha" },
+      expected: { beta: "C:/repo/beta", alpha: "C:/repo/beta/alpha" },
+    },
+  ])("normalizes and caches source-transform targets: $expected", ({ aliasMap, expected }) => {
     const marker = Symbol.for("pathe:normalizedAlias");
-    const aliasMap = {
-      "openclaw/plugin-sdk/core": "/repo/src/plugin-sdk/core.ts",
-      "@openclaw/plugin-sdk/core": "/repo/src/plugin-sdk/core.ts",
-    };
-
-    const first = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
-    const second = buildPluginLoaderJitiOptions({ ...aliasMap }).alias as Record<string, string>;
-
-    expect(second).toBe(first);
-    expect((first as Record<symbol, unknown>)[marker]).toBe(true);
-    expect(Object.prototype.propertyIsEnumerable.call(first, marker)).toBe(false);
-  });
-
-  it("applies source-transform alias-target normalization before caching", () => {
-    const aliasMap = {
-      alpha: "/repo/alpha",
-      beta: "alpha/sub",
-    };
-
-    const alias = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
-
+    const alias = expectDefined(buildPluginLoaderJitiOptions(aliasMap).alias, "normalized alias");
     expect(alias).not.toBe(aliasMap);
-    expect(alias.beta).toBe("/repo/alpha/sub");
-  });
-
-  it("follows chained source-transform alias targets", () => {
-    const aliasMap = {
-      alpha: "/repo/alpha",
-      gamma: "beta/gamma",
-      beta: "alpha/beta",
-    };
-
-    const alias = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
-
-    expect(alias.gamma).toBe("/repo/alpha/beta/gamma");
-  });
-
-  it("does not rewrite concrete Windows drive alias targets", () => {
-    const aliasMap = {
-      "C:": "/wrong",
-      beta: "C:/repo/beta",
-    };
-
-    const alias = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
-
-    expect(alias.beta).toBe("C:/repo/beta");
-  });
-
-  it("stops chained source-transform alias rewrites after reaching a Windows drive target", () => {
-    const aliasMap = {
-      beta: "C:/repo/beta",
-      "C:": "/wrong",
-      alpha: "beta/alpha",
-    };
-
-    const alias = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
-
-    expect(alias.alpha).toBe("C:/repo/beta/alpha");
+    expect(alias).toMatchObject(expected);
+    expect(buildPluginLoaderJitiOptions({ ...aliasMap }).alias).toBe(alias);
+    expect(Reflect.get(alias, marker)).toBe(true);
+    expect(Object.prototype.propertyIsEnumerable.call(alias, marker)).toBe(false);
   });
 
   it("bounds cyclic source-transform alias targets", () => {
-    const aliasMap = {
+    const alias = buildPluginLoaderJitiOptions({
       alpha: "beta/a",
       beta: "alpha/b",
       gamma: "alpha/g",
-    };
-
-    const alias = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
-
-    expect(expectDefined(alias.gamma, "alias.gamma test invariant").length).toBeLessThan(32);
+    }).alias;
+    expect(expectDefined(alias?.gamma, "alias.gamma test invariant").length).toBeLessThan(32);
   });
 
   it("does not attach an empty alias map", () => {

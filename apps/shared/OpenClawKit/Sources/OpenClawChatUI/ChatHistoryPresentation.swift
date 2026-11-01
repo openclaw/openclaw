@@ -10,7 +10,6 @@ public enum OpenClawChatHistoryPresentation {
     private struct MessageEntry {
         var message: OpenClawChatMessage
         var text: String
-        var runID: String?
         var isMessageToolMirror: Bool
     }
 
@@ -24,10 +23,40 @@ public enum OpenClawChatHistoryPresentation {
         inputConsumptions: [OpenClawChatHistoryPayload.InputConsumption]? = nil) -> String?
     {
         let entries = rawMessages.compactMap(Self.decodeMessage)
+        return Self.replyEntry(
+            from: entries,
+            runID: runID,
+            submittedText: submittedText,
+            submittedAtMs: submittedAtMs,
+            inputConsumptions: inputConsumptions,
+            isTerminal: Self.isTerminalAssistant)?.text
+    }
+
+    public nonisolated static func completedReply(
+        from rawMessages: [OpenClawKit.AnyCodable],
+        runID: String,
+        inputConsumptions: [OpenClawChatHistoryPayload.InputConsumption]?) -> OpenClawChatMessage?
+    {
+        self.replyEntry(
+            from: rawMessages.compactMap(self.decodeMessage),
+            runID: runID,
+            inputConsumptions: inputConsumptions,
+            isTerminal: { $0.message.isCompletedReply && !$0.text.isEmpty })?.message
+    }
+
+    private nonisolated static func replyEntry(
+        from entries: [MessageEntry],
+        runID: String,
+        submittedText: String? = nil,
+        submittedAtMs: Int64? = nil,
+        inputConsumptions: [OpenClawChatHistoryPayload.InputConsumption]?,
+        isTerminal: (MessageEntry) -> Bool) -> MessageEntry?
+    {
         if let directReply = entries.last(where: {
-            Self.isTerminalAssistant($0) && ($0.runID ?? $0.message.idempotencyKey) == runID
+            isTerminal($0) &&
+                ($0.message.transcriptRunID ?? $0.message.idempotencyKey ?? $0.message.streamFallback?.runId) == runID
         }) {
-            return directReply.text
+            return directReply
         }
 
         let consumedEventID = inputConsumptions?.first { $0.runId == runID }?.consumedByEventId
@@ -59,10 +88,10 @@ public enum OpenClawChatHistoryPresentation {
             // Attachment-only user rows still bound the turn even when previews hide them.
             guard entry.message.role.lowercased() != "user" else { return nil }
             // A collected input may execute under a fresh run ID; only its receipt permits that.
-            if consumedEventID == nil, let candidateRunID = entry.runID, candidateRunID != runID {
+            if consumedEventID == nil, let candidateRunID = entry.message.transcriptRunID, candidateRunID != runID {
                 return nil
             }
-            if Self.isTerminalAssistant(entry) { return entry.text }
+            if isTerminal(entry) { return entry }
         }
         return nil
     }
@@ -103,7 +132,6 @@ public enum OpenClawChatHistoryPresentation {
         return MessageEntry(
             message: message,
             text: text,
-            runID: fields?["__openclaw"]?.dictionaryValue?["runId"]?.stringValue,
             isMessageToolMirror: fields?["openclawMessageToolMirror"]?.dictionaryValue != nil)
     }
 
@@ -125,10 +153,7 @@ public enum OpenClawChatHistoryPresentation {
     private nonisolated static func timestampMs(_ timestamp: Double?) -> Int64? {
         guard let timestamp, timestamp.isFinite, timestamp >= 0 else { return nil }
         let milliseconds = timestamp > 100_000_000_000 ? timestamp : timestamp * 1000
-        guard milliseconds.isFinite,
-              milliseconds >= 0,
-              milliseconds <= 32_503_680_000_000
-        else { return nil }
+        guard milliseconds <= 32_503_680_000_000 else { return nil }
         return Int64(milliseconds)
     }
 }
