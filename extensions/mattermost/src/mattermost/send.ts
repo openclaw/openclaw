@@ -26,6 +26,7 @@ import {
   fetchMattermostUserTeams,
   parseMattermostApiStatus,
   uploadMattermostFile,
+  type MattermostPost,
   type MattermostUser,
 } from "./client.js";
 import {
@@ -45,6 +46,8 @@ type MattermostSendOpts = Pick<
   baseUrl?: string;
   accountId?: string;
   mediaUrl?: string;
+  /** Further attachments for the same post; Mattermost accepts several `file_ids` per post. */
+  mediaUrls?: readonly string[];
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   workspaceDir?: string;
@@ -65,6 +68,8 @@ export type MattermostSendResult = {
   content: string;
 };
 
+// Mattermost's per-post attachment limit (`FileSettings.MaxFileCount` ships as 10).
+const MATTERMOST_MAX_FILES_PER_POST = 10;
 const MATTERMOST_BOT_USER_CACHE_MAX_ENTRIES = 64;
 const MATTERMOST_TARGET_CACHE_MAX_ENTRIES = 1024;
 const botUserCache = new Map<string, MattermostUser>();
@@ -210,8 +215,14 @@ export async function sendMessageMattermost(
   let message = normalizeOptionalString(text) ?? "";
   let fileIds: string[] | undefined;
   let uploadError: Error | undefined;
-  const mediaUrl = opts.mediaUrl?.trim();
-  if (mediaUrl) {
+  const mediaUrls = [
+    ...new Set(
+      [opts.mediaUrl, ...(opts.mediaUrls ?? [])]
+        .map((entry) => entry?.trim())
+        .filter((entry): entry is string => Boolean(entry)),
+    ),
+  ];
+  for (const mediaUrl of mediaUrls) {
     try {
       const media = await loadOutboundMediaFromUrl(mediaUrl, {
         maxBytes: mediaMaxBytes,
@@ -225,7 +236,7 @@ export async function sendMessageMattermost(
         fileName: media.fileName ?? `upload${extensionForMime(media.contentType) ?? ""}`,
         contentType: media.contentType,
       });
-      fileIds = [fileInfo.id];
+      fileIds = [...(fileIds ?? []), fileInfo.id];
     } catch (err) {
       client.assertRequestCurrent?.();
       uploadError = err instanceof Error ? err : new Error(String(err));
@@ -271,25 +282,63 @@ export async function sendMessageMattermost(
     client.assertRequestCurrent?.();
     throw error;
   }
+  // Mattermost caps attachments per post; overflow continues in follow-up posts in the same thread.
+  const fileBatches: string[][] = [];
+  for (let index = 0; index < (fileIds?.length ?? 0); index += MATTERMOST_MAX_FILES_PER_POST) {
+    fileBatches.push((fileIds ?? []).slice(index, index + MATTERMOST_MAX_FILES_PER_POST));
+  }
   const post = await createMattermostPost(client, {
     channelId,
     message,
     rootId: opts.replyToId,
-    fileIds,
+    fileIds: fileBatches[0],
     props,
   });
+  const delivered: MattermostPost[] = [post];
+  const buildReceipt = () =>
+    createMessageReceiptFromOutboundResults({
+      results: delivered.map((entry) => ({
+        channel: "mattermost",
+        messageId: entry.id,
+        channelId,
+      })),
+      kind: fileIds?.length ? "media" : opts.buttons?.length || props ? "card" : "text",
+      ...(opts.replyToId ? { replyToId: opts.replyToId } : {}),
+    });
+  const content = post.message ?? message;
+  // Overflow posts stay with their caption: in the caller's thread, or threaded
+  // under the first post when the send was top-level.
+  const overflowRootId = opts.replyToId ?? post.id;
+  for (const batch of fileBatches.slice(1)) {
+    try {
+      client.assertRequestCurrent?.();
+      delivered.push(
+        await createMattermostPost(client, {
+          channelId,
+          message: "",
+          rootId: overflowRootId,
+          fileIds: batch,
+        }),
+      );
+    } catch (error: unknown) {
+      // Earlier posts are already visible; report them so the caller settles
+      // what landed instead of resending the whole batch.
+      const receipt = buildReceipt();
+      throw createChannelPartialDeliveryError(error, {
+        messageIds: listMessageReceiptPlatformIds(receipt),
+        receipt,
+        visibleReplySent: true,
+        content,
+      });
+    }
+  }
 
-  const messageId = post.id;
-  const receipt = createMessageReceiptFromOutboundResults({
-    results: [{ channel: "mattermost", messageId, channelId }],
-    kind: fileIds?.length ? "media" : opts.buttons?.length || props ? "card" : "text",
-    ...(opts.replyToId ? { replyToId: opts.replyToId } : {}),
-  });
+  const receipt = buildReceipt();
   const result: MattermostSendResult = {
-    messageId,
+    messageId: post.id,
     channelId,
     receipt,
-    content: post.message ?? message,
+    content,
   };
   try {
     // Core must learn the provider identity before local bookkeeping can fail;

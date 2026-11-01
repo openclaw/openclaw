@@ -8,14 +8,17 @@ import {
   createMattermostClient,
   fetchMattermostChannel,
   fetchMattermostChannelPosts,
-  type MattermostPost,
+  type MattermostClient,
 } from "./client.js";
+import { normalizeMattermostMessages } from "./post-list.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
-type ReadContext = Pick<
+export type MattermostReadContext = Pick<
   ChannelMessageActionContext,
-  "conversationReadOrigin" | "requesterAccountId" | "toolContext"
+  "conversationReadOrigin" | "requesterAccountId" | "toolContext" | "assertDirectAdapterHandoff"
 >;
+
+type MattermostCurrentConversation = { kind: "channel"; id: string } | { kind: "user"; id: string };
 
 function parseMattermostChannelTarget(rawTarget: string): string | undefined {
   const normalized = normalizeMattermostMessagingTarget(rawTarget);
@@ -26,23 +29,38 @@ function parseMattermostChannelTarget(rawTarget: string): string | undefined {
   return trimmed && !trimmed.includes(":") ? trimmed : undefined;
 }
 
+/**
+ * The conversation the runner vouches for. Mattermost DMs route outbound messages
+ * via `user:<peerId>`, while the trusted native channel ID remains the exact
+ * conversation identity, so the channel ID wins when both are present.
+ */
+export function resolveCurrentMattermostConversation(
+  context: Pick<MattermostReadContext, "toolContext">,
+): MattermostCurrentConversation | undefined {
+  const nativeChannelId = context.toolContext?.currentChannelId?.trim();
+  if (nativeChannelId) {
+    const channelId = parseMattermostChannelTarget(nativeChannelId);
+    return channelId ? { kind: "channel", id: channelId } : undefined;
+  }
+  const messagingTarget = context.toolContext?.currentMessagingTarget?.trim();
+  if (!messagingTarget) {
+    return undefined;
+  }
+  const normalized = normalizeMattermostMessagingTarget(messagingTarget);
+  if (normalized?.startsWith("user:")) {
+    const id = normalized.slice("user:".length).trim();
+    return id ? { kind: "user", id } : undefined;
+  }
+  const channelId = parseMattermostChannelTarget(messagingTarget);
+  return channelId ? { kind: "channel", id: channelId } : undefined;
+}
+
 function isCurrentMattermostReadTarget(params: {
   channelId: string;
-  context: ReadContext;
+  context: MattermostReadContext;
 }): boolean {
-  const toolContext = params.context.toolContext;
-  const nativeChannelId = toolContext?.currentChannelId;
-  if (nativeChannelId?.trim()) {
-    // Mattermost DMs route outbound messages via `user:<peerId>`, while the
-    // trusted native channel ID remains the exact conversation identity.
-    return parseMattermostChannelTarget(nativeChannelId) === params.channelId;
-  }
-  const messagingTarget = toolContext?.currentMessagingTarget;
-  return (
-    messagingTarget !== undefined &&
-    Boolean(messagingTarget.trim()) &&
-    parseMattermostChannelTarget(messagingTarget) === params.channelId
-  );
+  const current = resolveCurrentMattermostConversation(params.context);
+  return current?.kind === "channel" && current.id === params.channelId;
 }
 
 function isConfiguredMattermostReadTarget(params: {
@@ -67,15 +85,12 @@ function isConfiguredMattermostReadTarget(params: {
   return groups?.[params.channelId] !== undefined || groups?.["*"] !== undefined;
 }
 
-export async function readMattermostMessages(params: {
+export function createMattermostReadClient(params: {
   cfg: OpenClawConfig;
-  channelId: string;
-  limit?: number;
-  before?: string;
-  after?: string;
   accountId?: string | null;
-  context: ReadContext;
-}): Promise<{ messages: MattermostPost[]; hasMore: boolean }> {
+  /** Host-owned caller authority, rechecked by the client before every request. */
+  assertRequestCurrent?: () => void;
+}): { account: ReturnType<typeof resolveMattermostAccount>; client: MattermostClient } {
   const account = resolveMattermostAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.enabled) {
     throw new Error(`Mattermost account "${account.accountId}" is disabled`);
@@ -85,38 +100,90 @@ export async function readMattermostMessages(params: {
   if (!baseUrl || !botToken) {
     throw new Error("Mattermost botToken/baseUrl missing.");
   }
-
   const client = createMattermostClient({
     baseUrl,
     botToken,
     allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
+    assertRequestCurrent: params.assertRequestCurrent,
   });
-  if (params.context.conversationReadOrigin !== "direct-operator") {
-    const requesterAccountId = params.context.requesterAccountId?.trim();
-    const sameProvider =
-      normalizeLowercaseStringOrEmpty(params.context.toolContext?.currentChannelProvider) ===
-      "mattermost";
-    const sameAccount =
-      requesterAccountId &&
-      normalizeAccountId(requesterAccountId) === normalizeAccountId(account.accountId);
-    if (!sameProvider || !sameAccount) {
-      throw new Error("Mattermost delegated reads require the current Mattermost account.");
-    }
+  return { account, client };
+}
 
-    if (!isCurrentMattermostReadTarget(params)) {
-      const channel = await fetchMattermostChannel(client, params.channelId);
-      if (
-        (channel.type !== "O" && channel.type !== "P") ||
-        !isConfiguredMattermostReadTarget({ cfg: params.cfg, account, channelId: params.channelId })
-      ) {
-        throw new Error("Mattermost read target channel is not allowed.");
-      }
-    }
+/**
+ * Delegated lookups answer only for the Mattermost account that owns the current
+ * conversation; a run on another provider or account gets nothing, not even a
+ * provider request.
+ */
+export function assertMattermostDelegatedAccount(params: {
+  account: ReturnType<typeof resolveMattermostAccount>;
+  context: MattermostReadContext;
+}): void {
+  if (params.context.conversationReadOrigin === "direct-operator") {
+    return;
   }
+  const requesterAccountId = params.context.requesterAccountId?.trim();
+  const sameProvider =
+    normalizeLowercaseStringOrEmpty(params.context.toolContext?.currentChannelProvider) ===
+    "mattermost";
+  const sameAccount =
+    requesterAccountId &&
+    normalizeAccountId(requesterAccountId) === normalizeAccountId(params.account.accountId);
+  if (!sameProvider || !sameAccount) {
+    throw new Error("Mattermost delegated reads require the current Mattermost account.");
+  }
+}
 
-  return await fetchMattermostChannelPosts(client, params.channelId, {
+/**
+ * Delegated reads stay inside the current conversation unless the channel is
+ * configured under `groups` (or the group policy is open); operators read anywhere
+ * Mattermost lets the bot read.
+ */
+export async function authorizeMattermostChannelRead(params: {
+  cfg: OpenClawConfig;
+  account: ReturnType<typeof resolveMattermostAccount>;
+  client: MattermostClient;
+  channelId: string;
+  context: MattermostReadContext;
+}): Promise<void> {
+  if (params.context.conversationReadOrigin === "direct-operator") {
+    return;
+  }
+  assertMattermostDelegatedAccount(params);
+  if (isCurrentMattermostReadTarget(params)) {
+    return;
+  }
+  // Config decides first so a denied channel never reaches the provider.
+  if (!isConfiguredMattermostReadTarget(params)) {
+    throw new Error("Mattermost read target channel is not allowed.");
+  }
+  const channel = await fetchMattermostChannel(params.client, params.channelId);
+  if (channel.type !== "O" && channel.type !== "P") {
+    throw new Error("Mattermost read target channel is not allowed.");
+  }
+}
+
+export async function readMattermostMessages(params: {
+  cfg: OpenClawConfig;
+  channelId: string;
+  limit?: number;
+  before?: string;
+  after?: string;
+  accountId?: string | null;
+  context: MattermostReadContext;
+}): Promise<{ messages: Record<string, unknown>[]; hasMore: boolean }> {
+  const { account, client } = createMattermostReadClient({
+    ...params,
+    assertRequestCurrent: params.context.assertDirectAdapterHandoff,
+  });
+  await authorizeMattermostChannelRead({ ...params, account, client });
+
+  const page = await fetchMattermostChannelPosts(client, params.channelId, {
     limit: params.limit,
     before: params.before,
     after: params.after,
   });
+  return {
+    messages: await normalizeMattermostMessages(client, page.messages),
+    hasMore: page.hasMore,
+  };
 }
