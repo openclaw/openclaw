@@ -296,8 +296,12 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     position: absolute;
     inset: 0 0 auto;
     height: 72px;
-    /* Solid through the title, so text passing beneath never crowds it. */
-    background: linear-gradient(var(--bg-content, var(--bg)) 62%, transparent);
+    /* Solid to the controls' bottom edge, so content passing beneath never crowds
+       the title or reads as a line under the header. */
+    background: linear-gradient(
+      var(--bg-content, var(--bg)) calc(8px + var(--floating-header-control)),
+      transparent
+    );
   }
 
   & .topnav-shell {
