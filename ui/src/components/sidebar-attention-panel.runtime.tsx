@@ -285,17 +285,9 @@ export function SidebarAttentionPanel(
   const visibleEntries = createMemo(() =>
     props.entries.filter((entry) => sidebarInboxEntryMatchesTab(entry, props.selectedTab)),
   );
-  const visibleDismissals = createMemo(() => {
-    const dismissals = (entries: readonly SidebarInboxEntry[]) =>
-      entries.flatMap((entry) => (entry.dismissal ? [entry.dismissal] : []));
-    const entries = visibleEntries();
-    if (props.selectedTab !== "system") {
-      return dismissals(entries);
-    }
-    // Automations listed under System clear in their own pass, once nothing else is dismissible.
-    const system = dismissals(entries.filter((entry) => entry.category === "system"));
-    return system.length > 0 ? system : dismissals(entries);
-  });
+  const visibleDismissals = createMemo(() =>
+    visibleEntries().flatMap((entry) => (entry.dismissal ? [entry.dismissal] : [])),
+  );
   const visibleMentions = createMemo(() =>
     visibleEntries().flatMap((entry) => (entry.type === "mention" ? [entry.mention.id] : [])),
   );

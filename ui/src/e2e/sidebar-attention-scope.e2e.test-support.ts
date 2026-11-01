@@ -260,11 +260,8 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await expectAutomations(0, 1);
     await captureProof("11-mobile-inbox-writer-agent.png", true);
 
-    // System clears its own alerts first; automations go in the next pass.
     await sidebar.getByRole("button", { name: "Dismiss shown" }).click();
     await expectCount(sidebarUpdate, 0);
-    await expectAutomations(0, 1);
-    await sidebar.getByRole("button", { name: "Dismiss shown" }).click();
     await expectCount(automationRows, 0);
     await sidebar.getByRole("tab", { name: /All/ }).click();
     await expectCount(approvalRow, 1);

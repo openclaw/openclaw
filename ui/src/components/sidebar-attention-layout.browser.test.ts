@@ -397,7 +397,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     },
   );
 
-  it("clears System in two passes so automations keep their own Dismiss shown", () => {
+  it("clears everything shown under System in one press, automations included", () => {
     const automation: SidebarAttentionItem = {
       ...authWarning,
       category: "automations",
@@ -410,14 +410,10 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     const shell = mountPanel({ ...params, selectedTab: "system" });
 
     part(shell, "dismiss-shown").click();
-    expect(vi.mocked(params.onDismiss).mock.calls).toEqual([[authWarning.dismissal]]);
-    shell.remove();
-
-    vi.mocked(params.onDismiss).mockClear();
-    const remaining = inboxEntries([automation], []);
-    const next = mountPanel({ ...params, entries: remaining, selectedTab: "system" });
-    part(next, "dismiss-shown").click();
-    expect(vi.mocked(params.onDismiss).mock.calls).toEqual([[automation.dismissal]]);
+    expect(vi.mocked(params.onDismiss).mock.calls.flat()).toEqual(
+      expect.arrayContaining([authWarning.dismissal, automation.dismissal]),
+    );
+    expect(params.onDismiss).toHaveBeenCalledTimes(2);
   });
 
   it("gives every row the same marker and text column", () => {
