@@ -726,9 +726,10 @@ describe("google-interactions provider", () => {
       expected: { thinking_summaries: "auto" },
     },
   ])(
-    "maps $modelId reasoning=$reasoning into the request",
+    "maps $modelId reasoning=$reasoning and nucleus sampling into the request",
     async ({ modelId, reasoning, expected }) => {
       let requestBody: Record<string, unknown> | undefined;
+      const options = { apiKey: "test-api-key", reasoning, topP: 0.4 };
       vi.stubGlobal(
         "fetch",
         vi.fn(async (_url: string, init?: RequestInit) => {
@@ -748,10 +749,10 @@ describe("google-interactions provider", () => {
           thinkingLevelMap: { xhigh: "high", max: "high" },
         },
         basicContext,
-        { apiKey: "test-api-key", reasoning },
+        options,
       ).result();
 
-      expect(requestBody?.generation_config).toEqual(expected);
+      expect(requestBody?.generation_config).toEqual({ ...expected, top_p: 0.4 });
     },
   );
 });
