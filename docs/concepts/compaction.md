@@ -87,6 +87,10 @@ new tool results, against the full window even when proactive compaction is
 disabled. It stops an over-window submission and uses the existing safe recovery
 path. Native Codex and Claude CLI keep their own compaction policies.
 
+Scheduled turns in an existing session use the same built-in request checks.
+Their context totals update during requests and after completion even when the
+automation preserves the conversation's displayed model and billing snapshot.
+
 In the built-in runtime, native ChatGPT sign-in uses V2 compaction at normal
 request boundaries, including between completed tool rounds. It starts when the
 known or projected request occupancy reaches the smaller of the reserve-based
