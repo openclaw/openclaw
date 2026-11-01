@@ -354,6 +354,7 @@
 }
 
 .agent-chat__attachment-sources .agent-chat__attach-menu-option {
+  margin-block-start: 0;
   flex-direction: column;
   justify-content: center;
   gap: 4px;

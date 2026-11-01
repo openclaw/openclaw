@@ -90,6 +90,12 @@
   cursor: var(--cursor-action);
 }
 
+/* Windowed rows are absolute, so their gap comes from the virtualizer. */
+.picker-select__option + .picker-select__option:not(.picker-select__option--windowed),
+.multi-select__option + .multi-select__option {
+  margin-block-start: var(--menu-item-gap);
+}
+
 /* Navigation highlight and selection are separate fills drawn behind the row. A
    multi-select's aria-selected names its highlight: chosen values leave its list. */
 .picker-select__option::before,

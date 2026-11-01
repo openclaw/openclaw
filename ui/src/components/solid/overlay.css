@@ -302,6 +302,13 @@
   cursor: var(--cursor-action);
 }
 
+/* Adjacent fills stay apart. Submenu rows and groups sit inside wrappers of their own;
+   zero specificity lets a row's own margin win. */
+:where(.oc-menu-item, :has(> .oc-menu-item--submenu, > .oc-menu-item:last-child))
+  + :where(.oc-menu-item, :has(> .oc-menu-item:first-child):not(.oc-overlay)) {
+  margin-block-start: var(--menu-item-gap);
+}
+
 a.oc-menu-item[href] {
   cursor: pointer;
 }

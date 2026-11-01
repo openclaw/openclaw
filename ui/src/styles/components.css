@@ -1173,6 +1173,10 @@ select.settings-select:not([multiple]) {
         line-height: calc(1.25 / 0.875);
       }
 
+      & option + option {
+        margin-block-start: var(--menu-item-gap);
+      }
+
       & option:is(:hover, :focus-visible):not(:disabled) {
         outline: 0;
         background: var(--menu-hover);

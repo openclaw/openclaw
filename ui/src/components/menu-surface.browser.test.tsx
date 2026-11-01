@@ -541,6 +541,43 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       expect(channels("--surface-selected")).toBeLessThan(channels("--surface-selected-hover"));
     });
 
+    it("keeps the row gap between consecutive rows, not around separators or menu edges", async () => {
+      const gap = Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue("--menu-item-gap"),
+      );
+      expect(gap).toBeGreaterThan(0);
+      const container = mountMenu({
+        id: "row-gap",
+        label: "Row gap",
+        items: [
+          { id: "first", label: "First", type: "checkbox", checked: true },
+          { id: "second", label: "Second", type: "checkbox", checked: true },
+          { id: "parent", label: "Parent", children: [{ id: "child", label: "Child" }] },
+          { id: "after-parent", label: "After parent" },
+          {
+            kind: "group",
+            id: "group",
+            items: [
+              { id: "grouped", label: "Grouped" },
+              { id: "grouped-too", label: "Grouped too" },
+            ],
+          },
+          { id: "after-group", label: "After group" },
+          { kind: "content", id: "line", content: <div role="separator" /> },
+          { id: "last", label: "Last" },
+        ],
+      });
+      const menu = await openMenu(container);
+      const rows = [...menu.querySelectorAll<HTMLElement>(".oc-menu-item")]
+        .filter((row) => row.closest(".oc-menu") === menu)
+        .map((row) => row.getBoundingClientRect());
+      const gaps = rows.slice(1).map((row, index) => row.top - rows[index]!.bottom);
+      expect(gaps).toEqual([gap, gap, gap, gap, gap, gap, 9]);
+      const panel = menu.getBoundingClientRect();
+      expect(rows[0]!.top - panel.top).toBe(4);
+      expect(panel.bottom - rows.at(-1)!.bottom).toBe(4);
+    });
+
     it("matches session menu geometry and theme inside browser cards", async () => {
       const view = mountSolid(() => (
         <BrowserTabCardHost

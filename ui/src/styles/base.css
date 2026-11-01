@@ -386,6 +386,7 @@
   --menu-item-radius: var(--radius-menu-item);
   --menu-item-height: 28px;
   --menu-padding: 4px;
+  --menu-item-gap: 2px;
   --menu-selected: var(--surface-selected);
   /* Half the selected fill: an unchosen choice row must not read as the chosen one. */
   --menu-hover: color-mix(

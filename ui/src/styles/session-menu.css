@@ -37,6 +37,10 @@
   text-align: left;
 }
 
+:where(.session-menu__item) + :where(.session-menu__item) {
+  margin-block-start: var(--menu-item-gap);
+}
+
 .row.session-menu__label {
   gap: 6px;
 }
