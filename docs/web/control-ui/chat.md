@@ -1064,6 +1064,9 @@ pasted-text attachments. Older history without origin metadata recognizes
 `text/plain` attachments named `pasted-text-<digits>.txt` as pasted text.
 
 Uploaded attachments keep their original filenames on download, including spaces and Unicode characters.
+Inbound file cards also show readable fallback names when the stored reference
+uses percent encoding or a generated UUID suffix. Explicit filenames and the
+underlying file links are unchanged.
 Document cards show a labeled **Download** action without hovering, both in the
 transcript and in the **Files** panel when no preview is available.
 Uploaded images also retain their names in accessible transcript image and image-viewer labels after sending and reloading; descriptive alt text takes precedence when provided.
