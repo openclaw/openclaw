@@ -427,7 +427,8 @@
   .dashboard-preview .board-widget {
     grid-template-rows: minmax(0, 1fr);
   }
-  .dashboard-preview .board-widget__chrome {
+  .dashboard-preview .board-widget__chrome,
+  .dashboard-preview .board-widget__grant-dot {
     display: none;
   }
   .dashboard-card__body {

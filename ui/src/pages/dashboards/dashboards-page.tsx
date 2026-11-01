@@ -3,8 +3,9 @@ import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectSessionList } from "../../lib/reactive/domain-capabilities.ts";
 import { dashboardSessionListQuery } from "../../lib/sessions/session-requests.ts";
+import type { DashboardGalleryFilters } from "./gallery-filters.ts";
 import { dashboardsRouteData } from "./route.ts";
-import { DashboardsView, type DashboardGalleryFilters, type DashboardsRouteData } from "./view.tsx";
+import { DashboardsView, type DashboardsRouteData } from "./view.tsx";
 
 export function DashboardsPage(props: { routeData?: DashboardsRouteData }) {
   const context = useApplication();

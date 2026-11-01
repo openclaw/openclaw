@@ -19,7 +19,7 @@ import {
   onSettled,
 } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
@@ -38,6 +38,7 @@ import {
 import "../../styles/dashboards.css";
 import { DashboardFilterPopover } from "./dashboard-filter-popover.tsx";
 import { DashboardPreview } from "./dashboard-preview.tsx";
+import type { DashboardGalleryFilters, DashboardGalleryHandlers } from "./gallery-filters.ts";
 
 registerDashboardsEnglish();
 
@@ -48,17 +49,6 @@ export type DashboardsRouteData = {
   fallbackAgentId: string;
   mainKey: string;
   globalScope: boolean;
-};
-
-export type DashboardGalleryFilters = {
-  query: string;
-  ownerId: string;
-  sort: "updated" | "title";
-};
-
-export type DashboardGalleryHandlers = {
-  onFilterChange: (filter: Partial<DashboardGalleryFilters>) => void;
-  onNavigate?: ApplicationContext["navigate"];
 };
 
 type DashboardRow = SessionsListResult["sessions"][number];

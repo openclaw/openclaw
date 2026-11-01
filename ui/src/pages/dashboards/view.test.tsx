@@ -6,7 +6,8 @@ import type { SessionsListResult } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { DashboardsView, type DashboardGalleryFilters, type DashboardsRouteData } from "./view.tsx";
+import type { DashboardGalleryFilters } from "./gallery-filters.ts";
+import { DashboardsView, type DashboardsRouteData } from "./view.tsx";
 
 const filters: DashboardGalleryFilters = { query: "", ownerId: "", sort: "updated" };
 const handlers = { onFilterChange: vi.fn() };
@@ -92,7 +93,7 @@ it.each([
 
 it.each([
   [{ ownerId: "", sort: "updated" }, false],
-  [{ ownerId: "peter", sort: "updated" }, true],
+  [{ ownerId: "riley", sort: "updated" }, true],
   [{ ownerId: "", sort: "title" }, true],
 ] as const)("marks the phone filter trigger for %j", (selected, active) => {
   const { container } = mountSolid(() => (

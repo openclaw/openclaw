@@ -44,8 +44,8 @@ const dashboardRows = agesSeconds.map((age, index) => ({
   status: index === 0 ? "running" : "done",
   createdActor: {
     type: "human",
-    id: index % 2 ? "peter" : "mira",
-    label: index % 2 ? "Peter" : "Mira",
+    id: index % 2 ? "riley" : "mira",
+    label: index % 2 ? "Riley" : "Mira",
   },
 }));
 
@@ -435,7 +435,7 @@ suite.define(() => {
         expect(await filter.getAttribute("class")).not.toContain("active");
         await filter.click();
         const popover = page.locator("#dashboards-filter-popover");
-        await popover.getByRole("radio", { name: "Peter" }).click();
+        await popover.getByRole("radio", { name: "Riley" }).click();
         await expect.poll(() => cards.count()).toBe(6);
         await popover.getByRole("radio", { name: "Title A–Z" }).click();
         await expect.poll(() => cards.first().locator("h2").textContent()).toBe("Dashboard 1");
@@ -444,6 +444,24 @@ suite.define(() => {
         await popover.getByRole("radio", { name: "Recently updated" }).click();
         await expect.poll(() => cards.count()).toBe(12);
         expect(await filter.getAttribute("class")).not.toContain("active");
+
+        // Each group is one tab stop, and arrow keys move the checked option with wraparound.
+        const authors = popover.locator(".dashboards-filter__authors").getByRole("radio");
+        await expect
+          .poll(() =>
+            authors.evaluateAll((options) =>
+              options.map((option) => option.getAttribute("tabindex")),
+            ),
+          )
+          .toEqual(["0", "-1", "-1"]);
+        await authors.first().focus();
+        await page.keyboard.press("ArrowUp");
+        await expect.poll(() => authors.last().getAttribute("aria-checked")).toBe("true");
+        expect(await authors.last().evaluate((option) => option.matches(":focus"))).toBe(true);
+        await expect.poll(() => cards.count()).toBe(6);
+        await page.keyboard.press("ArrowDown");
+        await expect.poll(() => authors.first().getAttribute("aria-checked")).toBe("true");
+        await expect.poll(() => cards.count()).toBe(12);
 
         // The inert preview drops its widget title bar here; the opened dashboard keeps its own.
         const previewBar = cards.first().locator(".dashboard-preview .board-widget__bar");

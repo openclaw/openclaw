@@ -2,15 +2,45 @@ import { For, Show, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { DashboardGalleryFilters, DashboardGalleryHandlers } from "./view.tsx";
+import { listen } from "../../lib/reactive/listener.ts";
+import type { DashboardGalleryFilters, DashboardGalleryHandlers } from "./gallery-filters.ts";
 
-function DashboardFilterOption(props: { label: string; checked: boolean; onSelect: () => void }) {
+const ARROW_STEPS: Record<string, number> = {
+  ArrowDown: 1,
+  ArrowRight: 1,
+  ArrowUp: -1,
+  ArrowLeft: -1,
+};
+
+// Arrow keys check the next option, the same as tapping it, and move focus with it.
+function moveCheckedOption(event: KeyboardEvent & { currentTarget: HTMLDivElement }) {
+  const step = ARROW_STEPS[event.key];
+  const options = [...event.currentTarget.children].filter(
+    (option): option is HTMLElement => option instanceof HTMLElement,
+  );
+  const current = options.findIndex((option) => option === event.target);
+  if (step === undefined || current < 0) {
+    return;
+  }
+  event.preventDefault();
+  const next = options[(current + step + options.length) % options.length]!;
+  next.click();
+  next.focus();
+}
+
+function DashboardFilterOption(props: {
+  label: string;
+  checked: boolean;
+  tabbable?: boolean;
+  onSelect: () => void;
+}) {
   return (
     <button
       type="button"
       class="oc-menu-item"
       role="radio"
       aria-checked={props.checked ? "true" : "false"}
+      tabindex={props.checked || props.tabbable ? 0 : -1}
       onClick={() => props.onSelect()}
     >
       <span class="oc-menu-item__check" aria-hidden="true">
@@ -36,15 +66,17 @@ export function DashboardFilterPopover(props: {
     let dismissing = false;
     const controller = new AbortController();
     const options = { capture: true, signal: controller.signal };
-    document.addEventListener(
+    listen(
+      document,
       "pointerdown",
       (event) => {
         dismissing = Boolean(popover?.overlay.open) && !event.composedPath().includes(root);
       },
       options,
     );
-    document.addEventListener("pointercancel", () => (dismissing = false), options);
-    document.addEventListener(
+    listen(document, "pointercancel", () => (dismissing = false), options);
+    listen(
+      document,
       "click",
       (event) => {
         if (dismissing && event.detail > 0) {
@@ -86,10 +118,12 @@ export function DashboardFilterPopover(props: {
           class="dashboards-filter__authors"
           role="radiogroup"
           aria-labelledby="dashboards-filter-author"
+          onKeyDown={moveCheckedOption}
         >
           <DashboardFilterOption
             label={t("dashboardsPage.allAuthors")}
             checked={props.filters.ownerId === ""}
+            tabbable={!props.owners.some((owner) => owner.id === props.filters.ownerId)}
             onSelect={() => props.handlers.onFilterChange({ ownerId: "" })}
           />
           <For each={props.owners} keyed={(owner) => owner.id}>
@@ -105,7 +139,11 @@ export function DashboardFilterPopover(props: {
         <h6 id="dashboards-filter-sort" class="dashboards-filter__heading">
           {t("dashboardsPage.sortLabel")}
         </h6>
-        <div role="radiogroup" aria-labelledby="dashboards-filter-sort">
+        <div
+          role="radiogroup"
+          aria-labelledby="dashboards-filter-sort"
+          onKeyDown={moveCheckedOption}
+        >
           <For each={sorts()} keyed={([sort]) => sort}>
             {(entry) => (
               <DashboardFilterOption
