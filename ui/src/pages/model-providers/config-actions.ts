@@ -70,7 +70,7 @@ export function createModelProviderConfigActions(deps: {
       provider,
     });
     return models.length > 0 && models.every((model) => model.manualSelectionAllowed === false)
-      ? t("modelProviders.add.policyHidden", { provider })
+      ? t("modelProviders.add.policyHidden", { provider, agent: state.selectedAgentId })
       : null;
   }
 

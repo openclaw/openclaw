@@ -639,7 +639,7 @@ describe("ModelProvidersPage agent scope", () => {
       expect(page.view.props.addProviderOpen).toBe(warns);
       expect(page.view.props.messages.add?.warning).toBe(
         warns
-          ? 'Model policy hides all anthropic models, so they do not show in the model picker. Add "anthropic/*" to agents.defaults.modelPolicy.allow to use them.'
+          ? 'Model policy hides all anthropic models, so they do not show in the model picker. Add "anthropic/*" to agents.entries.main.modelPolicy.allow if this agent sets its own policy, otherwise to agents.defaults.modelPolicy.allow.'
           : undefined,
       );
     },
