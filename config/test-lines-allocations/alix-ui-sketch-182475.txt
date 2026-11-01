@@ -1,0 +1,2 @@
+# Sketch attachment admission controls; existing menu/file and painter contracts remain covered.
+82

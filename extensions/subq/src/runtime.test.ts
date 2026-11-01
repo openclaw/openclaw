@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type * as Decisions from "openclaw/plugin-sdk/decisions";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
 import plugin from "../index.js";
@@ -54,8 +54,15 @@ const key = "synthetic-subq-key";
 beforeEach(() => {
   vi.stubEnv("SUBQ_API_KEY", "synthetic-ambient");
   vi.mocked(getPreparedPluginSecretInput).mockReturnValue({ revision: 1, value: key });
-  const registerDecisionProvider = (p: Decisions.DecisionProviderV1) => (selected = p);
-  plugin.register({ registerDecisionProvider } as unknown as OpenClawPluginApi);
+  plugin.register(
+    createTestPluginApi({
+      id: "subq",
+      registerDecisionProvider(registered) {
+        assert(registered.contractVersion === 1);
+        selected = registered;
+      },
+    }),
+  );
   fetch.mockReset().mockImplementation(async () => Response.json(result()));
   vi.stubGlobal("fetch", fetch);
 });

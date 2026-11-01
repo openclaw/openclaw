@@ -288,7 +288,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           assertStoreCurrent?.();
           request.sessionMutationAuthorization?.assertCurrent();
           parseRealtimeVoiceAgentConsultArgs(params.args ?? {});
-          const origin = assertClientVoiceSessionOpen(
+          const origin = await assertClientVoiceSessionOpen(
             { agentId, sessionKey: params.sessionKey, voiceSessionId },
             physicalSource,
           );

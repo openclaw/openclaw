@@ -59,6 +59,12 @@ vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
   activateSubagentRegistry: postAttachMocks.activateSubagentRegistry,
 }));
 
+// mock-isolation: Durable persistence and observation own workers outside this startup fixture.
+vi.mock("../agents/bash-process-durable.js", () => ({
+  initializeDurableProcesses: vi.fn(async () => {}),
+  disposeDurableProcesses: vi.fn(async () => {}),
+}));
+
 // mock-isolation: This worker-free ordering fixture has no pending agent deletions.
 vi.mock("./server-agent-deletion-recovery.js", () => ({
   resumeAgentDeletions: vi.fn(async () => {}),

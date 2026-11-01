@@ -1191,6 +1191,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/pages/logs/logs-page.tsx"],
   ),
   pageWatch("ui/src/e2e/logs-layout.e2e.test.ts", ["config", "logs"]),
+  pageWatch("ui/src/e2e/logs-scroll.e2e.test.ts", ["logs"]),
   pageWatch(
     "ui/src/e2e/managed-media-base-path.e2e.test.ts",
     ["chat"],

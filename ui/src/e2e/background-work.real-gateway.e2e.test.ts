@@ -11,6 +11,7 @@ import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-i
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import type { ChatHistoryResult } from "../pages/chat/chat-history-snapshot.ts";
+import { openChatPanels } from "../test-helpers/chat-layout-menu.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -332,6 +333,7 @@ suite.define(() => {
 
         proof.stage = "mobile child Stop through history-owned exact run";
         await page.setViewportSize({ width: 390, height: 844 });
+        await openChatPanels(page, "mobile");
         await switchTab("Subagents");
         const mobileChildStop = detail.getByRole("button", {
           name: `Stop ${fixture.childLabel}`,

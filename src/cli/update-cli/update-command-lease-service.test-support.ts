@@ -22,7 +22,7 @@ import * as restartHealth from "../daemon-cli/restart-health.js";
 import type { GatewayRestartResult } from "../daemon-cli/restart-health.types.js";
 import { registerUpdateCli } from "../update-cli.js";
 import type { LeaseScenario } from "./update-command-lease.test-support.js";
-import type { ProducedPluginUpdateResult } from "./update-command-plugins-internals.js";
+import type { PostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import * as serviceMaintenance from "./update-command-service-maintenance.js";
 
 export function seedInterruptedPostCoreRun(): UpdateRunRecord {
@@ -188,7 +188,7 @@ export function registerLegacyResumeWarningTests(params: {
   writeScenario: (scenario: Omit<LeaseScenario, "lane">) => Promise<void>;
   invoke: () => Promise<void>;
   plugins: Mock<typeof import("./update-command-plugins.js").updatePluginsAfterCoreUpdate>;
-  pluginResult: ProducedPluginUpdateResult;
+  pluginResult: PostCorePluginUpdateResult;
   events: () => Promise<string[]>;
   expectDoctorDiagnostics: () => void;
 }) {

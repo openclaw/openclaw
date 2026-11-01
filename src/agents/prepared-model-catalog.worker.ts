@@ -78,7 +78,10 @@ import type { PreparedModelRuntimePluginGeneration } from "./prepared-model-runt
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 type WorkerGeneration = {
-  pluginGeneration: PreparedModelRuntimePluginGeneration & { pluginRegistry: PluginRegistry };
+  pluginGeneration: Omit<
+    PreparedModelRuntimePluginGeneration,
+    "inlineProviderModels" | "configuredCatalogEntries"
+  > & { pluginRegistry: PluginRegistry };
   pluginIds: ReadonlySet<string>;
   staticProviderIds: ReadonlySet<string>;
   release: () => void | Promise<void>;
@@ -101,8 +104,6 @@ async function prepareWorkerGeneration(
   previous?: WorkerGeneration,
   pluginIds?: readonly string[],
 ): Promise<WorkerGeneration> {
-  const { prepareConfiguredModelFacts } =
-    await import("./prepared-model-runtime.configured-facts.js");
   // Rediscovery under agent workspaces or runtime activation overlays loses the owner's
   // metadata generation. Its source/built artifact selection must survive reconstruction too.
   const metadata =
@@ -140,7 +141,9 @@ async function prepareWorkerGeneration(
     () => {},
   );
   const pluginGeneration = Object.freeze({
-    ...(previous?.pluginGeneration ?? prepareConfiguredModelFacts(value.input.config, metadata)),
+    // Configured model facts arrive with each request; retaining host-only projections here
+    // duplicates those rows for every workspace without contributing to discovery.
+    ...previous?.pluginGeneration,
     remoteCatalog: value.remoteCatalog,
     pluginMetadataSnapshot: metadata,
     pluginRegistry,

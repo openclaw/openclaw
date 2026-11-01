@@ -43,10 +43,13 @@ const testProgramContext = { programVersion: "9.9.9-test" };
 
 describe("configureProgramHelp", () => {
   let originalArgv: string[];
+  let originalExitCode: NodeJS.Process["exitCode"];
 
   beforeEach(() => {
     vi.clearAllMocks();
     originalArgv = [...process.argv];
+    originalExitCode = process.exitCode;
+    process.exitCode = undefined;
     resolveCommitHashMock.mockReturnValue("abc1234");
     vi.stubEnv("OPENCLAW_SUPPRESS_HELP_BANNER", undefined);
   });
@@ -54,6 +57,7 @@ describe("configureProgramHelp", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     process.argv = originalArgv;
+    process.exitCode = originalExitCode;
     vi.unstubAllEnvs();
   });
 

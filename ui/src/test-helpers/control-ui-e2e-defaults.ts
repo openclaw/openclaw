@@ -60,6 +60,7 @@ export const defaultControlUiFeatureMethods = [
   "sessions.search",
   "system.info",
   "users.github.status",
+  "users.channelIdentity",
   "users.github.authorize.start",
   "users.github.authorize.poll",
   "users.github.authorize.cancel",
@@ -157,6 +158,7 @@ export function createControlUiDefaultResponses(scenario: {
     } satisfies ChannelsPairingListResult,
     "plugins.catalog.categories": { categories: [] } satisfies PluginsCatalogCategoriesResult,
     "plugins.catalog.browse": { items: [] } satisfies PluginsCatalogBrowseResult,
+    "users.channelIdentity": { status: "ready", accounts: [] },
     "users.self": profile
       ? { profile }
       : {

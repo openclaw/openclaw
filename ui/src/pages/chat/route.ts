@@ -35,6 +35,11 @@ function sessionPage(face: BoardFace) {
     loader: (context: ApplicationContext, options) => {
       // Subscription acquisition owns errors and retries after this speculative load.
       void preloadSessionMessageSubscriptions().catch(() => undefined);
+      if (face === "dashboard") {
+        // Start both presentation boundaries together; their lazy views own load errors.
+        void import("./components/chat-sidebar-region.runtime.tsx").catch(() => undefined);
+        void import("../../components/board/board-view.tsx").catch(() => undefined);
+      }
       const creation = context.chatSubmissions.creation;
       if (creation && !creation.admitted) {
         const mainKey = resolveUiConfiguredMainKey({

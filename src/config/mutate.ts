@@ -593,6 +593,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
             deferredPluginMigrations: params.deferredPluginMigrations,
             configPath: params.snapshot.path,
             includePath,
+            includeBoundaryPath: boundaryPath,
             allowedRoots,
             expectedTargetPath: expectedIncludeTarget,
             value: includedValueToWrite,

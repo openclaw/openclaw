@@ -95,6 +95,28 @@ describe("scribes catalog", () => {
     ).toContain("- Runs on cron `5 1 * * 2`, time zone UTC.");
   });
 
+  it("writes a Granola prompt that names the meetings and the meeting-ingest work", () => {
+    const prompt = setupPrompt(
+      scribeSetup("granola", "ongoing", defaultOptions("granola"), "America/Los_Angeles"),
+    );
+    expect(prompt).toContain(
+      [
+        "- Runs weekdays at 10:00 AM, 2:00 PM and 6:00 PM America/Los_Angeles (cron `0 10,14,18 * * 1-5`).",
+        "- Granola meetings: the owner's (recorded by them or with them invited), from the last 7 days.",
+      ].join("\n"),
+    );
+    expect(prompt).toContain("declaration key `knowledge:scribe:granola`");
+    const runMessage = prompt.match(/Run message:\n\n```text\n([\s\S]+)\n```$/)?.[1] ?? "";
+    expect(runMessage).toContain(
+      'Follow "Learn from Granola" in the "Scribe runs" section of the knowledge-meeting-ingest skill',
+    );
+    const once = setupPrompt(
+      scribeSetup("granola", "once", { meetings: "all", since: "30d" }, "UTC"),
+    );
+    expect(once).toContain("Runs once, now, in this turn.");
+    expect(once).toContain("including notes others shared, from the last 30 days.");
+  });
+
   it("reads a status line tolerantly", () => {
     const cases: [string, string?, string?][] = [
       ["Filed.\nScribe status: on — 9 filed, 2 left", "on", "9 filed, 2 left"],
@@ -234,9 +256,10 @@ describe("scribes state", () => {
     expect(snapshots.map((s) => [s.scribe.id, s.status, s.session?.key, s.job?.id])).toEqual([
       ["claim-consolidation", "on", "s-review", "job-review"],
       ["conversations", "available", undefined, undefined],
+      ["granola", "available", undefined, undefined],
       ["memory", "done", "s-memory", undefined],
     ]);
-    expect(snapshots[2]!.result).toEqual({ state: "done", summary: "Saved 4" });
+    expect(snapshots[3]!.result).toEqual({ state: "done", summary: "Saved 4" });
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "main",
       search: scribeLabel(memory),
@@ -295,16 +318,75 @@ describe("scribes state", () => {
           ? { sessions: [], count: 1 }
           : { sessions: [], count: 1, totalCount: 148 };
       }
+      if (method === "plugins.inspect") {
+        return { plugin: { installed: true, enabled: true }, mcpAuth: [{ state: "authorized" }] };
+      }
       return { files: [{ name: "MEMORY.md", missing: false, size: 4096 }] };
     });
     expect(await detectSources({ request } as never, "main")).toEqual({
       activeConversations: 148,
       memoryFile: { size: 4096 },
+      plugins: { granola: "ready" },
     });
     const failing = vi.fn(async () => {
       throw new Error("missing scope");
     });
     expect(await detectSources({ request: failing } as never, "main")).toEqual({});
+  });
+});
+
+describe("plugin readiness", () => {
+  const read = async (answer: () => unknown) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "plugins.inspect") {
+        return answer();
+      }
+      if (method === "sessions.list") {
+        return { sessions: [], count: 0 };
+      }
+      if (method === "agents.files.list") {
+        return { files: [] };
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+    const detection = await detectSources({ request } as never, "main");
+    expect(request).toHaveBeenCalledWith("plugins.inspect", {
+      pluginId: scribeById("granola")!.plugin!.id,
+    });
+    return detection.plugins;
+  };
+
+  it("maps plugins.inspect to missing, disabled, needs sign-in and ready", async () => {
+    const plugin = (installed: boolean, enabled: boolean) => ({ installed, enabled });
+    expect(await read(() => ({ plugin: plugin(false, false) }))).toEqual({ granola: "missing" });
+    expect(await read(() => ({ plugin: plugin(true, false) }))).toEqual({ granola: "disabled" });
+    expect(
+      await read(() => ({
+        plugin: plugin(true, true),
+        mcpAuth: [{ serverName: "granola", state: "requires-authorization" }],
+      })),
+    ).toEqual({ granola: "needs-sign-in" });
+    expect(
+      await read(() => ({
+        plugin: plugin(true, true),
+        mcpAuth: [{ serverName: "granola", state: "authorized" }],
+      })),
+    ).toEqual({ granola: "ready" });
+  });
+
+  it("reads an unknown plugin as missing and any other failure as unknown", async () => {
+    expect(
+      await read(() => {
+        throw Object.assign(new Error('Plugin "granola" not found.'), {
+          gatewayCode: "INVALID_REQUEST",
+        });
+      }),
+    ).toEqual({ granola: "missing" });
+    expect(
+      await read(() => {
+        throw Object.assign(new Error("missing scope"), { gatewayCode: "UNAUTHORIZED" });
+      }),
+    ).toBeUndefined();
   });
 });
 

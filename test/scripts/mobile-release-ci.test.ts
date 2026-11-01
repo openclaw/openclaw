@@ -279,11 +279,18 @@ describe("mobile release CI tools", () => {
   describe.each(releasePlatforms)("$platform release artifact recovery", ({ workflow }) => {
     it("checks out and verifies the dispatch commit before accessing signing credentials", () => {
       const steps = releaseSteps(workflow);
-      expect(steps[0]).toMatchObject({
+      const checkoutIndex = steps.findIndex((step) => step.uses?.startsWith("actions/checkout@"));
+      expect(steps[checkoutIndex]).toMatchObject({
         uses: expect.stringMatching(/^actions\/checkout@/u),
         with: { ref: "${{ github.sha }}", "fetch-depth": 1 },
       });
-      const verification = expectDefined(steps[1]?.run, "Release checkout verification");
+      const verification = expectDefined(
+        steps[checkoutIndex + 1]?.run,
+        "Release checkout verification",
+      );
+      expect(steps.findIndex((step) => JSON.stringify(step).includes("secrets."))).toBeGreaterThan(
+        checkoutIndex + 1,
+      );
       const root = tempRoots.make("openclaw-release-dispatch-");
       initGit(root, { name: "Release Fixture", email: "release@example.invalid" });
       writeFile(root, "README.md", "Synthetic release source\n");
@@ -301,8 +308,8 @@ describe("mobile release CI tools", () => {
   });
 
   it.each(releasePlatforms)(
-    "retains $platform release evidence and ancestry without unrelated branch history",
-    ({ platform, workflow }) => {
+    "supports selective $platform history hydration after shallow source admission",
+    ({ platform }) => {
       const root = tempRoots.make(`openclaw-${platform}-release-history-`);
       const remote = path.join(root, "remote.git");
       const seed = path.join(root, "seed");
@@ -341,25 +348,31 @@ describe("mobile release CI tools", () => {
       }
       initGit(checkout, { name: "Release Fixture", email: "release@example.invalid" });
       git(checkout, "remote", "add", "origin", pathToFileURL(remote).href);
-      git(checkout, "fetch", "--no-tags", "--depth=1", "origin", source);
-      git(checkout, "checkout", "--detach", source);
-      const steps = releaseSteps(workflow);
-      const history = expectDefined(
-        steps[stepIndex(steps, "Fetch release source history")]?.run,
-        `${platform} release history step`,
+      git(
+        checkout,
+        "fetch",
+        "--no-tags",
+        "--depth=1",
+        "origin",
+        `${source}:refs/remotes/origin/main`,
       );
-      const fetched = bash(history, { GITHUB_SHA: source }, { cwd: checkout });
+      git(checkout, "checkout", "--detach", source);
+      git(checkout, "fetch", "--no-tags", "origin", "refs/heads/main");
+      git(checkout, "merge-base", "--is-ancestor", source, currentMain);
+      expect(git(checkout, "rev-parse", "--is-shallow-repository")).toBe("true");
+      const fetched = bash(
+        'git fetch --no-tags --filter=blob:none --unshallow origin "$GITHUB_SHA"',
+        { GITHUB_SHA: source },
+        { cwd: checkout },
+      );
       expect(fetched.status, fetched.stderr).toBe(0);
       expect(git(checkout, "rev-parse", "--is-shallow-repository")).toBe("false");
       expect(git(checkout, "for-each-ref", "--format=%(refname)")).toBe("refs/remotes/origin/main");
-      expect(git(checkout, "rev-parse", "origin/main")).toBe(source);
+      expect(git(checkout, "rev-parse", "origin/main")).toBe(currentMain);
       expect(
         git(checkout, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)"),
       ).not.toContain(unrelated);
-      git(checkout, "fetch", "--no-tags", "origin", "refs/heads/main");
-      expect(git(checkout, "rev-parse", "FETCH_HEAD")).toBe(currentMain);
-      expect(git(checkout, "rev-parse", "origin/main")).toBe(currentMain);
-      git(checkout, "merge-base", "--is-ancestor", source, currentMain);
+      expect(git(checkout, "rev-parse", "FETCH_HEAD")).toBe(source);
       const staged = path.join(root, "staged");
       git(checkout, "worktree", "add", "--detach", staged, source);
       for (const { sha, ref } of baselines) {
@@ -1709,15 +1722,14 @@ describe("mobile release CI tools", () => {
         timeoutMs: number;
       }) => {
         const pidFile = path.join(runnerTemp, `${name}.pid`);
+        // Publish both PIDs before the grandchild can trigger the output cap.
+        const childSource = `process.on("SIGTERM", () => {}); require("node:fs").writeFileSync(process.env.PID_FILE, \`\${process.ppid}\\n\${process.pid}\\n\`); ${grandchildSource}`;
         const parentSource = [
-          // A timeout during PID publication must not terminate the fixture before it writes.
           'process.on("SIGTERM", () => {});',
           'const { spawn } = require("node:child_process");',
-          'const fs = require("node:fs");',
-          `const child = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildSource)}], {`,
+          `spawn(process.execPath, ["-e", ${JSON.stringify(childSource)}], {`,
           '  stdio: ["ignore", process.stdout, process.stderr],',
           "});",
-          "fs.writeFileSync(process.env.PID_FILE, `${process.pid}\\n${child.pid}\\n`);",
           "setInterval(() => {}, 1000);",
         ].join("\n");
         const runnerSource = `
@@ -1772,14 +1784,13 @@ process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message
 
       await exerciseOwnedProcessTree({
         expectedError: "timed out after 1000ms",
-        grandchildSource: 'process.on("SIGTERM", () => {}); setTimeout(() => {}, 5000);',
+        grandchildSource: "setTimeout(() => {}, 5000);",
         name: "timeout-tree",
         timeoutMs: 1_000,
       });
       await exerciseOwnedProcessTree({
         expectedError: "exceeded the 4096-byte output limit",
-        grandchildSource:
-          'process.on("SIGTERM", () => {}); setInterval(() => process.stdout.write("x".repeat(2048)), 1);',
+        grandchildSource: 'setInterval(() => process.stdout.write("x".repeat(2048)), 1);',
         maxOutputBytes: 4096,
         name: "output-cap-tree",
         timeoutMs: 5_000,

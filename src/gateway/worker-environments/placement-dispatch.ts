@@ -3,6 +3,7 @@ import {
   assertRequiredWorkerDispatch,
   RequiredWorkerProfileError,
 } from "../../config/required-worker-profile.js";
+import { getRepositoryIntegration } from "../../plugins/repository-integration-runtime.js";
 import { resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { sessionLog } from "../session-log.js";
 import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
@@ -126,12 +127,22 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       "sessions.dispatch",
       "admission",
     );
+    let dispatchActive = true;
     const assertCurrent = composePlacementAuthorization(authorize, () => {
+      if (!dispatchActive) {
+        throw new Error("Repository dispatch was released");
+      }
       signal?.throwIfAborted();
       assertRequiredWorkerDispatch(getRuntimeConfig(), request);
     });
     assertCurrent();
     let placement: WorkerDispatchPlacement | undefined;
+    const credentialCleanups = new Set<() => Promise<void>>();
+    const retainCredentialCleanup = (revoke: () => Promise<void>) => {
+      credentialCleanups.add(revoke);
+    };
+    // Source owners compose dispatch liveness with the original reader's admission and policy guard.
+    const readNativeCredential = request.readNativeCredential;
     try {
       signal?.throwIfAborted();
       placement = await options.runLocalBarrier({
@@ -203,6 +214,14 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           "Repository cloud sessions require a managed-node cloud provider or paired node. Choose one and retry dispatch.",
         );
       }
+      const repositoryIntegration =
+        workspace.kind === "repository" && !request.deviceId
+          ? getRepositoryIntegration()
+          : undefined;
+      if (repositoryIntegration && !readNativeCredential) {
+        throw new Error("Repository worker startup requires current GitHub dispatch admission");
+      }
+      const imageReserve = repositoryIntegration?.preparedCapacity === "image";
       const projectPath = workspace.kind === "local" ? workspace.path : undefined;
       // Workspace preparation yields; fence the current paired node again before durable provision.
       await startup.validateDevicePlacement(request);
@@ -211,25 +230,32 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         ? await environments.prepareProjectIntent(request.profileId, {
             machineClass: request.machineClass,
             executionMode: request.executionMode,
-            projectPath,
-            ...(workspace.kind === "repository"
-              ? {
-                  repository: {
-                    agentId: request.agentId,
-                    url: workspace.repository.url,
-                    ref: workspace.repository.requestedRef ?? undefined,
-                    baseCommit: workspace.repository.baseCommit ?? undefined,
-                  },
-                }
-              : {}),
+            assertCurrent,
             inherited: request.inheritedProfile,
             signal,
             os: request.os,
-            runSetupScript:
-              workspace.kind === "repository"
-                ? workspace.repository.runSetupScript && request.runSetupScript !== false
-                : request.runSetupScript,
-            setupAuthorized: request.runSetupScript !== undefined,
+            ...(imageReserve
+              ? { imageReserve: true }
+              : {
+                  projectPath,
+                  readNativeCredential,
+                  retainCredentialCleanup,
+                  ...(workspace.kind === "repository"
+                    ? {
+                        repository: {
+                          agentId: request.agentId,
+                          url: workspace.repository.url,
+                          ref: workspace.repository.requestedRef ?? undefined,
+                          baseCommit: workspace.repository.baseCommit ?? undefined,
+                        },
+                      }
+                    : {}),
+                  runSetupScript:
+                    workspace.kind === "repository"
+                      ? workspace.repository.runSetupScript && request.runSetupScript !== false
+                      : request.runSetupScript,
+                  setupAuthorized: request.runSetupScript !== undefined,
+                }),
           })
         : undefined;
       assertCurrent();
@@ -283,7 +309,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           });
       return await startup.continueProvisionedDispatch({
         markPhase: diagnostics?.mark,
-        request,
+        request: { ...request, readNativeCredential },
+        retainCredentialCleanup,
         placement,
         environment,
         expectedEnvironmentId,
@@ -326,6 +353,14 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         }
       }
       throw error;
+    } finally {
+      dispatchActive = false;
+      const cleanup = await Promise.allSettled([...credentialCleanups].map((revoke) => revoke()));
+      if (cleanup.some((result) => result.status === "rejected")) {
+        sessionLog.warn(
+          "Repository dispatch credential cleanup failed; retry GitHub credential cleanup before reusing the worker.",
+        );
+      }
     }
   };
 

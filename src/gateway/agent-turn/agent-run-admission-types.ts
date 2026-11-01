@@ -95,6 +95,7 @@ export type PrepareAgentRunDispatchParams = Omit<
   onUserTurnMediaPersisted: () => void;
   agentDedupeKeys: readonly string[];
   getOwnedAgentDedupeKeys: () => readonly string[];
+  releaseUnacceptedReservation: () => boolean;
   io: AgentTurnIo;
   acquireGatewayWorkAdmission: (scope: string) => Promise<void>;
   assertGatewayWorkAdmissionAllowed: () => SessionEntry | undefined;

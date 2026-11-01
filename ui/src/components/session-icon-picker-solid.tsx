@@ -6,7 +6,7 @@ import {
   SESSION_ICON_GLYPH_IDS,
   SESSION_ICON_SVG_DATA_URL_PREFIX,
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
-import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
+import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import {
@@ -17,7 +17,7 @@ import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, ShortcutText } from "./solid/kbd.tsx";
 
-registerSessionOrganizationEnglish();
+registerSessionMenuEnglish();
 
 export type AppearancePickerFocus = (
   target: "first" | "grid" | "custom",

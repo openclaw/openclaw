@@ -56,12 +56,17 @@ import {
 } from "./session-sharing-policy.js";
 import { prepareProjectedSessionSharing } from "./session-sharing.js";
 import { sessionTitleRequests } from "./session-title-state.js";
-import { matchesSessionArchiveFilter, resolveSessionChildOwners } from "./session-utils-core.js";
+import {
+  matchesSessionArchiveFilter,
+  resolveGatewaySessionBackgroundProcessCount,
+  resolveSessionChildOwners,
+} from "./session-utils-core.js";
 import {
   applyGatewaySessionRowMode,
   projectGatewaySessionActiveRun,
 } from "./session-utils-display.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
+import { authorizeSessionWorkspaceRead } from "./session-workspace-read-policy.js";
 
 type PresentationOptions = Readonly<
   Omit<records.SnapshotOptions, "now" | "active" | "subagentRuns" | "preparedFacts"> & {
@@ -156,7 +161,7 @@ export function prepareSessionRowPublication(
     return {
       getAudienceKey() {
         // Fixed-domain prefixes keep the opaque sharing key intact without re-encoding it.
-        return `${recipient.presentFastMode("ultrafast") === true ? 0 : 1}:${recipient.publicationState?.factsRevision ?? ""}:${recipient.sharing.getCacheKey(projection.sharingRevision)}`;
+        return `${recipient.presentFastMode("ultrafast") === true ? 0 : 1}:${recipient.publicationState?.factsRevision ?? ""}:${recipient.sharing.getCacheKey()}`;
       },
       // Event fanout needs display structures only on an audience miss, after live authority.
       getPresentation() {
@@ -259,7 +264,11 @@ export function prepareProjectedSessionPresentation(
     return publicationState?.lists.get(key) ?? { key, refs: 0, bytes: 0, historyRefs: 0 };
   };
   const viewerFacts: Partial<GatewaySessionRow> = {};
-  const viewer = (value: SessionSharingTarget, rowMode: PresentationOptions["rowMode"]) => {
+  const viewer = (
+    value: SessionSharingTarget,
+    rowMode: PresentationOptions["rowMode"],
+    unscopedHostRoot: boolean,
+  ) => {
     const sharingRole = sharing.roleForTarget(value);
     viewerFacts.visibility = resolveSessionVisibility(value.entry);
     viewerFacts.hiddenFromInvolvingMe =
@@ -282,6 +291,13 @@ export function prepareProjectedSessionPresentation(
           (resolveSendPolicy({ cfg, entry: value.entry, sessionKey: value.canonicalKey }) === "deny"
             ? "send blocked by session policy"
             : null));
+    viewerFacts.workspaceReadDisabledReason =
+      rowMode === "sidebar" || rowMode === "dashboard"
+        ? undefined
+        : (authorizeSessionWorkspaceRead(
+            { cfg: policyConfig, client: client ?? null, target: value, unscopedHostRoot },
+            { policy: sharing.policy },
+          )?.message ?? null);
     return viewerFacts;
   };
   const projectModels = (row: GatewaySessionRow, view?: SessionRowView) =>
@@ -421,7 +437,13 @@ export function prepareProjectedSessionPresentation(
       facts[21] = run?.runIds?.length;
       // A changed child fact retires timestamped views even when the aggregate stays equal.
       facts[22] = childActivity.revision;
-      facts.length = 23;
+      facts[23] = resolveGatewaySessionBackgroundProcessCount({
+        cfg,
+        key: record.key,
+        agentId: record.agentId,
+        sessionId: record.entry.sessionId,
+      });
+      facts.length = 24;
       if (run?.runIds) {
         for (const id of run.runIds) {
           facts.push(id);
@@ -435,7 +457,10 @@ export function prepareProjectedSessionPresentation(
     }
     const views = published?.views;
     const value = published?.target ?? toProjectedSessionSharingTarget(record);
-    const recipientView = client === undefined ? undefined : viewer(value, options.rowMode);
+    const recipientView =
+      client === undefined
+        ? undefined
+        : viewer(value, options.rowMode, record.materialized.source.unscopedHostRoot);
     const includeActivitySummary = options.includeActivitySummary !== false && fullRow;
     const canEnsure =
       includeActivitySummary && client !== undefined && preparedFacts?.activitySummary
@@ -457,7 +482,8 @@ export function prepareProjectedSessionPresentation(
     recipientFacts[6] = visibility
       ? visibility.swarmKey
       : excludedSwarmKeys && JSON.stringify([...excludedSwarmKeys]);
-    recipientFacts.length = 7;
+    recipientFacts[7] = recipientView?.workspaceReadDisabledReason;
+    recipientFacts.length = 8;
     const variants = signature === undefined ? undefined : views?.get(signature);
     if (variants) {
       for (const cached of variants) {

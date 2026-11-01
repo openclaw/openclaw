@@ -57,15 +57,44 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
     spawnSyncMock.mockReset().mockImplementation(actual.spawnSync);
   });
 
-  it("reuses a supplied report without starting Vitest", async ({ onTestFinished }) => {
-    const { runVitestJsonReport } = await import("../../scripts/test-report-utils.mts");
+  it("reads a supplied report once without starting Vitest", async ({ onTestFinished }) => {
+    const { loadVitestReportFromArgs } =
+      await import("../../scripts/lib/vitest-report-cli-utils.mts");
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "report-reuse-"));
     onTestFinished(() => fs.rmSync(root, { recursive: true, force: true }));
     const reportPath = path.join(root, "report.json");
-    fs.writeFileSync(reportPath, JSON.stringify({ testResults: [] }));
-    expect(runVitestJsonReport({ config: "missing.config.mjs", reportPath })).toBe(reportPath);
+    const report = { success: false, testResults: [timedFile] };
+    fs.writeFileSync(reportPath, JSON.stringify(report));
+    const reads = vi.spyOn(fs, "readFileSync");
+    onTestFinished(() => reads.mockRestore());
+    expect(
+      loadVitestReportFromArgs({ config: "missing.config.mjs", reportPath }, "unused"),
+    ).toEqual(report);
+    expect(reads.mock.calls.filter(([file]) => file === reportPath)).toHaveLength(1);
     expect(spawnSyncMock).not.toHaveBeenCalled();
   });
+
+  it.for([
+    ["{", "invalid Vitest JSON report:"],
+    ["null", "(report must be an object)"],
+    ["[]", "(report must be an object)"],
+    ["1", "(report must be an object)"],
+    ["{}", "(missing testResults array)"],
+    ['{"testResults":{}}', "(missing testResults array)"],
+  ] as const)(
+    "rejects invalid report evidence %s",
+    async ([payload, diagnostic], { onTestFinished }) => {
+      const { readVitestJsonReport } = await import("../../scripts/test-report-utils.mts");
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "report-admission-"));
+      onTestFinished(() => fs.rmSync(root, { recursive: true, force: true }));
+      const reportPath = path.join(root, "report.json");
+      fs.writeFileSync(reportPath, payload);
+      expect(readVitestJsonReport(reportPath)).toEqual({
+        ok: false,
+        error: expect.stringContaining(diagnostic),
+      });
+    },
+  );
 
   it("uses distinct default report paths when invocations share a clock tick", async () => {
     const { runVitestJsonReport } = await import("../../scripts/test-report-utils.mts");

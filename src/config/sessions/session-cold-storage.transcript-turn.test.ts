@@ -196,6 +196,13 @@ describe("selected transcript turn cold restoration", () => {
     "keeps the archive cold when the captured revision changes %s",
     async (timing) => {
       const fixture = await createFixture();
+      const navigationRows = () =>
+        fixture
+          .database()
+          .prepare("SELECT * FROM transcript_events WHERE session_id = ? ORDER BY seq")
+          .all(historicalId);
+      const before = navigationRows();
+      expect(before).not.toHaveLength(0);
       let admitted = false;
       let commitRequested = false;
       if (timing === "at worker admission") {
@@ -231,12 +238,7 @@ describe("selected transcript turn cold restoration", () => {
       expect(commitRequested).toBe(false);
       expect(fixture.prepareMessage).not.toHaveBeenCalled();
       expect(fixture.cold()).toEqual(fixture.descriptor);
-      expect(
-        fixture
-          .database()
-          .prepare("SELECT seq FROM transcript_events WHERE session_id = ?")
-          .all(historicalId),
-      ).toEqual([]);
+      expect(navigationRows()).toEqual(before);
     },
   );
 

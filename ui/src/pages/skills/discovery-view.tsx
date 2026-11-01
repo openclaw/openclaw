@@ -1,4 +1,4 @@
-import { createMemo, Errored, For, isPending, Loading, onSettled, Show } from "solid-js";
+import { createMemo, Errored, isPending, Loading, onSettled, Show } from "solid-js";
 import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { SkillStatusEntry } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -6,6 +6,7 @@ import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-brows
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
+import { PluginCatalogGrid } from "../plugins/catalog-grid.tsx";
 import { PluginCardSummary } from "../plugins/plugin-card.tsx";
 import { SkillStateStatus, verdictForSkill } from "./skill-status.tsx";
 import type { SkillsProps } from "./view-types.ts";
@@ -31,7 +32,11 @@ function installedReference(skill: SkillStatusEntry): string | null {
   return link.requestedReference ?? (link.ownerHandle ? `@${link.ownerHandle}/${link.slug}` : null);
 }
 
-function DiscoveryCard(props: { entry: SkillDiscoveryEntry; skills: SkillsProps }) {
+function DiscoveryCard(props: {
+  entry: SkillDiscoveryEntry;
+  skills: SkillsProps;
+  contentRef: (element: HTMLDivElement) => void;
+}) {
   const reference = () => props.entry.remote?.installRef ?? "";
   const installed = () => Boolean(props.entry.skill || props.entry.library);
   const icon = () => {
@@ -61,57 +66,59 @@ function DiscoveryCard(props: { entry: SkillDiscoveryEntry; skills: SkillsProps 
           }}
         />
       )}
-      <div class="plugin-catalog-card__head">
-        <div class="installed-plugins-card__head">
-          <span class="installed-plugins-card__art plugin-catalog-card__art" aria-hidden="true">
-            {icon() ? (
-              <img src={icon()} alt="" loading="lazy" />
-            ) : (
-              (props.entry.skill?.emoji ?? <Icon name="bookOpenText" />)
-            )}
-          </span>
-          <div class="installed-plugins-card__identity">
-            <div class="plugin-card-title-row">
-              <h2>{props.entry.name}</h2>
-              <div class="plugin-catalog-card__action">
-                {installed() ? (
-                  <SkillStateStatus
-                    skill={props.entry.skill ?? { disabled: !props.entry.library!.enabled }}
-                    verdict={
-                      props.entry.skill
-                        ? verdictForSkill(props.entry.skill, props.skills.state.clawhubVerdicts)
-                        : null
-                    }
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    class="btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"
-                    disabled={
-                      props.skills.saving ||
-                      !props.skills.state.connected ||
-                      !props.skills.canInstall ||
-                      props.skills.loading ||
-                      props.skills.state.skillOperation !== null
-                    }
-                    aria-label={t("skillsPage.installNamed", { name: props.entry.name })}
-                    onClick={() => props.skills.onClawHubInstall(reference())}
-                  >
-                    {t(busy() ? "skillsPage.installing" : "skillsPage.install")}
-                  </button>
-                )}
+      <div class="plugin-catalog-card__content" ref={props.contentRef}>
+        <div class="plugin-catalog-card__head">
+          <div class="installed-plugins-card__head">
+            <span class="installed-plugins-card__art plugin-catalog-card__art" aria-hidden="true">
+              {icon() ? (
+                <img src={icon()} alt="" loading="lazy" />
+              ) : (
+                (props.entry.skill?.emoji ?? <Icon name="bookOpenText" />)
+              )}
+            </span>
+            <div class="installed-plugins-card__identity">
+              <div class="plugin-card-title-row">
+                <h2>{props.entry.name}</h2>
+                <div class="plugin-catalog-card__action">
+                  {installed() ? (
+                    <SkillStateStatus
+                      skill={props.entry.skill ?? { disabled: !props.entry.library!.enabled }}
+                      verdict={
+                        props.entry.skill
+                          ? verdictForSkill(props.entry.skill, props.skills.state.clawhubVerdicts)
+                          : null
+                      }
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      class="btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"
+                      disabled={
+                        props.skills.saving ||
+                        !props.skills.state.connected ||
+                        !props.skills.canInstall ||
+                        props.skills.loading ||
+                        props.skills.state.skillOperation !== null
+                      }
+                      aria-label={t("skillsPage.installNamed", { name: props.entry.name })}
+                      onClick={() => props.skills.onClawHubInstall(reference())}
+                    >
+                      {t(busy() ? "skillsPage.installing" : "skillsPage.install")}
+                    </button>
+                  )}
+                </div>
               </div>
+              <span class="plugin-card-author">{props.entry.attribution}</span>
             </div>
-            <span class="plugin-card-author">{props.entry.attribution}</span>
           </div>
         </div>
+        <PluginCardSummary summary={props.entry.description} />
+        {props.entry.remote?.trustState && (
+          <span class="muted skill-discovery-card__notice">
+            {t("skillsPage.notScannedByClawHub")}
+          </span>
+        )}
       </div>
-      <PluginCardSummary summary={props.entry.description} />
-      {props.entry.remote?.trustState && (
-        <span class="muted skill-discovery-card__notice">
-          {t("skillsPage.notScannedByClawHub")}
-        </span>
-      )}
     </article>
   );
 }
@@ -268,14 +275,11 @@ export function SkillDiscovery(props: SkillsProps) {
           {props.state.clawhubInstallMessage!.text}
         </div>
       )}
-      <div
-        class="plugin-catalog-grid plugin-catalog-grid--results"
-        aria-busy={props.loading || pending() ? "true" : "false"}
-      >
-        <For each={entries()} keyed={(entry) => entry.id}>
-          {(entry) => <DiscoveryCard entry={entry()} skills={props} />}
-        </For>
-      </div>
+      <PluginCatalogGrid items={entries()} results busy={props.loading || pending()}>
+        {(entry, contentRef) => (
+          <DiscoveryCard entry={entry()} skills={props} contentRef={contentRef} />
+        )}
+      </PluginCatalogGrid>
       <Errored fallback={() => null}>
         <Loading on={[query(), connected(), epoch()]} fallback={null}>
           {props.readClawHubSearch() &&

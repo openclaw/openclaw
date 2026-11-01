@@ -2,7 +2,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { IsolatedCompletionResult } from "../../agents/isolated-completion.js";
-import { buildConfiguredModelCatalog } from "../../agents/model-selection-shared.js";
+import { buildThinkingCatalog } from "../../agents/model-thinking-default-core.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -127,7 +127,7 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
   const { cfg, agentId, provider, model } = params;
   const reasoning = params.request.reasoning;
   if (reasoning !== undefined) {
-    const catalog = buildConfiguredModelCatalog({ cfg });
+    const catalog = buildThinkingCatalog({ cfg, provider, model });
     const profile = resolveThinkingProfile({
       provider,
       model,

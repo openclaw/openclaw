@@ -19,10 +19,11 @@ The setup assistant's `doctor` action uses this read-only lint posture in an iso
 process. It reports findings without applying repairs or migrations. Run
 `openclaw doctor --fix` separately on the Gateway host when you intend to repair state.
 
-Reports reuse a private shared-state snapshot for ordinary reads within the report,
+Reports reuse a private shared-state snapshot and its reader for ordinary reads within the report,
 preserving the live database and its WAL files. `--only` reports prepare that shared
 snapshot on the first shared-state read.
-Each new report reads a fresh snapshot. Checks that need writable inspection state
+Read-only agent database inspections also reuse their captured image until the
+report's readers close. Each new report reads fresh snapshots. Checks that need writable inspection state
 or independent database verification retain their own copies.
 
 Read-only reports preserve existing SQLite database, WAL, and shared-memory files,
@@ -140,7 +141,7 @@ and error message, and provide a recovery hint for the affected path.
 The updater retains the warning and continues. Doctor preserves settings whose
 plugin owner could not be inspected; see [Plugin repair warnings](/install/update-troubleshooting#plugin-repair-warnings).
 
-Bare `openclaw doctor --json` exits `0` once it emits a findings payload, including when `ok` is `false`. Argument errors remain nonzero. If the lint runner fails before producing a report, Doctor exits `2` and emits one redacted JSON document with `ok: false`, `checksRun: 0`, and an error finding under `core/doctor/lint-inspection`. It retains the `error: { type: "cli_error", message }` field for existing consumers. This readiness shape is accepted by published updaters, including 2026.9.5, without treating an inspection failure as a successful check.
+Bare `openclaw doctor --json` exits `0` once it emits a findings payload, including when `ok` is `false`. Argument errors remain nonzero. If config parsing or database target selection blocks inspection, JSON includes `status: "blocked"`, `ok: false`, and an error finding explaining the reason, and Doctor exits `2`. If the lint runner fails before producing a report, Doctor exits `2` and emits one redacted JSON document with `ok: false`, `checksRun: 0`, and an error finding under `core/doctor/lint-inspection`. It retains the `error: { type: "cli_error", message }` field for existing consumers. This readiness shape is accepted by published updaters, including 2026.9.5, without treating an inspection failure as a successful check.
 
 `--all` controls which checks are selected before severity filtering. The default lint run excludes checks that are deep, historical, or more likely to surface repairable legacy residue; use `--all` for the complete inventory. `--only <id>` is the most precise selector and can run any registered check by id.
 

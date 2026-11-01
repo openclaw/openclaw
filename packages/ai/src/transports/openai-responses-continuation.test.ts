@@ -1,6 +1,11 @@
 import { hash } from "node:crypto";
 import type { ResponseFunctionToolCall } from "openai/resources/responses/responses.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  freezeJsonSnapshot,
+  isDeeplyFrozenPlainData,
+} from "../../../../src/shared/immutable-data.js";
+import { createAiTransportHost, runWithAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import {
   claimOpenAIResponsesHttpContinuation,
@@ -159,6 +164,59 @@ afterEach(() => {
 });
 
 describe("OpenAI Responses continuation", () => {
+  it("extends immutable prefix hashes without re-encoding retained entries across branches", () => {
+    const host = createAiTransportHost({
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+    });
+    runWithAiTransportHost(host, () => {
+      const texts = ["retained prefix 🦞", "new suffix", "rewritten prefix"];
+      const [a, b, c] = texts.map((text) => freezeJsonSnapshot(userInput(text)));
+      const expected = (indices: number[]) =>
+        hash(
+          "sha256",
+          `[${indices
+            .map(
+              (index) =>
+                `{"content":[{"text":${JSON.stringify(texts[index])},"type":"input_text"}],"role":"user","type":"message"}`,
+            )
+            .join(",")}]`,
+        );
+      const first = expected([0]);
+      const appended = expected([0, 1]);
+      const stringify = vi.spyOn(JSON, "stringify");
+      try {
+        expect(responsesContinuationPrefixFingerprint([a])).toBe(first);
+        stringify.mockClear();
+        expect(responsesContinuationPrefixFingerprint([a, b])).toBe(appended);
+        expect(stringify.mock.calls.filter(([value]) => value === texts[0])).toHaveLength(0);
+        expect(stringify.mock.calls.filter(([value]) => value === texts[1])).toHaveLength(1);
+      } finally {
+        stringify.mockRestore();
+      }
+      for (const indices of [[0, 2], [2, 1], [0, 1], [1, 0], [0], []]) {
+        const input = indices.map((index) => [a, b, c][index]);
+        expect(responsesContinuationPrefixFingerprint(input)).toBe(expected(indices));
+        // Restarted/reloaded history has no checkpoint identities but the same persisted hash.
+        expect(
+          responsesContinuationPrefixFingerprint(freezeJsonSnapshot(structuredClone(input))),
+        ).toBe(expected(indices));
+      }
+      const mutable = { toJSON: (key: string) => ({ key, text: "before" }) };
+      const before = responsesContinuationPrefixFingerprint([a, mutable]);
+      expect(before).toBe(
+        hash(
+          "sha256",
+          `[{"content":[{"text":${JSON.stringify(texts[0])},"type":"input_text"}],"role":"user","type":"message"},{"key":"1","text":"before"}]`,
+        ),
+      );
+      mutable.toJSON = (key) => ({ key, text: "after" });
+      expect(responsesContinuationPrefixFingerprint([a, mutable])).not.toBe(before);
+      expect(responsesContinuationPrefixFingerprint([a], [assistantOutput])).toBe(
+        responsesContinuationPrefixFingerprint(structuredClone([a]), [assistantOutput]),
+      );
+    });
+  });
+
   it("preserves persisted request and prefix hashes across JSON normalization and key order", () => {
     const text = `${"x".repeat(17_000)}🦞 café e\u0301 \ud800\n`;
     const encodedText = JSON.stringify(text);

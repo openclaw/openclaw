@@ -242,37 +242,6 @@ export function isCompletedRequesterDeliveryBlocked(
   );
 }
 
-/** Returns true when required delivery still owns the row after its child session is gone. */
-export function hasRetainedRequiredCompletionDelivery(
-  entry: Pick<
-    SubagentRunRecord,
-    "completion" | "delivery" | "expectsCompletionMessage" | "suppressCompletionDelivery"
-  >,
-): boolean {
-  const delivery = entry.delivery;
-  if (
-    entry.expectsCompletionMessage !== true ||
-    entry.suppressCompletionDelivery === true ||
-    entry.completion?.required !== true ||
-    !delivery?.payload
-  ) {
-    return false;
-  }
-  if (isDeliverySuspended(entry)) {
-    return true;
-  }
-  if (delivery.status === "in_progress") {
-    // The correlated session queue owns this delivery and resumes it separately.
-    return true;
-  }
-  return (
-    delivery.status === "pending" &&
-    delivery.disposition !== "ambiguous" &&
-    delivery.disposition !== "intentional_non_delivery" &&
-    delivery.disposition !== "permanent_failure"
-  );
-}
-
 export function getDeliveryLastError(entry: SubagentRunRecord): string | undefined {
   const error = entry.delivery?.lastError;
   return typeof error === "string" && error.trim() ? error : undefined;

@@ -145,14 +145,19 @@ suite.define(() => {
       );
       await pollLocatorText(selectedAgent).toContain("Pacino");
       await expect
-        .poll(() => selectedAgent.evaluate((element) => document.activeElement === element))
+        .poll(() =>
+          selectedAgent.evaluate(
+            (element) =>
+              document.activeElement?.getAttribute("aria-activedescendant") === element.id,
+          ),
+        )
         .toBe(true);
-      const unnamedAgent = picker.getByRole("menuitemradio", {
+      const unnamedAgent = picker.getByRole("option", {
         name: "research",
         exact: true,
       });
       await pollLocatorText(unnamedAgent).toContain("research");
-      const longNameAgent = picker.getByRole("menuitemradio", { name: longName, exact: true });
+      const longNameAgent = picker.getByRole("option", { name: longName, exact: true });
       await pollLocatorText(longNameAgent).toContain(longName);
       await longNameAgent.hover();
 

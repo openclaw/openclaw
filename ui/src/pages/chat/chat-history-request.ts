@@ -3,6 +3,10 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import {
+  nativeHistoryMessageSourceId,
+  oldestNativeHistoryMessage,
+} from "../../lib/chat/history-message-identity.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import {
   isUiSelectedGlobalSessionKey,
@@ -65,7 +69,7 @@ export function captureChatHistoryRun(
 
 // Keep startup small, then amortize older-history reads and prepend work across
 // larger pages. The Gateway owns the response byte and single-message limits.
-const CHAT_HISTORY_OLDER_PAGE_LIMIT = 1000;
+export const CHAT_HISTORY_OLDER_PAGE_LIMIT = 1000;
 const CHAT_HISTORY_OLDER_PAGE_MAX_BYTES = 3 * 1024 * 1024;
 
 export function attachHistoryActivity<Result extends ChatHistoryResponse>(result: Result): Result {
@@ -361,11 +365,26 @@ export async function requestChatSessionSnapshot(
   };
 }
 
-async function requestOlderChatHistoryPage(
+type OlderHistorySelector = { cursor: string } | { messageId: string; sessionId: string };
+
+export function chatHistoryOlderSelector(state: ChatState): OlderHistorySelector | null {
+  const pagination = state.chatHistoryPagination;
+  if (!pagination.hasMore) {
+    return null;
+  }
+  if (pagination.olderCursor) {
+    return { cursor: pagination.olderCursor };
+  }
+  const sessionId = state.currentSessionId?.trim();
+  const messageId = nativeHistoryMessageSourceId(oldestNativeHistoryMessage(state.chatMessages));
+  return messageId && sessionId ? { messageId, sessionId } : null;
+}
+
+export async function requestOlderChatHistoryPage(
   client: GatewayBrowserClient,
   sessionKey: string,
   requestAgentId: string | undefined,
-  offset: number,
+  selector: OlderHistorySelector,
   isCurrent: () => boolean,
   signal?: AbortSignal,
 ): Promise<ChatHistoryResult> {
@@ -382,9 +401,9 @@ async function requestOlderChatHistoryPage(
             sessionKey,
             toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
             ...(requestAgentId ? { agentId: requestAgentId } : {}),
-            limit: CHAT_HISTORY_OLDER_PAGE_LIMIT,
+            limit: "messageId" in selector ? 1 : CHAT_HISTORY_OLDER_PAGE_LIMIT,
             maxBytes: CHAT_HISTORY_OLDER_PAGE_MAX_BYTES,
-            offset,
+            ...selector,
           },
           { signal: readSignal },
         ),
@@ -398,7 +417,7 @@ async function requestOlderChatHistoryPage(
 
 export async function loadOlderChatHistoryPage(
   state: ChatState,
-  offset: number,
+  selector: OlderHistorySelector,
   signal?: AbortSignal,
 ): Promise<ChatHistoryResult | undefined> {
   if (!state.client || !state.connected) {
@@ -420,7 +439,7 @@ export async function loadOlderChatHistoryPage(
     client,
     sessionKey,
     requestAgentId,
-    offset,
+    selector,
     () => acceptsHistoryResult(state, ownership),
     signal,
   );
@@ -440,7 +459,7 @@ export type StagedOlderHistoryPage = NonNullable<
 // same facts and the pane validates it at consume time instead.
 export async function fetchStagedOlderHistoryPage(
   state: ChatState,
-  offset: number,
+  cursor: string,
   signal?: AbortSignal,
 ) {
   if (!state.client || !state.connected) {
@@ -465,16 +484,16 @@ export async function fetchStagedOlderHistoryPage(
     client,
     sessionKey,
     requestAgentId,
-    offset,
+    { cursor },
     () => acceptsHistoryResult(state, claim),
     signal,
   );
-  return { claim, requestedOffset: offset, result };
+  return { claim, requestedCursor: cursor, result };
 }
 
 /** A staged page is valid only for the exact connection, session, and the
  * pagination cursor it was fetched at; any drift means the reactive path must
- * refetch (tail reloads rebase offsets, resets reuse session keys). */
+ * refetch (tail reloads may replace the window, resets reuse session keys). */
 export function isStagedOlderHistoryPageCurrent(
   state: ChatState,
   staged: StagedOlderHistoryPage,
@@ -484,6 +503,6 @@ export function isStagedOlderHistoryPageCurrent(
   return (
     acceptsHistoryResult(state, claim) &&
     pagination.hasMore &&
-    pagination.nextOffset === staged.requestedOffset
+    pagination.olderCursor === staged.requestedCursor
   );
 }

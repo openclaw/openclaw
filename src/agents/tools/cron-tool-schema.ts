@@ -498,6 +498,12 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
         description: 'Job offset for action="list"; use nextOffset to load the next page',
       }),
       job: managementOnly ? Type.Optional(Type.Omit(job, ["declarationKey", "owner"])) : job,
+      toolsAllowMode: Type.Optional(
+        Type.Literal("exact", {
+          description:
+            'Add/update: use "exact" to keep the requested toolsAllow without configured default tools. Omitted adds cron.defaultTools before policy checks. An explicit [] always stays tool-less.',
+        }),
+      ),
       jobId: Type.Optional(Type.String()),
       id: Type.Optional(Type.String()),
       content: Type.Optional(Type.Union([Type.String({ maxLength: 262144 }), Type.Null()])),

@@ -5,22 +5,22 @@ import path from "node:path";
 import { gzipSync } from "node:zlib";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
+import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
 import { createBackupArchive } from "../infra/backup-create.js";
+import { withIsolatedBackupState } from "../infra/backup-create.test-support.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { backupRestoreCommand } from "./backup-restore.js";
-import { buildBackupArchivePath } from "./backup-shared.js";
 import { encodeTarEntry } from "./backup-tar.test-support.js";
 import type { BackupManifest } from "./backup-verify-manifest.js";
 import { prepareBackupArchive, verifyBackupArchive } from "./backup-verify.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-const withState = (run: Parameters<typeof withOpenClawTestState>[1]) =>
-  withOpenClawTestState({ layout: "state-only", scenario: "minimal", prefix: "oc-link-" }, run);
+const withState = (run: Parameters<typeof withIsolatedBackupState>[1]) =>
+  withIsolatedBackupState({ layout: "state-only", scenario: "minimal", prefix: "oc-link-" }, run);
 const DEFAULT_ARCHIVE_ROOT = "2026-08-12T00-00-00.000Z-openclaw-backup";
 const DEFAULT_PAYLOAD_PATH = buildBackupArchivePath(DEFAULT_ARCHIVE_ROOT, "/tmp/openclaw.json");
 const restore = (archive: string, target: string) =>

@@ -15,6 +15,7 @@ import {
 import { verifyBuiltPluginControlPlaneModules } from "./check-built-plugin-control-plane-modules.mts";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mts";
 import { copyHookMetadata, listHookMetadataOutputs } from "./copy-hook-metadata.ts";
+import { bundledModuleRegions } from "./lib/bundled-module-regions.mjs";
 import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
@@ -183,7 +184,7 @@ function resolveStableRootRuntimeAliasCandidate(
       (target) =>
         target !== candidate &&
         source.includes(`"./${target}"`) &&
-        !source.includes("\n//#region "),
+        bundledModuleRegions(source).next().done,
     ),
   );
   return wrappers.length === 1 ? (wrappers[0]?.candidate ?? null) : null;

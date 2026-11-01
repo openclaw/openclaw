@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ApiError } from "grammy/types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -96,14 +95,18 @@ function admitAtNetwork(
   scope: TelegramRequestScope | undefined,
   prev: TelegramApiCall,
 ): TelegramApiCall {
-  return async (method, payload, signal) => {
-    const waitMs = method === "getUpdates" ? 0 : gate.remainingMs();
-    if (waitMs > 0) {
-      return skippedFloodResponse(waitMs, "flood wait active");
-    }
-    scope?.assertCurrent?.();
-    return prev(method, payload, signal);
-  };
+  // Shared limiter queues inherit their first caller's context. Restore this
+  // request's owner before checking authority or starting transport work.
+  const runInContext = AsyncLocalStorage.snapshot();
+  return (method, payload, signal) =>
+    runInContext(async () => {
+      const waitMs = method === "getUpdates" ? 0 : gate.remainingMs();
+      if (waitMs > 0) {
+        return skippedFloodResponse(waitMs, "flood wait active");
+      }
+      scope?.assertCurrent?.();
+      return prev(method, payload, signal);
+    });
 }
 
 class TelegramFloodGate {
@@ -530,11 +533,10 @@ function createTelegramAccountThrottler(
     }
     // Classify at the call site: queued work later runs in the drain's async context.
     const callerScope = requestScopes.getStore();
-    const effect = captureEffectAuthority();
     const replaceable = method === "sendChatAction" || callerScope?.replaceable === true;
     const scope = replaceable ? { ...callerScope, replaceable: true as const } : callerScope;
     // Waiting and retry policy runs outside the queues; admission runs at the network edge.
-    const admitted = admitAtNetwork(floodGate, scope, (...args) => effect.run(() => prev(...args)));
+    const admitted = admitAtNetwork(floodGate, scope, prev);
     const send = callThroughFloodGate(
       floodGate,
       replaceable,

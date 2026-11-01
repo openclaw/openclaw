@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listLiveAgentRunIds } from "../../../infra/agent-run-registry.js";
+import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { listSwarmRunReservationIds } from "../swarm/swarm-scheduler.js";
@@ -59,14 +60,14 @@ export type SubagentRootRequester = {
   storePath?: string;
 };
 
-/** Shutdown follows the live registry's requester links, never persisted recovery claims. */
+/** Shutdown follows subagent ancestry; ordinary conversations own their own resume. */
 export function resolveRootSubagentRequester(
   sessionKey: string,
   agentId?: string,
 ): SubagentRootRequester {
   let root: SubagentRootRequester = { sessionKey, agentId };
   const visited = new Set<string>();
-  for (;;) {
+  while (isSubagentSessionKey(root.sessionKey)) {
     const identity = JSON.stringify([root.agentId, root.sessionKey]);
     if (visited.has(identity)) {
       return root;
@@ -82,6 +83,7 @@ export function resolveRootSubagentRequester(
       storePath: entry.requesterStorePath,
     };
   }
+  return root;
 }
 
 export function listLiveSubagentRootSessions(): SubagentRootRequester[] {

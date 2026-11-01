@@ -59,6 +59,9 @@ it("retains scoped display-only thumbnail bytes without authorizing a read or ac
   try {
     let image = view.container.querySelector("img");
     expect(image?.getAttribute("src")).toBe("blob:cached-thumbnail");
+    expect(view.container.querySelector<HTMLElement>(".chat-image-frame")?.style.cssText).toContain(
+      "--chat-image-ratio: 400 / 200",
+    );
     const button = view.container.querySelector<HTMLButtonElement>(".chat-message-image-button")!;
     button.click();
     view.container.querySelector<HTMLButtonElement>(".catalog-image")!.click();
@@ -117,6 +120,8 @@ it("records displayed bytes only from HTTP cache without replacing the live imag
   try {
     await waitForSolid(() => expect(view.container.querySelector("img")).not.toBeNull());
     const image = view.container.querySelector("img")!;
+    const frame = view.container.querySelector<HTMLElement>(".chat-image-frame")!;
+    const reservedSize = frame.style.cssText;
     const displayedSource = image.getAttribute("src");
     expect(displayedSource).toContain("mediaTicket=synthetic-live-ticket");
     Object.defineProperties(image, {
@@ -125,6 +130,8 @@ it("records displayed bytes only from HTTP cache without replacing the live imag
     });
     image.dispatchEvent(new Event("load"));
     await waitForSolid(() => expect(facts().images?.[key]?.thumbnail).toBeInstanceOf(Blob));
+    expect(facts().images?.[key]).toMatchObject({ width: 480, height: 240 });
+    expect(frame.style.cssText).toBe(reservedSize);
     expect(fetch).toHaveBeenCalledWith(expect.stringContaining("variant=thumbnail"), {
       cache: "only-if-cached",
       mode: "same-origin",

@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { revokeGoalContinuationReturn } from "../../../auto-reply/reply/goal-continuation-return.js";
-import type { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { prepareGatewayContextBindingOwner } from "../../../plugins/runtime/gateway-context-binding-owner.js";
 import {
   bindGatewayContextResolver,
@@ -8,6 +7,7 @@ import {
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import type { OperationalRunInstanceRef } from "../../operational-run-instance.js";
 import { transferFollowupCohort } from "../completion/session-followup-cohort.js";
 import {
   matchesSubagentChildSessionOwner,
@@ -16,6 +16,7 @@ import {
 } from "./subagent-child-owner-match.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import type { SubagentCompletionCustody } from "./subagent-registry-memory.types.js";
 import {
   publishSubagentRunChanges,
   subscribeSubagentRunChanges,
@@ -276,19 +277,10 @@ function completeRetirementPublication(publication: SubagentRetirementPublicatio
   publication.resolve();
 }
 
-type CompletionAuthority = NonNullable<
-  Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>
->;
-type CompletionCustody = {
-  authority: CompletionAuthority;
-  entry: SubagentRunRecord;
-  stop: () => void;
-};
-
 class SubagentRunMap extends Map<string, SubagentRunRecord> {
   readLookup = new SubagentSessionReadLookup();
   readonly workIndex = new SubagentRunWorkIndex();
-  private readonly completionAuthorities = new Map<object, CompletionCustody>();
+  private readonly completionAuthorities = new Map<object, SubagentCompletionCustody>();
   // A tombstone rejects stale callbacks without retaining closed Gateway/source contexts.
   private readonly requiredCompletionEntries = new WeakSet<object>();
   private readonly retiredCompletionEntries = new WeakSet<object>();
@@ -308,7 +300,11 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     return getCurrentSubagentRunOwner(this, entry) ?? entry;
   }
 
-  bindCompletionAuthority(row: SubagentRunRecord, source: CompletionAuthority) {
+  bindCompletionAuthority(
+    row: SubagentRunRecord,
+    source: SubagentCompletionCustody["authority"],
+    requesterRunInstance?: OperationalRunInstanceRef,
+  ) {
     const entry = this.currentValue(row);
     const key = getSubagentRunRuntimeKey(entry);
     // A committed row with captured custody stays restricted if its source expires before publication.
@@ -323,9 +319,10 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     this.releaseCompletionAuthority(entry);
     this.requiredCompletionEntries.add(key);
     this.retiredCompletionEntries.delete(key);
-    const custody: CompletionCustody = {
+    const custody: SubagentCompletionCustody = {
       authority: source,
       entry,
+      requesterRunInstance,
       stop: () => source.signal.removeEventListener("abort", revoked),
     };
     const revoked = () => this.releaseCompletionAuthority(custody.entry);
@@ -334,6 +331,20 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     if (source.signal.aborted) {
       revoked();
     }
+  }
+
+  /** Steering adopts an existing execution without replacing its completion source. */
+  bindRequesterRunInstance(entry: SubagentRunRecord, instance?: OperationalRunInstanceRef): void {
+    const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
+    if (custody && instance && isSameSubagentRunOwner(this.get(entry.runId), entry)) {
+      custody.requesterRunInstance = instance;
+    }
+  }
+
+  getRequesterRunInstance(entry: SubagentRunRecord): OperationalRunInstanceRef | undefined {
+    return isSameSubagentRunOwner(this.get(entry.runId), entry)
+      ? this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.requesterRunInstance
+      : undefined;
   }
 
   releaseCompletionAuthority(observed: SubagentRunRecord): void {

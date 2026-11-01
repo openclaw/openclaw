@@ -22,6 +22,7 @@ export function validateWorkerProviderContract(
     "prepareProvision",
     "listMachineOptions",
     "runSetupCommand",
+    "setRetainedState",
   ] as const) {
     if (provider[method] !== undefined && typeof provider[method] !== "function") {
       return { ok: false, message: `worker provider registration ${method} must be a function` };
@@ -34,6 +35,15 @@ export function validateWorkerProviderContract(
     return {
       ok: false,
       message: "worker provider registration provisionBeforeInstallation must be a boolean",
+    };
+  }
+  if (
+    provider.supportsResourceReceipts !== undefined &&
+    (typeof provider.supportsResourceReceipts !== "boolean" || !provider.supportsResourceReceipts)
+  ) {
+    return {
+      ok: false,
+      message: "worker provider registration supportsResourceReceipts must be true",
     };
   }
   const executionModes = provider.supportedExecutionModes;

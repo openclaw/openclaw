@@ -45,9 +45,10 @@ import { resolveSessionStoreKey } from "../session-utils.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import {
   canRequesterAbortChatRun,
+  captureChatAbortAuthority,
+  getChatRunAbortAuthority,
   resolveChatAbortTargetRejection,
   resolveChatAbortSessionRestriction,
-  resolveChatAbortRequester,
 } from "./chat-abort-authorization.js";
 import * as exactRun from "./chat-abort-exact-run.js";
 import {
@@ -66,7 +67,6 @@ import {
 import { persistAbortedPartials } from "./chat-transcript-persistence.js";
 import { respondError } from "./response.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -85,13 +85,13 @@ export async function handleChatAbortRequestWithLifecycle(
   options: GatewayRequestHandlerOptions,
   lifecycle: ChatAbortLifecycle = {},
 ): Promise<void> {
-  const { params, respond, context, client, sessionMutationAuthorization } = options;
-  const authority = readGatewayRequestMutationAuthority(options);
-  const requester = resolveChatAbortRequester(client, sessionMutationAuthorization);
+  const { params, respond, context, sessionMutationAuthorization } = options;
+  const { requester, assertRequesterCurrent, narrow } = captureChatAbortAuthority(options);
   const assertCurrent = () => {
-    authority.assertCurrent();
+    assertRequesterCurrent();
     sessionMutationAuthorization?.assertCurrent();
     requester.sessionAuthority?.assertCurrent();
+    requester.personalAuthority?.assertCurrent();
   };
   if (!assertValidParams(params, validateChatAbortParams, "chat.abort", respond)) {
     return;
@@ -147,9 +147,6 @@ export async function handleChatAbortRequestWithLifecycle(
     sessionKey: rawSessionKey,
     storeAgentId: abortAgentId,
   });
-  const narrow =
-    authority.sessionScope === "operator.sessions.write" ||
-    requester.sessionAuthority !== undefined;
   const restriction = resolveChatAbortSessionRestriction({
     requestedSessionId,
     runId,
@@ -198,6 +195,9 @@ export async function handleChatAbortRequestWithLifecycle(
         assertCurrent,
         preserveSideRuns,
         cascadeDescendants: lifecycle.cascadeDescendants,
+        // Plain chat.abort is the user-facing Stop. Queued-input discard and maintenance
+        // aborts stay unmarked; the exact-run branch bridges its accepted Stop separately.
+        cancelExperienceReview: true,
         yieldedRequesterRunId: lifecycle.yieldedRequesterRunId,
       },
       prepareAbortSession,
@@ -357,10 +357,7 @@ export async function handleChatAbortRequestWithLifecycle(
   });
   let inputWithdrawn = false;
   if (discardPendingInput) {
-    if (
-      active &&
-      !authorizeRunTarget({ ...getRpcSourceIdentity(active), requester: active.adapter.requester })
-    ) {
+    if (active && !authorizeRunTarget(getChatRunAbortAuthority(active))) {
       return;
     }
     if (
@@ -589,9 +586,7 @@ export async function handleChatAbortRequestWithLifecycle(
     await respondWithWorkerRuns([]);
     return;
   }
-  if (
-    !authorizeRunTarget({ ...getRpcSourceIdentity(active), requester: active.adapter.requester })
-  ) {
+  if (!authorizeRunTarget(getChatRunAbortAuthority(active))) {
     return;
   }
   const { sessionKey, sessionId, agentId } = getRpcSourceIdentity(active);
@@ -614,6 +609,9 @@ export async function handleChatAbortRequestWithLifecycle(
     assertCurrent: assertActive,
     hookContext: stopHookContext,
     afterParent: cancelWorker,
+    // Control UI and native chat clients Stop ordinary local runs with an exact runId; that
+    // accepted Stop must cover Workshop review exactly like a session Stop.
+    experienceReview: { agentId: agentId ?? abortAgentId, sessionKey },
     onAborted: () => lifecycle.onExactRunAborted?.(runId),
     onAbortPrepared: () => {
       const text = context.chatRunState.resolveBuffer(runId, { final: true }).text;

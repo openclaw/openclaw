@@ -423,6 +423,22 @@ describe("runtime.llm.complete isolated agent runtime", () => {
   });
 
   it.each([
+    ["deepseek", "deepseek-v4-pro"],
+    ["moonshot", "kimi-k3"],
+  ])(
+    "admits max reasoning for %s/%s from its bundled row without configured models",
+    async (provider, modelId) => {
+      hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValue({
+        provider,
+        modelId,
+        agentDir: "/tmp/main",
+      });
+      await authorizedLlm().complete(isolatedRequest({ reasoning: "max" }));
+      expectSingleCallFirstArg(hoisted.runIsolatedCompletion, { provider, model: modelId });
+    },
+  );
+
+  it.each([
     {
       name: "validates isolated reasoning against the host-resolved model and runtime",
       request: { reasoning: "max" },

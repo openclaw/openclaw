@@ -16,6 +16,7 @@ import {
   type SessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
+import { transferCommandOwnerAuthorityToSuccessor } from "../command-owner-authority.js";
 import { createGoalContinuationReturnScope } from "./goal-continuation-return.js";
 import type { GoalContinuation } from "./goal-continuation.types.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
@@ -211,19 +212,42 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
   }
   const base = params.base;
   const cancellation = new AbortController();
+  const transcript = buildTranscriptFollowupRun(base, {
+    prompt:
+      "Advance the active goal; keep it active until fully achieved. Use the current goal context, and verify the entire objective before marking it complete.",
+    sourceTool: "session_goal_continue",
+    expiredSkillAuthoringMessage:
+      "Skill authoring requires a fresh user request after the previous turn settled.",
+  });
+  // A session-event turn (for example a background exec completion) owns an
+  // occurrence-scoped signal, settlement hooks, and one-shot source delivery that
+  // all end when the event settles. The Goal turn outlives that occurrence, so it
+  // keeps only its own cancellation and the session's ordinary routed delivery.
+  // It still is not an authenticated channel turn, so the event origin and its
+  // explicit delivery suppression stay on the run as data, and inherited owner
+  // authority moves to the requester's own live check.
+  const sourceEvent = base.run.internalEventExecution;
+  const sourceSignal = sourceEvent ? undefined : base.abortSignal;
+  let run = transcript.run;
+  if (sourceEvent) {
+    run = {
+      ...transcript.run,
+      internalEventExecution: undefined,
+      sessionEventOrigin: sourceEvent.deliver === false ? { deliver: false } : {},
+    };
+    if (transferCommandOwnerAuthorityToSuccessor(run) === "removed") {
+      run.senderIsOwner = false;
+    }
+  }
   const nudge: FollowupRun = {
-    ...buildTranscriptFollowupRun(base, {
-      prompt:
-        "Advance the active goal; keep it active until fully achieved. Use the current goal context, and verify the entire objective before marking it complete.",
-      sourceTool: "session_goal_continue",
-      expiredSkillAuthoringMessage:
-        "Skill authoring requires a fresh user request after the previous turn settled.",
-    }),
+    ...transcript,
+    run,
+    ...(sourceEvent ? { queuedFollowupReplyDisposition: undefined } : {}),
     goalContinuation: continuation,
     summaryLine: "goal-continuation",
     messageId: ["goal", continuation.sessionId, continuation.goalId, params.sourceRunId].join(":"),
-    abortSignal: base.abortSignal
-      ? AbortSignal.any([base.abortSignal, cancellation.signal])
+    abortSignal: sourceSignal
+      ? AbortSignal.any([sourceSignal, cancellation.signal])
       : cancellation.signal,
     controllerInput: params.controllerInput,
     strandedReplyRetry: undefined,
@@ -257,24 +281,24 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
 export function createGoalContinuationReturn(
   params: Omit<GoalContinuationParams, "result" | "sourceRunId"> | undefined,
 ): <T>(run: () => T) => T {
-  if (!params?.initialGoalId) {
+  if (!params) {
     return (run) => run();
   }
-  const continuation: GoalContinuation = {
-    sessionId: params.expectedSession.sessionId,
-    lifecycleRevision: params.expectedSession.lifecycleRevision,
-    goalId: params.initialGoalId,
-  };
   return createGoalContinuationReturnScope({
     base: params.base,
     sessionKey: params.sessionKey,
-    continuation,
+    storePath: params.storePath,
+    expectedSession: {
+      sessionId: params.expectedSession.sessionId,
+      lifecycleRevision: params.expectedSession.lifecycleRevision,
+    },
+    initialGoalId: params.initialGoalId,
     operation: params.operation,
-    context: (entry, existing) =>
+    context: (continuation, entry, existing) =>
       isGoalContinuationCurrent(continuation, entry)
         ? refreshActiveGoalContext(existing, entry)
         : undefined,
-    async resume({ base, runId, result, isCurrent }) {
+    async resume({ continuation, base, runId, result, isCurrent }) {
       // The controller sees this pending input before admission reads yield to Stop.
       const input = reserveSessionControllerSource(params.queueKey, {
         policy: params.settings,
