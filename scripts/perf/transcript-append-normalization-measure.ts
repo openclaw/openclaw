@@ -14,6 +14,7 @@
  * owner path, not a whole Gateway or a production-size database/I/O benchmark.
  */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash, hash } from "node:crypto";
 import { constants, existsSync, readFileSync } from "node:fs";
 import { copyFile, mkdir, stat, writeFile } from "node:fs/promises";
@@ -227,7 +228,11 @@ try {
     );
     seedDatabaseBytes = (await stat(seed)).size;
     await mkdir(path.dirname(target.storePath), { recursive: true });
-    await copyFile(seed, target.storePath, constants.COPYFILE_FICLONE_FORCE);
+    if (process.platform === "darwin") {
+      execFileSync("/bin/cp", ["-c", seed, target.storePath]);
+    } else {
+      await copyFile(seed, target.storePath, constants.COPYFILE_FICLONE_FORCE);
+    }
   }
   const workspace = values.workspace ? path.resolve(values.workspace) : state.workspaceDir;
   assert((await stat(workspace)).isDirectory(), "Workspace must exist");
