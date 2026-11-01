@@ -9,10 +9,8 @@ function configWith(value: unknown): OpenClawConfig {
 
 // Every warning below comes from the empty-allow collector.
 describe("collectConfigValidationWarnings empty allow (#147342)", () => {
-  it("warns for an empty allow list on global tools", () => {
-    const warnings = collectConfigValidationWarnings(
-      configWith({ tools: { allow: [], deny: ["dangerous-*"] } }),
-    );
+  it("warns for an empty allow list that is the whole global policy", () => {
+    const warnings = collectConfigValidationWarnings(configWith({ tools: { allow: [] } }));
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.path).toBe("tools");
     expect(warnings[0]?.message).toContain("Empty allow list permits everything not denied");
@@ -68,31 +66,39 @@ describe("collectConfigValidationWarnings empty allow (#147342)", () => {
     expect(paths).toEqual(["tools.sandbox.tools", "tools.subagents.tools"]);
   });
 
-  it("stays silent only for sub-agent allow: [] paired with alsoAllow", () => {
+  it("stays silent when a non-empty deny gives the empty allow a purpose", () => {
     const warnings = collectConfigValidationWarnings(
       configWith({
         tools: {
-          subagents: { tools: { allow: [], alsoAllow: ["read"] } },
           allow: [],
+          deny: ["exec"],
+          sandbox: { tools: { allow: [], deny: ["*"] } },
+          toolsBySender: { "e164:+390000000000": { allow: [], deny: ["write"] } },
         },
       }),
     );
-    const paths = warnings.map((warning) => warning.path).toSorted();
-    expect(paths).toEqual(["tools"]);
+    expect(warnings).toEqual([]);
   });
 
-  it("warns for global and sandbox allow: [] even with alsoAllow", () => {
+  it("stays silent when a non-empty alsoAllow accompanies the empty allow", () => {
     const warnings = collectConfigValidationWarnings(
       configWith({
         tools: {
           allow: [],
           alsoAllow: ["read"],
+          subagents: { tools: { allow: [], alsoAllow: ["read"] } },
           sandbox: { tools: { allow: [], alsoAllow: ["read"] } },
         },
       }),
     );
-    const paths = warnings.map((warning) => warning.path).toSorted();
-    expect(paths).toEqual(["tools", "tools.sandbox.tools"]);
+    expect(warnings).toEqual([]);
+  });
+
+  it("still warns when deny and alsoAllow are present but empty", () => {
+    const warnings = collectConfigValidationWarnings(
+      configWith({ tools: { allow: [], deny: [], alsoAllow: [] } }),
+    );
+    expect(warnings.map((warning) => warning.path)).toEqual(["tools"]);
   });
 
   it("warns for byProvider and nested agent sandbox scopes", () => {
@@ -145,9 +151,13 @@ describe("validateConfigObjectWithPlugins empty allow (#147342)", () => {
     expect(paths).toEqual(["tools", "tools.sandbox.tools"]);
   });
 
-  it("stays silent for sub-agent allow: [] with alsoAllow and for omitted allow", () => {
+  it("stays silent when deny or alsoAllow accompany the empty allow", () => {
     const result = validateConfigObjectWithPlugins({
-      tools: { deny: ["exec"], subagents: { tools: { allow: [], alsoAllow: ["read"] } } },
+      tools: {
+        allow: [],
+        deny: ["exec"],
+        subagents: { tools: { allow: [], alsoAllow: ["read"] } },
+      },
     });
     expect(result.ok).toBe(true);
     expect(result.warnings.filter((warning) => warning.message.includes('deny:["*"]'))).toEqual([]);

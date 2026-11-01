@@ -51,37 +51,38 @@ import { McpServerNameSchema, NodeHostMcpServerNameSchema } from "./zod-schema.r
 const EMPTY_ALLOW_POLICY_MESSAGE =
   'Empty allow list permits everything not denied; use deny:["*"] to deny all or omit allow to keep the default.';
 
+function isNonEmptyList(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0;
+}
+
 function pushEmptyAllowWarning(
   warnings: ConfigValidationIssue[],
   policyPath: string,
   policy: unknown,
-  opts?: { alsoAllowNarrows?: boolean },
 ): void {
   if (!isRecord(policy)) {
     return;
   }
   const allow: unknown = policy.allow;
-  if (Array.isArray(allow) && allow.length === 0) {
-    // Only the sub-agent resolver narrows `allow: [] + alsoAllow` to the
-    // alsoAllow list. Global/sandbox resolvers stay permissive, so suppress
-    // only where narrowing is proven.
-    if (opts?.alsoAllowNarrows === true) {
-      const alsoAllow: unknown = policy.alsoAllow;
-      if (Array.isArray(alsoAllow) && alsoAllow.length > 0) {
-        return;
-      }
-    }
-    warnings.push({ path: policyPath, message: EMPTY_ALLOW_POLICY_MESSAGE });
+  if (!Array.isArray(allow) || allow.length > 0) {
+    return;
   }
+  // Only the unambiguous trap: `allow: []` with nothing else in the policy
+  // reads as "no tools" but restricts nothing. A non-empty deny or alsoAllow
+  // means the empty allow is a deliberate part of a larger policy.
+  if (isNonEmptyList(policy.deny) || isNonEmptyList(policy.alsoAllow)) {
+    return;
+  }
+  warnings.push({ path: policyPath, message: EMPTY_ALLOW_POLICY_MESSAGE });
 }
 
 /**
  * Warns for explicit `allow: []` tool policies. An empty allow list reads as
  * "no tools" but the matcher treats it as allow-all (same as omitting
  * allow), so validation stays silent on a security UX trap. Warn-only: no
- * runtime semantics change. The `alsoAllow` suppression applies only to
- * `tools.subagents.tools`, the single scope where the runtime narrows instead
- * of staying permissive. Refs #147342.
+ * runtime semantics change. Fires only when the policy has no non-empty
+ * `deny` or `alsoAllow`, i.e. the empty allow is the whole policy and
+ * restricts nothing. Refs #147342.
  */
 function collectEmptyAllowPolicyWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
   const warnings: ConfigValidationIssue[] = [];
@@ -102,9 +103,7 @@ function collectEmptyAllowPolicyWarnings(config: OpenClawConfig): ConfigValidati
   if (isRecord(toolsNode)) {
     const subagentsNode: unknown = toolsNode.subagents;
     if (isRecord(subagentsNode)) {
-      pushEmptyAllowWarning(warnings, "tools.subagents.tools", subagentsNode.tools, {
-        alsoAllowNarrows: true,
-      });
+      pushEmptyAllowWarning(warnings, "tools.subagents.tools", subagentsNode.tools);
     }
     const sandboxNode: unknown = toolsNode.sandbox;
     if (isRecord(sandboxNode)) {

@@ -156,10 +156,10 @@ by `tools.profile`.
 > exception: `tools.subagents.tools: { allow: [], alsoAllow: ["read"] }`
 > resolves to `["read"]`, while omitting `allow` leaves it undefined.
 >
-> So `openclaw config validate` warns on every empty `allow` list it finds (global `tools`, `tools.subagents.tools`,
-> `tools.sandbox.tools`, agent entry `tools`, `toolsBySender` and `byProvider`
-> overrides, nested agent `sandbox.tools`), except `tools.subagents.tools`
-> paired with a non-empty `alsoAllow`.
+> `openclaw config validate` warns when an explicit `allow: []` is the whole
+> policy (no non-empty `deny` or `alsoAllow` alongside it), because that
+> config restricts nothing while reading as "no tools". It stays silent when
+> `deny` or `alsoAllow` give the empty list a purpose.
 
 For example, `tools.profile: "coding"` includes
 `web_search`/`web_fetch` but not the `browser` tool. To let
