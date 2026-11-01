@@ -10,6 +10,7 @@ import {
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveBrewOpenClawPath } from "../../infra/brew.js";
 import { hasErrnoCode } from "../../infra/errors.js";
+import { UPDATE_GIT_RETRY_DELAYS_MS, withGitNetworkRetry } from "../../infra/git-network-retry.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
@@ -43,7 +44,8 @@ import {
   type SystemPackageOwnershipInspection,
 } from "../../infra/update-system-package-ownership.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
+import { resolveCommandProcessSignal } from "../../process/exec-spawn.js";
+import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { UPDATE_INSTALL_SKIP_GUIDANCE } from "../../shared/update-outcome.js";
 import { pathExists } from "../../utils.js";
@@ -263,7 +265,7 @@ type StagedGitCheckout = (
 
 async function cloneGitCheckoutTransactionally(
   params: Parameters<typeof ensureGitCheckout>[0],
-): Promise<GitCheckoutResult> {
+): Promise<GitCheckoutResult & { commandResult?: SpawnResult }> {
   const parentDir = path.dirname(params.dir);
   await fs.mkdir(parentDir, { recursive: true });
   const canonicalParentDir = await fs.realpath(parentDir);
@@ -292,6 +294,7 @@ async function cloneGitCheckoutTransactionally(
   let cleanupStaging = true;
   let published = false;
   let result: UpdateStepResult | null = null;
+  let commandResult: SpawnResult | undefined;
 
   async function ownsDirectory(
     directory: string,
@@ -319,6 +322,11 @@ async function cloneGitCheckoutTransactionally(
   const runOperation = async (): Promise<void> => {
     result = await runUpdateStep({
       name: "git-clone",
+      runCommand: async (argv, options) => {
+        params.assertCurrent?.();
+        commandResult = await runCommandWithTimeout(argv, options);
+        return commandResult;
+      },
       argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, UPSTREAM_REPOSITORY_URL, stagingDir],
       env: params.env,
       timeoutMs: params.timeoutMs,
@@ -458,7 +466,7 @@ async function cloneGitCheckoutTransactionally(
   if (operationFailure) {
     throw operationFailure.error;
   }
-  return { checkoutDir: targetDir, step: result };
+  return { checkoutDir: targetDir, step: result, commandResult };
 }
 
 export async function ensureGitCheckout(params: {
@@ -467,6 +475,7 @@ export async function ensureGitCheckout(params: {
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
   useStagedCheckout?: StagedGitCheckout;
+  assertCurrent?: () => void;
 }): Promise<GitCheckoutResult> {
   const gitEnv = params.env ?? (await createGlobalInstallEnv());
   const dirExists = await pathExists(params.dir);
@@ -477,7 +486,38 @@ export async function ensureGitCheckout(params: {
         `OPENCLAW_GIT_DIR points at a non-git directory: ${params.dir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
       );
     }
-    return await cloneGitCheckoutTransactionally({ ...params, env: gitEnv });
+    // Each attempt settles its transaction and disposes partial artifacts before
+    // retry admission. An uncertain cleanup retains its warning and stops retries.
+    const result = await withGitNetworkRetry(
+      "clone",
+      {
+        timeoutMs: params.timeoutMs,
+        retryDelaysMs: UPDATE_GIT_RETRY_DELAYS_MS,
+        signal: resolveCommandProcessSignal(),
+      },
+      async (timeoutMs) => {
+        const { commandResult, ...checkout } = await cloneGitCheckoutTransactionally({
+          ...params,
+          env: gitEnv,
+          timeoutMs: timeoutMs ?? params.timeoutMs,
+        });
+        // Classify native stderr before the step's diagnostic tail truncates it.
+        return {
+          ...commandResult,
+          checkout,
+          code: commandResult ? commandResult.code : null,
+          stderr: commandResult?.stderr ?? "",
+          termination: commandResult?.termination ?? ("signal" as const),
+          cleanup: checkout.step?.warnings?.length ? "uncertain" : commandResult?.cleanup,
+        };
+      },
+    );
+    if (result.checkout.step) {
+      result.checkout.step.exitCode = result.code;
+      result.checkout.step.termination = result.termination;
+      result.checkout.step.signal = result.signal;
+    }
+    return result.checkout;
   }
 
   if ((await readPackageName(params.dir)) !== DEFAULT_PACKAGE_NAME) {

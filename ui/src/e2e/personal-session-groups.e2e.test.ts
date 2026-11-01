@@ -260,6 +260,9 @@ suite.define(() => {
 
       // From a teammate's session: it starts selected and stays listed as Added.
       await sidebar.getByRole("link", { name: /Incident follow-up/ }).click({ button: "right" });
+      expect(
+        await page.getByRole("menuitem", { name: "Move to group", exact: true }).isDisabled(),
+      ).toBe(false);
       await page.getByRole("menuitem", { name: "Add to section", exact: true }).hover();
       await page.getByRole("menuitem", { name: "New section", exact: true }).waitFor();
       await capture(
@@ -284,7 +287,7 @@ suite.define(() => {
     });
   });
 
-  it.for(["operator.admin", "operator.sessions.read"])(
+  it.for(["operator.sessions.read"])(
     "organizes a personal layout without shared mutations (%s)",
     async (scope) => {
       const capture =

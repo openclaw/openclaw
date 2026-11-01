@@ -82,7 +82,7 @@ it("retries the same object request once without leaking partial output or reset
   expect(calls.map((call) => call.input)).toEqual([input, input]);
   expect(calls.map((call) => call.timeoutMs)).toEqual([10_000, 9_000]);
   expect(networkLog.warn).toHaveBeenCalledExactlyOnceWith(
-    "Git fetch hit a transient failure; retrying once",
+    "Git fetch hit a transient failure; retrying",
     { operation: "fetch", attempt: 1, maxAttempts: 2, delayMs: 1_000, exitCode: 1 },
   );
 });
@@ -133,6 +133,23 @@ it.each([10_000, undefined])(
     ]);
   },
 );
+
+it.each([
+  { failures: 2, attempts: 3, code: 0, delays: [1_000, 5_000] },
+  { failures: 4, attempts: 4, code: 128, delays: [1_000, 5_000, 15_000] },
+])("bounds repeated update disconnects ($failures failures)", async (test) => {
+  const disconnected = { ...failure, code: 128, stderr: "fatal: early EOF" };
+  results(...Array.from({ length: test.failures }, () => disconnected), success);
+  const { runCommand } = await buildUpdateCommandRunner();
+  const pending = runCommand(["git", "fetch", "origin"], { timeoutMs: 60_000 });
+  await vi.advanceTimersByTimeAsync(21_000);
+  expect((await pending).code).toBe(test.code);
+  expect(calls).toHaveLength(test.attempts);
+  expect(calls.map((call) => call.timeoutMs)).toEqual(
+    [60_000, 59_000, 54_000, 39_000].slice(0, test.attempts),
+  );
+  expect(networkLog.warn.mock.calls.map(([, fields]) => fields.delayMs)).toEqual(test.delays);
+});
 
 it("does not retry package installation after a transport-like failure", async () => {
   const { runCommand } = await buildUpdateCommandRunner();
@@ -186,13 +203,18 @@ it("recovers transport errors with Git global options", async () => {
 
 it.each([
   [["fetch", "origin"], "fatal: repository not found"],
+  [["fetch", "origin"], "fatal: pack checksum mismatch\nfatal: early EOF"],
+  [["fetch", "origin"], "error: inflate: data stream error\nerror: RPC failed; curl 56"],
+  [["fetch", "origin"], "fatal: Authentication failed\nerror: RPC failed; curl 56"],
   [["push", "origin", "main"], failure.stderr],
   [["fetch", "origin"], `error: cannot lock ref: is at aaaa but expected bbbb\n${failure.stderr}`],
 ] satisfies Array<[string[], string]>)(
   "does not replay permanent failures or unsafe operations: %j %s",
   async (args, stderr) => {
-    results({ ...failure, stderr });
-    expect((await executeGitCommand("/repo", args, { timeoutMs: 10_000 })).code).toBe(1);
+    results({ ...failure, stderr }, { ...failure, stderr });
+    const pending = executeGitCommand("/repo", args, { timeoutMs: 10_000 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect((await pending).code).toBe(1);
     expect(calls).toHaveLength(1);
     expect(networkLog.warn).not.toHaveBeenCalled();
   },

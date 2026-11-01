@@ -280,7 +280,6 @@ async function loadGitHubDetailWithIdentity(
   if (!parsed) {
     throw new ControlUiGitHubError(400, "Invalid GitHub detail target");
   }
-  await identity?.revalidate();
   identity?.assertSelected();
   const id = parsed.kind === "commit" ? parsed.sha : parsed.number;
   const sourceKey = `${apiBaseUrl}\0${parsed.kind}:${parsed.owner.toLowerCase()}/${parsed.repo.toLowerCase()}#${id}\0${identity?.cacheScope ?? "anonymous"}\0${githubApiCredentialCacheScope(identity?.token)}\0`;

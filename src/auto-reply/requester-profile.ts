@@ -1,3 +1,4 @@
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { MsgContext } from "./templating.js";
 
 const REQUESTER_PROFILE = Symbol("openclaw.requesterProfile");
@@ -5,6 +6,7 @@ const REQUESTER_PROFILE = Symbol("openclaw.requesterProfile");
 export type PreparedRequesterProfile = Readonly<{
   id: string;
   displayName: string | null;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   isCurrent: () => boolean;
 }>;
 

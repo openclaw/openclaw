@@ -114,6 +114,10 @@ export const workerEnvironmentOperations = {
   "workerEnvironments.createIntent": environmentMutation("createIntent", (input, store) =>
     store.createIntent(input),
   ),
+  "workerEnvironments.recordResourceReceipt": environmentMutation(
+    "recordResourceReceipt",
+    (input, store) => store.recordResourceReceipt(input),
+  ),
   "workerEnvironments.ensureNodeEnrollment": mutation(
     "ensureNodeEnrollment",
     ({ input }, { store, touch }) => {

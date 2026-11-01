@@ -4,7 +4,15 @@ import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { withPluginInstallRoots } from "./install-root-context.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
-import { capturePluginGenerationArtifactInScope } from "./plugin-generation-capture.js";
+import {
+  capturePluginGenerationArtifactInScope,
+  capturePluginSnapshotGeneration,
+  capturePluginSourceSnapshot,
+} from "./plugin-generation-capture.js";
+import {
+  createPluginGenerationMetrics,
+  withPluginGenerationMetrics,
+} from "./plugin-generation-metrics.js";
 import {
   markPluginSourceCaptureOperation,
   type PluginRecoverySource,
@@ -15,6 +23,7 @@ import type {
   GenerationWorkerReply,
   GenerationWorkerCallback,
 } from "./plugin-generation-worker-contract.js";
+import { isPluginSourceAcquisitionError } from "./plugin-instance-error.js";
 import {
   nativeAdmissionStateFor,
   settlePluginNativeAdmissions,
@@ -25,6 +34,12 @@ import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capt
 import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import { recordPluginNativeLoad } from "./plugin-source-capture-native-loads.js";
+import {
+  acquirePluginSourceSnapshot,
+  pluginSourceSnapshotClosureDigest,
+  stagePluginSourceSnapshot,
+} from "./plugin-source-snapshot-artifact.js";
+import type { PluginSourceSnapshotBinding } from "./plugin-source-snapshot.types.js";
 
 type Resource = { dispose(): void; disposeAsync(): Promise<void> };
 type CaptureCommand = Extract<GenerationWorkerInput, { operation: "capture" }>;
@@ -36,6 +51,7 @@ function createPreparationSession(context: CaptureCommand) {
   const sentReceipts: PluginNativeAdmissionTransfer["receipts"] = new Map();
   const sentRoots = new Set<string>();
   const borrowedRootIds = new WeakMap<object, number>();
+  const snapshotReaders = new Set<Awaited<ReturnType<typeof acquirePluginSourceSnapshot>>>();
 
   function admissionChanges() {
     const state = nativeAdmissionStateFor();
@@ -220,94 +236,188 @@ function createPreparationSession(context: CaptureCommand) {
     );
     await cache.sourceAdmissions?.dispose();
     throwSettledAggregate(outcomes, "Plugin preparation resources failed to close");
+    // The reader outlives independent runtime/native cleanup, including failed disposal.
+    for (const snapshot of snapshotReaders) {
+      await snapshot.releaseAsync();
+    }
+    snapshotReaders.clear();
   }
   async function execute(command: GenerationWorkerInput): Promise<GenerationWorkerReply> {
-    return scoped(async () => {
-      for (const filename of command.nativeLoads ?? []) {
-        recordPluginNativeLoad(filename);
-      }
-      let result: unknown;
-      let failedCapture: Resource | undefined;
-      try {
-        if (command.operation === "capture") {
-          const state = nativeAdmissionStateFor();
-          state.createRoot = createNativeRoot;
-          for (const key of [
-            "owners",
-            "managedRoots",
-            "receipts",
-            "files",
-            "namespaces",
-          ] as const) {
-            // Import into the owner, then release entries retained by the capture command.
-            const target: Map<string, unknown> = state[key];
-            command.admission[key].forEach((value, name) => target.set(name, value));
-            command.admission[key].clear();
+    const metrics = createPluginGenerationMetrics();
+    const started = performance.now();
+    const reply = await withPluginGenerationMetrics(metrics, () =>
+      scoped(async () => {
+        for (const filename of command.nativeLoads ?? []) {
+          recordPluginNativeLoad(filename);
+        }
+        let result: unknown;
+        let failedCapture: Resource | undefined;
+        try {
+          if (command.operation === "capture") {
+            const state = nativeAdmissionStateFor();
+            state.createRoot = createNativeRoot;
+            for (const key of [
+              "owners",
+              "managedRoots",
+              "receipts",
+              "files",
+              "namespaces",
+            ] as const) {
+              // Import into the owner, then release entries retained by the capture command.
+              const target: Map<string, unknown> = state[key];
+              command.admission[key].forEach((value, name) => target.set(name, value));
+              command.admission[key].clear();
+            }
+            for (const [key, receipt] of state.receipts) {
+              sentReceipts.set(key, receipt);
+            }
+            if (command.inspection) {
+              // Inspection's host capture wrapper must stay outside worker bootstrap.
+              const { inspectPluginGenerationSources, inspectPluginSourceDependencies } =
+                await import("./plugin-generation-source-inspection.js");
+              const inspection = command.inspection;
+              const unresolvedAncestors: Array<{ name: string; importer: string }> = [];
+              result = {
+                inspection:
+                  inspection.kind === "sources"
+                    ? inspectPluginGenerationSources(inspection.entries)
+                    : inspectPluginSourceDependencies(
+                        inspection.entries,
+                        inspection.dependencyRoot !== undefined
+                          ? {
+                              root: inspection.dependencyRoot,
+                              onUnresolvable: (name, importer) =>
+                                unresolvedAncestors.push({ name, importer }),
+                            }
+                          : undefined,
+                      ),
+                unresolvedAncestors,
+              };
+            } else if (command.snapshotPublication) {
+              const capture = capturePluginSourceSnapshot(command.rootDir);
+              const publication = command.snapshotPublication;
+              const snapshot = own({
+                contentDigest: capture.sourceDigest,
+                dependencyClosureDigest: pluginSourceSnapshotClosureDigest(capture),
+                stage: markPluginSourceCaptureOperation(
+                  async (binding: PluginSourceSnapshotBinding) =>
+                    own(
+                      await stagePluginSourceSnapshot({
+                        stateDir: publication.stateDir,
+                        capture,
+                        binding,
+                        // The host installation owner checks authority before and after this await.
+                        assertCurrent: () => {},
+                      }),
+                    ),
+                ),
+                dispose: () => capture.dispose(),
+                disposeAsync: () => capture.disposeAsync(),
+              });
+              failedCapture = snapshot;
+              result = snapshot;
+            } else {
+              const snapshot = command.sourceSnapshot
+                ? await acquirePluginSourceSnapshot({
+                    ...command.sourceSnapshot,
+                    // Index authority belongs to the host; the worker owns artifact validation.
+                    assertCurrent: () => {},
+                  })
+                : undefined;
+              if (snapshot) {
+                snapshotReaders.add(snapshot);
+              }
+              const artifact = own(
+                snapshot
+                  ? capturePluginSnapshotGeneration(
+                      snapshot,
+                      command.entryFile,
+                      (run) => run(),
+                      (filename) => mapSource(command.captureId, filename),
+                    )
+                  : capturePluginGenerationArtifactInScope(
+                      command.rootDir,
+                      command.entryFile,
+                      (run) => run(),
+                      (filename) => mapSource(command.captureId, filename),
+                    ),
+              );
+              failedCapture = artifact;
+              snapshot?.assertCurrent();
+              const captureRecovery = artifact.captureRecoverySource.bind(artifact);
+              artifact.captureRecoverySource = markPluginSourceCaptureOperation(() =>
+                ownRecovery(captureRecovery()),
+              );
+              const retainCustody = artifact.retainSourceCustody.bind(artifact);
+              artifact.retainSourceCustody = markPluginSourceCaptureOperation(() => {
+                const custody = retainCustody();
+                ownRecovery(custody.source);
+                return custody;
+              });
+              result = artifact;
+            }
+          } else {
+            if (command.asynchronous) {
+              await settlePluginNativeAdmissions();
+            }
+            result = await codec.call(command.handle, command.args);
           }
-          for (const [key, receipt] of state.receipts) {
-            sentReceipts.set(key, receipt);
-          }
-          const artifact = own(
-            capturePluginGenerationArtifactInScope(
-              command.rootDir,
-              command.entryFile,
-              (run) => run(),
-              (filename) => mapSource(command.captureId, filename),
-            ),
-          );
-          const captureRecovery = artifact.captureRecoverySource.bind(artifact);
-          artifact.captureRecoverySource = markPluginSourceCaptureOperation(() =>
-            ownRecovery(captureRecovery()),
-          );
-          const retainCustody = artifact.retainSourceCustody.bind(artifact);
-          artifact.retainSourceCustody = markPluginSourceCaptureOperation(() => {
-            const custody = retainCustody();
-            ownRecovery(custody.source);
-            return custody;
-          });
-          failedCapture = artifact;
-          result = artifact;
-        } else {
-          if (command.asynchronous) {
+          if (command.operation !== "call" || command.asynchronous) {
             await settlePluginNativeAdmissions();
           }
-          result = await codec.call(command.handle, command.args);
-        }
-        if (command.operation !== "call" || command.asynchronous) {
-          await settlePluginNativeAdmissions();
-        }
-        const value =
-          command.operation === "call"
-            ? codec.encodeResult(result, command.handle)
-            : codec.encode(result);
-        const admission = admissionChanges();
-        return {
-          value,
-          admission,
-          resources: resources.size - orphaned.size,
-          released: codec.takeReleasedHandles(),
-        };
-      } catch (error) {
-        let failure = error;
-        if (failedCapture) {
-          try {
-            await failedCapture.disposeAsync();
-          } catch (cleanupError) {
-            orphaned.add(failedCapture);
-            failure = new AggregateError(
-              [error, cleanupError],
-              "Plugin capture and cleanup failed",
-            );
+          const value =
+            command.operation === "call"
+              ? codec.encodeResult(result, command.handle)
+              : codec.encode(result);
+          const admission = admissionChanges();
+          return {
+            value,
+            admission,
+            resources: resources.size - orphaned.size,
+            released: codec.takeReleasedHandles(),
+          };
+        } catch (error) {
+          let failure = error;
+          if (failedCapture) {
+            try {
+              await failedCapture.disposeAsync();
+            } catch (cleanupError) {
+              orphaned.add(failedCapture);
+              failure = new AggregateError(
+                [error, cleanupError],
+                "Plugin capture and cleanup failed",
+              );
+            }
           }
+          const exception = failure instanceof Error ? failure : new Error(String(failure));
+          return {
+            error: {
+              message: exception.message,
+              name: exception.name,
+              stack: exception.stack,
+              ...("code" in exception && typeof exception.code === "string"
+                ? { code: exception.code }
+                : {}),
+              ...("artifactPath" in exception && typeof exception.artifactPath === "string"
+                ? { artifactPath: exception.artifactPath }
+                : {}),
+              ...("modulePath" in exception && typeof exception.modulePath === "string"
+                ? { modulePath: exception.modulePath }
+                : {}),
+            },
+            ...((command.operation === "capture" ||
+              codec.isSourcePreparationCall(command.handle)) &&
+            isPluginSourceAcquisitionError(failure)
+              ? { sourceAcquisitionFailure: true as const }
+              : {}),
+            resources: resources.size - orphaned.size,
+            released: codec.takeReleasedHandles(),
+          };
         }
-        const exception = failure instanceof Error ? failure : new Error(String(failure));
-        return {
-          error: { message: exception.message, name: exception.name, stack: exception.stack },
-          resources: resources.size - orphaned.size,
-          released: codec.takeReleasedHandles(),
-        };
-      }
-    });
+      }),
+    );
+    metrics.workerMs = performance.now() - started;
+    return { ...reply, metrics };
   }
   callbacks?.on("message", observe);
   callbacks?.unref();

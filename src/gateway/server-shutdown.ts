@@ -2,6 +2,7 @@ import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
+import { GatewayRetainedWorkTimeoutError } from "../shared/async-work-scope.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { formatGatewayPendingCloseSteps, measureGatewayCloseStep } from "./restart-trace.js";
 import type { GatewayCloseOptions } from "./server-public.js";
@@ -40,6 +41,7 @@ export class GatewayShutdownCleanupRetainedError extends AggregateError {
 export function isGatewayCleanupRetainedError(error: unknown): boolean {
   if (
     error instanceof GatewayShutdownCleanupRetainedError ||
+    error instanceof GatewayRetainedWorkTimeoutError ||
     error instanceof PluginRuntimeCloseRetainedError
   ) {
     return true;
@@ -116,11 +118,13 @@ export async function runGatewayCloseSteps(params: {
       if (!(await settlesWithin(pending, graceMs))) {
         const message = `${step.name} cleanup exceeded ${graceMs}ms; resources remain; pending: ${formatGatewayPendingCloseSteps()}`;
         params.onError(message);
-        leftovers.push(new Error(message));
-        // Dependencies of a retained connection writer cannot be disposed safely.
+        // Grace is diagnostic for required joins: releasing the Gateway lock
+        // invalidates state admission while their accepted finalizers still write.
         if (step.required) {
-          break;
+          await pending;
+          continue;
         }
+        leftovers.push(new Error(message));
       }
     } catch (error) {
       const message = `shutdown step failed (${step.name}): ${formatErrorMessage(error)}`;

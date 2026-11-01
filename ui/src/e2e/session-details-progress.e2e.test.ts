@@ -302,7 +302,10 @@ suite.define(() => {
         await page.setViewportSize({ width: 430, height: 900 });
         await trigger.waitFor({ state: "hidden" });
         expect(await details.isVisible()).toBe(false);
-        await page.getByRole("button", { name: "Panels", exact: true }).waitFor();
+        await page
+          .locator(".agent-chat__header--mobile")
+          .getByRole("button", { name: "Panels", exact: true })
+          .waitFor();
         const mobileDetails = await openChatDetails(page);
         const mobileProgress = mobileDetails.locator('[data-details-destination="task-progress"]');
         await mobileProgress.waitFor();

@@ -30,12 +30,15 @@ import {
 } from "../../plugins/command-specs.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import { prepareSkillCommandsForAgents } from "../../skills/discovery/chat-commands.js";
+import type { ExecutionSkillWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 
 export async function buildCommandsListResult(params: {
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   cfg: OpenClawConfig;
   agentId: string;
+  /** Admitted project root and its file host, selected before session creation. */
+  projectSkillRoot?: ExecutionSkillWorkspace;
   provider?: string;
   scope?: "native" | "text" | "both";
   includeArgs?: boolean;
@@ -50,6 +53,7 @@ export async function buildCommandsListResult(params: {
     agentIds: [params.agentId],
     sessionEntry: params.sessionEntry,
     sessionKey: params.sessionKey,
+    ...params.projectSkillRoot,
   });
   const chatCommands = listChatCommandsForConfig(params.cfg, { skillCommands });
   const skillsByKey = new Map(skillCommands.map((skill) => [`skill:${skill.skillName}`, skill]));

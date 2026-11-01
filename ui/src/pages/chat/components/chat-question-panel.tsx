@@ -9,6 +9,7 @@ import {
 } from "solid-js";
 import type { QuestionDraft } from "../../../app/question-prompt.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { SessionLink } from "../../../components/solid/session-link.tsx";
 import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../../lib/external-link.ts";
@@ -368,28 +369,42 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
               data-chat-autotype-shortcuts="active"
               onKeyDown={(event) => handleKeyDown(event, item())}
             >
-              <div
-                class={[
-                  "chat-question-panel__topline",
-                  { "chat-question-panel__topline--prompt": model().nonBlocking },
-                ]}
-              >
-                {model().nonBlocking ? (
-                  <span class="chat-question-panel__prompt">{item().question}</span>
-                ) : (
-                  <div class="chat-question-panel__title">{model().title}</div>
-                )}
-                {requestNavigation()}
-                <span class="chat-question-panel__progress">{progress()}</span>
-                <button
-                  class="chat-question-panel__collapse"
-                  type="button"
-                  onClick={() => setCollapsed(true)}
-                  aria-label={t("chat.questions.collapse")}
-                  aria-expanded="true"
+              <div class="chat-question-panel__header">
+                <div
+                  class={[
+                    "chat-question-panel__topline",
+                    { "chat-question-panel__topline--prompt": model().nonBlocking },
+                  ]}
                 >
-                  <Icon name="chevronDown" />
-                </button>
+                  {model().nonBlocking ? (
+                    <span class="chat-question-panel__prompt">{item().question}</span>
+                  ) : (
+                    <div class="chat-question-panel__title">{model().title}</div>
+                  )}
+                  {requestNavigation()}
+                  <span class="chat-question-panel__progress">{progress()}</span>
+                  <button
+                    class="chat-question-panel__collapse"
+                    type="button"
+                    onClick={() => setCollapsed(true)}
+                    aria-label={t("chat.questions.collapse")}
+                    aria-expanded="true"
+                  >
+                    <Icon name="chevronDown" />
+                  </button>
+                </div>
+                {model().requestedBySession && (
+                  <div class="chat-question-panel__source" role="note">
+                    <span>{t("chat.questions.requestedBySession")}</span>
+                    <SessionLink
+                      sessionKey={model().sessionKey}
+                      label={model().requestedBySession!}
+                      titled
+                      href={model().requestedBySessionHref}
+                      onOpen={props.panel.onOpenSession}
+                    />
+                  </div>
+                )}
               </div>
               {!model().nonBlocking && (
                 <div class="chat-question-panel__heading">

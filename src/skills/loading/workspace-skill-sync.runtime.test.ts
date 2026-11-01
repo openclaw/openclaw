@@ -232,13 +232,25 @@ describe("syncWorkspaceSkills", () => {
     expect(await exists(skillPath(target, "demo-skill", "node_modules"))).toBe(false);
   });
 
-  it("copies rebuildable skills without blocking fsync (#181928)", async () => {
+  it("copies rebuildable skills with mutation-owned custody and without blocking fsync", async () => {
     const { source, target } = await setupSkills(["alpha"]);
+    await writeFiles(
+      skillPath(source, "alpha"),
+      Object.fromEntries(
+        Array.from({ length: 16 }, (_, index) => [`file-${index}.txt`, "content"]),
+      ),
+    );
     const skillsSnapshot = await buildSnapshot(source);
+    const assertCurrent = vi.fn();
     const fsync = vi.spyOn(fsSync, "fsyncSync");
     try {
-      await sync(source, target, { skillsSnapshot });
+      await sync(source, target, { skillsSnapshot, assertCurrent });
       expect(fsync).not.toHaveBeenCalled();
+      // Includes setup and publication; read-only traversal must not double the mutation budget.
+      if (process.platform !== "win32") {
+        expect(assertCurrent.mock.calls.length).toBeLessThan(120);
+      }
+      expect(await readText(skillPath(target, "alpha", "file-15.txt"))).toBe("content");
     } finally {
       fsync.mockRestore();
     }
@@ -675,6 +687,33 @@ describe("syncWorkspaceSkills", () => {
     expect(await exists(skillPath(target, "safe-traversal-skill", "SKILL.md"))).toBe(true);
     expect(await exists(escapedDest)).toBe(false);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a destination symlink escape after awaiting source metadata",
+    async () => {
+      const { source, target } = await setupSkills(["alpha"]);
+      const outside = await newDir("outside-copy");
+      const skillsSnapshot = await buildSnapshot(source);
+      const lstat = fs.lstat.bind(fs);
+      let replaced = false;
+      const read = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        const stat = await lstat(...args);
+        if (!replaced && nodeFilePath(args[0]) === skillPath(source, "alpha", "SKILL.md")) {
+          replaced = true;
+          await fs.rename(skillPath(target, "alpha"), path.join(target, "parked"));
+          await fs.symlink(outside, skillPath(target, "alpha"), "dir");
+        }
+        return stat;
+      });
+      try {
+        expect(await sync(source, target, { skillsSnapshot, assertCurrent: () => {} })).toEqual([]);
+        expect(replaced).toBe(true);
+        expect(await fs.readdir(outside)).toEqual([]);
+      } finally {
+        read.mockRestore();
+      }
+    },
+  );
 
   it("syncs managed symlinked skills as real directories in the target workspace", async () => {
     const { source, target } = await setupSkills();

@@ -69,6 +69,7 @@ const observedConsoleWarnings = vi.hoisted(() => vi.fn());
 function createMockSocket() {
   const { EventEmitter } = require("node:events") as typeof import("node:events");
   return {
+    authState: { creds: { accountSyncCounter: 0 } },
     ev: new EventEmitter(),
     ws: { close: vi.fn() },
     sendPresenceUpdate: vi.fn().mockResolvedValue(undefined),

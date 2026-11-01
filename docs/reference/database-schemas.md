@@ -64,6 +64,8 @@ physical shared database's process-owned facts. Journal writers publish pending,
 completed, and removed status at commit through the existing worker fact transport;
 rollback preserves the previous status. Session admission reuses this fact and the
 deletion owner's queue closure instead of reading the journal on every turn.
+Unrelated first-use feature tables do not invalidate these per-agent row facts or
+cancel admitted runs. Journal changes and database retirement still revoke authority.
 Synchronous runtime guards reuse the same committed fact rather than copying the
 shared database for each check. Guards inside a native transaction still read
 that transaction's current journal, including its uncommitted changes.

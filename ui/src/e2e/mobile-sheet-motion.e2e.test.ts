@@ -61,7 +61,7 @@ async function shellState(page: Page) {
     const region = shell.parentElement!.getBoundingClientRect();
     return {
       hidden: shell.hasAttribute("hidden"),
-      display: style.display,
+      visibility: style.visibility,
       mode: shell.getAttribute("data-mode"),
       height: shell.getBoundingClientRect().height,
       top: shell.getBoundingClientRect().top,
@@ -202,14 +202,14 @@ suite.define(() => {
         async (leaving) => {
           // Hidden immediately for focus and accessibility, but still sliding out on screen.
           expect(leaving.hidden).toBe(true);
-          expect(leaving.display).not.toBe("none");
+          expect(leaving.visibility).toBe("visible");
           expect(leaving.top).toBeGreaterThan(open.top + 10);
           // The page it showed slides away with it instead of blanking first.
           expect(await page.locator(".chat-panel-launcher-mobile").boundingBox()).not.toBeNull();
         },
       );
       await settle(page);
-      expect((await shellState(page)).display).toBe("none");
+      expect((await shellState(page)).visibility).toBe("hidden");
     });
   });
 
@@ -250,11 +250,11 @@ suite.define(() => {
         () => flick(page, 150),
         (dismissing) => {
           expect(dismissing.hidden).toBe(true);
-          expect(dismissing.display).not.toBe("none");
+          expect(dismissing.visibility).toBe("visible");
         },
       );
       await settle(page);
-      expect((await shellState(page)).display).toBe("none");
+      expect((await shellState(page)).visibility).toBe("hidden");
     });
   });
 
@@ -290,7 +290,7 @@ suite.define(() => {
       // Pulled most of the way out, the same slow release dismisses.
       await dragGrabber(page, back.height - 40, { steps: 20, stepMs: 40 });
       await settle(page);
-      expect((await shellState(page)).display).toBe("none");
+      expect((await shellState(page)).visibility).toBe("hidden");
     });
   });
 
@@ -402,6 +402,52 @@ suite.define(() => {
     });
   });
 
+  it("keeps the open panel and Details page on screen while the sheet slides out", async () => {
+    await suite.withPage(mobile, async ({ page }) => {
+      await openSession(page);
+      await openPanels(page);
+      const shell = page.locator(".chat-mobile-host");
+      // Detail pages lead with Back; Close is the labelled control on every page.
+      const close = shell
+        .locator(".chat-mobile-host__header")
+        .getByRole("button", { name: "Close", exact: true });
+      await shell.getByRole("button", { name: "Files", exact: true }).click();
+      const files = page.locator('[data-panel-slot="workspace"]');
+      await files.waitFor();
+      await settle(page);
+
+      await close.click();
+      await page.waitForTimeout(60);
+      expect((await shellState(page)).hidden).toBe(true);
+      // Closed for focus and accessibility, but the panel slides out with the sheet.
+      expect(await files.isVisible()).toBe(true);
+      await settle(page);
+      expect(await files.isVisible()).toBe(false);
+
+      await openPanels(page);
+      await shell.getByRole("button", { name: "Details", exact: true }).click();
+      await shell.getByRole("button", { name: /^Outputs/ }).click();
+      const outputs = shell.locator('.chat-mobile-details-page[data-details-page="outputs"]');
+      await outputs.waitFor();
+      await settle(page);
+      await close.click();
+      await page.waitForTimeout(60);
+      expect(await outputs.isVisible()).toBe(true);
+      await settle(page);
+      expect(await outputs.isVisible()).toBe(false);
+
+      // Reopening mid-exit cancels the pending close instead of hiding the page later.
+      await page.getByRole("button", { name: "Panels", exact: true }).first().click();
+      await outputs.waitFor();
+      await close.click();
+      await page.waitForTimeout(60);
+      await page.getByRole("button", { name: "Panels", exact: true }).first().click();
+      await settle(page);
+      expect((await shellState(page)).hidden).toBe(false);
+      expect(await outputs.isVisible()).toBe(true);
+    });
+  });
+
   it("switches instantly when the person prefers reduced motion", async () => {
     await suite.withPage({ ...mobile, reducedMotion: "reduce" }, async ({ page }) => {
       await openSession(page);
@@ -410,7 +456,7 @@ suite.define(() => {
       const open = await shellState(page);
       expect(Math.abs(open.top + open.height - open.regionBottom)).toBeLessThan(1.5);
       await page.locator(".chat-mobile-host__header .chat-mobile-host__circle").first().click();
-      await expect.poll(async () => (await shellState(page)).display).toBe("none");
+      await expect.poll(async () => (await shellState(page)).visibility).toBe("hidden");
     });
   });
 });

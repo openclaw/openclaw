@@ -4,10 +4,6 @@ openclaw-file-preview-modal {
   .modal {
     width: 100%;
     height: min(780px, 86vh);
-    background: var(--bg);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-xl);
     display: flex;
     flex-direction: column;
     overflow: hidden;

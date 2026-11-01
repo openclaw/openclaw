@@ -379,6 +379,8 @@ installs on macOS/Linux/WSL. FreeBSD uses the npm method. FreeBSD and Alpine use
 system Node packages.
 </Info>
 
+Quote `--prefix` and `--git-dir` values containing spaces or shell characters when invoking the installer. The generated launcher preserves those literal paths when called from another working directory.
+
 ### Flow (install-cli.sh)
 
 <Steps>

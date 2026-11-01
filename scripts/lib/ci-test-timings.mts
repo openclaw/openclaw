@@ -149,7 +149,11 @@ export function readCompleteSplitGenerationSeconds(
   selectorKey: string,
 ): number | undefined {
   const generations = new Map<string, { expected: number; parts: Map<number, number> }>();
+  const prefix = `${selectorKey}#generation-`;
   for (const [key, seconds] of Object.entries(timings)) {
+    if (!key.startsWith(prefix)) {
+      continue;
+    }
     const parsed = parseCompactSplitTimingKey(key);
     if (!parsed || parsed.selectorKey !== selectorKey) {
       continue;

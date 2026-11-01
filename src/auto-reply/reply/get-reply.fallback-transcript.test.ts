@@ -42,6 +42,8 @@ it.each(["openai-responses", "openai-completions"] as const)(
       const config = createEmbeddedAgentRunnerOpenAiConfig(["primary", "backup"]);
       const models = expectDefined(config.models, "model fixture");
       const base = expectDefined(models.providers?.openai, "provider fixture");
+      // Exercise provider fallback with room for the full prompt, not context recovery.
+      base.models = base.models.map((model) => ({ ...model, contextWindow: 128_000 }));
       const endpoint = {
         baseUrl: "http://127.0.0.1:44080/v1",
         request: { allowPrivateNetwork: true },

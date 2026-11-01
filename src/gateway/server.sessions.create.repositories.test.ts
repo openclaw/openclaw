@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { appendTranscriptMessage, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import * as gitWorker from "../infra/git-worker.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -16,6 +16,7 @@ import { controlUiClient } from "./server.sessions.create.projects.test-support.
 import { dispatchInboundMessageMock, testState } from "./test-helpers.js";
 import {
   directSessionReq,
+  getGatewayConfigModule,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
@@ -169,6 +170,52 @@ test("sessions.create retains a cloud repository across replay without creating 
   expect(await fs.stat(workspace).catch(() => undefined)).toBeUndefined();
   expect(projectCloneMocks.materialize).not.toHaveBeenCalled();
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+});
+
+test("repository branches preserve their prefix on replay and use the current prefix on fork", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  let config = { ...getRuntimeConfig(), repositoryBranchPrefix: "clawson" };
+  const options = { ...controlUiClient, context: { getRuntimeConfig: () => config } };
+  const repository = { url: "https://github.com/openclaw/openclaw.git", ref: "main" };
+  const created = await directSessionReq<{
+    key: string;
+    entry: { sessionId: string; repositoryWorkspaceId: string };
+  }>("sessions.create", { agentId: "main", repository }, options);
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  const { key, entry } = created.payload!;
+  config = { ...config, repositoryBranchPrefix: "renamed" };
+  const replay = await directSessionReq(
+    "sessions.create",
+    { agentId: "main", key, repository },
+    options,
+  );
+  expect(replay.ok, JSON.stringify(replay.error)).toBe(true);
+  await appendTranscriptMessage(
+    { agentId: "main", sessionKey: key, sessionId: entry.sessionId, storePath },
+    { eventId: "user-entry", parentId: null, message: { role: "user", content: "Fork here." } },
+  );
+  const forked = await directSessionReq<{ sessionKey: string }>(
+    "sessions.fork",
+    { sessionKey: key, entryId: "user-entry" },
+    options,
+  );
+  expect(forked.ok, JSON.stringify(forked.error)).toBe(true);
+  const listed = await directSessionReq<{
+    sessions: Array<{
+      key: string;
+      repositoryWorkspaceId?: string;
+      repository?: { branch: string };
+    }>;
+  }>("sessions.list", { agentId: "main", limit: 100 }, options);
+  expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
+  expect(listed.payload?.sessions.find((row) => row.key === key)?.repository?.branch).toBe(
+    `clawson/${entry.repositoryWorkspaceId}`,
+  );
+  const forkRow = listed.payload?.sessions.find((row) => row.key === forked.payload?.sessionKey);
+  expect(forkRow?.repositoryWorkspaceId).toEqual(expect.any(String));
+  expect(forkRow?.repositoryWorkspaceId).not.toBe(entry.repositoryWorkspaceId);
+  expect(forkRow?.repository?.branch).toBe(`renamed/${forkRow?.repositoryWorkspaceId}`);
 });
 
 test.each([

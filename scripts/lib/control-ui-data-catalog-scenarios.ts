@@ -8,7 +8,10 @@ import type {
   PluginDiscoveryResult,
 } from "../../ui/src/lib/plugins/index.ts";
 import { createSkill } from "../../ui/src/pages/skills/view.test-support.ts";
-import { defaultControlUiFeatureMethods } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  waitForControlUiRoute,
+} from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import {
   openNavigationDrawer,
   prepareInteractionNavigation,
@@ -385,6 +388,58 @@ function agentSelectionScenario(roundTripMs: 0 | 100): InteractionScenario {
     },
   };
 }
+
+const agentFirstOpenScenario: InteractionScenario = {
+  ...agentSelectionScenario(0),
+  id: "page-agent-selector-first-open",
+  explicitOnly: true,
+  expected: "The unopened 300-agent selector renders its options and focuses the selected agent.",
+  prepare: async (page) => {
+    if (await page.locator(".shell--mobile-nav:not(.shell--nav-drawer-open)").count()) {
+      await openNavigationDrawer(page);
+    }
+    await page.locator(".settings-sidebar__agent .agent-select__trigger").waitFor();
+    await page.waitForFunction(() => {
+      const trigger = document.querySelector<HTMLButtonElement>(
+        ".settings-sidebar__agent .agent-select__trigger",
+      );
+      return trigger && !trigger.disabled && trigger.getAttribute("aria-expanded") === "false";
+    });
+    await frames(page);
+  },
+  run: async (page, gateway) => {
+    const identityRequestsBefore = (await gateway.getRequests("agent.identity.get")).length;
+    const mountedAgentRowsBefore = await page.locator("[data-agent-option]").count();
+    await page.locator(".settings-sidebar__agent .agent-select__trigger").click();
+    await countRows(page, "[data-agent-option]", agentCount);
+    await countRows(page, agentAvatarSelector, agentCount);
+    await countRows(
+      page,
+      '[data-agent-option] .identity-avatar__text[data-avatar="🧪"]',
+      agentCount,
+    );
+    await page.waitForFunction(() => {
+      const selected = document.querySelector<HTMLElement>(
+        '.settings-sidebar__agent [data-agent-option][value="main"][aria-checked="true"]',
+      );
+      return (
+        selected &&
+        !selected.matches(':disabled, [aria-disabled="true"]') &&
+        selected === document.activeElement
+      );
+    });
+    await frames(page);
+    return {
+      fixtureAgents: agentCount,
+      mountedAgentRowsBefore,
+      mountedAgentRows: await page.locator("[data-agent-option]").count(),
+      mountedAgentAvatars: await page.locator(agentAvatarSelector).count(),
+      selectedAgentFocused: true,
+      identityRequests:
+        (await gateway.getRequests("agent.identity.get")).length - identityRequestsBefore,
+    };
+  },
+};
 
 const agentReopenRetentionScenario: InteractionScenario = {
   ...agentSelectionScenario(0),
@@ -954,6 +1009,46 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
         throw new Error("Catalog window changed canonical entry ordering");
       }
       return { loadedPlugins: inventorySize, mountedPlugins, finalEntryVisible: true };
+    },
+  },
+  agentFirstOpenScenario,
+  {
+    ...agentSelectionScenario(0),
+    id: "page-agent-selector-visit-and-open",
+    route: pathForRoute("new-session"),
+    explicitOnly: true,
+    expected: "Navigate from New Session and open the 300-agent selector in the same document.",
+    prepare: async (page) => {
+      await waitForControlUiRoute(page, { routeId: "new-session" });
+      await frames(page);
+    },
+    run: async (page, gateway) => {
+      const requestsBefore = (await gateway.getRequests("agent.identity.get")).length;
+      const start = await page.evaluate(() => ({
+        at: performance.now(),
+        timeOrigin: performance.timeOrigin,
+      }));
+      await page.evaluate(
+        (pathname) => {
+          window.openclawControlUi!.navigate("agents", { pathname });
+        },
+        pathForAgentPanel("main", "overview"),
+      );
+      await waitForControlUiRoute(page, { routeId: "agents" });
+      await agentFirstOpenScenario.prepare(page, gateway);
+      const evidence = await agentFirstOpenScenario.run(page, gateway);
+      const visitAndFirstOpenMs = await page.evaluate((started) => {
+        if (performance.timeOrigin !== started.timeOrigin) {
+          throw new Error("Agent selector flow reloaded its document");
+        }
+        return performance.now() - started.at;
+      }, start);
+      return {
+        ...evidence,
+        visitAndFirstOpenMs,
+        flowIdentityRequests:
+          (await gateway.getRequests("agent.identity.get")).length - requestsBefore,
+      };
     },
   },
   agentSelectionScenario(0),

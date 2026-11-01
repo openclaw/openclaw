@@ -9,18 +9,17 @@ import {
 } from "../../../../../src/chat/session-catalog-display.js";
 import { wrapExternalContent } from "../../../../../src/security/external-content.js";
 import { i18n } from "../../../i18n/index.ts";
-import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
+import {
+  prepareChatMessageRender,
+  resolveMessageDisplayMarkdown,
+} from "../../../lib/chat/message-display.ts";
 import { extractText, extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { coalesceToolActivityMessages } from "../chat-tool-activity-coalesce.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import {
-  prepareChatMessageRender,
-  MessageActions,
-  resolveMessageActionDetails,
-} from "./chat-message-markdown-view.tsx";
+import { MessageActions, resolveMessageActionDetails } from "./chat-message-markdown-view.tsx";
 import { ChatToolOutput } from "./chat-tool-output-view.tsx";
 
 const importKey = "example-catalog:thread:item";

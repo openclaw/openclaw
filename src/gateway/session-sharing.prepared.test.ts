@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
@@ -18,11 +19,11 @@ afterEach(() => vi.restoreAllMocks());
 
 it("reuses interleaved audience keys and copies scope snapshots without iteration", () => {
   const cfg = rolePolicyConfig();
-  let revision = {};
   const clients = ["alice", "bob"].map((user) => sharingPolicyClient({ user }));
   const key = (client: (typeof clients)[number]) =>
-    prepareProjectedSessionSharing({ cfg, client, isMember: () => false }).getCacheKey(revision);
+    prepareProjectedSessionSharing({ cfg, client, isMember: () => false }).getCacheKey();
   const initial = clients.map(key);
+  expect(initial[0]).not.toBe(initial[1]);
   const scopes = clients[0]!.connect.scopes!;
   const iterate = vi.spyOn(scopes, Symbol.iterator);
   const sets = vi.spyOn(globalThis, "Set");
@@ -31,8 +32,8 @@ it("reuses interleaved audience keys and copies scope snapshots without iteratio
   sets.mockRestore();
   expect(reused).toEqual(initial);
   expect(allocations).toBe(0);
-  // A publication retires the keys; native array copying avoids iterable expansion.
-  revision = {};
+  // An access publication retires the facts; native array copying avoids iterable expansion.
+  setRuntimeConfigSnapshot(cfg);
   expect(clients.map(key)).toEqual(initial);
   expect(iterate).not.toHaveBeenCalled();
   iterate.mockRestore();
@@ -58,13 +59,17 @@ it("refreshes retained sharing facts on profile changes and clears them when ide
     prepareGatewayRecipientProfile(client);
     const stop = onUserProfilesChanged(() => prepareGatewayRecipientProfile(client));
     const cfg = rolePolicyConfig();
-    let revision = {};
     const share = () => prepareProjectedSessionSharing({ cfg, client, isMember: () => false });
-    const key = () => share().getCacheKey(revision);
+    const key = () => share().getCacheKey();
     try {
       const initialKey = key();
       setUserProfileRole(source.id, "view");
       expect(client.preparedSessionProfile?.role).toBe("view");
+      expect(key()).toBe(initialKey);
+      setUserProfileRole(source.id, "none");
+      expect(key()).not.toBe(initialKey);
+      expect(share().sessionCap).toBe("none");
+      setUserProfileRole(source.id, "view");
       expect(key()).toBe(initialKey);
       setUserProfileRole(target.id, "none");
       linkEmail("source@example.test", target.id);
@@ -80,12 +85,12 @@ it("refreshes retained sharing facts on profile changes and clears them when ide
       expect(key()).not.toBe(mergedKey);
       client.connect.scopes!.pop();
       expect(key()).toBe(mergedKey);
-      // The owner retires the revision when publishing same-object policy edits.
+      // The config owner publishes same-object policy edits before the next read.
       cfg.gateway!.roles!.definitions.none!.sessions.others = "view";
-      revision = {};
+      setRuntimeConfigSnapshot(cfg);
       expect(key()).not.toBe(mergedKey);
       cfg.gateway!.roles!.definitions.none!.sessions.others = "none";
-      revision = {};
+      setRuntimeConfigSnapshot(cfg);
       const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
       const sharing = share();
       expect(sharing.sessionCap).toBe("none");

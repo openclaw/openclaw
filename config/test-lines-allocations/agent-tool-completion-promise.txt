@@ -1,0 +1,2 @@
+20
+# Regression for preserving the tool completion listener's promise and rejection.

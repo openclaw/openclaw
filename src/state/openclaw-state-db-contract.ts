@@ -9,6 +9,9 @@ export const MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION = 23;
 export const CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION = 29;
 export { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
+export const STATE_MIGRATION_VERSIONS = [
+  5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
+] as const;
 // Absence records lost history; only Doctor may reconstruct these on existing state.
 export const DOCTOR_OWNED_STATE_TABLES = ["agent_deletion_journal"] as const;
 // Privacy-sensitive feature tables remain absent even in fresh databases until
@@ -171,6 +174,7 @@ export const STATE_SCHEMA_MIGRATION_DESCRIPTIONS = {
   "local-workspace-cas-v35":
     "local workspace baselines → shared immutable trees and compact scan fingerprints",
   "template-names-v36": "starter installs and provenance → canonical Template storage names",
+  "worker-resource-receipts-v37": "immutable provider resource identity retained through teardown",
   "operator-approvals-system-agent": "operator approvals → OpenClaw system changes",
   "session-watch-cursor-provenance-v4": "session watch cursors → provenance column",
   "strict-tables-v3": "tables → SQLite STRICT typing",

@@ -114,9 +114,21 @@ fixture.describe("Control UI forced-colors indicators", () => {
           });
           await page.emulateMedia({ forcedColors: "none" });
           const normal = await readIndicators(page);
-          const selectStyle = { appearance: "none", image: expect.stringContaining("gradient") };
+          const selectStyle = { appearance: "base-select", image: "none" };
           expect(normal.selects).toEqual([selectStyle, selectStyle]);
           expect(normal.summaryImage).toContain("gradient");
+          // Engines without customizable selects keep the gradient chevron.
+          await page.evaluate(() => {
+            for (const style of document.querySelectorAll("style")) {
+              style.textContent = style.textContent.replaceAll(
+                "@supports (appearance: base-select)",
+                "@supports (appearance: openclaw-unsupported)",
+              );
+            }
+          });
+          const fallback = await readIndicators(page);
+          const fallbackStyle = { appearance: "none", image: expect.stringContaining("gradient") };
+          expect(fallback.selects).toEqual([fallbackStyle, fallbackStyle]);
         },
       );
     }

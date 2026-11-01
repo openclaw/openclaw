@@ -233,6 +233,7 @@ export function createChatComposerContext(
   const showComposer =
     !questionPanelProps ||
     questionPanelProps.model.nonBlocking === true ||
+    questionPanelProps.model.requestedBySession !== undefined ||
     questionPanelProps.model.collapsed;
 
   // Offline slash commands need live state, except /stop: its send owner captures

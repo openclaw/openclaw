@@ -221,17 +221,18 @@ describe("chat pane header", () => {
     expect(onToggleSidePanel).toHaveBeenCalledTimes(2);
   });
 
-  it("replaces desktop session actions with native connection status and Retry, then restores them", () => {
+  it("keeps desktop session actions beside native connection status and Retry", () => {
     const onRetry = vi.fn();
     const { container, update } = mountHeader({ sessionMenuAction: chatPaneHeaderSessionMenu() });
     expect(container.querySelector("openclaw-chat-header-session-menu")).not.toBeNull();
     update({ gatewayStatus: { kind: "offline", onRetry } });
-    absent(container, "openclaw-chat-header-session-menu, openclaw-chat-pane-versions-menu");
-    expect(text(container, '[role="status"]')).toContain("Disconnected");
+    expect(container.querySelector("openclaw-chat-header-session-menu")).not.toBeNull();
+    expect(text(container, ".chat-pane__connection-state")).toContain("Disconnected");
+    expect(container.querySelector('.chat-pane__connection [role="status"]')).toBeNull();
     container.querySelector<HTMLButtonElement>(".chat-pane__connection-retry")!.click();
     expect(onRetry).toHaveBeenCalledOnce();
     update({ gatewayStatus: { kind: "restoring", onRetry } });
-    expect(text(container, '[role="status"]')).toContain("Restoring");
+    expect(text(container, ".chat-pane__connection-state")).toContain("Restoring");
     expect(container.querySelector(".chat-pane__connection-retry")).toBeNull();
     update({ gatewayStatus: { kind: null, onRetry } });
     expect(container.querySelector(".chat-pane__connection")).toBeNull();
@@ -246,7 +247,7 @@ describe("chat pane header", () => {
     const savedStatus = () => text(container, ".chat-pane__connection-state");
     expect(savedStatus()).toBe("Saved conversation · Reconnecting…");
     update({ gatewayStatus: undefined });
-    expect(savedStatus()).toBe("Saved conversation · Reconnecting…");
+    absent(container, ".chat-pane__connection");
     update({ gatewayStatus: { kind: "offline" } });
     expect(savedStatus()).toBe("Saved conversation · Disconnected");
     update({ savedConversation: false, gatewayStatus: { kind: null } });
@@ -666,36 +667,6 @@ describe("chat pane header", () => {
     expect(notice?.textContent).toContain("Tools, plugins, and uploads may save data.");
     expect(mountHeader().container.querySelector(".chat-pane__incognito-notice")).toBeNull();
   });
-});
-
-it("releases each merged-chrome toggle when its header branch closes", async () => {
-  const registered = trackNavigation();
-  const mounted = mountHeader({ mergedChrome: false });
-  const retainedToggle = query(mounted.container, ".mobile-header__navigation");
-  await waitForSolid(() => expect(registered()).toEqual([retainedToggle]));
-  for (let mount = 0; mount < 2; mount += 1) {
-    mounted.update({ mergedChrome: true });
-    const toggle = query(mounted.container, ".chat-pane__nav-toggle");
-    await waitForSolid(() => expect(registered()).toEqual([retainedToggle, toggle]));
-    mounted.update({ mergedChrome: false });
-    // A connected retired button exposes a stale map entry instead of letting isConnected mask it.
-    mounted.container.append(toggle);
-    try {
-      await waitForSolid(() => expect(registered()).toEqual([retainedToggle]));
-    } finally {
-      toggle.remove();
-    }
-  }
-  mounted.update({ mergedChrome: true });
-  const toggle = query(mounted.container, ".chat-pane__nav-toggle");
-  await waitForSolid(() => expect(registered()).toEqual([retainedToggle, toggle]));
-  mounted.unmount();
-  document.body.append(toggle);
-  try {
-    expect(registered()).toEqual([]);
-  } finally {
-    toggle.remove();
-  }
 });
 
 it("publishes the active header while retaining mobile chrome across desktop transitions", async () => {

@@ -10,6 +10,13 @@ sidebarTitle: "Offline and reconnect"
 
 What survives a dropped connection, and how the Control UI recovers when it returns.
 
+An initial connection has a two-second grace period before connection feedback
+appears. A failed or closed connection shows feedback immediately, and retries
+keep it visible until the Gateway connects. Cached conversations retain their
+header controls; the connection indicator fills the header's existing gap without
+moving controls or covering conversation rows. Resolving a session link or loading
+history does not imply a lost connection.
+
 Returning to a suspended tab or regaining network connectivity can recover a
 stale connection. These signals do not retry a connection that requires a page
 reload, corrected credentials, or a new pairing request. Follow the displayed
@@ -184,9 +191,9 @@ Unique display-name links use the same cached route resolution, including the
 
 Exact conversation links can restore their scoped transcript without waiting for
 the sidebar roster or the socket to open. A prepared snapshot supplies the header,
-transcript, and composer in the first pane frame. The existing header connection
-indicator remains visible until live history and route confirmation finish; cached
-content stays visible while those checks run. Dashboard layouts restore before the pane renders, and embedded
+transcript, and composer in the first pane frame. Cached content stays visible
+while live history and route confirmation finish; those checks do not show the
+header connection indicator. Dashboard layouts restore before the pane renders, and embedded
 HTML widgets restore their last board metadata from the same scoped conversation
 cache and start loading the isolated sandbox while connecting. Document requests
 still require the current Gateway connection and overlap the live board refresh.
@@ -419,7 +426,8 @@ With the sidebar collapsed, a flag beside the avatar appears for four seconds on
 Hover or focus the avatar to reopen it. If the flag would cover a composer or other writing
 controls, the avatar tooltip carries the status instead. The tooltip is hidden while the flag is visible.
 On mobile, status replaces the header breadcrumb and badges the menu button; opening the drawer
-shows the full footer row. Brief disconnects keep the existing two-second grace.
+shows the full footer row. Initial connection attempts use the two-second grace;
+an observed connection close shows status immediately.
 
 The status includes the total queued messages and session changes, plus **Retry** when an immediate connection
 attempt is available. Hover or focus for the redacted connection error. Settings keeps its save feedback
@@ -531,6 +539,21 @@ Gateway confirms that the conversation no longer exists, such as an incognito
 conversation after a Gateway restart, the page shows **Session not found** with
 actions to open Main or browse sessions. A connection failure or a conversation
 missing from the current sidebar page does not count as deletion.
+
+Offline cache downloads yield while conversations, routes, and plugin interfaces
+load, including during the service worker's first installation. Downloads run in
+bounded batches at low priority. Interrupted downloads retain completed assets
+and resume after foreground imports and Gateway requests settle.
+
+Menu bodies load when opened instead of downloading speculatively while the page
+is idle. First open can briefly show a loading row; later opens reuse the loaded
+body. Declared next-route preloads still run after the current page is ready.
+
+When reconnecting to the same Gateway and account, the existing conversation
+history requests changes since its last cursor. The sidebar refresh runs alongside
+that history recovery instead of waiting for it. Its retained labels stay visible
+until the fresh authorized roster arrives; first loads still prioritize the open
+conversation before loading the roster.
 
 Opening a view for the first time can fail if its interface files cannot be downloaded.
 This also covers the workspace shell in source-backed development previews.

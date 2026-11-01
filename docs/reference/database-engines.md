@@ -967,8 +967,39 @@ Both include `engine` (`"sqlite"` or `"postgres"`),
 also include normalized `sql` with literals redacted; neither event includes
 bindings. Request events count the worker boundary separately from the statements
 that the request executes. This lets census tools compare both engines without
-inferring them from SQL. When no subscriber is present, the boundary skips timing,
-SQL normalization, and event construction.
+inferring them from SQL. Outside the scoped deletion diagnostic below, when no
+subscriber is present, the boundary skips timing, SQL normalization, and event
+construction.
+
+Slow `session.lifecycle.delete` transaction warnings additionally split legacy
+`sqlMs` into `statementExecutionMs` and `callbackOtherMs`. Statement execution includes
+native SQLite calls and their triggers inside the application callback; the remainder
+includes preparation, JavaScript, final guards, rollback on failure, garbage
+collection, and scheduling delays. These are elapsed times,
+not CPU measurements. Admission waits and commit time remain separate.
+
+The warning records statement count, maximum duration, and at most 32 statement
+groups plus an overflow group. Groups use the first 16 hexadecimal characters of
+the SHA-256 hash of normalized SQL, matching the statement channel's normalization;
+SQL text and bindings are omitted. Collection is scoped to this deletion callback,
+and serialization occurs only above the existing 1,000 ms slow-hold threshold.
+
+Slow or failed SQLite `BEGIN IMMEDIATE` warnings also include `holderAtWaitStart`
+when the admitted database has a known in-process writer. It contains the writer's
+bounded `operation` label, `threadId`, and `heldMs` observed before the native wait.
+The existing admission snapshot shares one 500-byte diagnostic slot per database;
+the transaction owner records it at begin and clears it after commit or rollback.
+It is best-effort attribution, never admission authority. External-process writers,
+unadmitted handles, and a writer changing during observation can remain unknown.
+
+Agent database reservation and session-write warnings include `holderAtEnqueue`
+from the existing queue owner, including the active worker operation and thread
+when known. Slow WebSocket connect responses include `pairingLockWait` for the
+longest observed pairing-lock wait, with the same enqueue-time holder fields.
+These snapshots name the holder observed at entry, not every intervening writer;
+`heldMs` is its age at that observation, not the waiter's total wait duration.
+Existing warning thresholds and transaction phase/statement fields are unchanged.
+No SQL, bindings, message content, or tool content is added to these records.
 
 See [Database schemas](/reference/database-schemas) for store ownership and schema
 contracts, and [Configuration reference](/gateway/configuration-reference) for

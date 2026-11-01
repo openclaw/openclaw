@@ -291,7 +291,7 @@ async function candidateInputs(ctx: ReleaseContext): Promise<Map<string, string>
     "normal",
     "--release-profile",
     "stable",
-    "--full-release-run",
+    "--full-release-validation-run-id",
     requireValue(state.validate.runId, "Full Release Validation run"),
     "--publish-workflow-ref",
     requireValue(state.validate.toolingTag, "tooling tag"),

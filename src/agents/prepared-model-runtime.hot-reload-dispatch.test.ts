@@ -22,7 +22,9 @@ import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { readPreparedGatewayModelCatalogOwnerSnapshot as readCatalog } from "../gateway/server-model-catalog.js";
 import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import { loadPreparedModelCatalogOwnerSnapshot as loadCatalog } from "./prepared-model-catalog.js";
@@ -141,6 +143,85 @@ function createPluginReloadHandler(
 }
 
 describe("Gateway plugin reload run admission", () => {
+  it.each([
+    { provider: "synthetic-unrelated", fails: false },
+    { provider: "openai", fails: false },
+    { provider: "synthetic-unrelated", fails: true },
+  ])(
+    "keeps provider callables usable after auth reload $provider (fails=$fails)",
+    async ({ provider, fails }) => {
+      const registry = createEmptyPluginRegistry();
+      const record = createPluginRecord({ id: "openai" });
+      registry.plugins.push(record);
+      const instance = new PluginInstance(record.id, { record, registry });
+      const read = instance.wrap(() => "current provider facts");
+      mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+      const retained: OpenClawConfig = {};
+      const committed: OpenClawConfig = {
+        auth: { profiles: { [`${provider}:manual`]: { provider, mode: "api_key" } } },
+      };
+      mocks.authStorage.getAll.mockReturnValue({
+        [provider]: { type: "api_key", key: "synthetic-before" },
+      });
+      setRuntimeConfigSnapshot(retained, retained);
+      await refreshPreparedModelRuntimeSnapshots(retained, {
+        gatewayLifecycle: true,
+        catalogMode: "static",
+        allowGatewaySubagentBinding: true,
+      });
+      const previous = await loadDispatch({ agentId: "default" });
+      const previousCatalog = getSnapshot(ownerInput(retained));
+      expect(previousCatalog?.createStores().authStorage.getAll()[provider]).toEqual({
+        type: "api_key",
+        key: "synthetic-before",
+      });
+      mocks.authStorage.getAll.mockReturnValue({
+        [provider]: { type: "api_key", key: "synthetic-after" },
+      });
+      if (fails) {
+        mocks.resolveAmbientCredentials.mockRejectedValueOnce(
+          new Error("synthetic auth read failure"),
+        );
+      }
+      expect(read()).toBe("current provider facts");
+      const handler = createPluginReloadHandler(async () => {
+        throw new Error("Auth config must not replace Gateway plugins");
+      });
+      try {
+        const reload = handler.applyHotReload(
+          buildGatewayReloadPlan([`auth.profiles.${provider}:manual`]),
+          committed,
+          {
+            sourceConfig: committed,
+            isCurrent: () => true,
+            publish: async (commit) => {
+              setRuntimeConfigSnapshot(committed, committed);
+              await commit();
+            },
+          },
+        );
+        if (fails) {
+          await expect(reload).rejects.toThrow(
+            "could not schedule recovery for prepared model runtime reload",
+          );
+          expect(getSnapshot(ownerInput(committed))).toBeUndefined();
+        } else {
+          await reload;
+          const current = await loadDispatch({ agentId: "default" });
+          expect(current?.config).toBe(committed);
+          expect(current?.pluginGeneration).toBe(previous?.pluginGeneration);
+          expect(
+            getSnapshot(ownerInput(committed))?.createStores().authStorage.getAll()[provider],
+          ).toEqual({ type: "api_key", key: "synthetic-after" });
+        }
+        expect(previousCatalog?.isCurrent()).toBe(false);
+        expect(read()).toBe("current provider facts");
+      } finally {
+        handler.stopRestartRetries();
+      }
+    },
+  );
+
   it("cancels degraded startup acquisition before plugin drain and publishes only its replacement", async () => {
     mocks.configuredAgentIds = ["default", "held"];
     const heldWorkspace = fixture.state.path("held-workspace");

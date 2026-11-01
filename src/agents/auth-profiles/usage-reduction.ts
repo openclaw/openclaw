@@ -48,15 +48,12 @@ function applyWhamCooldownResult(params: {
     params.existing.cooldownUntil,
     params.now,
   );
-  const existingActiveBlockedUntil = resolveActiveWindowUntil(
-    params.existing.blockedUntil,
-    params.now,
-  );
   if (params.whamResult.blockedUntil) {
     return {
       ...params.computed,
       lastProbeAt: params.now,
-      blockedUntil: Math.max(existingActiveBlockedUntil, params.whamResult.blockedUntil),
+      // The authenticated quota snapshot supersedes an older reset, even if earlier.
+      blockedUntil: params.whamResult.blockedUntil,
       blockedReason: "subscription_limit",
       blockedSource: "wham",
       blockedModel: undefined,

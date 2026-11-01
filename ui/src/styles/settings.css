@@ -484,11 +484,17 @@ openclaw-appearance-background .settings-background-preview .session-background_
 }
 
 .settings-group {
+  --btn-bg: var(--surface-hover);
+  --btn-bg-hover: var(--surface-selected);
   background: var(--card);
   border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
   border-radius: var(--radius-lg);
   overflow: hidden;
   min-width: 0;
+}
+
+.settings-group:empty {
+  display: none;
 }
 
 .settings-group--danger {
@@ -518,16 +524,9 @@ openclaw-appearance-background .settings-background-preview .session-background_
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  min-height: 48px;
-}
-
-.settings-row-mount + .settings-row-mount > .settings-row,
-.settings-row + .settings-row,
-.settings-row + .settings-subrows,
-.settings-subrows + .settings-row {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  gap: var(--space-3);
+  padding: var(--list-row-padding);
+  min-height: var(--list-row-min-height);
 }
 
 .settings-row--nested {
@@ -545,7 +544,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
 
 .settings-row__title {
   font-size: var(--control-ui-text-md);
-  font-weight: 500;
+  font-weight: var(--list-row-title-weight);
   color: var(--text-strong);
   line-height: 1.35;
   overflow-wrap: anywhere;
@@ -556,6 +555,10 @@ openclaw-appearance-background .settings-background-preview .session-background_
   color: var(--muted);
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.settings-row__control > .settings-row__desc[aria-hidden="true"] {
+  overflow-wrap: normal;
 }
 
 .settings-row__control {
@@ -740,7 +743,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
 }
 
 .settings-row--nav:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 /* Fully-inset ring: the group clips overflow, so an outer ring would vanish. */
@@ -757,9 +760,10 @@ openclaw-appearance-background .settings-background-preview .session-background_
   flex: 0 0 auto;
 }
 
-.settings-row__chevron svg {
-  width: 14px;
-  height: 14px;
+.settings-row__chevron svg,
+.settings-row__chevron .session-css-icon {
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
   /* Icons rely on currentColor; without this the SVG falls back to black fill
      and disappears in dark mode. */
   stroke: currentColor;
@@ -775,10 +779,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
 
 .settings-subrows .settings-row {
   padding-left: var(--space-7);
-}
-
-.settings-subrows .settings-row + .settings-row {
-  border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
 }
 
 .settings-toggle {
@@ -1387,11 +1387,6 @@ textarea.settings-input {
 }
 
 /* Quiet-hours details stay connected to their toggle without changing row controls. */
-.settings-row + .quiet-hours-window,
-.quiet-hours-window .settings-row + .settings-row {
-  border-top: 0;
-}
-
 .quiet-hours-window .settings-row {
   padding-top: 0;
 }

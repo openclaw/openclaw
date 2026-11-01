@@ -7,7 +7,7 @@ import {
   indexPluginNodeCapabilitySurfaces,
   normalizePluginNodeCapabilityScopedUrl,
   pluginNodeCapabilityScopedHostUrlsConflict,
-  prepareClientPluginNodeCapabilities,
+  preparePluginNodeCapabilityPublication,
   reconcileClientPluginNodeCapabilities,
   refreshClientPluginNodeCapability,
   setClientPluginNodeCapability,
@@ -79,17 +79,14 @@ describe("plugin node capability helpers", () => {
     const files = { surface: "files", scopeKey: "storage:files" };
     const removed = { surface: "retired", scopeKey: "drawing:retired" };
     const client = makeClient({ pluginSurfaceBaseUrl: "https://gateway.example" });
-    prepareClientPluginNodeCapabilities({
-      client,
-      surfaces: [canvas, files, removed],
-      changedPluginIds: new Set(),
-    })();
+    client.connect.role = "operator";
+    preparePluginNodeCapabilityPublication([client], [canvas, files, removed], new Set())();
     const previous = { ...client.pluginSurfaceUrls };
-    const publish = prepareClientPluginNodeCapabilities({
-      client,
-      surfaces: [canvas, files],
-      changedPluginIds: new Set(["drawing"]),
-    });
+    const publish = preparePluginNodeCapabilityPublication(
+      [client],
+      [canvas, files],
+      new Set(["drawing"]),
+    );
     expect(client.pluginSurfaceUrls).toEqual(previous);
     expect(authorizedUrl(client, canvas, previous.canvas!)).toBe(true);
     publish();
@@ -103,13 +100,16 @@ describe("plugin node capability helpers", () => {
   test("publishes newly enabled surfaces only within the client's admitted capabilities", () => {
     const canvas = { surface: "canvas", scopeKey: "drawing:canvas" };
     const files = { surface: "files", scopeKey: "storage:files" };
-    const client = makeClient({ pluginSurfaceBaseUrl: "https://gateway.example" });
-    const publish = prepareClientPluginNodeCapabilities({
-      client,
-      surfaces: [canvas, files],
-      changedPluginIds: new Set(["drawing", "storage"]),
-      allowedSurfaces: new Set(["canvas"]),
+    const client = makeClient({
+      connect: { ...makeClient().connect, caps: ["canvas"] },
+      pluginSurfaceBaseUrl: "https://gateway.example",
+      pluginNodeCapabilitySurfaces: { canvas },
     });
+    const publish = preparePluginNodeCapabilityPublication(
+      [client],
+      [canvas, files],
+      new Set(["drawing", "storage"]),
+    );
     expect(client.pluginSurfaceUrls).toBeUndefined();
     expect(client.pluginNodeCapabilities).toBeUndefined();
     publish();

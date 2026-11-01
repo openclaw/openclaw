@@ -421,6 +421,32 @@ requests. Manual runs build and upload the `.deb` and AppImage as the
 See `apps/linux/README.md` in the repository for Linux build dependencies and
 development commands.
 
+### Raspberry Pi and low-memory desktops
+
+For headless Gateway hosts, see the [Raspberry Pi swap setup](/install/raspberry-pi#setup)
+and [managed service heap sizing](/platforms/linux#gateway-service-systemd).
+The settings below apply to the desktop companion's WebKitGTK WebView.
+
+If a source-built ARM64 companion shows a blank or frozen window on a Pi with
+Mesa, quit the companion fully and try launching the installed binary with:
+
+```bash
+WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 openclaw-desktop
+```
+
+These disable the DMA-BUF renderer and accelerated compositing. They were
+[reported to help on Pi 5 with Debian 13 and WebKitGTK 2.52](https://github.com/openclaw/openclaw/issues/138279#issuecomment-5547961043);
+results depend on the graphics stack. This does not imply official ARM64 release availability.
+
+For memory pressure in the WebView, try a separate launch with
+`JSC_useJIT=false openclaw-desktop`. Disabling JavaScriptCore's JIT may reduce
+memory use at the cost of JavaScript performance. The linked Pi measurements
+are single-host observations, not a guaranteed memory budget.
+
+Keep these variables in the companion launcher rather than a shell profile or
+Gateway service. For an AppImage, replace `openclaw-desktop` with its path.
+Remove the variables to return to the default rendering and JIT behavior.
+
 ### Quick Chat
 
 `Ctrl+Shift+O` opens a new session only in the focused dashboard. The companion
@@ -649,21 +675,42 @@ enables isolation. Without writable delegation, OpenClaw leaves the cgroup
 layout unchanged and reports the missing prerequisite once at startup.
 
 OpenClaw places host agent-exec process trees in the sibling `agent-exec` cgroup.
-Its CPU weight is `10`, compared with the Gateway leaf's default `100`; these are
+Placement follows the launch caller's typed execution intent: agent tool commands
+and their PTYs enter `agent-exec`; Gateway-internal commands stay in `gateway`.
+This includes managed worktree preparation, base refresh and hydration, Git
+status and diff RPCs, and sandbox synchronization helpers. Executable names,
+arguments, and cleanup ownership do not select the cgroup. Descendants inherit
+their command's placement.
+
+On Node, the Gateway's existing spawn broker launches supported child commands
+and PTY helpers without forking the Gateway's large address space. Durable-process
+observation and cron command watchers retain that broker across detached timers
+and queues. This changes the launch process, not execution intent: durable
+`systemctl` helpers remain Gateway work, while durable commands themselves remain
+independent systemd user services.
+
+The `agent-exec` CPU weight is `10`, compared with the Gateway leaf's default `100`; these are
 relative shares during contention, not a fixed CPU cap. Aggregate `memory.high`
 reuses the host exec memory allowance: the smaller of one quarter of available
 host/container memory and half that memory remaining after Gateway RSS.
 Existing per-exec memory limits and child-first OOM policy still apply.
 `memory.high` applies reclaim pressure; it is not a hard memory limit.
 
-An aggregate `io.max` ceiling budgets a memory-sized IO backlog over five
-minutes, split equally between reads and writes and across devices backing the
-Gateway state directory. Each direction receives `memory.high / 600 / deviceCount`
-bytes per second and that rate divided by `4096` operations per second. Half of
-any finite ancestor IO limit further caps the corresponding rate. This is a
-deliberate pressure budget, not measured disk bandwidth: a 4 GiB memory allowance
-on one device gives about 6.8 MiB/s in each direction. Gateway IO remains outside
-the exec ceiling.
+An aggregate `io.max` ceiling covers agent-exec IO on each device backing the
+Gateway state directory. Non-rotational devices receive **250 MiB/s in each
+direction and 40,960 read/write operations per second**, independent of RAM or
+device count. Classification uses the logical device's `queue/rotational` value,
+including md/dm devices, rather than separately throttling their members.
+Rotational devices, or devices without that attribute, retain the conservative
+pressure budget: `memory.high / 600 / deviceCount` bytes per second in each
+direction, with that rate divided by `4096` operations per second. These are
+policy ceilings, not measured disk bandwidth. The non-rotational ceiling balances
+agent IO throughput against Gateway WAL commit latency on btrfs, rather than
+device utilization; the IOPS ceiling remains fixed at the measured 40,960.
+For example, a 4 GiB memory allowance on one SSD gives 250 MiB/s per direction; on a rotational device it
+gives about 6.8 MiB/s. Half of any finite ancestor IO limit further caps each
+corresponding rate. Gateway IO remains outside the exec ceiling. The policy is
+applied at Gateway startup.
 
 Enable this policy for an older managed unit with an explicit
 `openclaw doctor --fix` or `openclaw gateway install --force`. Normal updates

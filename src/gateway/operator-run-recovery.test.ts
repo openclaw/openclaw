@@ -33,7 +33,11 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { changeCanonicalUserChannelIdentity } from "../state/user-channel-identity-operations.js";
 import { fenceUserProfileMutationAuthority } from "../state/user-profile-events.js";
@@ -435,7 +439,7 @@ describe("scheduled authenticated operator source", () => {
   );
   it("preserves live channel work at recovery bounds and rejects revoked ingress", async () => {
     await withAdminIngress(
-      async ({ admins, context, gateway, retire, cfg, activatePolicy }) => {
+      async ({ admins, context, gateway, retire, cfg, activatePolicy, state }) => {
         const admin = expectDefined(admins[0], "linked administrator");
         cfg.agents = { entries: { main: { model: "fixture/permitted" } } };
         const roles = expectDefined(cfg.gateway?.roles, "configured channel roles");
@@ -520,6 +524,7 @@ describe("scheduled authenticated operator source", () => {
         const persisted: unknown = JSON.parse(serializedSource);
         retire();
         expect(original.assertCurrent).toThrow();
+        await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
         const restore = () =>
           restoreGatewayQueuedOperatorRecovery({
             source: decodeQueuedOperatorRecoverySource(persisted),

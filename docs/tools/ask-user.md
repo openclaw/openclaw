@@ -12,9 +12,10 @@ wait for the answers. It is for decisions that genuinely belong to the user,
 not routine confirmation or information the agent can derive from the request,
 code, or a sensible default.
 
-The tool is available only in the main session on a surface that supports
-question input: Discord, Slack, Telegram, and WebChat (including the Control UI
-and native OpenClaw clients). Subagents and other non-primary runs do not
+The tool is available in primary sessions, including visible sessions created
+with `sessions_spawn`, on a surface that supports question input: Discord,
+Slack, Telegram, and WebChat (including the Control UI and native OpenClaw
+clients). Hidden subagents, ACP sessions, and other non-primary runs do not
 receive it, and an explicit tool denial still takes precedence.
 
 On the ACP bridge, iMessage, Mattermost, Signal, WhatsApp, and other surfaces without
@@ -32,6 +33,11 @@ You can answer from any supported conversation surface:
   through a short stepper. After resolution, the panel closes and the chat
   keeps the full question alongside your answer in a compact summary. Skipped
   or expired questions keep their wording alongside the outcome.
+  A pending question from a direct child session also docks in the parent
+  chat, marked **Asked by** with a link to the child's session. The parent's
+  composer stays available, including its draft and attachments. Collapsing the
+  panel does not cancel the question. Answering in either session resolves the
+  same question; its history stays in the child's transcript.
   Switching between pending questions preserves both selected choices and typed
   answers, even when typed text matches an option label.
   Use number keys to choose an option and Ctrl+Enter (Cmd+Enter on macOS) to

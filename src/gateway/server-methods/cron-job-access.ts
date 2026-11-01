@@ -17,6 +17,11 @@ import {
   readCronCallerScope,
   type CronCallerScope,
 } from "./cron-caller-scope.js";
+import {
+  canHumanManageCronJob,
+  isHumanCronJobOwner,
+  isHumanCronMutation,
+} from "./cron-human-owner.js";
 import { requiresExplicitAgentRuntimeToolsAllow } from "./cron-input-validation.js";
 import { createCronSessionVisibility, cronJobIsVisible } from "./cron-visibility.js";
 import type { GatewayRequestHandler, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
@@ -213,7 +218,9 @@ export function scopedCronJobHandler<P extends CronJobIdParams>(
     const visibility = scope.checkVisibility ? visibilityRead.resolve() : undefined;
     if (
       !job ||
+      (isHumanCronMutation(method) && !canHumanManageCronJob(client, job)) ||
       (scope.checkVisibility &&
+        !(method === "cron.get" && isHumanCronJobOwner(client, job)) &&
         !cronJobIsVisible(job, visibility, context.cron.getDefaultAgentId())) ||
       !cronJobMatchesCallerScope({
         job,

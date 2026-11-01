@@ -10,6 +10,7 @@ import {
   getChatSessionScrollPosition,
   handleChatScroll,
   handleChatScrollTakeover,
+  hasPendingManualChatScroll,
   lockChatScroll,
   resetChatScroll,
   saveChatSessionScrollPosition,
@@ -287,14 +288,17 @@ describe("programmatic scroll ownership", () => {
     host.chatIsProgrammaticScroll = () => true;
     host.chatNewMessagesBelow = true;
     host.chatLastScrollTop = 500;
+    expect(hasPendingManualChatScroll(host)).toBe(false);
     scheduleChatScroll(host, true, true, { source: "manual" });
     expect(canAutoFollowChat(host)).toBe(false);
+    expect(hasPendingManualChatScroll(host)).toBe(true);
     frames.runNext();
     expect(canAutoFollowChat(host)).toBe(false);
     expect(host.chatScrollToEnd).not.toHaveBeenCalled();
     scheduleCommittedChatScroll(host, false, false, { source: "resize" });
     frames.runNext();
     expect(canAutoFollowChat(host)).toBe(true);
+    expect(hasPendingManualChatScroll(host)).toBe(false);
     expect(host.chatScrollToEnd).toHaveBeenCalledWith({ behavior: "smooth", source: "manual" });
     expect(frames.pending.size).toBe(0);
     scroll(host, 900);

@@ -78,8 +78,8 @@ it.each([
     path.join(home, "fixture.plist"),
   );
   expect(command.environmentValueSources?.TAVILY_API_KEY).toBe("file");
-  service.readCommand.mockResolvedValue(command);
-  await runServiceRestart(createGatewayServiceRunArgs(true));
+  await runServiceRestart(createGatewayServiceRunArgs(() => ({ command, config: loadConfig() })));
+  expect(service.readCommand).toHaveBeenCalledOnce();
   const output = lifecycleRuntimeLogs.find((line) => line.trim().startsWith("{"));
   const payload = JSON.parse(output ?? "{}") as { warnings?: string[] };
   expect(payload.warnings).toContainEqual(expect.stringContaining("managed keys (TAVILY_API_KEY)"));

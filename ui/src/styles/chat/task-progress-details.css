@@ -103,7 +103,6 @@
 }
 
 .task-progress-details--desktop[data-desktop-details][data-details-moving] {
-  box-sizing: border-box;
   overflow: hidden;
 }
 
@@ -222,7 +221,7 @@
   padding: 4px;
   place-items: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   corner-shape: superellipse(7.5);
   background: transparent;
   color: var(--muted);
@@ -270,7 +269,6 @@
 
 /* Compact only this non-interactive checklist, without changing shared Details rows. */
 .task-progress-details--desktop[data-desktop-details] .task-progress-details__plan {
-  --details-row-font-size: var(--control-ui-text-sm);
   --details-row-height: 24px;
   --details-row-padding-block: 2px;
   --details-row-list-gap: 2px;
@@ -360,7 +358,6 @@
 .chat-details-desktop-body
   .task-progress-details--desktop[data-desktop-details]
   .session-progress-card__step {
-  --details-row-font-size: var(--control-ui-text-sm);
   --details-row-line-height: 20px;
   --session-progress-marker-size: var(--details-row-icon-size, 15px);
 
@@ -396,7 +393,7 @@
   min-height: 24px;
   padding: 2px 8px;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--bg-hover);
   color: var(--muted);
   font-size: 12px;
@@ -434,7 +431,7 @@
   margin-block-end: 16px;
   padding: 12px;
   border: 0;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--card);
   font-size: 13px;
   line-height: 18px;

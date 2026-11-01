@@ -307,6 +307,39 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     },
   );
 
+  it.each([
+    ["missing name", "missing-exec-fixture", true],
+    ["missing absolute path", "{root}/missing-exec-fixture", true],
+    ["resolution error", "{root}/loop", true],
+    ["resolved without a grant", "/bin/ls", false],
+    ["satisfied builtin before a missing command", "cd . && missing-exec-fixture", true],
+    ["satisfied builtin before an ungranted command", "cd . && /bin/ls", false],
+    ["prompt-only wrapper", "env -S missing-exec-fixture", false],
+  ] as const)(
+    "explains Gateway executable lookup denials: %s",
+    async (_name, command, unresolved) => {
+      fs.symlinkSync("loop", path.join(root, "loop"));
+      saveExecApprovals({
+        version: 1,
+        defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+        agents: {},
+      });
+      const review = reviewer();
+      await expect(
+        tool(review, "allowlist").execute("lookup-denial", {
+          command: command.replace("{root}", root),
+        }),
+      ).rejects.toThrow(
+        unresolved
+          ? "exec denied: executable could not be resolved; check command spelling and Gateway PATH or use an absolute executable path"
+          : "exec denied: allowlist miss",
+      );
+      expect(boundary.spawn).not.toHaveBeenCalled();
+      expect(review).not.toHaveBeenCalled();
+      expect(callGatewayTool).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps current-policy execution pinned when an allowlisted symlink changes", async () => {
     const bin = path.join(root, "bin");
     fs.mkdirSync(bin);

@@ -78,6 +78,7 @@ type RunSessionBackfillParams = {
   assertCurrent?: () => void;
   agentId: string;
   workspaceDir: string;
+  workspaceFileMode?: import("./workspace-file-mode.js").WorkspaceFileMode;
   pluginConfig?: Record<string, unknown>;
   from?: string;
   to?: string;
@@ -483,6 +484,7 @@ async function executeSessionBackfillBatchCore(
     });
     const diary = await writeBackfillDiaryEntries({
       workspaceDir,
+      workspaceFileMode: params.workspaceFileMode,
       entries: diaryEntries,
       preserveExisting: true,
       ...(params.timezone !== undefined ? { timezone: params.timezone } : {}),

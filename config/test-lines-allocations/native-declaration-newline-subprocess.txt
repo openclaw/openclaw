@@ -1,0 +1,2 @@
+# Preserve native declaration boundary proof for newline checkout paths outside Vitest module loading.
+25

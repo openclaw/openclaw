@@ -1,3 +1,4 @@
+import iconv from "iconv-lite";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 
@@ -17,9 +18,10 @@ const pngUrl = `data:image/png;base64,${PNG.toString("base64")}`;
 function requestUrl(input: Parameters<typeof fetch>[0]): string {
   return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 }
-
-function html(text: string) {
-  return new Response(text, { headers: { "content-type": "text/html; charset=utf-8" } });
+function html(text: string, charset = "utf-8") {
+  return new Response(new Uint8Array(iconv.encode(text, charset)), {
+    headers: { "content-type": "text/html; charset=" + charset },
+  });
 }
 const redirect = (location: string) => new Response(null, { status: 302, headers: { location } });
 const missing = () => new Response(null, { status: 404 });
@@ -52,10 +54,7 @@ function load(path: string, enabled = () => true, scope = principal, revision = 
   return loadControlUiLinkPreview(
     parseControlUiLinkPreviewUrl(new URL(path, "https://public.example").href)!,
     enabled,
-    {
-      principal: scope,
-      revision,
-    },
+    { principal: scope, revision },
   );
 }
 
@@ -85,13 +84,14 @@ it("uses redirected-page OG metadata, document base URLs, entity decoding and an
     }
     if (url.endsWith("index.html")) {
       return html(
-        '<html><head><base href="https://assets.example/brand/"><base href="https://ignored.example/"><title>Fallback</title><meta content="A &amp; B" property="og:title"><meta name="twitter:image" content="/wrong.png"><meta content="../cover.png?x=1&amp;y=2" property="og:image"><link href="./icon.png" rel="shortcut icon"></head></html>',
+        '<html><head><base href="https://assets.example/brand/"><base href="https://ignored.example/"><title>Fallback</title><meta content="日本語 &amp; B" property="og:title"><meta name="twitter:image" content="/wrong.png"><meta content="../cover.png?x=1&amp;y=2" property="og:image"><link href="./icon.png" rel="shortcut icon"></head></html>',
+        "shift_jis",
       );
     }
     return new Response(PNG);
   });
   expect(await load("/metadata#fragment")).toEqual({
-    title: "A & B",
+    title: "日本語 & B",
     imageDataUrl: pngUrl,
     faviconDataUrl: pngUrl,
   });

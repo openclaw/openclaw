@@ -15,6 +15,8 @@
 // fresh clone per arm for partial-clone comparisons. No operator repositories.
 // --previous-ref <commit> seeds the native cache before timing; its initial
 // hydration/size scan is excluded. Without it, native mode measures a cold HEAD.
+// --hydration-base-file <saved-object-hydration.ts> compares the hydration owner
+// independently against the same native fixture and checkout-size implementation.
 // --cold disables size-fact reuse to measure a cold Git worker on every operation.
 // Acceptance: identical byte totals, fewer full scans, lower CPU/allocation.
 import assert from "node:assert/strict";
@@ -31,6 +33,7 @@ const { values } = parseArgs({
     allocation: { type: "boolean" },
     cold: { type: "boolean" },
     "base-file": { type: "string" },
+    "hydration-base-file": { type: "string" },
     iterations: { type: "string" },
     repo: { type: "string" },
     "previous-ref": { type: "string" },
@@ -72,6 +75,11 @@ const ownerUrl = new URL("../../src/agents/worktrees/capacity.runtime.ts", impor
 const gitUrl = new URL("../../src/agents/worktrees/git.ts", import.meta.url).href;
 const baseUrl = values["base-file"]
   ? pathToFileURL(path.resolve(values["base-file"])).href
+  : undefined;
+const hydrationUrl = new URL("../../src/agents/worktrees/object-hydration.ts", import.meta.url)
+  .href;
+const hydrationBaseUrl = values["hydration-base-file"]
+  ? pathToFileURL(path.resolve(values["hydration-base-file"])).href
   : undefined;
 const hooks = registerHooks({
   load(url, context, nextLoad) {
@@ -134,7 +142,14 @@ export async function requireGit(cwd, args, options) {
 `,
       };
     }
-    return nextLoad(url === ownerUrl && baseUrl ? baseUrl : url, context);
+    return nextLoad(
+      url === ownerUrl && baseUrl
+        ? baseUrl
+        : url === hydrationUrl && hydrationBaseUrl
+          ? hydrationBaseUrl
+          : url,
+      context,
+    );
   },
 });
 const inspector = new Session();
@@ -190,7 +205,7 @@ try {
   samples.sort((a, b) => a - b);
   console.log(
     JSON.stringify({
-      revision: baseUrl ? "base" : "candidate",
+      revision: baseUrl || hydrationBaseUrl ? "base" : "candidate",
       mode: values.allocation ? "allocation" : "timing",
       scope: repo
         ? "direct owner with native Git; wall includes Git/I/O, process CPU excludes Git child CPU; optional seed excluded"
