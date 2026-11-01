@@ -1,4 +1,10 @@
 import { chromium } from "playwright-core";
+import { vi } from "vitest";
+
+export const reattachRelayPage = vi.fn(
+  async (_browser: unknown, _targetId: string, _timeout: number) => false,
+);
+export class RelayPageRecoveryTimeoutError extends Error {}
 
 export class UnresponsiveCdpTargetError extends Error {
   constructor(targetIds: string[]) {

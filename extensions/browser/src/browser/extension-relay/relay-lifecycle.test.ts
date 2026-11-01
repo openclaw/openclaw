@@ -64,15 +64,17 @@ function createState(token: string, existing?: ExtensionRelayHandle) {
   return { profile, state };
 }
 
-function createHandle(token: string, port = RELAY_PORT): ExtensionRelayHandle {
+function createHandle(token: string, port = RELAY_PORT) {
+  const closeSpy = vi.fn(async () => {});
   return {
-    ownership: "owned",
+    ownership: "owned" as const,
     port,
     token,
     allowLegacyAuth: true,
     internalToken: `${token.slice(0, 8)}-internal`,
     bridge: {} as ExtensionRelayHandle["bridge"],
-    close: vi.fn(async () => {}),
+    close: closeSpy,
+    closeSpy,
   };
 }
 
@@ -137,7 +139,7 @@ describe("extension relay lifecycle", () => {
     await expect(ensureExtensionRelayForProfile(state, profile)).resolves.toBe(replacement);
     expect(state.resolved.extensionRelayToken).toBe(ROTATED_TOKEN);
     expect(state.extensionRelays?.get(PROFILE_NAME)).toBe(replacement);
-    expect(replacement.close).not.toHaveBeenCalled();
+    expect(replacement.closeSpy).not.toHaveBeenCalled();
   });
 
   it("coalesces concurrent rebinds to one exact relay handle", async () => {
@@ -185,7 +187,7 @@ describe("extension relay lifecycle", () => {
     await expect(sibling).resolves.toBe(replacement);
     expect(oldRelay.close).toHaveBeenCalledOnce();
     expect(startExtensionRelayServerMock).toHaveBeenCalledOnce();
-    expect(replacement.close).not.toHaveBeenCalled();
+    expect(replacement.closeSpy).not.toHaveBeenCalled();
     expect(state.extensionRelays?.get(PROFILE_NAME)).toBe(replacement);
     expect(state.resolved.extensionRelayInternalTokens[PROFILE_NAME]).toBe(
       replacement.internalToken,
@@ -229,7 +231,7 @@ describe("extension relay lifecycle", () => {
     await expect(owner).resolves.toBe(replacement);
     expect(oldRelay.close).toHaveBeenCalledOnce();
     expect(startExtensionRelayServerMock).toHaveBeenCalledOnce();
-    expect(replacement.close).not.toHaveBeenCalled();
+    expect(replacement.closeSpy).not.toHaveBeenCalled();
     expect(getProfileLifecycle(runtime).leases.size).toBe(0);
   });
 
@@ -257,7 +259,7 @@ describe("extension relay lifecycle", () => {
     await expect(transition).resolves.toEqual(expect.objectContaining({ stopped: true }));
 
     expect(oldRelay.close).toHaveBeenCalledOnce();
-    expect(replacement.close).toHaveBeenCalledOnce();
+    expect(replacement.closeSpy).toHaveBeenCalledOnce();
     expect(state.extensionRelays?.has(PROFILE_NAME)).toBe(false);
     expect(state.resolved.extensionRelayInternalTokens[PROFILE_NAME]).toBeUndefined();
     expect(getProfileLifecycle(runtime).leases.size).toBe(0);

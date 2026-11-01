@@ -1,9 +1,14 @@
+import { EventEmitter } from "node:events";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { chromium } from "playwright-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
-import { BrowserTabNotFoundError } from "./errors.js";
+import { BrowserActionError, BrowserTabNotFoundError } from "./errors.js";
+import type { RelayOwnerClient } from "./extension-relay/owner-client.js";
+import { registerRelayCdpAccess } from "./extension-relay/relay-access.js";
+import type { ExtensionRelayHandle } from "./extension-relay/relay-server.js";
 import { pwAi } from "./pw-ai.js";
+import * as cdpTransport from "./pw-session-cdp-transport.js";
 import { closeConnectionScopedPageBrowser, markTargetBlocked } from "./pw-session-connection.js";
 
 const {
@@ -27,6 +32,7 @@ type MockPageSpec = {
   targetId?: string;
   url?: string;
   title?: string;
+  published?: boolean;
   beforeTargetLookup?: () => Promise<void>;
   targetLookupError?: string;
 };
@@ -39,12 +45,18 @@ type BrowserMockBundle = {
     bringToFront: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
   }>;
+  publishPage: (index: number) => void;
+  contextEvents: import("node:events").EventEmitter;
+  browserEvents: import("node:events").EventEmitter;
 };
 
 const cdpUrl = "http://127.0.0.1:18792";
 
 function makeBrowser(pages: MockPageSpec[]): BrowserMockBundle {
   let connected = true;
+  const contextEvents = new EventEmitter();
+  const browserEvents = new EventEmitter();
+  const published = pages.map((spec) => spec.published !== false);
   const browserClose = vi.fn(async () => {
     connected = false;
   });
@@ -69,8 +81,9 @@ function makeBrowser(pages: MockPageSpec[]): BrowserMockBundle {
   });
 
   const context: import("playwright-core").BrowserContext = {
-    pages: () => pageObjects,
-    on: vi.fn(),
+    pages: () => pageObjects.filter((_, index) => published[index]),
+    on: contextEvents.on.bind(contextEvents),
+    off: contextEvents.off.bind(contextEvents),
     browser: () => browser,
     newCDPSession: vi.fn(async (page: import("playwright-core").Page) => {
       const spec = specByPage.get(page);
@@ -93,18 +106,55 @@ function makeBrowser(pages: MockPageSpec[]): BrowserMockBundle {
   const browser = {
     isConnected: () => connected,
     contexts: () => [context],
-    on: vi.fn(),
-    off: vi.fn(),
+    on: browserEvents.on.bind(browserEvents),
+    off: browserEvents.off.bind(browserEvents),
     close: browserClose,
   } as unknown as import("playwright-core").Browser;
 
-  return { browser, browserClose, pages: pageObjects, pageActions };
+  return {
+    browser,
+    browserClose,
+    pages: pageObjects,
+    pageActions,
+    publishPage: (index) => {
+      published[index] = true;
+      contextEvents.emit("page", pageObjects[index]);
+    },
+    contextEvents,
+    browserEvents,
+  };
 }
 
 function installBrowser(pages: MockPageSpec[]): BrowserMockBundle {
   const bundle = makeBrowser(pages);
   connectOverCdpSpy.mockResolvedValue(bundle.browser);
   return bundle;
+}
+
+function registerRelay(ownership: "borrowed" | "owned") {
+  if (ownership === "owned") {
+    return registerRelayCdpAccess(cdpUrl, {
+      ownership,
+      port: 9222,
+      token: "test-token",
+      allowLegacyAuth: false,
+      internalToken: "test-internal-token",
+      bridge: {} as ExtensionRelayHandle["bridge"],
+      close: vi.fn(async () => {}),
+    });
+  }
+  const client = {
+    assertCurrent: vi.fn(),
+    openTransport: vi.fn(async () => ({ send: vi.fn(), close: vi.fn() })),
+  } as unknown as RelayOwnerClient;
+  return registerRelayCdpAccess(cdpUrl, {
+    ownership: "borrowed",
+    port: 9222,
+    token: "test-token",
+    allowLegacyAuth: false,
+    client,
+    close: vi.fn(async () => {}),
+  });
 }
 
 afterEach(async () => {
@@ -116,9 +166,107 @@ afterEach(async () => {
 
 beforeEach(() => {
   getChromeWebSocketEndpointSpy.mockResolvedValue(null);
+  vi.mocked(cdpTransport.reattachRelayPage).mockReset().mockResolvedValue(false);
 });
 
 describe("pw-session getPageForTargetId", () => {
+  it.each(["borrowed", "owned"] as const)(
+    "reinitializes a failed %s Page without retiring its healthy neighbour",
+    async (ownership) => {
+      const failed = { targetId: "BUSY", url: "" };
+      const bundle = installBrowser([{ targetId: "HEALTHY", url: "about:blank" }, failed]);
+      const unregister = registerRelay(ownership);
+      vi.mocked(cdpTransport.reattachRelayPage).mockImplementation(async (_browser, targetId) => {
+        expect(targetId).toBe("BUSY");
+        failed.url = "https://recovered.example/";
+        bundle.publishPage(1);
+        return true;
+      });
+      try {
+        await expect(getPageForTargetId({ cdpUrl, targetId: "HEALTHY" })).resolves.toBe(
+          bundle.pages[0],
+        );
+        expect(cdpTransport.reattachRelayPage).not.toHaveBeenCalled();
+        await expect(getPageForTargetId({ cdpUrl, targetId: "BUSY" })).resolves.toBe(
+          bundle.pages[1],
+        );
+        expect(cdpTransport.reattachRelayPage).toHaveBeenCalledOnce();
+        await expect(getPageForTargetId({ cdpUrl, targetId: "HEALTHY" })).resolves.toBe(
+          bundle.pages[0],
+        );
+        expect(connectOverCdpSpy).toHaveBeenCalledOnce();
+        expect(bundle.browserClose).not.toHaveBeenCalled();
+      } finally {
+        unregister();
+      }
+    },
+  );
+
+  it("bounds recovery of a published failed Page instead of selecting its dummy frame", async () => {
+    vi.useFakeTimers();
+    const bundle = installBrowser([{ targetId: "BUSY", url: "" }]);
+    const unregister = registerRelay("owned");
+    vi.mocked(cdpTransport.reattachRelayPage).mockResolvedValue(true);
+    try {
+      const result = getPageForTargetId({ cdpUrl, targetId: "BUSY" }).catch(
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(await result).toMatchObject({ status: 409 });
+      expect(cdpTransport.reattachRelayPage).toHaveBeenCalledOnce();
+      expect(bundle.browserClose).not.toHaveBeenCalled();
+    } finally {
+      unregister();
+      await vi.runAllTimersAsync();
+    }
+  });
+
+  it.each(["borrowed", "owned"] as const)(
+    "keeps healthy %s relay selection usable while another Page is unpublished",
+    async (ownership) => {
+      vi.useFakeTimers();
+      const bundle = installBrowser([
+        { targetId: "HEALTHY" },
+        { targetId: "BUSY", published: false },
+      ]);
+      const unregister = registerRelay(ownership);
+
+      try {
+        await expect(getPageForTargetId({ cdpUrl, targetId: "HEALTHY" })).resolves.toBe(
+          bundle.pages[0],
+        );
+        const contextListeners = bundle.contextEvents.listenerCount("page");
+        const disconnectListeners = bundle.browserEvents.listenerCount("disconnected");
+
+        const busySelection = getPageForTargetId({ cdpUrl, targetId: "BUSY" });
+        const failure = busySelection.then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        await vi.advanceTimersByTimeAsync(5_000);
+        const unavailable = await failure;
+        expect(unavailable).toBeInstanceOf(BrowserActionError);
+        expect(unavailable).toMatchObject({ status: 409 });
+        expect(bundle.contextEvents.listenerCount("page")).toBe(contextListeners);
+        expect(bundle.browserEvents.listenerCount("disconnected")).toBe(disconnectListeners);
+        expect(connectOverCdpSpy).toHaveBeenCalledOnce();
+        expect(bundle.browserClose).not.toHaveBeenCalled();
+
+        bundle.publishPage(1);
+        await expect(getPageForTargetId({ cdpUrl, targetId: "BUSY" })).resolves.toBe(
+          bundle.pages[1],
+        );
+        expect(bundle.contextEvents.listenerCount("page")).toBe(contextListeners);
+        expect(bundle.browserEvents.listenerCount("disconnected")).toBe(disconnectListeners);
+        expect(connectOverCdpSpy).toHaveBeenCalledOnce();
+        expect(bundle.browserClose).not.toHaveBeenCalled();
+      } finally {
+        unregister();
+        await vi.runAllTimersAsync();
+      }
+    },
+  );
+
   it("namespaces reused Lightpanda target IDs and refuses stale IDs without reconnecting", async () => {
     const endpoint = "ws://127.0.0.1:9222/";
     const first = installBrowser([{ targetId: "reused-target" }]);

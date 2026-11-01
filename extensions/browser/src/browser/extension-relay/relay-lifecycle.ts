@@ -14,7 +14,7 @@ import {
 } from "../server-context.lifecycle.js";
 import type { BrowserServerState, ProfileRuntimeState } from "../server-context.types.js";
 import { RelayOwnerClient } from "./owner-client.js";
-import { registerBorrowedRelayCdpAccess, type ExtensionRelayResource } from "./relay-access.js";
+import { registerRelayCdpAccess, type ExtensionRelayResource } from "./relay-access.js";
 import { startExtensionRelayServer } from "./relay-server.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay");
@@ -195,17 +195,13 @@ async function ensureDesiredRelay(params: {
             token,
             signal,
           });
-          let unregister = () => {};
           handle = {
             ownership: "borrowed",
             port: profile.cdpPort,
             token,
             allowLegacyAuth: state.resolved.extensionRelay.allowLegacyAuth,
             client,
-            close: async () => {
-              await client.close();
-              unregister();
-            },
+            close: () => client.close(),
           };
           actor.cleanupRelays.add(handle);
           const status = await client.status();
@@ -229,10 +225,6 @@ async function ensureDesiredRelay(params: {
             }
           };
           client.adoptProfileLease(assertCurrent);
-          unregister = registerBorrowedRelayCdpAccess(
-            `http://127.0.0.1:${profile.cdpPort}`,
-            borrowed,
-          );
         }
         actor.cleanupRelays.add(handle);
         signal.throwIfAborted();
@@ -255,6 +247,12 @@ async function ensureDesiredRelay(params: {
           throw new Error(`Extension relay profile "${profile.name}" disappeared during startup.`);
         }
         Object.assign(profile, currentWithInternalAuth);
+        const closeHandle = handle.close;
+        const unregister = registerRelayCdpAccess(currentWithInternalAuth.cdpUrl, handle);
+        handle.close = async () => {
+          await closeHandle();
+          unregister();
+        };
         actor.cleanupRelays.delete(handle);
         log.info(
           `extension relay for profile "${profile.name}" listening on 127.0.0.1:${handle.port}`,

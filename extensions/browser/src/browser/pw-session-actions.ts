@@ -17,6 +17,7 @@ import { AX_REF_PATTERN, normalizeCdpWsUrl } from "./cdp.js";
 import { DEFAULT_BROWSER_ACTION_TIMEOUT_MS } from "./constants.js";
 import { resolveBrowserEngine } from "./engines/registry.js";
 import type { BrowserEngineId } from "./engines/types.js";
+import { getRelayCdpAccess } from "./extension-relay/relay-access.js";
 import {
   withBrowserNavigationPolicy,
   assertBrowserNavigationAllowed,
@@ -351,7 +352,7 @@ export async function listPagesViaPlaywright(opts: {
           browser.on("disconnected", onDisconnected);
           signal.addEventListener("abort", wake, { once: true });
           try {
-            const readNativeTargetIds = async () => {
+            const readNativeTargets = async () => {
               const session = browser.newBrowserCDPSession();
               let detaching: Promise<void> | undefined;
               const detach = () => {
@@ -375,20 +376,48 @@ export async function listPagesViaPlaywright(opts: {
                 if (!Array.isArray(result.targetInfos)) {
                   throw new Error("Browser target enumeration was unavailable.");
                 }
-                return new Set(
-                  result.targetInfos
-                    .filter(
-                      (info) =>
-                        isSelectableCdpBrowserTarget(info) &&
-                        !isBlockedTarget(opts.cdpUrl, info.targetId),
-                    )
-                    .map((info) => info.targetId),
+                return result.targetInfos.filter(
+                  (info) =>
+                    isSelectableCdpBrowserTarget(info) &&
+                    !isBlockedTarget(opts.cdpUrl, info.targetId),
                 );
               } finally {
                 signal.removeEventListener("abort", detach);
                 detach();
               }
             };
+            const readNativeTargetIds = async () =>
+              new Set((await readNativeTargets()).map((info) => info.targetId));
+            if (opts.requireCompleteTargetList && getRelayCdpAccess(opts.cdpUrl)) {
+              const targets = await readNativeTargets();
+              // Native target identity and relay metadata do not require a ready
+              // renderer. Never hide a still-initializing Page from the inventory.
+              for (const page of await getAllPages(browser)) {
+                if (!isBlockedPageRef(opts.cdpUrl, page)) {
+                  continue;
+                }
+                const blocked = await pageTargetInfo(page);
+                if (!blocked) {
+                  throw new Error("Blocked page target identity is unavailable.");
+                }
+                const index = targets.findIndex((info) => info.targetId === blocked.targetId);
+                if (index >= 0) {
+                  targets.splice(index, 1);
+                }
+              }
+              signal.throwIfAborted();
+              if (disconnected) {
+                throw new Error("Browser disconnected during page enumeration.");
+              }
+              return targets
+                .filter((info) => !isBlockedTarget(opts.cdpUrl, info.targetId))
+                .map((info) => ({
+                  targetId: info.targetId,
+                  title: info.title,
+                  url: info.url,
+                  type: "page" as const,
+                }));
+            }
             let nativeTargetIds = opts.requireCompleteTargetList
               ? await readNativeTargetIds()
               : undefined;

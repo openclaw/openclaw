@@ -1,11 +1,12 @@
 import type { Browser } from "playwright-core";
 import { connectOverCdpTransport } from "../pw-session-cdp-transport.js";
 import type { RelayOperationReference } from "./owner-client.js";
-import { getBorrowedRelayCdpAccess, type BorrowedRelayAccess } from "./relay-access.js";
+import { getRelayCdpAccess, type BorrowedRelayAccess } from "./relay-access.js";
 
 // Navigation recovery gets its own reference-bound connection. DOM references remain
 // on the ordinary cached Page/Frame and are never copied into this operation cache.
 const operationConnections = new WeakMap<RelayOperationReference, Promise<Browser>>();
+export const RELAY_PLAYWRIGHT_TIMEOUT_MS = 5_000;
 
 export async function closeRelayOperationConnection(
   reference: RelayOperationReference,
@@ -37,15 +38,19 @@ export async function connectRelayBrowser(
   const pending = (async () => {
     const transport = await (reference ? reference.openTransport() : relay.client.openTransport());
     const browser = await connectOverCdpTransport(cdpUrl, {
-      timeout: 5_000,
+      timeout: RELAY_PLAYWRIGHT_TIMEOUT_MS,
       headers: {},
       preparedTransport: transport,
+      deferInitialAutoAttach: true,
+      assertCurrent: () => {
+        if (getRelayCdpAccess(cdpUrl) !== relay) {
+          throw new Error("Captured relay connection was superseded");
+        }
+        relay.client.assertCurrent();
+      },
     });
     try {
-      if (
-        getBorrowedRelayCdpAccess(cdpUrl) !== relay ||
-        (reference && !(await reference.resolve()))
-      ) {
+      if (getRelayCdpAccess(cdpUrl) !== relay || (reference && !(await reference.resolve()))) {
         throw new Error("Captured relay connection was superseded");
       }
       return browser;
