@@ -55,6 +55,7 @@ import {
 } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowSelection } from "./session-row-selection.js";
+import { createSessionRuntimeResolution } from "./session-runtime-resolution.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 import { getSessionDefaults } from "./session-utils-model.js";
@@ -341,6 +342,7 @@ export function prepareSessionRowSelection(
     prepared?.ordered ? undefined : rows,
   );
   const { entries } = selected;
+  let runtimeResolution: ReturnType<typeof createSessionRuntimeResolution> | undefined;
   return {
     cfg,
     opts,
@@ -374,6 +376,7 @@ export function prepareSessionRowSelection(
       return projection.modelFacts(
         { agentId: winner.agentId, key: winner.key, storePath: winner.storeTarget.storePath },
         prepared?.metadataPrepared === true,
+        (runtimeResolution ??= createSessionRuntimeResolution(cfg)),
       );
     },
     modelSearchMayMatch: (search: string) => projection.modelSearchMayMatch(search),

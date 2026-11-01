@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Session scheduling ownership, input custody, and retained settlement"
 read_when:
   - Changing turn admission, queueing, stopping, or session mutations
@@ -126,7 +127,7 @@ even after the turn slot becomes available.
 ## Inputs and custody
 
 Inputs include channel messages, Gateway user turns, agent RPC turns, scheduled
-wakes, heartbeats, subagent completion handoffs, and restart-recovery resends. Adapters retain each input
+wakes, heartbeats, subagent completion handoffs, and post-restart resume inputs. Adapters retain each input
 owner's authentication, visibility, routing, idempotency, and acknowledgment
 contract; a common scheduling interface does not make those inputs equivalent.
 
@@ -227,7 +228,8 @@ table:
 | `talk` (key-only Talk voice cancel)                            | Abort                              | Keep                             | Stop that turn's subagents                   | Skip                                    | Fire once           |
 | `mutation`                                                     | Per mutation                       | Per mutation                     | Per mutation                                 | Skip                                    | No                  |
 | `interrupt`                                                    | Abort                              | Keep                             | Keep                                         | Skip                                    | No                  |
-| `restart`, `operator-revocation`                               | Abort                              | Cancel selected pending inputs   | Keep                                         | Skip                                    | No                  |
+| `restart`                                                      | Abort after root marker            | Retain accepted user inputs      | Stop quietly                                 | Skip                                    | No                  |
+| `operator-revocation`                                          | Abort                              | Cancel selected pending inputs   | Keep                                         | Skip                                    | No                  |
 | `watchdog`, `supersede`                                        | Abort                              | Keep                             | Keep                                         | Skip                                    | No                  |
 
 A Stop that targets a subagent session with no running turn, but with a paused
@@ -288,10 +290,10 @@ custody ends after persistence and publication.
 A mutation closes competing admission, targets exact current owners, waits for
 real settlement, and then acquires its mutation boundary. In-band commands must
 not wait for their own admitted stack, and a mailbox clear they request does not
-select their own claimed input. Restart drain cancels waiting inputs while claimed
-inputs and in-flight steering remain with their active producers. Shutdown waits
-for those producers or aborts them with the typed restart reason used by recovery,
-including the turn that requested the restart. A mutation body that owns no turn
+select their own claimed input. Committed shutdown records running root sessions
+and their accepted queued input IDs for resume, then aborts active producers, including the turn that
+requested the restart. In-flight persistence keeps a short bounded settlement
+grace. A mutation body that owns no turn
 and requests one for its own session, such as
 `sessions.compact` or a native `/compact`, receives that turn under its own fence,
 ahead of the inputs it keeps waiting. Mutations queued behind it do not block that
@@ -334,19 +336,14 @@ reports the session as blocked; the user can continue in a separate session, and
 the operator can restart the Gateway to terminate the process-local writer. No
 in-process statechart can guarantee recovery from a blocked process by itself.
 
-The controller mailbox is process-local; it does not introduce a new replay or
-storage contract. Existing durable recovery owners retain interrupted work,
-input identity, delivery receipts, and retry decisions. Eligible unfinished tasks
-resume through the same mailbox after restart with fresh execution authority.
-Explicit Stop remains terminal, and an unknown side-effect outcome is reported
-for inspection rather than mechanically replayed. Durable channel ingress keeps
-its own recovery contract. See [Restart recovery](/gateway/restart-recovery).
-
-If durable recovery already holds a preclaim, active claim, or terminal result
-for the same requester-completion input, restoration reuses that custody instead
-of reserving a second mailbox input. The completion owner keeps the durable
-obligation until it reconciles the final delivery result. Unrelated inputs
-retain their FIFO order and current-authority checks.
+The controller mailbox is process-local. Graceful shutdown writes one resume marker
+per running root session before aborting work, including the IDs of accepted
+queued user messages. Startup clears that marker and admits one ordinary system
+input; only its captured messages follow in FIFO order under each sender’s current
+authority. A crash does not reconstruct execution or queued work, and a later
+graceful marker does not adopt older crash-left rows. Explicit Stop remains terminal. Durable
+channel ingress, produced-message delivery, and file integrity keep their own
+contracts. See [Restart recovery](/gateway/restart-recovery).
 
 A later durable mailbox must reconcile these existing custody owners, specify
 retention and upgrade/rollback behavior, and distinguish queued from possibly

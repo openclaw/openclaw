@@ -793,6 +793,44 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     });
   });
 
+  it("ignores agent UI commands before native mobile navigation or panel delivery", () => {
+    Object.assign(window, {
+      __OPENCLAW_NATIVE_EMBED__: { platform: "android", formFactor: "phone" },
+    });
+    onTestFinished(() => {
+      Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_EMBED__");
+    });
+    const update = vi.fn();
+    const setSessionKey = vi.fn();
+    const navigate = vi.fn();
+    const panelEvent = vi.fn();
+    window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent);
+    onTestFinished(() => window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent));
+    const shell = testShell({
+      navigation: { update },
+      gateway: { setSessionKey, snapshot: { hello: null } },
+      navigate,
+    });
+    for (const command of [
+      { kind: "sidebar", visible: true },
+      ...["browser", "desktop", "terminal", "portal", "plugin"].map((panel) => ({
+        kind: "panel",
+        panel,
+        open: true,
+      })),
+      { kind: "split", direction: "right", sessionKey: "agent:main:other" },
+    ]) {
+      shell.handleGatewayEvent({
+        event: "ui.command",
+        payload: { command, sessionKey: "agent:main:other" },
+      });
+    }
+    expect(update).not.toHaveBeenCalled();
+    expect(setSessionKey).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(panelEvent).not.toHaveBeenCalled();
+  });
+
   it("routes UI commands to navigation, panels, and chat fallback", () => {
     const update = vi.fn();
     const setSessionKey = vi.fn();

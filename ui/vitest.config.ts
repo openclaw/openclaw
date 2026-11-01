@@ -87,6 +87,8 @@ let chromiumLaunchOptions: ReturnType<typeof resolveChromiumLaunchOptions> | nul
 
 // The accessibility-tree suite remains Chromium-only until its CDP probe is replaced.
 const webkitTestFiles = [
+  "src/pages/apps/apps-page.browser.test.tsx",
+  "src/pages/config/view.config-read.browser.test.tsx",
   "src/pages/usage/view-details.browser.test.tsx",
   "src/components/settings-ui.browser.test.tsx",
   "src/components/select-picker.behavior.browser.test.ts",
@@ -98,6 +100,7 @@ const webkitTestFiles = [
   "src/components/app-sidebar-agent-menu-scroll.browser.test.ts",
   "src/components/app-sidebar-rail-menus.browser.test.ts",
   "src/components/app-sidebar-session-visibility.browser.test.ts",
+  "src/components/app-sidebar-owner-avatar.browser.test.ts",
   "src/components/agent-emoji-picker.browser.test.ts",
   "src/components/appearance-picker.browser.test.ts",
   "src/components/confirm-dialog.browser.test.ts",
@@ -106,6 +109,7 @@ const webkitTestFiles = [
   "src/pages/new-session/project-chip.registration.browser.test.tsx",
   "src/pages/agents/agent-file-preview.browser.test.ts",
   "src/pages/skills/reader-shell.browser.test.tsx",
+  "src/pages/skills/view.clawhub.browser.test.ts",
   "src/lib/toast.browser.test.ts",
   "src/components/session-menu.browser.test.ts",
   "src/components/session-people-search.browser.test.ts",
@@ -115,6 +119,7 @@ const webkitTestFiles = [
   "src/components/modal-dialog.test.ts",
   "src/components/tooltip.test.ts",
   "src/components/tooltip.browser.test.ts",
+  "src/components/tooltip.escape-hover.browser.test.ts",
   "src/components/panel-tab-strip.test.ts",
   "src/components/panel-tab-strip.browser.test.ts",
   "src/components/hub-tabs.browser.test.tsx",

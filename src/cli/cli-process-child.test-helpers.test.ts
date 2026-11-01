@@ -11,6 +11,7 @@ import { waitForPidFile } from "../../test/helpers/process-wait.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   formatCliProcessFailure,
   runCliProcessChild,
@@ -83,52 +84,63 @@ it("keeps the end of streams longer than the output tail cap", () => {
   expect(message).toContain("[... truncated 8 chars ...]");
   expect(message).toMatch(/xEND$/u);
 });
-it("names the live handle and keeps partial output when a child never exits", async (context) => {
-  let child: ChildProcessWithoutNullStreams | undefined;
-  const reports = reportHooks(context);
-  const childRun = runScript({
-    script: [
-      "process.stdout.write('partial');",
-      "globalThis.pending = new Promise(() => {});",
-      "require('node:net').createServer().listen(0, '127.0.0.1');",
-      "process.on('SIGQUIT', () => process.stderr.write('x'.repeat(8_100) + '\\nlast-stderr-line\\n'));",
-      "setInterval(() => {}, 1_000);",
-    ],
-    timeoutMs: 500,
-    onTestFinished: reports.onTestFinished,
-    interact: (runningChild) => {
-      child = runningChild;
-      onTestFinished(() => stopChildProcess(runningChild, 1_000));
-      runningChild.stdin.end();
-    },
-  });
-  const reportCleanup = reports.clean();
-  const failure = await childRun.catch(captureFailure);
-  await reportCleanup;
-
-  expect(child).toMatchObject({ ...closedPipes, signalCode: "SIGKILL" });
-  expect(failure).toBeInstanceOf(Error);
-  expect(String(failure)).toMatch(/500ms deadlock guard[\s\S]*partial/u);
-  if (shouldEnableNodeDiagnosticReports()) {
-    expect(String(failure)).toContain('"Timeout":1');
-    expect(String(failure)).toContain('"activeHandles"');
-    expect(String(failure)).toMatch(/"pendingPromises":\{"tracked":[1-9]/u);
-    expect(String(failure)).toContain("last-stderr-line");
-    const report = String(failure)
-      .split("--- Node diagnostic report ---\n")[1]
-      ?.split("\n--- child diagnostics ---")[0];
-    expect(report).toBeDefined();
-    expect(JSON.parse(report!)).toMatchObject({
-      javascriptStack: expect.any(Object),
-      nativeStack: expect.any(Array),
-      libuv: expect.arrayContaining([
-        expect.objectContaining({ type: "timer", is_active: true, is_referenced: true }),
-        expect.objectContaining({ type: "tcp", is_active: true, is_referenced: true }),
-      ]),
+it.for(
+  process.versions.bun && process.platform !== "win32" ? ["inherited", "node"] : ["inherited"],
+)(
+  "names the live handle and keeps partial output when a child never exits (%s)",
+  async (runtime, context) => {
+    let child: ChildProcessWithoutNullStreams | undefined;
+    const reports = reportHooks(context);
+    const childRun = runScript({
+      nodeExecutable: runtime === "node" ? resolveTestNodeExecPath() : undefined,
+      script: [
+        "process.stdout.write('partial');",
+        "globalThis.pending = new Promise(() => {});",
+        "require('node:net').createServer().listen(0, '127.0.0.1');",
+        "process.on('SIGQUIT', () => process.stderr.write('x'.repeat(8_100) + '\\nlast-stderr-line\\n'));",
+        "setInterval(() => {}, 1_000);",
+      ],
+      timeoutMs: 500,
+      onTestFinished: reports.onTestFinished,
+      interact: (runningChild) => {
+        child = runningChild;
+        onTestFinished(() => stopChildProcess(runningChild, 1_000));
+        runningChild.stdin.end();
+      },
     });
-    expect(report).not.toMatch(/"(?:local|remote)Endpoint"\s*:/u);
-  }
-});
+    const reportCleanup = reports.clean();
+    const failure = await childRun.catch(captureFailure);
+    await reportCleanup;
+
+    expect(child).toMatchObject({ ...closedPipes, signalCode: "SIGKILL" });
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toMatch(/500ms deadlock guard[\s\S]*partial/u);
+    if (runtime === "node" || shouldEnableNodeDiagnosticReports()) {
+      expect(String(failure)).toMatch(/Child diagnostics: SIGQUIT requested;[^\n]*; received\./u);
+      expect(String(failure)).toContain('"Timeout":1');
+      expect(String(failure)).toContain('"activeHandles"');
+      expect(String(failure)).toMatch(/"pendingPromises":\{"tracked":[1-9]/u);
+      expect(String(failure)).toContain("last-stderr-line");
+      const report = String(failure)
+        .split("--- Node diagnostic report ---\n")[1]
+        ?.split("\n--- child diagnostics ---")[0];
+      expect(report).toBeDefined();
+      expect(JSON.parse(report!)).toMatchObject({
+        javascriptStack: expect.any(Object),
+        nativeStack: expect.any(Array),
+        libuv: expect.arrayContaining([
+          expect.objectContaining({ type: "timer", is_active: true, is_referenced: true }),
+          expect.objectContaining({ type: "tcp", is_active: true, is_referenced: true }),
+        ]),
+      });
+      expect(report).not.toMatch(/"(?:local|remote)Endpoint"\s*:/u);
+    } else {
+      expect(String(failure)).toContain(
+        "Node diagnostic report unavailable: signal was not requested.",
+      );
+    }
+  },
+);
 
 it.skipIf(!shouldEnableNodeDiagnosticReports())(
   "keeps a timeout failure when the child exits during diagnostic grace",

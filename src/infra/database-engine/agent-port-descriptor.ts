@@ -9,6 +9,7 @@ import {
 import { readTranscriptPayload } from "../../config/sessions/transcript-payload.js";
 import { deriveTranscriptPredicateFields } from "../../config/sessions/transcript-predicate-fields.js";
 import { withoutAgentPostgresColdArchiveChunks } from "../../state/openclaw-agent-cold-archive-chunks-schema.js";
+import { withoutAgentPostgresColdNavigation } from "../../state/openclaw-agent-cold-navigation-schema.js";
 import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import {
   AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION,
@@ -154,12 +155,12 @@ export async function loadAgentPortDescriptor(
       return backup;
     }
     // Schema 30 appends columns; 31–36 and 38 change only PostgreSQL search, triggers, or indexes.
-    // Schema 37 adds a cold archive companion table.
+    // Schema 37 adds a cold archive companion table; 39 relaxes the transcript payload CHECK.
     // Pin the remaining shared layout so future DDL gets its own descriptor.
     if (
       backup ||
-      OPENCLAW_AGENT_SCHEMA_VERSION !== 38 ||
-      ![27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37].includes(sourceVersion)
+      OPENCLAW_AGENT_SCHEMA_VERSION !== 39 ||
+      ![27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing agent PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -458,10 +459,12 @@ export async function loadAgentPortDescriptor(
           }))
         : []),
     ],
-    preData: withoutLegacyColdArchive(
-      legacyTrajectory
-        ? withLegacyAgentPostgresTrajectoryStorage(descriptor.preData)
-        : descriptor.preData,
+    preData: withoutAgentPostgresColdNavigation(
+      withoutLegacyColdArchive(
+        legacyTrajectory
+          ? withLegacyAgentPostgresTrajectoryStorage(descriptor.preData)
+          : descriptor.preData,
+      ),
     ),
     postData: withoutLegacyColdArchive(postData),
     expectedCatalog: catalog.map((fact) =>

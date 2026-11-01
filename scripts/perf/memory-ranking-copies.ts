@@ -22,6 +22,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { LoadedRecord } from "../../extensions/knowledge/src/model.js";
 import type { mergeHybridResults } from "../../extensions/memory-core/src/memory/hybrid.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -149,12 +150,7 @@ await nextTurn();
 
 const profiler = values.mode === "allocation" ? new Session() : undefined;
 if (profiler) {
-  profiler.connect();
-  await profiler.post("HeapProfiler.startSampling", {
-    samplingInterval: 4096,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(profiler, 4096);
 }
 const gcEntries: PerformanceEntry[] = [];
 const observer = new PerformanceObserver((list) => gcEntries.push(...list.getEntries()));

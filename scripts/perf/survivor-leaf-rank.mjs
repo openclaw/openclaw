@@ -13,6 +13,7 @@ import { SourceMap } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { bundledModuleRegions, findBundledModuleRegion } from "../lib/bundled-module-regions.mjs";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -66,6 +67,7 @@ function loadBuiltFile(file) {
           ? JSON.parse(readFileSync(mapFile, "utf8"))
           : null;
       files.set(file, {
+        text,
         lines: text.split("\n"),
         map: mapPayload ? new SourceMap(mapPayload) : null,
         mapDirectory: path.dirname(mapFile),
@@ -112,17 +114,18 @@ function mapFrame(frame) {
   if (file.startsWith(`${root}${path.sep}`) && !relative(file).includes("dist/")) {
     return { source: { ...built, file: relative(file) }, mapping: "source", built };
   }
-  const regions = [];
-  for (let i = 0; i <= frame.lineNumber && i < data.lines.length; i++) {
-    const start = /^\/\/#region (.+)$/.exec(data.lines[i]);
-    if (start) {
-      regions.push(start[1]);
-    } else if (data.lines[i].startsWith("//#endregion")) {
-      regions.pop();
+  const offset = data.lines
+    .slice(0, frame.lineNumber)
+    .reduce((size, line) => size + line.length + 1, 0);
+  let region;
+  for (const match of bundledModuleRegions(data.text)) {
+    if (match.index > offset) {
+      break;
     }
+    region = match[1];
   }
-  const region = regions.at(-1);
-  if (!region || !/^(src|packages|extensions)\//.test(region)) {
+  const bounds = region && findBundledModuleRegion(data.text, region);
+  if (!bounds || offset >= bounds.end || !/^(src|packages|extensions)\//.test(region)) {
     return fallback;
   }
   const source = path.join(root, region);

@@ -14,7 +14,7 @@ import {
 } from "../../routing/session-key.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
 import type { ModelFallbackNotice } from "../../shared/model-fallback-notice.js";
-import type { SkillWorkshopChangeNotice } from "../../shared/skill-workshop-change-notice.js";
+import type { PluginNotice } from "../../shared/plugin-notice.js";
 import {
   CRON_DIRECT_DELIVERY_CONTEXT_KIND,
   OPENCLAW_DELIVERY_MIRROR_MODEL,
@@ -26,7 +26,6 @@ import { rethrowIncognitoSessionError } from "../../state/incognito-session-erro
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import { resolveDefaultSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
-import type { RecoveryNoticeMirror } from "./recovery-notice.js";
 import {
   createSessionEntryWithTranscript,
   isSessionTranscriptProjectionUnavailableError,
@@ -112,9 +111,8 @@ type InternalSessionTranscriptDeliveryMirror =
   | {
       kind: typeof CRON_DIRECT_DELIVERY_CONTEXT_KIND;
     }
-  | SkillWorkshopChangeNotice
-  | ModelFallbackNotice
-  | RecoveryNoticeMirror;
+  | PluginNotice
+  | ModelFallbackNotice;
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";

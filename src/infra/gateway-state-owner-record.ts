@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -5,6 +6,7 @@ import { isMainThread } from "node:worker_threads";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getCliParentPid } from "../../cli-parent-lifetime.mjs";
+import { isForegroundGatewayRunArgv } from "../../gateway-run-argv.mjs";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
@@ -18,8 +20,10 @@ import {
   readGatewayLockProcessNamespace,
   type LockPayload,
 } from "./gateway-lock-payload.js";
+import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import {
   ensureOwnerDirectory,
+  resolveStateOwnerIdentity,
   type StateOwnerDirectoryIdentity,
 } from "./gateway-state-owner-directory.js";
 import {
@@ -28,17 +32,25 @@ import {
   StateDatabaseAdmissionPendingError,
   StateDatabaseOfflineMaintenanceError,
 } from "./gateway-state-owner-errors.js";
-import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
+import { inspectStaleLockOwner } from "./stale-lock-file.js";
 
-function isComparableStateOwnerStale(
+const ownerInspections = new AsyncLocalStorage<{ deadOwner?: { path: string; raw: string } }>();
+
+/** Retain only one exact dead owner, and only during this admission operation. */
+export function withPersistedStateOwnerInspection<T>(operation: () => T): T {
+  return ownerInspections.run({}, operation);
+}
+
+function comparableStateOwnerStaleReason(
   payload: Record<string, unknown>,
   namespace: "same" | "dead" | "unknown",
-): boolean {
-  return (
-    namespace === "dead" ||
-    (namespace === "same" &&
-      isLockOwnerDefinitelyStale({ payload: { pid: payload.pid, starttime: payload.startTime } }))
-  );
+): "owner-process-exited" | "owner-starttime-changed" | undefined {
+  return namespace === "dead"
+    ? "owner-process-exited"
+    : namespace === "same"
+      ? inspectStaleLockOwner({ payload: { pid: payload.pid, starttime: payload.startTime } })
+          ?.reason
+      : undefined;
 }
 
 /** Reclamation requires proof that the recorded owner stopped. */
@@ -52,7 +64,7 @@ export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath: str
   if (namespace === "unknown") {
     throw new GatewayLockNamespaceError(payload, lockPath);
   }
-  return isComparableStateOwnerStale(payload, namespace);
+  return comparableStateOwnerStaleReason(payload, namespace) !== undefined;
 }
 
 export {
@@ -85,6 +97,10 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     }
     throw new StateDatabaseAccessError(unavailable, { cause: error });
   }
+  const inspection = ownerInspections.getStore();
+  if (inspection?.deadOwner?.path === ownerPath && inspection.deadOwner.raw === raw) {
+    return;
+  }
   const owner = parseGatewayLockPayload(raw);
   if (!owner) {
     // Native exclusive creation precedes the payload write; cold admission may wait for publication.
@@ -96,7 +112,11 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
   // Ordinary SQLite access does not reclaim the owner or borrow schema custody.
   // Unknown namespaces retain maintenance contention without probing a local PID.
   const namespace = classifyGatewayLockProcessNamespace(owner, ownerPath);
-  if (isComparableStateOwnerStale(owner, namespace)) {
+  const staleReason = comparableStateOwnerStaleReason(owner, namespace);
+  if (staleReason) {
+    if (inspection && staleReason === "owner-process-exited") {
+      inspection.deadOwner = { path: ownerPath, raw };
+    }
     return;
   }
   // Workers share the process PID, but their schema authority still comes from
@@ -142,6 +162,81 @@ export function defaultPayload(databasePath: string): LockPayload {
   };
 }
 
+/** Keep queued CLI schema preparation behind the Gateway while Doctor restores its stop. */
+export function reserveGatewayStateRestoration(
+  databasePath: string,
+  assertOwnerCurrent: () => void,
+) {
+  assertOwnerCurrent();
+  const lockPath = `${resolveStateOwnerIdentity(databasePath).ownerPath}.gateway-restoration`;
+  const payload = defaultPayload(databasePath);
+  const stale = ({ payload: previous }: { payload: unknown }) =>
+    isGatewayStateOwnerDefinitelyStale(previous, lockPath);
+  const lock = acquireFileLockSync(lockPath, {
+    lockPath,
+    timeoutMs: 0,
+    retry: { retries: 0 },
+    staleMs: Infinity,
+    staleRecovery: "remove-if-unchanged",
+    payload: () => {
+      assertOwnerCurrent();
+      return payload;
+    },
+    shouldReclaim: stale,
+    shouldRemoveStaleLock: stale,
+  });
+  let released = false;
+  return {
+    assertCurrent() {
+      if (released || !lock.verifyStillHeld()) {
+        throw new Error("Gateway restoration reservation is no longer current.");
+      }
+    },
+    release() {
+      lock.release();
+      released = true;
+    },
+  };
+}
+
+function assertGatewayRestorationPriority(
+  databasePath: string,
+  restorationPath: string,
+  payload: LockPayload,
+): void {
+  if (payload.role === "gateway") {
+    return;
+  }
+  let raw: string;
+  try {
+    raw = fs.readFileSync(restorationPath, "utf8");
+  } catch (error) {
+    if (extractErrorCode(error) === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  const reservation = parseGatewayLockPayload(raw);
+  if (
+    isGatewayStateOwnerDefinitelyStale(reservation, restorationPath) ||
+    reservation?.pid === payload.pid
+  ) {
+    return;
+  }
+  // Gateway bootstrap may need schema admission before acquiring its process root.
+  if (
+    payload.pid === process.pid &&
+    isForegroundGatewayRunArgv(process.argv) &&
+    classifyOpenClawArgv(process.argv, { command: "gateway" }).kind === "openclaw"
+  ) {
+    return;
+  }
+  throw new StateDatabaseAdmissionPendingError(
+    databasePath,
+    `Gateway restoration has priority for OpenClaw state at ${databasePath}; retry when it finishes.`,
+  );
+}
+
 export function acquireGatewayStateOwnerFile(
   databasePath: string,
   pathname: string,
@@ -150,6 +245,8 @@ export function acquireGatewayStateOwnerFile(
   createdDirectories?: StateOwnerDirectoryIdentity[],
 ) {
   const deadline = performance.now() + busyTimeoutMs;
+  const restorationPath = `${resolveStateOwnerIdentity(databasePath).ownerPath}.gateway-restoration`;
+  assertGatewayRestorationPriority(databasePath, restorationPath, payload);
   ensureOwnerDirectory(path.dirname(pathname), createdDirectories);
   const observed: { holder: LockPayload | null } = { holder: null };
   const stale = ({ payload: value }: { payload: unknown }) => {
@@ -189,7 +286,11 @@ export function acquireGatewayStateOwnerFile(
         staleMs: Infinity,
         staleRecovery: "remove-if-unchanged",
         reentrantOwner: payload.ownerId,
-        payload: () => payload,
+        payload: () => {
+          // Sync waiters can predate Doctor's reservation. Recheck every physical attempt.
+          assertGatewayRestorationPriority(databasePath, restorationPath, payload);
+          return payload;
+        },
         // Reclamation validates foreign payloads; held custody compares exact bytes and token.
         shouldReclaim: stale,
         shouldRemoveStaleLock: stale,

@@ -29,18 +29,48 @@ require the `node` role.
 
 ## Scope levels
 
-| Scope                     | Meaning                                                                                                                                                       |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `operator.read`           | Read-only status, lists, catalog, logs, session reads, retained audit and execution-identity diagnostics, and other non-mutating calls.                       |
-| `operator.sessions.read`  | Read visible sessions, history, and session metadata without general Gateway read access.                                                                     |
-| `operator.sessions.write` | Read visible sessions, organize owned sessions, and start or continue the authenticated person's own work.                                                    |
-| `operator.write`          | Mutating operator actions: sending messages, invoking tools, updating talk/voice settings, node command relay. Also satisfies `operator.read`.                |
-| `operator.admin`          | Administrative access. Satisfies every `operator.*` scope. Required for config mutation, updates, native hooks, reserved namespaces, and high-risk approvals. |
-| `operator.pairing`        | Device and node pairing management: list, approve, reject, remove, rotate, revoke.                                                                            |
-| `operator.approvals`      | Exec and plugin approval APIs.                                                                                                                                |
-| `operator.questions`      | Listing, reading, answering, and resolving interactive questions.                                                                                             |
-| `operator.talk`           | Creating, steering, and closing Talk sessions without general Gateway write access. `operator.write` also satisfies this scope.                               |
-| `operator.talk.secrets`   | Reading Talk configuration with secrets included.                                                                                                             |
+| Scope                     | Meaning                                                                                                                                                                         |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `operator.read`           | Read-only status, lists, catalog, logs, session reads, retained audit and execution-identity diagnostics, and other non-mutating calls.                                         |
+| `operator.sessions.read`  | Read visible sessions, history, and session metadata without general Gateway read access.                                                                                       |
+| `operator.sessions.write` | Read visible sessions, organize owned sessions, and start or continue the authenticated person's own work.                                                                      |
+| `operator.write`          | Mutating operator actions: sending messages, invoking tools, updating talk/voice settings, node command relay. Also satisfies `operator.read`.                                  |
+| `operator.cron`           | Manage owned automations in the Control UI; create conversation-owned automations through an authenticated agent turn. Included in `operator.write`; not global administration. |
+| `operator.admin`          | Administrative access. Satisfies every `operator.*` scope. Required for config mutation, updates, native hooks, reserved namespaces, and high-risk approvals.                   |
+| `operator.pairing`        | Device and node pairing management: list, approve, reject, remove, rotate, revoke.                                                                                              |
+| `operator.approvals`      | Exec and plugin approval APIs.                                                                                                                                                  |
+| `operator.questions`      | Listing, reading, answering, and resolving interactive questions.                                                                                                               |
+| `operator.talk`           | Creating, steering, and closing Talk sessions without general Gateway write access. `operator.write` also satisfies this scope.                                                 |
+| `operator.talk.secrets`   | Reading Talk configuration with secrets included.                                                                                                                               |
+
+`operator.cron` allows a fresh authenticated conversation turn to create automations
+and manage jobs owned by that conversation and account. It does not make the
+requester a Gateway owner. Combine it with `operator.sessions.write` when the
+requester also needs permission to start a conversation; `operator.write` already
+includes both capabilities. Read-only and session-only scopes do not imply
+`operator.cron`.
+
+The agent runtime supplies the authenticated conversation boundary. An authenticated
+human with `operator.cron` can also edit, pause, run, or delete their own automations
+in the Control UI. The Gateway checks the stored human owner again when the change
+is committed. Other people's automations remain read-only; global creation and
+administration still require `operator.admin`. Global scheduler status requires
+`operator.read`.
+
+The **Owner** field under **Agent** shows the human responsible for an automation.
+Its current human owner or an administrator can select another existing profile.
+Transferring ownership pauses the automation, cancels any active occurrence, and
+retires captured credentials and operator authority; it does not lend the previous
+owner's account to the recipient.
+The recipient must select an available inference account or recapture runtime
+authority before resuming model execution.
+Existing jobs inherit a human owner from trusted creator provenance when available.
+Jobs without that provenance remain administrator-managed.
+
+Human ownership does not grant host command execution, arbitrary session routing,
+or bypass tool and approval policies. Scheduled operator continuations retain the
+creator's actual scopes and revalidate their source authority; they do not become
+admin runs.
 
 Personal profile editing is a narrowly self-scoped exception to read-only
 behavior: `operator.read` or `operator.sessions.read` (including their implied
@@ -87,6 +117,12 @@ configuration changes, Gateway-wide tool invocation, or publication outside
 the own-session shared-account path described above.
 
 Session readers can browse visible conversations and receive their updates.
+They can inspect a visible session's effective tool names with `tools.effective`.
+The session-only response includes core summaries and preserves policy-filtered
+GitHub action descriptions. It omits other runtime descriptions, configuration
+diagnostics, and MCP connection notices.
+Session visibility and requester authority are checked before returning the preview;
+general Gateway read access still receives the full diagnostic response.
 The Control UI can copy visible history as Markdown. Session writers can rename,
 pin, archive, or restore their own existing conversations. Other people's visible
 sessions remain read-only under these grants, including shared sessions.
@@ -99,6 +135,12 @@ currently read when the session has an admitted project checkout. Unmanaged
 private sandbox file workspaces return `not_git`; their Files browser remains
 available. Existing sharing, agent, and sandbox access rules still apply; no
 general Gateway read grant is needed.
+
+The Control UI waits for the session's projected workspace access before loading
+changes. When the operator role cannot read the host workspace, Review explains
+the restriction without requesting a diff. If the workspace changes during an
+admitted diff read, the Gateway returns retryable `UNAVAILABLE`; refresh Review
+to read the current workspace. Authorization failures remain `FORBIDDEN`.
 
 Session readers can use `sessions.files.list`, `sessions.files.get`, and
 `sessions.files.assets` for files within the workspace admitted to both the

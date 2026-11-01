@@ -1,4 +1,6 @@
 import { getEventListeners } from "node:events";
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { startConnect } from "../../ui/src/api/gateway-handshake.test-support.js";
@@ -75,6 +77,27 @@ function harness(peer = createPeer("subscriber"), options: Parameters<typeof bro
 }
 
 const payloads = (peer: ReturnType<typeof createPeer>) => peer.frames.map(({ payload }) => payload);
+
+it("releases completed runs while their delivery socket remains open", async () => {
+  class RetiredRun {
+    readonly fixtureLabel = "RetiredRun";
+  }
+  const peer = createPeer("retained-socket", true);
+  const { broadcast } = broadcaster([peer]);
+  function completeRuns() {
+    for (let index = 0; index < 20; index += 1) {
+      const owner = new AbortController();
+      broadcast("chat", text(`run-${index}`), textOptions(owner.signal));
+      owner.abort(new RetiredRun());
+    }
+    peer.socket.send.mockClear();
+  }
+  completeRuns();
+  await setImmediate();
+  expect(queryObjects(RetiredRun)).toBe(0);
+  expect(peer.frames).toHaveLength(20);
+  expect(peer.socket.close).not.toHaveBeenCalled();
+});
 
 it("keeps a shared chat stream when one full observer unsubscribes", async () => {
   useNodeFakeTimers();

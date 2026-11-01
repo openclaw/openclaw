@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { chunkText } from "../../auto-reply/chunk.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
-import { getRestartRecoveryTerminalDeliveryEvidence as terminalEvidence } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import { matrixOutboundForQueueTest } from "./deliver.queue-integration.test-support.js";
@@ -10,7 +9,7 @@ import {
   installRecoveryHooks,
   markFinal,
   registerMatrix,
-  seedRecoverySession,
+  seedDeliverySession,
 } from "./delivery-completion.shard-test-support.js";
 import { enqueueDeliveryOnce } from "./delivery-queue-storage.js";
 import { loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
@@ -36,7 +35,7 @@ it.each(
   "requires every physical send in one logical final ($mode, $transport, $disposition)",
   async ({ mode, transport, disposition }) => {
     const tmpDir = fixtures.tmpDir();
-    const { scope, context, entry } = await seedRecoverySession(tmpDir);
+    const { scope, context, entry } = await seedDeliverySession(tmpDir);
     // One logical final. Real core planning splits text or media into two sends.
     const payloads = [
       {
@@ -99,15 +98,15 @@ it.each(
       await enqueueDeliveryOnce(params, completion.deliveryId, tmpDir);
       await recover();
     }
-    const evidence = terminalEvidence(loadSessionEntry(scope), "source");
+    const receipt = loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries?.[0]?.receipt;
     if (disposition === "complete") {
-      expect(evidence).toMatchObject({
-        deliveryStatus: { status: "sent", resultCount: 2 },
-        durableFinalReceipt: { platformMessageId: "second-id" },
+      expect(receipt).toMatchObject({
+        resultCount: 2,
+        platformMessageId: "second-id",
       });
       expect(progress.map((result) => result.messageId)).toEqual(["first-id", "second-id"]);
     } else {
-      expect(evidence).toBeUndefined();
+      expect(receipt).toBeUndefined();
       // Receipt refusal must not withhold valid physical progress or retry it.
       expect(progress.map((result) => result.messageId)).toEqual([
         disposition.endsWith("first") ? "second-id" : "first-id",

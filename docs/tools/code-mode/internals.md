@@ -175,8 +175,7 @@ before parsing another full JSON copy for bounded preview construction. The
 normalized string moves into the same store. Final projection reserves a usable
 reference before allocating the remaining display space to sampled descriptions
 and output; an undisplayable reference is released. Failed admission remains a
-successful partial result with a precise non-retention reason. Headless and
-restart-safe execution do not allocate automatic references.
+successful partial result with a precise non-retention reason. Headless execution does not allocate automatic references.
 
 Catalog teardown, replacement, restriction, and the admitted run's abort clear
 saved data. Appended client tools preserve the same result-store lifetime, including
@@ -225,7 +224,7 @@ or disk cache is created. Replay follows branch ancestry, survives compaction,
 and excludes other branches' writes. Custom entries stay outside model context.
 Loading a flagged value marks the receiving cell's runtime as containing
 network content, preserving the normal untrusted-content wrapper across turns.
-Store operations are unavailable in headless or `restartSafe` execution, or
+Store operations are unavailable in headless execution or
 without a bound session manager. See the
 [guest store contract](/tools/code-mode/guest-api#session-store) for data limits.
 

@@ -231,7 +231,7 @@
 /* The shared page header owns its shell's mobile inset, including on pages that do
    not load the settings stylesheet. */
 @media (max-width: 640px) {
-  .content.content--hub-header {
+  .content.content--hub-header:not(.content--systems) {
     --content-inline-padding: var(--space-3);
     --settings-header-inline-padding: 0;
     padding: var(--space-3) var(--space-3) var(--space-4);

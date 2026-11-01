@@ -1,8 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionOwnerSessionCount,
   SessionsListParams,
@@ -24,7 +21,10 @@ import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
 import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
 import { formatGoalSummary } from "../shared/session-goal-display.js";
 import { isSessionRunStateActive } from "../shared/session-run-state.js";
-import { normalizeSessionSearchText } from "../shared/session-search-text.js";
+import {
+  normalizeSessionSearchLiteral,
+  normalizeSessionSearchText,
+} from "../shared/session-search-text.js";
 import type { SessionActivityPulse, SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
@@ -137,7 +137,7 @@ function resolveSessionListSearchDisplayName(
 
 function matchesSessionListSearch(fields: Array<string | undefined>, search: string): boolean {
   return fields.some(
-    (field) => typeof field === "string" && normalizeLowercaseStringOrEmpty(field).includes(search),
+    (field) => typeof field === "string" && normalizeSessionSearchLiteral(field).includes(search),
   );
 }
 
@@ -169,7 +169,7 @@ export function filterSessionEntries(
   const { cfg, opts, now, configuredAgentIds } = params;
   let rowContext: SessionListRowContext | undefined;
   const getRowContext = () => (rowContext ??= params.getRowContext());
-  const search = normalizeLowercaseStringOrEmpty(opts.search);
+  const search = normalizeSessionSearchLiteral(opts.search);
   const activeMinutes =
     typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
       ? Math.max(1, Math.floor(opts.activeMinutes))
@@ -317,7 +317,7 @@ export function filterSessionEntries(
           fields = {
             key: storeKey,
             // Both matchers run only for nonempty queries; empty fields can never match.
-            literal: rawFields.map(normalizeLowercaseStringOrEmpty).filter(Boolean),
+            literal: rawFields.map(normalizeSessionSearchLiteral).filter(Boolean),
             titles: titles.map(normalizeSessionSearchText).filter(Boolean),
           };
           staticSearchFields.set(entry, fields);
@@ -470,7 +470,7 @@ export function filterSessionEntries(
       continue;
     }
     if (agentFilter && storeKey !== "global") {
-      const ownerAgentId = target.storeKey ? normalizeAgentId(target.agentId) : selection.agentId;
+      const ownerAgentId = normalizeAgentId(target.agentId);
       if (ownerAgentId !== agentFilter) {
         continue;
       }

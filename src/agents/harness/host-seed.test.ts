@@ -274,6 +274,33 @@ it.each([false, true])("preserves the admitted task only for a refresh seed (%s)
   }),
 );
 
+it("charges restored assistant images before selecting the bounded seed", () =>
+  withOpenClawTestState({ label: "assistant-media-seed" }, async (state) => {
+    const fixture = await seedFixture(state, "assistant-media");
+    const manager = await fixture.open();
+    await manager.appendMessageAsync(assistant("Saved badge"));
+    await appendUser(manager, "Recent text", 2);
+    const bound = fixture.bind(
+      { config: seedConfig("20mb", false), contextTokenBudget: 2048 },
+      undefined,
+      {
+        capabilities: {
+          prepareContextMedia: async ({ message }) => ({
+            images:
+              message.role === "assistant"
+                ? [{ type: "image", mimeType: "image/png", data: "prepared-image" }]
+                : [],
+          }),
+        },
+      },
+    );
+    const prepare = expectDefined(bound?.prepareBoundedSeed, "assistant media seed");
+    const seed = await prepare({ assertCurrent: () => {} });
+    expect(seed.some((message) => message.role === "assistant")).toBe(false);
+    expect(JSON.stringify(seed)).toContain("Older history outside that window is omitted");
+    expect(JSON.stringify(seed)).toContain("Recent text");
+  }));
+
 it.each([1, 2])("bounds restored images and reuses their prepared snapshot (%s)", (imageCount) =>
   withOpenClawTestState({ label: "native-media-seed" }, async (state) => {
     const fixture = await seedFixture(state, "media");

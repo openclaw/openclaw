@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { sql, type Expression, type RawBuilder } from "kysely";
+import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import {
   LEGACY_MISSING_TOOL_RESULT_TEXT,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
@@ -146,6 +147,23 @@ export function projectTranscriptPayloadNavigationSql(
   db: EngineConnection,
   event: Expression<string | Uint8Array>,
 ): RawBuilder<string> {
+  if (isPostgresSqlConnection(db)) {
+    // JSON (not JSONB) preserves duplicate members used by historical navigation.
+    return /* kysely-allow-raw: bounded native member projection preserves duplicate keys and JSON types. */ sql<string>`(
+      SELECT coalesce(json_object_agg(root_member.key, CASE
+        WHEN root_member.key = 'message' AND json_typeof(root_member.value) = 'object' THEN (
+          SELECT coalesce(json_object_agg(message_member.key, CASE
+            WHEN message_member.key = '__openclaw' AND json_typeof(message_member.value) = 'object' THEN (
+              SELECT coalesce(json_object_agg(internal.key, internal.value), '{}'::json)
+              FROM json_each(message_member.value) AS internal
+              WHERE internal.key IN ('runId', 'steerTargetRunId', 'contextFreeCommand'))
+            ELSE message_member.value END), '{}'::json)
+          FROM json_each(root_member.value) AS message_member
+          WHERE message_member.key IN ('role', 'idempotencyKey', 'provenance', 'excludeFromContext', '__openclaw'))
+        ELSE root_member.value END), '{}'::json)::text
+      FROM json_each(${event}::json) AS root_member
+      WHERE root_member.key IN (${sql.join([...MODEL_CONTEXT_NAVIGATION_KEYS, "message"])}))`;
+  }
   const memberValue =
     /* kysely-allow-raw: fixed JSON member cursor declared in the message projection below. */ sql.ref(
       "message_member.value",
@@ -274,6 +292,20 @@ export function projectModelContextNavigationSql(
     WHEN 'custom' THEN CASE WHEN ${jsonPathValue(db, event, sql.lit("$.customType"))} = 'openclaw.system-prompt'
       THEN json_set(${entry}, '$.data', json_object('restart', json(CASE
         WHEN json_type(${event}, '$.data.restart') = 'true' THEN 'true' ELSE 'false' END)))
+      WHEN ${jsonPathValue(db, event, sql.lit("$.customType"))} = ${BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE}
+      THEN ${jsonSetPath(
+        db,
+        entry,
+        sql.lit("$.data"),
+        // The scalar subquery loses SQLite's JSON subtype before embedding its object.
+        getNodeSqliteKysely(db).fn<string>("json", [
+          jsonPickObject(db, jsonPathValue(db, event, sql.lit("$.data")), [
+            "afterEntryId",
+            "resultEntryIds",
+          ]),
+        ]),
+        true,
+      )}
       ELSE ${entry} END
     WHEN 'compaction' THEN json_set(${entry}, '$.summary', '')
     WHEN 'branch_summary' THEN json_set(${entry}, '$.summary', '')
@@ -375,6 +407,8 @@ function postgresModelNavigationSql(
       CASE WHEN ${customKind} IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('details', jsonb_build_object('kind', ${customKind})) END
     WHEN 'custom' THEN CASE WHEN ${event} ->> 'customType' = 'openclaw.system-prompt'
       THEN ${entry} || jsonb_build_object('data', jsonb_build_object('restart', coalesce((${event} #> '{data,restart}')::text, 'false') = 'true'))
+      WHEN ${event} ->> 'customType' = ${BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE}
+      THEN ${entry} || jsonb_build_object('data', ${postgresNavigationObjectSql(sql`${event} -> 'data'`, ["afterEntryId", "resultEntryIds"])})
       ELSE ${entry} END
     WHEN 'compaction' THEN ${entry} || jsonb_build_object('summary', '')
     WHEN 'branch_summary' THEN ${entry} || jsonb_build_object('summary', '')

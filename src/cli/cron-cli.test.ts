@@ -45,11 +45,7 @@ afterEach(() => {
 
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
-  return {
-    ...actual,
-    callGatewayFromCli: (method: string, opts: unknown, params?: unknown, extra?: unknown) =>
-      mocks.callGatewayFromCli(method, opts, params, extra as number | undefined),
-  };
+  return { ...actual, callGatewayFromCli: mocks.callGatewayFromCli };
 });
 
 vi.mock("../runtime.js", async (importOriginal) => ({
@@ -223,7 +219,6 @@ it("resolves Gateway options with leaf overrides", async () => {
     "cron.add",
     expect.objectContaining({ port: "65268", token: "leaf-token" }),
     expect.anything(),
-    undefined,
   );
 });
 
@@ -300,25 +295,28 @@ it("bounds oversized poll intervals by the wait timeout", async () => {
   expectRuntimeErrorContaining("timed out waiting for cron run");
 });
 
-it.each(["sleep", "request", "completion"])("cancels cron wait during %s", async (phase) => {
+const interruptPhases = ["sleep", "request", "completion", "cron list", "cron show job-1"];
+it.each(interruptPhases)("cancels cron %s", async (phase) => {
   vi.useFakeTimers();
   resetGatewayMock();
   const scope = new AsyncWorkScope();
   const completed = { entries: [{ status: "ok", completionStatus: "succeeded" }] } as const;
   const read = createDeferredCore<typeof completed>();
-  const polls = () => callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.runs");
-  callGatewayFromCli
-    .mockResolvedValue(completed)
-    .mockResolvedValueOnce({ ok: true, enqueued: true, runId: "queued-run" })
-    .mockImplementationOnce(async (_method, _opts, _params, extra?: { signal?: AbortSignal }) => {
-      if (phase === "request" && extra?.signal) {
+  const polls = () => callGatewayFromCli.mock.calls.filter(([method]) => method !== "cron.run");
+  callGatewayFromCli.mockImplementation(
+    async (method, _opts, _params, extra?: { signal?: AbortSignal }) => {
+      if (method === "cron.run") {
+        return { ok: true, enqueued: true, runId: "queued-run" };
+      }
+      if (!["sleep", "completion"].includes(phase) && extra?.signal) {
         const { signal } = extra;
         signal.addEventListener("abort", () => read.reject(signal.reason), { once: true });
       }
       return phase === "sleep" ? { entries: [] } : read.promise;
-    });
+    },
+  );
   const settled = vi.fn();
-  const running = scope.track(() => parse([...RUN_WAIT, "--poll-interval", "500ms"]));
+  const running = scope.track(() => parse(phase.includes(" ") ? phase.split(" ") : RUN_WAIT));
   void running.then(() => settled(), settled);
   try {
     await vi.advanceTimersByTimeAsync(0);
@@ -335,7 +333,7 @@ it.each(["sleep", "request", "completion"])("cancels cron wait during %s", async
     expect(polls()).toHaveLength(1);
   } finally {
     read.resolve(completed);
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(2000);
     await scope.drain();
   }
 });

@@ -18,9 +18,9 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import type { NativeSubagentRequestSource } from "./plugin-native-subagent.types.js";
 import { preparePluginCommandScheduledTurns } from "./plugin-scheduled-command.js";
 import { matchesSubagentRequesterSession } from "./subagents/registry/subagent-registry-queries.js";
+import { isSubagentRunQueued } from "./subagents/registry/subagent-registry-read.js";
 import {
   getSwarmRunByLaunchReplayKey,
-  initSubagentRegistry,
   listCollectorRunsForRequesterIncarnation,
   prepareSubagentRunsByRunIds,
   type SubagentRunRecord,
@@ -320,7 +320,7 @@ export function createRequestNativeSubagentRuntime(
         return await inFlight.result;
       }
       const result = (async (): Promise<NativeSubagentAccepted> => {
-        let existing = await getSwarmRunByLaunchReplayKey(
+        const existing = await getSwarmRunByLaunchReplayKey(
           replayKey,
           source.options.sessionKey,
           source.options.agentId,
@@ -336,22 +336,8 @@ export function createRequestNativeSubagentRuntime(
           ) {
             throw new Error("Native subagent replay does not match the admitted request.");
           }
-          if (existing.swarmLaunchPending) {
-            if (!existing.queuedLaunch) {
-              throw new Error("Native subagent launch reservation cannot be recovered.");
-            }
-            await initSubagentRegistry();
-            assertSpawnCurrent();
-            existing =
-              (await getSwarmRunByLaunchReplayKey(
-                replayKey,
-                source.options.sessionKey,
-                source.options.agentId,
-              )) ?? existing;
-            assertSpawnCurrent();
-            if (existing.swarmLaunchPending && !existing.queuedLaunch) {
-              throw new Error("Native subagent launch reservation cannot be recovered.");
-            }
+          if (existing.swarmLaunchPending && !isSubagentRunQueued(existing)) {
+            throw new Error("Native subagent launch is no longer active; start a new request.");
           }
           return {
             runId: existing.swarmRunId ?? existing.runId,

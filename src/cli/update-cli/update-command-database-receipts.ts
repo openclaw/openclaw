@@ -1,12 +1,12 @@
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import type { UpdateDatabaseWriteReceipt } from "../../infra/update-database-generations.js";
+import { resolveUpdateSqlitePath } from "../../infra/update-database-path.js";
 import {
   UPDATE_DOCTOR_HISTORICAL_SCANS_ENV,
   type UpdateDoctorHistoricalScans,
 } from "../../infra/update-doctor-scan-receipts.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
-import { isStatePostgres } from "../../state/openclaw-state-db-engine.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 
@@ -24,7 +24,8 @@ export async function observeUpdateParentDatabaseWrites(
   },
 ): Promise<void> {
   const pathname = resolveOpenClawStateSqlitePath(options.env);
-  if (isStatePostgres() || !Object.hasOwn(backup.sourceGenerations, pathname)) {
+  const key = resolveUpdateSqlitePath(pathname);
+  if (!Object.hasOwn(backup.sourceGenerations, key)) {
     return;
   }
   options.assertCurrent?.();
@@ -33,9 +34,12 @@ export async function observeUpdateParentDatabaseWrites(
     await closeOpenClawStateDatabaseByPathAsync(pathname);
     const { readUpdateDatabaseGenerationsIsolated } =
       await import("../../infra/update-candidate-state.js");
-    const generations = await readUpdateDatabaseGenerationsIsolated([pathname], options);
+    const generations = await readUpdateDatabaseGenerationsIsolated([key], {
+      ...options,
+      pluginOwners: backup.pluginOwners,
+    });
     options.assertCurrent?.();
-    if (typeof generations[pathname] !== "string") {
+    if (typeof generations[key] !== "string") {
       throw new Error("Update ledger database is unavailable before Doctor admission.");
     }
     // Like native Doctor close (#177831), this can absorb raw outside writes during
@@ -126,6 +130,11 @@ export function recordUpdateDatabaseWrites(
     }
   }
   if (backup.restoreRefusal) {
+    // Repeated Doctor receipts share a ledger key; keep the first refusal's provenance.
+    receipt.diagnostics = backup.restoreRefusalDiagnostics ??= [
+      `First restoration refusal observed at ${new Date().toISOString()} during ${step.name}: ${backup.restoreRefusal}.`,
+      ...(receipt.diagnostics ?? []),
+    ];
     // The first warning owns the retained ledger key, regardless of Doctor's other warnings.
     receipt.warnings = [
       `Automatic database restoration unavailable: ${backup.restoreRefusal}. Snapshots retained at ${backup.directory}.`,

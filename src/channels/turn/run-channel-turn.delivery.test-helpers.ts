@@ -1,10 +1,13 @@
-import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, vi } from "vitest";
+import { withReplyDispatcher } from "../../auto-reply/dispatch-dispatcher.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import { createReplyDispatchSettledCounts } from "../../auto-reply/reply/reply-dispatch-outcome.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import type { ReplyDispatchReceipt } from "../../auto-reply/reply/reply-dispatcher.types.js";
+import type {
+  ReplyDispatchReceipt,
+  ReplyDispatcher,
+} from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { resolveOutboundDurableFinalDeliverySupport } from "../../infra/outbound/deliver.js";
 import type { DurableMessageSendContextParams } from "../message/send.js";
@@ -48,22 +51,35 @@ export function expectDispatched<TDispatchResult>(
 
 export function createDispatch(
   events: string[] = [],
-  deliverPayload: { text: string } = { text: "reply" },
+  deliverPayload: ReplyPayload = { text: "reply" },
   onDelivery?: (result: unknown) => void,
 ): DispatchReplyWithBufferedBlockDispatcher {
-  return vi.fn(async (params) => {
+  const dispatch = createDispatcherBackedDispatch(
+    () => {},
+    () => deliverPayload,
+  );
+  return vi.fn<DispatchReplyWithBufferedBlockDispatcher>(async (params) => {
     events.push("dispatch");
-    const delivery = await params.dispatcherOptions.deliver(deliverPayload, { kind: "final" });
-    onDelivery?.(delivery);
-    const deliveredNotVisible = asOptionalObjectRecord(delivery)?.visibleReplySent === false;
-    return {
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-      settledReceipt: createReplyDispatchReceipt({
-        final: deliveredNotVisible ? { deliveredNotVisible: 1 } : { delivered: 1 },
-      }),
-    };
-  }) as DispatchReplyWithBufferedBlockDispatcher;
+    return dispatch({
+      ...params,
+      dispatcherOptions: {
+        ...params.dispatcherOptions,
+        deliver: async (payload, info) => {
+          const result = await params.dispatcherOptions.deliver(payload, info);
+          onDelivery?.(result);
+          return result;
+        },
+      },
+    });
+  });
+}
+
+// These probes assert raw callback rejection; the real dispatcher records it through onError.
+export function createDirectDeliveryDispatch(): DispatchReplyWithBufferedBlockDispatcher {
+  return vi.fn<DispatchReplyWithBufferedBlockDispatcher>(async (params) => {
+    await params.dispatcherOptions.deliver({ text: "reply" }, { kind: "final" });
+    return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+  });
 }
 
 export function createDeliveryResultCapture() {
@@ -79,15 +95,26 @@ export function createDeliveryResultCapture() {
 export function createDispatcherBackedDispatch(
   onReceipt: (receipt: ReplyDispatchReceipt | undefined) => void,
   createPayload: () => ReplyPayload = () => ({ text: "reply" }),
+  enqueue: (dispatcher: ReplyDispatcher, payload: ReplyPayload) => boolean = (
+    dispatcher,
+    payload,
+  ) => dispatcher.sendFinalReply(payload),
 ): DispatchReplyWithBufferedBlockDispatcher {
-  return vi.fn(async (params) => {
+  return vi.fn<DispatchReplyWithBufferedBlockDispatcher>(async (params) => {
+    // Replays need a fresh payload, and a failed factory must not leave a dispatcher open.
+    const payload = createPayload();
     const dispatcher = createReplyDispatcher(params.dispatcherOptions);
-    dispatcher.sendFinalReply(createPayload());
-    dispatcher.markComplete();
-    const settledReceipt = (await dispatcher.waitForIdle()) || undefined;
-    onReceipt(settledReceipt);
-    return { queuedFinal: true, counts: dispatcher.getQueuedCounts(), settledReceipt };
-  }) as DispatchReplyWithBufferedBlockDispatcher;
+    let settledReceipt: ReplyDispatchReceipt | undefined;
+    const queuedFinal = await withReplyDispatcher({
+      dispatcher,
+      run: async () => enqueue(dispatcher, payload),
+      onSettledReceipt: (receipt) => {
+        settledReceipt = receipt;
+        onReceipt(receipt);
+      },
+    });
+    return { queuedFinal, counts: dispatcher.getQueuedCounts(), settledReceipt };
+  });
 }
 
 export function createReplyDispatchReceipt(

@@ -53,8 +53,6 @@ describe("Gateway automatic Workshop learning", () => {
       const requests: string[] = [];
       const oldHistory = "OLD_HISTORY_NOT_NEEDED_FOR_REVIEW ".repeat(20_000);
       const workspaceInstructions = "WORKSPACE_INSTRUCTIONS_NOT_NEEDED_FOR_REVIEW";
-      const skillBundle = "SKILL_BUNDLE_NOT_NEEDED_FOR_REVIEW";
-      const foregroundInstructions = "FOREGROUND_INSTRUCTIONS_NOT_NEEDED_FOR_REVIEW";
       const recentEvidence =
         "RECENT_VERIFIED_PROCEDURE: confirm the public generation matches the release.";
       try {
@@ -95,21 +93,6 @@ describe("Gateway automatic Workshop learning", () => {
               transport: "sse",
               openaiWsWarmup: false,
             };
-            Object.assign(candidate.ctx.foregroundPromptContext, {
-              promptCacheKey: "foreground-cache-affinity",
-              sourceReplyDeliveryMode: "message_tool_only",
-              skillsSnapshot: { prompt: skillBundle.repeat(3_000), skills: [] },
-              extraSystemPrompt: foregroundInstructions.repeat(3_000),
-              clientTools: [
-                {
-                  type: "function",
-                  function: {
-                    name: "foreground_client_tool",
-                    parameters: { type: "object", properties: {} },
-                  },
-                },
-              ],
-            } satisfies Partial<typeof candidate.ctx.foregroundPromptContext>);
             setRuntimeConfigSnapshot(candidate.config);
             await state.writeConfig(candidate.config);
 
@@ -120,13 +103,7 @@ describe("Gateway automatic Workshop learning", () => {
             const serialized = requests[0]!;
             expect(Buffer.byteLength(serialized)).toBeLessThan(64 * 1024);
             expect(serialized).toContain(recentEvidence);
-            for (const excluded of [
-              "OLD_HISTORY_NOT_NEEDED_FOR_REVIEW",
-              workspaceInstructions,
-              skillBundle,
-              foregroundInstructions,
-              "foreground-cache-affinity",
-            ]) {
+            for (const excluded of ["OLD_HISTORY_NOT_NEEDED_FOR_REVIEW", workspaceInstructions]) {
               expect(serialized).not.toContain(excluded);
             }
             const payload = JSON.parse(serialized) as ProviderRequest;

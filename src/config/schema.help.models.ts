@@ -21,7 +21,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "models.providers.*.apiKey":
     "Provider credential used for API-key based authentication when the provider requires direct key auth. Use secret/env substitution and avoid storing real keys in committed config files.",
   "models.providers.*.auth":
-    'Selects provider auth style: "api-key" for API key auth, "token" for bearer token auth, "oauth" for OAuth credentials, "aws-sdk" for AWS credential resolution, and "none" for custom openai-completions endpoints that do not enforce auth. Explicit "none" skips credentials and sends no Authorization header; other effective adapters are rejected.',
+    'Selects provider auth style: "api-key" for API key auth, "token" for bearer token auth, "oauth" for OAuth credentials, "aws-sdk" for AWS credential resolution, and "none" for custom openai-completions endpoints that do not enforce auth. Explicit "none" skips credentials and sends no Authorization header; other effective adapters are rejected. "native-command" delegates credentials to an explicitly configured Codex runtime for a custom HTTPS Responses provider; it cannot be combined with API keys, profiles, or request overrides.',
   "models.providers.*.api":
     "Wire protocol adapter, independent of the provider ID. Chat Completions: openai-completions; Responses: openai-responses; Messages: anthropic-messages. Choose other adapters from the allowed values to match your upstream protocol.",
   "models.providers.*.maxTokens":
@@ -150,6 +150,10 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "auth.order": "Ordered auth profile IDs per provider (used for automatic failover).",
   "agents.defaults.workspace":
     "Default agent workspace for bootstrap and memory files. Also used as the working directory when agents.defaults.cwd is unset. Set this explicitly when running from wrappers so path resolution stays consistent.",
+  "agents.defaults.workspaceFileMode":
+    'New memory-core DREAMS.md, MEMORY.md, and memory/dreaming report permissions: "0600", "0620", "0640", or "0660". Unset keeps exact 0600; configured modes respect the writing host\'s umask. Existing files, daily memory, session corpus, and private state are unchanged. Directory traversal and default ACLs must be provisioned separately.',
+  "agents.entries.*.workspaceFileMode":
+    "Overrides agents.defaults.workspaceFileMode for this agent's newly created human-readable memory outputs. Existing file permissions are preserved; the writing host applies its own umask.",
   "agents.defaults.cwd":
     "Working directory for agent reply runs, separate from workspace bootstrap and memory files. Agent-specific cwd and session-spawned cwd take precedence. Supports ~ and relative paths; a distinct cwd requires an unsandboxed run.",
   "agents.defaults.skipBootstrap":
@@ -191,7 +195,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "agents.defaults.modelPolicy":
     "Explicit policy for model overrides. Omit it or leave allow empty to permit any model.",
   "agents.defaults.modelPolicy.allow":
-    'Allowed model override refs. Accepts aliases, full "provider/model" refs, and provider wildcards such as "openai/*". Empty permits any model.',
+    'Allowed model override refs. Accepts aliases, full "provider/model" refs, and trailing prefix wildcards such as "openai/*", "clawrouter/anthropic/*" or "openai/gpt-*". Empty permits any model.',
   "agents.defaults.models.*.agentRuntime":
     "Optional per-model runtime policy for the default agent. Use this for model-specific runtime exceptions instead of setting a whole-agent runtime.",
   "agents.defaults.models.*.agentRuntime.id":

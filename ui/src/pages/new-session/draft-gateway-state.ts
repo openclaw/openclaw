@@ -406,9 +406,6 @@ export class DraftGatewayState {
     this.gatewayRecoveryScopeValue = recoveryScope;
     this.gatewayRecoveryScopeReady = snapshot.client?.recoveryScopeReady === true;
     this.gatewayConnectedValue = connected;
-    if (this.read().visibility === "draft" && !this.read().canStartAsDraft) {
-      this.callbacks.onVisibilityRetired();
-    }
     if (
       gatewayUrlChanged ||
       gatewayBootChanged ||

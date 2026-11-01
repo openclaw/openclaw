@@ -3,6 +3,7 @@ import { button, choice, el } from "./page-dom.js";
 import {
   CONVERSATIONS_SCHEDULE,
   defaultOptions,
+  GRANOLA_SCHEDULE,
   REVIEW_NIGHTLY_SCHEDULE,
   REVIEW_WEEKLY_SCHEDULE,
   scribeLabel,
@@ -10,14 +11,17 @@ import {
   setupPrompt,
   type ConversationScope,
   type ConversationSince,
+  type GranolaMeetings,
+  type GranolaSince,
   type MemorySource,
   type ReviewSchedule,
   type ScribeDefinition,
   type ScribeId,
   type ScribeMode,
   type ScribeOptions,
+  type ScribePlugin,
 } from "./scribes-catalog.js";
-import type { ScribeDetection } from "./scribes-state.js";
+import { neededPluginState, type PluginReadiness, type ScribeDetection } from "./scribes-state.js";
 import { icon } from "./ui-icons.js";
 
 /** What the start dialog needs from the page. */
@@ -27,6 +31,8 @@ export type StartDialogInput = {
   storeName: string;
   detection: ScribeDetection;
   canWrite: boolean;
+  /** The Control UI's base path, for links to the Plugins page. */
+  basePath: string;
   /** Starts the scribe with the prompt shown; a rejection keeps the dialog open with the error. */
   start: (prompt: string) => Promise<void>;
 };
@@ -37,6 +43,42 @@ export function scribeTile(scribe: ScribeDefinition, size = 36) {
   tile.style.setProperty("--tile-size", `${size}px`);
   tile.append(icon(scribe.icon, size >= 36 ? 18 : 15));
   return tile;
+}
+
+// What a needed plugin's readiness means, in the page's words.
+const PLUGIN_STATE: Record<PluginReadiness, (name: string) => string> = {
+  missing: (name) => `Needs the ${name} plugin, which is not installed`,
+  disabled: (name) => `Needs the ${name} plugin, which is turned off`,
+  "needs-sign-in": (name) => `${name} plugin installed, not connected to your ${name} account`,
+  ready: (name) => `${name} connected`,
+};
+/** One line for a needed plugin's readiness. */
+export const pluginStateText = (plugin: ScribePlugin, readiness: PluginReadiness) =>
+  PLUGIN_STATE[readiness](plugin.name);
+
+// The control that fixes a needed plugin, by readiness; a ready plugin needs none.
+const PLUGIN_ACTION: Record<Exclude<PluginReadiness, "ready">, (name: string) => string> = {
+  missing: (name) => `Install ${name}…`,
+  disabled: (name) => `Turn on ${name}…`,
+  "needs-sign-in": (name) => `Connect ${name}…`,
+};
+
+/**
+ * Button that opens the plugin's page under Plugins, where it is installed, turned on and signed
+ * in to. It leaves the Knowledge page; the Scribes tab reads the new state when it loads again.
+ */
+export function pluginButton(
+  basePath: string,
+  plugin: ScribePlugin,
+  readiness: Exclude<PluginReadiness, "ready">,
+  className = "knowledge-button knowledge-primary knowledge-small",
+) {
+  const href = `${basePath}/plugins/${plugin.catalogPath}`;
+  return button(
+    PLUGIN_ACTION[readiness](plugin.name),
+    () => window.location.assign(href),
+    className,
+  );
 }
 
 const count = (n: number, one: string, many = `${one}s`) =>
@@ -184,6 +226,121 @@ function conversationFields(detection: ScribeDetection, changed: () => void) {
     mode: () => state.mode,
     options: () => ({ scope: state.scope, since: state.since, schedule: CONVERSATIONS_SCHEDULE }),
   };
+}
+
+const GRANOLA_SINCE: readonly GranolaSince[] = ["7d", "30d", "today"];
+
+// "How often", "Which meetings" and "Starting from" for the Granola scribe.
+function granolaFields(changed: () => void) {
+  const state: { mode: ScribeMode; meetings: GranolaMeetings; since: GranolaSince } = {
+    mode: "ongoing",
+    meetings: "mine",
+    since: "7d",
+  };
+  const set = (patch: Partial<typeof state>) => () => {
+    Object.assign(state, patch);
+    changed();
+  };
+  const often = el("fieldset", undefined, "knowledge-choices");
+  often.append(
+    el("legend", "How often"),
+    choice(
+      "radio",
+      "scribe-granola-ongoing",
+      "Keep learning",
+      "Checks for finished meetings on weekdays at 10 AM, 2 PM and 6 PM.",
+      false,
+      set({ mode: "ongoing" }),
+      true,
+      "scribe-granola-often",
+    ),
+    choice(
+      "radio",
+      "scribe-granola-once",
+      "Once",
+      "Works through the meetings below, then stops.",
+      false,
+      set({ mode: "once" }),
+      false,
+      "scribe-granola-often",
+    ),
+  );
+  const which = el("fieldset", undefined, "knowledge-choices");
+  which.append(
+    el("legend", "Which meetings"),
+    choice(
+      "radio",
+      "scribe-granola-mine",
+      "Your meetings",
+      "Meetings you recorded or were invited to.",
+      false,
+      set({ meetings: "mine" }),
+      true,
+      "scribe-granola-which",
+    ),
+    choice(
+      "radio",
+      "scribe-granola-all",
+      "Every meeting you can read",
+      "Also notes others shared with you and Team Space meetings.",
+      false,
+      set({ meetings: "all" }),
+      false,
+      "scribe-granola-which",
+    ),
+  );
+  const since = el("label", undefined, "knowledge-field");
+  const select = el("select", undefined, "scribe-select");
+  const labels: Record<GranolaSince, string> = {
+    "7d": "The last 7 days",
+    "30d": "The last 30 days",
+    today: "Today (new meetings only)",
+  };
+  for (const value of GRANOLA_SINCE) {
+    const option = el("option", labels[value]);
+    option.value = value;
+    select.append(option);
+  }
+  select.addEventListener("change", () => {
+    state.since = GRANOLA_SINCE.find((value) => value === select.value) ?? "7d";
+    changed();
+  });
+  since.append(
+    el("span", "Starting from"),
+    select,
+    el("small", "Meetings already in Knowledge are skipped. Each meeting takes a few minutes."),
+  );
+  return {
+    nodes: [often, which, since],
+    mode: () => state.mode,
+    options: () => ({ meetings: state.meetings, since: state.since, schedule: GRANOLA_SCHEDULE }),
+  };
+}
+
+/**
+ * The needed plugin's state above the choices, with the control that fixes it. Undefined when
+ * the scribe needs no plugin or its state could not be read.
+ */
+function pluginNotice(input: StartDialogInput) {
+  const { scribe } = input;
+  const readiness = neededPluginState(scribe, input.detection);
+  if (!scribe.plugin || !readiness) {
+    return undefined;
+  }
+  const state = pluginStateText(scribe.plugin, readiness);
+  const notice = el("div", undefined, "knowledge-effect");
+  notice.append(
+    el(
+      "p",
+      readiness === "ready"
+        ? `${state}. This scribe reads through the ${scribe.plugin.name} plugin.`
+        : `${state}. Connect it before starting this scribe.`,
+    ),
+  );
+  if (readiness !== "ready") {
+    notice.append(pluginButton(input.basePath, scribe.plugin, readiness));
+  }
+  return { node: notice, ready: readiness === "ready" };
 }
 
 // "How often" for the review scribe: weekly by default, or nightly after maintenance.
@@ -354,10 +511,12 @@ export function openStartDialog(input: StartDialogInput) {
   let mode: () => ScribeMode = () => scribe.modes[0]!;
   let options: () => ScribeOptions[ScribeId] = () => defaultOptions(scribe.id);
   let valid = () => true;
+  let pluginReady = true;
   let starting = false;
   const submit = button(scribe.submitLabel, () => void run(), "knowledge-button knowledge-primary");
-  // A hand-edited prompt only needs text; a generated one needs valid choices.
-  const ready = () => (prompt.edited() ? Boolean(prompt.value().trim()) : valid());
+  // A needed plugin must be ready. A hand-edited prompt then only needs text; a generated one
+  // needs valid choices.
+  const ready = () => pluginReady && (prompt.edited() ? Boolean(prompt.value().trim()) : valid());
   const refresh = () => {
     submit.disabled = starting || !input.canWrite || !ready();
     submit.textContent = starting ? "Starting…" : scribe.submitLabel;
@@ -370,8 +529,19 @@ export function openStartDialog(input: StartDialogInput) {
     refresh();
   };
   frame.body.append(el("p", scribe.blurb, "scribe-dialog-blurb"));
+  // A needed plugin that is known not to be ready blocks starting; an unknown state does not.
+  const notice = pluginNotice(input);
+  if (notice) {
+    frame.body.append(notice.node);
+    pluginReady = notice.ready;
+  }
   if (scribe.id === "conversations") {
     const fields = conversationFields(input.detection, changed);
+    frame.body.append(...fields.nodes);
+    mode = fields.mode;
+    options = fields.options;
+  } else if (scribe.id === "granola") {
+    const fields = granolaFields(changed);
     frame.body.append(...fields.nodes);
     mode = fields.mode;
     options = fields.options;

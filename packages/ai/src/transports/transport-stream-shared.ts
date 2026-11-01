@@ -25,7 +25,7 @@ import {
 } from "../utils/provider-error.js";
 import { isTransientNetworkError } from "../utils/retryable-network-errors.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-import { createZeroUsage, isUnbilledFailedTurn } from "../utils/usage.js";
+import { createZeroUsage } from "../utils/usage.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 
 /** A single synchronous scanner per stream; undefined requests the next reader result. */
@@ -100,27 +100,26 @@ export function* decodeSseFrames(limit?: {
         break;
       }
     }
-    const pending = buffer.slice(start);
     // Scan only new text plus the maximum delimiter overlap; scanning an ever-growing
     // concatenated string would flatten/copy the entire pending frame on every read.
     // Keep only trailing newline characters, so UTF-8 length accounting never
     // splits a surrogate pair between a retained fragment and the overlap.
-    let split = pending.length;
-    while (split > 0 && pending.length - split < 3) {
-      const last = pending.charCodeAt(split - 1);
+    let split = buffer.length;
+    while (split > start && buffer.length - split < 3) {
+      const last = buffer.charCodeAt(split - 1);
       if (last !== 10 && last !== 13) {
         break;
       }
       split--;
     }
-    if (split > 0) {
-      const part = pending.slice(0, split);
+    if (split > start) {
+      const part = buffer.slice(start, split);
       parts.push(part);
       if (limit) {
         partsLength += lengthOf(part);
       }
     }
-    tail = pending.slice(split);
+    tail = buffer.slice(split);
     if (limit) {
       assertWithinLimit(partsLength + lengthOf(tail));
     }
@@ -665,14 +664,6 @@ export function assignTransportErrorDetails(
   if (output.usage.usageReport?.state !== "available") {
     output.usage.usageReport = { state: "unavailable" };
     output.usage.contextUsage = { state: "unavailable" };
-  }
-  if (isUnbilledFailedTurn(output)) {
-    // The provider did no billable work; record its usage as a complete zero.
-    output.usage = {
-      ...createZeroUsage(),
-      usageReport: { state: "available" },
-      contextUsage: output.usage.contextUsage,
-    };
   }
   if (
     projection.stopReason === "error" &&

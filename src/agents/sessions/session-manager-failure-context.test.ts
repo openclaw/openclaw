@@ -42,7 +42,10 @@ it.each([{ generation: "new" }, { generation: "existing" }])(
           type: "custom_message",
           customType: "run-failed-before-reply",
           display: true,
-          content: "Your request couldn't be completed: Synthetic run failure",
+          content:
+            generation === "new"
+              ? "Your request couldn't be completed."
+              : "Your request couldn't be completed: Synthetic run failure",
         }),
       );
       const context = (await SessionManager.openModelContextAsync(scope)).buildSessionContext();

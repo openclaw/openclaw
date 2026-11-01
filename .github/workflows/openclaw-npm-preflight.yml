@@ -820,6 +820,7 @@ jobs:
         if: ${{ inputs.npm_dist_tag == 'extended-stable' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: openclaw-plugin-npm-preflight-${{ inputs.tag }}
           path: ${{ steps.plugin_npm_preflight.outputs.dir }}
           if-no-files-found: error

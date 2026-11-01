@@ -80,6 +80,7 @@ export type PluginManifestRecord = PluginManifestRecordStatic & {
   trustedOfficialInstall?: boolean;
   trust?: PluginTrust;
   skills: string[];
+  agentSkillsDir?: string;
   settingsFiles?: string[];
   hooks: string[];
   origin: PluginOrigin;

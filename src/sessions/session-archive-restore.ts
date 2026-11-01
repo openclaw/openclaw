@@ -1,4 +1,3 @@
-import { isRestartRecoveryTombstone } from "../config/sessions/lifecycle.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
@@ -27,7 +26,7 @@ export async function restoreArchivedSession(params: {
   storePath: string;
 }): Promise<SessionEntry | undefined> {
   const { entry, sessionKey, storePath } = params;
-  if (entry.archivedAt === undefined || isRestartRecoveryTombstone(entry)) {
+  if (entry.archivedAt === undefined) {
     return entry;
   }
   const scope = { agentId: params.agentId, sessionKey, storePath };
@@ -52,8 +51,7 @@ export async function restoreArchivedSession(params: {
     if (
       currentEntry.sessionId !== snapshotSessionId ||
       currentEntry.archivedAt !== snapshotArchivedAt ||
-      currentEntry.lifecycleRevision !== snapshotLifecycleRevision ||
-      isRestartRecoveryTombstone(currentEntry)
+      currentEntry.lifecycleRevision !== snapshotLifecycleRevision
     ) {
       return false;
     }

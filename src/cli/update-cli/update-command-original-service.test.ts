@@ -693,7 +693,10 @@ it.each([
     await writeFixtureJson(path.join(rootA, "package.json"), metadata);
   }
   if (scenario === "unverified-health") {
-    mocks.inspect.mockResolvedValue({ healthy: false, runtime: { status: "running" } });
+    mocks.health.mockResolvedValue({
+      ...healthObservation(undefined, undefined, false),
+      waitOutcome: "timeout",
+    });
   }
   mocks.package.mockImplementation(async (params) => {
     expect(params.honorPackageRoot).toBe(true);

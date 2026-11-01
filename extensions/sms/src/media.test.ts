@@ -770,24 +770,11 @@ describe("SMS inbound MMS materialization", () => {
     expect(result.body).toContain("[2 Twilio MMS attachments unavailable]");
   });
 
-  it("rejects non-Twilio media hosts and exposes a visible failure notice", async () => {
-    const saveRemoteMedia = vi.fn();
-
-    const result = await materializeSmsInboundMedia({
-      account: createAccount(),
-      msg: createInboundMessage({
-        body: "",
-        media: [{ url: "https://example.com/not-twilio.jpg", contentType: "image/jpeg" }],
-      }),
-      mediaRuntime: { media: { saveRemoteMedia } } as never,
-    });
-
-    expect(saveRemoteMedia).not.toHaveBeenCalled();
-    expect(result.media).toEqual([]);
-    expect(result.body).toContain("Twilio MMS attachment unavailable");
-  });
-
   it.each([
+    {
+      name: "a non-Twilio media host",
+      url: "https://example.com/not-twilio.jpg",
+    },
     {
       name: "an arbitrary Twilio API path",
       url: "https://api.twilio.com/2010-04-01/Accounts.json",
