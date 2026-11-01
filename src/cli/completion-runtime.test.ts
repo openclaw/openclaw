@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -118,14 +118,6 @@ function expectProfileMode(profilePath: string) {
     : fs.stat(profilePath).then((stat) => expect(stat.mode & 0o777).toBe(0o640));
 }
 
-function expectAvailableZshToSucceed(result: SpawnSyncReturns<string>): void {
-  if (result.error) {
-    expect(result.error).toHaveProperty("code", expect.stringMatching(/^(ENOENT|EACCES)$/));
-    return;
-  }
-  expect(result).toMatchObject({ stderr: "", status: 0 });
-}
-
 it.skipIf(process.platform === "win32").for([
   ["zsh", "ZDOTDIR", ".zshrc"],
   ["fish", "XDG_CONFIG_HOME", "fish/config.fish"],
@@ -193,10 +185,11 @@ literalIt.for(["bash", "zsh"] as const)(
     );
     if (bash) {
       expect(result).toMatchObject({ stderr: "", status: 0 });
-      expect(result.stdout).toContain("complete -W 'status' openclaw");
-      expect(result.stdout).toContain("<value >\n");
+      expect(result.stdout).toBe("complete -W 'status' openclaw\n<value >\n");
+    } else if (result.error) {
+      expect(result.error).toHaveProperty("code", expect.stringMatching(/^(ENOENT|EACCES)$/));
     } else {
-      expectAvailableZshToSucceed(result);
+      expect(result).toMatchObject({ stderr: "", status: 0 });
     }
   },
 );
