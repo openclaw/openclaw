@@ -24,7 +24,10 @@ import {
 } from "./client.js";
 import { buildButtonProps, type MattermostInteractionResponse } from "./interactions.js";
 
-type MattermostMediaInfo = Pick<ChannelInboundMediaInput, "contentType" | "fileName" | "path"> & {
+export type MattermostMediaInfo = Pick<
+  ChannelInboundMediaInput,
+  "contentType" | "fileName" | "path"
+> & {
   kind: MediaKind;
 };
 

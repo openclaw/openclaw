@@ -8,9 +8,7 @@ import type { OpenClawConfig, ReplyPayload } from "./runtime-api.js";
 
 type DraftStream = ReturnType<typeof import("./draft-stream.js").createMattermostDraftStream>;
 
-function createFinalDraft<T extends Partial<Omit<DraftStream, "deleteCurrentMessage">>>(
-  overrides: T,
-) {
+export function createFinalDraft<T extends Partial<DraftStream>>(overrides: T) {
   return {
     update: vi.fn(),
     updateAssistantText: vi.fn(),
@@ -234,6 +232,44 @@ export function registerMattermostPreviewDeliveryTests(harness: {
     expect(draftUpdate).toHaveBeenCalledWith("Done.");
     expect(draftUpdate).toHaveBeenCalledWith("Answer after reasoning");
   });
+
+  it.each(["status", "raw"] as const)(
+    "compacts consecutive tool rows only with %s command text",
+    async (commandText) => {
+      const draftStream = createFinalDraft({ deleteCurrentMessage: vi.fn(async () => {}) });
+      mockState.createMattermostDraftStream.mockReturnValue(draftStream);
+      const progressConfig = withStreaming({
+        mode: "progress",
+        progress: { toolProgress: true, commandText },
+      });
+      mockState.runtimeCore = createRuntimeCore(progressConfig);
+      // Dispatch catches and logs errors, so assert after dispatch.
+      let preview = "";
+      mockState.dispatchInboundMessage.mockImplementation(async ({ replyOptions: reply }) => {
+        for (const id of ["1", "2", "3"]) {
+          const event = { toolCallId: id, name: "bash", args: { command: `printf ${id}` } };
+          await reply?.onItemEvent?.(projectAgentToolActivity({ ...event, phase: "start" }));
+          await reply?.onToolStart?.({ ...event, phase: "start" });
+          await reply?.onItemEvent?.({
+            ...event,
+            itemId: `tool:${id}`,
+            kind: "tool",
+            phase: "end",
+            status: "completed",
+          });
+        }
+        preview = String(draftStream.update.mock.calls.at(-1)?.[0] ?? "");
+        mockState.abortController?.abort();
+      });
+      await receivePost(
+        { id: `post-compact-${commandText}`, message: "run tools" },
+        progressConfig,
+      );
+      expect(preview.match(/Bash( ×3)?/g)).toEqual(
+        commandText === "status" ? ["Bash ×3"] : ["Bash", "Bash", "Bash"],
+      );
+    },
+  );
 
   it("keeps Mattermost progress with tools disabled and no label", async () => {
     let previewPostId: string | undefined = "preview-progress";

@@ -62,13 +62,17 @@ beforeEach(() => {
 describe("reportChannelRoomJoin", () => {
   it.each([
     ["disabled", { cfg: { channels: { slack: { joinIntro: false } } } }],
+    ["disabled", { enabledByDefault: false }],
     ["room-not-allowed", { roomAllowed: false }],
-  ] as const)("skips %s before resolving context or starting a turn", async (reason, overrides) => {
-    const params = createJoinParams(reason, overrides);
-    await expectJoin(params, { kind: "skipped", reason });
-    expect(params.resolveRoomContext).not.toHaveBeenCalled();
-    expect(runCronIsolatedAgentTurn).not.toHaveBeenCalled();
-  });
+  ] as const)(
+    "skips %s for %j before resolving context or starting a turn",
+    async (reason, overrides) => {
+      const params = createJoinParams(reason, overrides);
+      await expectJoin(params, { kind: "skipped", reason });
+      expect(params.resolveRoomContext).not.toHaveBeenCalled();
+      expect(runCronIsolatedAgentTurn).not.toHaveBeenCalled();
+    },
+  );
 
   it("lets the account-specific enablement override its channel default", async () => {
     const params = createJoinParams("account-enabled", {
@@ -116,6 +120,22 @@ describe("reportChannelRoomJoin", () => {
     await expectJoin({ ...params, accountId: "first" });
     await expectJoin({ ...params, accountId: "second" });
     expect(runCronIsolatedAgentTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops a join whose room admission is revoked while its context loads and leaves its claim available", async () => {
+    let roomAllowed = true;
+    const params = createJoinParams("revoked", {
+      roomAllowed: () => roomAllowed,
+      resolveRoomContext: vi.fn(async () => {
+        roomAllowed = false;
+        return roomContext;
+      }),
+    });
+    await expectJoin(params, { kind: "skipped", reason: "room-not-allowed" });
+    expect(runCronIsolatedAgentTurn).not.toHaveBeenCalled();
+    roomAllowed = true;
+    await expectJoin({ ...params, resolveRoomContext: async () => roomContext });
+    expect(runCronIsolatedAgentTurn).toHaveBeenCalledOnce();
   });
 
   it("reports an unavailable room snapshot and leaves its claim available for a later join", async () => {

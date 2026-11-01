@@ -44,6 +44,16 @@ export function createMattermostReactionHandler(monitor: MattermostMonitorContex
       return;
     }
     const reactedPost = await monitor.resources.resolvePostInfo(postId);
+    const notificationMode = account.config.reactionNotifications ?? "all";
+    if (notificationMode === "off") {
+      return;
+    }
+    if (notificationMode === "own" && reactedPost?.user_id !== botUserId) {
+      monitor.logVerboseMessage(
+        `mattermost: drop reaction (reactionNotifications=own post=${postId} author=${reactedPost?.user_id ?? "unknown"})`,
+      );
+      return;
+    }
     const eventPlan = await buildMattermostEventPlan(monitor, {
       channelId,
       senderId: userId,

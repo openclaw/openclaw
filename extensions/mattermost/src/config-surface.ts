@@ -24,6 +24,18 @@ const mattermostChannelConfigUiHints = {
     label: "Mattermost Allow Bot Posts",
     help: "Override allowBots for this Mattermost channel. Exact channel settings override the wildcard, then the account setting.",
   },
+  joinIntro: {
+    label: "Mattermost Join Introduction",
+    help: "Set to true to post a short introduction when the bot is added to a channel (default: false). The agent reads the channel purpose and recent posts first.",
+  },
+  reactionNotifications: {
+    label: "Mattermost Reaction Notifications",
+    help: 'Which reaction add/remove events reach the agent as system events: "all" (default) every reaction the sender is allowed to send, "own" only reactions on this bot\'s posts, "off" none.',
+  },
+  ackReaction: {
+    label: "Mattermost Ack Reaction",
+    help: 'Emoji name added to an inbound post while OpenClaw works on it, for example "eyes". Omit to use messages.ackReaction or the agent identity emoji; set "" to disable. messages.ackReactionScope decides when it is sent.',
+  },
   botLoopProtection: {
     label: "Mattermost Bot Loop Protection",
     help: "Sliding-window guard for Mattermost bot-to-bot loops. Default is enabled whenever allowBots lets bot posts reach dispatch.",

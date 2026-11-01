@@ -89,7 +89,9 @@ there, grounded in what that platform can actually show it.
 `channels.<channel>.joinIntro: false`, or override a single account with
 `channels.<channel>.accounts.<accountId>.joinIntro`. Resolution order is the
 account value, then the channel value, then the default of `true`. There is no
-per-room introduction switch. Only Discord, LINE, Matrix, Slack, and Telegram accept this option; other channels
+per-room introduction switch. Mattermost also accepts the option but defaults to `false`, so
+set `channels.mattermost.joinIntro: true` to introduce there; see
+[Mattermost](/channels/mattermost#channel-events-and-join-introduction). Other channels
 reject it rather than accepting a setting they never read.
 
 **What it reads.** Core requests up to 100 recent messages plus room metadata,
