@@ -39,6 +39,27 @@ type SearxngResult = {
   content?: string;
   img_src?: string;
 };
+type SearxngPage = {
+  results: SearxngResult[];
+  /** Engines SearXNG could not get an answer from, as "engine (reason)". */
+  unresponsiveEngines: string[];
+};
+
+// SearXNG serializes each unresponsive engine as [engine, errorType, ...].
+function readUnresponsiveEngines(parsed: unknown): string[] {
+  const raw = asOptionalObjectRecord(parsed)?.unresponsive_engines;
+  const engines: string[] = [];
+  for (const entry of Array.isArray(raw) ? raw : []) {
+    const [engine, reason] = Array.isArray(entry) ? entry : [entry];
+    if (typeof engine !== "string" || engine.length === 0) {
+      continue;
+    }
+    engines.push(
+      typeof reason === "string" && reason.length > 0 ? `${engine} (${reason})` : engine,
+    );
+  }
+  return engines;
+}
 
 function normalizeBaseUrl(value: unknown): string | undefined {
   return normalizeSecretInput(value)?.replace(/\/+$/u, "") || undefined;
@@ -162,7 +183,7 @@ export async function runSearxngSearch(params: {
   const signal = params.signal;
   const fetchSearxngResults = async (
     searchCategories: string | undefined,
-  ): Promise<SearxngResult[]> => {
+  ): Promise<SearxngPage> => {
     const url = new URL(baseUrl);
     const basePathname = url.pathname.replace(/\/+$/u, "");
     url.pathname = basePathname.endsWith("/search") ? basePathname : `${basePathname}/search`;
@@ -235,21 +256,29 @@ export async function runSearxngSearch(params: {
           }
         }
 
-        return results;
+        return { results, unresponsiveEngines: readUnresponsiveEngines(parsed) };
       },
     );
   };
-  let results = await fetchSearxngResults(categories);
+  let page = await fetchSearxngResults(categories);
   params.signal?.throwIfAborted();
-  if (results.length === 0 && categories) {
+  if (page.results.length === 0 && categories) {
     const normalized = categories
       .split(",")
       .map((category) => category.trim().toLowerCase())
       .filter((category) => category.length > 0);
     if (normalized.length > 0 && !normalized.includes("general")) {
-      results = await fetchSearxngResults("general");
+      page = await fetchSearxngResults("general");
       params.signal?.throwIfAborted();
     }
+  }
+  const { results, unresponsiveEngines } = page;
+  // No results while engines were suspended, rate-limited or timing out is a failed
+  // search, not an empty one: fail so the caller does not treat (and cache) it as "nothing found".
+  if (results.length === 0 && unresponsiveEngines.length > 0) {
+    throw new Error(
+      `SearXNG returned no results and reported unresponsive engines: ${unresponsiveEngines.join(", ")}.`,
+    );
   }
 
   const payload = {

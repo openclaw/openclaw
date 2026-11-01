@@ -100,6 +100,29 @@ it("retries an empty category search with general results", async () => {
   expect(result).toMatchObject({ count: 1, results: [{ url: "https://example.com/rain" }] });
 });
 
+it("fails instead of returning nothing when SearXNG reports unresponsive engines", async () => {
+  const blocked = [
+    ["google", "too many requests"],
+    ["mojeek", "access denied", true],
+    ["wikipedia"],
+    [42, "ignored"],
+  ];
+  const fetch = mockFetch(
+    Response.json({ results: [], unresponsive_engines: blocked }),
+    Response.json({ results: [], unresponsive_engines: blocked }),
+  );
+  await expect(search({ categories: "news" })).rejects.toThrow(
+    "SearXNG returned no results and reported unresponsive engines: google (too many requests), mojeek (access denied), wikipedia.",
+  );
+  expectRequests(fetch, ...["news", "general"].map((v) => `${requestUrl}&categories=${v}`));
+
+  mockFetch(Response.json({ results: [row("partial")], unresponsive_engines: blocked }));
+  await expect(search()).resolves.toMatchObject({ count: 1 });
+
+  mockFetch(Response.json({ results: [], unresponsive_engines: [] }));
+  await expect(search()).resolves.toMatchObject({ count: 0 });
+});
+
 it("preserves the upstream HTTP error status", async () => {
   mockFetch(new Response("upstream rejected search", { status: 429 }));
   await expect(search()).rejects.toMatchObject({ status: 429, statusCode: 429 });
