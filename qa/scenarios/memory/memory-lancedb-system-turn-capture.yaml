@@ -1,0 +1,134 @@
+title: memory-lancedb keeps OpenClaw system turns out of auto-capture
+
+scenario:
+  id: memory-lancedb-system-turn-capture
+  surface: session-memory
+  coverage:
+    secondary:
+      - channels.message-final-reply
+  objective: Under messages.visibleReplies=message_tool, a stranded private final gets one OpenClaw-generated [System] retry turn that quotes the agent's own reply. With memory-lancedb autoCapture on, that system turn must not be stored as a user memory, while the user's own message still is.
+  plugins:
+    - memory-lancedb
+  gatewayConfigPatch:
+    messages:
+      visibleReplies: message_tool
+    plugins:
+      slots:
+        memory: memory-lancedb
+      entries:
+        memory-lancedb:
+          enabled: true
+          config:
+            embedding:
+              model: text-embedding-3-small
+              # The mock provider returns 16-dimensional embeddings.
+              dimensions: 16
+            autoCapture: true
+            autoRecall: false
+            captureMaxChars: 4000
+            customTriggers:
+              - QA-STRANDED-85714
+  successCriteria:
+    - The stranded private final gets one recovery retry, and the reply is delivered via message(action=send).
+    - The user's inbound message, which carries the custom capture trigger, is stored as a memory (capture ran).
+    - No stored memory starts with the [System] marker of the retry turn.
+  docsRefs:
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - extensions/memory-lancedb/memory-policy.ts
+    - extensions/memory-lancedb/index.ts
+    - src/auto-reply/reply/stranded-reply-recovery.ts
+    - src/sessions/system-turn-prompt.ts
+  execution:
+    kind: flow
+    summary: Strand a message_tool_only private final with memory-lancedb autoCapture on, let the one retry deliver it, then read the memory store.
+    config:
+      requiredProviderMode: mock-openai
+      agentId: qa
+      conversationId: qa-stranded-memory-dm
+      # Capturable on its own: "remember" plus the custom trigger, and no tool-call phrasing.
+      prompt: "qa stranded final recovery check. Remember the marker QA-STRANDED-85714."
+      expectedMarker: QA-STRANDED-85714
+      systemTurnFilter: "text LIKE '[System]%'"
+      markerFilter: "text LIKE '%QA-STRANDED-85714%'"
+
+flow:
+  steps:
+    - name: stores the user turn but not the stranded-reply system turn
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this seeded scenario is mock-openai only
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId:
+              expr: config.conversationId
+            senderName: Alice
+            text:
+              expr: config.prompt
+        - call: waitForOutboundMessage
+          saveAs: outbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === config.conversationId && candidate.conversation.kind === 'direct' && String(candidate.text ?? '').includes(config.expectedMarker)"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - call: sleep
+          args:
+            - expr: liveTurnTimeoutMs(env, 8000)
+        - call: runQaCli
+          saveAs: markerRows
+          args:
+            - ref: env
+            - - ltm
+              - query
+              - --agent
+              - expr: config.agentId
+              - --filter
+              - expr: config.markerFilter
+              - --cols
+              - text
+              - --limit
+              - "50"
+            - timeoutMs:
+                expr: liveTurnTimeoutMs(env, 60000)
+              json: true
+        - call: runQaCli
+          saveAs: systemRows
+          args:
+            - ref: env
+            - - ltm
+              - query
+              - --agent
+              - expr: config.agentId
+              - --filter
+              - expr: config.systemTurnFilter
+              - --cols
+              - text
+              - --limit
+              - "50"
+            - timeoutMs:
+                expr: liveTurnTimeoutMs(env, 60000)
+              json: true
+        - assert:
+            expr: "Array.isArray(markerRows) && markerRows.some((row) => !String(row.text ?? '').startsWith('[System]'))"
+            message:
+              expr: "`expected the user's own turn to be captured (capture must have run), saw ${JSON.stringify(markerRows)}`"
+        - assert:
+            expr: "Array.isArray(systemRows) && systemRows.length === 0"
+            message:
+              expr: "`expected no stored [System] turn, saw ${JSON.stringify(systemRows)}`"
+      detailsExpr: "`marker rows=${markerRows.length}; [System] rows=${systemRows.length}; first [System] row: ${JSON.stringify(systemRows[0] ?? null).slice(0, 240)}`"

@@ -176,11 +176,22 @@ export function looksLikePromptInjection(text: string): boolean {
   return PROMPT_INJECTION_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
+// Core's formatSystemTurnPrompt prefixes every turn OpenClaw writes itself (stranded-reply retry,
+// restart recovery, transcript follow-ups) with this marker and sends it as a user-role message.
+// A plugin cannot import that helper, so the marker is matched here.
+const SYSTEM_TURN_PROMPT_PREFIX = "[System]";
+
+/** True for an OpenClaw-generated system turn, which is not something the user said. */
+export function isSystemTurnPromptText(text: string): boolean {
+  return text.trimStart().startsWith(SYSTEM_TURN_PROMPT_PREFIX);
+}
+
 // Legacy label-only rows slip past now that header detection keys on the provenance marker, and the
 // marker-free checks catch only payload/bracket shapes. `doctor --fix` deletes sentinel and fenced rows
 // (memory-lancedb-legacy-envelope-rows); dynamic-label prose survives both, accepted over a reader here.
+// System turns stored before capture rejected them stay out of recall and duplicate matching.
 function isRecallableMemoryText(text: string): boolean {
-  return text.trim().length > 0 && !looksLikeEnvelopeSludge(text);
+  return text.trim().length > 0 && !looksLikeEnvelopeSludge(text) && !isSystemTurnPromptText(text);
 }
 
 function normalizeStoredMemoryText(text: string): string {
@@ -251,7 +262,7 @@ export function shouldCapture(
   text: string,
   options?: { customTriggers?: string[]; maxChars?: number },
 ): boolean {
-  if (looksLikeEnvelopeSludge(text)) {
+  if (looksLikeEnvelopeSludge(text) || isSystemTurnPromptText(text)) {
     return false;
   }
   const maxChars = options?.maxChars ?? DEFAULT_CAPTURE_MAX_CHARS;
