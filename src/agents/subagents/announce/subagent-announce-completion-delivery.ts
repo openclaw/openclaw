@@ -1,24 +1,20 @@
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizePendingFinalDeliveryText } from "../../../auto-reply/reply/pending-final-delivery-state.js";
-import {
-  getRestartRecoveryTerminalDeliveryEvidence,
-  hasRestartRecoverySourceClaim,
-  hasRestartRecoveryTerminalRun,
-} from "../../../config/sessions/restart-recovery-state.js";
-import type { RestartRecoveryTerminalDeliveryEvidence } from "../../../config/sessions/restart-recovery-types.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
+import { runOutsideAdmittedGenerationScopes } from "../../../auto-reply/reply/queue/drain-admission-scope.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { runOutsideOperatorToolGatewayAuthority } from "../../../gateway/operator-tool-gateway-authority.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
-import type { GatewayRecoveryTypingParams } from "../../../gateway/server-instance-runtime.types.js";
-import { getGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
+import type { GatewayLifecycleTypingParams } from "../../../gateway/server-instance-runtime.types.js";
+import { getGatewayLifecycleRuntime } from "../../../gateway/server-lifecycle-runtime-context.js";
+import { materializeErrorStack } from "../../../infra/error-graph-internal.js";
 import { normalizeOutboundReplyPayloadCore } from "../../../infra/outbound/reply-payload-normalize.js";
 import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
 import { splitMediaFromOutput } from "../../../media/parse.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
+import type { SessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
 import { isNonTerminalAgentRunStatus } from "../../../shared/agent-run-status.js";
-import { SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND } from "../../../shared/transcript-only-openclaw-assistant.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import {
@@ -52,14 +48,17 @@ import { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
 
 export async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
+  controllerInput?: SessionControllerInput;
   privateCompletion?: true;
   replyExpectation?: ReplyExpectation;
-  typing?: Omit<GatewayRecoveryTypingParams, "isCurrent">;
+  agentToolCaller?: import("../../../gateway/server-methods/client-types.js").TrustedAgentToolCaller;
+  typing?: Omit<GatewayLifecycleTypingParams, "isCurrent">;
   settleWakeSourceSessionKeys?: readonly string[];
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
   expectFinal?: boolean;
   onAccepted?: (payload: unknown) => void;
   onExecutionStarted?: () => void;
+  onBeforeDispatch?: () => void | Promise<void>;
   signal?: AbortSignal;
   timeoutMs?: number;
   isExecutionAllowed: () => boolean;
@@ -68,8 +67,8 @@ export async function runAnnounceAgentCall(params: {
 }): Promise<unknown> {
   const typingRuntime = params.typing
     ? params.resolveGatewayContext
-      ? params.resolveGatewayContext()?.recoveryRuntime
-      : getGatewayRecoveryRuntime()
+      ? params.resolveGatewayContext()?.lifecycleRuntime
+      : getGatewayLifecycleRuntime()
     : undefined;
   let stopTyping: (() => void) | undefined;
   const deadline = new AbortController();
@@ -85,78 +84,106 @@ export async function runAnnounceAgentCall(params: {
   const timer =
     params.timeoutMs === undefined
       ? undefined
-      : setTimeout(
-          () => deadline.abort(new Error("gateway request timeout for agent")),
-          params.timeoutMs,
-        );
-  timer?.unref?.();
+      : setTimeout(() => {
+          const reason = new Error("gateway request timeout for agent");
+          materializeErrorStack(reason);
+          deadline.abort(reason);
+        }, params.timeoutMs);
+  timer?.unref();
   try {
     signal.throwIfAborted();
-    const dispatch = dispatchGatewayMethodInProcess("agent", params.agentParams, {
-      cancelOnDeadline: true,
-      privateCompletion: params.privateCompletion,
-      replyExpectation: params.replyExpectation,
-      settleWakeReplay: params.settleWakeSourceSessionKeys
-        ? {
-            sourceSessionKeys: params.settleWakeSourceSessionKeys,
-            assertCurrent: () => {
-              if (!params.isExecutionAllowed()) {
-                throw new SourceOwnerChangedError();
+    const dispatch = async () => {
+      if (params.onBeforeDispatch) {
+        await params.onBeforeDispatch();
+      }
+      signal.throwIfAborted();
+      if (!params.isExecutionAllowed() || params.isSourceSessionAdmissionAllowed?.() === false) {
+        throw new SourceOwnerChangedError();
+      }
+      return runOutsideAdmittedGenerationScopes(() =>
+        dispatchGatewayMethodInProcess("agent", params.agentParams, {
+          controllerInput: params.controllerInput,
+          cancelOnDeadline: true,
+          privateCompletion: params.privateCompletion,
+          replyExpectation: params.replyExpectation,
+          agentToolCaller: params.agentToolCaller,
+          settleWakeReplay: params.settleWakeSourceSessionKeys
+            ? {
+                sourceSessionKeys: params.settleWakeSourceSessionKeys,
+                assertCurrent: () => {
+                  if (!params.isExecutionAllowed()) {
+                    throw new SourceOwnerChangedError();
+                  }
+                },
               }
-            },
-          }
-        : undefined,
-      expectFinal: params.expectFinal,
-      forceSyntheticClient: shouldPreserveUserFacingSessionStateForInputProvenance(
-        params.agentParams.inputProvenance,
-      ),
-      operatorRoleActor: { kind: "system" },
-      delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
-      signal: executionSignal,
-      ...(isSourceSessionAdmissionAllowed
-        ? {
-            sessionMutationCommitGuard: () => {
-              if (!isSourceSessionAdmissionAllowed()) {
-                const error = new SourceOwnerChangedError();
-                sourceLifecycle.abort(error);
-                throw error;
+            : undefined,
+          expectFinal: params.expectFinal,
+          forceSyntheticClient: shouldPreserveUserFacingSessionStateForInputProvenance(
+            params.agentParams.inputProvenance,
+          ),
+          operatorRoleActor: { kind: "system" },
+          delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
+          signal: executionSignal,
+          ...(isSourceSessionAdmissionAllowed
+            ? {
+                sessionMutationCommitGuard: () => {
+                  if (!isSourceSessionAdmissionAllowed()) {
+                    const error = new SourceOwnerChangedError();
+                    materializeErrorStack(error);
+                    sourceLifecycle.abort(error);
+                    throw error;
+                  }
+                },
               }
-            },
-          }
-        : {}),
-      // Accepted queue waits belong to session admission; execution belongs to
-      // the requester runtime budget, not the announcement handoff deadline.
-      onAccepted: (payload) => {
-        clearTimeout(timer);
-        params.onAccepted?.(payload);
-      },
-      onExecutionStarted: () => {
-        executionSignal.throwIfAborted();
-        if (!params.isExecutionAllowed()) {
-          sourceLifecycle.abort(new SourceOwnerChangedError());
-          // Classify execution immediately, before Gateway observes cancellation.
-          throw createAgentRunDirectAbortError();
-        }
-        // Execution can be observed before acceptance on an already-running replay.
-        clearTimeout(timer);
-        params.onExecutionStarted?.();
-        if (params.typing) {
-          stopTyping ??= typingRuntime?.startRecoveryTyping?.({
-            ...params.typing,
-            isCurrent: () =>
-              !executionSignal.aborted &&
-              params.isExecutionAllowed() &&
-              (params.resolveGatewayContext
-                ? params.resolveGatewayContext()?.recoveryRuntime === typingRuntime
-                : getGatewayRecoveryRuntime() === typingRuntime),
-          });
-        }
-      },
-      resolveGatewayContext: params.resolveGatewayContext,
-    });
+            : {}),
+          // Accepted queue waits belong to session admission; execution belongs to
+          // the requester runtime budget, not the announcement handoff deadline.
+          onAccepted: (payload) => {
+            clearTimeout(timer);
+            params.onAccepted?.(payload);
+          },
+          onStartOwner: (owner) => {
+            // Private callers still time out their observation while admission keeps custody.
+            // Public handoffs transfer their cancelling deadline at source registration.
+            if (!params.privateCompletion && owner.observe()) {
+              clearTimeout(timer);
+            }
+          },
+          onExecutionStarted: () => {
+            executionSignal.throwIfAborted();
+            if (!params.isExecutionAllowed()) {
+              const reason = new SourceOwnerChangedError();
+              materializeErrorStack(reason);
+              sourceLifecycle.abort(reason);
+              // Classify execution immediately, before Gateway observes cancellation.
+              throw createAgentRunDirectAbortError();
+            }
+            // Execution can be observed before acceptance on an already-running replay.
+            clearTimeout(timer);
+            params.onExecutionStarted?.();
+            if (params.typing) {
+              stopTyping ??= typingRuntime?.startTyping?.({
+                ...params.typing,
+                isCurrent: () =>
+                  !executionSignal.aborted &&
+                  params.isExecutionAllowed() &&
+                  (params.resolveGatewayContext
+                    ? params.resolveGatewayContext()?.lifecycleRuntime === typingRuntime
+                    : getGatewayLifecycleRuntime() === typingRuntime),
+              });
+            }
+          },
+          resolveGatewayContext: params.resolveGatewayContext,
+        }),
+      );
+    };
+    const continuationCaller = params.controllerInput?.continuationCaller;
+    const dispatched = runOutsideOperatorToolGatewayAuthority(() =>
+      continuationCaller ? continuationCaller.run(dispatch) : dispatch(),
+    );
     return params.privateCompletion
-      ? await waitForGatewayDispatch("agent", dispatch, undefined, signal)
-      : await dispatch;
+      ? await waitForGatewayDispatch("agent", dispatched, undefined, signal)
+      : await dispatched;
   } catch (error) {
     sourceLifecycle.signal.throwIfAborted();
     throw error;
@@ -170,50 +197,12 @@ export function isGatewayAgentRunPending(response: unknown): boolean {
   return isNonTerminalAgentRunStatus(asOptionalObjectRecord(response)?.status);
 }
 
-/** A recovery successor owns its admitted input until its exact final can be reconciled. */
-export function resolveRequesterRecoveryDelivery(
-  entry: SessionEntry | undefined,
-  runId: string,
-):
-  | { kind: "result"; result: RestartRecoveryTerminalDeliveryEvidence }
-  | { kind: "delivery"; delivery: SubagentAnnounceDeliveryResult }
-  | undefined {
-  const result = getRestartRecoveryTerminalDeliveryEvidence(entry, runId);
-  if (result) {
-    return { kind: "result", result };
-  }
-  if (hasRestartRecoverySourceClaim(entry, runId)) {
-    return {
-      kind: "delivery",
-      delivery: {
-        delivered: false,
-        path: "direct",
-        reason: "requester_turn_pending",
-        disposition: "retryable",
-      },
-    };
-  }
-  if (hasRestartRecoveryTerminalRun(entry, runId)) {
-    return {
-      kind: "delivery",
-      delivery: {
-        delivered: false,
-        path: "direct",
-        reason: "visible_reply_missing",
-        error: "recovered requester completed without durable final delivery evidence",
-        disposition: "permanent_failure",
-      },
-    };
-  }
-  return undefined;
-}
-
 export function resolvePrivateCompletionDeliveryResult(
   response: Record<string, unknown> | undefined,
   origin?: DeliveryContext,
 ): SubagentAnnounceDeliveryResult {
   const outcome = buildAgentRunTerminalOutcomeFromWaitResult(response);
-  if (outcome?.reason === "cancelled" && outcome.stopReason !== "restart") {
+  if (outcome?.reason === "cancelled") {
     return {
       delivered: false,
       path: "direct",
@@ -226,7 +215,7 @@ export function resolvePrivateCompletionDeliveryResult(
   // Successful internal consumption may be silent or start the next child.
   // Queue acceptance alone is not consumption, and no external receipt is owed.
   const delivery: SubagentAnnounceDeliveryResult =
-    response?.status === "ok" && response?.inputProcessingCompleted === true
+    response?.status === "ok" && response.inputProcessingCompleted === true
       ? { delivered: true, path: "direct" }
       : {
           delivered: false,
@@ -373,6 +362,7 @@ export async function deliverCompletionDirect(params: {
   cfg: OpenClawConfig;
   requesterSessionKey: string;
   requesterSessionId?: string;
+  requesterLifecycleRevision?: string;
   requesterAgentId?: string;
   directIdempotencyKey: string;
   deliveryTarget: {
@@ -439,6 +429,8 @@ export async function deliverCompletionDirect(params: {
       accountId: params.deliveryTarget.accountId,
       threadId: params.deliveryTarget.threadId,
       requesterSessionKey: params.requesterSessionKey,
+      // The child produced this result; the requester key scopes policy only.
+      session: { agentId, policyKey: params.requesterSessionKey },
       agentId,
       conversationType: "direct",
       content: content ?? "",
@@ -454,7 +446,7 @@ export async function deliverCompletionDirect(params: {
           return;
         }
         // This single payload must finish every chunk and attachment before settling,
-        // still ahead of potentially blocked transcript mirroring.
+        // still ahead of potentially blocked conversation history.
         committedDelivery = { delivered: true, path: "direct", deliveredAt: Date.now() };
         deliveryResultReported = Promise.resolve(
           params.onDeliveryResult?.(committedDelivery),
@@ -462,15 +454,17 @@ export async function deliverCompletionDirect(params: {
           // Bookkeeping failure cannot make a fully sent result retryable.
         });
       },
-      // The requester lane may already belong to its next turn.
-      mirror: {
-        sessionKey: params.requesterSessionKey,
-        agentId,
-        idempotencyKey,
-        expectedSessionId: params.requesterSessionId,
-        deliveryMirror: { kind: SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND },
-        deferToSessionLane: true,
-      },
+      // Pin history to the requester generation that spawned the child.
+      ...(params.requesterSessionId
+        ? {
+            transcriptExpectedGeneration: {
+              sessionKey: params.requesterSessionKey,
+              sessionId: params.requesterSessionId,
+              lifecycleRevision: params.requesterLifecycleRevision,
+            },
+          }
+        : {}),
+      transcriptProvenance: { kind: "subagent-completion" },
     });
     if (committedDelivery) {
       return committedDelivery;
@@ -504,7 +498,6 @@ export async function deliverCompletionDirect(params: {
         terminal: true,
         disposition: "permanent_failure",
         error: `text completion direct delivery was incomplete; automatic retry would duplicate sent chunks: ${summarizeDeliveryError(err)}`,
-        ...(mediaUrls.length > 0 ? { missingMediaUrls: mediaUrls } : {}),
       };
     }
     if (err instanceof SourceOwnerChangedError) {

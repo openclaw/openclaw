@@ -1,8 +1,15 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   createMetricsHarness,
   type TrustedExporterInternalDiagnostics,
 } from "./service.test-helpers.js";
+
+// mock-isolation: Keep Gateway runtime initialization outside the fixture; scrape as a read-authorized operator.
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getPluginRuntimeGatewayRequestScope: () => ({
+    client: { connect: { scopes: ["operator.read"] } },
+  }),
+}));
 
 it("replaces live owner counts through idle, source retirement, and exporter restart", () => {
   type Listener = Parameters<

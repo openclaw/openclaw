@@ -13,11 +13,12 @@ import {
 } from "@openclaw/model-catalog-core/provider-id";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
-import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { readAgentDatabaseReadAdmissionRefusal } from "../state/agent-database-admission.js";
 import { getOrLoadAgentDeletionJournalStatus } from "../state/agent-deletion-journal-status.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveAgentEntry, toAgentEntriesRecord } from "./agent-scope-config.js";
@@ -38,6 +39,7 @@ import { resolveConfiguredModelHarnessRuntime } from "./harness-runtimes.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
@@ -69,6 +71,13 @@ export function collectPreparedModelRuntimeConfiguredRefs(
         }
       : config,
   );
+  // Decision profiles select credentials, not catalog identity. Keep other literal
+  // model suffixes intact and leave the shared raw-config collector lossless.
+  for (const ref of refs) {
+    if (ref.capability === "decision") {
+      ref.value = splitTrailingAuthProfile(ref.value).model;
+    }
+  }
   for (const [index, selection] of runtimePluginSelections.entries()) {
     refs.push({
       path: `runtimePluginSelections.${index}`,
@@ -97,11 +106,19 @@ export function collectPreparedModelRuntimeProviderIds(
     for (const providerId of Object.keys(credentials)) {
       addProviderId(providerId);
     }
+    for (const [providerId, providerConfig] of Object.entries(config.models?.providers ?? {})) {
+      if (hasConfiguredSecretInput(providerConfig.apiKey)) {
+        addProviderId(providerId);
+      }
+    }
   }
   for (const ref of configuredModelRefs) {
     const separator = ref.value.indexOf("/");
     if (separator > 0) {
       addProviderId(ref.value.slice(0, separator));
+    }
+    if (ref.capability === "decision") {
+      continue;
     }
     addProviderId(
       resolveConfiguredModelHarnessRuntime({
@@ -301,7 +318,7 @@ export function listConfiguredOwnerInputs(
       return (
         deletion !== "pending" &&
         deletion !== "complete" &&
-        !readAgentDatabaseAdmissionRefusal(agentId)
+        !readAgentDatabaseReadAdmissionRefusal(agentId)
       );
     })
     .map((agentId) => {

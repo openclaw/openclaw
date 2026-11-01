@@ -1,4 +1,3 @@
-// Chat target prefix tests cover channel target prefix parsing and display behavior.
 import { describe, expect, it } from "vitest";
 import {
   createAllowedChatSenderMatcher,
@@ -28,14 +27,22 @@ function parseAllowTarget(entry: string): ParsedChatAllowTarget {
   return { kind: "handle", handle: normalizeSender(trimmed) };
 }
 
+const parsers = { normalizeSender, parseAllowTarget };
+const conversation = {
+  sender: "other@example.com",
+  chatId: 123,
+  chatGuid: "thread-123",
+  chatIdentifier: "team",
+};
+const conversationEntries = ["chat_id:123", "chat_guid:thread-123", "chat_identifier:team"];
+
 describe("isAllowedParsedChatSender", () => {
   it("matches wildcard and normalized sender handles", () => {
     expect(
       isAllowedParsedChatSender({
         allowFrom: ["owner@example.com"],
         sender: "Owner@Example.com",
-        normalizeSender,
-        parseAllowTarget,
+        ...parsers,
       }),
     ).toBe(true);
 
@@ -43,79 +50,34 @@ describe("isAllowedParsedChatSender", () => {
       isAllowedParsedChatSender({
         allowFrom: ["*"],
         sender: "other@example.com",
-        normalizeSender,
-        parseAllowTarget,
+        ...parsers,
       }),
     ).toBe(true);
   });
 
   it("does not match conversation targets unless explicitly enabled", () => {
-    for (const entry of ["chat_id:123", "chat_guid:thread-123", "chat_identifier:team"]) {
-      expect(
-        isAllowedParsedChatSender({
-          allowFrom: [entry],
-          sender: "other@example.com",
-          chatId: 123,
-          chatGuid: "thread-123",
-          chatIdentifier: "team",
-          normalizeSender,
-          parseAllowTarget,
-        }),
-      ).toBe(false);
-
-      expect(
-        isAllowedParsedChatSender({
-          allowFrom: [entry],
-          sender: "other@example.com",
-          chatId: 123,
-          chatGuid: "thread-123",
-          chatIdentifier: "team",
-          allowConversationTargets: true,
-          normalizeSender,
-          parseAllowTarget,
-        }),
-      ).toBe(true);
+    for (const entry of conversationEntries) {
+      const params = { ...conversation, ...parsers, allowFrom: [entry] };
+      expect(isAllowedParsedChatSender(params)).toBe(false);
+      expect(isAllowedParsedChatSender({ ...params, allowConversationTargets: true })).toBe(true);
     }
   });
 });
 
 describe("createAllowedChatSenderMatcher", () => {
-  it("keeps conversation targets disabled unless the matcher opts in", () => {
-    const matcher = createAllowedChatSenderMatcher({
-      normalizeSender,
-      parseAllowTarget,
-    });
+  it.each([undefined, true])(
+    "conversation targets require opt-in: %s",
+    (allowConversationTargets) => {
+      const matcher = createAllowedChatSenderMatcher({
+        ...parsers,
+        allowConversationTargets,
+      });
 
-    for (const entry of ["chat_id:123", "chat_guid:thread-123", "chat_identifier:team"]) {
-      expect(
-        matcher({
-          allowFrom: [entry],
-          sender: "other@example.com",
-          chatId: 123,
-          chatGuid: "thread-123",
-          chatIdentifier: "team",
-        }),
-      ).toBe(false);
-    }
-  });
-
-  it("matches conversation targets when the matcher explicitly opts in", () => {
-    const matcher = createAllowedChatSenderMatcher({
-      normalizeSender,
-      parseAllowTarget,
-      allowConversationTargets: true,
-    });
-
-    for (const entry of ["chat_id:123", "chat_guid:thread-123", "chat_identifier:team"]) {
-      expect(
-        matcher({
-          allowFrom: [entry],
-          sender: "other@example.com",
-          chatId: 123,
-          chatGuid: "thread-123",
-          chatIdentifier: "team",
-        }),
-      ).toBe(true);
-    }
-  });
+      for (const entry of conversationEntries) {
+        expect(matcher({ ...conversation, allowFrom: [entry] })).toBe(
+          allowConversationTargets === true,
+        );
+      }
+    },
+  );
 });

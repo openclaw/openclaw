@@ -11,6 +11,7 @@ import {
 } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
 import { UpdatePreMutationError } from "./shared.js";
 import {
   resolveMutableUpdateFailure,
@@ -31,6 +32,20 @@ vi.mock("./update-command-terminal.js", () => ({
   prepareUnexpectedUpdateCommandFailure: boundary.prepareFailure,
 }));
 afterEach(() => vi.clearAllMocks());
+
+function resolveFailure(
+  cause: unknown,
+  originalRecovery: Parameters<typeof resolveMutableUpdateFailure>[0]["originalRecovery"],
+  mode: "npm" | "git" = "npm",
+) {
+  return resolveMutableUpdateFailure({
+    cause,
+    originalRecovery,
+    mode,
+    root: "/synthetic",
+    durationMs: 1,
+  });
+}
 
 it.each(["forced", "uncertain"] as const)(
   "joins command cleanup before updater compensation (%s)",
@@ -76,25 +91,19 @@ it.each(["forced", "uncertain"] as const)(
           throw new Error("compensation escaped cleanup ownership");
         }),
       ]);
-      expect(boundary.admission).not.toHaveBeenCalled();
-      expect(restore).not.toHaveBeenCalled();
-      expect(complete).not.toHaveBeenCalled();
-      expect(boundary.prepareFailure).not.toHaveBeenCalled();
+      expectNoCalls(boundary.admission, restore, complete, boundary.prepareFailure);
     } finally {
       cleanup.resolve(cleanupResult);
       await work;
     }
     const error = await work;
     expect(hasCommandProcessCleanupError(error)).toBe(cleanupResult === "uncertain");
+    expect(collectNestedErrorCandidates(error)).toContain(original);
     if (cleanupResult === "uncertain") {
-      expect(collectNestedErrorCandidates(error)).toContain(original);
-      expect(boundary.admission).not.toHaveBeenCalled();
-      expect(restore).not.toHaveBeenCalled();
+      expectNoCalls(boundary.admission, restore, boundary.prepareFailure);
       expect(complete).toHaveBeenCalledExactlyOnceWith(false, { preserveState: true });
-      expect(boundary.prepareFailure).not.toHaveBeenCalled();
     } else {
       expect(error).toBe(prepared);
-      expect(collectNestedErrorCandidates(error)).toContain(original);
       expect(restore).toHaveBeenCalledOnce();
       expect(complete).toHaveBeenCalledOnce();
       expect(boundary.prepareFailure).toHaveBeenCalledExactlyOnceWith(
@@ -115,7 +124,7 @@ it.each([
 ])(
   "preserves recovery metadata without authorizing uncertain cleanup ($uncertain, reporting=$reporting)",
   async ({ uncertain, reporting }) => {
-    const report = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    using report = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     const original = new UpdatePreMutationError(
       "node-runtime-preflight",
       "Select a supported Node",
@@ -133,56 +142,35 @@ it.each([
       serviceRestartSafe: true as const,
       version: "2026.9.4",
     }));
-    const work = resolveMutableUpdateFailure({
-      cause: error,
-      durationMs: 1,
-      mode: "npm",
-      root: "/synthetic",
-      originalRecovery,
-    });
-    try {
-      if (uncertain) {
-        await expect(work).rejects.toBe(error);
-        expect(originalRecovery).not.toHaveBeenCalled();
-        expect(report).not.toHaveBeenCalled();
-      } else {
-        const { result, failure } = await work;
-        expect(failure.cause).toBe(error);
-        expect(originalRecovery).toHaveBeenCalledOnce();
-        expect(result.failedStep).toMatchObject({
-          name: "node-runtime-preflight",
-          recoverySteps: original.recoverySteps,
-          failureFacts: original.failureFacts,
-        });
-        expect(result.steps).toEqual([result.failedStep]);
-      }
-    } finally {
-      report.mockRestore();
+    const work = resolveFailure(error, originalRecovery);
+    if (uncertain) {
+      await expect(work).rejects.toBe(error);
+      expectNoCalls(originalRecovery, report);
+    } else {
+      const { result, failure } = await work;
+      expect(failure.cause).toBe(error);
+      expect(originalRecovery).toHaveBeenCalledOnce();
+      expect(result.failedStep).toMatchObject({
+        name: "node-runtime-preflight",
+        recoverySteps: original.recoverySteps,
+        failureFacts: original.failureFacts,
+      });
+      expect(result.steps).toEqual([result.failedStep]);
     }
   },
 );
 
 it("keeps pending recovery closed when cleanup reporting also fails", async () => {
   const original = new UpdateCommandPendingRecoveryFailure(
-    {
-      status: "error",
-      mode: "git",
-      reason: "update-failed",
-      steps: [],
-      durationMs: 1,
-    },
+    { status: "error", mode: "git", reason: "update-failed", steps: [], durationMs: 1 },
     "Recovery owner has not settled",
   );
   const reporting = new Error("cleanup ledger unavailable");
   const cause = new GitCleanupReportingError(original, [reporting]);
   const originalRecovery = vi.fn();
-  const error = await resolveMutableUpdateFailure({
-    cause,
-    mode: "git",
-    root: "/synthetic",
-    durationMs: 1,
-    originalRecovery,
-  }).catch((caught: unknown) => caught);
+  const error = await resolveFailure(cause, originalRecovery, "git").catch(
+    (caught: unknown) => caught,
+  );
   expect(error).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
   expect(collectNestedErrorCandidates(error)).toEqual(
     expect.arrayContaining([original, reporting]),

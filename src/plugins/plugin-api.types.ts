@@ -2,15 +2,13 @@ import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/ha
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
-import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { StorageProvider } from "../storage/types.js";
-import type { AgentExecutorController } from "./agent-executor-controller.types.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
 } from "./agent-tool-result-middleware-types.js";
-import type { PluginBoardWidgetContentKind } from "./board-widget-content-kind.types.js";
 import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
 import type {
   ImageGenerationProviderPlugin,
@@ -23,8 +21,7 @@ import type {
   VideoGenerationProviderPlugin,
   WorkerProvider,
 } from "./capability-provider.types.js";
-import type { CliBackendPlugin, PluginTextTransforms } from "./cli-backend.types.js";
-import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
+import type { CliBackendPlugin } from "./cli-backend.types.js";
 import type { PluginConversationBindingResolvedEvent } from "./conversation-binding.types.js";
 import type { PluginGatewayAccessPolicy } from "./gateway-access-policy.types.js";
 import type {
@@ -67,7 +64,6 @@ import type {
   OpenClawPluginCliRegistrationOptions,
   OpenClawPluginCliRegistrar,
   OpenClawGatewayDiscoveryService,
-  OpenClawPluginHostedMediaResolver,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginNodeCliFeatureOptions,
   OpenClawPluginNodeInvokePolicy,
@@ -98,18 +94,18 @@ import type {
 import type { OpenClawPluginNodeHostCommand } from "./types.node-host.js";
 import type { WebFetchProviderPlugin, WebSearchProviderPlugin } from "./web-provider-types.js";
 
-type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
 type AnyChannelPlugin = import("../channels/plugins/types.plugin.js").AnyChannelPlugin;
 
-type ChannelPluginForGatewayVersion<Version extends 1 | 2> = Omit<ChannelPlugin, "gateway"> & {
+type ChannelPluginForGatewayVersion<Version extends 1 | 2> = Omit<
+  import("../channels/plugins/types.plugin.js").ChannelPlugin,
+  "gateway"
+> & {
   gateway?: Extract<NonNullable<AnyChannelPlugin["gateway"]>, { apiVersion?: Version }>;
 };
 
 type ChannelRegistrationForGatewayVersion<Version extends 1 | 2> =
   | ChannelPluginForGatewayVersion<Version>
   | OpenClawPluginChannelRegistration<ChannelPluginForGatewayVersion<Version>>;
-
-export type PluginTextTransformRegistration = PluginTextTransforms;
 
 type OpenClawPluginSessionStateApi = {
   /** Register plugin-owned session state projected into Gateway session rows. */
@@ -143,18 +139,27 @@ type OpenClawPluginSessionWorkflowApi = {
   registerSessionSchedulerJob: (
     job: PluginSessionSchedulerJobRegistration,
   ) => PluginSessionSchedulerJobHandle | undefined;
-  /** Send host-validated files to the active direct-outbound route for a session. */
+  /**
+   * Send host-validated files to the active direct-outbound route for a session.
+   * Intended for bundled plugins with host channel/session integration available.
+   * Calls can return `{ ok: false }` when side effects are disabled or the required
+   * channel runtime is not loaded; callers must handle that result.
+   */
   sendSessionAttachment: (
     params: PluginSessionAttachmentParams,
   ) => Promise<PluginSessionAttachmentResult>;
   /**
    * Schedule a future agent turn in a session through Cron.
    * Cron owns timing and records the run history when the turn runs.
+   * Bundled plugins only; workspace plugins receive undefined.
    */
   scheduleSessionTurn: (
     params: PluginSessionTurnScheduleParams,
   ) => Promise<PluginSessionSchedulerJobHandle | undefined>;
-  /** Remove Cron-backed scheduled session turns that share a plugin-owned tag. */
+  /**
+   * Remove Cron-backed scheduled session turns that share a plugin-owned tag.
+   * Bundled plugins only; workspace plugins receive a zero-count result.
+   */
   unscheduleSessionTurnsByTag: (
     params: PluginSessionTurnUnscheduleByTagParams,
   ) => Promise<PluginSessionTurnUnscheduleByTagResult>;
@@ -167,30 +172,11 @@ type OpenClawPluginSessionControlsApi = {
   registerControlUiDescriptor: (descriptor: PluginControlUiDescriptor) => void;
 };
 
-type OpenClawPluginSessionApi = {
-  state: OpenClawPluginSessionStateApi;
-  workflow: OpenClawPluginSessionWorkflowApi;
-  controls: OpenClawPluginSessionControlsApi;
-};
-
 type OpenClawPluginAgentEventsApi = {
   /** Subscribe to sanitized agent events through the host-owned plugin lifecycle. */
   registerAgentEventSubscription: (subscription: PluginAgentEventSubscriptionRegistration) => void;
   /** Emit a host-routed, plugin-attributed event for workflow/UI subscribers. */
   emitAgentEvent: (params: PluginAgentEventEmitParams) => PluginAgentEventEmitResult;
-};
-
-type OpenClawPluginAgentApi = {
-  events: OpenClawPluginAgentEventsApi;
-};
-
-type OpenClawPluginRunContextApi = {
-  /** Store namespaced, JSON-compatible data for the active run. Cleared on run end/error. */
-  setRunContext: (patch: PluginRunContextPatch) => boolean;
-  /** Read namespaced plugin data for a run. */
-  getRunContext: (params: PluginRunContextGetParams) => PluginJsonValue | undefined;
-  /** Clear one namespace or all namespaces this plugin owns for a run. */
-  clearRunContext: (params: { runId: string; namespace?: string }) => void;
 };
 
 type OpenClawPluginLifecycleApi = Partial<
@@ -206,6 +192,12 @@ type OpenClawPluginLifecycleApi = Partial<
  * @see https://docs.openclaw.ai/plugins/sdk-overview#api-stability
  */
 export type OpenClawPluginApi = {
+  /** Data for an installed native view, with a portable text summary. */
+  inlineView: (
+    viewId: string,
+    payload: import("./host-hook-json.js").PluginJsonValue,
+    options: { version: number; summary: string },
+  ) => import("./inline-view.js").PluginInlineViewResult;
   id: string;
   name: string;
   version?: string;
@@ -229,11 +221,28 @@ export type OpenClawPluginApi = {
    * Grouped facade over the existing flat session-related plugin API.
    * Flat methods remain supported for compatibility.
    */
-  session: OpenClawPluginSessionApi;
+  session: {
+    state: OpenClawPluginSessionStateApi;
+    workflow: OpenClawPluginSessionWorkflowApi;
+    controls: OpenClawPluginSessionControlsApi;
+  };
   /** Grouped facade for agent-event workflow seams. */
-  agent: OpenClawPluginAgentApi;
+  agent: {
+    /** Optional; requires contracts.subagentProfiles and native-subagent-profiles-v1. */
+    registerSubagentProfile?: (
+      profile: import("./subagent-profile.types.js").PluginSubagentProfile,
+    ) => void;
+    events: OpenClawPluginAgentEventsApi;
+  };
   /** Grouped facade for run-scoped plugin scratch state. */
-  runContext: OpenClawPluginRunContextApi;
+  runContext: {
+    /** Store namespaced, JSON-compatible data for the active run. Cleared on run end/error. */
+    setRunContext: (patch: PluginRunContextPatch) => boolean;
+    /** Read namespaced plugin data for a run. */
+    getRunContext: (params: PluginRunContextGetParams) => PluginJsonValue | undefined;
+    /** Clear one namespace or all namespaces this plugin owns for a run. */
+    clearRunContext: (params: { runId: string; namespace?: string }) => void;
+  };
   /** Grouped facade for plugin-owned lifecycle cleanup hooks. */
   lifecycle: OpenClawPluginLifecycleApi;
   registerTool: (
@@ -246,8 +255,6 @@ export type OpenClawPluginApi = {
     opts?: OpenClawPluginHookOptions,
   ) => void;
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
-  /** Register a plugin-owned resolver for browser-style hosted media URLs. */
-  registerHostedMediaResolver: (resolver: OpenClawPluginHostedMediaResolver) => void;
   /** Register a plugin-owned destination for presenting hosted widget documents. */
   registerWidgetPresenter: (presenter: WidgetPresenter) => void;
   /** Bind a declared MCP server's transport to the trusted message requester. */ registerMcpServerConnectionResolver: (
@@ -261,6 +268,7 @@ export type OpenClawPluginApi = {
   };
   /**
    * Register a gateway RPC method for this plugin.
+   * Return a payload for automatic completion, or call `respond(...)` explicitly.
    *
    * Reserved core admin namespaces (`config.*`, `exec.approvals.*`,
    * `wizard.*`, `update.*`) always normalize to `operator.admin` even if a
@@ -268,7 +276,7 @@ export type OpenClawPluginApi = {
    */
   registerGatewayMethod: (
     method: string,
-    handler: GatewayRequestHandler,
+    handler: (opts: GatewayRequestHandlerOptions) => unknown,
     opts?: {
       scope?: OperatorScope;
       profileAccess?: "independent" | "required";
@@ -279,10 +287,13 @@ export type OpenClawPluginApi = {
       shareMaxAgeMs?: number;
     },
   ) => void;
+  /** Register repository preparation policy, selected by gateway.repositoryIntegration. */
+  registerRepositoryIntegration: (
+    integration: import("./repository-integration.types.js").RepositoryIntegration,
+  ) => void;
   /** Add a plugin-owned lifetime requirement to authenticated person admission. */
   registerGatewayAccessPolicy: (policy: PluginGatewayAccessPolicy) => void;
   /** Register a sandboxed board widget source kind owned by this plugin. */
-  registerBoardWidgetContentKind: (definition: PluginBoardWidgetContentKind) => void;
   /** Register a read-only external-session catalog with optional native adoption actions. */
   registerSessionCatalog: (provider: SessionCatalogProvider) => void;
   registerCli: (
@@ -312,8 +323,6 @@ export type OpenClawPluginApi = {
   registerGatewayDiscoveryService: (service: OpenClawGatewayDiscoveryService) => void;
   /** Register a text-only CLI backend used by the local CLI runner. */
   registerCliBackend: (backend: CliBackendPlugin) => void;
-  /** Register plugin-owned prompt/message compatibility text transforms. */
-  registerTextTransforms: (transforms: PluginTextTransformRegistration) => void;
   /** Register a lightweight config migration that can run before plugin runtime loads. */
   registerConfigMigration: (migrate: PluginConfigMigration) => void;
   /** Register an importer for `openclaw migrate` (migration capability). */
@@ -378,8 +387,8 @@ export type OpenClawPluginApi = {
   /** Register a versioned typed decision executor declared in the manifest. */
   registerDecisionProvider: (
     provider:
-      | import("../decisions/types.js").DecisionProviderV1
-      | import("../decisions/types-v2.js").DecisionProviderV2,
+      | import("../decisions/provider-types.js").DecisionProviderV1
+      | import("../decisions/provider-types.js").DecisionProviderV2,
   ) => void;
   /** Register a compaction provider (pluggable summarization backend). */
   registerCompactionProvider: (
@@ -387,14 +396,6 @@ export type OpenClawPluginApi = {
   ) => void;
   /** Register an agent harness implementation. */
   registerAgentHarness: (harness: AgentHarness, options?: AgentHarnessRegistrationOptions) => void;
-  /** Register this plugin's executor controller, selected by the owning plugin ID. */
-  registerAgentExecutorController: (controller: AgentExecutorController) => void;
-  /**
-   * Register a Codex app-server extension factory for Codex harness tool-result
-   * middleware. Only bundled plugins may use this seam, and
-   * `contracts.embeddedExtensionFactories` must include `"codex-app-server"`.
-   */
-  registerCodexAppServerExtensionFactory: (factory: CodexAppServerExtensionFactory) => void;
   /**
    * Register runtime-neutral tool-result middleware. Declare
    * `contracts.agentToolResultMiddleware` for every targeted runtime.
@@ -413,8 +414,6 @@ export type OpenClawPluginApi = {
    * @deprecated Use `api.session.workflow.enqueueNextTurnInjection(...)`.
    */
   enqueueNextTurnInjection: OpenClawPluginSessionWorkflowApi["enqueueNextTurnInjection"];
-  /** Backs `api.session.workflow.steerActiveRun(...)`; plugins call the workflow facade. */
-  steerActiveRun: OpenClawPluginSessionWorkflowApi["steerActiveRun"];
   /**
    * Register a trusted pre-tool policy. Installed plugins must declare the
    * policy id in `contracts.trustedToolPolicies`.
@@ -442,26 +441,6 @@ export type OpenClawPluginApi = {
    */
   registerAgentEventSubscription: OpenClawPluginAgentEventsApi["registerAgentEventSubscription"];
   /**
-   * Emit a host-routed, plugin-attributed agent event for workflow/UI subscribers.
-   * @deprecated Use `api.agent.events.emitAgentEvent(...)`.
-   */
-  emitAgentEvent: OpenClawPluginAgentEventsApi["emitAgentEvent"];
-  /**
-   * Store namespaced, JSON-compatible data for the active run. Cleared on run end/error.
-   * @deprecated Use `api.runContext.setRunContext(...)`.
-   */
-  setRunContext: OpenClawPluginRunContextApi["setRunContext"];
-  /**
-   * Read namespaced plugin data for a run.
-   * @deprecated Use `api.runContext.getRunContext(...)`.
-   */
-  getRunContext: OpenClawPluginRunContextApi["getRunContext"];
-  /**
-   * Clear one namespace or all namespaces this plugin owns for a run.
-   * @deprecated Use `api.runContext.clearRunContext(...)`.
-   */
-  clearRunContext: OpenClawPluginRunContextApi["clearRunContext"];
-  /**
    * Register cleanup metadata for a plugin-owned session scheduler job.
    * This does not schedule work or create task records; it only lets the host
    * clean external scheduler state during reset/delete/disable.
@@ -469,37 +448,6 @@ export type OpenClawPluginApi = {
    * @deprecated Use `api.session.workflow.registerSessionSchedulerJob(...)`.
    */
   registerSessionSchedulerJob: OpenClawPluginSessionWorkflowApi["registerSessionSchedulerJob"];
-  /**
-   * Register a typed session action that clients can dispatch through the Gateway.
-   * @deprecated Use `api.session.controls.registerSessionAction(...)`.
-   */
-  registerSessionAction: OpenClawPluginSessionControlsApi["registerSessionAction"];
-  /**
-   * Send one or more host-validated files to the active direct-outbound channel for a session.
-   *
-   * This API is intended for bundled plugins running with the host channel/session
-   * integration available. Calls may resolve to `{ ok: false }` instead of attaching
-   * files when global side effects are disabled or when the required plugin/channel
-   * runtime is not loaded, so callers must handle rejection via the returned result.
-   *
-   * @deprecated Use `api.session.workflow.sendSessionAttachment(...)`.
-   */
-  sendSessionAttachment: OpenClawPluginSessionWorkflowApi["sendSessionAttachment"];
-  /**
-   * Schedule a future agent turn in a session through Cron.
-   * Cron owns timing and records the run history when the turn runs.
-   * Bundled plugins only; workspace plugins receive undefined.
-   *
-   * @deprecated Use `api.session.workflow.scheduleSessionTurn(...)`.
-   */
-  scheduleSessionTurn: OpenClawPluginSessionWorkflowApi["scheduleSessionTurn"];
-  /**
-   * Remove Cron-backed scheduled session turns that share the same plugin-owned tag.
-   * Bundled plugins only; workspace plugins receive a zero-count result.
-   *
-   * @deprecated Use `api.session.workflow.unscheduleSessionTurnsByTag(...)`.
-   */
-  unscheduleSessionTurnsByTag: OpenClawPluginSessionWorkflowApi["unscheduleSessionTurnsByTag"];
   /** Register the active memory capability for this memory plugin (exclusive slot). */
   registerMemoryCapability: (capability: MemoryPluginCapability) => void;
   /** Register an additive memory-adjacent prompt section (non-exclusive). */

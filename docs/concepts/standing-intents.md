@@ -25,7 +25,8 @@ Put aspirations in `MEMORY.md`, a project note, or another maintained Markdown f
 
 Standing intents are owner-directed memory. Channel owners recognized by
 `commands.ownerAllowFrom` can use the `intent` tool to create, list, or cancel
-them; other senders do not receive that tool. Authenticated Gateway/Control UI
+them. The tool definition stays available across turns, but calls without owner
+authority are denied. Authenticated Gateway/Control UI
 administrators and the local CLI can inspect and cancel existing intents, but
 creation requires an authenticated channel and sender identity. If either is
 missing, OpenClaw refuses creation and asks the operator to retry from an

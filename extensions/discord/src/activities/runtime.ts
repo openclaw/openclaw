@@ -82,7 +82,8 @@ export class DiscordActivitiesRuntime {
     return accounts.length === 1 ? (accounts[0] ?? null) : null;
   }
 
-  hasEnabledAccounts(cfg = this.currentConfig()): boolean {
+  hasEnabledAccounts(): boolean {
+    const cfg = this.currentConfig();
     return listDiscordAccountIds(cfg).some(
       (accountId) => this.resolveAccount(accountId, cfg) !== null,
     );

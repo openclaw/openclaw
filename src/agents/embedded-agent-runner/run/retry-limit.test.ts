@@ -15,7 +15,6 @@ function handleRetryLimit(replayInvalid = false) {
       model: "test-model",
     },
     replayInvalid: replayInvalid || undefined,
-    livenessState: "blocked",
   });
 }
 

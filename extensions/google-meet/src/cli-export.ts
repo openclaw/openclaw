@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listGoogleMeetCalendarEvents, type GoogleMeetCalendarLookupResult } from "./calendar.js";
 import {
   formatDuration,
@@ -15,37 +16,6 @@ import type {
   GoogleMeetAttendanceResult,
   GoogleMeetLatestConferenceRecordResult,
 } from "./meet-api.js";
-
-function appendArtifactSummary(
-  lines: string[],
-  entry: GoogleMeetArtifactsResult["artifacts"][number],
-): void {
-  if (entry.smartNotesError) {
-    lines.push(`smart notes warning: ${entry.smartNotesError}`);
-  }
-  for (const recording of entry.recordings) {
-    lines.push(`- recording: ${recording.name}`);
-  }
-  for (const transcript of entry.transcripts) {
-    lines.push(`- transcript: ${transcript.name}`);
-    if (transcript.documentTextError) {
-      lines.push(`- transcript document body warning: ${transcript.documentTextError}`);
-    }
-  }
-  for (const transcriptEntries of entry.transcriptEntries) {
-    if (transcriptEntries.entriesError) {
-      lines.push(
-        `- transcript entries warning: ${transcriptEntries.transcript}: ${transcriptEntries.entriesError}`,
-      );
-    }
-  }
-  for (const smartNote of entry.smartNotes) {
-    lines.push(`- smart note: ${smartNote.name}`);
-    if (smartNote.documentTextError) {
-      lines.push(`- smart note document body warning: ${smartNote.documentTextError}`);
-    }
-  }
-}
 
 function createReport(
   title: string,
@@ -185,7 +155,31 @@ export function renderArtifacts(
     );
     field("Smart notes", entry.smartNotes.length);
     if (!markdown) {
-      appendArtifactSummary(lines, entry);
+      if (entry.smartNotesError) {
+        lines.push(`smart notes warning: ${entry.smartNotesError}`);
+      }
+      for (const recording of entry.recordings) {
+        lines.push(`- recording: ${recording.name}`);
+      }
+      for (const transcript of entry.transcripts) {
+        lines.push(`- transcript: ${transcript.name}`);
+        if (transcript.documentTextError) {
+          lines.push(`- transcript document body warning: ${transcript.documentTextError}`);
+        }
+      }
+      for (const transcriptEntries of entry.transcriptEntries) {
+        if (transcriptEntries.entriesError) {
+          lines.push(
+            `- transcript entries warning: ${transcriptEntries.transcript}: ${transcriptEntries.entriesError}`,
+          );
+        }
+      }
+      for (const smartNote of entry.smartNotes) {
+        lines.push(`- smart note: ${smartNote.name}`);
+        if (smartNote.documentTextError) {
+          lines.push(`- smart note document body warning: ${smartNote.documentTextError}`);
+        }
+      }
       continue;
     }
     const warnings = collectGoogleMeetArtifactWarnings({
@@ -432,10 +426,6 @@ export function googleMeetExportFileNames(): string[] {
   ];
 }
 
-function defaultExportDirectory(): string {
-  return `google-meet-export-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-}
-
 async function publishMeetExportFile(outputPath: string, content: string | Buffer): Promise<void> {
   const absolutePath = path.resolve(outputPath);
   await writeExternalFileWithinRoot({
@@ -456,7 +446,9 @@ export async function writeMeetExportBundle(params: {
   tokenSource?: "cached-access-token" | "refresh-token";
   calendarEvent?: GoogleMeetCalendarLookupResult;
 }): Promise<{ outputDir: string; files: string[]; zipFile?: string }> {
-  const outputDir = params.outputDir?.trim() || defaultExportDirectory();
+  const outputDir =
+    readNonBlankString(params.outputDir) ??
+    `google-meet-export-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   await fsp.mkdir(outputDir, { recursive: true });
   let zipOutputDir = outputDir;
   if (params.zip) {

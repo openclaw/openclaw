@@ -1,0 +1,188 @@
+.chat-details-processes {
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--details-row-font-size, var(--control-ui-text-sm));
+}
+
+.chat-details-processes__list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--details-row-list-gap, 4px);
+}
+
+.chat-details-processes__row {
+  position: relative;
+  min-width: 0;
+  border-radius: var(--radius-md);
+
+  &:is(:hover, :focus-within) {
+    background: var(--bg-hover);
+  }
+
+  > :where(button):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  &:is(:hover, :focus-within, [data-stopping]) {
+    &[data-actionable] .chat-details-processes__name {
+      mask-image: linear-gradient(to right, black calc(100% - 42px), transparent calc(100% - 26px));
+    }
+
+    &[data-actionable] .chat-details__process-elapsed {
+      visibility: hidden;
+    }
+
+    .chat-details-processes__action {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
+}
+
+.chat-details-processes__open {
+  display: flex;
+  align-items: center;
+  gap: var(--details-row-gap, 8px);
+  width: 100%;
+  min-width: 0;
+  min-height: var(--details-row-height, 28px);
+  padding: var(--details-row-padding-block, 4px) var(--details-row-padding, 4px);
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
+.chat-details-processes__icon {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  color: var(--muted);
+
+  > svg {
+    width: 18px;
+    height: 18px;
+  }
+}
+
+.chat-details-processes__badge {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  display: grid;
+  place-items: center;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  corner-shape: round;
+  background: var(--details-surface, var(--card));
+  box-shadow: 0 0 0 1.5px var(--details-surface, var(--card));
+}
+
+.chat-details-processes__spinner {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border: 1.25px solid color-mix(in srgb, var(--accent) 30%, var(--details-surface, var(--card)));
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  corner-shape: round;
+  animation: btn-spinner-spin 1.5s linear infinite;
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+
+.chat-details-processes__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+
+  &[data-scrollable="true"] {
+    mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
+  }
+}
+
+.chat-details-processes__action {
+  position: absolute;
+  inset-inline-end: 4px;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  corner-shape: round;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+
+  > svg {
+    width: 14px;
+    height: 14px;
+  }
+}
+
+.chat-details-processes__stop {
+  background: color-mix(in srgb, var(--danger) 8%, var(--details-surface, var(--card)));
+  color: var(--danger);
+
+  > svg {
+    fill: currentColor;
+    stroke: none;
+  }
+
+  &:hover {
+    background: color-mix(in srgb, var(--danger) 12%, var(--details-surface, var(--card)));
+  }
+}
+
+.chat-details-processes__error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger);
+
+  > button {
+    flex: none;
+    white-space: nowrap;
+  }
+  > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
+
+.chat-details-processes__view-all {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  padding: var(--details-row-padding-block, 4px) var(--details-row-padding, 4px);
+  cursor: var(--cursor-action);
+}
+
+/* Text link: outranks the shared Details button hover background. */
+.chat-details .chat-details-processes__view-all:is(:hover, :focus-visible) {
+  background: none;
+  color: var(--text);
+}
+
+.chat-details-processes__envelope {
+  min-width: 0;
+}
+.chat-details-processes__motion-content {
+  display: flow-root;
+}

@@ -12,13 +12,12 @@ import type {
 } from "./fs-bridge-path-safety.js";
 import type { SandboxResolvedFsPath } from "./fs-paths.js";
 
-// Plans carry path-safety checks alongside the command so rechecks and execution stay coupled.
+// Plans carry path-safety checks alongside the command so checks and execution stay coupled.
 export type SandboxFsCommandPlan = {
   checks: PathSafetyCheck[];
   script: string;
   args?: string[];
   stdin?: Buffer | string;
-  recheckBeforeCommand?: boolean;
   allowFailure?: boolean;
 };
 
@@ -38,6 +37,22 @@ export const PINNED_MUTATION_ACTION_LABELS = {
 } as const;
 
 export const SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL = `'${GUEST_FILESYSTEM_PYTHON.replaceAll("'", `'\\''`)}'`;
+
+export const SANDBOX_PINNED_READ_TOO_LARGE_EXIT_CODE = 27;
+
+// The guest program's stderr is diagnostic text. Preserve its actual bounded-read
+// exception at this invocation boundary without parsing or changing that program.
+const sandboxPinnedReadPython = [
+  "import errno, sys",
+  "try:",
+  `    exec(${JSON.stringify(GUEST_FILESYSTEM_PYTHON)})`,
+  "except OSError as error:",
+  "    if sys.argv[1] == 'read' and len(sys.argv) > 5 and error.errno == errno.EFBIG:",
+  `        sys.exit(${SANDBOX_PINNED_READ_TOO_LARGE_EXIT_CODE})`,
+  "    raise",
+].join("\n");
+
+export const SANDBOX_PINNED_READ_PYTHON_SHELL_LITERAL = `'${sandboxPinnedReadPython.replaceAll("'", `'\\''`)}'`;
 
 export type PinnedSandboxOperation =
   | {
@@ -151,7 +166,6 @@ export function buildPinnedMutationPlan(operation: CheckedPinnedOperation): Sand
   const args = buildPinnedMutationArgs(operation);
   return {
     checks,
-    recheckBeforeCommand: true,
     // -c executes reliably on older Python builds while stdin carries payload bytes.
     script: [
       "set -eu",

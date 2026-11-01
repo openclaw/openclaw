@@ -1,11 +1,10 @@
-import { once } from "node:events";
 import fs from "node:fs";
-import { createServer, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { getAiTransportHost } from "@openclaw/ai";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { resolveAgentDir } from "../../agents/agent-scope-config.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "../../agents/auth-profiles/path-resolve.native.js";
 import {
@@ -23,6 +22,12 @@ import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared
 import { AuthStorage } from "../../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../../agents/sessions/model-registry.js";
 import { acquireSimpleCompletionModelForAgent } from "../../agents/simple-completion-runtime.js";
+import {
+  assertPrepared,
+  completionContext,
+  completionModelDefinition,
+  startCompletionServer,
+} from "../../agents/simple-completion.test-support.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindModelLlmRuntime, getModelLlmRuntime } from "../../llm/model-runtime-binding.js";
@@ -52,12 +57,7 @@ function waitForWork(
   completion: Promise<unknown>,
   message = "Completion settled before accepted work",
 ) {
-  return Promise.race([
-    started,
-    completion.then(() => {
-      throw new Error(message);
-    }),
-  ]);
+  return awaitGateBeforeSettlement(started, completion, message);
 }
 
 const nextTurn = () =>
@@ -180,7 +180,7 @@ it.each([
       })}\n\ndata: [DONE]\n\n`,
     );
   };
-  const server = createServer((request, response) => {
+  const server = await startCompletionServer((request, response) => {
     request.resume();
     const index = requests.push(response) - 1;
     const apiKey = request.headers["x-api-key"];
@@ -194,29 +194,15 @@ it.each([
       finish(response, index);
     }
   });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
   const pending: Promise<unknown>[] = [];
   try {
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Completion fixture did not expose a TCP port");
-    }
     const provider: ModelProviderConfig = {
       api: anthropicReadCancel ? "anthropic-messages" : "openai-completions",
       ...(anthropicReadCancel ? { request: { tls: { insecureSkipVerify: false } } } : {}),
       ...(mode === "auth" ? {} : { apiKey: "fixture-auth-A" }),
-      baseUrl: `http://127.0.0.1:${address.port}/A/v1`,
+      baseUrl: `${server.origin}/A/v1`,
       models: ["lease-model", ...Array.from({ length: 9 }, (_, index) => `churn-${index}`)].map(
-        (id) => ({
-          id,
-          name: "Lease model",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 8192,
-          maxTokens: 1024,
-        }),
+        (id) => completionModelDefinition({ id, name: "Lease model" }),
       ),
     };
     const cfg: OpenClawConfig = {
@@ -305,9 +291,7 @@ it.each([
                         error instanceof Error ? error.message : "Non-Error preparation failure";
                       throw error;
                     });
-                    if ("error" in nested) {
-                      throw new Error(nested.error);
-                    }
+                    assertPrepared(nested);
                     nestedPreparationCompleted = true;
                     return;
                   }
@@ -326,10 +310,7 @@ it.each([
             vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
               const origin = getAsyncWorkSignal();
               const response = await realFetch(...args);
-              if (
-                wrappedResponse ||
-                !response.url.startsWith(`http://127.0.0.1:${address.port}/`)
-              ) {
+              if (wrappedResponse || !response.url.startsWith(`${server.origin}/`)) {
                 return response;
               }
               wrappedResponse = true;
@@ -392,7 +373,7 @@ it.each([
               ...cfg.models?.providers,
               [fixture.providerId]: {
                 ...provider,
-                baseUrl: `http://127.0.0.1:${address.port}/B/v1`,
+                baseUrl: `${server.origin}/B/v1`,
                 apiKey: "fixture-auth-B",
               },
             },
@@ -449,9 +430,7 @@ it.each([
         [];
       const completeSdk = async (index: number, signal?: AbortSignal) => {
         const prepared = await prepare(sdkHosts[index]!);
-        if ("error" in prepared) {
-          throw new Error(prepared.error);
-        }
+        assertPrepared(prepared);
         expect(Object.keys(prepared).toSorted()).toEqual(["auth", "model", "selection"]);
         const runtime = getModelLlmRuntime(prepared.model);
         if (!runtime) {
@@ -461,9 +440,7 @@ it.each([
           ...prepared,
           // Legitimate transport copies must carry the original completion owner.
           model: bindModelLlmRuntime(prepared.model, runtime),
-          context: {
-            messages: [{ role: "user" as const, content: `request-${index}`, timestamp: 0 }],
-          },
+          context: completionContext(`request-${index}`, 0),
           options: { signal },
         };
         preparedModels.push(execution);
@@ -545,9 +522,7 @@ it.each([
           const first =
             mode === "setup-success"
               ? acquireSimpleCompletionModelForAgent(completionInput).then((acquired) => {
-                  if ("error" in acquired) {
-                    throw new Error(acquired.error);
-                  }
+                  assertPrepared(acquired);
                   pending.push(Promise.resolve(acquired[Symbol.asyncDispose]()));
                 })
               : sdk
@@ -620,13 +595,11 @@ it.each([
           }
           if (mode === "dispatch-close" || mode === "current-check") {
             const prepared = await prepare(firstHost);
-            if ("error" in prepared) {
-              throw new Error(prepared.error);
-            }
+            assertPrepared(prepared);
             const callerFailure = new Error("Caller completion authority closed");
             const completion = completeWithPreparedSimpleCompletionModel({
               ...prepared,
-              context: { messages: [{ role: "user", content: "check dispatch", timestamp: 0 }] },
+              context: completionContext("check dispatch", 0),
               assertCurrent:
                 mode === "current-check"
                   ? () => {
@@ -822,10 +795,7 @@ it.each([
       }
     });
   } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await server[Symbol.asyncDispose]();
     roots.cleanup();
   }
 });

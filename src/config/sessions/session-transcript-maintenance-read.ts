@@ -4,7 +4,7 @@ import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { NESTED_TOOL_ACTIVITY_CUSTOM_TYPE } from "../../sessions/nested-tool-activity.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
-import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
+import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
@@ -15,10 +15,16 @@ import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import { readWithCanonicalSessionAdmission } from "./session-canonical-key.js";
+import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import type {
   SessionTranscriptMaintenanceRead,
   SessionTranscriptMaintenanceFacts,
 } from "./session-transcript-hydration.types.js";
+import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import {
+  readTranscriptReportEvent,
+  readTranscriptReportNavigation,
+} from "./session-transcript-report-read.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 export function readSessionTranscriptMaintenance(
@@ -26,6 +32,26 @@ export function readSessionTranscriptMaintenance(
   target: SessionTranscriptRuntimeTarget,
   request: SessionTranscriptMaintenanceRead,
 ): SessionTranscriptMaintenanceFacts {
+  if (request.operation === "custom-branch") {
+    return readWithCanonicalSessionAdmission(database, () =>
+      runSqliteReadSnapshotSync(database.db, () => {
+        const fence = resolveSqliteSessionTranscriptReadFence({ database, ...target });
+        assertSessionTranscriptHot(database.db, target.sessionId);
+        const navigation = readTranscriptReportNavigation(
+          database,
+          target.sessionId,
+          fence?.beforeRawSeq,
+        );
+        return {
+          kind: "transcript-maintenance" as const,
+          version: readTranscriptContextVersionInTransaction(database, target.sessionId),
+          events: navigation.readCustomBranch(request.leafEntryId, request.customType, (seq) =>
+            readTranscriptReportEvent(database, target.sessionId, seq),
+          ),
+        };
+      }),
+    );
+  }
   if (request.operation === "previous") {
     return {
       kind: "transcript-maintenance",

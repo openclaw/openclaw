@@ -3,14 +3,19 @@ import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import type { BootRoster } from "../lib/sessions/session-boot-roster.ts";
-import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
+import {
+  createTestSessionCapability,
+  sessionsResult,
+} from "../lib/sessions/session-capability.test-support.ts";
 import * as snapshotPrewarm from "../pages/chat/session-snapshot-prewarm.ts";
 import { createContext, createGatewayHarness, TWO_AGENTS } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { createSessionDataHost } from "./session-data-controller.test-support.ts";
+import { publishSidebarSessionList } from "./session-data-events.ts";
 import { SessionDataOwner } from "./session-data.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -18,6 +23,98 @@ afterEach(() => vi.restoreAllMocks());
 function row(key: string, updatedAt: number, extra: Partial<GatewaySessionRow> = {}) {
   return { key: `agent:main:${key}`, kind: "direct" as const, updatedAt, ...extra };
 }
+
+it("selects current and cached agent windows without reviving a retired current result", () => {
+  const gateway = createGatewayHarness(createTestGatewayClient(vi.fn()));
+  const sessions = createTestSessionCapability(gateway.gateway);
+  const owner = new SessionDataOwner(
+    createSessionDataHost(createContext(gateway.gateway, sessions, TWO_AGENTS)),
+    () => undefined,
+  );
+  const main = sessionsResult([row("main", 1)]);
+  const research = sessionsResult([{ key: "agent:research:work", kind: "direct" }]);
+  const publish = (agentId: string | null, result: SessionsListResult | null) =>
+    publishSidebarSessionList(owner, { agentId, result, loading: false, error: null });
+
+  publish("main", main);
+  publish("research", research);
+  expect(owner.resultForAgent(" MAIN ")).toBe(main);
+  expect(owner.resultForAgent("research")).toBe(research);
+  expect(owner.resultForAgent("unseen")).toBeNull();
+
+  publish("research", null);
+  expect(owner.resultForAgent("research")).toBeNull();
+  expect(owner.resultForAgent("main")).toBe(main);
+
+  publish(null, research);
+  expect(owner.resultForAgent("main")).toBe(research);
+});
+
+it("applies the saved roster filter before its first read and releases it with the data owner", async () => {
+  const rows = [row("mine", 1), row("other", 2)];
+  const rosterFilters: unknown[] = [];
+  const request = vi.fn(async (method: string, params?: unknown) => {
+    if (method === "sessions.subscribe") {
+      return { subscribed: true };
+    }
+    if (method === "sessions.groups.list") {
+      return { names: [], groups: [], sectionOrder: [] };
+    }
+    if (method === "sessions.list") {
+      if (
+        params &&
+        typeof params === "object" &&
+        "source" in params &&
+        params.source === "agent-roster"
+      ) {
+        const involvingMe = "involvingMe" in params ? params.involvingMe : undefined;
+        rosterFilters.push(involvingMe);
+        return sessionsResult(involvingMe ? [rows[0]!] : rows, 1);
+      }
+      return sessionsResult([], 1);
+    }
+    throw new Error(`Unexpected Gateway request: ${method}`);
+  });
+  const gateway = createGatewayHarness(createTestGatewayClient(request));
+  const sessions = createTestSessionCapability(gateway.gateway);
+  const context = createContext(gateway.gateway, sessions, TWO_AGENTS);
+  let involvingMe = true;
+  const host = createSessionDataHost(context, {
+    sidebarAgentsMode: "roster",
+    sessionCatalogRowsVisible: false,
+    sidebarSessionOwnerFilter: () => ({ ownerId: null, involvingMe }),
+  });
+  const owner = new SessionDataOwner(host, () => undefined);
+  const roster = rosterActivityStore(context);
+  try {
+    owner.connect();
+    await vi.waitFor(() =>
+      expect(owner.sessionsResult?.sessions.map((session) => session.key)).toEqual([
+        "agent:main:mine",
+      ]),
+    );
+    expect(rosterFilters).toEqual([true]);
+
+    involvingMe = false;
+    owner.synchronize();
+    await vi.waitFor(() =>
+      expect(owner.sessionsResult?.sessions.map((session) => session.key)).toEqual([
+        "agent:main:mine",
+        "agent:main:other",
+      ]),
+    );
+    expect(rosterFilters).toEqual([true, undefined]);
+
+    involvingMe = true;
+    owner.synchronize();
+    expect(roster.snapshot.involvingMe).toBe(true);
+    owner.disconnect(true);
+    expect(roster.snapshot.involvingMe).toBe(false);
+  } finally {
+    owner.disconnect();
+    sessions.dispose();
+  }
+});
 
 it.each([
   ["before controller binding", "before", null, false],

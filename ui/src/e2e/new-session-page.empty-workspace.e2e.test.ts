@@ -28,8 +28,11 @@ suite.define(() => {
           "worktrees.branches": { repositoryStatus: "not_git", branches: [] },
           "sessions.create": { key: sessionKey },
           "sessions.list": createdSessionListResult(sessionKey),
-          "sessions.dispatch": { placement: { state: "active", generation: 1 } },
-          "sessions.send": { runId: "run-empty-workspace", status: "started" },
+          "sessions.dispatch": {
+            sessionId: `session:${sessionKey}`,
+            placement: { state: "active", generation: 1 },
+          },
+          "chat.send": { runId: "run-empty-workspace", status: "started" },
         },
       });
 
@@ -73,18 +76,24 @@ suite.define(() => {
       }
       const dispatch = await gateway.waitForRequest("sessions.dispatch");
       expect(dispatch.params).toEqual({ key: sessionKey, agentId: "main", profileId: "aws" });
-      expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await gateway.resolveDeferred("worktrees.branches");
       await gateway.resolveDeferred("sessions.dispatch");
-      const send = await gateway.waitForRequest("sessions.send");
-      expect(send.params).toMatchObject({ key: sessionKey, agentId: "main", message });
+      const send = await gateway.waitForRequest("chat.send");
+      expect(send.params).toMatchObject({
+        sessionKey,
+        sessionId: `session:${sessionKey}`,
+        expectedLeafEntryId: null,
+        agentId: "main",
+        message,
+      });
       expect(
         (await gateway.getRequests())
           .map((request) => request.method)
           .filter((method) =>
-            ["sessions.create", "sessions.dispatch", "sessions.send"].includes(method),
+            ["sessions.create", "sessions.dispatch", "chat.send"].includes(method),
           ),
-      ).toEqual(["sessions.create", "sessions.dispatch", "sessions.send"]);
+      ).toEqual(["sessions.create", "sessions.dispatch", "chat.send"]);
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));
     });
   });

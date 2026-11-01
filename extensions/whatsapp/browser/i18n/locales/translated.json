@@ -1,0 +1,728 @@
+{
+  "zh-CN": {
+    "common": {
+      "configured": "已配置",
+      "linked": "已关联",
+      "running": "运行中",
+      "connected": "已连接",
+      "lastConnect": "上次连接",
+      "lastMessage": "上条消息",
+      "authAge": "认证已过时长",
+      "na": "不适用",
+      "yes": "是",
+      "no": "否",
+      "relink": "重新关联",
+      "working": "正在处理…",
+      "showQr": "显示二维码",
+      "waitForScan": "等待扫描",
+      "logout": "退出登录",
+      "refresh": "刷新"
+    },
+    "channels": {
+      "lastError": "上次错误",
+      "setup": {
+        "whatsappQrAlt": "WhatsApp 二维码"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "关联 WhatsApp Web 并监控连接状况。",
+        "phoneNumber": "电话号码",
+        "logoutConfirmTitle": "退出 WhatsApp 账号 {accountId}？",
+        "logoutConfirmMessage": "退出账号 {accountId} 将停止其监听器并删除已保存的凭据。"
+      }
+    }
+  },
+  "zh-TW": {
+    "common": {
+      "configured": "已設定",
+      "linked": "已連結",
+      "running": "執行中",
+      "connected": "已連線",
+      "lastConnect": "上次連線",
+      "lastMessage": "上次訊息",
+      "authAge": "驗證後經過時間",
+      "na": "不適用",
+      "yes": "是",
+      "no": "否",
+      "relink": "重新連結",
+      "working": "處理中…",
+      "showQr": "顯示 QR 碼",
+      "waitForScan": "等待掃描",
+      "logout": "登出",
+      "refresh": "重新整理"
+    },
+    "channels": {
+      "lastError": "最近一次錯誤",
+      "setup": {
+        "whatsappQrAlt": "WhatsApp QR 碼"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "連結 WhatsApp Web 並監控連線狀況。",
+        "phoneNumber": "電話號碼",
+        "logoutConfirmTitle": "要登出 WhatsApp 帳號 {accountId} 嗎？",
+        "logoutConfirmMessage": "登出帳號 {accountId} 會停止其監聽程式並刪除已儲存的憑證。"
+      }
+    }
+  },
+  "pt-BR": {
+    "common": {
+      "configured": "Configurado",
+      "linked": "Vinculado",
+      "running": "Em execução",
+      "connected": "Conectado",
+      "lastConnect": "Última conexão",
+      "lastMessage": "Última mensagem",
+      "authAge": "Tempo desde a autenticação",
+      "na": "n/d",
+      "yes": "Sim",
+      "no": "Não",
+      "relink": "Vincular novamente",
+      "working": "Processando…",
+      "showQr": "Mostrar QR",
+      "waitForScan": "Aguardar leitura",
+      "logout": "Sair",
+      "refresh": "Atualizar"
+    },
+    "channels": {
+      "lastError": "Último erro",
+      "setup": {
+        "whatsappQrAlt": "QR do WhatsApp"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "Vincule o WhatsApp Web e monitore a integridade da conexão.",
+        "phoneNumber": "Número de telefone",
+        "logoutConfirmTitle": "Sair da conta {accountId} do WhatsApp?",
+        "logoutConfirmMessage": "Sair da conta {accountId} interrompe a escuta de mensagens e exclui as credenciais salvas."
+      }
+    }
+  },
+  "de": {
+    "common": {
+      "configured": "Konfiguriert",
+      "linked": "Verknüpft",
+      "running": "Läuft",
+      "connected": "Verbunden",
+      "lastConnect": "Letzte Verbindung",
+      "lastMessage": "Letzte Nachricht",
+      "authAge": "Alter der Authentifizierung",
+      "na": "k. A.",
+      "yes": "Ja",
+      "no": "Nein",
+      "relink": "Erneut verknüpfen",
+      "working": "Verarbeitung…",
+      "showQr": "QR-Code anzeigen",
+      "waitForScan": "Auf Scan warten",
+      "logout": "Abmelden",
+      "refresh": "Aktualisieren"
+    },
+    "channels": {
+      "lastError": "Letzter Fehler",
+      "setup": {
+        "whatsappQrAlt": "WhatsApp-QR"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "WhatsApp Web verknüpfen und Verbindungsstatus überwachen.",
+        "phoneNumber": "Telefonnummer",
+        "logoutConfirmTitle": "Vom WhatsApp-Konto {accountId} abmelden?",
+        "logoutConfirmMessage": "Beim Abmelden vom Konto {accountId} wird dessen Listener gestoppt und die gespeicherten Anmeldedaten werden gelöscht."
+      }
+    }
+  },
+  "es": {
+    "common": {
+      "configured": "Configurado",
+      "linked": "Vinculado",
+      "running": "En ejecución",
+      "connected": "Conectado",
+      "lastConnect": "Última conexión",
+      "lastMessage": "Último mensaje",
+      "authAge": "Antigüedad de la autenticación",
+      "na": "n/d",
+      "yes": "Sí",
+      "no": "No",
+      "relink": "Volver a vincular",
+      "working": "Procesando…",
+      "showQr": "Mostrar QR",
+      "waitForScan": "Esperar al escaneo",
+      "logout": "Cerrar sesión",
+      "refresh": "Actualizar"
+    },
+    "channels": {
+      "lastError": "Último error",
+      "setup": {
+        "whatsappQrAlt": "QR de WhatsApp"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "Vincula WhatsApp Web y supervisa el estado de la conexión.",
+        "phoneNumber": "Número de teléfono",
+        "logoutConfirmTitle": "¿Cerrar la sesión de la cuenta de WhatsApp {accountId}?",
+        "logoutConfirmMessage": "Al cerrar la sesión de la cuenta {accountId}, se detiene su proceso de escucha y se eliminan sus credenciales guardadas."
+      }
+    }
+  },
+  "ja-JP": {
+    "common": {
+      "configured": "設定済み",
+      "linked": "連携済み",
+      "running": "実行中",
+      "connected": "接続済み",
+      "lastConnect": "最終接続",
+      "lastMessage": "最終メッセージ",
+      "authAge": "認証からの経過時間",
+      "na": "該当なし",
+      "yes": "はい",
+      "no": "いいえ",
+      "relink": "再リンク",
+      "working": "処理中…",
+      "showQr": "QRを表示",
+      "waitForScan": "スキャンを待機",
+      "logout": "ログアウト",
+      "refresh": "更新"
+    },
+    "channels": {
+      "lastError": "直近のエラー",
+      "setup": {
+        "whatsappQrAlt": "WhatsApp QR"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "WhatsApp Webを連携し、接続状態を監視します。",
+        "phoneNumber": "電話番号",
+        "logoutConfirmTitle": "WhatsAppアカウント{accountId}からログアウトしますか？",
+        "logoutConfirmMessage": "アカウント{accountId}からログアウトすると、リスナーが停止し、保存済みの認証情報が削除されます。"
+      }
+    }
+  },
+  "ko": {
+    "common": {
+      "configured": "구성됨",
+      "linked": "연결됨",
+      "running": "실행 중",
+      "connected": "연결됨",
+      "lastConnect": "최근 연결",
+      "lastMessage": "최근 메시지",
+      "authAge": "인증 후 경과 시간",
+      "na": "해당 없음",
+      "yes": "예",
+      "no": "아니요",
+      "relink": "다시 연결",
+      "working": "작업 중…",
+      "showQr": "QR 표시",
+      "waitForScan": "스캔 대기",
+      "logout": "로그아웃",
+      "refresh": "새로고침"
+    },
+    "channels": {
+      "lastError": "최근 오류",
+      "setup": {
+        "whatsappQrAlt": "WhatsApp QR"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "WhatsApp Web을 연결하고 연결 상태를 모니터링합니다.",
+        "phoneNumber": "전화번호",
+        "logoutConfirmTitle": "WhatsApp 계정 {accountId}에서 로그아웃하시겠습니까?",
+        "logoutConfirmMessage": "계정 {accountId}에서 로그아웃하면 해당 계정의 리스너가 중지되고 저장된 인증 정보가 삭제됩니다."
+      }
+    }
+  },
+  "fr": {
+    "common": {
+      "configured": "Configuré",
+      "linked": "Associé",
+      "running": "En cours d'exécution",
+      "connected": "Connecté",
+      "lastConnect": "Dernière connexion",
+      "lastMessage": "Dernier message",
+      "authAge": "Ancienneté de l’authentification",
+      "na": "s/o",
+      "yes": "Oui",
+      "no": "Non",
+      "relink": "Associer à nouveau",
+      "working": "Traitement…",
+      "showQr": "Afficher le QR",
+      "waitForScan": "Attendre le scan",
+      "logout": "Se déconnecter",
+      "refresh": "Actualiser"
+    },
+    "channels": {
+      "lastError": "Dernière erreur",
+      "setup": {
+        "whatsappQrAlt": "QR WhatsApp"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "Associez WhatsApp Web et surveillez l’état de la connexion.",
+        "phoneNumber": "Numéro de téléphone",
+        "logoutConfirmTitle": "Se déconnecter du compte WhatsApp {accountId} ?",
+        "logoutConfirmMessage": "La déconnexion du compte {accountId} arrête son écouteur et supprime ses identifiants enregistrés."
+      }
+    }
+  },
+  "hi": {
+    "common": {
+      "configured": "कॉन्फ़िगर किया गया",
+      "linked": "लिंक किया गया",
+      "running": "चल रहा है",
+      "connected": "कनेक्ट किया गया",
+      "lastConnect": "पिछला कनेक्शन",
+      "lastMessage": "पिछला संदेश",
+      "authAge": "प्रमाणीकरण के बाद बीता समय",
+      "na": "लागू नहीं",
+      "yes": "हाँ",
+      "no": "नहीं",
+      "relink": "फिर से लिंक करें",
+      "working": "काम चल रहा है…",
+      "showQr": "QR दिखाएँ",
+      "waitForScan": "स्कैन होने की प्रतीक्षा करें",
+      "logout": "लॉग आउट करें",
+      "refresh": "रिफ़्रेश करें"
+    },
+    "channels": {
+      "lastError": "पिछली त्रुटि",
+      "setup": {
+        "whatsappQrAlt": "WhatsApp QR"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "WhatsApp Web लिंक करें और कनेक्शन की स्थिति पर नज़र रखें.",
+        "phoneNumber": "फ़ोन नंबर",
+        "logoutConfirmTitle": "WhatsApp खाते {accountId} से लॉग आउट करें?",
+        "logoutConfirmMessage": "खाते {accountId} से लॉग आउट करने पर उसका लिसनर बंद हो जाता है और उसके सहेजे गए क्रेडेंशियल मिट जाते हैं."
+      }
+    }
+  },
+  "ar": {
+    "common": {
+      "configured": "تم الإعداد",
+      "linked": "مرتبط",
+      "running": "قيد التشغيل",
+      "connected": "متصل",
+      "lastConnect": "آخر اتصال",
+      "lastMessage": "آخر رسالة",
+      "authAge": "الوقت المنقضي منذ المصادقة",
+      "na": "غير متاح",
+      "yes": "نعم",
+      "no": "لا",
+      "relink": "إعادة الربط",
+      "working": "جارٍ العمل…",
+      "showQr": "إظهار رمز QR",
+      "waitForScan": "انتظار المسح",
+      "logout": "تسجيل الخروج",
+      "refresh": "تحديث"
+    },
+    "channels": {
+      "lastError": "آخر خطأ",
+      "setup": {
+        "whatsappQrAlt": "رمز QR لـ WhatsApp"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "اربط WhatsApp Web وراقب سلامة الاتصال.",
+        "phoneNumber": "رقم الهاتف",
+        "logoutConfirmTitle": "هل تريد تسجيل الخروج من حساب WhatsApp {accountId}؟",
+        "logoutConfirmMessage": "يؤدي تسجيل الخروج من الحساب {accountId} إلى إيقاف خدمة الاستماع الخاصة به وحذف بيانات اعتماده المحفوظة."
+      }
+    }
+  },
+  "it": {
+    "common": {
+      "configured": "Configurato",
+      "linked": "Collegato",
+      "running": "In esecuzione",
+      "connected": "Connesso",
+      "lastConnect": "Ultima connessione",
+      "lastMessage": "Ultimo messaggio",
+      "authAge": "Tempo dall'autenticazione",
+      "na": "n/d",
+      "yes": "Sì",
+      "no": "No",
+      "relink": "Ricollega",
+      "working": "Elaborazione…",
+      "showQr": "Mostra QR",
+      "waitForScan": "Attendi la scansione",
+      "logout": "Esci",
+      "refresh": "Aggiorna"
+    },
+    "channels": {
+      "lastError": "Ultimo errore",
+      "setup": {
+        "whatsappQrAlt": "QR di WhatsApp"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "Collega WhatsApp Web e monitora lo stato della connessione.",
+        "phoneNumber": "Numero di telefono",
+        "logoutConfirmTitle": "Disconnettere l'account WhatsApp {accountId}?",
+        "logoutConfirmMessage": "La disconnessione dell'account {accountId} interrompe il relativo listener ed elimina le credenziali salvate."
+      }
+    }
+  },
+  "tr": {
+    "common": {
+      "configured": "Yapılandırıldı",
+      "linked": "Bağlandı",
+      "running": "Çalışıyor",
+      "connected": "Bağlı",
+      "lastConnect": "Son bağlantı",
+      "lastMessage": "Son mesaj",
+      "authAge": "Kimlik doğrulama yaşı",
+      "na": "geçerli değil",
+      "yes": "Evet",
+      "no": "Hayır",
+      "relink": "Yeniden Bağla",
+      "working": "İşleniyor…",
+      "showQr": "QR Göster",
+      "waitForScan": "Taranmasını bekle",
+      "logout": "Oturumu Kapat",
+      "refresh": "Yenile"
+    },
+    "channels": {
+      "lastError": "Son hata",
+      "setup": {
+        "whatsappQrAlt": "WhatsApp QR"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "WhatsApp Web'i bağlayın ve bağlantı sağlığını izleyin.",
+        "phoneNumber": "Telefon numarası",
+        "logoutConfirmTitle": "{accountId} WhatsApp hesabının oturumu kapatılsın mı?",
+        "logoutConfirmMessage": "{accountId} hesabının oturumunu kapatmak, dinleyicisini durdurur ve kayıtlı kimlik bilgilerini siler."
+      }
+    }
+  },
+  "uk": {
+    "common": {
+      "configured": "Налаштовано",
+      "linked": "Пов’язано",
+      "running": "Працює",
+      "connected": "Підключено",
+      "lastConnect": "Останнє підключення",
+      "lastMessage": "Останнє повідомлення",
+      "authAge": "Час від автентифікації",
+      "na": "н/д",
+      "yes": "Так",
+      "no": "Ні",
+      "relink": "Пов’язати повторно",
+      "working": "Виконання…",
+      "showQr": "Показати QR",
+      "waitForScan": "Дочекайтеся сканування",
+      "logout": "Вийти",
+      "refresh": "Оновити"
+    },
+    "channels": {
+      "lastError": "Остання помилка",
+      "setup": {
+        "whatsappQrAlt": "QR-код WhatsApp"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "Підключіть WhatsApp Web і відстежуйте стан з’єднання.",
+        "phoneNumber": "Номер телефону",
+        "logoutConfirmTitle": "Вийти з облікового запису WhatsApp {accountId}?",
+        "logoutConfirmMessage": "Вихід з облікового запису {accountId} зупинить його обробник вхідних повідомлень і видалить збережені облікові дані."
+      }
+    }
+  },
+  "id": {
+    "common": {
+      "configured": "Dikonfigurasi",
+      "linked": "Ditautkan",
+      "running": "Berjalan",
+      "connected": "Terhubung",
+      "lastConnect": "Koneksi terakhir",
+      "lastMessage": "Pesan terakhir",
+      "authAge": "Usia autentikasi",
+      "na": "t/a",
+      "yes": "Ya",
+      "no": "Tidak",
+      "relink": "Tautkan ulang",
+      "working": "Memproses…",
+      "showQr": "Tampilkan QR",
+      "waitForScan": "Tunggu pemindaian",
+      "logout": "Keluar",
+      "refresh": "Segarkan"
+    },
+    "channels": {
+      "lastError": "Kesalahan terakhir",
+      "setup": {
+        "whatsappQrAlt": "QR WhatsApp"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "Tautkan WhatsApp Web dan pantau kondisi koneksi.",
+        "phoneNumber": "Nomor telepon",
+        "logoutConfirmTitle": "Keluar dari akun WhatsApp {accountId}?",
+        "logoutConfirmMessage": "Keluar dari akun {accountId} akan menghentikan pendengarnya dan menghapus kredensial yang tersimpan."
+      }
+    }
+  },
+  "pl": {
+    "common": {
+      "configured": "Skonfigurowane",
+      "linked": "Połączone",
+      "running": "Uruchomione",
+      "connected": "Połączono",
+      "lastConnect": "Ostatnie połączenie",
+      "lastMessage": "Ostatnia wiadomość",
+      "authAge": "Czas od uwierzytelnienia",
+      "na": "nie dotyczy",
+      "yes": "Tak",
+      "no": "Nie",
+      "relink": "Połącz ponownie",
+      "working": "Przetwarzanie…",
+      "showQr": "Pokaż QR",
+      "waitForScan": "Poczekaj na zeskanowanie",
+      "logout": "Wyloguj się",
+      "refresh": "Odśwież"
+    },
+    "channels": {
+      "lastError": "Ostatni błąd",
+      "setup": {
+        "whatsappQrAlt": "Kod QR WhatsApp"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "Połącz WhatsApp Web i monitoruj stan połączenia.",
+        "phoneNumber": "Numer telefonu",
+        "logoutConfirmTitle": "Wylogować się z konta WhatsApp {accountId}?",
+        "logoutConfirmMessage": "Wylogowanie z konta {accountId} zatrzyma nasłuchiwanie i usunie zapisane dane uwierzytelniające."
+      }
+    }
+  },
+  "th": {
+    "common": {
+      "configured": "กำหนดค่าแล้ว",
+      "linked": "เชื่อมโยงแล้ว",
+      "running": "กำลังทำงาน",
+      "connected": "เชื่อมต่อแล้ว",
+      "lastConnect": "การเชื่อมต่อครั้งล่าสุด",
+      "lastMessage": "ข้อความล่าสุด",
+      "authAge": "ระยะเวลาตั้งแต่ยืนยันตัวตน",
+      "na": "ไม่เกี่ยวข้อง",
+      "yes": "ใช่",
+      "no": "ไม่",
+      "relink": "เชื่อมโยงอีกครั้ง",
+      "working": "กำลังดำเนินการ…",
+      "showQr": "แสดง QR",
+      "waitForScan": "รอการสแกน",
+      "logout": "ออกจากระบบ",
+      "refresh": "รีเฟรช"
+    },
+    "channels": {
+      "lastError": "ข้อผิดพลาดล่าสุด",
+      "setup": {
+        "whatsappQrAlt": "QR ของ WhatsApp"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "เชื่อมโยง WhatsApp Web และตรวจสอบสถานะการเชื่อมต่อ.",
+        "phoneNumber": "หมายเลขโทรศัพท์",
+        "logoutConfirmTitle": "ออกจากระบบบัญชี WhatsApp {accountId} หรือไม่?",
+        "logoutConfirmMessage": "การออกจากระบบบัญชี {accountId} จะหยุดตัวรับฟังของบัญชีและลบข้อมูลรับรองที่บันทึกไว้."
+      }
+    }
+  },
+  "vi": {
+    "common": {
+      "configured": "Đã cấu hình",
+      "linked": "Đã liên kết",
+      "running": "Đang chạy",
+      "connected": "Đã kết nối",
+      "lastConnect": "Lần kết nối gần nhất",
+      "lastMessage": "Tin nhắn gần nhất",
+      "authAge": "Thời gian kể từ khi xác thực",
+      "na": "không áp dụng",
+      "yes": "Có",
+      "no": "Không",
+      "relink": "Liên kết lại",
+      "working": "Đang xử lý…",
+      "showQr": "Hiện mã QR",
+      "waitForScan": "Chờ quét",
+      "logout": "Đăng xuất",
+      "refresh": "Làm mới"
+    },
+    "channels": {
+      "lastError": "Lỗi gần nhất",
+      "setup": {
+        "whatsappQrAlt": "Mã QR WhatsApp"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "Liên kết WhatsApp Web và theo dõi tình trạng kết nối.",
+        "phoneNumber": "Số điện thoại",
+        "logoutConfirmTitle": "Đăng xuất khỏi tài khoản WhatsApp {accountId}?",
+        "logoutConfirmMessage": "Đăng xuất khỏi tài khoản {accountId} sẽ dừng trình lắng nghe của tài khoản và xóa thông tin xác thực đã lưu."
+      }
+    }
+  },
+  "nl": {
+    "common": {
+      "configured": "Geconfigureerd",
+      "linked": "Gekoppeld",
+      "running": "Actief",
+      "connected": "Verbonden",
+      "lastConnect": "Laatste verbinding",
+      "lastMessage": "Laatste bericht",
+      "authAge": "Tijd sinds authenticatie",
+      "na": "n.v.t.",
+      "yes": "Ja",
+      "no": "Nee",
+      "relink": "Opnieuw koppelen",
+      "working": "Bezig…",
+      "showQr": "QR tonen",
+      "waitForScan": "Wachten op scan",
+      "logout": "Uitloggen",
+      "refresh": "Vernieuwen"
+    },
+    "channels": {
+      "lastError": "Laatste fout",
+      "setup": {
+        "whatsappQrAlt": "WhatsApp QR"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "Koppel WhatsApp Web en bewaak de verbindingsstatus.",
+        "phoneNumber": "Telefoonnummer",
+        "logoutConfirmTitle": "Uitloggen bij WhatsApp-account {accountId}?",
+        "logoutConfirmMessage": "Als je uitlogt bij account {accountId}, wordt de listener gestopt en worden de opgeslagen inloggegevens verwijderd."
+      }
+    }
+  },
+  "fa": {
+    "common": {
+      "configured": "پیکربندی‌شده",
+      "linked": "متصل",
+      "running": "در حال اجرا",
+      "connected": "متصل",
+      "lastConnect": "آخرین اتصال",
+      "lastMessage": "آخرین پیام",
+      "authAge": "زمان سپری‌شده از احراز هویت",
+      "na": "نامربوط",
+      "yes": "بله",
+      "no": "خیر",
+      "relink": "پیوند مجدد",
+      "working": "در حال انجام…",
+      "showQr": "نمایش QR",
+      "waitForScan": "منتظر اسکن بمانید",
+      "logout": "خروج",
+      "refresh": "تازه‌سازی"
+    },
+    "channels": {
+      "lastError": "آخرین خطا",
+      "setup": {
+        "whatsappQrAlt": "کد QR برای WhatsApp"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "WhatsApp Web را متصل کنید و سلامت اتصال را زیر نظر بگیرید.",
+        "phoneNumber": "شماره تلفن",
+        "logoutConfirmTitle": "از حساب WhatsApp با شناسه {accountId} خارج می‌شوید?",
+        "logoutConfirmMessage": "خروج از حساب {accountId} شنونده آن را متوقف می‌کند و اطلاعات احراز هویت ذخیره‌شده آن را حذف می‌کند."
+      }
+    }
+  },
+  "ru": {
+    "common": {
+      "configured": "Настроено",
+      "linked": "Связано",
+      "running": "Работает",
+      "connected": "Подключено",
+      "lastConnect": "Последнее подключение",
+      "lastMessage": "Последнее сообщение",
+      "authAge": "Время с момента аутентификации",
+      "na": "н/д",
+      "yes": "Да",
+      "no": "Нет",
+      "relink": "Привязать повторно",
+      "working": "Обработка…",
+      "showQr": "Показать QR",
+      "waitForScan": "Дождаться сканирования",
+      "logout": "Выйти",
+      "refresh": "Обновить"
+    },
+    "channels": {
+      "lastError": "Последняя ошибка",
+      "setup": {
+        "whatsappQrAlt": "QR-код WhatsApp"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "Подключите WhatsApp Web и отслеживайте состояние соединения.",
+        "phoneNumber": "Номер телефона",
+        "logoutConfirmTitle": "Выйти из аккаунта WhatsApp {accountId}?",
+        "logoutConfirmMessage": "Выход из аккаунта {accountId} останавливает прослушивание входящих сообщений и удаляет сохранённые учётные данные этого аккаунта."
+      }
+    }
+  },
+  "sv": {
+    "common": {
+      "configured": "Konfigurerad",
+      "linked": "Länkad",
+      "running": "Körs",
+      "connected": "Ansluten",
+      "lastConnect": "Senaste anslutning",
+      "lastMessage": "Senaste meddelande",
+      "authAge": "Tid sedan autentisering",
+      "na": "Ej tillämpligt",
+      "yes": "Ja",
+      "no": "Nej",
+      "relink": "Länka igen",
+      "working": "Arbetar…",
+      "showQr": "Visa QR-kod",
+      "waitForScan": "Vänta på skanning",
+      "logout": "Logga ut",
+      "refresh": "Uppdatera"
+    },
+    "channels": {
+      "lastError": "Senaste fel",
+      "setup": {
+        "whatsappQrAlt": "QR-kod för WhatsApp"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "Länka WhatsApp Web och övervaka anslutningsstatus.",
+        "phoneNumber": "Telefonnummer",
+        "logoutConfirmTitle": "Logga ut från WhatsApp-kontot {accountId}?",
+        "logoutConfirmMessage": "Om du loggar ut från kontot {accountId} stoppas dess lyssnare och dess sparade inloggningsuppgifter raderas."
+      }
+    }
+  },
+  "ca": {
+    "common": {
+      "configured": "Configurat",
+      "linked": "Vinculat",
+      "running": "En execució",
+      "connected": "Connectat",
+      "lastConnect": "Última connexió",
+      "lastMessage": "Últim missatge",
+      "authAge": "Antiguitat de l'autenticació",
+      "na": "n/d",
+      "yes": "Sí",
+      "no": "No",
+      "relink": "Torna a vincular",
+      "working": "En procés…",
+      "showQr": "Mostra el QR",
+      "waitForScan": "Espera l'escaneig",
+      "logout": "Tanca la sessió",
+      "refresh": "Actualitza"
+    },
+    "channels": {
+      "lastError": "Últim error",
+      "setup": {
+        "whatsappQrAlt": "QR de WhatsApp"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "Vincula WhatsApp Web i supervisa l'estat de la connexió.",
+        "phoneNumber": "Número de telèfon",
+        "logoutConfirmTitle": "Voleu tancar la sessió del compte de WhatsApp {accountId}?",
+        "logoutConfirmMessage": "Tancar la sessió del compte {accountId} atura el seu procés d'escolta i elimina les seves credencials desades."
+      }
+    }
+  }
+}

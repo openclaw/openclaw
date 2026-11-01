@@ -22,7 +22,9 @@ import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { readPreparedGatewayModelCatalogOwnerSnapshot as readCatalog } from "../gateway/server-model-catalog.js";
 import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import { loadPreparedModelCatalogOwnerSnapshot as loadCatalog } from "./prepared-model-catalog.js";
@@ -38,6 +40,7 @@ import {
   registerPreparedModelRuntimePublicationListener as observePublication,
 } from "./prepared-model-runtime.js";
 import { getPreparedModelRuntimeStartupStatus } from "./prepared-model-runtime.startup-status.js";
+import { observeSettlement as watchSettlement } from "./promise-settlement.test-support.js";
 
 const fixture = usePreparedModelRuntimeHarness(
   { label: "hot-reload-dispatch" },
@@ -47,6 +50,7 @@ const { mocks } = fixture;
 type Reload = ReturnType<ReturnType<typeof createPluginReloadHandler>["applyHotReload"]>;
 type Dispatch = ReturnType<typeof loadDispatch>;
 type CatalogRead = ReturnType<typeof readCatalog>;
+type PluginReload = NonNullable<Parameters<typeof createGatewayReloadHandlers>[0]["reloadPlugins"]>;
 
 beforeEach(() => {
   mocks.configuredAgentIds = ["default"];
@@ -68,6 +72,21 @@ async function publish(cfg: OpenClawConfig) {
   });
 }
 
+async function publishMemoryConfig() {
+  const retained = config(true);
+  setRuntimeConfigSnapshot(retained, retained);
+  await publish(retained);
+  return { retained, committed: config(false) };
+}
+
+function prepareEffects({ prepareConfigEffects }: Parameters<PluginReload>[0]) {
+  return prepareConfigEffects({ pluginIds: new Set(["synthetic"]), channels: new Set() });
+}
+
+function commitConfig({ commitRuntime }: Parameters<PluginReload>[0], cfg: OpenClawConfig) {
+  return commitRuntime({ publish: () => setRuntimeConfigSnapshot(cfg, cfg) });
+}
+
 function pluginPlan(operationId: string) {
   return {
     ...buildGatewayReloadPlan([]),
@@ -75,15 +94,6 @@ function pluginPlan(operationId: string) {
     reloadPlugins: true,
     pluginLifecycle: { operationId, pluginIds: ["synthetic"], reason: "reload" as const },
   };
-}
-
-function watchSettlement(promise: Promise<unknown>) {
-  let settled = false;
-  const mark = () => {
-    settled = true;
-  };
-  void promise.then(mark, mark);
-  return () => settled;
 }
 
 function createPluginReloadHandler(
@@ -96,7 +106,6 @@ function createPluginReloadHandler(
   let reloadState: ReturnType<ReloadParams["getState"]> = {
     hooksConfig: null,
     hookClientIpConfig: {},
-    heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
     cronState: {
       cron: { start: vi.fn(), stop: vi.fn() } as never,
       storePath: fixture.state.path("cron.sqlite"),
@@ -104,7 +113,6 @@ function createPluginReloadHandler(
       reconcileExitWatchers: vi.fn(async () => {}),
       reconcileStreamWatchers: vi.fn(async () => {}),
       stopStreamWatchers: vi.fn(async () => {}),
-      reconcileSystemJobs: vi.fn(async () => "converged" as const),
     },
   };
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -135,6 +143,85 @@ function createPluginReloadHandler(
 }
 
 describe("Gateway plugin reload run admission", () => {
+  it.each([
+    { provider: "synthetic-unrelated", fails: false },
+    { provider: "openai", fails: false },
+    { provider: "synthetic-unrelated", fails: true },
+  ])(
+    "keeps provider callables usable after auth reload $provider (fails=$fails)",
+    async ({ provider, fails }) => {
+      const registry = createEmptyPluginRegistry();
+      const record = createPluginRecord({ id: "openai" });
+      registry.plugins.push(record);
+      const instance = new PluginInstance(record.id, { record, registry });
+      const read = instance.wrap(() => "current provider facts");
+      mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+      const retained: OpenClawConfig = {};
+      const committed: OpenClawConfig = {
+        auth: { profiles: { [`${provider}:manual`]: { provider, mode: "api_key" } } },
+      };
+      mocks.authStorage.getAll.mockReturnValue({
+        [provider]: { type: "api_key", key: "synthetic-before" },
+      });
+      setRuntimeConfigSnapshot(retained, retained);
+      await refreshPreparedModelRuntimeSnapshots(retained, {
+        gatewayLifecycle: true,
+        catalogMode: "static",
+        allowGatewaySubagentBinding: true,
+      });
+      const previous = await loadDispatch({ agentId: "default" });
+      const previousCatalog = getSnapshot(ownerInput(retained));
+      expect(previousCatalog?.createStores().authStorage.getAll()[provider]).toEqual({
+        type: "api_key",
+        key: "synthetic-before",
+      });
+      mocks.authStorage.getAll.mockReturnValue({
+        [provider]: { type: "api_key", key: "synthetic-after" },
+      });
+      if (fails) {
+        mocks.resolveAmbientCredentials.mockRejectedValueOnce(
+          new Error("synthetic auth read failure"),
+        );
+      }
+      expect(read()).toBe("current provider facts");
+      const handler = createPluginReloadHandler(async () => {
+        throw new Error("Auth config must not replace Gateway plugins");
+      });
+      try {
+        const reload = handler.applyHotReload(
+          buildGatewayReloadPlan([`auth.profiles.${provider}:manual`]),
+          committed,
+          {
+            sourceConfig: committed,
+            isCurrent: () => true,
+            publish: async (commit) => {
+              setRuntimeConfigSnapshot(committed, committed);
+              await commit();
+            },
+          },
+        );
+        if (fails) {
+          await expect(reload).rejects.toThrow(
+            "could not schedule recovery for prepared model runtime reload",
+          );
+          expect(getSnapshot(ownerInput(committed))).toBeUndefined();
+        } else {
+          await reload;
+          const current = await loadDispatch({ agentId: "default" });
+          expect(current?.config).toBe(committed);
+          expect(current?.pluginGeneration).toBe(previous?.pluginGeneration);
+          expect(
+            getSnapshot(ownerInput(committed))?.createStores().authStorage.getAll()[provider],
+          ).toEqual({ type: "api_key", key: "synthetic-after" });
+        }
+        expect(previousCatalog?.isCurrent()).toBe(false);
+        expect(read()).toBe("current provider facts");
+      } finally {
+        handler.stopRestartRetries();
+      }
+    },
+  );
+
   it("cancels degraded startup acquisition before plugin drain and publishes only its replacement", async () => {
     mocks.configuredAgentIds = ["default", "held"];
     const heldWorkspace = fixture.state.path("held-workspace");
@@ -220,16 +307,13 @@ describe("Gateway plugin reload run admission", () => {
         });
       }
     });
-    const handler = createPluginReloadHandler(async ({ prepareConfigEffects, commitRuntime }) => {
-      const effects = prepareConfigEffects({
-        pluginIds: new Set(["synthetic"]),
-        channels: new Set(),
-      });
+    const handler = createPluginReloadHandler(async (context) => {
+      const effects = prepareEffects(context);
       events.push("plugin-drain");
       drainageStarted.resolve();
       await finishDrainage.promise;
       effects.retire();
-      await commitRuntime({ publish: () => setRuntimeConfigSnapshot(committed, committed) });
+      await commitConfig(context, committed);
       pluginCommitted.resolve();
       return {
         runtime: { operationId: "degraded-reload", generation: 1, pluginIds: ["synthetic"] },
@@ -294,10 +378,7 @@ describe("Gateway plugin reload run admission", () => {
   it.each(["rollback", "activation failure"] as const)(
     "preserves a run admitted during drainage and waiting requests through plugin %s",
     async (outcome) => {
-      const retained = config(true);
-      const committed = config(false);
-      setRuntimeConfigSnapshot(retained, retained);
-      await publish(retained);
+      const { retained, committed } = await publishMemoryConfig();
       const drainageStarted = createDeferred();
       const finishDrainage = createDeferred();
       const pluginFailure = new PluginRuntimeApplicationError(
@@ -312,11 +393,8 @@ describe("Gateway plugin reload run admission", () => {
           committed: outcome === "activation failure",
         },
       );
-      const handler = createPluginReloadHandler(async ({ prepareConfigEffects, commitRuntime }) => {
-        const effects = prepareConfigEffects({
-          pluginIds: new Set(["synthetic"]),
-          channels: new Set(),
-        });
+      const handler = createPluginReloadHandler(async (context) => {
+        const effects = prepareEffects(context);
         drainageStarted.resolve();
         await finishDrainage.promise;
         if (outcome === "rollback") {
@@ -324,7 +402,7 @@ describe("Gateway plugin reload run admission", () => {
           throw pluginFailure;
         }
         effects.retire();
-        await commitRuntime({ publish: () => setRuntimeConfigSnapshot(committed, committed) });
+        await commitConfig(context, committed);
         throw pluginFailure;
       });
       const plan = pluginPlan("synthetic-reload");
@@ -378,10 +456,7 @@ it.each([
   "config supersession",
   "replacement during refresh",
 ] as const)("keeps committed plugin recovery bound to its Gateway across %s", async (event) => {
-  const retained = config(true);
-  const committed = config(false);
-  setRuntimeConfigSnapshot(retained, retained);
-  await publish(retained);
+  const { committed } = await publishMemoryConfig();
   const plan = pluginPlan("lifecycle-recovery");
   const pluginLifecycle = plan.pluginLifecycle;
   const pluginFailure = new PluginRuntimeApplicationError("Plugin activation failed", {
@@ -409,12 +484,9 @@ it.each([
       return { entries: [] };
     });
   }
-  const handler = createPluginReloadHandler(async ({ prepareConfigEffects, commitRuntime }) => {
-    prepareConfigEffects({
-      pluginIds: new Set(pluginLifecycle.pluginIds),
-      channels: new Set(),
-    }).retire();
-    await commitRuntime({ publish: () => setRuntimeConfigSnapshot(committed, committed) });
+  const handler = createPluginReloadHandler(async (context) => {
+    prepareEffects(context).retire();
+    await commitConfig(context, committed);
     if (event === "refresh failure") {
       mocks.configuredAgentIdsError = refreshFailure;
     } else if (event === "shutdown") {
@@ -641,9 +713,7 @@ describe("retained config and committed model publication", () => {
 it.each(["success", "activation failure"] as const)(
   "delivers low-level channel replies after plugin reload %s with a retained monitor config",
   async (outcome) => {
-    const retained = config(true);
-    setRuntimeConfigSnapshot(retained, retained);
-    await publish(retained);
+    const { retained, committed } = await publishMemoryConfig();
     const deliver = vi.fn(async (_payload: ReplyPayload) => undefined);
     const dispatch = async (messageId: string) => {
       const dispatcher = createReplyDispatcher({ deliver });
@@ -676,7 +746,6 @@ it.each(["success", "activation failure"] as const)(
       await dispatcher.waitForIdle();
       expect(result.queuedFinal).toBe(true);
     };
-    const committed = config(false);
     const plan = pluginPlan("reply-reload");
     const pluginLifecycle = plan.pluginLifecycle;
     const activationFailure = new PluginRuntimeApplicationError("synthetic activation failed", {
@@ -685,12 +754,9 @@ it.each(["success", "activation failure"] as const)(
       phase: "activate",
       committed: true,
     });
-    const handler = createPluginReloadHandler(async ({ prepareConfigEffects, commitRuntime }) => {
-      prepareConfigEffects({
-        pluginIds: new Set(pluginLifecycle.pluginIds),
-        channels: new Set(),
-      }).retire();
-      await commitRuntime({ publish: () => setRuntimeConfigSnapshot(committed, committed) });
+    const handler = createPluginReloadHandler(async (context) => {
+      prepareEffects(context).retire();
+      await commitConfig(context, committed);
       if (outcome === "activation failure") {
         throw activationFailure;
       }

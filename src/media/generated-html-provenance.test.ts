@@ -9,7 +9,6 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { stageGatewayWorkspaceMedia } from "../infra/outbound/message-action-gateway-media.js";
 import * as brokerReply from "../infra/sqlite-worker-broker-reply.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
@@ -20,7 +19,9 @@ import * as stateRead from "../state/openclaw-state-db-readonly.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { resolveOutboundMediaMaxBytes } from "./configured-max-bytes.js";
 import { HostReadMediaTypeError } from "./local-media-access.js";
+import { resolveOutboundAttachmentFromUrl } from "./outbound-attachment.js";
 import { cleanOldMedia, pruneOutboundMedia, saveMediaBuffer } from "./store.js";
 import {
   loadWebMedia,
@@ -91,20 +92,17 @@ describe("generated HTML provenance worker boundary", () => {
     const source = path.join(workspace, "report.html");
     await fs.writeFile(source, html);
     const access = { localRoots: [workspace], readFile: (file: string) => fs.readFile(file) };
-    const result = await stageGatewayWorkspaceMedia({
-      cfg: {},
-      channel: "discord",
-      payload: { text: "Report", mediaUrl: source },
-      mediaUrls: [source],
-      mediaAccess: access,
-      workspaceMediaAccess: access,
-    });
-    expect(result.mediaUrl).toBeDefined();
-    expect(result.mediaUrl).not.toBe(source);
+    const result = await resolveOutboundAttachmentFromUrl(
+      source,
+      resolveOutboundMediaMaxBytes({ cfg: {}, channel: "discord" }),
+      { mediaAccess: access },
+    );
+    expect(result.path).toBeDefined();
+    expect(result.path).not.toBe(source);
     if (operation === "prune") {
-      await fs.rm(result.mediaUrl!);
+      await fs.rm(result.path);
     }
-    return result.mediaUrl!;
+    return result.path;
   }
 
   const writeMarker = (operation: "upsert" | "prune", staged: string) =>

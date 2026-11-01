@@ -10,13 +10,10 @@ import {
   parseForkedCheckpoint,
 } from "./crabbox-worker-warm-image-checkpoint.js";
 import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.js";
+import type { WarmAllocationRecord, WarmStartStatus } from "./crabbox-worker-warm-image-records.js";
 import {
-  assertCrabboxWarmImageMigrationReady,
   isCrabboxCaptureRefusalRetained,
   withCrabboxWarmImageGeneration,
-  type CrabboxState,
-  type WarmAllocationRecord,
-  type WarmStartStatus,
   type openCrabboxWarmImageStore,
 } from "./crabbox-worker-warm-image-store.js";
 
@@ -45,7 +42,7 @@ type Store = ReturnType<typeof openCrabboxWarmImageStore>;
 type AllocationOwner = NonNullable<Awaited<ReturnType<Store["lookupLease"]>>>;
 
 export function createCrabboxWarmImageAllocation({
-  state,
+  assertMigrationReady,
   lookupLease,
   selectAllocation,
   openStore,
@@ -53,7 +50,7 @@ export function createCrabboxWarmImageAllocation({
   policy,
   assertCurrent,
 }: {
-  state: CrabboxState;
+  assertMigrationReady: () => Promise<void>;
   lookupLease: Store["lookupLease"];
   selectAllocation: (
     context: AllocationContext,
@@ -94,7 +91,7 @@ export function createCrabboxWarmImageAllocation({
       }
     }
     if (context.profile.warmImage) {
-      await assertCrabboxWarmImageMigrationReady(state);
+      await assertMigrationReady();
       const owner = await selectAllocation(context, context.profile);
       const record = await openStore().lookup(owner.key);
       startStatus =

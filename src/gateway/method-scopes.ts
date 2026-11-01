@@ -22,6 +22,7 @@ import { isForbiddenBrowserProxyMutation } from "./node-browser-proxy-policy.js"
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
+  CRON_SCOPE,
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
@@ -52,6 +53,25 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   PAIRING_SCOPE,
   TALK_SECRETS_SCOPE,
 ];
+
+/** These handlers enforce the authenticated runtime's account and conversation boundary. */
+export function resolveAgentRuntimeCronScope(method: string): typeof CRON_SCOPE | undefined {
+  switch (method) {
+    case "cron.add":
+    case "cron.update":
+    case "cron.remove":
+    case "cron.run":
+    case "cron.get":
+    case "cron.list":
+    case "cron.runs":
+    case "cron.history":
+    case "cron.scratch.get":
+    case "cron.scratch.set":
+      return CRON_SCOPE;
+    default:
+      return undefined;
+  }
+}
 
 function resolveScopedMethod(method: string): OperatorScope | undefined {
   // Node/dynamic sentinels are not operator scopes.
@@ -128,7 +148,13 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   const record = asOptionalRecord(params);
   if (method === "sessions.github.action") {
     return [
-      record?.action === "refresh_base" || record?.action === "edit"
+      record?.action === "inspect_pr" ||
+      record?.action === "prepare_pr" ||
+      record?.action === "refresh_base" ||
+      record?.action === "edit" ||
+      record?.action === "request_review" ||
+      record?.action === "upload_evidence" ||
+      (record?.action === "ready" && record.publishingSessionKey === undefined)
         ? SESSION_WRITE_SCOPE
         : WRITE_SCOPE,
     ];

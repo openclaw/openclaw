@@ -213,6 +213,35 @@ The anchors from the single-page version still resolve here.
 }
 ```
 
+## Generation overlap
+
+`generationOverlap: true` opts a native plugin into replacement while previously
+admitted turns finish on its old generation. Omitted or `false` preserves serialized
+replacement. Other value types are rejected. Both the predecessor and successor
+must opt in; the Gateway also checks their registered resource surfaces.
+If both `generationOverlap` and `reload.turnHandover` are declared, overlap takes
+precedence: admitted turns keep their old generation, and any serialized
+replacement waits for them to finish.
+
+Declare this only when registration, service startup, runtime state, and cleanup
+are independent for each generation. A successor must not overwrite a shared
+module singleton, close its predecessor's resources, or take an exclusive
+listener, port, or subscription that the predecessor still needs. If successor
+preparation fails, cleaning up that successor must leave the predecessor usable.
+Shared persistent data must remain compatible across both generations, and its
+writer coordination must span separately loaded module copies. Timers and
+watchers belong to their service or instance cleanup owner, which must stop and
+join them during retirement.
+An opted-in service must meet the same generation ownership contract. Channel
+replacement remains serialized, as do other exclusive resource surfaces.
+
+For eligible replacements, new work selects the successor once it is published.
+Already admitted turns retain their original tools, hooks, and end hooks until
+they finish. The predecessor's services and registration cleanup retire after
+its last admitted holder releases. The declaration does not bypass current
+credentials, approvals, or external-effect authorization. See
+[Plugin lifecycle and cleanup](/plugins/sdk-runtime#plugin-lifecycle-and-cleanup).
+
 ## Top-level field reference
 
 | Field                                | Required | Type                         | What it means                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -220,6 +249,7 @@ The anchors from the single-page version still resolve here.
 | `id`                                 | Yes      | `string`                     | Primary plugin id. This is the id used in `plugins.entries.<id>`. Exception: a package whose `package.json` declares multiple plugin entries registers each entry as `<id>/<entry-basename>` (for example `pack/one`), and that entry-scoped id is the `plugins.entries` key for that entry. Entry basenames must be unique within the package; colliding basenames are rejected at discovery. |
 | `configSchema`                       | Yes      | `object`                     | Inline JSON Schema for this plugin's config.                                                                                                                                                                                                                                                                                                                                                   |
 | `requiresPlugins`                    | No       | `string[]`                   | Plugin ids that must also be installed for this plugin to have an effect. Discovery keeps the plugin loadable but warns when any required plugin is missing.                                                                                                                                                                                                                                   |
+| `generationOverlap`                  | No       | `boolean`                    | Explicit author opt-in for independently owned plugin generations to overlap during replacement. Defaults to serialized replacement; see [Generation overlap](#generation-overlap).                                                                                                                                                                                                            |
 | `enabledByDefault`                   | No       | `true`                       | Marks a bundled plugin as enabled by default. Omit it, or set any non-`true` value, to leave the plugin disabled by default.                                                                                                                                                                                                                                                                   |
 | `enabledByDefaultOnPlatforms`        | No       | `string[]`                   | Marks a bundled plugin as enabled by default only on the listed Node.js platforms, for example `["darwin"]`. Explicit config still wins.                                                                                                                                                                                                                                                       |
 | `legacyPluginIds`                    | No       | `string[]`                   | Legacy ids that normalize to this primary plugin id.                                                                                                                                                                                                                                                                                                                                           |
@@ -235,6 +265,7 @@ The anchors from the single-page version still resolve here.
 | `modelIdNormalization`               | No       | `object`                     | Provider-owned model-id alias/prefix cleanup that must run before provider runtime loads.                                                                                                                                                                                                                                                                                                      |
 | `providerEndpoints`                  | No       | `object[]`                   | Manifest-owned endpoint host/baseUrl metadata for provider routes that core must classify before provider runtime loads.                                                                                                                                                                                                                                                                       |
 | `managesOwnAvailability`             | No       | `boolean`                    | Declares that this plugin's providers manage their own rate-limit and overload recovery. Only transient capacity cooldowns are bypassed; authentication, billing, and subscription blocks remain enforced. Read from metadata before plugin runtime loads.                                                                                                                                     |
+| `reload`                             | No       | `object`                     | `{ "turnHandover": true }` lets a reload hand running agent turns to the new plugin version at their next model step instead of waiting for them to finish. Declare it only when the plugin keeps no in-memory state a later call in the same turn depends on. See [Reload-safe plugins](/plugins/sdk-runtime#reload-safe-plugins).                                                            |
 | `providerRequest`                    | No       | `object`                     | Cheap provider-family and request-compatibility metadata used by generic request policy before provider runtime loads.                                                                                                                                                                                                                                                                         |
 | `secretProviderIntegrations`         | No       | `Record<string, object>`     | Declarative [SecretRef](/gateway/secrets) exec provider presets that setup or install surfaces can offer without hardcoding provider-specific integrations in core.                                                                                                                                                                                                                            |
 | `cliBackends`                        | No       | `string[]`                   | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                                                                                                                                                                                                                                                                                    |
@@ -267,6 +298,7 @@ The anchors from the single-page version still resolve here.
 | `channelConfigs`                     | No       | `Record<string, object>`     | Manifest-owned channel config metadata merged into discovery and validation surfaces before runtime loads.                                                                                                                                                                                                                                                                                     |
 | `channelAccountKeyPolicies`          | No       | `Record<string, object>`     | Stored account-key selection rules for declared channels. See [account-key policies](/plugins/manifest/surfaces#channelaccountkeypolicies-reference).                                                                                                                                                                                                                                          |
 | `skills`                             | No       | `string[]`                   | Skill directories to load, relative to the plugin root.                                                                                                                                                                                                                                                                                                                                        |
+| `agentSkillsDir`                     | No       | `string`                     | One folder name for learned skills that each agent keeps under its own state folder. Skill loading reads it while the plugin is enabled, ranked between bundled and managed skills, without loading the plugin.                                                                                                                                                                                |
 | `name`                               | No       | `string`                     | Human-readable plugin name.                                                                                                                                                                                                                                                                                                                                                                    |
 | `description`                        | No       | `string`                     | Short summary shown in plugin surfaces.                                                                                                                                                                                                                                                                                                                                                        |
 | `catalog`                            | No       | `object`                     | Optional presentation hints for plugin catalog surfaces. This metadata does not install, enable, or grant trust to a plugin.                                                                                                                                                                                                                                                                   |
@@ -325,7 +357,7 @@ The active categories below are listed in browse order:
 | `computer-use`        | Interactive desktop and browser navigation, clicking, typing, and screenshots. Hosting execution environments belongs in Infrastructure; web search and crawling belong in Web.                                                             |
 | `media`               | Creating, transforming, or understanding images, video, music, and other media. Spoken interaction and transcription belong in Voice.                                                                                                       |
 | `security`            | Protecting access and enforcing trust through authentication, authorization, credential controls, security auditing, or policy. Authentication incidental to another purpose does not belong here.                                          |
-| `integrations`        | General connectors, API bridges, and service integration platforms without a more specific user purpose. A connector to a particular workflow belongs in that workflow's category; exposing tools or MCP is not enough.                     |
+| `integrations`        | General-purpose integrations, API bridges, and service integration platforms without a more specific user purpose. An integration for a particular workflow belongs in that workflow's category; exposing tools or MCP is not enough.       |
 | `developer-tools`     | Writing, reviewing, testing, and debugging software, development environments, and coding workflows. Plugins whose main purpose is providing the agent execution engine belong in Agent runtimes.                                           |
 | `infrastructure`      | Deploying, hosting, monitoring, and operating systems, networks, services, and execution environments. Engines that run the agent loop belong in Agent runtimes; coordinating agents belongs in Agent orchestration.                        |
 | `documents-files`     | Reading, creating, extracting, transferring, and managing documents and files. Software code review belongs in Developer tools; task and project management belongs in Productivity.                                                        |
@@ -435,6 +467,8 @@ normal allocation retains its authentication and provisioning checks.
 
 - Settings validation matches manifest IDs case-insensitively. Errors and schema defaults use the authored settings entry rather than creating a second entry with different casing.
 - Required-field errors identify every missing field after schema defaults are applied. For dependencies on multiple fields, the error reports the dependency condition without claiming that fields already present are missing.
+- Cached schemas validate every config value independently, including `unevaluatedProperties` and `unevaluatedItems` constraints. Node/Bun and JIT standalone hosts compile dynamic schemas; AOT standalone hosts use cached schema evaluation without generating JavaScript.
+- Config format checks are local to the manifest schema: `uri` requires an absolute URL, standard descriptive formats such as `email` remain annotations, and custom registered formats are captured when the schema is prepared. They do not change format validation in other plugins or tools.
 - Unknown `channels.*` keys are **errors**, unless the channel id is declared by a plugin manifest. If the same id also appears in `plugins.allow`, `plugins.entries`, or `plugins.installs` (a plugin that is referenced but not currently discoverable), OpenClaw downgrades this to a **warning** instead.
 - `plugins.entries.<id>`, `plugins.allow`, and `plugins.deny` referencing unknown plugin ids are **warnings** ("stale config entry ignored"), not errors, so upgrades and removed/renamed plugins do not block gateway startup. An exact `{ enabled: false }` plugin entry is an intentional uninstall marker, so validation and Doctor keep it without a stale-config warning.
 - `plugins.slots.memory` referencing an unknown plugin id is an **error**, except for the known `memory-lancedb` official external plugin, which warns instead.
@@ -444,6 +478,13 @@ normal allocation retains its authentication and provisioning checks.
 See [Configuration reference](/gateway/configuration-reference#plugins) for the full `plugins.*` schema.
 
 ## Notes
+
+- `contextEngineIds` optionally declares a nonempty list of registered engine IDs
+  for a `kind: "context-engine"` plugin. IDs are case-sensitive, nonblank, and
+  cannot be `legacy` or `none`. This metadata connects the engine selected in
+  `plugins.slots.contextEngine` to its plugin before runtime loading. A single
+  engine can be selected automatically during installation; multiple engines
+  require an explicit choice. See [Plugin and engine IDs](/concepts/context-engine#plugin-and-engine-ids).
 
 - The manifest is **required for native OpenClaw plugins**, including local filesystem loads. Runtime still loads the plugin module separately; the manifest is only for discovery + validation.
 - Native manifests are parsed with JSON5, so comments, trailing commas, and unquoted keys are accepted as long as the final value is still an object.

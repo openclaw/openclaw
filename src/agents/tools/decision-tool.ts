@@ -1,18 +1,18 @@
 import { getRuntimeConfig } from "../../config/config.js";
 import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { listAvailableManifestContractPlugins } from "../../plugins/manifest-contract-eligibility.js";
+import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import { resolveDecisionModelSetting } from "../decision-model-setting.js";
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import type { OpenClawToolsOptions } from "../openclaw-tools.types.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   capabilityGuidance,
-  DecisionEvaluateInput,
-  DecisionEvaluateOutput,
   decisionToolResult,
   parseDecisionEvaluateInput,
   rubricVersion,
 } from "./decision-tool-contract.js";
+import { DecisionEvaluateInput, DecisionEvaluateOutput } from "./decision-tool-schema.js";
 
 /** Bind a conditional core tool to its trusted agent; provider health never changes eligibility. */
 export function createDecisionTool(
@@ -71,20 +71,30 @@ export function createDecisionTool(
         return decisionToolResult({ status: "unavailable", reason: "unsupported-input" });
       }
       // Load execution only on invocation; the runtime rereads selection and checks live authority.
-      const { evaluateDecisionV2 } = await import("../../decisions/runtime.js");
+      const [{ evaluateDecisionV2Operation }, { completeDecisionEvaluation }] = await Promise.all([
+        import("../../decisions/runtime.js"),
+        import("../../decisions/completion.js"),
+      ]);
       operationSignal.throwIfAborted();
       const currentConfig = getRuntimeConfig();
       const currentSelection = resolveDecisionModelSetting(currentConfig, agentId);
       const currentCapabilities = resolveCapabilities(currentSelection);
-      const outcome = await evaluateDecisionV2(batch, {
-        agentId,
-        purpose: "decision_evaluate",
-        rubricVersion: rubricVersion(batch),
-        timeoutMs: 30_000,
-        signal: operationSignal,
-      });
+      const evaluation = await evaluateDecisionV2Operation(
+        batch,
+        {
+          agentId,
+          purpose: "decision_evaluate",
+          rubricVersion: rubricVersion(batch),
+          timeoutMs: 30_000,
+          signal: operationSignal,
+        },
+        getPluginRegistryForContext(),
+        currentConfig,
+      );
       operationSignal.throwIfAborted();
-      return decisionToolResult(outcome, currentCapabilities);
+      const result = decisionToolResult(evaluation.outcome, currentCapabilities);
+      completeDecisionEvaluation(evaluation);
+      return result;
     },
   };
 }

@@ -295,10 +295,12 @@ extension GatewayIngressControllerTests {
                     ingressAuthorization: authorization)
             }
             model.applyGatewayConnectConfig(config(authorization))
-            try await waitForIngress {
-                model.gatewayConnected && ShareGatewayRelaySettings.loadConfig()?.requiresForegroundSignIn == true
+            // The connection callback saves Share metadata in the same MainActor turn.
+            try await TestWait.observed("managed native gateway connection") {
+                model.gatewayConnected
             }
             let managed = try #require(ShareGatewayRelaySettings.loadConfigDiscardingUnscopedDeviceAuth())
+            try #require(managed.requiresForegroundSignIn == true)
             #expect(managed.gatewayStableID == fixture.stableID)
             #expect(managed.token == nil)
             #expect(managed.password == nil)
@@ -330,10 +332,11 @@ extension GatewayIngressControllerTests {
             #expect(ordinary == nil)
             let before = server.requests.count
             model.applyGatewayConnectConfig(config(ordinary))
-            try await waitForIngress {
-                model.gatewayConnected && ShareGatewayRelaySettings.loadConfig()?.requiresForegroundSignIn == false
+            try await TestWait.observed("ordinary native gateway reconnection") {
+                model.gatewayConnected
             }
             let restored = try #require(ShareGatewayRelaySettings.loadConfigDiscardingUnscopedDeviceAuth())
+            try #require(restored.requiresForegroundSignIn == false)
             #expect(restored.gatewayStableID == fixture.stableID)
             #expect(restored.gatewayURLString == server.url().absoluteString)
             #expect(restored.token == "share-pairing-token")

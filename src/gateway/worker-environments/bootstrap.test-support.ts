@@ -1,17 +1,7 @@
 import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerBootstrapCommandRunner } from "./bootstrap-command.js";
 
-export function result(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
+export { createCommandResult as result } from "../../test-utils/npm-spec-install-test-helpers.js";
 
 export function fakeRunner(
   responses: SpawnResult[],

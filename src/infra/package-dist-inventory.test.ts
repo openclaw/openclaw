@@ -3,9 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
 import {
   isLegacyPluginDependencyInstallStagePath as isInstallStage,
-  LOCAL_BUILD_METADATA_DIST_PATHS,
   writePackageDistInventory,
   writePackageDistInventoryForPublish,
 } from "../../scripts/lib/package-dist-inventory.ts";
@@ -24,8 +24,9 @@ beforeEach(() => {
   packageRoot = dirs.make("openclaw-dist-inventory-");
 });
 afterEach(() => __setFsSafeTestHooksForTest());
-async function writeFiles(paths: readonly string[], content = "export {};\n") {
-  for (const relativePath of paths) {
+const words = (value: string) => value.trim().split(/\s+/u);
+async function writeFiles(paths: readonly string[] | string, content = "export {};\n") {
+  for (const relativePath of typeof paths === "string" ? words(paths) : paths) {
     const filePath = at(relativePath);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, content, "utf8");
@@ -42,6 +43,8 @@ const content = (files?: string[]) => collectPackageDistContentInventory(package
 const expectInventory = (result: Promise<string[]>, ...files: string[]) =>
   expect(result).resolves.toEqual([...files, "dist/postinstall-content-inventory.json"]);
 const currentInventory = ["dist/current.js", "dist/postinstall-content-inventory.json"] as const;
+const mode = async (file: string, expected: number) =>
+  process.platform === "win32" ? (await fs.stat(at(file))).mode & 0o777 : expected;
 
 it("retains binary digests, byte counts, modes, and allowed package hardlinks", async () => {
   const distDir = at("dist");
@@ -57,7 +60,7 @@ it("retains binary digests, byte counts, modes, and allowed package hardlinks", 
   const binaryEntry = {
     sha256: createHash("sha256").update(binary).digest("hex"),
     size: binary.byteLength,
-    mode: process.platform === "win32" ? (await fs.stat(binaryPath)).mode & 0o777 : 0o751,
+    mode: await mode("dist/binary.js", 0o751),
   };
   await expect(content()).resolves.toEqual([
     { path: "dist/binary.js", ...binaryEntry },
@@ -65,10 +68,7 @@ it("retains binary digests, byte counts, modes, and allowed package hardlinks", 
       path: "dist/empty.js",
       sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       size: 0,
-      mode:
-        process.platform === "win32"
-          ? (await fs.stat(path.join(distDir, "empty.js"))).mode & 0o777
-          : 0o600,
+      mode: await mode("dist/empty.js", 0o600),
     },
     { path: "dist/linked.js", ...binaryEntry },
   ]);
@@ -143,29 +143,20 @@ it("tracks missing and stale files while keeping lifecycle state outside the inv
   await fs.rm(currentFile);
   await writeFiles(["dist/stale.js"]);
 
-  await expect(collect()).resolves.toEqual([
-    "dist/postinstall-content-inventory.json",
-    "dist/stale.js",
-  ]);
+  await expect(collect()).resolves.toEqual(
+    words("dist/postinstall-content-inventory.json dist/stale.js"),
+  );
 });
 
 it("omits build and dependency artifacts while retaining packaged runtime files", async () => {
-  await writeFiles([
-    "dist/extensions/qa-channel/runtime-api.js",
-    "dist/extensions/qa-lab/runtime-api.js",
-    "dist/extensions/qa-channel/cli.js",
-    "dist/extensions/qa-lab/cli.js",
-    "dist/plugin-sdk/qa-lab.js",
-    "dist/plugin-sdk/qa-channel.js",
-    "dist/plugin-sdk/qa-channel-protocol.js",
-    "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
-    "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts",
-    "dist/plugin-sdk/provider-entry.d.ts",
-    "dist/qa-runtime-B9LDtssJ.js",
-    "dist/extensions/demo/runtime-api.js",
-    "dist/extensions/node_modules/openclaw/package.json",
-    "dist/extensions/demo/node_modules/left-pad/package.json",
-  ]);
+  await writeFiles(`
+    dist/extensions/qa-channel/runtime-api.js dist/extensions/qa-lab/runtime-api.js
+    dist/extensions/qa-channel/cli.js dist/extensions/qa-lab/cli.js
+    dist/plugin-sdk/qa-lab.js dist/plugin-sdk/qa-channel.js dist/plugin-sdk/qa-channel-protocol.js
+    dist/plugin-sdk/extensions/qa-lab/cli.d.ts dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts
+    dist/plugin-sdk/provider-entry.d.ts dist/qa-runtime-B9LDtssJ.js dist/extensions/demo/runtime-api.js
+    dist/extensions/node_modules/openclaw/package.json dist/extensions/demo/node_modules/left-pad/package.json
+  `);
   await writeFiles(LOCAL_BUILD_METADATA_DIST_PATHS, "{}\n");
   await writeFiles(["dist/feature.runtime.js.map"], "{}");
   await expect(inventory()).resolves.toStrictEqual([
@@ -186,25 +177,13 @@ it.each([
     const omittedAppBundle = at(app);
     await fs.mkdir(omittedAppBundle, { recursive: true });
     await writeJson("package.json", {
-      files: [
-        "dist/",
-        exclusion,
-        "!dist/plugin-sdk/plugin-test-runtime.js",
-        "!dist/plugin-sdk/plugin-test-runtime.d.ts",
-        "!dist/plugin-sdk/src/test-utils/**",
-        "!dist/plugin-sdk/qa-channel.*",
-        "!dist/qa-runtime-*.js",
-        "!dist/**/*.map",
-      ],
+      files: words(`dist/ ${exclusion}
+        !dist/plugin-sdk/plugin-test-runtime.js !dist/plugin-sdk/plugin-test-runtime.d.ts
+        !dist/plugin-sdk/src/test-utils/** !dist/plugin-sdk/qa-channel.* !dist/qa-runtime-*.js !dist/**/*.map`),
     });
-    await writeFiles([
-      "dist/plugin-sdk/runtime.js",
-      "dist/plugin-sdk/plugin-test-runtime.js",
-      "dist/plugin-sdk/plugin-test-runtime.d.ts",
-      "dist/plugin-sdk/src/test-utils/helpers.d.ts",
-      "dist/plugin-sdk/qa-channel.js",
-      "dist/qa-runtime-AbC123.js",
-    ]);
+    await writeFiles(`dist/plugin-sdk/runtime.js dist/plugin-sdk/plugin-test-runtime.js
+      dist/plugin-sdk/plugin-test-runtime.d.ts dist/plugin-sdk/src/test-utils/helpers.d.ts
+      dist/plugin-sdk/qa-channel.js dist/qa-runtime-AbC123.js`);
     await writeFiles(["dist/runtime.js.map", "dist/plugin-sdk/runtime.js.map"], "{}");
     await fs.symlink(packageRoot, path.join(omittedAppBundle, "Autoupdate"));
 
@@ -215,11 +194,8 @@ it.each([
 it("omits interrupted Control UI build siblings through the root package files list", async () => {
   const { files } = JSON.parse(await fs.readFile(path.resolve("package.json"), "utf8"));
   await writeJson("package.json", { files });
-  await writeFiles([
-    "dist/control-ui/index.html",
-    "dist/control-ui.build-123-AbCdEf/assets/index.js",
-    "dist/control-ui.build-123-AbCdEf.retired/index.html",
-  ]);
+  await writeFiles(`dist/control-ui/index.html dist/control-ui.build-123-AbCdEf/assets/index.js
+    dist/control-ui.build-123-AbCdEf.retired/index.html`);
 
   await expectInventory(inventory(), "dist/control-ui/index.html");
 });
@@ -246,13 +222,12 @@ it.each([
 });
 
 it("matches install-stage paths case-insensitively across path segments", () => {
-  const paths = [
-    "dist/extensions/brave/.openclaw-install-stage/node_modules/typebox/package.json",
-    "dist/Extensions/browser/.OPENCLAW-INSTALL-STAGE-AbC123/node_modules/playwright-core/package.json",
-    "Dist/Extensions/browser/.OpenClaw-Install-Stage/package.json",
-    "dist/extensions/browser/.openclaw-runtime-deps-copy-AbC123/package.json",
-    "dist/extensions/.openclaw-install-stage",
-  ];
+  const paths = words(`
+    dist/extensions/brave/.openclaw-install-stage/node_modules/typebox/package.json
+    dist/Extensions/browser/.OPENCLAW-INSTALL-STAGE-AbC123/node_modules/playwright-core/package.json
+    Dist/Extensions/browser/.OpenClaw-Install-Stage/package.json
+    dist/extensions/browser/.openclaw-runtime-deps-copy-AbC123/package.json dist/extensions/.openclaw-install-stage
+  `);
   expect(paths.map(isInstallStage)).toEqual([true, true, true, false, false]);
 });
 

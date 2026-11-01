@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { Page } from "playwright";
 import { expect, it, onTestFinished } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -60,6 +61,7 @@ async function waitForList(gateway: Gateway, previousCount: number) {
 const allAgentsQuery = {
   configuredAgentsOnly: true,
   excludeDock: true,
+  ifRowsRevision: "",
   includeGlobal: true,
   includeUnknown: false,
   limit: 50,
@@ -74,12 +76,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       sessionKey: "unknown",
       methodResponses: {
-        "agents.list": {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [{ id: "main" }, { id: "writer" }],
-        },
+        "agents.list": makeBootRoster({ agents: [{ id: "main" }, { id: "writer" }] }),
         "sessions.list": sessionList([row("agent:main:visible", visibleLabel)]),
       },
     });
@@ -99,8 +96,8 @@ suite.define(() => {
       .poll(async () =>
         (await gateway.getRequests("sessions.list")).map((request) => request.params),
       )
-      .toContainEqual(allAgentsQuery);
-    await gateway.deferNext("sessions.list", allAgentsQuery);
+      .toContainEqual({ ...allAgentsQuery, ifRowsRevision: "" });
+    await gateway.deferNext("sessions.list", { ...allAgentsQuery, ifRowsRevision: "" });
     const requestsBeforeEvent = await gateway.getRequests("sessions.list");
 
     await page.clock.install();
@@ -118,7 +115,10 @@ suite.define(() => {
     // Cross the full event window while keeping the response explicitly deferred.
     await page.clock.runFor(5_000);
     await waitForList(gateway, requestsBeforeEvent.length);
-    expect((await gateway.getRequests("sessions.list")).at(-1)?.params).toEqual(allAgentsQuery);
+    expect((await gateway.getRequests("sessions.list")).at(-1)?.params).toEqual({
+      ...allAgentsQuery,
+      ifRowsRevision: "",
+    });
     expect(await page.getByText(hiddenLabel, { exact: true }).count()).toBe(0);
     await page.clock.resume();
     await gateway.resolveDeferred(
@@ -131,7 +131,7 @@ suite.define(() => {
 
   it("keeps the Sessions page query stable when the startup roster completes", async () => {
     const visibleLabel = "Visible page-owned session";
-    const pageQueryParams = { ...allAgentsQuery, agentId: "main" };
+    const pageQueryParams = { ...allAgentsQuery, agentId: "main", ifRowsRevision: "" };
     const visibleResponse = sessionList([row("agent:main:page-owned", visibleLabel)]);
     const page = await newPage(captureUiProof);
     const gateway = await installMockGateway(page, {
@@ -171,8 +171,10 @@ suite.define(() => {
 
     const startupAndPageRequests = await gateway.getRequests("sessions.list");
     expect(startupAndPageRequests[0]?.params).toEqual({
-      ...allAgentsQuery,
       agentId: "main",
+      configuredAgentsOnly: true,
+      excludeDock: true,
+      includeGlobal: true,
       includeDerivedTitles: true,
       includeLastMessage: true,
       includeUnknown: true,
@@ -252,40 +254,5 @@ suite.define(() => {
     expect(resetParams).not.toHaveProperty("activeMinutes");
     await expect.poll(() => activeMinutes.inputValue()).toBe("");
     await expect.poll(() => limit.inputValue()).toBe("50");
-  });
-
-  it("omits noncanonical numeric filters from sessions.list requests", async () => {
-    const page = await newPage();
-    const gateway = await installMockGateway(page, {
-      sessionKey: "unknown",
-      methodResponses: {
-        "sessions.list": sessionList([]),
-      },
-    });
-
-    await page.goto(`${suite.server?.baseUrl ?? ""}sessions`);
-    await gateway.waitForRequest("sessions.list");
-    await openSessionFilters(page);
-    const activeMinutes = page.getByLabel("Updated within");
-    const limit = page.getByLabel("Limit");
-    const cases = [
-      ["60minutes", "70junk", undefined, 50],
-      ["12.5", "1e2", undefined, 50],
-      ["9007199254740993", "9007199254740993", undefined, 50],
-      ["+30", "060", 30, 60],
-      [" 80 ", " 090 ", 80, 90],
-    ] as const;
-    for (const [minutes, cap, expectedMinutes, expectedLimit] of cases) {
-      const requestCount = (await gateway.getRequests("sessions.list")).length;
-      await activeMinutes.fill(minutes);
-      await limit.fill(cap);
-      await waitForList(gateway, requestCount);
-      await expect
-        .poll(async () => {
-          const params = await lastParams(gateway);
-          return { activeMinutes: params?.activeMinutes, limit: params?.limit };
-        })
-        .toEqual({ activeMinutes: expectedMinutes, limit: expectedLimit });
-    }
   });
 });

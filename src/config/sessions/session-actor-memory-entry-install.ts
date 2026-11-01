@@ -15,7 +15,11 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export function installSessionActorMemoryEntry(
   state: SessionActorMemoryState,
   entry: SessionEntry,
-  options: { providerReviewMutation?: boolean; consumePendingReset?: boolean } = {},
+  options: {
+    providerReviewMutation?: boolean;
+    consumePendingReset?: boolean;
+    preserveVisibility?: boolean;
+  } = {},
 ): SessionEntry {
   const previous = state.hot.entry;
   let next: SessionEntry = normalizeSessionEntryTimestamp({ ...entry, incognito: true });
@@ -48,10 +52,14 @@ export function installSessionActorMemoryEntry(
   } else {
     delete next.profileInvolvement;
   }
-  // A copied transcript never inherits publication or visibility from its old identity.
+  // Publication never follows a copied transcript; only its lifecycle owner may select an audience.
   delete next.publicShare;
   if (previous && !sameWindow) {
-    delete next.visibility;
+    if (options.preserveVisibility && previous.visibility !== undefined) {
+      next.visibility = previous.visibility;
+    } else {
+      delete next.visibility;
+    }
   }
   selectSessionActorMemoryWindow(state, next);
   state.sourceCreatedAt ??= resolveSessionWindowCreatedAt(next, next.updatedAt);

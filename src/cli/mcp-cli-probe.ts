@@ -70,6 +70,8 @@ export async function probeMcpServers(
   config: OpenClawConfig,
   servers: Record<string, Record<string, unknown>>,
 ) {
+  const { recoverMcpDockerServers } = await import("../agents/mcp-docker-recovery.js");
+  await recoverMcpDockerServers(Object.values(servers));
   const runtime = await createSessionMcpRuntime({
     sessionId,
     workspaceDir: process.cwd(),
@@ -86,7 +88,7 @@ export async function probeMcpServers(
       // Disposal is best effort; joining exposes any unconfirmed closure.
       await runtime.joinCleanup?.();
     } catch (err) {
-      cleanupError = `${formatErrorMessage(err)}. Check the MCP server's session termination support, then rerun this command.`;
+      cleanupError = `${formatErrorMessage(err)}. Rerun this command; if local cleanup still fails, restart the process that owns the MCP connection.`;
     }
   }
   return { ...result, ...(cleanupError ? { cleanupError } : {}) };

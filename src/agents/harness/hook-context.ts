@@ -50,6 +50,7 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.accountId ? { accountId: params.accountId } : {}),
     ...(params.channel ? { channel: params.channel } : {}),
     ...(params.trigger ? { trigger: params.trigger } : {}),
+    ...(params.toolNames ? { toolNames: Object.freeze([...params.toolNames]) } : {}),
     ...(params.inputProvenance ? { inputProvenance: params.inputProvenance } : {}),
     ...(params.channelId ? { channelId: params.channelId } : {}),
     ...(params.contextTokenBudget ? { contextTokenBudget: params.contextTokenBudget } : {}),
@@ -57,11 +58,6 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.contextWindowReferenceTokens
       ? { contextWindowReferenceTokens: params.contextWindowReferenceTokens }
       : {}),
-    ...buildAgentHookContextIdentityFields({
-      trigger: params.trigger,
-      senderId: params.senderId,
-      chatId: params.chatId,
-      channelContext: params.channelContext,
-    }),
+    ...buildAgentHookContextIdentityFields(params),
   };
 }

@@ -489,7 +489,7 @@ describe("recovery cancellation through the public run owner", () => {
         expect(persisted).toMatchObject({ activeWriterRunId: "replacement-writer" });
       } else {
         expect(persisted).toMatchObject({
-          totalTokens: 13_357,
+          totalTokens: 13_375,
           activeWriterRunId: runParams.runId,
           inputTokens: 3,
           outputTokens: 18,

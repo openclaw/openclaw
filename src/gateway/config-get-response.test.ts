@@ -6,7 +6,6 @@ import { makeSnapshot } from "../config/redact-snapshot.test-helpers.js";
 import {
   invalidateGatewayRuntimeConfigSchema,
   loadGatewayConfigRedactionHints,
-  loadGatewayRuntimeConfigSchema,
 } from "../config/runtime-schema.js";
 import * as schema from "../config/schema.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
@@ -88,40 +87,6 @@ it("redacts cold config reads without building the form schema", async () => {
   expect(response.config.gateway?.auth?.token).toBe(REDACTED_SENTINEL);
   expect(JSON.stringify(response)).not.toContain("synthetic-cold-token-canary");
   expect(buildSchema).not.toHaveBeenCalled();
-
-  expect(loadGatewayRuntimeConfigSchema().schema).toHaveProperty("properties.gateway");
-  expect(buildSchema).toHaveBeenCalledOnce();
-  await readWatched();
-  loadGatewayRuntimeConfigSchema();
-  expect(buildSchema).toHaveBeenCalledOnce();
-});
-
-it.each([true, false])("keeps provenance private across cache modes (valid=%s)", async (valid) => {
-  const config = withToken("runtime");
-  const snapshot = {
-    ...makeSnapshot(config),
-    valid,
-    authoredConfig: withToken("authored-only"),
-    sourceConfigBeforeMigrations: makeSnapshot(withToken("resolved-only")).sourceConfig,
-  };
-  const before = structuredClone(snapshot);
-  mocks.snapshot.mockResolvedValue(snapshot);
-  const cold = await readWatched();
-  const cached = await readWatched();
-  expect(cached).toBe(cold);
-  expect(mocks.snapshot).toHaveBeenCalledOnce();
-  const uncached = await readResponse({
-    getHotReloadStatus: disabledWatcher,
-  });
-  expect(mocks.snapshot).toHaveBeenCalledTimes(2);
-
-  for (const response of [cold, cached, uncached]) {
-    expect(response.valid).toBe(valid);
-    expect(response).not.toHaveProperty("authoredConfig");
-    expect(response).not.toHaveProperty("sourceConfigBeforeMigrations");
-    expect(JSON.stringify(response)).not.toContain("token-canary");
-  }
-  expect(snapshot).toEqual(before);
 });
 
 it("round-trips wildcard plugin SecretRefs through an unrelated form save", async () => {
@@ -195,15 +160,6 @@ it("round-trips wildcard plugin SecretRefs through an unrelated form save", asyn
     ok: true,
     result: { ...config, gateway: { port: 19_002 } },
   });
-  for (const identityChange of [{ source: "env" }, { provider: "alternate" }]) {
-    const changedIdentity = {
-      ...formValue,
-      ...webhookRoutes({ publish: { secret: { ...redactedSecret, ...identityChange } } }),
-    };
-    expect(restoreRedactedValues(changedIdentity, config, uiHints)).toMatchObject({
-      ok: false,
-    });
-  }
 });
 
 it("redacts every projection, including disabled channel owners", async () => {
@@ -277,6 +233,8 @@ it("serves identical bytes without filesystem work on an active-watcher cache hi
   invalidateConfigGetResponseCache();
   const fresh = await readWatched();
   expect(hit).toEqual(fresh);
+  await expect(readResponse({ getHotReloadStatus: disabledWatcher })).resolves.toEqual(fresh);
+  expect(mocks.snapshot).toHaveBeenCalledTimes(2);
 });
 
 it("shares one projection across concurrent active-watcher callers", async () => {

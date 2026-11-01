@@ -1,66 +1,29 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Selectable } from "kysely";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../infra/sqlite-worker-operation-admission.js";
-import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { createStateDomainPublication } from "../state/state-domain-publication.js";
+import type { WorkspaceStateSnapshot } from "./workspace-state-types.js";
 
-type WorkspaceStateFact =
-  | { kind: "setup"; row: Selectable<DB["workspace_setup_state"]> }
-  | { kind: "alias"; row: Selectable<DB["workspace_path_aliases"]> }
-  | { kind: "hashes"; workspaceKey: string; hashes: readonly (readonly [string, string])[] };
-
-export function workspaceStateFactKey(kind: WorkspaceStateFact["kind"], key: string): string {
-  return JSON.stringify([kind, key]);
-}
-
-export const workspaceStatePublication = createStateDomainPublication<WorkspaceStateFact>({
+export const workspaceStatePublication = createStateDomainPublication<WorkspaceStateSnapshot>({
   domain: "workspace-state",
-  keyOf: (value) =>
-    workspaceStateFactKey(
-      value.kind,
-      value.kind === "hashes"
-        ? value.workspaceKey
-        : value.kind === "alias"
-          ? value.row.alias_key
-          : value.row.workspace_key,
-    ),
-  isValue: (value): value is WorkspaceStateFact => {
-    if (!isRecord(value)) {
-      return false;
-    }
-    if (value.kind === "hashes") {
-      return (
-        typeof value.workspaceKey === "string" &&
-        Array.isArray(value.hashes) &&
-        value.hashes.every(
-          (entry) =>
-            Array.isArray(entry) && entry.length === 2 && entry.every((v) => typeof v === "string"),
-        )
-      );
-    }
-    const row = value.row;
-    if (!isRecord(row)) {
-      return false;
-    }
-    return value.kind === "alias"
-      ? ["alias_key", "alias_path", "workspace_key", "workspace_path"].every(
-          (key) => typeof row[key] === "string",
-        ) && typeof row.updated_at_ms === "number"
-      : value.kind === "setup" &&
-          typeof row.workspace_key === "string" &&
-          ["workspace_path", "bootstrap_seeded_at", "setup_completed_at"].every(
-            (key) => row[key] === null || typeof row[key] === "string",
-          ) &&
-          ["version", "updated_at", "attested_at_ms", "attestation_updated_at_ms"].every(
-            (key) => row[key] === null || typeof row[key] === "number",
-          );
-  },
+  keyOf: (value) => value.identity.workspaceKey,
+  isValue: (value): value is WorkspaceStateSnapshot =>
+    isRecord(value) &&
+    isRecord(value.identity) &&
+    typeof value.identity.workspaceKey === "string" &&
+    typeof value.identity.workspacePath === "string" &&
+    typeof value.setupExists === "boolean" &&
+    isRecord(value.setup) &&
+    value.setup.version === 1 &&
+    (value.attestation === undefined ||
+      (isRecord(value.attestation) &&
+        typeof value.attestation.attestedAtMs === "number" &&
+        value.attestation.generatedHashes instanceof Map)),
 });
 
 export function captureWorkspaceStateReceipt<T>(db: EngineConnection, run: () => T): T {

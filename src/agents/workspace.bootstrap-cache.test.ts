@@ -1,14 +1,9 @@
-/**
- * Integration coverage for workspace bootstrap file-cache reads.
- * Uses temp workspaces to verify fresh guarded reads and cached content.
- */
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as boundaryFileRead from "../infra/boundary-file-read.js";
-import { writeWorkspaceFile } from "../test-helpers/workspace.js";
 import * as workspaceBootstrapRead from "./workspace-bootstrap-read.js";
 import {
   readWorkspaceFileCache,
@@ -18,6 +13,7 @@ import {
 import { loadWorkspaceBootstrapFiles, DEFAULT_AGENTS_FILENAME } from "./workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
 describe("workspace bootstrap file caching", () => {
   let workspaceDir: string;
@@ -26,37 +22,28 @@ describe("workspace bootstrap file caching", () => {
     workspaceDir = tempDirs.make("openclaw-bootstrap-cache-test-");
   });
 
-  const loadAgentsFile = async (dir: string) => {
-    const result = await loadWorkspaceBootstrapFiles(dir);
-    return result.find((f) => f.name === DEFAULT_AGENTS_FILENAME);
-  };
-
-  const expectAgentsContent = (
-    agentsFile: Awaited<ReturnType<typeof loadAgentsFile>>,
-    content: string,
-  ) => {
-    expect(agentsFile?.content).toBe(content);
-    expect(agentsFile?.missing).toBe(false);
-  };
+  const agentsPath = (dir = workspaceDir) => path.join(dir, DEFAULT_AGENTS_FILENAME);
+  const writeAgents = (content: string, dir = workspaceDir) =>
+    fs.writeFile(agentsPath(dir), content);
+  async function expectAgents(content: string, dir = workspaceDir) {
+    const files = await loadWorkspaceBootstrapFiles(dir);
+    expect(files.find((f) => f.name === DEFAULT_AGENTS_FILENAME)).toMatchObject({
+      content,
+      missing: false,
+    });
+  }
 
   it("evicts the oldest cached file after 64 empty entries", async () => {
     const readFile = vi.spyOn(workspaceBootstrapRead, "readWorkspaceBootstrapFile");
-    try {
-      const workspaces: string[] = [];
-      for (let index = 0; index <= 64; index += 1) {
-        const dir = path.join(workspaceDir, String(index));
-        await fs.mkdir(dir);
-        await writeWorkspaceFile({ dir, name: DEFAULT_AGENTS_FILENAME, content: "" });
-        expectAgentsContent(await loadAgentsFile(dir), "");
-        workspaces.push(dir);
-      }
-      expect(readFile).toHaveBeenCalledTimes(65);
-
-      expectAgentsContent(await loadAgentsFile(workspaces[0]!), "");
-      expect(readFile).toHaveBeenCalledTimes(66);
-    } finally {
-      readFile.mockRestore();
+    for (let index = 0; index <= 64; index += 1) {
+      const dir = path.join(workspaceDir, String(index));
+      await fs.mkdir(dir);
+      await writeAgents("", dir);
+      await expectAgents("", dir);
     }
+    expect(readFile).toHaveBeenCalledTimes(65);
+    await expectAgents("", path.join(workspaceDir, "0"));
+    expect(readFile).toHaveBeenCalledTimes(66);
   });
 
   it("shares one cache entry across canonical workspace aliases", async () => {
@@ -67,19 +54,11 @@ describe("workspace bootstrap file caching", () => {
     const aliasWorkspace = path.join(workspaceDir, "alias");
     await fs.mkdir(realWorkspace);
     await fs.symlink(realWorkspace, aliasWorkspace, "dir");
-    await writeWorkspaceFile({
-      dir: realWorkspace,
-      name: DEFAULT_AGENTS_FILENAME,
-      content: "# shared",
-    });
+    await writeAgents("# shared", realWorkspace);
     const readFile = vi.spyOn(workspaceBootstrapRead, "readWorkspaceBootstrapFile");
-    try {
-      expectAgentsContent(await loadAgentsFile(realWorkspace), "# shared");
-      expectAgentsContent(await loadAgentsFile(aliasWorkspace), "# shared");
-      expect(readFile).toHaveBeenCalledTimes(1);
-    } finally {
-      readFile.mockRestore();
-    }
+    await expectAgents("# shared", realWorkspace);
+    await expectAgents("# shared", aliasWorkspace);
+    expect(readFile).toHaveBeenCalledTimes(1);
   });
 
   it("invalidates cache when content changes in-place with restored mtime", async () => {
@@ -88,33 +67,25 @@ describe("workspace bootstrap file caching", () => {
     }
     const content1 = "# old guidance";
     const content2 = "# new guidance";
-    const filePath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
-
-    await writeWorkspaceFile({
-      dir: workspaceDir,
-      name: DEFAULT_AGENTS_FILENAME,
-      content: content1,
-    });
+    const filePath = agentsPath();
+    await writeAgents(content1);
     // Use integer-second mtime so utimes can restore it exactly, isolating ctime as the
     // only changed stat field after the in-place edit.
     const cleanTime = new Date(Math.floor(Date.now() / 1000) * 1000);
     await fs.utimes(filePath, cleanTime, cleanTime);
     const originalStat = await fs.stat(filePath);
 
-    const agentsFile1 = await loadAgentsFile(workspaceDir);
-    expectAgentsContent(agentsFile1, content1);
+    await expectAgents(content1);
 
     await fs.writeFile(filePath, content2, "utf-8");
     await fs.utimes(filePath, originalStat.atime, originalStat.mtime);
 
     const editedStat = await fs.stat(filePath);
-    expect(editedStat.dev).toBe(originalStat.dev);
-    expect(editedStat.ino).toBe(originalStat.ino);
-    expect(editedStat.size).toBe(originalStat.size);
-    expect(editedStat.mtimeMs).toBe(originalStat.mtimeMs);
+    const { dev, ino, size, mtimeMs } = originalStat;
+    expect(editedStat).toMatchObject({ dev, ino, size, mtimeMs });
 
     const originalFstatSync = fsSync.fstatSync;
-    const fstatSync = vi.spyOn(fsSync, "fstatSync").mockImplementationOnce((fd, options) => {
+    vi.spyOn(fsSync, "fstatSync").mockImplementationOnce((fd, options) => {
       const stat = originalFstatSync(fd, options);
       // Filesystems may coalesce rapid ctime updates; isolate the identity contract.
       if ("ctimeNs" in stat) {
@@ -124,20 +95,15 @@ describe("workspace bootstrap file caching", () => {
       }
       return stat;
     });
-    try {
-      const agentsFile2 = await loadAgentsFile(workspaceDir);
-      expectAgentsContent(agentsFile2, content2);
-    } finally {
-      fstatSync.mockRestore();
-    }
+    await expectAgents(content2);
   });
 
   it("invalidates cached content when distinct exact file IDs have the same numeric value", async () => {
-    const filePath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
-    await fs.writeFile(filePath, "# old guidance");
+    const filePath = agentsPath();
+    await writeAgents("# old guidance");
     let fileId = 9_007_199_254_740_992n;
     const openRootFile = boundaryFileRead.openRootFile;
-    const open = vi.spyOn(boundaryFileRead, "openRootFile").mockImplementation(async (params) => {
+    vi.spyOn(boundaryFileRead, "openRootFile").mockImplementation(async (params) => {
       const opened = await openRootFile(params);
       if (!opened.ok || params.absolutePath !== filePath) {
         return opened;
@@ -148,53 +114,30 @@ describe("workspace bootstrap file caching", () => {
         exactIdentity: { ...opened.exactIdentity, ino: fileId },
       };
     });
-    try {
-      expectAgentsContent(await loadAgentsFile(workspaceDir), "# old guidance");
-      expectAgentsContent(await loadAgentsFile(workspaceDir), "# old guidance");
-      await fs.writeFile(filePath, "# new guidance");
-      fileId += 1n;
-      expect(Number(fileId)).toBe(Number(fileId - 1n));
-      expectAgentsContent(await loadAgentsFile(workspaceDir), "# new guidance");
-    } finally {
-      open.mockRestore();
-    }
+    await expectAgents("# old guidance");
+    await expectAgents("# old guidance");
+    await writeAgents("# new guidance");
+    fileId += 1n;
+    expect(Number(fileId)).toBe(Number(fileId - 1n));
+    await expectAgents("# new guidance");
   });
 });
 
-describe("workspace file cache retention", () => {
-  let workspaceRoot = "";
+it("retires contained cache entries without evicting sibling roots", () => {
+  const workspaceRoot = tempDirs.make("openclaw-file-cache-test-");
+  const contained = path.join(workspaceRoot, "contained");
+  writeWorkspaceFileCache({ filePath: contained, content: "é", identity: "contained" });
+  const siblingRoot = `${workspaceRoot}-sibling`;
+  const sibling = path.join(siblingRoot, "sibling");
+  writeWorkspaceFileCache({ filePath: sibling, content: "s", identity: "sibling" });
 
-  beforeEach(async () => {
-    workspaceRoot = tempDirs.make("openclaw-file-cache-test-");
-  });
-
-  afterEach(() => {
+  try {
     retireWorkspaceFileCache(workspaceRoot);
-  });
 
-  function cacheFile(name: string, sizeBytes: number, identity = name): string {
-    const filePath = path.join(workspaceRoot, name);
-    writeWorkspaceFileCache({
-      filePath,
-      content: "é".repeat(sizeBytes / 2),
-      identity,
-    });
-    return filePath;
+    expect(readWorkspaceFileCache(contained, "contained")).toBeUndefined();
+    expect(readWorkspaceFileCache(sibling, "sibling")).toBe("s");
+  } finally {
+    retireWorkspaceFileCache(workspaceRoot);
+    retireWorkspaceFileCache(siblingRoot);
   }
-
-  it("retires contained entries without evicting sibling roots", () => {
-    const contained = cacheFile("contained", 2);
-    const siblingRoot = `${workspaceRoot}-sibling`;
-    const sibling = path.join(siblingRoot, "sibling");
-    writeWorkspaceFileCache({ filePath: sibling, content: "s", identity: "sibling" });
-
-    try {
-      retireWorkspaceFileCache(workspaceRoot);
-
-      expect(readWorkspaceFileCache(contained, "contained")).toBeUndefined();
-      expect(readWorkspaceFileCache(sibling, "sibling")).toBe("s");
-    } finally {
-      retireWorkspaceFileCache(siblingRoot);
-    }
-  });
 });

@@ -12,9 +12,9 @@ import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-goal-operations-schema.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
-import { runWithCliHistoryWriter } from "./cli-history-boundary.js";
+import { createCliHistoryOwnerProbe, runWithCliHistoryWriter } from "./cli-history-boundary.js";
 import { applySessionGoalOperation } from "./goals-operation-policy.js";
-import { readSessionGoalOperationReceipt } from "./goals-operations.js";
+import { readSessionGoalOperationReceipt } from "./goals-operation-receipts.js";
 import {
   readQualifiedSessionEntryRow,
   readSessionKeyBySessionIdInDatabase,
@@ -37,7 +37,7 @@ import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worke
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { prepareSessionTurnRouting } from "./session-turn-predicate.js";
 import {
   createSessionTranscriptTurnKernel,
@@ -59,11 +59,22 @@ function inCustody<T>(
 ): T {
   const assertCurrent = () =>
     context.admit("transaction", { kind: "session-entry-patch-validated" });
+  // Coverage asks the host for its live owner check inside this transaction, once.
+  const probe = createCliHistoryOwnerProbe();
+  let probed = false;
+  const confirmsOwner = () => {
+    if (!probed) {
+      context.admit("transaction", probe.fact);
+      probed = true;
+    }
+    return probe.holds();
+  };
   const owned = () =>
     runWithCliHistoryWriter(
       input.cliWriter
         ? {
             ...input.cliWriter,
+            ...(input.cliWriter.confirmOwner ? { confirmsOwner } : {}),
             target: {
               agentId: input.agentId,
               sessionKey: input.sessionKey,
@@ -227,7 +238,13 @@ export function prepareSessionTurn(
                   ),
                 ),
                 existing:
-                  key && append.idempotencyLookup !== "caller-checked"
+                  key &&
+                  append.idempotencyLookup !== "caller-checked" &&
+                  (!resident?.transcript.complete ||
+                    append.idempotencyLookup === "scan-assistant" ||
+                    [...resident.transcript.identities.values()].some(
+                      (identity) => identity.message_idempotency_key === key,
+                    ))
                     ? readTranscriptMessageByScopedIdempotencyKey(
                         database,
                         scope,
@@ -250,7 +267,7 @@ export function prepareSessionTurn(
       version: transcriptState?.version,
       expectedSessionState:
         expectedEntry &&
-        buildRestartRecoveryExpectedState(
+        buildSessionTranscriptTurnExpectedState(
           selected?.entry ?? { sessionId: scope.sessionId, updatedAt: 0 },
         ),
       goalId:
@@ -295,7 +312,7 @@ export function applySessionTurn<T>(
             ...(input.custody ? [input.custody.sessionKey] : []),
           ],
           () => {
-            const scope = {
+            let scope = {
               agentId: input.agentId,
               path: context.options.path,
               sessionKey: input.sessionKey,
@@ -360,7 +377,8 @@ export function applySessionTurn<T>(
                   projectionNeedsReconcile = true;
                 },
               },
-              (selected) => {
+              (selected, selectedScope) => {
+                scope = { ...scope, sessionKey: selectedScope.sessionKey };
                 const revision = getSqliteReadScopeRevision(database.db);
                 selectedPostimage =
                   selected && revision

@@ -319,37 +319,6 @@ export function resolveAttachmentMediaPolicy(params: {
   };
 }
 
-function buildAttachmentMediaLoadOptions(params: {
-  policy: AttachmentMediaPolicy;
-  maxBytes?: number;
-  optimizeImages?: boolean;
-}) {
-  if (params.policy.mode === "sandbox") {
-    const sandboxRoot = params.policy.sandboxRoot.trim();
-    let sandboxFsPromise: ReturnType<typeof root> | undefined;
-    const readSandboxFile =
-      params.policy.mediaReadFile ??
-      createBoundedOutboundMediaReadFile(async (filePath, options) => {
-        sandboxFsPromise ??= root(sandboxRoot);
-        const sandboxFs = await sandboxFsPromise;
-        return await sandboxFs.readBytes(filePath, { maxBytes: options?.maxBytes });
-      });
-    return {
-      maxBytes: params.maxBytes,
-      ...(params.optimizeImages !== undefined ? { optimizeImages: params.optimizeImages } : {}),
-      sandboxValidated: true,
-      readFile: readSandboxFile,
-    };
-  }
-  return buildOutboundMediaLoadOptions({
-    maxBytes: params.maxBytes,
-    mediaAccess: params.policy.mediaAccess,
-    mediaLocalRoots: params.policy.mediaLocalRoots,
-    mediaReadFile: params.policy.mediaReadFile,
-    optimizeImages: params.optimizeImages,
-  });
-}
-
 export async function normalizeSandboxMediaParams(params: {
   args: Record<string, unknown>;
   mediaPolicy: AttachmentMediaPolicy;
@@ -424,6 +393,10 @@ export async function hydrateAttachmentParamsForAction(params: {
   if (params.action === "send") {
     const { args, preserveSendBuffer } = params;
     if (hasExplicitSendMediaSource(args, params.extraParamKeys)) {
+      const contentType = readAttachmentContentType(args);
+      if (contentType) {
+        args.contentType = contentType;
+      }
       delete args.buffer;
       return;
     }
@@ -538,14 +511,33 @@ export async function hydrateAttachmentParamsForAction(params: {
 
   if (!params.dryRun && !rawBuffer && mediaSource) {
     const maxBytes = resolveAttachmentMaxBytes(params);
-    const media = await loadWebMedia(
-      mediaSource,
-      buildAttachmentMediaLoadOptions({
-        policy: params.mediaPolicy,
+    let mediaOptions: Exclude<Parameters<typeof loadWebMedia>[1], number | undefined>;
+    if (params.mediaPolicy.mode === "sandbox") {
+      const sandboxRoot = params.mediaPolicy.sandboxRoot.trim();
+      let sandboxFsPromise: ReturnType<typeof root> | undefined;
+      const readSandboxFile =
+        params.mediaPolicy.mediaReadFile ??
+        createBoundedOutboundMediaReadFile(async (filePath, options) => {
+          sandboxFsPromise ??= root(sandboxRoot);
+          const sandboxFs = await sandboxFsPromise;
+          return await sandboxFs.readBytes(filePath, { maxBytes: options?.maxBytes });
+        });
+      mediaOptions = {
         maxBytes,
+        ...(optimizeImages !== undefined ? { optimizeImages } : {}),
+        sandboxValidated: true,
+        readFile: readSandboxFile,
+      };
+    } else {
+      mediaOptions = buildOutboundMediaLoadOptions({
+        maxBytes,
+        mediaAccess: params.mediaPolicy.mediaAccess,
+        mediaLocalRoots: params.mediaPolicy.mediaLocalRoots,
+        mediaReadFile: params.mediaPolicy.mediaReadFile,
         optimizeImages,
-      }),
-    );
+      });
+    }
+    const media = await loadWebMedia(mediaSource, mediaOptions);
     params.args.buffer = media.buffer.toString("base64");
     if (!contentTypeParam && media.contentType) {
       params.args.contentType = media.contentType;

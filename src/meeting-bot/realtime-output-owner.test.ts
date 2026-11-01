@@ -30,6 +30,7 @@ describe("meeting realtime output queue", () => {
         transport: createTransport(),
         bytesPerMs: 1,
         onFailure: vi.fn(),
+        onStall: vi.fn(),
       });
 
       expect(queue.enqueue(Buffer.alloc(100), true, true)).toBe(true);

@@ -18,6 +18,12 @@ The workspace is the **default cwd**, not a hard sandbox. Tools resolve relative
 When sandboxing is enabled and `workspaceAccess` is not `"rw"`, tools operate inside a sandbox workspace under `~/.openclaw/sandboxes`, not your host workspace.
 </Warning>
 
+On the host, workspace-contained OpenClaw file tools also allow registered Git
+linked worktrees of the workspace's repository. Each write checks the current
+registration and resolves filesystem aliases; a copied `.git` file alone grants
+no access. Other repositories and Git metadata remain outside this scope.
+Container sandbox mounts keep their own boundaries.
+
 ## Default location
 
 - Default: `~/.openclaw/workspace`
@@ -39,11 +45,14 @@ Override in `~/.openclaw/openclaw.json`:
 }
 ```
 
-Per-agent override: `agents.entries.*.workspace`. To keep `main` at an existing shared root in a multi-agent roster, pin `agents.entries.main.workspace` to that root explicitly; changing `agents.defaults.workspace` alone sets the base for unpinned entries.
+Per-agent override: `agents.entries.*.workspace`. To keep `main` at an existing shared root in a multi-agent roster, pin `agents.entries.main.workspace` to that root explicitly; changing `agents.defaults.workspace` alone sets the base for unpinned entries. For an unpinned system agent in an explicit roster, `openclaw doctor --fix` copies its files into one workspace and pins it ([Agent roster migration](/gateway/doctor/config-migrations#agent-roster-migration)).
 
 Run workspace selection rejects an explicitly supplied blank or invalid agent ID. Omit the selector to use configured ownership, or supply the intended agent ID.
 
 `openclaw onboard`, `openclaw configure`, or `openclaw setup` create the workspace and seed the bootstrap files if they are missing.
+
+Already-provisioned workspaces can continue if packaged templates are unavailable.
+Creating missing files still requires a working template installation.
 
 <Note>
 Sandbox seed copies only accept regular in-workspace files; symlink/hardlink aliases that resolve outside the source workspace are ignored.
@@ -54,6 +63,36 @@ If you already manage the workspace files yourself, disable bootstrap file creat
 ```json5
 { agents: { defaults: { skipBootstrap: true } } }
 ```
+
+## Sharing generated memory files
+
+For a workspace shared with trusted local users, set
+`agents.defaults.workspaceFileMode` or override it with
+`agents.entries.<agentId>.workspaceFileMode`:
+
+```json5
+{
+  agents: {
+    defaults: { workspaceFileMode: "0660" },
+    entries: { main: { workspace: "/srv/shared/openclaw" } },
+  },
+}
+```
+
+Accepted values are the octal strings `"0600"`, `"0620"`, `"0640"`, and `"0660"`.
+The setting applies only when memory-core creates `DREAMS.md`, `MEMORY.md`, or
+reports under `memory/dreaming/`. Existing files keep their permissions. Daily
+memory files and the session corpus under `memory/.dreams/` keep their private
+creation mode, as do configuration, credentials, logs, and other state.
+
+When configured, the host writing the file applies its own umask. For example,
+`"0660"` with umask `022` creates mode `0640`; a remote workspace uses the remote
+host's umask. When unset, new files retain the exact private mode `0600`.
+
+Provision directory traversal permissions and default ACLs separately. This
+setting does not repair directory access or grant access to a user absent from
+the directory's group or ACL. Generated memory can contain sensitive information;
+share it only with users who should read it.
 
 ## Extra workspace folders
 
@@ -144,6 +183,9 @@ Git is optional. An empty `.git` directory is treated as a non-Git workspace and
 left untouched. Partial Git metadata or a linked worktree whose metadata is missing
 still blocks Git operations with checkout-preservation guidance; repair the original
 repository metadata before retrying.
+
+Commit timing follows your instructions and workspace conventions. A pending
+`BOOTSTRAP.md` does not require committing edits before you review them.
 
 Run these steps on the machine where the Gateway runs (that is where the workspace lives).
 

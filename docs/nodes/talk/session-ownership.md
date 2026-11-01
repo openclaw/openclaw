@@ -26,6 +26,8 @@ its recorded owner for unqualified keys, and conflicting explicit ownership is r
 even when a main alias becomes `global`. If routing or access changes during
 startup, creation fails rather than switching sessions; retry the request.
 
+When a human starts realtime Talk from a connected client, the Gateway restores an archived backing session in place, preserving its session ID and history; if active lifecycle work or worker placement prevents restoration, creation fails with restore guidance before the voice provider connects.
+
 Client tool calls, Gateway-owned provider consultations, and steering retain the prepared agent,
 resolved session key, and store. Agent replies stay in the same session as voice
 transcripts, including under global scope, while the original key continues to
@@ -34,6 +36,21 @@ only work bound to that logical voice call. Reusing `voiceSessionId` to replace 
 browser transport preserves control of its accepted work. The legacy
 `talk.client.steer` RPC remains session-scoped: it selects owned work by
 `sessionKey`, not by a voice call ID.
+
+If a hot configuration change moves that session's storage route, a new native
+provider consultation rejects the old target before updating consultation metadata
+or starting model work. Start a new call to use the current route. Changing only
+the default Talk agent preserves an existing call's selected agent, and ending
+its audio transport does not cancel work already accepted by the Gateway.
+
+Talk starts closing at the Gateway shutdown fence. On process exit, the shutdown
+plan's five-second prelude grace bounds the persistence join and reports unfinished
+cleanup. When the join has no outer deadline, including embedded close and
+state-store retirement, Talk uses its own grace derived from the remaining
+shutdown budget and capped at 30 seconds. It then requests abort and allows a
+second bounded grace period for its work to settle.
+Completed writes keep their receipts, and uncertain delivery is not replayed.
+Work that ignores abort is reported as retained, never as saved.
 
 Native steering uses the current caller's tool policy and session permissions. The
 host captures the actual backend attempt's authority after policy preparation and

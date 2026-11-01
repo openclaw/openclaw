@@ -205,7 +205,7 @@ it.each(["github.com", "ghe.example.test"])(
     expect(
       h.fetchImpl.mock.calls.filter(([input]) => requestUrl(input).includes("/jobs?")),
     ).toHaveLength(2);
-    expect(h.fetchImpl.mock.calls).toHaveLength(6);
+    expect(h.fetchImpl.mock.calls).toHaveLength(5);
   },
 );
 
@@ -280,10 +280,40 @@ it("does not treat a failed later jobs page as a complete job inventory", async 
   expect(result).toMatchObject({ status: "stale", rateLimited: false });
 });
 
+it.each(["new head", "closed"])(
+  "keeps requested-head details when GitHub has a %s PR",
+  async (change) => {
+    h.fetchImpl.mockImplementation((input, init) =>
+      requestUrl(input).includes("/pulls/")
+        ? Promise.resolve(
+            githubJson(
+              pullListItem(
+                change === "closed" ? { state: "closed" } : { head: { sha: "b".repeat(40) } },
+              ),
+            ),
+          )
+        : h.fetchResponse(input, init),
+    );
+    const result = await h.load();
+    expect(result).toMatchObject({ status: "ready", headSha });
+    expect(result.checks[0]?.steps).toHaveLength(3);
+    h.loadPullRequests.mockResolvedValueOnce({
+      pullRequests: [
+        {
+          ...chip,
+          ...(change === "closed" ? { state: "closed" as const } : { headSha: "b".repeat(40) }),
+        },
+      ],
+      rateLimited: false,
+    });
+    expect(await h.load()).toMatchObject(unavailable);
+  },
+);
+
 it("coalesces reads and respects the retry window with stale data", async () => {
   const [a, b] = await Promise.all([h.load(), h.load()]);
   expect(a).toEqual(b);
-  expect(h.fetchImpl).toHaveBeenCalledTimes(4);
+  expect(h.fetchImpl).toHaveBeenCalledTimes(3);
   a.checks.splice(0);
   expect((await h.load()).checks).toHaveLength(1);
   h.state.status = 429;
@@ -374,7 +404,7 @@ it.each([true, false])(
       expect((await second).status).toBe("ready");
     } else {
       await expect(second).rejects.toThrow("Second reader retired");
-      expect(h.fetchImpl).toHaveBeenCalledTimes(4);
+      expect(h.fetchImpl).toHaveBeenCalledTimes(3);
     }
   },
 );

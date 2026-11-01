@@ -15,8 +15,10 @@ import { listen } from "../lib/reactive/listener.ts";
 import { getSafeSessionStorage } from "../local-storage.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
+import { trackForegroundActivity } from "./foreground-activity.ts";
 
 const RELOAD_GUARD_STORAGE_KEY = "openclaw.controlUi.staleChunkReloadBuildId";
+const RENDER_RELOAD_STORAGE_KEY = "openclaw.controlUi.renderErrorReloadAttempted";
 // Bounds document probes across rapid re-renders of the same error state.
 const ATTEMPT_COOLDOWN_MS = 5_000;
 // Allow slow links to answer; callers share the in-flight probe.
@@ -30,6 +32,7 @@ const MODULE_IMPORT_ERROR_PATTERN =
 
 type StaleChunkReloadDeps = {
   buildId?: string;
+  reloadOnce?: boolean;
   storage?: Pick<Storage, "getItem" | "setItem"> | null;
   reload?: () => void;
   canReload?: () => boolean;
@@ -61,7 +64,7 @@ export async function retryControlUiImport<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   try {
-    return await load();
+    return await trackForegroundActivity(Promise.resolve(load()));
   } catch (error) {
     if (!isStaleChunkImportError(error)) {
       throw error;
@@ -83,7 +86,7 @@ export async function retryControlUiImport<T>(
     // Chromium can retain the first failed import in its module map. A persistent
     // failure now reaches the route error surface and its guarded reload owner.
     try {
-      return await load();
+      return await trackForegroundActivity(Promise.resolve(load()));
     } catch (retryError) {
       if (isStaleChunkImportError(retryError)) {
         routeImportErrors.add(retryError);
@@ -170,6 +173,15 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   let guardDelayMs = 0;
   try {
     const guard = JSON.parse(storage?.getItem(RELOAD_GUARD_STORAGE_KEY) ?? "null");
+    // Rejected handshakes must settle on visible recovery guidance, not a timer
+    // that keeps replacing an incompatible bundle. Also bound alternating builds.
+    if (
+      deps.reloadOnce &&
+      (guard?.buildId === buildId ||
+        (typeof guard?.at === "number" && Date.now() - guard.at < 60_000))
+    ) {
+      return false;
+    }
     if (guard?.buildId === buildId && typeof guard.at === "number") {
       guardDelayMs = Math.max(0, guard.at + RELOAD_GUARD_WINDOW_MS - Date.now());
     }
@@ -242,6 +254,42 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   }
   recovery.buildId = null;
   reload();
+  return true;
+}
+
+/** Render bugs get one automatic reload per tab, not the stale-asset retry loop. */
+export async function reloadAfterRenderErrorOnce(
+  deps: Omit<StaleChunkReloadDeps, "buildId"> = {},
+): Promise<boolean> {
+  const storage = deps.storage === undefined ? getSafeSessionStorage() : deps.storage;
+  if (!storage || deps.canReload?.() === false || !canReloadControlUiDocument()) {
+    return false;
+  }
+  try {
+    if (storage.getItem(RENDER_RELOAD_STORAGE_KEY) !== null) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  // Do not replace a recoverable error with a browser network-error document.
+  if (!(await waitForReachableControlUiDocument({ timeoutMs: 0 }, () => true))) {
+    return false;
+  }
+  if (deps.canReload?.() === false || !canReloadControlUiDocument()) {
+    return false;
+  }
+  try {
+    // Recheck after the shared probe: another failing surface may have claimed it.
+    if (storage.getItem(RENDER_RELOAD_STORAGE_KEY) !== null) {
+      return false;
+    }
+    // Never clear on mount, Retry, or a timer: a persistent bug must stay stopped.
+    storage.setItem(RENDER_RELOAD_STORAGE_KEY, "1");
+  } catch {
+    return false;
+  }
+  (deps.reload ?? reloadControlUiDocument)();
   return true;
 }
 

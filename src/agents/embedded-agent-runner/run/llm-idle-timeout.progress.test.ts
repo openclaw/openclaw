@@ -17,14 +17,11 @@ import { classifyFailoverSignalCore } from "../../failover/classify-core.js";
 import { shouldRetryFailoverSignal } from "../../failover/retry-evidence.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { resolveEmbeddedAgentStream } from "../stream-resolution.js";
-import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
+import { streamWithIdleTimeout } from "./llm-idle-timeout.js";
 
 const model = makeCompletionsModel({ reasoning: false });
 
-async function openStream(
-  scope: "creation-and-gaps" | "creation-only" = "creation-and-gaps",
-  timeoutMs = 100,
-) {
+async function openStream(timeoutMs = 100) {
   const chunks = new EventStream<ChatCompletionChunk, boolean>(
     () => false,
     () => true,
@@ -32,13 +29,17 @@ async function openStream(
   const output = createAssistantOutput(model);
   const activity: boolean[] = [];
   const onTimeout = vi.fn<(error: Error) => void>();
+  let onChunkActivity: (() => void) | undefined;
   let requestSignal: AbortSignal | undefined;
   const providerStreamFn: StreamFn = (_model, _context, options) => {
     requestSignal = options?.signal;
     if (!requestSignal) {
       throw new Error("Missing request signal");
     }
-    const unsubscribe = onLlmRequestActivity(requestSignal, (progress) => activity.push(progress));
+    const unsubscribe = onLlmRequestActivity(requestSignal, (progress) => {
+      activity.push(progress);
+      onChunkActivity?.();
+    });
     const stopChunks = () => chunks.end(true);
     requestSignal.addEventListener("abort", stopChunks, { once: true });
     const stream = createAssistantMessageEventStream();
@@ -72,9 +73,8 @@ async function openStream(
     model,
     signal: new AbortController().signal,
   });
-  const stream = await streamWithIdleTimeout(streamFn, timeoutMs, onTimeout, { scope })(model, {
-    messages: [],
-  });
+  const watchedStreamFn = streamWithIdleTimeout(streamFn, timeoutMs, onTimeout);
+  const stream = await watchedStreamFn(model, { messages: [] });
   const events: AssistantMessageEvent[] = [];
   const completion = (async () => {
     for await (const event of stream) {
@@ -88,7 +88,12 @@ async function openStream(
     completion,
     requestSignal,
     async send(chunk: ChatCompletionChunk) {
+      const observed = Promise.withResolvers<void>();
+      onChunkActivity = observed.resolve;
       chunks.push(chunk);
+      // Advance the fake clock only after the real stream consumes this chunk.
+      await observed.promise;
+      onChunkActivity = undefined;
       await vi.advanceTimersByTimeAsync(0);
     },
     async close() {
@@ -126,7 +131,10 @@ it("aborts content-free chunks at twice the idle window through composed run sig
     }
     await vi.advanceTimersByTimeAsync(1);
     expect(stream.onTimeout).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ message: "LLM idle timeout (0s): no model progress" }),
+      expect.objectContaining({
+        name: "LlmNoProgressError",
+        message: "LLM idle timeout (0s): no model progress",
+      }),
     );
     expect(stream.requestSignal?.aborted).toBe(true);
     expect(await stream.completion).toBe(stream.onTimeout.mock.calls[0]?.[0]);
@@ -140,21 +148,17 @@ it("aborts content-free chunks at twice the idle window through composed run sig
 });
 
 it("allows 1095 seconds of hidden reasoning while the 120-second idle watchdog sees progress", async () => {
-  const stream = await withStream(
-    async (active) => {
-      for (let index = 0; index < 15; index += 1) {
-        await vi.advanceTimersByTimeAsync(73_000);
-        await active.send(makeCompletionsChunk({ reasoning_content: "x" }));
-      }
-      expect(active.onTimeout).not.toHaveBeenCalled();
-      expect(active.requestSignal?.aborted).toBe(false);
-      expect(active.activity).toHaveLength(15);
-      expect(active.events.filter((event) => event.type === "thinking_delta")).toEqual([]);
-      await active.send(makeCompletionsChunk({ content: "OK" }, "stop"));
-    },
-    "creation-and-gaps",
-    120_000,
-  );
+  const stream = await withStream(async (active) => {
+    for (let index = 0; index < 15; index += 1) {
+      await vi.advanceTimersByTimeAsync(73_000);
+      await active.send(makeCompletionsChunk({ reasoning_content: "x" }));
+    }
+    expect(active.onTimeout).not.toHaveBeenCalled();
+    expect(active.requestSignal?.aborted).toBe(false);
+    expect(active.activity).toHaveLength(15);
+    expect(active.events.filter((event) => event.type === "thinking_delta")).toEqual([]);
+    await active.send(makeCompletionsChunk({ content: "OK" }, "stop"));
+  }, 120_000);
   expect(await stream.completion).toBeUndefined();
   expect(
     stream.events.flatMap((event) => (event.type === "text_delta" ? [event.delta] : [])).join(""),
@@ -185,14 +189,4 @@ it("counts legacy tool fragments and reasoning buffered behind them as progress"
   expect(stream.events.find((event) => event.type === "toolcall_end")?.toolCall).toEqual(
     expect.objectContaining({ name: "read", arguments: {} }),
   );
-});
-
-it("preserves the local endpoint gap opt-out", async () => {
-  expect(resolveLlmIdleTimeoutMs({ model: { baseUrl: "http://localhost:1234" } })).toBe(0);
-  await withStream(async (stream) => {
-    await stream.send(makeCompletionsChunk({}, null, { choices: [] }));
-    await vi.advanceTimersByTimeAsync(500);
-    expect(stream.onTimeout).not.toHaveBeenCalled();
-    expect(stream.requestSignal?.aborted).toBe(false);
-  }, "creation-only");
 });

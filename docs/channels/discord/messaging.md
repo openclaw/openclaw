@@ -26,6 +26,10 @@ How inbound and outbound Discord messages are routed, formatted, acknowledged, a
 
 Messages in the same channel continue reaching the [reply queue](/concepts/queue) while an earlier message waits for its turn. Discord messages use durable ingress admission, so `collect` keeps queued messages as separate followup turns, like `followup`. This prevents one message from committing before another rejects a combined turn. Deferring a message preserves its durable recovery state.
 
+During recovery, native bot mentions sent within the last 15 minutes take priority
+over other pending messages. An active claim or retry backoff can still delay them.
+Ambient messages remain queued and pass through normal preflight and history recording.
+
 ## Message behavior
 
 <AccordionGroup>
@@ -52,7 +56,7 @@ Messages in the same channel continue reaching the [reply queue](/concepts/queue
     - `batched`: attaches it only when the inbound event was a debounced batch of multiple messages — useful when you want native replies mainly for ambiguous bursty chats, not every single-message turn
 
     Message IDs are surfaced in context/history so agents can target specific messages. Replies to bot messages, including automation alerts, retain the referenced text as untrusted context when context visibility allows it. The bot's own inbound events are still ignored, and referenced self-authored media is not downloaded again.
-    Chunked persona delivery receipts retain the reply target selected for each chunk.
+    Native replies in bound threads use the bot identity and require the bot to have permission to send there. Ordinary bound-thread messages without a native reply retain the webhook persona. Chunked native reply receipts retain the reply target selected for each chunk.
 
   </Accordion>
 
@@ -74,7 +78,7 @@ Messages in the same channel continue reaching the [reply queue](/concepts/queue
   </Accordion>
 
   <Accordion title="Live stream preview">
-    OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives. Discord preview streaming defaults to `off`; set `channels.discord.streaming.mode` to `partial`, `block`, or `progress` to opt in. `streamMode` is a legacy alias; run `openclaw doctor --fix` to rewrite persisted config to the current nested `streaming` format.
+    OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives. Discord preview streaming defaults to `progress`, which keeps one editable work message without tool rows. Set `channels.discord.streaming.mode` to `partial` or `block` to preview answer text, or `off` to disable previews. `streamMode` is a legacy alias; run `openclaw doctor --fix` to rewrite persisted config to the current nested `streaming` format.
 
 ```json5
 {
@@ -97,7 +101,7 @@ Messages in the same channel continue reaching the [reply queue](/concepts/queue
     - `off` disables Discord preview edits.
     - `partial` edits a single preview message as tokens arrive.
     - `block` emits draft-sized chunks; tune size and breakpoints with `streaming.preview.chunk` (`minChars`, `maxChars`, `breakPreference`), clamped to `textChunkLimit`. An explicit non-`off` preview mode overrides inherited `agents.defaults.blockStreamingDefault: "on"`; explicit `streaming.block.enabled: true` overrides the preview. If a turn cannot use previews, inherited block delivery still applies.
-    - `progress` keeps one editable status draft until final delivery. By default it is quiet: the agent's latest preamble or narration as a status headline, 💬 commentary and 🧠 reasoning when they stream, ✅ / ▸ / ▢ plan steps, and any approval request or failed command. Ordinary tool calls do not add rows.
+    - `progress` keeps one editable status draft until final delivery. By default it is quiet: the agent's latest preamble or narration as a status headline, 💬 commentary and 🧠 reasoning when they stream, ✅ / ▸ / ▢ plan steps, and any approval request. Ordinary tool calls and delegated-task lifecycle events do not add rows unless `streaming.progress.toolProgress` is enabled.
     - Media, error, and explicit-reply finals cancel pending preview edits.
     - `streaming.progress.toolProgress: true` adds the rolling tool log underneath the headline: rows such as `🛠️ Exec: running` or `📖 Read from notes.txt` (default `false`). Each tool row starts with a text glyph for its tool. `streaming.preview.toolProgress` controls tool rows in `partial` and `block` modes, where they default to `true`.
     - `streaming.progress.commentary` (default `false`) opts into raw assistant commentary in the temporary progress draft. The default preamble/narration status line is independent of this option. Commentary is cleaned before display, stays transient, and does not change final answer delivery.
@@ -155,6 +159,8 @@ Messages in the same channel continue reaching the [reply queue](/concepts/queue
 
   <Accordion title="Outbound mention aliases">
     Use `mentionAliases` when agents need to mention known Discord users by handle. Keys are handles without the leading `@`; values are Discord user IDs. Unknown handles, `@everyone`, `@here`, and mentions inside URLs, email addresses, or Markdown backtick code spans and fences are left unchanged.
+
+    Ambiguous cached names and unmatched discriminator tags stay as text instead of pinging a guessed user. Use an explicit `<@userId>` mention or a configured `mentionAliases` entry to select the intended person.
 
     Trailing punctuation (`.`, `,`, `!`, `?`, `:`, `;`, `)`) is preserved after known mentions, including dotted handles such as `@alice.dev.`. The longest known handle takes precedence over treating its trailing periods as punctuation.
 

@@ -1,7 +1,12 @@
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
-import { SymbolFlags, type Symbol } from "typescript/unstable/sync";
-import { createNativeTypeScriptProject } from "./native-typescript.mts";
+import * as ts from "typescript/ast";
+import { serverFS } from "typescript/fs";
+import { SymbolFlags, type Symbol } from "typescript/sync";
+import {
+  createNativeTypeScriptProject,
+  reportNativeTypeScriptPhase,
+  type NativeTypeScriptObserver,
+} from "./native-typescript.mts";
 import { inspectPersonalCredentialWriters } from "./personal-credential-writer-guard.mts";
 
 // Each entry is a reviewed, released compatibility boundary, not a whole-file exemption.
@@ -112,8 +117,26 @@ const reviewed = new Map<string, readonly string[]>([
 // Mixed SDK receivers retain only these deprecated members, never their live factories.
 const reviewedMembers = new Map<string, readonly string[]>([
   [
+    "src/gateway/github-oauth-lifecycle.ts",
+    ["createGitHubOAuthLifecycle.cancelAuthorization", "createGitHubOAuthLifecycle.retireProfile"],
+  ],
+  [
+    "src/gateway/github-personal-oauth.ts",
+    [
+      "createPersonalGitHubOAuthLifecycle.cancelAuthorization",
+      "createPersonalGitHubOAuthLifecycle.disconnect",
+    ],
+  ],
+  [
     "src/agents/sessions/session-manager.ts",
-    ["open", "openBounded", "openDetachedBounded", "openModelContext", "readSessionContext"],
+    [
+      "open",
+      "openBounded",
+      "openDetachedBounded",
+      "openModelContext",
+      "readSessionContext",
+      "prepareTranscriptRewrite",
+    ],
   ],
   [
     "src/agents/sessions/session-manager-core.ts",
@@ -163,8 +186,24 @@ const reviewedMembers = new Map<string, readonly string[]>([
 // These are candidates, not exemptions: every value reference must resolve to
 // another proven candidate or an inventory-reviewed worker/maintenance entry.
 const nonRuntimeCandidates = new Map<string, readonly string[]>([
+  [
+    "src/config/sessions/session-cold-storage-chunks.ts",
+    ["readSessionColdChunks", "readVerifiedSessionColdChunk", "iterateSessionColdRecords"],
+  ],
+  [
+    "src/config/sessions/session-cold-storage-navigation.ts",
+    ["retainSessionColdNavigationInTransaction"],
+  ],
+  ["src/config/sessions/session-cold-storage-records.ts", ["writeSessionColdRecordsInTransaction"]],
+  [
+    "src/config/sessions/session-cold-storage-prepare.ts",
+    [
+      "prepareSessionColdArchiveInWorker",
+      "prepareSessionColdBatchInWorker",
+      "prepareExternalization",
+    ],
+  ],
   ["src/state/openclaw-state-db-maintenance.ts", ["writeCurrentStateSchemaMetadata"]],
-  ["src/state/user-github-connections.kernel.ts", ["listUserGitHubConnectionsInDatabase"]],
   ["src/state/user-profile-mutation.ts", ["runUserProfileWriteTransaction"]],
   ["src/gateway/channel-operator-authority.ts", ["resolveChannelOperatorIdentityFacts"]],
   [
@@ -270,10 +309,17 @@ const synchronousScopes = new Map<string, ReadonlyMap<string, number>>([
     "src/state/openclaw-state-db-readonly.ts",
     new Map([["withExistingOpenClawStateDatabaseReadOnly", 0]]),
   ],
+  ["src/state/openclaw-agent-db-readonly.ts", new Map([["withOpenClawAgentDatabaseReadOnly", 0]])],
   ["src/state/openclaw-state-db.ts", new Map([["runOpenClawStateWriteTransaction", 0]])],
   ["src/state/user-profile-mutation.ts", new Map([["runUserProfileWriteTransaction", 0]])],
   ["src/state/user-profiles-internal.ts", new Map([["readResolvedUserProfile", 1]])],
-  ["src/infra/sqlite-transaction.ts", new Map([["runSqliteDeferredTransactionSync", 1]])],
+  [
+    "src/infra/sqlite-transaction.ts",
+    new Map([
+      ["runSqliteDeferredTransactionSync", 1],
+      ["runSqliteReadSnapshotSync", 1],
+    ]),
+  ],
   [
     "src/plugins/runtime/generation-state.ts",
     new Map([["withPluginRuntimeGenerationRegistryScope", 1]]),
@@ -318,6 +364,7 @@ export function inspectDatabaseWorkerBoundaries(
     /\.worker\.[cm]?[jt]s$/.test(file),
   classifyEntry: (file: string, operation: string) => NonRuntimeTier | undefined = () => undefined,
   validateCredentialWriters = true,
+  observer?: NativeTypeScriptObserver,
 ): {
   operations: Map<string, Set<string>>;
   callLocations: Map<string, Set<string>>;
@@ -358,20 +405,40 @@ export function inspectDatabaseWorkerBoundaries(
     files: [...sourceTexts.keys(), globals],
     include: [],
   });
+  reportNativeTypeScriptPhase(observer, "inputs", { files: sourceTexts.size });
   // The supplied snapshot owns all source bytes, including historical comparisons.
   using session = createNativeTypeScriptProject({
     cwd: root,
     configFileName: config,
+    observer,
     files,
     fs: {
-      readFile: () => null,
+      readFile: () => undefined,
       fileExists: () => false,
       directoryExists: () => false,
-      getAccessibleEntries: () => ({ files: [], directories: [] }),
-      realpath: (file) => file,
+      getAccessibleEntries: () => ({ files: [], directories: [], symlinks: undefined }),
+      realpath: serverFS.identity,
+      stat: serverFS.fakeStat,
+      writeFile: serverFS.error,
+      removeFile: serverFS.error,
     },
   });
   const { checker, program } = session.project;
+  // The snapshot fixes compiler answers, even while graph forwarding is prepared.
+  // Cache raw symbols (including misses); resolveSymbol applies current bindings later.
+  const compilerSymbols = new Map<ts.Node, Symbol | undefined>();
+  const symbolsAt = (nodes: readonly ts.Node[]): (Symbol | undefined)[] => {
+    const missing = [...new Set(nodes.filter((node) => !compilerSymbols.has(node)))];
+    if (missing.length) {
+      const symbols = checker.getSymbolAtLocation(missing);
+      for (const [index, node] of missing.entries()) {
+        compilerSymbols.set(node, symbols[index]);
+      }
+    }
+    return nodes.map((node) => compilerSymbols.get(node));
+  };
+  const symbolAt = (node: ts.Node): Symbol | undefined =>
+    compilerSymbols.has(node) ? compilerSymbols.get(node) : symbolsAt([node])[0];
   const forwarded = new Map<Symbol, Symbol>();
   // Compiler aliases are immutable; prepared binding overrides are applied separately.
   const aliasTargets = new Map<Symbol, Symbol>();
@@ -414,6 +481,9 @@ export function inspectDatabaseWorkerBoundaries(
     }
     return parts.join(".");
   };
+  // Both graph walks reuse the exact callback argument after forwarding is complete.
+  // A cached boolean would incorrectly authorize other arguments in the same call.
+  const inlineArguments = new Map<ts.CallExpression, ts.Expression | undefined>();
   const isInlineInvocation = (node: ts.Node): boolean => {
     const call = node.parent;
     if (!ts.isCallExpression(call)) {
@@ -422,7 +492,11 @@ export function inspectDatabaseWorkerBoundaries(
     if (call.expression === node) {
       return true;
     }
-    const symbol = resolveSymbol(checker.getSymbolAtLocation(call.expression));
+    if (inlineArguments.has(call)) {
+      return inlineArguments.get(call) === node;
+    }
+    inlineArguments.set(call, undefined);
+    const symbol = resolveSymbol(symbolAt(call.expression));
     const declaration = symbol?.valueDeclaration?.resolve();
     const callable =
       declaration && ts.isVariableDeclaration(declaration) ? declaration.initializer : declaration;
@@ -431,7 +505,9 @@ export function inspectDatabaseWorkerBoundaries(
     }
     const file = path.relative(root, callable.getSourceFile().fileName).split(path.sep).join("/");
     const argument = synchronousScopes.get(file)?.get(operationName(callable));
-    return argument !== undefined && call.arguments[argument] === node;
+    const inlineArgument = argument === undefined ? undefined : call.arguments[argument];
+    inlineArguments.set(call, inlineArgument);
+    return inlineArgument === node;
   };
   const registered = new Map<Symbol, BoundaryOperation>();
   const declarations = new Map<ts.Node, BoundaryOperation>();
@@ -483,7 +559,7 @@ export function inspectDatabaseWorkerBoundaries(
       if (!node || !nameNode) {
         continue;
       }
-      const symbol = resolveSymbol(checker.getSymbolAtLocation(nameNode));
+      const symbol = resolveSymbol(symbolAt(nameNode));
       if (!symbol) {
         throw new Error(`Compatibility scan could not resolve ${file}:${name}`);
       }
@@ -528,8 +604,10 @@ export function inspectDatabaseWorkerBoundaries(
     }
     return { file, source };
   });
+  session.checkpoint?.("sources-registration");
   if (validateCredentialWriters) {
     violations.push(...inspectPersonalCredentialWriters(sources, checker));
+    session.checkpoint?.("credential-writers");
   }
   // Follow named kernels from the reviewed boundaries. A symbol reference from
   // outside this closure (or an escaped callback) will make that kernel live.
@@ -559,7 +637,7 @@ export function inspectDatabaseWorkerBoundaries(
       if (name) {
         declarationNames.add(name);
       }
-      const symbol = name ? resolveSymbol(checker.getSymbolAtLocation(name)) : undefined;
+      const symbol = name ? resolveSymbol(symbolAt(name)) : undefined;
       if (symbol) {
         registered.set(symbol, member);
         if (name && ts.isIdentifier(name)) {
@@ -584,6 +662,9 @@ export function inspectDatabaseWorkerBoundaries(
     "withOpenClawAgentDatabaseReadOnly",
   ]);
   const examined = new Set<Symbol>();
+  // Factory and member expansion can revisit the same call in this immutable snapshot.
+  // Query each location once; distinct locations still need the symbol-level guard.
+  const seenReferences = new Set<ts.Node>();
   const expandedMembers = new Set<ts.Node>();
   let pending = [...registered.values()];
   while (pending.length > 0) {
@@ -592,7 +673,11 @@ export function inspectDatabaseWorkerBoundaries(
       if (ts.isTypeNode(node) || declarations.get(node)?.reviewed) {
         return;
       }
-      if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+      if (
+        (ts.isCallExpression(node) || ts.isNewExpression(node)) &&
+        !seenReferences.has(node.expression)
+      ) {
+        seenReferences.add(node.expression);
         references.push(node.expression);
       }
       node.forEachChild(visit);
@@ -683,7 +768,7 @@ export function inspectDatabaseWorkerBoundaries(
     for (const member of pending) {
       expandedMembers.add(member.node);
     }
-    const symbols = references.length ? checker.getSymbolAtLocation(references) : [];
+    const symbols = symbolsAt(references);
     for (const raw of symbols) {
       const symbol = resolveSymbol(raw);
       if (!symbol || examined.has(symbol) || registered.has(symbol)) {
@@ -804,7 +889,7 @@ export function inspectDatabaseWorkerBoundaries(
     }
     return found;
   };
-  const namespaceSymbols = checker.getSymbolAtLocation(namespaces);
+  const namespaceSymbols = symbolsAt(namespaces);
   for (const [index, namespace] of namespaces.entries()) {
     if (targets(namespaceSymbols[index]).size) {
       names.add(namespace.text);
@@ -831,13 +916,13 @@ export function inspectDatabaseWorkerBoundaries(
         ? expression
         : undefined;
     const module = dynamicImport?.arguments[0]
-      ? resolveSymbol(checker.getSymbolAtLocation(dynamicImport.arguments[0]))
+      ? resolveSymbol(symbolAt(dynamicImport.arguments[0]))
       : undefined;
     if (!dynamicImport || !module) {
       continue;
     }
     const record = (name: ts.Identifier, target: Symbol | undefined) => {
-      const local = checker.getSymbolAtLocation(name);
+      const local = symbolAt(name);
       if (local && target) {
         forwarded.set(local, target);
         handledImportBindings.add(name);
@@ -888,13 +973,8 @@ export function inspectDatabaseWorkerBoundaries(
       edges.set(member, memberEdges);
     }
   }
-  const compiledAccesses = new Map<ts.Expression, Symbol | undefined>();
-  const compilerSymbol = (expression: ts.Expression): Symbol | undefined =>
-    compiledAccesses.has(expression)
-      ? compiledAccesses.get(expression)
-      : checker.getSymbolAtLocation(expression);
   const accessSymbol = (expression: ts.Expression): Symbol | undefined => {
-    const known = resolveSymbol(compilerSymbol(expression));
+    const known = resolveSymbol(symbolAt(expression));
     if (known) {
       return known;
     }
@@ -906,7 +986,7 @@ export function inspectDatabaseWorkerBoundaries(
       expression.expression.kind === ts.SyntaxKind.ImportKeyword &&
       expression.arguments[0]
     ) {
-      return resolveSymbol(compilerSymbol(expression.arguments[0]));
+      return resolveSymbol(symbolAt(expression.arguments[0]));
     }
     if (ts.isPropertyAccessExpression(expression)) {
       const base = accessSymbol(expression.expression);
@@ -971,10 +1051,19 @@ export function inspectDatabaseWorkerBoundaries(
       node.forEachChild(visit);
     };
     source.forEachChild(visit);
-    const symbols = references.length ? checker.getSymbolAtLocation(references) : [];
-    compiledAccesses.clear();
+    const symbols = symbolsAt(references);
     const pendingAccesses = new Set<ts.Expression>();
+    const receiverBindings = new Map<ts.Node, ts.ObjectBindingPattern>();
     for (const [index, node] of references.entries()) {
+      if (
+        ts.isIdentifier(node) &&
+        ts.isBindingElement(node.parent) &&
+        node.parent.name === node &&
+        !node.parent.propertyName &&
+        ts.isObjectBindingPattern(node.parent.parent)
+      ) {
+        receiverBindings.set(node, node.parent.parent);
+      }
       if (symbols[index]) {
         continue;
       }
@@ -1000,20 +1089,18 @@ export function inspectDatabaseWorkerBoundaries(
     }
     // Query the same receiver nodes as the fallback, without a round trip per access.
     const accessLocations = [...pendingAccesses];
-    const accessSymbols = accessLocations.length
-      ? checker.getSymbolAtLocation(accessLocations)
-      : [];
-    for (const [index, expression] of accessLocations.entries()) {
-      compiledAccesses.set(expression, accessSymbols[index]);
-    }
+    symbolsAt(accessLocations);
+    // Members of one destructuring share a receiver type; query each pattern once.
+    const patterns = [...new Set(receiverBindings.values())];
+    const receiverTypes = patterns.length ? checker.getTypeAtLocation(patterns) : [];
+    const bindingTypes = new Map(
+      patterns.map((pattern, index) => [pattern, receiverTypes[index]!]),
+    );
     for (const [index, node] of references.entries()) {
+      const pattern = receiverBindings.get(node);
       const bindingMember =
-        ts.isIdentifier(node) &&
-        ts.isBindingElement(node.parent) &&
-        node.parent.name === node &&
-        !node.parent.propertyName &&
-        ts.isObjectBindingPattern(node.parent.parent)
-          ? checker.getTypeAtLocation(node.parent.parent).getProperty(node.text)
+        pattern && ts.isIdentifier(node)
+          ? bindingTypes.get(pattern)!.getProperty(node.text)
           : undefined;
       let symbol = resolveSymbol(
         bindingMember ??
@@ -1096,28 +1183,29 @@ export function inspectDatabaseWorkerBoundaries(
             const name = enclosingNames.join(".");
             const tier = classifyEntry(file, name);
             const consumer = expression.parent;
-            const receiver =
-              ts.isCallExpression(consumer) &&
-              resolveSymbol(
-                checker.getSymbolAtLocation(consumer.expression),
-              )?.valueDeclaration?.resolve();
             const reviewedForward =
+              !directCall &&
               tier === "T3" &&
               ts.isCallExpression(consumer) &&
-              receiver &&
-              ts.isFunctionDeclaration(receiver) &&
-              path.relative(root, receiver.getSourceFile().fileName).split(path.sep).join("/") ===
-                file &&
-              nonRuntimeMemberForwards
-                .get(file)
-                ?.some(
-                  (forward) =>
-                    forward.caller === name &&
-                    callee.file === file &&
-                    forward.member === callee.name &&
-                    forward.receiver === operationName(receiver) &&
-                    consumer.arguments[forward.argument] === expression,
+              nonRuntimeMemberForwards.get(file)?.some((forward) => {
+                // Receiver identity needs a compiler round trip only after the
+                // local facts select an exact reviewed forwarding contract.
+                const receiver =
+                  forward.caller === name &&
+                  callee.file === file &&
+                  forward.member === callee.name &&
+                  consumer.arguments[forward.argument] === expression &&
+                  resolveSymbol(symbolAt(consumer.expression))?.valueDeclaration?.resolve();
+                return (
+                  receiver &&
+                  ts.isFunctionDeclaration(receiver) &&
+                  path
+                    .relative(root, receiver.getSourceFile().fileName)
+                    .split(path.sep)
+                    .join("/") === file &&
+                  forward.receiver === operationName(receiver)
                 );
+              });
             nonRuntime = Boolean(
               (directCall || reviewedForward) &&
               (tier !== undefined ||
@@ -1163,7 +1251,7 @@ export function inspectDatabaseWorkerBoundaries(
     ) {
       continue;
     }
-    for (const operation of targets(checker.getSymbolAtLocation(source))) {
+    for (const operation of targets(symbolAt(source))) {
       if (!compatibilityReachable.has(operation)) {
         operation.nonRuntimeValid = false;
       }
@@ -1247,6 +1335,7 @@ export function inspectDatabaseWorkerBoundaries(
       selectedLocations.set(operation.file, locations);
     }
   }
+  session.checkpoint?.("graph-classification");
   return {
     operations,
     callLocations,

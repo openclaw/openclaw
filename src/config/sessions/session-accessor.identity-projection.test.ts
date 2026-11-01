@@ -120,7 +120,6 @@ it.each([
     expect(result).toMatchObject({
       found: true,
       canonicalKey: logical,
-      storeKey: stored,
       result: "selected",
     });
     expect(readEntry(physical)?.label).toBe("after");

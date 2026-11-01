@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { execGhRead, execGhReadAsync, execPlainGh, execPlainGhAsync } from "../lib/plain-gh.mjs";
 import {
@@ -10,6 +10,7 @@ import {
   rateLimitRetryGuidance,
   readWriterLogin,
 } from "./gh-api-preflight.mjs";
+import { bindGitInvocation } from "./git-invocation.mjs";
 
 function githubAccessFailure(error) {
   const limited = (text) =>
@@ -130,9 +131,10 @@ function* execPrGhSteps(args, options = {}) {
     if (selectedGit) {
       // gh resolves Git through PATH even for local repository selection. This
       // call-owned adapter also covers advisory commands without a supervisor.
-      gitPath = mkdtempSync(join(tmpdir(), "openclaw-pr-gh-git-"));
-      symlinkSync(resolve(options.cwd ?? process.cwd(), selectedGit), join(gitPath, "git"));
-      captured.env = { ...inherited, PATH: `${gitPath}${delimiter}${inherited.PATH ?? ""}` };
+      if (process.platform !== "win32") {
+        gitPath = mkdtempSync(join(tmpdir(), "openclaw-pr-gh-git-"));
+      }
+      captured.env = bindGitInvocation(gitPath, selectedGit, inherited, options.cwd).env;
     }
     return yield [commandArgs, captured];
   } catch (error) {

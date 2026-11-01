@@ -2,14 +2,14 @@ import {
   bindMessageInjectionAdmission,
   createLegacyMessageInjectionAuthority,
 } from "../../auto-reply/reply/message-injection-authority.js";
+import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type {
   ReplyBackendHandle,
   ReplyBackendMessageInjection,
   ReplyBackendMessageInjectionV2,
   ReplyToolAuthorityPreparation,
-} from "../../auto-reply/reply/reply-run-registry.contracts.js";
-import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
+} from "../../sessions/session-controller.contracts.js";
 import {
   capturePreparedToolAuthorityReads,
   type PreparedToolAuthorityRead,

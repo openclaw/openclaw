@@ -8,11 +8,10 @@ import {
   isAgentDatabaseInspectionPendingError,
   resolveGatewayReadRetryDelayMs,
 } from "../gateway-availability.ts";
-import { modelCatalogKey, modelCatalogParams } from "../model-catalog-cache.ts";
+import { modelCatalogParams } from "../model-catalog-cache.ts";
 import {
   loadModelCatalog,
   peekModelCatalog,
-  settleModelCatalogRequests,
   subscribeModelCatalogCache,
 } from "../model-catalog-store.ts";
 import { uiConversationMatches, type UiSessionDefaultsHost } from "../sessions/session-key.ts";
@@ -54,6 +53,8 @@ function metadataEntryFor(
       sessionDefaults?: UiSessionDefaultsHost,
       {
         sessionOnly = false,
+        refreshSessionFacts = sessionOnly || !scope?.sessionKey,
+        retireCatalog = false,
         matchesCatalog,
         commandsChanged = true,
         delayMs = 0,
@@ -89,7 +90,8 @@ function metadataEntryFor(
         notifyChatMetadataListeners(entry, {
           type: "invalidated",
           scope: sessionOnly ? "session" : "full",
-          refreshSessionFacts: sessionOnly || !scope?.sessionKey,
+          refreshSessionFacts,
+          ...(retireCatalog ? { retireCatalog: true } : {}),
         });
         entry.release();
       }
@@ -101,7 +103,6 @@ function metadataEntryFor(
   let entry = entries.get(key);
   if (!entry) {
     const catalogScope = modelCatalogParams(params);
-    const catalogKey = modelCatalogKey(catalogScope);
     const created: ChatMetadataEntry = {
       scope: params,
       catalogController: new AbortController(),
@@ -124,11 +125,15 @@ function metadataEntryFor(
         }
       },
     };
-    const stopCatalog = subscribeModelCatalogCache(client, (update) => {
-      if (update.type === "invalidated" && update.matches(catalogScope, catalogKey)) {
-        created.catalogRevision += 1;
-      }
-    });
+    const stopCatalog = subscribeModelCatalogCache(
+      client,
+      (update) => {
+        if (update.type === "invalidated") {
+          created.catalogRevision += 1;
+        }
+      },
+      () => catalogScope,
+    );
     entry = created;
     entries.set(key, entry);
     for (const candidate of entries.values()) {
@@ -327,7 +332,7 @@ export function subscribeChatMetadata(
   };
 }
 
-export function loadChatMetadata(
+function loadChatMetadata(
   client: GatewayBrowserClient,
   scope: ChatMetadataParams,
 ): Promise<ChatMetadataResult> {
@@ -415,7 +420,6 @@ export function loadChatMetadataRefresh(
       : undefined;
   const catalog = createDeferredCore<ModelCatalogResult | undefined>();
   const completed = createDeferredCore();
-  let wakePending = false;
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
   const record: ChatMetadataRefreshRecord = {
     controller: entry.catalogController,
@@ -450,28 +454,12 @@ export function loadChatMetadataRefresh(
         // Refresh the queued publication without admitting another transport.
         void loadChatMetadata(client, scope);
       }
+      // A same-generation startup extension adds commands beside its existing catalog.
       const inheritedCatalog =
         requestedRevision === entry.refreshRevision &&
         requestedCatalogRevision === entry.catalogRevision
           ? startupCatalog
           : undefined;
-      // A same-generation startup extension adds commands beside its existing catalog.
-      // Hidden or invalidated demand must retain both producer barriers through remount.
-      const catalogSettlement =
-        inheritedCatalog && active ? undefined : settleModelCatalogRequests(client, scope);
-      const pending = [entry.activeRequest?.promise, catalogSettlement].filter(
-        (promise) => promise !== undefined,
-      );
-      if (current && pending.length) {
-        if (!wakePending) {
-          wakePending = true;
-          void Promise.allSettled(pending).then(() => {
-            wakePending = false;
-            record.start();
-          });
-        }
-        return;
-      }
       if (!active) {
         record.phase = "inactive";
         catalog.resolve(undefined);

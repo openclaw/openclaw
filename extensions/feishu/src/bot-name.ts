@@ -1,5 +1,6 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { createFeishuClient } from "./client.js";
+import { extractFeishuApiErrorMeta } from "./comment-shared.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 type FeishuLogger = (...args: unknown[]) => void;
@@ -40,73 +41,6 @@ function writeCache(key: string, entry: CacheEntry): void {
   pruneMapToMaxSize(cache, MAX_CACHE_ENTRIES);
 }
 
-function readFeishuErrorCode(error: unknown): number | undefined {
-  if (!error || typeof error !== "object") {
-    return undefined;
-  }
-  const data = (error as { response?: { data?: unknown } }).response?.data;
-  if (!data || typeof data !== "object") {
-    return undefined;
-  }
-  const code = (data as { code?: unknown }).code;
-  return typeof code === "number" ? code : undefined;
-}
-
-async function requestBotName(params: {
-  account: ResolvedFeishuAccount;
-  openId: string;
-  log: FeishuLogger;
-}): Promise<BotBatchResponse | null> {
-  const { account, openId, log } = params;
-  const query = new URLSearchParams({ bot_ids: openId });
-  try {
-    const client = createFeishuClient(account);
-    const response = await client.request<BotBatchResponse>({
-      method: "GET",
-      url: `/open-apis/bot/v3/bots/basic_batch?${query.toString()}`,
-      timeout: REQUEST_TIMEOUT_MS,
-    });
-    const code = response.code ?? 0;
-    if (code === 0) {
-      return response;
-    }
-    if (code === 99991672) {
-      log(`feishu[${account.accountId}]: bot.basic_info scope not granted`);
-    } else {
-      log(`feishu[${account.accountId}]: bot name lookup failed (code=${code})`);
-    }
-  } catch (error) {
-    if (readFeishuErrorCode(error) === 99991672) {
-      log(`feishu[${account.accountId}]: bot.basic_info scope not granted`);
-    } else {
-      log(`feishu[${account.accountId}]: bot name lookup failed: ${String(error)}`);
-    }
-  }
-  return null;
-}
-
-async function resolveUncachedBotName(params: {
-  account: ResolvedFeishuAccount;
-  openId: string;
-  cacheKey: string;
-  log: FeishuLogger;
-}): Promise<string | undefined> {
-  const { account, openId, cacheKey, log } = params;
-  const result = await requestBotName({ account, openId, log });
-  if (!result) {
-    // Optional names use one short cooldown, not an hour-long failure circuit.
-    backoffUntilByAccount.set(account.accountId, Date.now() + LOOKUP_BACKOFF_MS);
-    return undefined;
-  }
-
-  const name = result.data?.bots?.[openId]?.name?.trim();
-  writeCache(cacheKey, {
-    ...(name ? { name } : {}),
-    expiresAt: Date.now() + (name ? POSITIVE_TTL_MS : NEGATIVE_TTL_MS),
-  });
-  return name;
-}
-
 export async function resolveFeishuBotName(params: {
   account: ResolvedFeishuAccount;
   openId: string;
@@ -132,7 +66,45 @@ export async function resolveFeishuBotName(params: {
   if (pending) {
     return pending;
   }
-  const lookup = resolveUncachedBotName({ ...params, openId, cacheKey: key });
+  const { account, log } = params;
+  const lookup = (async () => {
+    const query = new URLSearchParams({ bot_ids: openId });
+    let result: BotBatchResponse | null = null;
+    try {
+      const client = createFeishuClient(account);
+      const response = await client.request<BotBatchResponse>({
+        method: "GET",
+        url: `/open-apis/bot/v3/bots/basic_batch?${query.toString()}`,
+        timeout: REQUEST_TIMEOUT_MS,
+      });
+      const code = response.code ?? 0;
+      if (code === 0) {
+        result = response;
+      } else if (code === 99991672) {
+        log(`feishu[${account.accountId}]: bot.basic_info scope not granted`);
+      } else {
+        log(`feishu[${account.accountId}]: bot name lookup failed (code=${code})`);
+      }
+    } catch (error) {
+      if (extractFeishuApiErrorMeta(error).feishuCode === 99991672) {
+        log(`feishu[${account.accountId}]: bot.basic_info scope not granted`);
+      } else {
+        log(`feishu[${account.accountId}]: bot name lookup failed: ${String(error)}`);
+      }
+    }
+    if (!result) {
+      // Optional names use one short cooldown, not an hour-long failure circuit.
+      backoffUntilByAccount.set(account.accountId, Date.now() + LOOKUP_BACKOFF_MS);
+      return undefined;
+    }
+
+    const name = result.data?.bots?.[openId]?.name?.trim();
+    writeCache(key, {
+      ...(name ? { name } : {}),
+      expiresAt: Date.now() + (name ? POSITIVE_TTL_MS : NEGATIVE_TTL_MS),
+    });
+    return name;
+  })();
   inflight.set(key, lookup);
   try {
     return await lookup;

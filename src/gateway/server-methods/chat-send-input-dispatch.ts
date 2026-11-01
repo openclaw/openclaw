@@ -1,10 +1,6 @@
 import { performance } from "node:perf_hooks";
-import {
-  createAgentRunRestartAbortError,
-  isAgentRunRestartAbortReason,
-} from "../../agents/run-termination.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { withoutGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import { reserveReplyAdmissionTicket } from "../../auto-reply/reply/reply-admission-ticket.js";
 import { lookupSessionGoalOperation } from "../../config/sessions/goals-operations-read.js";
 import type { SessionGoalOperationResult } from "../../config/sessions/goals-operations.js";
 import {
@@ -14,17 +10,21 @@ import {
 import { logVerbose } from "../../globals.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
-import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
+import {
+  emitDiagnosticsTimelineEvent,
+  withDiagnosticsTimelineObserver,
+} from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveChatAbortDiagnosticReason } from "../chat-abort-diagnostics.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../operator-tool-gateway-authority.js";
+import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { invalidateSkillAuthoringForOtherRequester } from "../skill-library-authoring.js";
-import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
 import {
@@ -35,22 +35,20 @@ import { createChatSendDashboardAuthority } from "./chat-send-dashboard-authorit
 import { readChatSendDiagnostics, startChatSendDiagnostics } from "./chat-send-diagnostics.js";
 import { handleChatSendSetupError } from "./chat-send-dispatch-errors.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
+import { acknowledgeCodexGoal } from "./chat-send-goal-ack.js";
 import {
-  createChatSendMessageInjectionStarter,
-  settleChatSendPreAckMessageInjection,
-} from "./chat-send-message-injection.js";
+  createChatSendGoalCommitGuard,
+  requiresRuntimeApprovedChatInput,
+} from "./chat-send-goal-admission.js";
+import { createChatSendMessageInjectionStarter } from "./chat-send-message-injection.js";
 import type { ChatSendInternalOptions } from "./chat-send-options.js";
-import { applyChatSendReplyContextFields } from "./chat-send-reply-context.js";
+import { readChatSendRetryComparison } from "./chat-send-retry-comparison.js";
 import { createChatSendSessionInitialization } from "./chat-send-session-binding.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
 import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
-import {
-  createChatSendGoalCommitGuard,
-  createChatSendPendingInputAdmission,
-} from "./chat-send-work-admission.js";
+import { createChatSendPendingInputAdmission } from "./chat-send-work-admission.js";
 import { prepareChatSendAckTiming } from "./chat-server-timing.js";
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
-import { isDirectGatewayUserClient } from "./cron-creator-authority-admission.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { publishCommittedSessionGoalChange } from "./session-goal-change.js";
@@ -81,12 +79,10 @@ export async function handleChatSendWithStorage(
     sessionMutationAuthorization?.takeRelease?.() ?? sessionMutationAuthorization?.release;
   using diagnostics =
     readChatSendDiagnostics(handlerOptions) ?? startChatSendDiagnostics(context.logGateway);
-  const isDirectExternalUser =
-    externalAuthorityAdmission !== undefined && isDirectGatewayUserClient(client);
   const setup = await prepareAndAdmitChatSend(
     handlerOptions,
     onAdmissionOwned,
-    { ...options, isDirectExternalUser },
+    options,
     diagnostics,
     storage ? () => storage.release() : undefined,
   ).catch((error: unknown) => {
@@ -108,7 +104,7 @@ export async function handleChatSendWithStorage(
       }
     },
   };
-  const { p, systemInputProvenance, reconnectResumeRequested } = request;
+  const { systemInputProvenance, reconnectResumeRequested } = request;
   const { clientRunId, cfg, storePath, entry, sessionKey, sessionRoutingChanged, selectedAgent } =
     session;
   const {
@@ -119,12 +115,11 @@ export async function handleChatSendWithStorage(
     interruptedActiveRun,
     lifecycleGeneration,
     messageInjectionTarget,
-    restartSafeAdmission,
   } = admission;
+  diagnostics.setRunIdentity(admittedSessionId, clientRunId);
   const phase = diagnostics.scope("attachments");
   const preparedAttachments = await prepareChatSendAttachments({
     ...setup,
-    client,
     respond,
     context,
   });
@@ -169,15 +164,10 @@ export async function handleChatSendWithStorage(
   const cronCreatorAuthority = externalAuthorityAdmission?.resolve(externalAdmissionParams);
 
   const admissionStartedAt = Date.now();
-  const terminalizeRestartSafeAdmission = (terminalState: RestartSafeChatTerminalState) =>
-    admission.settleTerminal({ ...terminalState, startedAt: admissionStartedAt });
-  // sessions.create invokes chat only after committing a fresh session. Its eligible
-  // initial input transfers custody with the transcript and restart claim, not before.
-  const commitFreshInput =
-    restartSafeAdmission !== undefined && !restartSafeAdmission.retryExpectedState;
-  const commitInitialInput = req.method === "sessions.create" && commitFreshInput;
+  const commitInitialInput = req.method === "sessions.create";
+  let commitFreshInput = admission.localInputAdmission || commitInitialInput;
   let inputAdmissionAttempted = false;
-  let replyAdmissionTicket: ReturnType<typeof reserveReplyAdmissionTicket>;
+  let committedInput: { sessionId: string; lifecycleRevision?: string } | undefined;
   let releaseBeforeDispatch: void | (() => void) = undefined;
   let dashboardAuthority: Awaited<ReturnType<typeof createChatSendDashboardAuthority>> | undefined;
   try {
@@ -188,6 +178,14 @@ export async function handleChatSendWithStorage(
       }
     };
     let assertAcceptedInputCurrent: (() => void) | undefined;
+    const pendingAdmission = createChatSendPendingInputAdmission({
+      runId: clientRunId,
+      expectedProfileId: req.expectedProfileId,
+      sessionMutationAuthorization,
+      sessionMutationCommitGuard,
+      assertCustodyLifetimeCurrent,
+      assertClientUploadAllowed: admission.assertClientUploadAllowed,
+    });
     const assertUnacceptedInputCurrent = composeSessionSourceAssertion(
       [sessionMutationCommitGuard],
       (assertSource) => {
@@ -218,11 +216,13 @@ export async function handleChatSendWithStorage(
           sessionMutationCommitGuard,
         })
       : undefined;
+    const codexGoalCommitted = admission.codexGoalAdmission ? createDeferredCore() : undefined;
     const userTurn = createGatewayChatUserTurnController({
+      onMessagePersisted: codexGoalCommitted?.resolve,
       ...setup,
       client,
+      commitInitialInput,
       transcript: options?.transcript,
-      isDirectExternalUser,
       startedAt: admissionStartedAt,
       warn: (message) => context.logGateway.warn(message),
       mentionInbox: context.mentionInbox,
@@ -240,26 +240,34 @@ export async function handleChatSendWithStorage(
     } = userTurn;
     let needsSessionCreationBinding = !entry;
     const withUserTurnInputPublication = <T>(run: () => Promise<T>) =>
-      admission.withInputCommitPublication(
-        run,
-        entry
-          ? undefined
-          : (source, committedEntry) => {
-              sessionMutationAuthorization?.recordCreatedSession?.({
-                agentId: session.agentId,
-                sessionKey,
-                storePath,
-                sessionId: admittedSessionId,
-                lifecycleRevision: committedEntry.lifecycleRevision,
-                readSource: source,
-                entry: committedEntry,
-              });
-              needsSessionCreationBinding = false;
-            },
-      );
+      admission.withInputCommitPublication(run, (source, committedEntry) => {
+        committedInput = {
+          sessionId: committedEntry.sessionId,
+          lifecycleRevision: committedEntry.lifecycleRevision,
+        };
+        if (!entry) {
+          sessionMutationAuthorization?.recordCreatedSession?.({
+            agentId: session.agentId,
+            sessionKey,
+            storePath,
+            sessionId: admittedSessionId,
+            lifecycleRevision: committedEntry.lifecycleRevision,
+            readSource: source,
+            entry: committedEntry,
+          });
+          needsSessionCreationBinding = false;
+        }
+        if (options?.stageCreatedInput) {
+          assertAcceptedInputCurrent = pendingAdmission.assertAdmittedCurrent;
+        }
+        admission.bindAcceptedInputAuthority(pendingAdmission.assertAdmittedCurrent);
+      });
     const persistGatewayUserTurnTranscript = (
       ...args: Parameters<typeof persistUserTurnTranscript>
-    ) => withUserTurnInputPublication(() => persistUserTurnTranscript(...args));
+    ) =>
+      withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
+        withUserTurnInputPublication(() => persistUserTurnTranscript(...args)),
+      );
     const persistGatewayUserTurnTranscriptBestEffort = (
       ...args: Parameters<typeof userTurn.persistBestEffort>
     ) => withUserTurnInputPublication(() => userTurn.persistBestEffort(...args));
@@ -271,25 +279,32 @@ export async function handleChatSendWithStorage(
       client,
       logGateway: context.logGateway,
       getConfig: context.getRuntimeConfig,
+      assertInputCurrent: assertInputAdmissionCurrent,
       userTurn,
     });
     const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;
+    // Retained inputs need queue custody even after the resume run has finished.
+    commitFreshInput =
+      !readQueuedChatInputAdmission(clientRunId) &&
+      ((commitInitialInput && !requiresRuntimeApprovedChatInput(client)) ||
+        (admission.localInputAdmission &&
+          request.p.queueMode !== "steer" &&
+          !messageInjectionTarget &&
+          !isInternalTextSlashCommandTurn &&
+          (admission.localGoalAdmission ||
+            (userTurn.baseInput.display !== false &&
+              (!systemInputProvenance || systemInputProvenance.kind === "external_user")))));
     admission.setPendingInputCleanup(async () => {
       try {
         const pending =
           userTurnRecorder.getPendingInputMessage?.() &&
           !userTurnRecorder.isPendingInputConsumed?.();
-        const disposition =
-          activeRunAbort.controller.signal.aborted &&
-          activeRunAbort.entry?.abortStopReason !== "restart" &&
-          !isAgentRunRestartAbortReason(activeRunAbort.controller.signal.reason)
-            ? "cancelled"
-            : "interrupted";
+        const disposition = "cancelled";
         userTurnRecorder.finishPendingInput?.(disposition);
         if (pending && activeRunAbort.controller.signal.aborted) {
           const reason = resolveChatAbortDiagnosticReason(
             activeRunAbort.controller.signal,
-            activeRunAbort.entry,
+            activeRunAbort.entry?.adapter,
           );
           context.logGateway.info(`chat pending input aborted: ${reason} (${disposition})`, {
             runId: clientRunId,
@@ -313,58 +328,43 @@ export async function handleChatSendWithStorage(
     });
     phase?.mark("persist");
     let approvedInput: PersistedUserTurnMessage | undefined;
-    let stageInput = Boolean(
-      entry?.sessionId &&
-      (userTurn.baseInput.display !== false || request.restartResume) &&
-      (!systemInputProvenance ||
-        systemInputProvenance.kind === "external_user" ||
-        options?.stageCreatedInput === true) &&
-      !isInternalTextSlashCommandTurn &&
-      !request.goalOperation &&
-      !restartSafeAdmission?.retryExpectedState &&
-      !commitInitialInput,
-    );
-    if (stageInput && restartSafeAdmission && !request.restartResume) {
-      inputAdmissionAttempted = true;
-      const input = await admission.acquireInputActor();
-      if (input) {
-        const authority = {
-          assertCurrent: assertCustodyLifetimeCurrent,
-          authorize: assertCustodyLifetimeCurrent,
-        };
-        const state = input.actor.snapshot(authority) ?? (await input.actor.read(authority));
-        // Older Gateways can leave custody behind before committing the recovery
-        // claim. Recover that input; fresh idle sends commit transcript custody directly.
-        stageInput = state.pendingInputs.some(
-          (pending) => pending.idempotency_key === userTurn.baseInput.idempotencyKey,
-        );
-      }
-    }
+    const stageInput =
+      admission.codexGoalAdmission ||
+      Boolean(
+        entry?.sessionId &&
+        userTurn.baseInput.display !== false &&
+        (!systemInputProvenance ||
+          systemInputProvenance.kind === "external_user" ||
+          options?.stageCreatedInput === true) &&
+        !isInternalTextSlashCommandTurn &&
+        !request.goalOperation &&
+        !commitFreshInput,
+      );
     if (stageInput) {
-      // ACK transfers input custody. Persist approved source bytes before
-      // dispatch; a validated durable retry already owns its transcript input.
+      // ACK transfers input custody. Persist approved source bytes before dispatch.
       inputAdmissionAttempted = true;
       using stagePhase = diagnostics.scope("detail.persist.stage");
-      const pendingAdmission = createChatSendPendingInputAdmission({
-        runId: clientRunId,
-        expectedProfileId: req.expectedProfileId,
-        sessionMutationAuthorization,
-        sessionMutationCommitGuard,
-        assertCustodyLifetimeCurrent,
-        assertClientUploadAllowed: admission.assertClientUploadAllowed,
-      });
-      const staged = await userTurnRecorder.stageApproved?.({
-        ...pendingAdmission,
-        ...(request.restartResume ? { lifecycleAdmission: request.restartResume } : {}),
-      });
+      const staged = await withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
+        userTurnRecorder.stageApproved?.({
+          ...pendingAdmission,
+        }),
+      );
       stagePhase?.finish();
       if (userTurnRecorder.isPendingInputConsumed?.()) {
+        const comparison = await readChatSendRetryComparison(session);
+        assertInputAdmissionCurrent();
         admission.cleanupAdmittedRun();
         clearAgentRunContext(clientRunId, lifecycleGeneration);
-        respond(true, { runId: clientRunId, status: "ok" }, undefined, {
-          cached: true,
-          runId: clientRunId,
-        });
+        respond(
+          true,
+          {
+            runId: clientRunId,
+            status: "ok",
+            ...(comparison?.messageSeq !== undefined ? { messageSeq: comparison.messageSeq } : {}),
+          },
+          undefined,
+          { cached: true, runId: clientRunId },
+        );
         return;
       }
       if (!staged) {
@@ -375,6 +375,7 @@ export async function handleChatSendWithStorage(
         // the retained operator, destination and Gateway authority stay live.
         assertAcceptedInputCurrent = pendingAdmission.assertAdmittedCurrent;
       }
+      admission.bindAcceptedInputAuthority(pendingAdmission.assertAdmittedCurrent);
       approvedInput = userTurnRecorder.getPendingInputMessage?.();
       emitSessionsChanged(
         context,
@@ -383,14 +384,12 @@ export async function handleChatSendWithStorage(
       );
     }
     let goalResult: SessionGoalOperationResult | undefined;
-    if (restartSafeAdmission) {
+    if (commitFreshInput) {
       inputAdmissionAttempted = true;
       using transcriptPhase = diagnostics.scope("detail.persist.transcript");
       const persistedUserTurn = await persistGatewayUserTurnTranscript();
       transcriptPhase?.finish();
-      if (commitInitialInput || (!request.goalOperation && commitFreshInput)) {
-        approvedInput = persistedUserTurn?.message;
-      }
+      approvedInput = persistedUserTurn?.message;
       const goalOperation = request.goalOperation;
       if (goalOperation) {
         const mutation = persistedUserTurn?.sessionTurnMutationResult;
@@ -433,38 +432,20 @@ export async function handleChatSendWithStorage(
           summary: `goal ${goalOperation.action}`,
         });
       }
-      // A matching idempotency row and lifecycle claim commit atomically, so
-      // retries adopt the durable turn without submitting it twice.
-      if (
-        !persistedUserTurn ||
-        persistedUserTurn.sessionEntry?.restartRecoveryDeliveryRunId !== clientRunId ||
-        persistedUserTurn.sessionEntry.restartRecoveryDeliverySourceRunId !== clientRunId
-      ) {
-        throw new Error("chat turn was not durably admitted");
+      if (!persistedUserTurn) {
+        throw new Error("Chat input was not durably admitted; refresh and retry.");
       }
       if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
         if (activeRunAbort.entry) {
-          activeRunAbort.entry.abortStopReason = "restart";
+          activeRunAbort.entry.adapter.abortStopReason = "restart";
         }
         activeRunAbort.controller.abort(createAgentRunRestartAbortError());
       }
       if (activeRunAbort.controller.signal.aborted) {
-        // No runtime adopted this durable input; retain its same-ID restart retry.
-        if (
-          !(await terminalizeRestartSafeAdmission({
-            retryable: activeRunAbort.entry?.abortStopReason === "restart",
-            status: "killed",
-          }))
-        ) {
-          throw new Error("chat admission ownership changed before terminalization");
-        }
         finishAbortedChatSend();
         return;
       }
       if (sessionRoutingChanged(context.getRuntimeConfig())) {
-        if (!(await terminalizeRestartSafeAdmission({ retryable: true, status: "failed" }))) {
-          throw new Error("chat admission ownership changed before terminalization");
-        }
         admission.rejectSessionRoutingChanged();
         return;
       }
@@ -525,8 +506,10 @@ export async function handleChatSendWithStorage(
       return;
     }
     const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
+      diagnostics,
       operatorAuthority: admission.operatorAuthority,
       target: messageInjectionTarget,
+      sourceRef: admission.sourceRef,
       abortSignal: activeRunAbort.controller.signal,
       request,
       session,
@@ -543,32 +526,6 @@ export async function handleChatSendWithStorage(
           ? undefined
           : assertInputAdmissionCurrent,
     });
-    const preAckReplyContextPromise =
-      messageInjectionTarget && !isInternalTextSlashCommandTurn
-        ? replyContextFieldsPromise
-        : undefined;
-    phase?.mark("replyContext");
-    if (preAckReplyContextPromise) {
-      applyChatSendReplyContextFields(ctx, await preAckReplyContextPromise);
-      if (settleInterruptedPreparation()) {
-        return;
-      }
-    }
-    assertInputAdmissionCurrent();
-    let messageInjectionAttempt =
-      !p.replyToId || preAckReplyContextPromise ? await beginCapturedMessageInjection() : undefined;
-    phase?.mark("runAdmission");
-    const preAckInjection = await settleChatSendPreAckMessageInjection({
-      attempt: messageInjectionAttempt,
-      isAborted: () => activeRunAbort.controller.signal.aborted,
-      sessionRoutingChanged: () => sessionRoutingChanged(context.getRuntimeConfig()),
-      onAborted: finishAbortedChatSend,
-      onSessionRoutingChanged: admission.rejectSessionRoutingChanged,
-    });
-    if (preAckInjection.status === "handled") {
-      return;
-    }
-    messageInjectionAttempt = preAckInjection.attempt;
     phase?.mark("effects");
     const { serverTiming, chatSendTiming, ackReadyEvent } = prepareChatSendAckTiming({
       client,
@@ -611,21 +568,19 @@ export async function handleChatSendWithStorage(
     // post-ACK cleanupAdmittedRun must not race that persist with a discard.
     assertInputAdmissionCurrent();
     admission.setDiscardAbandonedPreparedMedia(undefined);
-    replyAdmissionTicket = reserveReplyAdmissionTicket([
-      ctx.SessionKey,
-      ctx.CommandTargetSessionKey,
-    ]);
     phase?.mark("response");
-    respond(true, ackPayload, undefined, { runId: clientRunId });
+    admission.markInputAccepted();
+    if (!admission.codexGoalAdmission) {
+      respond(true, ackPayload, undefined, { runId: clientRunId });
+    }
     phase?.finish();
-    diagnostics.acknowledge(messageInjectionAttempt ? "steer" : "startup");
+    diagnostics.acknowledge();
     context.recordClientActivity?.(client);
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
     // Dispatch owns execution from this point, including deferred and collected turns.
     releaseBeforeDispatch = undefined;
     const dispatch: StartChatDispatchParams = {
       ...setup,
-      replyAdmissionTicket,
       diagnostics,
       admissionStartedAt,
       attachments: preparedAttachments.value,
@@ -661,11 +616,8 @@ export async function handleChatSendWithStorage(
       externalAuthorityAdmission,
       injection: {
         beginCapturedMessageInjection,
-        messageInjectionAttempt,
-        preAckReplyContextPromise,
         replyContextFieldsPromise,
       },
-      terminalizeRestartSafeAdmission,
       timing: {
         chatSendAckedAtMs,
         chatSendTiming,
@@ -679,24 +631,32 @@ export async function handleChatSendWithStorage(
     };
     // Accepted work retains its source authority; the spawning tool and turn no longer
     // own reply preparation while the new runtime establishes its own caller context.
-    withoutGatewayToolCallerIdentity(() =>
+    const dispatched = withoutGatewayToolCallerIdentity(() =>
       runOutsideOperatorToolGatewayAuthority(() => startChatDispatch(dispatch)),
     );
     admittedCleanup.dispatched = true;
+    if (codexGoalCommitted) {
+      await acknowledgeCodexGoal({
+        dispatch,
+        committed: codexGoalCommitted.promise,
+        dispatched,
+        ackPayload,
+        respond,
+      });
+    }
   } catch (err) {
     dashboardAuthority?.release();
     releaseBeforeDispatch?.();
-    replyAdmissionTicket?.release();
     await handleChatSendSetupError({
       // Uncommitted Goal admissions may retry with their original identity. Committed
       // outcomes replay from the durable receipt instead of this transient error cache.
       cacheResult: request.goalOperation === undefined && !inputAdmissionAttempted,
+      committedInput,
       admission,
       context,
       error: err,
       respond,
       session,
-      terminalizeRestartSafeAdmission,
     });
   }
 }

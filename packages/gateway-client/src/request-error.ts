@@ -1,6 +1,9 @@
 import { formatConnectErrorMessage } from "@openclaw/gateway-protocol/connect-error-details";
 import type { ErrorShape } from "@openclaw/gateway-protocol/frame-guards";
-import { GatewayProtocolRequestError } from "./protocol-request.js";
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+} from "./protocol-request.js";
 
 export class GatewayClientRequestError extends GatewayProtocolRequestError {
   constructor(error: Partial<ErrorShape>) {
@@ -9,6 +12,13 @@ export class GatewayClientRequestError extends GatewayProtocolRequestError {
       message: formatConnectErrorMessage({ message: error.message, details: error.details }),
     });
     this.name = "GatewayClientRequestError";
+  }
+}
+
+export class GatewayClientRequestTimeoutError extends GatewayProtocolRequestTimeoutError {
+  constructor(params: { method: string; timeoutMs: number; requestSent: boolean }) {
+    super(params, `gateway request timeout for ${params.method}`);
+    this.name = "GatewayClientRequestTimeoutError";
   }
 }
 

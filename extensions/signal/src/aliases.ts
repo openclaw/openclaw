@@ -126,7 +126,7 @@ export function resolveSignalDeliveredConversationKey(params: {
   to: string;
 }): string | null {
   // Delivery already succeeded, so conversation-key recovery is fail-soft.
-  // Approval route revalidation stays fail-closed in approval-reaction-routes.ts.
+  // Approval route revalidation stays fail-closed in approval-reactions.ts.
   try {
     return (
       resolveSignalTarget({
@@ -151,6 +151,7 @@ export function listSignalAliasDirectoryEntries(params: {
 }): ChannelDirectoryEntry[] {
   const aliases = resolveAliasMap(params);
   const query = normalizeLowercaseStringOrEmpty(params.query);
+  const aliasQuery = query.normalize("NFC");
   const limit = params.limit != null && params.limit > 0 ? params.limit : undefined;
   const exactAlias = params.query ? normalizeAliasKey(params.query) : undefined;
   if (exactAlias && aliases.has(exactAlias)) {
@@ -178,7 +179,7 @@ export function listSignalAliasDirectoryEntries(params: {
     }
     if (
       query &&
-      !alias.includes(query) &&
+      !normalizeLowercaseStringOrEmpty(alias).normalize("NFC").includes(aliasQuery) &&
       !normalizeLowercaseStringOrEmpty(target.to).includes(query)
     ) {
       continue;

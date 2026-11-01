@@ -143,12 +143,24 @@ type WorkerNodeBootstrapAccess = {
     sha256: string;
     bytes: number;
     openclawVersion: string;
+    /** Explicit npm profiles resolve dependencies on the destination; bundles carry them. */
+    install?: "bundle" | "npm";
+    buildId?: string;
+    manifestSha256?: string;
     enabledPluginIds: readonly string[];
     tlsFingerprint?: string;
     /** Core-owned POSIX prerequisite script, applied only to Linux before invoking Node. */
     linuxToolchainSetup?: string;
+    /** Optional npm project lock for this exact archive; failure must retain unlocked installation. */
+    installLock?: {
+      url: string;
+      token: string;
+      sha256: string;
+      bytes: number;
+      tlsFingerprint?: string;
+    };
   };
-  /** Runtime/enrollment closure, including shutdown; provision's separate signal identifies explicit Stop. */
+  /** Runtime/enrollment closure, including shutdown; stop this work while preserving its allocation. */
   signal?: AbortSignal;
 };
 
@@ -170,21 +182,37 @@ export type WorkerNodeEnrollment = WorkerNodeBootstrapAccess & {
   openclawVersion: string;
   displayName: string;
   waitForDeviceId: () => Promise<string>;
+  /** Private per-lease inference inputs. Never captured in a prepared image. */
+  workerCodex?: {
+    configToml: string;
+    helperScript: string;
+    /** Original executable path referenced by configToml; provider rewrites it when staging. */
+    helperPath: string;
+    configVersion: string;
+  };
 } & (
     | { mode: "connect"; setupCode: string; setupId: string }
     | { mode: "resume"; deviceId: string }
   );
 
+/** Nonsecret immutable provider identity. The provider owns the identity keys and their meaning. */
+export type WorkerResourceReceipt = {
+  version: 1;
+  leaseId: string;
+  identity: Record<string, string>;
+};
+
 /** Durable lease identity and endpoint returned by a successful provision operation. */
 export type WorkerLease = {
   leaseId: string;
+  resourceReceipt?: WorkerResourceReceipt;
   /** The SSH account also owns processes unrelated to this worker lease. */
   sharedHost?: boolean;
   desktop?: WorkerDesktopEndpoint;
 } & ({ ssh: WorkerSshEndpoint; node?: never } | { node: { deviceId: string }; ssh?: never });
 
 /** Authoritative inspection result for an already-known worker lease. */
-export type WorkerLeaseStatus =
+export type WorkerLeaseStatus = { resourceReceipt?: WorkerResourceReceipt } & (
   | {
       status: "active";
       /** Explicit provider fact used to reconcile leases persisted before this metadata existed. */
@@ -192,7 +220,8 @@ export type WorkerLeaseStatus =
     }
   | { status: "dormant" }
   | { status: "destroyed" }
-  | { status: "unknown" };
+  | { status: "unknown" }
+);
 
 /** Provision failed after allocation and the provider could not prove cleanup completed. */
 class WorkerProvisionCleanupError extends AggregateError {
@@ -285,6 +314,8 @@ export type WorkerRecipePreparation = {
 /** Cloud-worker lifecycle capability shared by plugin and internal providers. */
 export type WorkerProvider = {
   id: string;
+  /** Honors exact receipts during provision replay, inspection and confirmed destruction. */
+  supportsResourceReceipts?: true;
   /**
    * Nonsecret backend display ID, never a routing or allocation identity.
    * Synchronous local presentation only: no commands, network, or credential reads.
@@ -356,10 +387,17 @@ export type WorkerProvider = {
       profileId?: string;
       /** Attempt-scoped display facts; the host rejects reports after provisioning closes. */
       reportStartStatus?: (status: WorkerEnvironmentStartStatus) => void;
-      /** Cancel this attempt; settle its active commands before rejecting. Cleanup proves release separately. */
+      /**
+       * Stop this attempt, including on Gateway shutdown; settle active commands before rejecting.
+       * Preserve allocations on abort. Explicit cancellation/destroy requests record destruction intent separately.
+       */
       signal?: AbortSignal;
       /** Modern hosts supply authority; legacy optionality is source compatibility only. */
       assertCurrent?: () => void;
+      /** Original committed resource on replay; never adopt a replacement. */
+      resourceReceipt?: WorkerResourceReceipt;
+      /** Await before setup/enrollment or cleanup affects a newly identified resource. */
+      recordResourceReceipt?: (receipt: WorkerResourceReceipt) => Promise<void>;
       executionMode?: WorkerExecutionMode;
       machineClass?: string;
       os?: string;
@@ -451,6 +489,7 @@ export type WorkerProvider = {
   inspect: (lease: {
     leaseId: string;
     profile: WorkerProfile;
+    resourceReceipt?: WorkerResourceReceipt;
     signal?: AbortSignal;
   }) => Promise<WorkerLeaseStatus>;
   /**
@@ -469,8 +508,26 @@ export type WorkerProvider = {
     signal: AbortSignal;
     assertCurrent: () => void;
   }) => Promise<void>;
+  /** Opt in to the cleanup-acceptance notification during session reclaim. */
+  supportsCleanupAcceptance?: true;
   /** Idempotent; resolves only after the provider can prove teardown. */
-  destroy: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<void>;
+  destroy: (lease: {
+    leaseId: string;
+    profile: WorkerProfile;
+    resourceReceipt?: WorkerResourceReceipt;
+    /** Recheck current authority after waits and immediately before effects. */
+    assertCurrent?: () => void;
+    /** Cancel commands, await their settlement, and reject while teardown remains unconfirmed. */
+    signal?: AbortSignal;
+    /**
+     * Optional notification that cleanup is accepted and no longer needs the session.
+     * The host may reclaim the session, but retains this operation until its promise settles.
+     * Call only after durable provider acceptance (or a claimed, provider-owned capture).
+     * Fulfillment must still prove physical teardown; rejection remains retryable.
+     * Providers without this capability ignore the callback and keep blocking reclaim.
+     */
+    onCleanupAccepted?: () => void;
+  }) => Promise<void>;
   /** Maximum core wait for teardown, including provider-owned checkpointing and cleanup. */
   resolveDestroyTimeoutMs?: (profile: WorkerProfile) => number;
 };

@@ -78,8 +78,6 @@ describe("classifyRealtimeVoiceAgentControlText", () => {
   it("keeps ambiguous active-call speech out of automatic steering", () => {
     const safeDefault = {
       mode: "status",
-      confidence: "low",
-      reason: "safe_default",
       shouldAutoControl: false,
     };
     expect(resolveIntent({ text: "hello" })).toMatchObject(safeDefault);
@@ -128,41 +126,52 @@ describe("controlRealtimeVoiceAgentRun", () => {
     },
   );
 
-  it("controls the exact live owner and queries only its session diagnostics", async () => {
-    const deps = createDeps({ activeSessionId: "another-agent-session" });
-    const abort = vi.fn(() => true);
-    const resolveActiveEmbeddedRunOwnerByRunId = vi.fn(() => ({
-      runId: "owned-run",
-      sessionId: "owned-session",
-      sessionKey: "global",
-      abort,
-    }));
-    const result = await control(
-      {
+  it.each(["provided callback", "legacy adapter"])(
+    "controls the exact live owner through %s",
+    async (route) => {
+      const deps = createDeps({ activeSessionId: "another-agent-session" });
+      const abort = vi.fn(() => true);
+      const cancelRun = route === "provided callback" ? vi.fn(async () => true) : undefined;
+      const resolveActiveEmbeddedRunOwnerByRunId = vi.fn(() => ({
+        runId: "owned-run",
+        sessionId: "owned-session",
         sessionKey: "global",
-        runTarget: createRunTarget(),
-        text: "cancel",
-        mode: "cancel",
-      },
-      { ...deps, resolveActiveEmbeddedRunOwnerByRunId },
-    );
-    expect(result).toMatchObject({ ok: true, sessionId: "owned-session", aborted: true });
-    expect([...new Set(resolveActiveEmbeddedRunOwnerByRunId.mock.calls.flat())]).toEqual([
-      "owned-run",
-    ]);
-    expect(abort).toHaveBeenCalledOnce();
-    expect(deps.getDiagnosticSessionActivitySnapshot).toHaveBeenCalledExactlyOnceWith({
-      sessionId: "owned-session",
-    });
-    expect(deps.resolveActiveEmbeddedRunSessionId).not.toHaveBeenCalled();
-    expect(deps.abortEmbeddedAgentRun).not.toHaveBeenCalled();
-  });
+        abort,
+      }));
+      const result = await control(
+        {
+          sessionKey: "global",
+          runTarget: createRunTarget(),
+          text: "cancel",
+          mode: "cancel",
+          cancelRun,
+        },
+        { ...deps, resolveActiveEmbeddedRunOwnerByRunId },
+      );
+      expect(result).toMatchObject({ ok: true, sessionId: "owned-session", aborted: true });
+      expect([...new Set(resolveActiveEmbeddedRunOwnerByRunId.mock.calls.flat())]).toEqual([
+        "owned-run",
+      ]);
+      if (cancelRun) {
+        expect(cancelRun).toHaveBeenCalledExactlyOnceWith("owned-run");
+        expect(abort).not.toHaveBeenCalled();
+      } else {
+        expect(abort).toHaveBeenCalledOnce();
+      }
+      expect(deps.getDiagnosticSessionActivitySnapshot).toHaveBeenCalledExactlyOnceWith({
+        sessionId: "owned-session",
+      });
+      expect(deps.resolveActiveEmbeddedRunSessionId).not.toHaveBeenCalled();
+      expect(deps.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([undefined, null])(
     "answers read-only status without mutating commands (target=%s)",
     async (runTarget) => {
       if (runTarget === null) {
-        vi.doMock("../agents/embedded-agent-runner/active-run-projections.js", () => {
+        // mock-isolation: A null exact-run target must answer status even when global session-key projections cannot load.
+        vi.doMock("../sessions/session-controller.queries.js", () => {
           throw new Error("session-key projections unavailable");
         });
       }
@@ -171,18 +180,19 @@ describe("controlRealtimeVoiceAgentRun", () => {
           control({ sessionKey: "agent:status-probe:main", runTarget }),
         ).resolves.toMatchObject({ ok: true, mode: "status", active: false, speak: true });
       } finally {
-        vi.doUnmock("../agents/embedded-agent-runner/active-run-projections.js");
+        vi.doUnmock("../sessions/session-controller.queries.js");
       }
     },
   );
 
-  it("queues steering into the active embedded run", async () => {
+  it.each([
+    ["steer", "use the safer path"],
+    ["followup", "also check the migration"],
+  ] as const)("queues %s into the active embedded run", async (mode, text) => {
     const deps = createDeps({ activeSessionId: "session-active" });
-    await expect(
-      control({ text: "use the safer path", mode: "steer" }, deps),
-    ).resolves.toMatchObject({
+    await expect(control({ text, mode }, deps)).resolves.toMatchObject({
       ok: true,
-      mode: "steer",
+      mode,
       sessionKey: "agent:main:main",
       sessionId: "session-active",
       active: true,
@@ -190,9 +200,14 @@ describe("controlRealtimeVoiceAgentRun", () => {
       speak: true,
       suppress: false,
     });
+    const queuedText = deps.queueEmbeddedAgentMessageWithOutcomeAsync.mock.calls[0]?.[1] ?? "";
+    expect(queuedText).toContain(text);
+    if (mode === "followup") {
+      expect(queuedText).toContain("Spoken follow-up for the current voice call.");
+    }
     expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).toHaveBeenCalledWith(
       "session-active",
-      "use the safer path",
+      mode === "steer" ? text : queuedText,
       {
         steeringMode: "all",
         debounceMs: 0,
@@ -245,16 +260,6 @@ describe("controlRealtimeVoiceAgentRun", () => {
     });
     expect(result.message).toContain("cannot safely accept scoped voice steering");
     expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).not.toHaveBeenCalled();
-  });
-
-  it("wraps follow-up steering so the active run treats it as deferred context", async () => {
-    const deps = createDeps({ activeSessionId: "session-active" });
-    await expect(
-      control({ text: "also check the migration", mode: "followup" }, deps),
-    ).resolves.toMatchObject({ ok: true, mode: "followup", speak: true });
-    const queuedText = deps.queueEmbeddedAgentMessageWithOutcomeAsync.mock.calls[0]?.[1] ?? "";
-    expect(queuedText).toContain("Spoken follow-up for the current voice call.");
-    expect(queuedText).toContain("also check the migration");
   });
 
   it("cancels the active run without queueing a steering message", async () => {

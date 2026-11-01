@@ -194,7 +194,7 @@ puts JSON.generate(rows)
     const rubyArgs = ["-e", source, fastfilePath];
     const result = spawnSync(
       useBundle ? "bundle" : "ruby",
-      useBundle ? ["_4.0.22_", "exec", "ruby", ...rubyArgs] : rubyArgs,
+      useBundle ? ["_4.0.23_", "exec", "ruby", ...rubyArgs] : rubyArgs,
       { encoding: "utf8", env: { ...process.env, BUNDLE_GEMFILE: gemfilePath } },
     );
     expect(result.status, result.stderr).toBe(0);
@@ -396,7 +396,7 @@ puts JSON.generate(rows)
     const rubyArgs = ["-e", source, fastfilePath];
     const result = spawnSync(
       useBundle ? "bundle" : "ruby",
-      useBundle ? ["_4.0.22_", "exec", "ruby", ...rubyArgs] : rubyArgs,
+      useBundle ? ["_4.0.23_", "exec", "ruby", ...rubyArgs] : rubyArgs,
       { encoding: "utf8", env: { ...process.env, BUNDLE_GEMFILE: gemfilePath } },
     );
     expect(result.status, result.stderr).toBe(0);
@@ -675,7 +675,7 @@ puts JSON.generate(rows)
       expect(existsSync(tracePath)).toBe(false);
       expect(result.stderr).toContain("repository iOS Gemfile is missing");
       expect(result.stderr).toContain("Restore it from the repository checkout");
-      expect(result.stderr).toContain("bundle _4.0.22_ install");
+      expect(result.stderr).toContain("bundle _4.0.23_ install");
     } finally {
       rmSync(fixture, { force: true, recursive: true });
     }
@@ -693,7 +693,7 @@ puts JSON.generate(rows)
   it("preserves the first screenshot failure and records one capture without retrying", () => {
     const fastfile = readFastfile();
     const screenshotArguments = fastfile.slice(
-      fastfile.indexOf("IOS_SCREENSHOT_TEST_TIMEOUT_SECONDS ="),
+      fastfile.indexOf("RELEASE_IOS_SCREENSHOT_TESTS ="),
       fastfile.indexOf("PNG_SIGNATURE ="),
     );
     const source = `
@@ -710,13 +710,13 @@ SNAPSHOT_STATUS_BAR_ARGUMENTS = "fixture"
 APP_STORE_APP_IDENTIFIER = "fixture.app"
 ${screenshotArguments}
 ${[
-  "bundle_identifier_for_product",
   "archive_snapshot_test_result!",
   "write_release_ios_screenshot_attempts!",
   "record_release_ios_screenshot_attempt!",
+  "mark_ios_resource_phase",
   "screenshot_phase",
   "run_screenshot_xcodebuild!",
-  "capture_release_ios_screenshot!",
+  "capture_release_ios_screenshots!",
 ]
   .map((name) => functionDefinition(fastfile, name))
   .join("\n")}
@@ -726,23 +726,11 @@ end
 def repo_root
   "/fixture"
 end
-module Open3
-  def self.capture3(command, *args)
-    raise "unexpected external command: #{command}" unless command == "/usr/libexec/PlistBuddy"
-    [File.read(args.last), "", Struct.new(:success?).new(true)]
-  end
-end
 def sh(*arguments, **options)
   command = arguments.last
-  return JSON.generate({ APP_STORE_APP_IDENTIFIER => {}, "fixture.capture.debug" => {} }) if command.include?("simctl listapps")
-  if arguments[0, 3] == ["xcrun", "simctl", "uninstall"]
-    @uninstalls << arguments.drop(3)
-    return
-  end
   @calls += 1
   raise "settings lookup" if command.include?("showBuildSettings")
   raise "rebooted simulator" if command.include?("simctl")
-  raise "missing test selection" unless command.include?("-only-testing:OpenClawUITests/OpenClawSnapshotUITests/fixture-test")
   raise "not using built products" unless command.include?("test-without-building")
   parts = Shellwords.split(command)
   @xcode_arguments = parts.drop(parts.index("xcodebuild") + 1)
@@ -752,31 +740,33 @@ def sh(*arguments, **options)
   FileUtils.mkdir_p(@result_path)
   File.write(File.join(@result_path, "result"), "capture #{@calls}")
   raise "synthetic capture failure" if @scenario == "capture" && @calls == 1
-  File.write(@screenshot_path, "fresh screenshot")
+  @screenshot_paths.each_with_index { |path, index| File.write(path, "fresh screenshot") unless @scenario == "missing" && index == 3 }
 end
 def verify_snapshot_test_result!(*)
   @checks += 1
   raise "synthetic result failure" if @scenario == "result" && @checks == 1
 end
-rows = %w[capture result success].map do |scenario|
+rows = %w[capture result missing success].map do |scenario|
   Dir.mktmpdir("openclaw-capture-") do |root|
-    @scenario, @calls, @checks, @uninstalls = scenario, 0, 0, []
-    app = File.join(root, "Build", "Products", "Debug-iphonesimulator", "OpenClaw.app")
-    FileUtils.mkdir_p(app)
-    File.write(File.join(app, "Info.plist"), "fixture.capture.debug")
+    @scenario, @calls, @checks = scenario, 0, 0
     @result_path = File.join(root, "current.xcresult")
     archive = File.join(root, "archive")
     logs = File.join(root, "logs")
     FileUtils.mkdir_p(archive)
     FileUtils.mkdir_p(File.join(root, "en-US"))
     FileUtils.mkdir_p(File.join(root, "screenshots"))
-    @screenshot_path = File.join(root, "screenshots", "fixture-device-fixture-screen.png")
+    @screenshot_paths = RELEASE_IOS_SCREENSHOT_TESTS.map do |screenshot|
+      filename = "fixture-device-#{screenshot.fetch(:name)}.png"
+      File.write(File.join(root, "en-US", filename), "stale output")
+      path = File.join(root, "screenshots", filename)
+      File.write(path, "stale cache")
+      path
+    end
     ledger = File.join(archive, "capture-attempts.json")
     error = nil
     begin
-      capture_release_ios_screenshot!(
+      capture_release_ios_screenshots!(
         project: "fixture", device: "fixture-device",
-        screenshot: { test: "fixture-test", name: "fixture-screen" },
         output_directory: root, result_bundle_path: @result_path,
         result_bundle_archive_directory: archive, capture_attempts: [],
         log_directory: logs,
@@ -784,15 +774,16 @@ rows = %w[capture result success].map do |scenario|
         device_udid: "fixture-udid", snapshot_cache_directory: root
       )
     rescue => failure
-      error = failure.message
+      error = scenario == "missing" && failure.is_a?(Errno::ENOENT) ? "missing screenshot" : failure.message
     end
-    { scenario: scenario, calls: @calls, checks: @checks, uninstalls: @uninstalls, error: error,
+    { scenario: scenario, calls: @calls, checks: @checks, error: error,
+      output: Dir[File.join(root, "en-US", "*.png")].map { |path| File.read(path) },
       xcodeArguments: @xcode_arguments,
       attempts: JSON.parse(File.read(ledger)).fetch("attempts"),
       ledgerKeys: JSON.parse(File.read(ledger)).keys.sort,
       evidenceEntries: Dir.children(archive).sort,
-      log: File.read(File.join(logs, "fixture-device-fixture-screen.log")),
-      archived: File.read(File.join(archive, "fixture-device-fixture-screen-attempt-1.xcresult", "result")) }
+      log: File.read(File.join(logs, "fixture-device.log")),
+      archived: File.read(File.join(archive, "fixture-device-attempt-1.xcresult", "result")) }
   end
 end
 puts JSON.generate(rows)
@@ -803,7 +794,7 @@ puts JSON.generate(rows)
       scenario: string;
       calls: number;
       checks: number;
-      uninstalls: string[][];
+      output: string[];
       error: string | null;
       xcodeArguments: string[];
       attempts: { attempt: number; captureOutcome: string }[];
@@ -817,6 +808,7 @@ puts JSON.generate(rows)
     ).toEqual([
       { scenario: "capture", calls: 1, checks: 0, error: "synthetic capture failure" },
       { scenario: "result", calls: 1, checks: 1, error: "synthetic result failure" },
+      { scenario: "missing", calls: 1, checks: 1, error: "missing screenshot" },
       { scenario: "success", calls: 1, checks: 1, error: null },
     ]);
     for (const row of rows) {
@@ -825,7 +817,19 @@ puts JSON.generate(rows)
         "-collect-test-diagnostics",
         "never",
       ]);
-      expect(row.uninstalls).toEqual([["fixture-udid", "fixture.capture.debug"]]);
+      expect(
+        row.xcodeArguments.filter((argument) => argument.startsWith("-only-testing:")),
+      ).toEqual([
+        "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/testReleaseControlScreenshot",
+        "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/testReleaseChatScreenshot",
+        "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/testReleaseAgentScreenshot",
+        "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/testReleaseSettingsScreenshot",
+      ]);
+      expect(row.output).not.toContain("stale output");
+      expect(row.output).not.toContain("stale cache");
+      if (row.scenario === "success") {
+        expect(row.output).toEqual(Array(4).fill("fresh screenshot"));
+      }
       expect(row.ledgerKeys).toEqual(["attempts", "schemaVersion"]);
       expect(row.attempts).toEqual([
         expect.objectContaining({
@@ -836,7 +840,7 @@ puts JSON.generate(rows)
       expect(row.archived).toBe("capture 1");
       expect(row.evidenceEntries).toEqual([
         "capture-attempts.json",
-        "fixture-device-fixture-screen-attempt-1.xcresult",
+        "fixture-device-attempt-1.xcresult",
       ]);
       expect(row.log).toBe("native capture log");
     }
@@ -903,16 +907,60 @@ puts JSON.generate(rows)
     expect(screenshots).toContain('ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"');
   });
 
+  it("can log runtime cleanup from Fastlane's namespace without a global UI constant", () => {
+    const source = `
+module FastlaneCore
+  module UI
+    def self.important(*); puts "cleanup observed"; end
+  end
+end
+require ARGV.fetch(0)
+module Open3
+  def self.capture3(*args)
+    data = args.first == "/sbin/mount" ? "" : JSON.generate({ "watch" => {
+      "runtimeIdentifier" => "watch", "platformIdentifier" => "com.apple.platform.watchsimulator", "state" => "Deleting"
+    } })
+    [data, "", Struct.new(:success?).new(true)]
+  end
+end
+def WatchRuntimeAdmission.sleep(*); raise "wait observed"; end
+begin
+  WatchRuntimeAdmission.wait!("watch")
+rescue => error
+  abort error.full_message unless error.message == "wait observed"
+end
+`;
+    const result = spawnSync(
+      "ruby",
+      ["-e", source, path.join(path.dirname(fastfilePath), "watch_runtime_admission.rb")],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("cleanup observed");
+  });
+
   it("owns one simulator at a time and cleans up failed captures while reusing the screenshot build", () => {
     const source = `
 require "json"
 require "tmpdir"
+require "rbconfig"
 module UI
   def self.user_error!(message)
     raise message
   end
   def self.success(message); end
   def self.important(message); end
+  def self.error(message); end
+  def self.shell_error!(message); raise message; end
+end
+if ENV["OPENCLAW_TEST_FASTLANE_BUNDLE"] == "1"
+  require "fastlane"
+  require "fastlane/helper/sh_helper"
+  FastlaneCore::UI.ui_object = UI
+else
+  module FastlaneCore
+    UI = ::UI
+  end
 end
 def default_platform(*); end
 def desc(*); end
@@ -947,7 +995,17 @@ def set_watch_status_bar_override(*)
   false
 end
 def normalize_watch_screenshot_status_bar(*); end
-def sleep(*); end
+def sleep(seconds)
+  return if seconds == 3
+  @observations << {
+    seconds: seconds,
+    phase: File.read(ENV.fetch("OPENCLAW_IOS_RESOURCE_PHASE_PATH")),
+    builds: @builds.dup,
+    active: @owned.values.map { |device| device.slice("name", "state") },
+    captures: @captures
+  }
+  @owned.each_value { |device| device["state"] = "Shutdown" } if @scenario == "startup-probe-ended" && seconds == 120
+end
 
 def make_product(derived_data_path)
   app = File.join(derived_data_path, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
@@ -956,57 +1014,198 @@ def make_product(derived_data_path)
   FileUtils.mkdir_p(app)
   File.write(File.join(app, "Info.plist"), "fixture.watch") unless @scenario == "invalid-plist"
 end
+module Process
+  class << self
+    alias real_clock_gettime clock_gettime
+    def clock_gettime(clock)
+      ($screenshot_scenario.start_with?("watch-") || $screenshot_scenario == "runtime-delete-recovered") ? $runtime_clock : real_clock_gettime(clock)
+    end
+  end
+end
 module Open3
   def self.popen2(*)
     raise Errno::ENOENT
   end
   def self.capture3(command, *args)
+    if [command, *args] == ["xcrun", "simctl", "runtime", "list", "-j"]
+      if $staging_scenario
+        image = { "identifier" => "watch-image", "platformIdentifier" => "com.apple.platform.watchsimulator",
+          "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", "state" => "Ready",
+          "kind" => $watch_staged ? "Disk Image" : "Patchable Cryptex Disk Image",
+          "signatureState" => $watch_staged && $screenshot_scenario != "watch-staging-unverified" ? "Verified" : "Unknown",
+          "path" => File.join($screenshot_root, "asset"), "mountPath" => "/Library/Developer/CoreSimulator/Volumes/watchOS_fixture",
+          "runtimeBundlePath" => $screenshot_root }
+        return [JSON.generate({ "watch-image" => image }), "", Struct.new(:success?).new(true)]
+      end
+      images = if %w[watch-maintenance watch-runtime-missing watch-unrelated-runtime].include?($screenshot_scenario) || ($screenshot_scenario == "runtime-delete-recovered" && $watch_deleted_partial && !$watch_restored)
+        ready = { "identifier" => "ready", "platformIdentifier" => "com.apple.platform.watchsimulator", "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", "state" => "Ready", "mountPath" => "/fixture/watch", "runtimeBundlePath" => $screenshot_root }
+        if ($screenshot_scenario == "watch-runtime-missing" || $watch_deleted_partial) && !$watch_restored
+          ready["runtimeBundlePath"] = ready["mountPath"] = "/fixture/missing"
+        end
+        result = { "ready" => ready }
+        if $screenshot_scenario == "watch-unrelated-runtime"
+          result["older"] = ready.merge("identifier" => "older", "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.watchOS-26-0", "state" => "Unusable", "mountPath" => "/fixture/missing")
+        end
+        if $runtime_maintenance_pending
+          result["stale"] = ready.merge("identifier" => "stale",
+            "state" => $runtime_stage == "unusable-mounted" ? "Unusable" : $runtime_stage,
+            "runtimeBundlePath" => $runtime_stage == "unusable-mounted" ? "/fixture/missing" : $screenshot_root,
+            "mountPath" => $runtime_stage == "Unusable" ? "/fixture/stale" : "/fixture/watch")
+        end
+        result
+      else
+        {}
+      end
+      return [JSON.generate(images), "", Struct.new(:success?).new(true)]
+    elsif [command, *args] == ["xcrun", "simctl", "runtime", "delete", "stale", "--keep-asset"]
+      raise "deleted mounted or usable registration" unless $runtime_stage == "Unusable"
+      $runtime_maintenance_pending = false
+      return ["", "", Struct.new(:success?).new(true)]
+    elsif [command, *args] == ["xcrun", "simctl", "runtime", "scan-and-mount"]
+      return ["", "", Struct.new(:success?).new(true)]
+    elsif command == "/sbin/mount"
+      return ["/dev/disk1 on /fixture/watch (apfs, local, read-only)\n/dev/disk2 on /Library/Developer/CoreSimulator/Volumes/watchOS_fixture (apfs, local, read-only)\n", "", Struct.new(:success?).new(true)]
+    elsif [command, *args] == ["xcrun", "simctl", "list", "runtimes", "--json"]
+      return ["", "runtime service unavailable", Struct.new(:success?).new(false)] if $screenshot_scenario == "inventory-failure"
+      return ["invalid JSON", "", Struct.new(:success?).new(true)] if $screenshot_scenario == "inventory-invalid"
+      available = !$screenshot_scenario.start_with?("unavailable-") || ($watch_restored && $screenshot_scenario != "unavailable-still-missing")
+      return [JSON.generate({ "runtimes" => [{
+        "identifier" => "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", "version" => "27.0", "isAvailable" => available,
+        "supportedDeviceTypes" => [{ "name" => "Apple Watch Ultra 3 (49mm)", "identifier" => "watch-type" }]
+      }] }), "", Struct.new(:success?).new(true)]
+    end
     raise "unexpected external command: #{command}" unless command == "/usr/libexec/PlistBuddy"
     [File.read(args.last), "", Struct.new(:success?).new(true)]
   end
 end
 def run_screenshot_xcodebuild!(arguments, log_path:)
   raise "not building test products" unless arguments.last == "build-for-testing"
+  derived_data_path = arguments.fetch(arguments.index("-derivedDataPath") + 1)
+  package_source = File.join(derived_data_path, "SourcePackages", "checkouts", "fixture", "Package.swift")
+  if @scenario == "iphone"
+    raise "unexpected cached Swift package source on cold build" if File.exist?(package_source)
+  else
+    raise "cached Swift package source was removed" unless File.exist?(package_source) && File.read(package_source) == "downloaded package source"
+  end
+  raise "stale non-package state survived clean build" if File.exist?(File.join(derived_data_path, ".previous-state"))
   FileUtils.mkdir_p(File.dirname(log_path))
   File.write(log_path, "native build log")
   @builds << "snapshot"
   raise "snapshot build failed" if @scenario == "build-failure"
-  make_product(arguments.fetch(arguments.index("-derivedDataPath") + 1))
+  make_product(derived_data_path)
 end
-def capture_release_ios_screenshot!(**options)
+def capture_release_ios_screenshots!(**options)
   raise "capture before successful build" unless @builds == ["snapshot"]
   active = @owned.fetch(options.fetch(:device_udid))
   raise "selected older runtime" unless active.fetch("runtime").end_with?("27-0")
   raise "capture failed" if @scenario == "capture-failure" || @scenario == "capture-cleanup-failure"
-  name = options.fetch(:screenshot).fetch(:name)
-  output = File.join(options.fetch(:output_directory), "en-US", "#{options.fetch(:device)}-#{name}.png")
-  FileUtils.mkdir_p(File.dirname(output))
-  File.binwrite(output, PNG_SIGNATURE + "fixture")
-  FileUtils.mkdir_p(File.join(options.fetch(:result_bundle_archive_directory), "#{options.fetch(:device)}-#{name}.xcresult"))
-  options.fetch(:capture_attempts) << { name: name, outcome: "passed" }
+  @captures += 1
+  RELEASE_IOS_SCREENSHOT_TESTS.each do |screenshot|
+    output = File.join(options.fetch(:output_directory), "en-US", "#{options.fetch(:device)}-#{screenshot.fetch(:name)}.png")
+    FileUtils.mkdir_p(File.dirname(output))
+    File.binwrite(output, PNG_SIGNATURE + "fixture")
+  end
+  FileUtils.mkdir_p(File.join(options.fetch(:result_bundle_archive_directory), "#{options.fetch(:device)}-attempt-1.xcresult"))
+  options.fetch(:capture_attempts) << { deviceName: options.fetch(:device), attempt: 1, captureOutcome: "succeeded" }
   write_release_ios_screenshot_attempts!(
     attempts: options.fetch(:capture_attempts), output_path: options.fetch(:capture_attempts_path)
   )
 end
-def sh(command, *arguments, **_options)
+def sh(command, *arguments, **options)
   args = arguments.empty? ? Shellwords.split(command) : [command, *arguments]
   @commands << args
-  if args[0, 3] == ["xcrun", "simctl", "create"]
+  if args == ["node", File.join(repo_root, "scripts", "lib", "ios-simulator-headroom.ts")]
+    raise "headroom checked before simulator cleanup" unless @owned.empty?
+    @admissions << @captures
+    raise "host CPU headroom unavailable" if @scenario == "watch-headroom-timeout" && @captures == 2
+  elsif args[0, 3] == ["xcrun", "simctl", "create"]
+    raise "simulator created without CPU headroom" unless @admissions.length == @created + 1
     raise "new device before old cleanup" unless @owned.empty?
+    if args[3].include?("Apple Watch")
+      @watch_creates += 1
+      raise "runtime path not found" if @scenario == "unavailable-create-failure"
+      raise "unrelated creation failure" if @scenario == "runtime-unrelated"
+      raise "The watchOS 27.0 simulator runtime is not available: runtime path not found" if (@scenario.start_with?("runtime-") && @watch_creates == 1) || @scenario == "runtime-retry-failure"
+    end
     @created += 1
     udid = "00000000-0000-0000-0000-%012d" % @created
     @owned[udid] = { "name" => args[3], "udid" => udid, "runtime" => args[5], "state" => "Shutdown" }
     return udid
   elsif args[0, 3] == ["xcrun", "simctl", "bootstatus"]
     device = @owned.fetch(args[3])
+    if device.fetch("name").include?("Apple Watch") &&
+      ((@scenario == "watch-maintenance" && $runtime_maintenance_pending) || ($staging_scenario && !($watch_staged && $source_retired)))
+      device["state"] = "Shutdown"
+      return
+    end
     # CI observed bootstatus exiting 0 after CoreSimulator shut the Watch down mid-boot.
     device["state"] = @scenario == "boot-ended" && device.fetch("name").include?("Apple Watch") ? "Shutdown" : "Booted"
-    raise "boot failed" if @scenario == "boot-failure"
+    raise "boot failed" if @scenario == "boot-failure" || (@scenario == "watch-boot-failure" && device.fetch("name").include?("Apple Watch"))
   elsif args[0, 3] == ["xcrun", "simctl", "shutdown"]
-    raise "cleanup failed" if @scenario == "capture-cleanup-failure" || @scenario == "cleanup-failure"
+    raise "cleanup failed" if @scenario == "capture-cleanup-failure" || @scenario == "cleanup-failure" || (@scenario == "watch-cleanup-failure" && @owned.fetch(args[3]).fetch("name").include?("Apple Watch"))
     @owned.fetch(args[3])["state"] = "Shutdown"
   elsif args[0, 3] == ["xcrun", "simctl", "delete"]
     @owned.delete(args[3])
+  elsif args == ["xcrun", "simctl", "runtime", "list", "-j"]
+    return "{}" if %w[unavailable-empty unavailable-staged].include?(@scenario) && !$watch_restored
+    watch_image = @runtime_scanned ? "watch-image-rescanned" : "watch-image"
+    images = {
+      watch_image => { "identifier" => watch_image, "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", "state" => "Ready", "runtimeBundlePath" => File.join(@root, "watch-runtime") },
+      "phone-image" => { "identifier" => "phone-image", "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0", "state" => "Ready", "runtimeBundlePath" => File.join(@root, "phone-runtime") }
+    }
+    if @scenario == "runtime-delete-recovered" && $watch_deleted_partial && !$watch_restored
+      images.fetch(watch_image).merge!("state" => "Unusable", "runtimeBundlePath" => "/fixture/missing")
+    end
+    if $staging_scenario
+      images.fetch(watch_image).merge!("signatureState" => $watch_staged && @scenario != "watch-staging-unverified" ? "Verified" : "Unknown")
+    end
+    if %w[unavailable-deleting unavailable-ambiguous].include?(@scenario)
+      images["watch-other"] = {
+        "identifier" => "watch-other", "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.watchOS-27-0",
+        "state" => @scenario == "unavailable-deleting" ? "Deleting" : "Ready"
+      }
+    end
+    return JSON.generate(images)
+  elsif args[0, 4] == ["xcrun", "simctl", "runtime", "delete"]
+    raise "wrong runtime image deleted" unless args[4] == (@runtime_scanned ? "watch-image-rescanned" : "watch-image")
+    @runtime_deletes += 1
+    deletion_error = "runtime deletion denied" if @scenario == "runtime-delete-unrelated"
+    partial_delete = %w[runtime-delete-recovered runtime-delete-repeated runtime-scan-failure].include?(@scenario)
+    if partial_delete && (@runtime_deletes == 1 || @scenario == "runtime-delete-repeated")
+      $watch_deleted_partial = true
+      deletion_error = "An error was encountered processing the command (domain=com.apple.CoreSimulator.simdiskimaged.SimDiskImageError, code=30): Removed the runtime, but did not reclaim its MobileAsset: /fixture/#{"segment/" * 100}runtime.asset/AssetData/"
+    end
+    if $staging_scenario && @scenario != "watch-staging-retained"
+      FileUtils.rm_rf(File.join(@root, "asset"))
+      $source_retired = true
+    end
+    if deletion_error
+      if ENV["OPENCLAW_TEST_FASTLANE_BUNDLE"] == "1"
+        Fastlane::Actions.sh(RbConfig.ruby, "-e", "warn ARGV.fetch(0); exit 30", deletion_error, log: false, **options)
+      elsif options[:error_callback]
+        options[:error_callback].call(deletion_error)
+      else
+        # Fastlane exceptions contain at most a recap; callbacks receive all output.
+        raise deletion_error.length > 500 ? deletion_error[-500..-1] : deletion_error
+      end
+    end
+  elsif args[0, 4] == ["xcrun", "simctl", "runtime", "add"]
+    raise "source asset still present at import" unless $source_retired
+    raise "runtime staging rejected" if @scenario == "watch-staging-rejected"
+    raise "wrong staged package" unless File.read(args.last) == "signed runtime fixture"
+    $watch_staged = true
+    FileUtils.mkdir_p(File.join(@root, "watch-runtime"))
+  elsif args[0, 2] == ["/bin/cp", "-c"]
+    FileUtils.cp(args[2], args[3])
+  elsif args == ["xcrun", "simctl", "runtime", "scan-and-mount"]
+    raise "runtime scan unavailable" if @scenario == "runtime-scan-failure"
+    @runtime_scanned = true
+  elsif args == ["xcrun", "--sdk", "watchsimulator", "--show-sdk-version"]
+    return "27.0"
+  elsif args[0, 2] == ["xcodebuild", "-downloadPlatform"]
+    raise "watchOS download unavailable" if %w[runtime-download-failure unavailable-download-failure].include?(@scenario)
+    $watch_restored = true
+    FileUtils.mkdir_p(File.join(@root, "watch-runtime")) unless @scenario == "runtime-path-missing"
   elsif args.include?("xcodebuild") && args.include?("build")
     @builds << "watch"
     raise "Watch build failed" if @scenario == "standalone-build-failure"
@@ -1019,12 +1218,36 @@ def sh(command, *arguments, **_options)
   end
 end
 
-results = %w[combined diagnostics iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended capture-failure capture-cleanup-failure cleanup-failure].map do |scenario|
+results = %w[combined watch-unrelated-runtime watch-staging watch-staging-retained watch-staging-rejected watch-staging-unverified watch-staging-ambiguous unavailable-staged watch-maintenance watch-runtime-missing diagnostics startup-probe startup-probe-ended iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended watch-headroom-timeout capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-delete-recovered runtime-delete-repeated runtime-delete-unrelated runtime-scan-failure runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local unavailable-recovered unavailable-empty unavailable-deleting unavailable-ambiguous unavailable-download-failure unavailable-still-missing unavailable-create-failure unavailable-local inventory-failure inventory-invalid watch-boot-failure watch-cleanup-failure].map do |scenario|
   Dir.mktmpdir("openclaw-watch-build-") do |root|
     @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
     @owned, @created = {}, 0
+    @admissions = []
+    @observations, @captures = [], 0
+    @watch_creates = 0
+    @runtime_deletes, @runtime_scanned = 0, false
+    $screenshot_scenario, $watch_restored, $watch_deleted_partial = scenario, false, false
+    $screenshot_root = root
+    $staging_scenario = scenario.start_with?("watch-staging") || scenario == "unavailable-staged"
+    $watch_staged, $source_retired = false, false
+    if $staging_scenario
+      FileUtils.mkdir_p(File.join(root, "asset", "Restore"))
+      File.write(File.join(root, "asset", "Restore", "runtime.dmg"), "signed runtime fixture")
+      File.write(File.join(root, "asset", "Restore", "extra.dmg"), "ambiguous") if scenario == "watch-staging-ambiguous"
+    end
+    $runtime_maintenance_pending = scenario == "watch-maintenance"
+    $runtime_stage, $runtime_clock = "Deleting", 0
+    if defined?(WatchRuntimeAdmission)
+      WatchRuntimeAdmission.define_singleton_method(:sleep) do |seconds|
+        $runtime_clock += seconds
+        $runtime_stage = $runtime_clock == 2 ? "unusable-mounted" : "Unusable"
+      end
+    end
+    ENV["CI"] = %w[runtime-local unavailable-local].include?(scenario) ? "false" : "true"
     ENV["HOME"] = root
     ENV["OPENCLAW_SNAPSHOT_DIAGNOSTICS"] = scenario == "diagnostics" ? "1" : "0"
+    ENV["OPENCLAW_SNAPSHOT_STARTUP_PROBE"] = scenario.start_with?("startup-probe") ? "1" : "0"
+    ENV["OPENCLAW_IOS_RESOURCE_PHASE_PATH"] = File.join(root, "resource-phase")
     logs = File.join(ios_root, "build", "SnapshotLogs")
     FileUtils.mkdir_p(logs)
     File.write(File.join(logs, "stale.log"), "previous invocation")
@@ -1032,9 +1255,17 @@ results = %w[combined diagnostics iphone standalone standalone-build-failure mis
       File.write(File.join(ios_root, "build", "screenshot-diagnostics.json"), JSON.generate({ stale: true }))
     end
     %w[SnapshotDerivedData WatchScreenshotDerivedData].each do |directory|
+      next if scenario == "iphone" && directory == "SnapshotDerivedData"
       app = File.join(ios_root, "build", directory, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
       FileUtils.mkdir_p(app)
       File.write(File.join(app, "stale"), "previous invocation")
+    end
+    unless scenario == "iphone"
+      snapshot_data = File.join(ios_root, "build", "SnapshotDerivedData")
+      package_checkout = File.join(snapshot_data, "SourcePackages", "checkouts", "fixture")
+      FileUtils.mkdir_p(package_checkout)
+      File.write(File.join(package_checkout, "Package.swift"), "downloaded package source")
+      File.write(File.join(snapshot_data, ".previous-state"), "previous invocation")
     end
     if scenario.start_with?("standalone")
       output = File.join(ios_root, "fastlane", "screenshots", "en-US")
@@ -1054,7 +1285,11 @@ results = %w[combined diagnostics iphone standalone standalone-build-failure mis
     {
       scenario: scenario, builds: @builds, error: error, installed: @installed,
       owned: @owned.keys,
+      observations: @observations,
+      admissions: @admissions,
       lifecycle: @commands.select { |args| args[0, 2] == ["xcrun", "simctl"] && %w[create bootstatus shutdown delete].include?(args[2]) }.map { |args| args.drop(2) },
+      repairCommands: @commands.select { |args| args[0, 3] == ["xcrun", "simctl", "runtime"] || args[0, 2] == ["xcodebuild", "-downloadPlatform"] },
+      watchCreates: @watch_creates,
       pngs: Dir[File.join(ios_root, "fastlane", "screenshots", "en-US", "*.png")].length,
       xcresults: Dir[File.join(ios_root, "build", "SnapshotTestResults", "*.xcresult")].length,
       attempts: File.exist?(File.join(ios_root, "build", "SnapshotTestResults", "capture-attempts.json")),
@@ -1069,7 +1304,13 @@ results = %w[combined diagnostics iphone standalone standalone-build-failure mis
 end
 puts JSON.generate(results)
 `;
-    const result = spawnSync("ruby", ["-e", source, fastfilePath], { encoding: "utf8" });
+    const useBundle = process.env.OPENCLAW_TEST_FASTLANE_BUNDLE === "1";
+    const rubyArgs = ["-e", source, fastfilePath];
+    const result = spawnSync(
+      useBundle ? "bundle" : "ruby",
+      useBundle ? ["_4.0.23_", "exec", "ruby", ...rubyArgs] : rubyArgs,
+      { encoding: "utf8", env: { ...process.env, BUNDLE_GEMFILE: gemfilePath } },
+    );
     expect(result.status, result.stderr).toBe(0);
     const rows = JSON.parse(result.stdout) as {
       scenario: string;
@@ -1085,28 +1326,47 @@ puts JSON.generate(results)
       logs: string[];
       versions: string[][];
       owned: string[];
+      observations: {
+        seconds: number;
+        phase: string;
+        builds: string[];
+        active: { name: string; state: string }[];
+        captures: number;
+      }[];
       lifecycle: string[][];
+      repairCommands: string[][];
+      watchCreates: number;
+      admissions: number[];
     }[];
     const row = (scenario: string) => rows.find((entry) => entry.scenario === scenario)!;
     const versionArgs = ["--version", "2026.9.1", "--revision", "2", "--build-number", "123"];
+    expect(row("watch-maintenance")).toMatchObject({
+      error: null,
+      pngs: 9,
+      watchCreates: 1,
+      owned: [],
+    });
+    expect(row("watch-runtime-missing")).toMatchObject({
+      error: null,
+      pngs: 9,
+      watchCreates: 1,
+      owned: [],
+    });
+    expect(
+      row("watch-runtime-missing").repairCommands.filter((args) => args[0] === "xcodebuild"),
+    ).toEqual([["xcodebuild", "-downloadPlatform", "watchOS", "-buildVersion", "27.0"]]);
     expect(row("combined")).toMatchObject({
       builds: ["snapshot"],
       error: null,
       installed:
         "/apps/ios/build/SnapshotDerivedData/Build/Products/Debug-watchsimulator/OpenClawWatchApp.app",
       pngs: 9,
-      xcresults: 8,
+      xcresults: 2,
       attempts: true,
       evidenceEntries: [
         "capture-attempts.json",
-        "iPad Pro 13-inch-01-control-connected.xcresult",
-        "iPad Pro 13-inch-02-chat-connected.xcresult",
-        "iPad Pro 13-inch-03-agent-connected.xcresult",
-        "iPad Pro 13-inch-04-settings-connected.xcresult",
-        "iPhone 17 Pro Max-01-control-connected.xcresult",
-        "iPhone 17 Pro Max-02-chat-connected.xcresult",
-        "iPhone 17 Pro Max-03-agent-connected.xcresult",
-        "iPhone 17 Pro Max-04-settings-connected.xcresult",
+        "iPad Pro 13-inch-attempt-1.xcresult",
+        "iPhone 17 Pro Max-attempt-1.xcresult",
       ],
       logs: ["build.log"],
       versions: [versionArgs],
@@ -1119,6 +1379,61 @@ puts JSON.generate(results)
     });
     expect(row("combined").ledgerKeys).toEqual(["attempts", "schemaVersion"]);
     expect(row("combined").diagnostics).toBeNull();
+    expect(row("combined").observations).toEqual([]);
+    expect(row("combined").admissions).toEqual([0, 1, 2]);
+    expect(row("standalone").admissions).toEqual([0]);
+    expect(row("watch-headroom-timeout")).toMatchObject({
+      error: "host CPU headroom unavailable",
+      pngs: 8,
+      watchCreates: 0,
+      installed: null,
+      owned: [],
+    });
+    expect(row("startup-probe")).toMatchObject({
+      error: null,
+      pngs: 9,
+      observations: [
+        {
+          seconds: 60,
+          phase: "screenshot-all-host-idle",
+          builds: ["snapshot"],
+          active: [],
+          captures: 0,
+        },
+        {
+          seconds: 120,
+          phase: "screenshot-iphone-simulator-idle",
+          builds: ["snapshot"],
+          active: [{ name: "iPhone 17 Pro Max", state: "Booted" }],
+          captures: 0,
+        },
+        {
+          seconds: 120,
+          phase: "screenshot-ipad-simulator-idle",
+          builds: ["snapshot"],
+          active: [{ name: "iPad Pro 13-inch", state: "Booted" }],
+          captures: 1,
+        },
+        {
+          seconds: 120,
+          phase: "screenshot-watch-simulator-idle",
+          builds: ["snapshot"],
+          active: [{ name: "Apple Watch Ultra 3 (49mm)", state: "Booted" }],
+          captures: 2,
+        },
+      ],
+    });
+    expect(row("startup-probe-ended")).toMatchObject({
+      error:
+        "Task-owned screenshot simulator 00000000-0000-0000-0000-000000000001 is Shutdown, not Booted; CoreSimulator ended its session.",
+      pngs: 0,
+      xcresults: 0,
+    });
+    expect(row("startup-probe-ended").lifecycle.map(([operation]) => operation)).toEqual([
+      "create",
+      "bootstatus",
+      "delete",
+    ]);
     expect(row("diagnostics").evidenceEntries).toEqual(row("combined").evidenceEntries);
     expect(row("diagnostics")).toMatchObject({
       error: null,
@@ -1127,7 +1442,13 @@ puts JSON.generate(results)
       diagnostics: {
         schemaVersion: 1,
         diagnostics: expect.arrayContaining([
-          expect.objectContaining({ phase: "boot", outcome: "succeeded", activeSimulatorCount: 1 }),
+          expect.objectContaining({
+            phase: "boot",
+            outcome: "succeeded",
+            activeSimulatorCount: 1,
+            bootstatusSeconds: expect.any(Number),
+            inventorySeconds: expect.any(Number),
+          }),
           expect.objectContaining({
             phase: "delete",
             outcome: "succeeded",
@@ -1154,7 +1475,7 @@ puts JSON.generate(results)
       expect(row(scenario), scenario).toMatchObject({
         builds: ["snapshot"],
         pngs: 8,
-        xcresults: 8,
+        xcresults: 2,
         attempts: true,
       });
     }
@@ -1208,6 +1529,129 @@ puts JSON.generate(results)
     expect(row("capture-failure").error).toBe("capture failed");
     expect(row("capture-cleanup-failure").error).toBe("capture failed");
     expect(row("cleanup-failure").error).toBe("cleanup failed");
+    expect(row("watch-boot-failure")).toMatchObject({
+      error: "boot failed",
+      pngs: 8,
+      watchCreates: 1,
+      repairCommands: [],
+    });
+    expect(row("watch-cleanup-failure")).toMatchObject({
+      error: "cleanup failed",
+      pngs: 9,
+      watchCreates: 1,
+      repairCommands: [],
+    });
+    for (const scenario of ["watch-staging", "unavailable-staged", "watch-unrelated-runtime"]) {
+      expect(row(scenario), scenario).toMatchObject({ error: null, pngs: 9, watchCreates: 1 });
+    }
+    for (const [scenario, error] of [
+      ["watch-staging-retained", "old MobileAsset was not reclaimed"],
+      ["watch-staging-rejected", "runtime staging rejected"],
+      ["watch-staging-unverified", "did not restore a mounted runtime"],
+      ["watch-staging-ambiguous", "expected one runtime DMG, found 2"],
+    ] satisfies [string, string][]) {
+      expect(row(scenario), scenario).toMatchObject({ pngs: 8, watchCreates: 0 });
+      expect(row(scenario).error).toContain(error);
+    }
+    expect(row("runtime-recovered")).toMatchObject({ error: null, pngs: 9, watchCreates: 2 });
+    expect(row("runtime-recovered").repairCommands).toEqual([
+      ["xcrun", "simctl", "runtime", "list", "-j"],
+      ["xcrun", "simctl", "runtime", "delete", "watch-image"],
+      ["xcodebuild", "-downloadPlatform", "watchOS", "-buildVersion", "27.0"],
+      ["xcrun", "simctl", "runtime", "list", "-j"],
+    ]);
+    expect(row("runtime-delete-recovered")).toMatchObject({
+      error: null,
+      pngs: 9,
+      watchCreates: 2,
+    });
+    const partialDeleteRecovery = [
+      ["xcrun", "simctl", "runtime", "list", "-j"],
+      ["xcrun", "simctl", "runtime", "delete", "watch-image"],
+      ["xcrun", "simctl", "runtime", "scan-and-mount"],
+      ["xcrun", "simctl", "runtime", "list", "-j"],
+      ["xcrun", "simctl", "runtime", "delete", "watch-image-rescanned"],
+    ];
+    expect(row("runtime-delete-recovered").repairCommands).toEqual([
+      ...partialDeleteRecovery,
+      ["xcodebuild", "-downloadPlatform", "watchOS", "-buildVersion", "27.0"],
+      ["xcrun", "simctl", "runtime", "list", "-j"],
+    ]);
+    expect(row("runtime-delete-repeated").error).toContain("did not reclaim its MobileAsset");
+    expect(row("runtime-delete-repeated").repairCommands).toEqual(partialDeleteRecovery);
+    expect(row("runtime-delete-unrelated").error).toContain("runtime deletion denied");
+    expect(row("runtime-delete-unrelated").repairCommands).toEqual(
+      partialDeleteRecovery.slice(0, 2),
+    );
+    expect(row("runtime-scan-failure").error).toBe("runtime scan unavailable");
+    expect(row("runtime-scan-failure").repairCommands).toEqual(partialDeleteRecovery.slice(0, 3));
+    for (const scenario of [
+      "runtime-delete-repeated",
+      "runtime-delete-unrelated",
+      "runtime-scan-failure",
+    ]) {
+      expect(row(scenario), scenario).toMatchObject({ pngs: 8, watchCreates: 1 });
+    }
+    expect(row("runtime-download-failure")).toMatchObject({
+      error: "watchOS download unavailable",
+      pngs: 8,
+      watchCreates: 1,
+    });
+    expect(row("runtime-path-missing").error).toContain("did not restore a mounted runtime");
+    expect(row("runtime-path-missing").watchCreates).toBe(1);
+    expect(row("runtime-retry-failure").error).toContain("after one runtime repair");
+    expect(row("runtime-retry-failure").watchCreates).toBe(2);
+    for (const scenario of ["runtime-unrelated", "runtime-local"]) {
+      expect(row(scenario)).toMatchObject({ pngs: 8, watchCreates: 1, repairCommands: [] });
+      expect(row(scenario).error).toBeTruthy();
+    }
+    for (const scenario of ["unavailable-recovered", "unavailable-empty"]) {
+      expect(row(scenario), scenario).toMatchObject({ error: null, pngs: 9, watchCreates: 1 });
+      expect(
+        row(scenario).repairCommands.filter(([command]) => command === "xcodebuild"),
+      ).toHaveLength(1);
+    }
+    expect(row("unavailable-empty").repairCommands.some((args) => args[3] === "delete")).toBe(
+      false,
+    );
+    expect(row("unavailable-deleting")).toMatchObject({ error: null, pngs: 9, watchCreates: 1 });
+    expect(row("unavailable-ambiguous")).toMatchObject({ pngs: 8, watchCreates: 0 });
+    expect(row("unavailable-ambiguous").error).toContain(
+      "expected at most one registered disk image, found 2",
+    );
+    expect(row("unavailable-ambiguous").repairCommands.some((args) => args[3] === "delete")).toBe(
+      false,
+    );
+    expect(row("unavailable-download-failure")).toMatchObject({
+      error: "watchOS download unavailable",
+      pngs: 8,
+      watchCreates: 0,
+    });
+    for (const scenario of ["unavailable-still-missing", "unavailable-create-failure"]) {
+      expect(row(scenario).error).toContain("after one runtime repair");
+      expect(row(scenario).pngs).toBe(8);
+      expect(
+        row(scenario).repairCommands.filter(([command]) => command === "xcodebuild"),
+      ).toHaveLength(1);
+    }
+    expect(row("unavailable-local")).toMatchObject({
+      pngs: 8,
+      watchCreates: 0,
+      repairCommands: [],
+    });
+    expect(row("unavailable-local").error).toContain("No available watchOS runtime");
+    for (const scenario of ["inventory-failure", "inventory-invalid"]) {
+      expect(row(scenario), scenario).toMatchObject({
+        pngs: 8,
+        watchCreates: 0,
+        repairCommands: [],
+      });
+      expect(row(scenario).error).toContain(
+        scenario === "inventory-failure"
+          ? "Failed to list Watch simulator runtimes"
+          : "Invalid JSON from simctl runtime list",
+      );
+    }
     for (const entry of rows) {
       expect(entry.owned, entry.scenario).toEqual([]);
     }
@@ -1218,25 +1662,8 @@ puts JSON.generate(results)
 require "json"
 require "tmpdir"
 require "fileutils"
-require "open3"
-require "stringio"
 require "time"
 require ARGV.fetch(0)
-module Open3
-  def self.popen2(*arguments, **options)
-    output = case arguments.last
-    when "hw.logicalcpu" then "12"
-    when "hw.memsize" then "34359738368"
-    when "vm.loadavg" then "{ 1.0 2.0 3.0 }"
-    when "pcpu=,rss=,comm=" then "5.2 1024 /private/PRIVATE-PATH/OpenClawUITests-Runner\\n1.0 10 /private/PRIVATE-PATH/OtherApp\\n"
-    else "Mach Virtual Memory Statistics: (page size of 16384 bytes)\\nPages free: 42.\\nSwapouts: 3.\\n"
-    end
-    process = Object.new
-    def process.join(*); true; end
-    def process.value; Struct.new(:success?).new(true); end
-    yield StringIO.new, StringIO.new(output), process
-  end
-end
 class << Dir
   alias fixture_glob []
   def [](*patterns)
@@ -1289,13 +1716,6 @@ end
         {
           phase: "capture",
           outcome: "failed",
-          before: {
-            hardware: { logicalCpuCount: 12, memoryBytes: 34359738368 },
-            loadAverage: [1, 2, 3],
-            memoryPageBytes: 16384,
-            memoryPages: { "Pages free": 42, Swapouts: 3 },
-            processes: [{ name: "OpenClawUITests-Runner", cpuPercent: 5.2, rssKiB: 1024 }],
-          },
           startup: {
             testCaseStarts: 0,
             instrumentsConnectionTimeout: true,
@@ -1327,8 +1747,8 @@ end
     const reducerJobEnd = workflow.indexOf("\n  android:\n", reducerJobStart);
     const reducerJob = workflow.slice(reducerJobStart, reducerJobEnd);
 
-    expect(workflow).toContain('IOS_SCREENSHOT_NODE_VERSION: "24.16.0"');
-    expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.0 Build version 27A266a"');
+    expect(workflow).toContain('IOS_SCREENSHOT_NODE_VERSION: "24.22.1"');
+    expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.1 Build version 27A9275"');
     expect(iosJob).toContain("timeout-minutes: 150");
     expect(iosJob).not.toContain("Capture iOS release screenshots");
     expect(captureJob).toContain("needs: [preflight]");
@@ -1336,7 +1756,7 @@ end
     expect(captureJob).not.toContain("OPENCLAW_SNAPSHOT_DEVICE_FAMILY");
     expect(captureJob).not.toContain("OPENCLAW_SNAPSHOT_SKIP_WATCH");
     expect(captureJob).not.toContain("run_ios_fastlane ios watch_screenshot");
-    expect(captureJob).toContain("run: pnpm ios:screenshots");
+    expect(captureJob).toContain("pnpm ios:screenshots");
     expect(captureJob).toContain("id: package_screenshot_evidence");
     expect(captureJob).not.toContain("--family");
     expect(
@@ -1353,7 +1773,7 @@ end
       'test "$fastlane_version" = "$IOS_SCREENSHOT_FASTLANE_VERSION"',
     );
     expect(captureJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
-    expect(captureJob).not.toContain("SnapshotDerivedData");
+    expect(captureJob).not.toMatch(/SnapshotDerivedData\/(?!SourcePackages)/);
     expect(captureJob.match(/contents: read/g)).toHaveLength(1);
     expect(reducerJob).toContain("needs: [preflight, ios-screenshot-capture]");
     expect(reducerJob).not.toContain("merge-multiple:");

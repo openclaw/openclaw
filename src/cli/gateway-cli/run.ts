@@ -1,4 +1,3 @@
-// Gateway run option resolution and local server startup command implementation.
 import { asOptionalObjectRecord } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -83,6 +82,7 @@ import { resolveGatewayPasswordOption, toOptionString } from "./run-option-value
 import type { GatewayRunOpts } from "./run-options.js";
 import type { GatewayRunRuntimeHooks } from "./runtime-hooks.js";
 import {
+  handleGatewayLockFailure,
   resolveGatewayStartupFailureExitCode,
   resolveGatewayStartupMaintenanceReason,
 } from "./startup-maintenance.js";
@@ -192,7 +192,6 @@ async function loadGatewayRunShellEnvFallback(
   const { loadShellEnvFallback } = await import("../../infra/shell-env.js");
   const valuesBeforeLoad = new Map(plan.expectedKeys.map((key) => [key, process.env[key]]));
   loadShellEnvFallback({
-    enabled: true,
     env: process.env,
     expectedKeys: plan.expectedKeys,
     logger: gatewayLog,
@@ -217,11 +216,11 @@ async function readGatewayStartupConfigWithShellEnv(params: {
   const plan = await resolveGatewayRunShellEnvFallbackPlan(
     startupConfig.snapshot.valid ? startupConfig.cfg : {},
   );
-  if (!plan.enabled) {
-    return { ...startupConfig, lowerPrecedenceEnv: {} };
-  }
   // Startup uses one shell-env plan; edits during this read take effect on the next start.
-  const lowerPrecedenceEnv = await loadGatewayRunShellEnvFallback(plan);
+  const lowerPrecedenceEnv = plan.enabled ? await loadGatewayRunShellEnvFallback(plan) : {};
+  if (Object.keys(lowerPrecedenceEnv).length === 0) {
+    return { ...startupConfig, lowerPrecedenceEnv };
+  }
   return {
     ...(await readGatewayStartupConfig(params.startupTrace, { lowerPrecedenceEnv })),
     lowerPrecedenceEnv,
@@ -292,11 +291,7 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
   port: number;
   healthHost: string;
   log: GatewayRunLogger;
-  now?: () => number;
-  sleep?: (ms: number) => Promise<void>;
   probeHealth: (params: { host: string; port: number }) => Promise<boolean>;
-  retryMs?: number;
-  timeoutMs?: number;
 }) {
   const supervisor = params.supervisor;
   if (!supervisor) {
@@ -304,11 +299,9 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
     return;
   }
 
-  const now = params.now ?? performance.now.bind(performance);
-  const sleep = params.sleep ?? defaultSleep;
-  const retryMs = params.retryMs ?? SUPERVISED_GATEWAY_LOCK_RETRY_MS;
-  const timeoutMs = params.timeoutMs ?? GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS;
-  const startedAt = now();
+  const retryMs = SUPERVISED_GATEWAY_LOCK_RETRY_MS;
+  const timeoutMs = GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS;
+  const startedAt = performance.now();
 
   for (;;) {
     try {
@@ -338,7 +331,7 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
         return;
       }
 
-      const elapsedMs = now() - startedAt;
+      const elapsedMs = performance.now() - startedAt;
       if (elapsedMs >= timeoutMs) {
         if (lifecycleContention) {
           throw err;
@@ -354,7 +347,7 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
       params.log.warn(
         `${lifecycleContention ? "gateway-lifecycle ownership held by another OpenClaw process" : "gateway already running"} under ${supervisor}; waiting ${waitMs}ms before retrying startup`,
       );
-      await sleep(waitMs);
+      await defaultSleep(waitMs);
     }
   }
 }
@@ -911,27 +904,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       throw err;
     }
     if (isGatewayLockError(err)) {
-      const errMessage = formatErrorMessage(err);
-      defaultRuntime.error(
-        `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("openclaw gateway stop")}`,
-      );
-      try {
-        const [{ formatPortDiagnostics }, { inspectPortUsage }] = await Promise.all([
-          import("../../infra/ports-format.js"),
-          import("../../infra/ports-inspect.js"),
-        ]);
-        const diagnostics = await inspectPortUsage(port);
-        if (diagnostics.status === "busy") {
-          for (const line of formatPortDiagnostics(diagnostics)) {
-            defaultRuntime.error(line);
-          }
-        }
-      } catch {
-        // ignore diagnostics failures
-      }
-      const { maybeExplainGatewayServiceStop } = await import("./shared.js");
-      await maybeExplainGatewayServiceStop();
-      defaultRuntime.exit(resolveGatewayLockErrorExitCode(err));
+      await handleGatewayLockFailure(err, port, resolveGatewayLockErrorExitCode(err));
       return;
     }
     if (isInvalidConfigError(err)) {

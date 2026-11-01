@@ -34,6 +34,7 @@ import {
   createEncryptedMediaPayload,
   makeClient,
   makeEncryptedMediaClient,
+  registerMatrixMediaMetadataTests,
 } from "./send.test-support.js";
 
 const loadOutboundMediaFromUrlMock = vi.hoisted(() => vi.fn());
@@ -240,7 +241,7 @@ describe("Matrix formatted chunk boundaries", () => {
     const markdown = `\`<ins>\` \\<u> [x](https://example.test "literal <u>") ${"plain ".repeat(8)}`;
     const chunks = chunksFor(markdown, 20);
 
-    expect(chunks.join("")).toBe(markdown.trim());
+    expect(chunks.join("")).toBe(markdown);
     expect(chunks.join("")).not.toContain("</u>");
   });
 
@@ -425,6 +426,17 @@ describe("sendMessageMatrix durable delivery", () => {
   });
 });
 
+registerMatrixMediaMetadataTests({
+  send,
+  sentContent,
+  loadOutboundMediaFromUrlMock,
+  mediaKindFromMimeMock,
+  isVoiceCompatibleAudioMock,
+  get sendMessage() {
+    return sendMessage;
+  },
+});
+
 describe("sendMessageMatrix media", () => {
   it("rejects encrypted media before loading or reporting dispatch when encryption is disabled", async () => {
     vi.spyOn(client, "getMessageWireEventType").mockResolvedValue("m.room.encrypted");
@@ -505,7 +517,7 @@ describe("sendMessageMatrix media", () => {
       });
       expect(content["m.mentions"]).toEqual({});
       expect(loadOutboundMediaFromUrlMock.mock.calls[0]?.[1].maxBytes).toBeUndefined();
-      expect(info.mimetype).toBe("image/png");
+      expect(info).toMatchObject({ size: 5, mimetype: "image/png", w: 1600, h: 1200 });
       expect(info.thumbnail_info).toEqual({ w: 800, h: 600, mimetype: "image/jpeg", size: 5 });
       if (encrypted) {
         expect(client.crypto?.encryptMedia).toHaveBeenCalledTimes(2);
@@ -525,39 +537,6 @@ describe("sendMessageMatrix media", () => {
         expect(content.url).toBe("mxc://example/main");
         expect(info.thumbnail_url).toBe("mxc://example/thumb");
         expect(info.thumbnail_file).toBeUndefined();
-      }
-    },
-  );
-
-  it.each([false, true])(
-    "preserves audio delivery and voice transcript relations (compatible=%s)",
-    async (compatible) => {
-      mediaKindFromMimeMock.mockReturnValue("audio");
-      isVoiceCompatibleAudioMock.mockReturnValue(compatible);
-      const fileName = compatible ? "clip.mp3" : "clip.wav";
-      loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
-        buffer: Buffer.from("audio"),
-        fileName,
-        contentType: compatible ? "audio/mpeg" : "audio/wav",
-        kind: "audio",
-      });
-      sendMessage.mockReset().mockResolvedValueOnce("$voice").mockResolvedValueOnce("$transcript");
-      const result = await send("voice caption", {
-        mediaUrl: `file:///tmp/${fileName}`,
-        audioAsVoice: true,
-        replyToId: compatible ? "$reply" : undefined,
-      });
-      if (compatible) {
-        expect(sentContent(1).body).toBe("voice caption");
-        expect(sentContent(1)["m.relates_to"]).toEqual({ "m.in_reply_to": { event_id: "$reply" } });
-        expect(result.receipt.parts).toMatchObject([
-          { platformMessageId: "$voice", kind: "voice", index: 0, replyToId: "$reply" },
-          { platformMessageId: "$transcript", kind: "text", index: 1, replyToId: "$reply" },
-        ]);
-      } else {
-        expect(sendMessage).toHaveBeenCalledTimes(1);
-        expect(sentContent()).toMatchObject({ msgtype: "m.audio", body: "voice caption" });
-        expect(sentContent()["org.matrix.msc3245.voice"]).toBeUndefined();
       }
     },
   );
@@ -747,7 +726,7 @@ describe("sendSingleTextMessageMatrix", () => {
 
       const content = sentContent();
       expect(content.msgtype).toBe("m.text");
-      expect(content).not.toHaveProperty("m.mentions");
+      expect(content["m.mentions"]).toEqual({});
       expect(content["org.matrix.msc4357.live"]).toEqual({});
       expect(content.formatted_body).toContain(
         "<code>read matrix-progress-@room-@alice:example.org-!room:example.org.txt failed</code>",
@@ -995,7 +974,7 @@ describe("editMessageMatrix mentions", () => {
     expect(sentContent()["m.mentions"]).toEqual({ user_ids: ["@bob:example.org"] });
   });
 
-  it("supports quiet draft preview edits without mention metadata or history reads", async () => {
+  it("supports quiet draft preview edits that mention nobody and skip history reads", async () => {
     getEvent.mockRejectedValue(new Error("Matrix history unavailable"));
 
     await edit("@room hi @alice:example.org", { msgtype: "m.notice", includeMentions: false });
@@ -1004,8 +983,8 @@ describe("editMessageMatrix mentions", () => {
     const content = sentContent();
     expect(content.msgtype).toBe("m.notice");
     expect(newContent(content).msgtype).toBe("m.notice");
-    expect(content).not.toHaveProperty("m.mentions");
-    expect(newContent(content)).not.toHaveProperty("m.mentions");
+    expect(content["m.mentions"]).toEqual({});
+    expect(newContent(content)["m.mentions"]).toEqual({});
     expect(sentContent().formatted_body).not.toContain("matrix.to");
     expect(newContent(content).formatted_body).not.toContain("matrix.to");
   });
@@ -1108,4 +1087,3 @@ describe("sendTypingMatrix", () => {
     expect(setTyping).toHaveBeenCalledWith("!room:example", true, 12_345);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

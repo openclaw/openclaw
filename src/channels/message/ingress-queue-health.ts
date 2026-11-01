@@ -12,24 +12,13 @@ import type {
 
 export async function countFailedChannelIngressQueueEntries(
   stateDir?: string,
-  context?: OpenClawStateWorkerContext,
 ): Promise<ChannelIngressFailedHealth[]> {
-  const cache = context ? channelIngressHealthCache(context) : undefined;
-  if (cache?.failed) {
-    return cache.failed;
-  }
   const reply = await executeExistingOpenClawStateRead(
     { env: resolveChannelIngressStateEnv(stateDir) },
     { type: "channelIngress.failedHealth" },
   );
   if (!reply) {
     return [];
-  }
-  if (!reply.ok || reply.type !== "channelIngress.failedHealth") {
-    throw new Error("Channel ingress failed health reader returned an unexpected result");
-  }
-  if (cache) {
-    cache.failed = reply.result;
   }
   return reply.result;
 }
@@ -66,9 +55,6 @@ export async function countChannelIngressQueueHealth(
     );
     if (!reply) {
       return { failed: failed ?? [], pressure: pressure ?? [] };
-    }
-    if (!reply.ok || reply.type !== "channelIngress.health") {
-      throw new Error("Channel ingress health reader returned an unexpected result");
     }
     if (cache) {
       if (reply.result.failed) {

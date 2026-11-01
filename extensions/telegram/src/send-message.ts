@@ -197,7 +197,9 @@ export async function sendMessageTelegram(
         };
       });
       const receipt = createMessageReceiptFromOutboundResults({ results, kind: "media" });
-      receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
+      receipt.parts.forEach((part, index) => {
+        part.index = index;
+      });
       const replyToId = receipt.parts.find((part) => part.replyToId)?.replyToId;
       if (replyToId) {
         receipt.replyToId = replyToId;

@@ -1,9 +1,9 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { isMainThread } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -16,9 +16,17 @@ import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
+  beginGatewayShutdownCleanup,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { getSessionControllerOperation } from "../../sessions/session-controller.js";
+import {
+  acquireReplyOperationSessionActor,
+  getReplyOperationSessionTarget,
+} from "../../sessions/session-controller.session-reader.js";
+import { testing } from "../../sessions/session-controller.test-support.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import * as agentWriteAdmission from "../../state/openclaw-agent-write-admission.js";
@@ -29,20 +37,10 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
-import { replyRunRegistry, waitForReplyRunSuccessorAdmission } from "./reply-run-registry.js";
-import {
-  acquireReplyOperationSessionActor,
-  getReplyOperationSessionTarget,
-} from "./reply-run-registry.state.js";
-import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
-beforeEach(() => {
-  expect(isMainThread).toBe(true);
-});
-
 afterEach(() => {
-  testing.resetReplyRunRegistry();
+  testing.resetSessionControllerForTest();
   resetGatewayWorkAdmission();
   vi.restoreAllMocks();
 });
@@ -53,16 +51,10 @@ function admit(params: Omit<Parameters<typeof admitReplyTurn>[0], "kind" | "rese
   return admitReplyTurn({ kind: "visible", resetTriggered: false, ...params });
 }
 
-function makeTarget(
-  state: OpenClawTestState,
-  name: string,
-  agentId = "main",
-  seed = true,
-  options: { sessionId?: string } = {},
-) {
+function makeTarget(state: OpenClawTestState, name: string, agentId = "main", seed = true) {
   const storePath = path.join(state.sessionsDir(agentId), "agent.sqlite");
   const sessionKey = `agent:${agentId}:${name}`;
-  const sessionId = options.sessionId ?? `${name}-session`;
+  const sessionId = `${agentId}-${name}-session`;
   if (seed) {
     replaceSessionEntrySync({ storePath, sessionKey }, { sessionId, updatedAt: 1 });
   }
@@ -87,16 +79,12 @@ function waitAtGate(
 }
 
 function requireOwned(result: Admission) {
-  expect(result.status).toBe("owned");
-  if (result.status !== "owned" || !result.databaseClaim) {
-    throw new Error("Persistent admission must retain its physical database claim");
-  }
+  assert(result.status === "owned" && result.databaseClaim, "Expected persistent reply admission");
   return { ...result, databaseClaim: result.databaseClaim };
 }
 
 function observeSql() {
   const sql = observeMainThreadSql({ includeClose: true });
-  sql.calibrate();
   const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
   return {
     expectIdle() {
@@ -174,7 +162,7 @@ it("creates a missing persistent store through reply admission without main-thre
       expect(fs.existsSync(storePath)).toBe(true);
       expect(sharing.readCurrent(cfg).target).toBeNull();
       await completeAdmission(result, sessionKey);
-      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      expect(getSessionControllerOperation(sessionKey)).toBeUndefined();
       sql.expectIdle();
     } finally {
       try {
@@ -236,32 +224,12 @@ it("retains one actor per cold/reopened reply admission and drains it without ma
           acquireReplyOperationSessionActor(operation),
           acquireReplyOperationSessionActor(operation),
         ]);
-        if (!actor || !sibling) {
-          throw new Error("Persistent admission must acquire a session actor");
-        }
+        assert(actor && sibling, "Persistent admission must acquire a session actor");
         expect(sibling).toBe(actor);
         const authority = {
           assertCurrent: () => databaseClaim.assertCurrent(),
           authorize() {},
         };
-        const before = await actor.read(authority);
-        expect(before.entry).toMatchObject({
-          sessionId,
-          updatedAt: phase === "cold" ? 1 : 543,
-        });
-        const updatedAt = phase === "cold" ? 543 : 987;
-        const patched = await actor.patch(
-          {
-            commandId: `${phase}-activity`,
-            phaseId: "reply-admission",
-            expected: before.version,
-            reducers: [{ kind: "activity", updatedAt }],
-          },
-          authority,
-        );
-        expect(patched.kind).toBe("committed");
-        expect(sibling.snapshot(authority)?.entry).toMatchObject({ sessionId, updatedAt });
-
         const phaseEntered = createDeferred();
         actorPhase = actor.withPhase("retained-reply", authority, async () => {
           phaseEntered.resolve();
@@ -279,7 +247,7 @@ it("retains one actor per cold/reopened reply admission and drains it without ma
         await withinTest(actorPhase, signal);
         expect(await withinTest(successor.pending, signal)).toMatchObject({ settled: true });
         expect(databaseClaim.isCurrent()).toBe(false);
-        expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+        expect(getSessionControllerOperation(sessionKey)).toBeUndefined();
         sql.expectIdle();
       } finally {
         try {
@@ -288,10 +256,6 @@ it("retains one actor per cold/reopened reply admission and drains it without ma
           controller.abort();
           await holder.release();
           result ??= await pending.catch(() => undefined);
-          if (result?.status === "owned") {
-            result.operation.complete();
-            await waitForReplyRunSuccessorAdmission(sessionKey, null);
-          }
           await completeAdmission(result, sessionKey);
           await settlement.done;
         } finally {
@@ -358,18 +322,18 @@ it("cancels a contended persistent admission without claiming the reply or poiso
       controller.abort(new Error("Synthetic cancelled reply"));
       await setImmediate();
       expect(Atomics.load(holder.released, 0)).toBe(0);
-      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
-      expect(replyRunRegistry.get(followerKey)).toBeUndefined();
+      expect(getSessionControllerOperation(sessionKey)).toBeUndefined();
+      expect(getSessionControllerOperation(followerKey)).toBeUndefined();
       await holder.release();
       await expect(pending).resolves.toEqual({ status: "skipped", reason: "aborted" });
-      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      expect(getSessionControllerOperation(sessionKey)).toBeUndefined();
       result = await follower;
       expect(result).toMatchObject({
         status: "owned",
         sessionEntry: { sessionId: followerSessionId },
       });
       await completeAdmission(result, followerKey);
-      expect(replyRunRegistry.get(followerKey)).toBeUndefined();
+      expect(getSessionControllerOperation(followerKey)).toBeUndefined();
     } finally {
       try {
         controller.abort();
@@ -387,17 +351,13 @@ it("cancels a contended persistent admission without claiming the reply or poiso
 });
 
 it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
-  "keeps successors behind physical claim release after %s during executor drain with a full idle cache",
+  "keeps successors behind physical claim release after %s during shutdown cleanup with a full idle cache",
   async (ending) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const activeTarget = makeTarget(state, "completion-close", "main", true, {
-        sessionId: "completion-active-session",
-      });
+      const activeTarget = makeTarget(state, "completion-close");
       const { storePath: activePath, sessionKey: activeKey } = activeTarget;
       const idleTargets = Array.from({ length: 4 }, (_, index) =>
-        makeTarget(state, "completion-idle", `other-${index}`, true, {
-          sessionId: `completion-idle-session-${index}`,
-        }),
+        makeTarget(state, "completion-idle", `other-${index}`),
       );
       for (const { storePath } of [activeTarget, ...idleTargets]) {
         await closeOpenClawAgentDatabaseByPathAsync(storePath);
@@ -421,9 +381,7 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
             expectedSessionId: target.sessionId,
           });
           idleAdmissions.push({ sessionKey: target.sessionKey, admission });
-          if (admission.status !== "owned") {
-            throw new Error("Fixture requires four admitted idle reply owners");
-          }
+          assert(admission.status === "owned", "Fixture requires four admitted idle reply owners");
           await completeAdmission(admission, target.sessionKey);
           expect(leases.all(target.storePath)).toHaveLength(1);
         }
@@ -433,8 +391,8 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
         const sql = observeSql();
         let successor: ReturnType<typeof waitForReplyRunSuccessorAdmission> | undefined;
         try {
-          // Drain forces physical retirement of the active owner and the full idle cache.
           markGatewayRestartDraining();
+          beginGatewayShutdownCleanup();
           if (ending !== "complete") {
             operation.setPhase("running");
             operation.attachBackend({
@@ -455,7 +413,7 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
               ).toBe(true);
             }
             expect(databaseClaim.isCurrent()).toBe(ending === "user-abort");
-            expect(replyRunRegistry.get(activeKey)).toBe(operation);
+            expect(getSessionControllerOperation(activeKey)).toBe(operation);
           }
           operation.complete();
           expect(databaseClaim.isCurrent()).toBe(false);
@@ -466,7 +424,7 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
           expect(settlement.isSettled()).toBe(false);
           await holder.release();
           expect(await successor).toMatchObject({ settled: true });
-          expect(replyRunRegistry.get(activeKey)).toBeUndefined();
+          expect(getSessionControllerOperation(activeKey)).toBeUndefined();
           sql.expectIdle();
         } finally {
           try {

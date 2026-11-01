@@ -1,75 +1,60 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createMemoryCoreTestHarness } from "../test-helpers.js";
-import { mergeHybridResults } from "./hybrid.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-const NOW_MS = Date.UTC(2026, 1, 10, 0, 0, 0);
+const DAY_MS = 86_400_000;
+const NOW_MS = Date.UTC(2026, 1, 10);
 const { createTempWorkspace } = createMemoryCoreTestHarness();
+const selective = { path: "notes", pattern: "stable/**/*.md", evergreen: true };
+const notePaths = ["notes/stable/topic.md", "notes/dated/topic.md"];
+const dated = ["memory/2026-01-11.md"];
+const memoryPolicy = { path: "memory", evergreen: true };
+const sessions = ["sessions/main/note.jsonl"];
+const sessionPolicy = { path: "sessions", evergreen: true };
 
-function createVectorMemoryEntry(memoryPath: string, vectorScore: number) {
-  return {
-    id: memoryPath,
-    path: memoryPath,
-    startLine: 1,
-    endLine: 1,
-    source: "memory" as const,
-    snippet: "memory",
-    vectorScore,
-  };
-}
-
-describe("temporal decay", () => {
-  it("uses indexed remote mtimes in hybrid ranking while retaining evergreen and dated paths", async () => {
-    const paths = ["imports/note.md", "MEMORY.md", "memory/2026-02-09.md"];
-    const results = await mergeHybridResults({
-      vector: paths.map((filePath) => ({
-        ...createVectorMemoryEntry(filePath, 1),
-        snippet: "host content",
-      })),
-      keyword: [],
-      vectorWeight: 1,
-      textWeight: 0,
-      temporalDecay: { enabled: true, halfLifeDays: 30 },
-      nowMs: NOW_MS,
-      memorySourceMtimes: new Map(paths.map((filePath) => [filePath, NOW_MS - 30 * DAY_MS])),
-    });
-    expect(results.find((entry) => entry.path === "imports/note.md")?.score).toBeCloseTo(0.5);
-    expect(results.find((entry) => entry.path === "MEMORY.md")?.score).toBe(1);
-    expect(results.find((entry) => entry.path === "memory/2026-02-09.md")?.score).toBeGreaterThan(
-      0.9,
+it.each([
+  [notePaths, 30, [1, 0.5], selective, "memory", undefined, false],
+  [notePaths, 0, [1, 0.5], selective, "memory", 30, false],
+  [["MEMORY.md"], 90, [1], undefined, "memory", 90, false],
+  [dated, 90, [0.5], memoryPolicy, "memory", 90, false],
+  [dated, 90, [0.5], memoryPolicy, "memory", 90, true],
+  [sessions, 90, [1], sessionPolicy, "sessions", undefined, false],
+  [sessions, 90, [0.5], sessionPolicy, "sessions", 30, false],
+] as const)(
+  "ranks %j with filesystem age %s and expected scores %j",
+  async (files, age, expected, extraPath, source, indexedAge, absolute) => {
+    const workspaceDir = await createTempWorkspace("openclaw-temporal-decay-");
+    for (const file of files) {
+      const filename = path.join(workspaceDir, file);
+      await fs.mkdir(path.dirname(filename), { recursive: true });
+      await fs.writeFile(filename, "memory\n");
+      const mtime = new Date(NOW_MS - age * DAY_MS);
+      await fs.utimes(filename, mtime, mtime);
+    }
+    const results = files.map((file) => ({
+      path: absolute ? path.join(workspaceDir, file) : file,
+      score: 1,
+      source,
+    }));
+    const mtimes = new Map(
+      results.map((entry) => [
+        entry.path,
+        indexedAge === undefined ? undefined : NOW_MS - indexedAge * DAY_MS,
+      ]),
     );
-  });
-
-  it("uses file mtime for additional memory files", async () => {
-    const dir = await createTempWorkspace("openclaw-temporal-decay-");
-    const filePath = path.join(dir, "notes", "topic.md");
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, "notes\n");
-    const oldMtime = new Date(NOW_MS - 30 * DAY_MS);
-    await fs.utimes(filePath, oldMtime, oldMtime);
-
-    const decayed = await applyTemporalDecayToHybridResults({
-      results: [{ path: "notes/topic.md", score: 1, source: "memory" }],
-      workspaceDir: dir,
+    const ranked = await applyTemporalDecayToHybridResults({
+      results,
+      workspaceDir,
+      extraPaths: extraPath ? [extraPath] : undefined,
       temporalDecay: { enabled: true, halfLifeDays: 30 },
       nowMs: NOW_MS,
+      memorySourceMtimes: source === "memory" && indexedAge !== undefined ? mtimes : undefined,
+      sessionSourceMtimes: source === "sessions" ? mtimes : undefined,
     });
-
-    expect(decayed[0]?.score).toBeCloseTo(0.5, 2);
-  });
-
-  it("leaves session timestamps unknown when their indexed source is missing", async () => {
-    const entry = { path: "sessions/main/missing.jsonl", score: 1, source: "sessions" };
-    expect(
-      await applyTemporalDecayToHybridResults({
-        results: [entry],
-        temporalDecay: { enabled: true, halfLifeDays: 30 },
-        sessionSourceMtimes: new Map(),
-        nowMs: NOW_MS,
-      }),
-    ).toEqual([entry]);
-  });
-});
+    for (const [index, score] of expected.entries()) {
+      expect(ranked[index]?.score).toBeCloseTo(score, 2);
+    }
+  },
+);

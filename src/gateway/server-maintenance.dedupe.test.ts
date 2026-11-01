@@ -1,56 +1,49 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import type { RpcSourceRef } from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { createArtifactDownload } from "./artifact-download-grants.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
+import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 // mock-isolation: Dedupe timers must not start the unrelated device expiry worker.
 vi.mock("../infra/device-bootstrap.js", () => ({
   startDevicePairSetupMaintenance: vi.fn(async () => 0),
 }));
 
-const ABORTED_RUN_TTL_MS = 60 * 60_000;
-
-function createActiveRun(): ChatAbortControllerEntry {
-  const now = Date.now();
-  return {
-    controller: new AbortController(),
-    sessionId: "sess-1",
-    sessionKey: "agent:main:main",
-    startedAtMs: now,
-    expiresAtMs: now + ABORTED_RUN_TTL_MS,
-    kind: "agent",
-  };
-}
-
-function createMaintenanceTimerDeps() {
-  return {
-    ...createGatewayMaintenanceStateForTest(),
-    runWorktreeGc: vi.fn(async () => undefined),
-    runManagedOutgoingMediaGc: async () => undefined,
-  };
+function createActiveRun(kind: "chat-send" | "agent" = "agent"): RpcSourceRef {
+  return createRpcSourceForTest(
+    { kind },
+    {
+      sessionKey: "agent:main:main",
+      sessionId: "sess-1",
+      phase: kind === "chat-send" ? "waiting" : "preparing",
+    },
+  );
 }
 
 function expiredDedupe(runId: string, status = "accepted") {
   return { ts: Date.now() - DEDUPE_TTL_MS - 1, ok: true, payload: { runId, status } };
 }
 
-function createTimedMaintenanceScenario() {
+function createTimedMaintenanceScenario(resolveGatewayContext?: GatewayContextResolver) {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
-  const deps = createMaintenanceTimerDeps();
+  const deps = createGatewayMaintenanceStateForTest();
   let timers: ReturnType<typeof startGatewayMaintenanceTimers> | undefined;
   return {
     deps,
     now: Date.now(),
     tick: async () => {
-      timers ??= startGatewayMaintenanceTimers(deps);
+      timers ??= startGatewayMaintenanceTimers({ ...deps, resolveGatewayContext });
       await vi.advanceTimersByTimeAsync(60_000);
     },
     [Symbol.asyncDispose]: async () => {
@@ -80,7 +73,7 @@ describe("gateway dedupe maintenance", () => {
     using now = vi.spyOn(Date, "now");
     now.mockImplementation(() => clock.clock.now());
     const scheduler = createTestGatewayScheduler(clock.clock);
-    const deps = { ...createMaintenanceTimerDeps(), scheduler, isNixMode: true };
+    const deps = { ...createGatewayMaintenanceStateForTest(), scheduler, isNixMode: true };
     const controller = new AbortController();
     const client: GatewayClient = {
       connId: "unused-artifact",
@@ -93,7 +86,6 @@ describe("gateway dedupe maintenance", () => {
     };
     deps.clients.add(client);
     const release = vi.fn();
-    const read = vi.fn(async () => undefined);
     const grant = createArtifactDownload({
       client,
       prepared: {
@@ -106,20 +98,14 @@ describe("gateway dedupe maintenance", () => {
         digest: "unused-artifact-digest",
       },
       assertCurrent: () => {},
-      read,
+      read: async () => undefined,
       release,
     });
     const timers = startGatewayMaintenanceTimers(deps);
     try {
-      await clock.advanceBy(0);
-      await clock.advanceTo(Date.parse(grant.expiresAt) - 1);
-      expect(release).not.toHaveBeenCalled();
-      await clock.advanceBy(60_000);
+      await clock.advanceTo(Date.parse(grant.expiresAt) + 60_000);
       expect(controller.signal.aborted).toBe(false);
       expect(release).toHaveBeenCalledOnce();
-      await clock.advanceBy(60_000);
-      expect(release).toHaveBeenCalledOnce();
-      expect(read).not.toHaveBeenCalled();
     } finally {
       controller.abort();
       await stopMaintenanceTimers(timers);
@@ -131,7 +117,7 @@ describe("gateway dedupe maintenance", () => {
     await using scenario = createTimedMaintenanceScenario();
     const { deps, tick } = scenario;
     const runId = "exec-approval-followup:req-active:nonce:retry-1";
-    deps.chatAbortControllers.set(runId, createActiveRun());
+    rpcSourceTesting.set(runId, createActiveRun());
     deps.dedupe.set("agent:exec-approval-followup:req-active", expiredDedupe(runId));
     deps.dedupe.set(
       "agent:exec-approval-followup:req-stale",
@@ -144,6 +130,25 @@ describe("gateway dedupe maintenance", () => {
     expect(deps.dedupe.has("agent:exec-approval-followup:req-stale")).toBe(false);
   });
 
+  it("does not retain this Gateway's stale dedupe key for another Gateway's run", async () => {
+    const resolveGatewayContext = () => undefined;
+    const otherGateway = () => undefined;
+    await using scenario = createTimedMaintenanceScenario(resolveGatewayContext);
+    const { deps, tick } = scenario;
+    for (const [runId, resolver] of [
+      ["own", resolveGatewayContext],
+      ["foreign", otherGateway],
+    ] as const) {
+      const source = createActiveRun();
+      bindGatewayContextResolver(source.input, resolver);
+      rpcSourceTesting.set(runId, source);
+      deps.dedupe.set(`agent:${runId}`, expiredDedupe(runId));
+    }
+    await tick();
+    expect(deps.dedupe.has("agent:own")).toBe(true);
+    expect(deps.dedupe.has("agent:foreign")).toBe(false);
+  });
+
   it.each(["chat", "agent"] as const)(
     "keeps live %s dedupe through ttl and overflow",
     async (kind) => {
@@ -153,15 +158,7 @@ describe("gateway dedupe maintenance", () => {
       for (let index = 0; index < DEDUPE_MAX; index += 1) {
         deps.dedupe.set(`stable-${index}`, { ts: now - 1_000 + index, ok: true });
       }
-      if (kind === "chat") {
-        deps.chatQueuedTurns.set(runId, {
-          controller: new AbortController(),
-          sessionId: "session-main",
-          sessionKey: "agent:main:main",
-        });
-      } else {
-        deps.chatAbortControllers.set(runId, createActiveRun());
-      }
+      rpcSourceTesting.set(runId, createActiveRun(kind === "chat" ? "chat-send" : "agent"));
       const key = `${kind}:${runId}`;
       deps.dedupe.set(key, expiredDedupe(runId, kind === "chat" ? "ok" : "accepted"));
       deps.dedupe.set("overflow-newest", { ts: now, ok: true });

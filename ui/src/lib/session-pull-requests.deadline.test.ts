@@ -85,18 +85,23 @@ describe("pull request subscription acknowledgment lifetime", () => {
     store.unwatch(owner);
     hello();
     await flushSync();
-    expect(params(3)).toEqual({ sessionKeys: [] });
+    expect(params(3)).toEqual({ sessionKeys: [], passiveSessionKeys: [key] });
     await vi.advanceTimersByTimeAsync(60_000);
     expect(harness.request).toHaveBeenCalledTimes(5);
-    expect(params(4)).toEqual({ sessionKeys: [] });
+    expect(params(4)).toEqual({ sessionKeys: [], passiveSessionKeys: [key] });
     acknowledge(4);
     await flushSync();
     hello({ ...createHello(), features: { methods: [] } });
     await flushSync();
     hello();
+    await flushSync();
+    expect(harness.request).toHaveBeenCalledTimes(6);
+    expect(params(5)).toEqual({ sessionKeys: [], passiveSessionKeys: [key] });
+    acknowledge(5);
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(harness.request).toHaveBeenCalledTimes(5);
+    expect(harness.request).toHaveBeenCalledTimes(6);
     store.unwatch(passiveOwner);
+    expect(params(6)).toEqual({ sessionKeys: [] });
     expect(vi.getTimerCount()).toBe(0);
   });
 

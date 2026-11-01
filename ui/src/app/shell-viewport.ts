@@ -2,6 +2,35 @@ import { listen } from "../lib/reactive/listener.ts";
 
 const KEYBOARD_MIN_SHRINK = 80;
 
+export type ShellViewportSnapshot = Readonly<{
+  width: number;
+  layoutHeight: number;
+  height: number;
+  offsetTop: number;
+  nativeScale: boolean;
+  keyboardVisible: boolean;
+  focusHeight: number | null;
+}>;
+
+let snapshot: ShellViewportSnapshot | undefined;
+const listeners = new Set<() => void>();
+
+/** Read-only facts from the existing observer; subscribing never starts a detector. */
+export const shellViewport = {
+  get snapshot(): ShellViewportSnapshot | undefined {
+    return snapshot;
+  },
+  subscribe(notify: () => void): () => void {
+    listeners.add(notify);
+    return () => listeners.delete(notify);
+  },
+};
+
+function publish(next: ShellViewportSnapshot | undefined): void {
+  snapshot = next;
+  listeners.forEach((notify) => notify());
+}
+
 function hasKeyboardFocus(): boolean {
   let target = document.activeElement;
   while (target?.shadowRoot?.activeElement) {
@@ -79,6 +108,15 @@ export function connectShellViewport(): () => void {
     } else {
       root.style.removeProperty("--shell-viewport-height");
     }
+    publish({
+      width,
+      layoutHeight,
+      height: viewport.height,
+      offsetTop: viewport.offsetTop,
+      nativeScale,
+      keyboardVisible: keyboard,
+      focusHeight,
+    });
   };
   const schedule = () => {
     frame ??= requestAnimationFrame(update);
@@ -104,5 +142,6 @@ export function connectShellViewport(): () => void {
     }
     root.style.removeProperty("--shell-viewport-height");
     root.style.removeProperty("--shell-safe-area-bottom");
+    publish(undefined);
   };
 }

@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
 import { beforeEach, expect, it, vi } from "vitest";
+import * as nativeExec from "../../daemon/exec-file.js";
 import * as launchctl from "../../daemon/launchd-exec.js";
 import { startLaunchAgent } from "../../daemon/launchd-lifecycle.js";
 import { bootstrapLaunchAgentOrThrow } from "../../daemon/launchd-runtime.js";
@@ -17,6 +18,7 @@ import * as taskRuntime from "../../daemon/schtasks-runtime.js";
 import * as systemdExec from "../../daemon/systemd-exec.js";
 import { startSystemdService } from "../../daemon/systemd-lifecycle.js";
 import * as systemdScope from "../../daemon/systemd-scope.js";
+import * as systemdTransport from "../../daemon/systemd-user-transport.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { useExecutorFixture } from "./update-command-executor.test-support.js";
@@ -94,18 +96,19 @@ it.each(["user", "system", "reset-failed"] as const)(
     if (at !== "reset-failed") {
       vi.spyOn(process, "geteuid").mockReturnValue(0);
     }
-    const native = vi.spyOn(systemdExec, "execSystemctl").mockResolvedValue(success);
+    vi.spyOn(systemdTransport, "resolveSystemdUserTransport").mockResolvedValue(undefined);
     const calls: string[] = [];
-    vi.spyOn(systemdExec, "execSystemctlUser").mockImplementation(async (_env, args) => {
-      calls.push(args[0]!);
-      if (args[0] === "reset-failed") {
+    vi.spyOn(nativeExec, "execFileUtf8").mockImplementation(async (command, args) => {
+      expect(command).toBe("systemctl");
+      const action = args.find((arg) => !arg.startsWith("--"))!;
+      calls.push(action);
+      if (action === "reset-failed") {
         await Promise.resolve();
         revoke();
       }
       return success;
     });
     await expectRevoked(startSystemdService);
-    expect(native).not.toHaveBeenCalled();
     expect(calls).toEqual(at === "reset-failed" ? ["reset-failed"] : []);
   },
 );

@@ -1,13 +1,23 @@
 import { afterEach, beforeEach, vi } from "vitest";
-import { createInternalAgentTurnFacade } from "../../../gateway/agent-turn/internal-facade.js";
+import type { InternalSessionEntry } from "../../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { AgentTurnStartRequest } from "../../../gateway/agent-turn/agent-turn-start-request.types.js";
 import { createGatewayMethodRegistry } from "../../../gateway/methods/registry.js";
 import { createChatRunState } from "../../../gateway/server-chat-state.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
+import { createContext as createGatewayTestContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
-import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
-import { trackAsyncWork } from "../../../shared/async-work-scope.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
+import {
+  clearSessionControllerMailbox,
+  sessionControllerMailboxes,
+} from "../../../sessions/session-controller.mailbox.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import * as deliveryRuntime from "./subagent-announce-delivery.runtime.js";
+import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
+import { completionReader, visibleCompletion } from "./subagent-announce-fixtures.test-support.js";
 import * as announceOutput from "./subagent-announce-output.js";
 import {
   outputTesting,
@@ -20,9 +30,25 @@ import {
   readDescendantFacts,
   loadRequester,
 } from "./subagent-announce.requester-settle-dispatch-mocks.test-support.js";
-import type { RequesterSettleWakeBatchCallbacks } from "./subagent-announce.requester-settle-state.js";
+import type { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
+import {
+  makeSettledChild,
+  publishWakeTransition,
+} from "./subagent-announce.requester-settle-wake.test-support.js";
 
 export { deliver, registryRead, startTurn, readDescendantFacts, loadRequester };
+
+export function finishProcessedCompletion(io: AgentTurnStartRequest["io"]) {
+  io.emitFinal([
+    true,
+    {
+      status: "ok",
+      inputProcessingCompleted: true,
+      result: { payloads: [{ text: "Completion received." }] },
+    },
+    undefined,
+  ]);
+}
 
 const readChildCompletionFindings = announceOutput.readChildCompletionFindings;
 
@@ -34,21 +60,11 @@ export function useRequesterSettleDispatchFixture() {
         sessionId: `session-${sessionKey}`,
         updatedAt: 1,
       }),
-      findTranscriptEvent: async ({ sessionId }, match) => {
-        const child = registryRead
+      findTranscriptEvent: completionReader((sessionId) =>
+        registryRead
           .listSubagentRunsForRequester()
-          .find((entry) => `session-${entry.childSessionKey}` === sessionId);
-        const event = {
-          type: "message",
-          message: {
-            role: "assistant",
-            display: true,
-            content: [{ type: "text", text: child?.completion?.resultText }],
-            __openclaw: { runId: child?.runId },
-          },
-        };
-        return child && matchesTranscriptEvent(event, match) ? { event } : undefined;
-      },
+          .find((entry) => `session-${entry.childSessionKey}` === sessionId),
+      ),
     });
     const requesterCurrent = vi
       .spyOn(deliveryRuntime, "captureRequesterSessionEntryCurrent")
@@ -65,17 +81,22 @@ export function useRequesterSettleDispatchFixture() {
     resetCommandQueueStateForTest();
     startTurn.mockReset();
     deliver.mockReset();
-    loadRequester.mockReset().mockResolvedValue({
+    loadRequester.mockReset().mockImplementation(async (sessionKey) => ({
       cfg: {},
-      canonicalKey: REQUESTER_KEY,
+      canonicalKey: sessionKey,
+      agentId: "main",
+      storePath: "/synthetic/requester-settle-dispatch/sessions.db",
       entry: { sessionId: "requester-session", updatedAt: 1 },
-    });
+    }));
     readDescendantFacts.mockReset().mockResolvedValue({ unsettled: false, active: 0 });
     registryRead.getLatestLiveSubagentRunByChildSessionKey.mockReset().mockReturnValue(undefined);
     registryRead.getLatestSubagentRunByChildSessionKey.mockReset().mockReturnValue(undefined);
   });
 
   afterEach(() => {
+    for (const mailbox of sessionControllerMailboxes()) {
+      clearSessionControllerMailbox(mailbox, () => {});
+    }
     vi.mocked(announceOutput.readChildCompletionFindings).mockRestore();
     resetCommandQueueStateForTest();
     setSubagentAnnounceDeliveryDepsForTest();
@@ -86,36 +107,77 @@ export function useRequesterSettleDispatchFixture() {
 }
 
 export const REQUESTER_KEY = "agent:main:main";
-
-export const publishWakeTransition: RequesterSettleWakeBatchCallbacks["transitionBatch"] = (
-  batch,
-  state,
-  onPublished,
-) => {
-  for (const entry of batch) {
-    entry.requesterSettleWake = state;
-  }
-  onPublished(batch);
+export const REQUESTER_TARGET = captureSessionTarget({
+  storeScope: "/synthetic/requester-settle-dispatch/sessions.db",
+  sessionKey: REQUESTER_KEY,
+  incarnation: "requester-session",
+  agentId: "main",
+});
+export const REQUESTER_TURN = {
+  target: REQUESTER_TARGET,
+  sessionKey: REQUESTER_KEY,
+  sessionId: "requester-session",
+  agentId: "main",
 };
 
-export function settledChild(): SubagentRunRecord {
+type WakeParams = Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0];
+export function wakeParams(
+  settledEntry: SubagentRunRecord,
+  completeBatch: WakeParams["completeBatch"],
+  overrides: Partial<WakeParams> = {},
+): WakeParams {
   return {
+    requesterSessionKey: settledEntry.requesterSessionKey,
+    requesterOrigin: settledEntry.requesterOrigin,
+    isSourceCurrent: () => true,
+    settledEntry,
+    transitionBatch: publishWakeTransition,
+    completeBatch,
+    ...overrides,
+  };
+}
+
+export function withGateway(context: GatewayRequestContext, run: () => Promise<boolean>) {
+  return withPluginRuntimeGatewayRequestScope(
+    { context, client: createSyntheticPluginRuntimeClient(), isWebchatConnect: () => false },
+    run,
+  );
+}
+
+export function requesterSnapshot(
+  cfg: OpenClawConfig = {},
+  entry: InternalSessionEntry = { sessionId: "requester-session", updatedAt: 1 },
+  { sessionKey = REQUESTER_KEY, storePath = REQUESTER_TARGET.storeScope } = {},
+) {
+  return { cfg, canonicalKey: sessionKey, agentId: "main", storePath, entry };
+}
+
+export function useDirectDelivery(requester = requesterSnapshot()) {
+  setSubagentAnnounceDeliveryDepsForTest({
+    getRuntimeConfig: () => requester.cfg,
+    loadRequesterSessionEntry: () => requester,
+    getRequesterSessionActivity: () => ({
+      sessionId: requester.entry.sessionId,
+      target: captureSessionTarget({
+        storeScope: requester.storePath,
+        sessionKey: requester.canonicalKey,
+        incarnation: requester.entry.sessionId,
+        agentId: requester.agentId,
+      }),
+      isActive: false,
+    }),
+  });
+  deliver.mockImplementation(sendSubagentAnnounceDirectly);
+  return requester;
+}
+
+export function settledChild(): SubagentRunRecord {
+  return makeSettledChild({
     runId: "settled-child",
-    childSessionKey: "agent:main:subagent:settled-child",
-    requesterSessionKey: REQUESTER_KEY,
-    requesterDisplayKey: "main",
     requesterAgentId: "main",
     task: "finish child work",
-    cleanup: "keep",
-    createdAt: 1_000,
-    execution: { status: "terminal", startedAt: 2_000, endedAt: 3_000, outcome: { status: "ok" } },
-    expectsCompletionMessage: true,
-    completion: {
-      required: true,
-      resultText: "child result",
-      terminalReply: { disposition: "visible", text: "child result" },
-      capturedAt: 3_000,
-    },
+    outcome: { status: "ok" },
+    completion: { ...visibleCompletion("child result"), capturedAt: 3_000 },
     delivery: { status: "delivered" },
     requesterSettleWake: {
       status: "pending",
@@ -123,30 +185,20 @@ export function settledChild(): SubagentRunRecord {
       requesterYieldBatch: true,
       rearmGeneration: 1,
     },
-  };
+  });
 }
 
 export function createRequesterSettleContext(): GatewayRequestContext {
-  const chatRunState = createChatRunState();
   const methodRegistry = createGatewayMethodRegistry([]);
-  const context = Object.assign({} as GatewayRequestContext, {
-    trackExecution: trackAsyncWork,
+  const context = createGatewayTestContext();
+  // This fixture deliberately leaves session-target preparation to its caller.
+  delete context.resolveSessionRequestTargets;
+  return Object.assign(context, {
     agentRunSeq: new Map(),
     broadcast: vi.fn(),
-    chatAbortControllers: new Map(),
-    chatRunState,
-    dedupe: new Map(),
-    getRuntimeConfig: () => ({}),
+    chatRunState: createChatRunState(),
     getGatewayMethodRegistry: () => methodRegistry,
-    logGateway: { error: vi.fn(), warn: vi.fn() },
     nodeSendToSession: vi.fn(),
     removeChatRun: vi.fn(() => undefined),
   });
-  context.createAgentTurnFacade = (principal) =>
-    createInternalAgentTurnFacade({
-      ...principal,
-      getContext: () => context,
-      getMethodRegistry: () => methodRegistry,
-    });
-  return context;
 }

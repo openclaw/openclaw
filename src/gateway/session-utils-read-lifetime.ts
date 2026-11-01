@@ -135,6 +135,7 @@ export async function retainGatewaySessionEntryReadOnly(
   options: {
     exactRead?: true;
     preserveQualifiedAddress?: true;
+    projection?: SessionEntryReadScope["projection"];
     prepared?: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>;
   } = {},
 ) {
@@ -146,7 +147,12 @@ export async function retainGatewaySessionEntryReadOnly(
           JSON.stringify({ ...current, lastReadAt: undefined }) ||
           allowMetadataChanges?.(previous, current) === true)
       : previous === current;
-  const memory = captureMemoryRead({ cfg, key: sessionKey, agentId, projection: "list" });
+  const memory = captureMemoryRead({
+    cfg,
+    key: sessionKey,
+    agentId,
+    projection: options.projection ?? "list",
+  });
   if (memory) {
     const selected = memory.loaded();
     let released = false;
@@ -211,7 +217,7 @@ export async function retainGatewaySessionEntryReadOnly(
         cfg,
         key: sessionKey,
         agentId,
-        projection: "list",
+        projection: options.projection ?? "list",
         exactRead: options.exactRead,
         preserveQualifiedAddress: options.preserveQualifiedAddress,
       }));
@@ -223,6 +229,7 @@ export async function retainGatewaySessionEntryReadOnly(
         sessionKey: selected.legacyKey ?? selected.canonicalKey,
         entry: selected.entry,
         matches,
+        projection: options.projection ?? "list",
       });
       unregister = registerOpenClawAgentDatabaseAsyncResource({
         agentId: source.agentId,

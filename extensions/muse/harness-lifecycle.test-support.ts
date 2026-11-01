@@ -5,7 +5,7 @@ import {
   type AgentHarnessAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { expect, it, vi, type Mock } from "vitest";
-import { createMuseAgentHarness, type MuseHarnessOptions } from "./harness.js";
+import type { createMuseAgentHarness, MuseHarnessOptions } from "./harness.js";
 
 export function registerMuseLifecycleTests({
   setup,
@@ -13,6 +13,7 @@ export function registerMuseLifecycleTests({
   fixture,
   writes,
   terminal,
+  createHarness,
 }: {
   setup: () => {
     harness: ReturnType<typeof createMuseAgentHarness>;
@@ -24,6 +25,7 @@ export function registerMuseLifecycleTests({
   fixture: string;
   writes: { append: Mock };
   terminal: (result: AgentHarnessAttemptResult) => { kind: string };
+  createHarness: typeof createMuseAgentHarness;
 }) {
   it("streams reasoning and text, journals native tool pairs, and resumes after restart", async () => {
     const workspace = getWorkspace();
@@ -72,7 +74,7 @@ export function registerMuseLifecycleTests({
       unsubscribe();
       await first.harness.dispose?.();
     }
-    const resumed = createMuseAgentHarness({
+    const resumed = createHarness({
       binaryPath: fixture,
       sessionStore: first.sessionStore,
     });

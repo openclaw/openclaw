@@ -6,6 +6,7 @@ import {
   type MessageGroup,
 } from "../../lib/chat/chat-types.ts";
 import { stripHeartbeatTokenForDisplay } from "../../lib/chat/heartbeat-display.ts";
+import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { isStandaloneToolMessageForDisplay } from "../../lib/chat/message-normalizer.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
@@ -17,18 +18,10 @@ import {
 import { resetWorkingProgress } from "./chat-progress.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
+import { collectOwnedCanvasPreviews, stripOwnedCanvasShortcodes } from "./chat-thread-canvas.ts";
 import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
-import { readChatThreadMessageIdentity, sanitizeStreamText } from "./chat-thread-items.ts";
+import { sanitizeStreamText } from "./chat-thread-items.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
-
-export { persistedMessageEntryId, readPendingSendStatus } from "./chat-thread-items.ts";
-export {
-  assistantGroupCanOwnActiveRunStatus,
-  coalesceActivityRuns,
-  coalesceStreamRuns,
-  collapseCompletedTurnWork,
-} from "./chat-thread-grouping.ts";
-export { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 
 type CachedChatItems = {
   generation: number;
@@ -38,6 +31,7 @@ type CachedChatItems = {
     index: number;
     identity: string;
     prefix: string | null;
+    ownedCanvas: ReturnType<typeof collectOwnedCanvasPreviews>;
   } | null;
 };
 
@@ -115,7 +109,6 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
         candidate !== undefined &&
         entry.key === candidate.key &&
         entry.message === candidate.message &&
-        entry.duplicateCount === candidate.duplicateCount &&
         JSON.stringify(entry.replyTarget) === JSON.stringify(candidate.replyTarget) &&
         entry.hasVisibleContent === candidate.hasVisibleContent
       );
@@ -124,7 +117,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
 }
 
 const CHAT_ITEM_FIELDS = {
-  message: ["message", "duplicateCount"],
+  message: ["message"],
   notice: [
     "text",
     "label",
@@ -133,6 +126,7 @@ const CHAT_ITEM_FIELDS = {
     "boundaryId",
     "timestamp",
     "systemEvent",
+    "repeatCount",
   ],
   divider: [
     "compaction",
@@ -165,7 +159,11 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
     case "message":
       return previous.kind === "message" && sameFields(previous, next, CHAT_ITEM_FIELDS.message);
     case "notice":
-      return previous.kind === "notice" && sameFields(previous, next, CHAT_ITEM_FIELDS.notice);
+      return (
+        previous.kind === "notice" &&
+        sameFields(previous, next, CHAT_ITEM_FIELDS.notice) &&
+        sameFields(previous.modelChange, next.modelChange, ["from", "to"])
+      );
     case "divider":
       return previous.kind === "divider" && sameFields(previous, next, CHAT_ITEM_FIELDS.divider);
     case "stream":
@@ -373,7 +371,11 @@ function updateCachedLiveStream(cached: CachedChatItems, input: BuildChatItemsPr
   ) {
     return false;
   }
-  const text = trimAccumulatedStreamPrefix(sanitizeStreamText(input.stream ?? ""), live.prefix);
+  const text = stripOwnedCanvasShortcodes(
+    trimAccumulatedStreamPrefix(sanitizeStreamText(input.stream ?? ""), live.prefix),
+    item.runId,
+    live.ownedCanvas,
+  );
   if (!reasoning && (text.length === 0 || stripHeartbeatTokenForDisplay(text).shouldSkip)) {
     return false;
   }
@@ -451,6 +453,7 @@ export function buildCachedChatItems(
           index: liveStreamIndex,
           identity: liveStreamIdentity(input),
           prefix: accumulatedStreamText(input.streamSegments, sanitizeStreamText),
+          ownedCanvas: collectOwnedCanvasPreviews(items),
         };
   return items;
 }

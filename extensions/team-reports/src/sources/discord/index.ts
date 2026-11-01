@@ -1,3 +1,4 @@
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { z } from "zod";
 import type {
   ActivityEntry,
@@ -6,10 +7,9 @@ import type {
   SourceRuntime,
   SourceStatus,
 } from "../../types.js";
-import { checkAbort, createResponseParser, parseApiBase, readApiResponse, wait } from "../http.js";
+import { createResponseParser, parseApiBase, readApiResponse } from "../http.js";
 
 const retrySchema = z.object({ retry_after: z.number().finite().nonnegative() });
-const ABORT_LABEL = "Discord collection aborted.";
 
 class DiscordHttpError extends Error {
   constructor(readonly status: number) {
@@ -57,7 +57,6 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
       };
       let messageCount = 0;
       const warn = (scope: string, error: unknown) => {
-        checkAbort(runtime.signal, ABORT_LABEL);
         const detail = error instanceof Error ? error.message : "Discord collection failed.";
         const warning = `${scope}: ${detail}`;
         status.warnings.push(
@@ -66,15 +65,12 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
         status.stale = true;
         status.ok = false;
       };
-      checkAbort(runtime.signal, ABORT_LABEL);
       const base = parseApiBase(config.apiBaseUrl, "Discord");
       const request = (url: string) =>
         readApiResponse(
           url,
           { Authorization: `Bot ${config.token}`, Accept: "application/json" },
-          runtime,
           status,
-          ABORT_LABEL,
         );
       const get = async (path: string, params?: Record<string, string>): Promise<unknown> => {
         const url = new URL(path.replace(/^\//, ""), base);
@@ -83,33 +79,27 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
         }
         let retries = 0;
         while (true) {
-          checkAbort(runtime.signal, ABORT_LABEL);
           let result: Awaited<ReturnType<typeof request>>;
           try {
             result = await request(url.toString());
           } catch {
-            checkAbort(runtime.signal, ABORT_LABEL);
             if (retries >= 2) {
               throw new Error(
                 "Discord request failed after retries; check connectivity and API access.",
               );
             }
-            await wait(1000 * 2 ** retries++, runtime.signal, ABORT_LABEL);
+            await sleepWithAbort(1000 * 2 ** retries++);
             continue;
           }
           if (result.status === 429) {
             const retry = retrySchema.safeParse(result.data);
             const headerDelay = Number(result.headers.get("Retry-After"));
             const seconds = retry.success ? retry.data.retry_after : headerDelay;
-            await wait(
-              Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 1000,
-              runtime.signal,
-              ABORT_LABEL,
-            );
+            await sleepWithAbort(Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 1000);
             continue;
           }
           if (result.status >= 500 && retries < 2) {
-            await wait(1000 * 2 ** retries++, runtime.signal, ABORT_LABEL);
+            await sleepWithAbort(1000 * 2 ** retries++);
             continue;
           }
           if (result.status < 200 || result.status >= 300) {
@@ -165,7 +155,6 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
       const collectArchives = async (path: string, order: "timestamp" | "id" = "timestamp") => {
         let before: string | undefined;
         while (true) {
-          checkAbort(runtime.signal, ABORT_LABEL);
           const page = parse(
             archivesSchema,
             await get(path, { limit: "100", ...(before ? { before } : {}) }),
@@ -234,7 +223,6 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
         let after = ((BigInt(window.sinceMs) - epochMs) << 22n).toString();
         try {
           while (true) {
-            checkAbort(runtime.signal, ABORT_LABEL);
             const page = parse(
               messagesSchema,
               await get(`/channels/${encodeURIComponent(target.id)}/messages`, {
@@ -298,7 +286,6 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
           warn(`Discord messages for channel ${target.id}`, error);
         }
       }
-      checkAbort(runtime.signal, ABORT_LABEL);
       runtime.logger.info(
         `team-reports: Discord messages done: ${status.stats.channelsScanned} channels, ${status.stats.threadsScanned} threads, ${messageCount} messages`,
       );

@@ -8,7 +8,6 @@ import hubStyles from "../../styles/hub-tabs.css?inline";
 export type HubTabsProps<T extends string> = {
   id: string;
   active: T | null;
-  requestedActive?: T;
   tabs: readonly {
     value: T;
     label: JSX.Element;
@@ -46,19 +45,16 @@ export function HubTabs<T extends string>(props: HubTabsProps<T>) {
       ),
     })),
   );
-  let tablist: HTMLDivElement | undefined;
+  let tabElement!: (value: string) => HTMLElement | undefined;
   onSettled(() => {
-    const selected = [...(tablist?.querySelectorAll<HTMLElement>("[role=tab]") ?? [])].find(
-      (tab) => tab.dataset.tabValue === props.active,
-    );
     if (props.active !== null) {
-      reclaimHubTabFocus(props.id, props.active, selected);
+      reclaimHubTabFocus(props.id, props.active, tabElement(props.active));
     }
   });
   return (
     <Tabs
-      ref={(node) => {
-        tablist = node;
+      ref={(_element, findTab) => {
+        tabElement = findTab;
       }}
       id={`${props.id}-tabs`}
       shadowStyles={[hubStyles]}
@@ -75,7 +71,7 @@ export function HubTabs<T extends string>(props: HubTabsProps<T>) {
       ]}
       onActivate={(value, element, event) => {
         const tab = props.tabs.find((entry) => entry.value === value);
-        if (!tab || tab.value === (props.requestedActive ?? props.active)) {
+        if (!tab || tab.value === props.active) {
           return false;
         }
         if (event instanceof KeyboardEvent) {

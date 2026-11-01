@@ -9,10 +9,19 @@ title: "Database layout"
 
 ## Database layout
 
-| Scope                | Default path                                               | Contents                                                                                              |
-| -------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state             |
-| Per-agent data plane | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state |
+| Scope                    | Default path                                               | Contents                                                                                                        |
+| ------------------------ | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Global control plane     | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state                       |
+| Per-agent data plane     | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state           |
+| Local client credentials | `<resolved-client-root>/client/credentials.sqlite`         | Client private identities, device and Gateway-scoped token caches, native socket secrets, and migration receipt |
+
+The client root is local even when the Gateway uses PostgreSQL or runs remotely.
+CLI clients normally use the selected state directory. The macOS app preserves
+its existing identity root in `~/Library/Application Support/OpenClaw` and its
+existing exec-host state root; configured roots remain explicit. iOS and extension
+clients retain their existing application-container roots. Each exact root has
+one credential owner; no timestamp reconciliation joins different roots.
+See [client migration and recovery](/reference/database-schemas/versioning#local-client-credentials).
 
 ### Local daemon service intent
 
@@ -66,6 +75,35 @@ imports stay retired; [upgrading very old versions](/install/updating#upgrading-
 describes the bridge-release path. Run the current Doctor after a direct binary
 replacement before starting the new Gateway.
 
+### Durable background processes
+
+The background-process registry owns `durable_background_processes` in the shared
+state database for Linux Gateway execution with systemd 250 or newer. Each row contains its opaque `id` primary key and registry-owned `record_json`.
+The typed record binds the systemd unit to
+an agent, session key, and exact session ID. It retains a generic command
+summary, working directory, log path, start and end times, terminal status, exit code,
+signal and reason, notification policy and settlement, cancellation intent, and the
+captured output and result-retention bounds. Environment values, command arguments,
+output, credentials, requester continuations, and approval grants are never stored
+in this table. Process output is a separate named log artifact under the state directory.
+
+The shared-state writer installs the canonical STRICT table on the first durable
+launch; reads of absent storage create nothing. This additive feature uses the existing
+schema owner and leaves state schema version 36 unchanged. PostgreSQL receives the
+equivalent first-use fragment. Existing databases need no row rewrite or backfill,
+and ordinary Doctor/update admission and integrity checks remain in place. Rollback
+to a binary without durable-process support leaves these rows and the units untouched;
+it cannot adopt or stop them through `process`. Stop units explicitly before such a
+rollback, or upgrade again to recover their handles. No automatic command replay occurs.
+
+On Gateway startup the registry consumes these facts through the shared read worker,
+reconciles each recorded unit, and records its real terminal or lost outcome before
+releasing unit metadata. Units use `ExitType=cgroup`, so a root exit with live
+descendants remains a running process. It never restores requester authority; completion is a new
+system input admitted under the owning session's current principal. Finished rows and
+their logs follow the registry's bounded result retention and explicit removal. A
+session reset invalidates completion eligibility through the recorded session ID.
+
 ### Linux database page cache
 
 After readiness, the Gateway samples Linux file-cache residency and checks it again
@@ -86,7 +124,9 @@ reads use batches of eight and skip stored JSON or compressed values above 64 Ki
 compressed messages are not decoded. Cold snapshot values and older transcript
 payloads are not scanned.
 Each bounded query finishes before yielding, so pacing holds no SQLite read transaction.
-Warming yields between chunks, targets 16 MiB/s, and stops at a 2 GiB pass budget
+Warming reports progress in roughly 1 MiB chunks instead of once per session or
+message batch, keeping small reads and their allocation in the worker. It still
+checks the byte budget after every bounded read. Warming targets 16 MiB/s and stops at a 2 GiB pass budget
 or three minutes per database. A final chunk can exceed the byte budget slightly.
 Shutdown cancels and joins the worker; no page map or read snapshot survives a pass.
 
@@ -163,6 +203,16 @@ stored without secret masking and before rule-based timestamp and sender
 normalization. Both the first dispatch and replay use that recorded text, then
 apply the same normalization.
 
+If sandbox provisioning prevents an accepted media input from reaching its first
+provider request, the built-in runtime retains that input's already-prepared text
+through the same recorder before releasing its admission. A later continuation
+can therefore use the attachment context even though the original run failed.
+If a write hook changed the input text, retention uses the approved replacement
+instead of restoring the earlier prepared text. The comparison belongs to the
+original recorder admission and is not persisted.
+Successful attempts still capture after prompt hooks and finalization; an existing
+projection is never replaced by the failed attempt's earlier text.
+
 The existing transcript writer binds capture to the exact active user message
 and rechecks live authority before committing. Capture is immutable: repeats
 can only confirm identical text. Later media cannot change a sent projection
@@ -196,7 +246,12 @@ The per-agent `session_transcript_cold_archives` table records cold transcript
 locations alongside `session_windows` and `transcript_events`. Each row belongs
 to a retained session window and identifies its generation, archive name, hash,
 counts, and sizes. The payload lives in an immutable compressed JSONL file, or
-in the row's blob when embedded by a supported backup.
+in the row's blob when embedded by a supported backup. Schema 37 adds
+`session_transcript_cold_archive_chunks`, keyed by session and ordered chunk index,
+with a cascading foreign key to the parent. Chunked parents retain window totals
+and the ordered manifest hash; each child records its sequence range, counts,
+file hash, and sizes. Backups embed each chunk in its own blob. Parents without
+children keep the original single-file representation.
 
 The default archive directory is
 `~/.openclaw/agents/<agentId>/sessions/cold/`, with filenames
@@ -205,7 +260,7 @@ The default archive directory is
 These files contain authoritative history. See
 [cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage)
 for retention and restoration, and
-[agent schema 20](/reference/database-schemas/agent-schema-history#cold-transcript-storage)
+[agent schema 37](/reference/database-schemas/agent-schema-history#agent-schema-37)
 for the schema and update contract.
 
 ### Plugin state listing index
@@ -506,6 +561,14 @@ row. See [Run history and reports](/cli/update#run-history-and-reports).
 Managed update leases use a separate machine-local `managed-update-handoffs.sqlite`
 database under the secure OpenClaw temporary directory. This owner must remain
 available while an update replaces an installation or changes its runtime state.
+The macOS Gateway LaunchAgent runs with its state's `tmp` as `TMPDIR`. For that
+managed `TMPDIR`, OpenClaw uses the operating system's per-user temporary directory
+(`getconf DARWIN_USER_TEMP_DIR`) instead, the directory terminal commands already
+use, so the Gateway, terminals, and every profile share one database. Any other
+explicit `TMPDIR` is still honored. Update admission also takes the installation
+in the database an earlier Gateway kept under its state's `tmp`, so that store's
+existing rules still decide when its custody has settled; `openclaw update repair`
+settles cancelled custody there.
 The update history above remains in the profile's shared state database.
 
 First creation exclusively creates a private file with one filesystem link.

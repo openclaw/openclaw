@@ -1,5 +1,4 @@
-// Covers update channel and npm tag normalization.
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   channelToNpmTag,
   isStableTag,
@@ -10,156 +9,69 @@ import {
   type UpdateChannel,
 } from "./update-channels.js";
 
-describe("update-channels tag detection", () => {
-  it.each([["v2026.6.32-1", true]])("stable classification for %s", (tag, stable) => {
-    expect(isStableTag(tag)).toBe(stable);
-  });
+it("classifies numbered stable corrections", () => {
+  expect(isStableTag("v2026.6.32-1")).toBe(true);
 });
 
-describe("normalizeUpdateChannel", () => {
-  it.each([[undefined, null]] satisfies Array<[string | null | undefined, UpdateChannel | null]>)(
-    "normalizes %j",
-    (value, expected) => {
-      expect(normalizeUpdateChannel(value)).toBe(expected);
-    },
-  );
+it("normalizes an absent channel", () => {
+  expect(normalizeUpdateChannel(undefined)).toBe(null);
 });
 
-describe("channelToNpmTag", () => {
-  it.each([
-    ["stable", "latest"],
-    ["dev", "dev"],
-  ] satisfies Array<[UpdateChannel, string]>)("maps %s to %s", (channel, expected) => {
-    expect(channelToNpmTag(channel)).toBe(expected);
-  });
+it.each([
+  ["stable", "latest"],
+  ["dev", "dev"],
+] satisfies Array<[UpdateChannel, string]>)("maps %s to %s", (channel, expected) => {
+  expect(channelToNpmTag(channel)).toBe(expected);
 });
 
-describe("resolveEffectiveUpdateChannel", () => {
-  it.each([
-    {
-      name: "uses main for immutable generations independently of the package version",
-      params: {
-        currentVersion: "2026.5.2-beta.1",
-        installKind: "immutable" as const,
-      },
-      expected: { channel: "dev", source: "default" },
-    },
-    {
-      name: "uses installed extended-stable version without config",
-      params: {
-        currentVersion: "2026.6.33",
-        installKind: "package" as const,
-      },
-      expected: { channel: "extended-stable", source: "installed-version" },
-    },
-    {
-      name: "identifies final extended-stable git tags without enabling Git updates",
-      params: { installKind: "git" as const, git: { tag: "v2026.6.33" } },
-      expected: { channel: "extended-stable", source: "git-tag" },
-    },
-    {
-      name: "treats non-beta prerelease git tag as dev",
-      params: { installKind: "git" as const, git: { tag: "v2026.5.25-alpha.1" } },
-      expected: { channel: "dev", source: "git-tag" },
-    },
-  ])("$name", ({ params, expected }) => {
-    expect(resolveEffectiveUpdateChannel(params)).toEqual(expected);
-  });
+it.each([
+  [{ currentVersion: "2026.5.2-beta.1", installKind: "immutable" }, "dev", "default"],
+  [{ currentVersion: "2026.6.33", installKind: "package" }, "extended-stable", "installed-version"],
+  [{ installKind: "git", git: { tag: "v2026.6.33" } }, "extended-stable", "git-tag"],
+  [{ installKind: "git", git: { tag: "v2026.5.25-alpha.1" } }, "dev", "git-tag"],
+] satisfies Array<[Parameters<typeof resolveEffectiveUpdateChannel>[0], UpdateChannel, string]>)(
+  "resolves effective channel for %j",
+  (params, channel, source) => {
+    expect(resolveEffectiveUpdateChannel(params)).toEqual({ channel, source });
+  },
+);
+
+it.each([
+  [{ installKind: "git", gitTag: "v2026.2.24" }, "stable (v2026.2.24)"],
+  [{ currentVersion: "2026.5.2-beta.1", installKind: "package" }, "beta (installed version)"],
+  [
+    { configChannel: "stable", currentVersion: "2026.5.2-beta.1", installKind: "package" },
+    { channel: "stable", source: "config", label: "stable (config)" },
+  ],
+  [
+    { installKind: "git", gitBranch: "feature/test" },
+    { channel: "dev", source: "git-branch", label: "dev (feature/test)" },
+  ],
+  [
+    { installKind: "git", gitTag: "v2026.2.24-beta.1", gitBranch: "feature/test" },
+    { channel: "beta", source: "git-tag", label: "beta (v2026.2.24-beta.1)" },
+  ],
+  [{ installKind: "package" }, { channel: "stable", source: "default", label: "stable (default)" }],
+] satisfies Array<
+  [
+    Parameters<typeof resolveUpdateChannelDisplay>[0],
+    string | ReturnType<typeof resolveUpdateChannelDisplay>,
+  ]
+>)("resolves display metadata for %j", (params, expected) => {
+  const actual = resolveUpdateChannelDisplay(params);
+  if (typeof expected === "string") {
+    expect(actual.label).toBe(expected);
+  } else {
+    expect(actual).toEqual(expected);
+  }
 });
 
-describe("resolveUpdateChannelDisplay labels", () => {
-  it.each([
-    {
-      name: "formats git tag labels with tag",
-      params: {
-        installKind: "git",
-        gitTag: "v2026.2.24",
-      },
-      expected: "stable (v2026.2.24)",
-    },
-    {
-      name: "formats installed-version labels",
-      params: { currentVersion: "2026.5.2-beta.1", installKind: "package" },
-      expected: "beta (installed version)",
-    },
-  ] satisfies Array<{
-    name: string;
-    params: Parameters<typeof resolveUpdateChannelDisplay>[0];
-    expected: string;
-  }>)("$name", ({ params, expected }) => {
-    expect(resolveUpdateChannelDisplay(params).label).toBe(expected);
-  });
-});
-
-describe("resolveUpdateChannelDisplay", () => {
-  it("shows the configured stable channel after a one-off beta package update", () => {
-    expect(
-      resolveUpdateChannelDisplay({
-        configChannel: "stable",
-        currentVersion: "2026.5.2-beta.1",
-        installKind: "package",
-      }),
-    ).toEqual({
-      channel: "stable",
-      source: "config",
-      label: "stable (config)",
-    });
-  });
-
-  it("includes the derived label for git branches", () => {
-    expect(
-      resolveUpdateChannelDisplay({
-        installKind: "git",
-        gitBranch: "feature/test",
-      }),
-    ).toEqual({
-      channel: "dev",
-      source: "git-branch",
-      label: "dev (feature/test)",
-    });
-  });
-
-  it("prefers git tag precedence over branch metadata in the derived label", () => {
-    expect(
-      resolveUpdateChannelDisplay({
-        installKind: "git",
-        gitTag: "v2026.2.24-beta.1",
-        gitBranch: "feature/test",
-      }),
-    ).toEqual({
-      channel: "beta",
-      source: "git-tag",
-      label: "beta (v2026.2.24-beta.1)",
-    });
-  });
-
-  it("does not synthesize git metadata when both tag and branch are missing", () => {
-    expect(
-      resolveUpdateChannelDisplay({
-        installKind: "package",
-      }),
-    ).toEqual({
-      channel: "stable",
-      source: "default",
-      label: "stable (default)",
-    });
-  });
-});
-
-describe("resolveRegistryUpdateChannel", () => {
-  it.each([["2026.6.33", "stable"]] as const)(
-    "does not infer a package-only channel for %s",
-    (currentVersion, expected) => {
-      expect(resolveRegistryUpdateChannel({ currentVersion })).toBe(expected);
-    },
-  );
-
-  it("queries beta when the installed version is beta even if config is stale stable", () => {
-    expect(
-      resolveRegistryUpdateChannel({
-        configChannel: "stable",
-        currentVersion: "2026.5.2-beta.1",
-      }),
-    ).toBe("beta");
-  });
-});
+it.each([
+  [{ currentVersion: "2026.6.33" }, "stable"],
+  [{ configChannel: "stable", currentVersion: "2026.5.2-beta.1" }, "beta"],
+] satisfies Array<[Parameters<typeof resolveRegistryUpdateChannel>[0], UpdateChannel]>)(
+  "resolves registry channel for %j",
+  (params, expected) => {
+    expect(resolveRegistryUpdateChannel(params)).toBe(expected);
+  },
+);

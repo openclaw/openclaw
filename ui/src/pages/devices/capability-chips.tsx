@@ -71,9 +71,8 @@ export function CapabilityChips(props: { caps: readonly string[] }) {
   const capabilities = createMemo(() =>
     unique().filter((cap) => !SESSION_RUNTIME_CAPABILITIES.has(cap)),
   );
-  const visible = createMemo(() =>
-    capabilities().slice(0, CAPABILITY_CHIP_LIMIT - (runtimes().length > 0 ? 1 : 0)),
-  );
+  const visible = () =>
+    capabilities().slice(0, CAPABILITY_CHIP_LIMIT - (runtimes().length > 0 ? 1 : 0));
   const overflow = () => capabilities().length - visible().length;
   return (
     <Show when={props.caps.length > 0}>

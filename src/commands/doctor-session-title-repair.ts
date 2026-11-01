@@ -1,13 +1,12 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isSessionTranscriptProjectionUnavailableError,
-  loadSessionEntry,
   patchSessionEntryCore,
   readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptMessageEventPage,
   scanDoctorSessionEntriesTolerant,
 } from "../config/sessions/session-accessor.js";
-import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
+import { SessionTranscriptColdError } from "../config/sessions/session-transcript-cold-error.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deriveGoalSessionTitle } from "../gateway/derive-goal-session-title.js";
 import { projectSessionDisplayMessage } from "../gateway/session-display-projection.js";
@@ -16,7 +15,7 @@ import {
   listExistingAgentDatabaseTargets,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
-import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { isIncognitoSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
@@ -96,7 +95,7 @@ export async function repairLegacySessionTitles(params: {
       agentId: target.agentId,
       path: target.sqlitePath,
       run: () => {
-        const keys: string[] = [];
+        const sessions: Array<{ sessionKey: string; sessionId: string }> = [];
         scanDoctorSessionEntriesTolerant(
           scope,
           ({ entry, sessionKey, recoveredFromProjections }) => {
@@ -104,28 +103,26 @@ export async function repairLegacySessionTitles(params: {
               !recoveredFromProjections &&
               !entry.incognito &&
               !isIncognitoSessionKey(sessionKey) &&
+              // Spawn owns child labels; its first user message is a runtime task envelope.
+              !isSubagentSessionKey(sessionKey) &&
               !hasExplicitSessionName(entry)
             ) {
-              keys.push(sessionKey);
+              sessions.push({ sessionKey, sessionId: entry.sessionId });
             }
           },
         );
-        return keys;
+        return sessions;
       },
     });
     if (!scan.ok) {
       continue;
     }
-    for (const sessionKey of scan.value) {
+    for (const { sessionKey, sessionId } of scan.value) {
       if (params.apply) {
         assertRepairAuthority();
       }
       try {
-        const entry = loadSessionEntry({ ...scope, sessionKey });
-        if (!entry || entry.incognito || hasExplicitSessionName(entry)) {
-          continue;
-        }
-        const session = { ...scope, sessionKey, sessionId: entry.sessionId, sessionEntry: entry };
+        const session = { ...scope, sessionKey, sessionId };
         const title = readLegacySessionTitle(session);
         if (!title) {
           continue;

@@ -346,15 +346,27 @@ export async function handleOpenResponsesHttpRequest(
 
   const responseId = `resp_${randomUUID()}`;
   const responseIdentity = { id: responseId, createdAt: Math.floor(Date.now() / 1000) };
+  const outputItemId = `msg_${randomUUID()}`;
   const createFailedResponse = (
     error: { code: string; message: string },
     usage?: Usage,
+    incompleteTurnText?: string,
   ): ResponseResource =>
     createResponseResource({
       ...responseIdentity,
       model,
       status: "failed",
-      output: [],
+      output:
+        incompleteTurnText === undefined
+          ? []
+          : [
+              createAssistantOutputItem({
+                id: outputItemId,
+                text: incompleteTurnText,
+                phase: "final_answer",
+                status: "incomplete",
+              }),
+            ],
       error,
       usage,
     });
@@ -371,7 +383,6 @@ export async function handleOpenResponsesHttpRequest(
       );
     }
   };
-  const outputItemId = `msg_${randomUUID()}`;
   const streamParams = resolveOpenAiStreamParams({
     maxTokens: payload.max_output_tokens,
     temperature: payload.temperature,
@@ -472,11 +483,18 @@ export async function handleOpenResponsesHttpRequest(
 
         sendJson(res, 200, response);
       },
-      fail: (mapped) =>
+      fail: (mapped, result, incompleteTurnText) =>
         sendJson(
           res,
           mapped.status,
-          createFailedResponse({ code: mapped.error.type, message: mapped.error.message }),
+          createFailedResponse(
+            {
+              code: incompleteTurnText === undefined ? mapped.error.type : "incomplete_turn",
+              message: mapped.error.message,
+            },
+            result === undefined ? undefined : extractUsageFromResult(result),
+            incompleteTurnText,
+          ),
         ),
     });
   }
@@ -624,12 +642,16 @@ export async function handleOpenResponsesHttpRequest(
         response: finalResponse,
       });
     },
-    fail: (error, result) =>
+    fail: (error, result, incompleteTurnText) =>
       writeSseEvent(res, {
         type: "response.failed",
         response: createFailedResponse(
-          { code: error.type, message: error.message },
+          {
+            code: incompleteTurnText === undefined ? error.type : "incomplete_turn",
+            message: error.message,
+          },
           result === undefined ? undefined : extractUsageFromResult(result),
+          incompleteTurnText,
         ),
       }),
   });

@@ -1,14 +1,16 @@
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid as mountView } from "../../../test-helpers/mount-solid.ts";
-import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { ChatActivityHeadline } from "./chat-activity-headline.solid.tsx";
 import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
-import { WorkGroupSummary } from "./chat-message-stream-view.tsx";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
-import { ChatToolRawOutput } from "./chat-tool-content.solid.tsx";
+import { RawOutputToggle } from "./chat-tool-content.solid.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
+import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let userEvent: (typeof import("vitest/browser"))["userEvent"];
@@ -25,69 +27,57 @@ afterEach(() => {
   }
 });
 
+function group(
+  key: string,
+  message: MessageGroupData["messages"][number]["message"],
+  role: MessageGroupData["role"] = "tool",
+): MessageGroupData {
+  return {
+    kind: "group",
+    key,
+    role,
+    timestamp: 1000,
+    isStreaming: false,
+    visibleContent: role === "assistant" ? "text" : "non-text",
+    messages: [{ key, hasVisibleContent: true, message }],
+  };
+}
+
 describe.runIf(browserMode)("chat disclosure activation", () => {
   it.each(["work", "activity", "tool", "tool-output", "raw"] as const)(
     "toggles on rapid clicks without selecting labels and retains keyboard access (%s)",
     async (kind) => {
       container = document.body.appendChild(document.createElement("div"));
-      const groups: MessageGroupData[] = [
-        {
-          kind: "group",
-          key: "activity",
-          role: "tool",
-          timestamp: 1000,
-          isStreaming: false,
-          visibleContent: "non-text",
-          messages: [
+      const groups = [
+        group("activity", {
+          role: "assistant",
+          content: [
             {
-              key: "call",
-              hasVisibleContent: true,
-              message: {
-                role: "assistant",
-                content: [
-                  {
-                    type: "toolCall",
-                    id: "search",
-                    name: "web_search",
-                    arguments: { query: "disclosures" },
-                  },
-                ],
-                activity: [
-                  {
-                    itemId: "search",
-                    toolCallId: "search",
-                    kind: "tool",
-                    phase: "end",
-                    name: "web_search",
-                    title: "Search",
-                    status: "completed",
-                  },
-                ],
-              },
+              type: "toolCall",
+              id: "search",
+              name: "web_search",
+              arguments: { query: "disclosures" },
             },
           ],
-        },
-      ];
-      const output: MessageGroupData = {
-        kind: "group",
-        key: "output",
-        role: "tool",
-        timestamp: 1000,
-        isStreaming: false,
-        visibleContent: "non-text",
-        messages: [
-          {
-            key: "result",
-            hasVisibleContent: true,
-            message: {
-              role: "toolResult",
+          activity: [
+            {
+              itemId: "search",
               toolCallId: "search",
-              toolName: "web_search",
-              content: "Search results",
+              kind: "tool",
+              phase: "end",
+              name: "web_search",
+              title: "Search",
+              status: "completed",
             },
-          },
-        ],
-      };
+          ],
+        }),
+      ];
+      const output = group("output", {
+        role: "toolResult",
+        toolCallId: "search",
+        toolName: "web_search",
+        content: "Search results",
+      });
       let expanded = false;
       const toggle = () => {
         expanded = !expanded;
@@ -100,27 +90,33 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
           isToolMessageExpanded: () => props.expanded,
           onToggleToolMessageExpanded: toggle,
         });
-        return kind === "work" ? (
-          <WorkGroupSummary
-            item={{ key: "work", durationMs: null, groups }}
-            options={{ expanded: props.expanded, onToggle: toggle }}
-          />
-        ) : kind === "activity" ? (
-          <ActivityGroup groups={groups} options={options()} presentation="standalone" />
-        ) : kind === "tool" ? (
-          <ChatToolCard
-            card={{
-              id: "search",
-              name: "web_search",
-              args: { query: "disclosures" },
-              completed: true,
-            }}
-            options={{ messageKey: "tool", expanded: props.expanded, onToggleExpanded: toggle }}
-          />
-        ) : kind === "tool-output" ? (
-          <MessageGroup group={output} options={options()} />
-        ) : (
-          <ChatToolRawOutput text="Copyable output" />
+        return (
+          <>
+            {kind === "work" ? (
+              <WorkGroupSummary
+                item={{ key: "work", durationMs: null, groups }}
+                options={{ expanded: props.expanded, onToggle: toggle }}
+              />
+            ) : kind === "activity" ? (
+              <ActivityGroup groups={groups} options={options()} presentation="standalone" />
+            ) : kind === "tool" ? (
+              <ChatToolCard
+                card={{
+                  id: "search",
+                  name: "web_search",
+                  args: { query: "disclosures" },
+                  completed: true,
+                }}
+                options={{ messageKey: "tool", expanded: props.expanded, onToggleExpanded: toggle }}
+              />
+            ) : kind === "tool-output" ? (
+              <MessageGroup group={output} options={options()} />
+            ) : (
+              <openclaw-chat-tool-raw>
+                <RawOutputToggle text="Copyable output" />
+              </openclaw-chat-tool-raw>
+            )}
+          </>
         );
       }
       const view = mountSolid(Disclosure, { expanded }, container);
@@ -147,30 +143,69 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
     },
   );
 
+  it("dims live operation text until hover or keyboard focus without a tooltip", async () => {
+    container = document.body.appendChild(document.createElement("div"));
+    const view = mountView(
+      () => (
+        <ContentPresentation value={() => true}>
+          <button class="chat-inline-disclosure chat-activity-group__summary">
+            <ChatActivityHeadline
+              scope="hover-proof"
+              activity={{
+                key: "search",
+                name: "tool_search",
+                title: "Find available tools",
+                status: "running",
+              }}
+              summary="5 other operations"
+            />
+          </button>
+        </ContentPresentation>
+      ),
+      { container },
+    );
+    try {
+      const button = container.querySelector<HTMLButtonElement>("button")!;
+      const label = container.querySelector<HTMLElement>(".chat-activity-group__label")!;
+      const icon = container.querySelector<HTMLElement>(".chat-activity-group__icon")!;
+      // Isolate the state assertions from the production color transition.
+      button.style.transition = "none";
+      await userEvent.hover(document.body, { position: { x: 0, y: 0 } });
+      const resting = getComputedStyle(label).color;
+      expect(resting).toBe(getComputedStyle(button).color);
+      expect(icon.getAttribute("aria-label")).toBe("tool_search");
+      expect(button.querySelector("[title]")).toBeNull();
+      await userEvent.hover(icon);
+      const hovered = getComputedStyle(label).color;
+      expect(hovered).not.toBe(resting);
+      expect(hovered).toBe(getComputedStyle(button).color);
+      await userEvent.hover(document.body, { position: { x: 0, y: 0 } });
+      expect(getComputedStyle(label).color).toBe(resting);
+      await userEvent.tab();
+      expect(document.activeElement).toBe(button);
+      expect(button.matches(":focus-visible")).toBe(true);
+      expect(getComputedStyle(label).color).toBe(hovered);
+    } finally {
+      view.unmount();
+    }
+  });
+
   it("keeps message prose and expanded output selectable", async () => {
     container = document.body.appendChild(document.createElement("div"));
     mountView(
       () => (
         <>
           <MessageGroup
-            group={{
-              kind: "group",
-              key: "answer",
-              role: "assistant",
-              timestamp: 1000,
-              isStreaming: false,
-              visibleContent: "text",
-              messages: [
-                {
-                  key: "answer",
-                  hasVisibleContent: true,
-                  message: { role: "assistant", content: "Copyable explanation." },
-                },
-              ],
-            }}
+            group={group(
+              "answer",
+              { role: "assistant", content: "Copyable explanation." },
+              "assistant",
+            )}
             options={{ showReasoning: false }}
           />
-          <ChatToolRawOutput text="Copyable output" />
+          <openclaw-chat-tool-raw>
+            <RawOutputToggle text="Copyable output" />
+          </openclaw-chat-tool-raw>
         </>
       ),
       { container },

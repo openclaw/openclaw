@@ -13,6 +13,7 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import { stateMigrations } from "../doctor-contract-api.js";
+import { authFiles } from "./auth-files.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/security-runtime", () => {
   throw new Error("Doctor migration detection must not load the broad security runtime");
@@ -26,20 +27,6 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 const migration = stateMigrations[0]!;
-const authFiles = [
-  "creds.json",
-  "creds.json.bak",
-  "pre-key-1.json",
-  "session-contact.json",
-  "sender-key-group.json",
-  "sender-key-memory-group.json",
-  "app-state-sync-key-contact.json",
-  "app-state-sync-version-contact.json",
-  "lid-mapping-15551234567.json",
-  "device-list-15551234567.json",
-  "tctoken-15551234567.json",
-  "identity-key-15551234567.json",
-];
 
 function fixture(seed = true) {
   const stateDir = tempDirs.make("openclaw-wa-auth-migration-");

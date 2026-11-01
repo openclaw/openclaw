@@ -100,9 +100,8 @@ vi.mock("../../plugins/memory-runtime.js", () => ({
 // mock-isolation: Exercise fixture-owned authority without a running Gateway session.
 vi.mock("../operator-run-authority.js", () => ({ captureGatewayOperatorRunAuthority }));
 
-import { createDoctorHandlers } from "./doctor.js";
-
-const doctorHandlers = createDoctorHandlers({
+// mock-isolation: Exercise Doctor through the existing bundled-runtime module boundary.
+vi.mock("../../plugin-sdk/memory-core-bundled-runtime.js", () => ({
   dedupeDreamDiaryEntries,
   loadShortTermPromotionDreamingStats,
   previewGroundedRemMarkdown,
@@ -110,7 +109,11 @@ const doctorHandlers = createDoctorHandlers({
   removeBackfillDiaryEntries,
   removeGroundedShortTermCandidates,
   repairDreamingArtifacts,
-});
+}));
+
+import { createDoctorHandlers } from "./doctor.js";
+
+const doctorHandlers = createDoctorHandlers();
 
 export const DOCTOR_MEMORY_TARGET_METHODS = [
   "doctor.memory.status",
@@ -214,14 +217,7 @@ export function useMemoryManagerFixture(options: MemoryManagerFixtureOptions) {
   const probeEmbeddingAvailability =
     options.probeEmbeddingAvailability ?? vi.fn().mockResolvedValue({ ok: true });
   getMemorySearchManager.mockResolvedValue({
-    manager: {
-      status: options.status,
-      probeEmbeddingAvailability,
-      ...(options.getCachedEmbeddingAvailability
-        ? { getCachedEmbeddingAvailability: options.getCachedEmbeddingAvailability }
-        : {}),
-      close,
-    },
+    manager: { ...options, probeEmbeddingAvailability, close },
   });
   return { close, probeEmbeddingAvailability };
 }

@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 
 function canonicalCodexCatalogHome(value: string): string {
   const resolved = path.resolve(value);
@@ -19,8 +19,5 @@ export function codexCatalogHomeId(codexHome: string): string {
 
 /** Hashes lifecycle-prepared paths without repeating filesystem discovery. */
 export function codexCatalogHomeIdFromCanonicalPath(codexHome: string): string {
-  return createHash("sha256")
-    .update("openclaw:codex-session-catalog-home:v1\0")
-    .update(codexHome)
-    .digest("hex");
+  return sha256Hex(`openclaw:codex-session-catalog-home:v1\0${codexHome}`);
 }

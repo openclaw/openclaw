@@ -245,6 +245,42 @@ export function canonicalUiSessionKeyForPersistence(
   return raw ? resolveUiConversationIdentity(host, raw).sessionKey : "";
 }
 
+function createUiConversationMatcher(
+  host: UiSessionDefaultsHost,
+  selectedKey: string | undefined | null,
+  selectedAgentId?: string | null,
+  scopeGlobalRows = false,
+) {
+  const selected = normalizeOptionalString(selectedKey);
+  const explicitSelectedAgent = normalizeOptionalString(selectedAgentId);
+  const current = selected
+    ? resolveUiConversationIdentity(host, selected, explicitSelectedAgent)
+    : null;
+  const defaultAgent = resolveUiDefaultAgentId(host);
+  const currentAgent = current?.agentId ?? defaultAgent;
+  return (candidateKey: string | undefined | null, candidateAgentId?: string | null): boolean => {
+    const candidate = normalizeOptionalString(candidateKey);
+    if (
+      !current ||
+      !candidate ||
+      (explicitSelectedAgent && normalizeAgentId(explicitSelectedAgent) !== currentAgent)
+    ) {
+      return false;
+    }
+    const explicitAgent = normalizeOptionalString(
+      candidateAgentId ??
+        (scopeGlobalRows && isUiGlobalSessionKey(candidate) ? current.agentId : undefined),
+    );
+    const other = resolveUiConversationIdentity(host, candidate, explicitAgent ?? defaultAgent);
+    const otherAgent = other.agentId ?? defaultAgent;
+    return (
+      (!explicitAgent || normalizeAgentId(explicitAgent) === otherAgent) &&
+      current.sessionKey === other.sessionKey &&
+      currentAgent === otherAgent
+    );
+  };
+}
+
 /** Compare selected conversation ownership, rejecting contradictory captured agent facts. */
 export function uiConversationMatches(
   host: UiSessionDefaultsHost,
@@ -253,24 +289,19 @@ export function uiConversationMatches(
   candidateAgentId?: string | null,
   selectedAgentId?: string | null,
 ): boolean {
-  const selected = normalizeOptionalString(selectedKey);
-  const candidate = normalizeOptionalString(candidateKey);
-  if (!selected || !candidate) {
-    return false;
-  }
-  const explicitSelectedAgent = normalizeOptionalString(selectedAgentId);
-  const current = resolveUiConversationIdentity(host, selected, explicitSelectedAgent);
-  const explicitAgent = normalizeOptionalString(candidateAgentId);
-  const defaultAgent = resolveUiDefaultAgentId(host);
-  const other = resolveUiConversationIdentity(host, candidate, explicitAgent ?? defaultAgent);
-  const currentAgent = current.agentId ?? defaultAgent;
-  const otherAgent = other.agentId ?? defaultAgent;
-  return (
-    (!explicitSelectedAgent || normalizeAgentId(explicitSelectedAgent) === currentAgent) &&
-    (!explicitAgent || normalizeAgentId(explicitAgent) === otherAgent) &&
-    current.sessionKey === other.sessionKey &&
-    currentAgent === otherAgent
-  );
+  return createUiConversationMatcher(
+    host,
+    selectedKey,
+    selectedAgentId,
+  )(candidateKey, candidateAgentId);
+}
+
+/** Resolve the selected identity once when matching an entire list. */
+export function createUiSessionRowMatcher(
+  host: UiSessionDefaultsHost,
+  selectedSessionKey: string | undefined | null,
+) {
+  return createUiConversationMatcher(host, selectedSessionKey, undefined, true);
 }
 
 export function uiSessionEventMatches(
@@ -307,16 +338,7 @@ export function uiSessionRowMatchesSelectedChat(
   selectedSessionKey: string | undefined | null,
   rowAgentId?: string | null,
 ): boolean {
-  // Rows without an explicit agent are already scoped by their owning list.
-  const selected = selectedSessionKey
-    ? resolveUiConversationIdentity(host, selectedSessionKey)
-    : null;
-  return uiConversationMatches(
-    host,
-    selectedSessionKey,
-    rowKey,
-    rowAgentId ?? (isUiGlobalSessionKey(rowKey) ? selected?.agentId : undefined),
-  );
+  return createUiSessionRowMatcher(host, selectedSessionKey)(rowKey, rowAgentId);
 }
 
 export function normalizeDefaultMainSessionAliasForUi(

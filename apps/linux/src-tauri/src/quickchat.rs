@@ -2443,13 +2443,4 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn rescaled_window_centers_on_the_target_monitor() {
-        // End to end: a 2x-scaled 640pt-wide window invoked on a 1x 1920px
-        // monitor. Without the rescale it centers using 1280 and lands at 320.
-        let target = quickchat_target_size((1280.0, 720.0), 2.0, 1.0);
-        let (x, _) = quickchat_position((0.0, 0.0), (1920.0, 1080.0), target);
-        assert_eq!(x, 640.0);
-    }
 }

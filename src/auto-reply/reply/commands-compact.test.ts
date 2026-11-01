@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
-  abortEmbeddedAgentRun,
   buildCompactParams,
   compactEmbeddedAgentSession,
   formatContextUsageShort,
@@ -13,7 +12,6 @@ import {
   requireResolveAgentDirCall,
   requireResolveSessionAgentIdCall,
   resetCompactCommandMocks,
-  waitForEmbeddedAgentRunEnd,
 } from "./commands-compact.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -132,8 +130,6 @@ describe("handleCompactCommand", () => {
     expect(call.ownerNumbers?.at(-1)).toBe("owner");
     expect(call).not.toHaveProperty("senderIsOwner");
     expect(params.command.ownerList).toEqual(ownerIds);
-    expect(vi.mocked(abortEmbeddedAgentRun)).not.toHaveBeenCalled();
-    expect(vi.mocked(waitForEmbeddedAgentRunEnd)).not.toHaveBeenCalled();
   });
 
   it.each([

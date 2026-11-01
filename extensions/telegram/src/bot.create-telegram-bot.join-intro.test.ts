@@ -23,9 +23,9 @@ const { runWithTelegramSpooledReplayUpdate, getTelegramSpooledReplayDeferredPart
 const chatId = -1001234567890;
 const room = { id: chatId, type: "supergroup", title: "Incident Response" };
 
-function createMembershipContext(newStatus: "left" | "member" = "member") {
+function createMembershipContext(newStatus: "left" | "member" = "member", isForum = false) {
   const membership = {
-    chat: room,
+    chat: { ...room, is_forum: isForum },
     from: { id: 12345, is_bot: false, first_name: "Sam", last_name: "Rivera" },
     date: 1736380800,
     old_chat_member: { status: "left", user: telegramBotInfoForTest },
@@ -116,6 +116,35 @@ describe("Telegram group join introductions", () => {
     expect(getChatSpy).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["disabled General topic", { enabled: false }, false, "main"],
+    ["disabled General policy", { groupPolicy: "disabled" }, false, "main"],
+    ["General topic agent", { agentId: "triage" }, true, "triage"],
+  ] as const)(
+    "respects the %s for a forum introduction",
+    async (_name, topic, roomAllowed, agentId) => {
+      const handler = await registerJoinHandler({
+        groupPolicy: "open",
+        groups: { [chatId]: { topics: { "1": topic } } },
+      });
+      await handler(createMembershipContext("member", true));
+
+      expect(reportChannelRoomJoinMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          conversationId: String(chatId),
+          deliverTo: String(chatId),
+          threadId: 1,
+          roomAllowed,
+          route: expect.objectContaining({
+            agentId,
+            sessionKey: expect.stringContaining(":topic:1"),
+          }),
+        }),
+      );
+      expect(getChatSpy).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not start an introduction after its ingress owner was aborted", async () => {
     const frame = await replayJoin({
       abortSignal: AbortSignal.abort(new Error("account stopped")),
@@ -150,14 +179,28 @@ describe("Telegram group join introductions", () => {
     await expect(participant?.task).resolves.toEqual({ kind: "completed" });
   });
 
-  it("settles the introduction hold when the shared owner throws unexpectedly", async () => {
-    const error = new Error("introduction owner failed");
-    let participant: ReturnType<typeof getTelegramSpooledReplayDeferredParticipant>;
-    reportChannelRoomJoinMock.mockImplementationOnce(async () => {
-      participant = getTelegramSpooledReplayDeferredParticipant();
-      throw error;
-    });
-    await expect(replayJoin()).rejects.toBe(error);
-    await expect(participant?.task).resolves.toEqual({ kind: "failed-retryable", error });
-  });
+  it.each(["throws", "returns failure"])(
+    "keeps the introduction retryable when the shared owner %s",
+    async (outcome) => {
+      const error = new Error("introduction owner failed");
+      let participant: ReturnType<typeof getTelegramSpooledReplayDeferredParticipant>;
+      reportChannelRoomJoinMock.mockImplementationOnce(async () => {
+        participant = getTelegramSpooledReplayDeferredParticipant();
+        if (outcome === "throws") {
+          throw error;
+        }
+        return { kind: "failed", reason: error.message };
+      });
+      const replay = replayJoin();
+      if (outcome === "throws") {
+        await expect(replay).rejects.toBe(error);
+      } else {
+        await expect(replay).rejects.toThrow(error.message);
+      }
+      await expect(participant?.task).resolves.toEqual({
+        kind: "failed-retryable",
+        error: outcome === "throws" ? error : expect.objectContaining({ message: error.message }),
+      });
+    },
+  );
 });

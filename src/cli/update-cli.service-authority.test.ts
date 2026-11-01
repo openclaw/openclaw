@@ -448,7 +448,7 @@ describe("update-cli", () => {
             ]),
             advisory: {
               kind: "recoverable-maintenance",
-              message: expect.stringContaining("Restart the Gateway you launched manually"),
+              message: expect.stringContaining("Stop the Gateway through its owner"),
             },
           }),
         ]),
@@ -464,7 +464,7 @@ describe("update-cli", () => {
         listUpdateRuns({ limit: 1 })[0]?.steps.some(
           (step) =>
             step.step === "warning:managed-service" &&
-            step.detail?.includes("Restart the Gateway you launched manually"),
+            step.detail?.includes("Stop the Gateway through its owner"),
         ),
       ).toBe(true);
       expect(fsSync.existsSync(staleState)).toBe(false);

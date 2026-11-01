@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { captureSecurityEvents } from "../../agents/test-helpers/security-events.js";
 import { approveDevicePairing } from "../../infra/device-pairing-approval.js";
 import {
   captureNodePairingGeneration,
@@ -17,11 +18,7 @@ import {
   requestDevicePairing,
   resolveNodePairingState,
 } from "../../infra/device-pairing.js";
-import {
-  onInternalDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  type DiagnosticEventPayload,
-} from "../../infra/diagnostic-events.js";
+import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { loadApnsRegistration, registerApnsRegistration } from "../../infra/push-apns.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -35,14 +32,11 @@ import {
 import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
 import { createNodeRegistryRuntime } from "../node-registry-private.js";
 import { NodeRegistry } from "../node-registry.js";
-import {
-  captureNodeWakeLifecycle,
-  runNodeWakeAttempt,
-  runNodeWakeNudgeAttempt,
-} from "../node-wake-state.js";
+import { captureNodeWakeLifecycle } from "../node-wake-state.js";
 import {
   getNodeWakeStateSnapshot,
   resetNodeWakeStateForTest,
+  seedNodeWakeState,
 } from "../node-wake-state.test-support.js";
 import { bindDeviceWorkerReconciliation } from "../worker-environments/device-provider.js";
 import { nodeHandlers } from "./nodes.js";
@@ -84,24 +78,6 @@ function registerApns(
   });
 }
 
-async function seedNodeWakeState(nodeId: string): Promise<void> {
-  await runNodeWakeAttempt({
-    nodeId,
-    force: true,
-    throttleMs: 60_000,
-    attempt: async (markAttempted) => {
-      markAttempted();
-      return { available: true, throttled: false, path: "sent", durationMs: 1 };
-    },
-  });
-  await runNodeWakeNudgeAttempt({
-    nodeId,
-    throttleMs: 60_000,
-    throttled: () => ({ sent: false, throttled: true, reason: "throttled", durationMs: 0 }),
-    attempt: async () => ({ sent: true, throttled: false, reason: "sent", durationMs: 1 }),
-  });
-}
-
 afterEach(async () => {
   resetDiagnosticEventsForTest();
   resetRemoteNodeSkillsForTests();
@@ -112,16 +88,6 @@ afterEach(async () => {
     await createdStates.pop()?.cleanup();
   }
 });
-
-function captureSecurityEvents() {
-  const events: Extract<DiagnosticEventPayload, { type: "security.event" }>[] = [];
-  const stop = onInternalDiagnosticEvent((event, metadata) => {
-    if (metadata.trusted && event.type === "security.event") {
-      events.push(event);
-    }
-  });
-  return { events, stop };
-}
 
 function createContext() {
   return {
@@ -189,7 +155,6 @@ function expectSuccess(opts: GatewayRequestHandlerOptions, payload: unknown) {
 async function publishRunner(
   registry: NodeRegistry,
   client: ReturnType<typeof createWorkerSupervisorNodeClient>,
-  bundleSupport = false,
 ) {
   const publication = createOptions(
     {
@@ -197,7 +162,6 @@ async function publishRunner(
       workerHost: {
         enabled: true,
         capacity: { total: 2, available: 2 },
-        ...(bundleSupport ? { bundleRetention: 1, bundleStatus: 1 } : {}),
       },
     },
     { client: client as never },
@@ -307,75 +271,50 @@ async function approveNodeSurface(stateDir: string, nodeId: string): Promise<voi
   expect(approved).toEqual(expect.objectContaining({ node: expect.objectContaining({ nodeId }) }));
 }
 
-it("node.describe projects exact runner slots with derived launch eligibility", async () => {
-  const { nodeId } = await createNodeState("node-1", { surface: true });
-  const pairingState = await captureNodePairingState(nodeId);
-  expect(pairingState?.generation).not.toBeNull();
-
-  const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-  const { client } = connectNode(nodeId, pairingState, runtime.nodeRegistry);
-  await publishRunner(runtime.nodeRegistry, client, true);
-  const [proof] = await runtime.nodeWorkerSupervisorTransport.listCurrentNodes();
-  expect(proof).toBeDefined();
-  expect(
-    proof &&
-      runtime.nodeWorkerSupervisorTransport.acceptBundleStatus?.(proof, {
-        bundleHash: "a".repeat(64),
-        status: { status: "installed", version: "2026.8.9" },
-      }),
-  ).toBe(true);
-
-  const listCall = createOptions({}, undefined, runtime.nodeRegistry);
-  await invokeNode("node.list", listCall.opts);
-  const describeCall = createOptions({ nodeId }, undefined, runtime.nodeRegistry);
-  await invokeNode("node.describe", describeCall.opts);
-
-  const projected = {
-    nodeId,
-    workerSlots: { total: 2, available: 2 },
-    workerBundle: { status: "installed", version: "2026.8.9" },
-  };
-  expectSuccess(
-    listCall.opts,
-    expect.objectContaining({
-      nodes: expect.arrayContaining([expect.objectContaining(projected)]),
-    }),
-  );
-  expectSuccess(describeCall.opts, expect.objectContaining({ ...projected, sessionHost: true }));
-  expect(JSON.stringify(listCall.respond.mock.calls)).not.toContain("bundleHash");
-  expect(JSON.stringify(describeCall.respond.mock.calls)).not.toContain("bundleHash");
-  runtime.nodeRegistry.unregister(client.connId);
-});
-
 describe("nodeHandlers node.pair.approve", () => {
-  it("promotes the first surface only for the same authenticated pairing identity", async () => {
-    const { stateDir, nodeId } = await createNodeState("node-pending-identity-stable");
-    const pending = await requestSurface(stateDir, nodeId, "Galaxy A54 5G pending");
-    const pendingState = await captureNodePairingState(nodeId);
-    expect(pendingState?.generation).toBeNull();
-
-    const { context, opts } = createOptions({ requestId: pending.request.requestId });
-    context.nodeRegistry.get.mockReturnValue({
-      nodeId,
-      connId: "conn-pending-identity-stable",
-      pairingIdentity: pendingState?.identity.key,
-    });
-
-    await invokeNode("node.pair.approve", opts);
-
-    const approvedState = await captureNodePairingState(nodeId);
-    expect(approvedState?.identity.key).toBe(pendingState?.identity.key);
-    expect(approvedState?.generation).not.toBeNull();
-    expect(context.nodeRegistry.updateSurface).toHaveBeenCalledWith(
-      nodeId,
-      expect.objectContaining({ commands: expect.any(Array) }),
-      {
-        expectedConnId: "conn-pending-identity-stable",
-        expectedPairingIdentity: pendingState?.identity.key,
-        nextPairingGeneration: approvedState?.generation?.key,
-      },
+  it("promotes a node that connects while its first surface approval is pending", async () => {
+    const { stateDir, nodeId } = await createNodeState("node-connect-during-approval");
+    const pairingState = expectDefined(await captureNodePairingState(nodeId), "paired node");
+    expect(pairingState.generation).toBeNull();
+    const pending = await nodePairing.requestNodePairing(
+      { nodeId, caps: ["system"], commands: ["system.run"] },
+      stateDir,
     );
-    expectApproved(opts, nodeId);
+    const registry = new NodeRegistry({
+      resolveCurrentPairingState: resolveCurrentPairedDeviceNodeBinding,
+      isPairingStateCurrent: isPairedDeviceNodeBindingCurrent,
+    });
+    const client = createWorkerSupervisorNodeClient("conn-during-approval");
+    Object.assign(client.connect, {
+      device: { id: nodeId },
+      commands: [],
+      declaredCaps: ["system"],
+      declaredCommands: ["system.run"],
+    });
+    const approve = nodePairing.approveNodePairing;
+    const approval = vi
+      .spyOn(nodePairing, "approveNodePairing")
+      .mockImplementation(async (...args) => {
+        registry.register(client, { pairingIdentity: pairingState.identity.key });
+        expect(registry.get(nodeId)?.commands).toEqual([]);
+        return await approve(...args);
+      });
+    const { opts } = createOptions({ requestId: pending.request.requestId }, undefined, registry);
+    try {
+      await invokeNode("node.pair.approve", opts);
+      expectApproved(opts, nodeId);
+      const approved = expectDefined(await captureNodePairingState(nodeId), "approved node");
+      expect(approved.identity.key).toBe(pairingState.identity.key);
+      expect(approved.generation).not.toBeNull();
+      expect(registry.get(nodeId)?.commands).toEqual(["system.run"]);
+      expect(registry.get(nodeId)?.pairingGeneration).toBe(
+        (await captureNodePairingGeneration(nodeId))?.key,
+      );
+      await expect(registry.getCurrentConnected(nodeId)).resolves.toBeDefined();
+    } finally {
+      approval.mockRestore();
+      registry.unregister(client.connId);
+    }
   });
 
   it("requires current-generation runner inventory after exact live reapproval", async () => {

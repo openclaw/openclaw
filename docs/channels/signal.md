@@ -116,6 +116,8 @@ signal-cli --version
 
 If you use the JVM build (`signal-cli-${VERSION}.tar.gz`), install a JRE first. Keep `signal-cli` updated; upstream notes old releases can break as Signal server APIs change.
 
+A managed `signal-cli` daemon gets only an allowlisted environment; see [Managed daemon environment](#managed-daemon-environment).
+
 3. Register and verify the number:
 
 ```bash
@@ -183,6 +185,25 @@ openclaw channels add --channel signal --signal-number +15551234567 \
 
 This skips auto-spawn and OpenClaw's startup wait. For a managed daemon with a slow start, set `channels.signal.transport.startupTimeoutMs`.
 
+## Managed daemon environment
+
+A managed `signal-cli` daemon gets only process essentials from the Gateway environment: `PATH`, `HOME`, user, locale (`LANG`, `LC_*`), `TZ`, temp directories, `XDG_*`, the Java launcher inputs (`JAVA_HOME`, `JAVA_OPTS`, `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS`, `_JAVA_OPTIONS`, `SIGNAL_CLI_OPTS`), signal-cli's own `SIGNAL_CLI_CONFIG` and `SIGNAL_CLI_USER_AGENT`, the native library path (`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `DYLD_FALLBACK_LIBRARY_PATH`), and common Windows system variables. Provider keys, Gateway tokens and other secrets in the Gateway environment do not reach it.
+
+Proxy and trust-store variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY` in either case, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`) are not inherited. When any of them is set, the Gateway logs a one-time warning naming them (names only, never values) when it starts the daemon, and `openclaw doctor` reports the same.
+
+`signal-cli` runs on the JVM, which takes proxy and trust-store settings from Java system properties. Pick one:
+
+- Pass Java properties through `JAVA_TOOL_OPTIONS`, which the daemon inherits:
+
+  ```bash
+  JAVA_TOOL_OPTIONS="-Dhttps.proxyHost=proxy.example -Dhttps.proxyPort=3128 -Dhttp.nonProxyHosts=localhost|127.0.0.1"
+  ```
+
+  For a private CA, add `-Djavax.net.ssl.trustStore=/path/to/truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12`.
+
+- Point `channels.signal.transport.cliPath` at a wrapper script that sets what it needs (for example, turns your proxy variables into Java properties), then runs `signal-cli "$@"`.
+- Run the daemon yourself and use [external native daemon mode](#external-native-daemon-mode).
+
 ## Container mode (bbernhard/signal-cli-rest-api)
 
 Instead of running `signal-cli` natively, use the [bbernhard/signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api) Docker container, which wraps `signal-cli` behind a REST + WebSocket interface.
@@ -243,6 +264,7 @@ Operational notes:
 
 - Use `MODE=json-rpc` for receiving. `MODE=normal` can make `/v1/about` look healthy, but `/v1/receive/{account}` will not WebSocket-upgrade, so container receive streaming will fail its check.
 - Set `kind: "container"` for the bbernhard REST API and `kind: "external-native"` for native `signal-cli` JSON-RPC/SSE.
+- The receive WebSocket sends standard ping frames. When the container stops answering them (for example after a network drop that never closed the connection), OpenClaw drops the socket and reconnects. A quiet account alone never triggers a reconnect.
 - Container attachment downloads honor the same media byte limits as native mode. Oversized responses are rejected before being fully buffered when the server sends `Content-Length`, and while streaming otherwise.
 - Health and missing-attachment results do not wait for an unused response body's cancellation to finish.
 
@@ -489,6 +511,7 @@ openclaw pairing list signal
 Common failures:
 
 - Daemon reachable but no replies: verify `account`, `transport.kind`, the transport URL, and receive mode.
+- Event stream repeatedly closes: inspect the daemon or proxy; a healthy idle stream stays open, and unexpected closure appears as a lost connection in logs and channel status.
 - DMs ignored: sender is pending pairing approval.
 - Group messages ignored: group sender/mention gating blocks delivery.
 - Config validation errors after edits: run `openclaw doctor --fix`.

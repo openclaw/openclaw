@@ -16,6 +16,7 @@ import { VERSION } from "../../version.js";
 import { formatUpdateOneLiner, resolveUpdateAvailability } from "../status.update.js";
 
 export { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
+export { redactStatusSecrets } from "../status-redaction.js";
 
 type StatusOverviewRow = {
   Item: string;
@@ -87,41 +88,12 @@ export function buildStatusUpdateSurface(params: {
   updateConfigChannel?: string | null;
   update: UpdateCheckResult;
 }) {
-  const channelInfo = resolveStatusUpdateChannelInfo(params);
   return {
-    channelInfo,
-    channelLabel: channelInfo.label,
+    channelLabel: resolveStatusUpdateChannelInfo(params).label,
     gitLabel: formatGitInstallLabel(params.update),
     updateLine: formatUpdateOneLiner(params.update).replace(/^Update:\s*/i, ""),
     updateAvailable: resolveUpdateAvailability(params.update).available,
   };
-}
-
-function formatStatusTailscaleValue(params: {
-  tailscaleMode: string;
-  dnsName?: string | null;
-  httpsUrl?: string | null;
-  includeBackendStateWhenOn?: boolean;
-  includeDnsNameWhenOff?: boolean;
-  decorateOff?: (value: string) => string;
-  decorateWarn?: (value: string) => string;
-}): string {
-  const decorateOff = params.decorateOff ?? ((value: string) => value);
-  const decorateWarn = params.decorateWarn ?? ((value: string) => value);
-  if (params.tailscaleMode === "off") {
-    // Off mode can still show DNS context when the caller wants diagnostic detail.
-    const suffix = params.includeDnsNameWhenOff ? params.dnsName : null;
-    return decorateOff(suffix ? `off · ${suffix}` : "off");
-  }
-  const hasAddress = params.dnsName && params.httpsUrl;
-  const value = [
-    params.tailscaleMode,
-    params.includeBackendStateWhenOn ? "unknown" : null,
-    ...(hasAddress ? [params.dnsName, params.httpsUrl] : ["magicdns unknown"]),
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  return hasAddress ? value : decorateWarn(value);
 }
 
 function formatStatusServiceValue(params: StatusManagedService): string {
@@ -236,15 +208,24 @@ export function buildStatusOverviewSurfaceRows(params: {
       : null);
   const gatewayServiceValue = formatStatusServiceValue(params.gatewayService);
   const nodeServiceValue = formatStatusServiceValue(params.nodeService);
-  const tailscaleValue = formatStatusTailscaleValue({
-    tailscaleMode: params.tailscaleMode,
-    dnsName: params.tailscaleDns,
-    httpsUrl: params.tailscaleHttpsUrl,
-    includeBackendStateWhenOn: params.includeBackendStateWhenOn,
-    includeDnsNameWhenOff: params.includeDnsNameWhenOff,
-    decorateOff: params.decorateTailscaleOff,
-    decorateWarn: params.decorateTailscaleWarn,
-  });
+  const decorateTailscaleOff = params.decorateTailscaleOff ?? ((value: string) => value);
+  const decorateTailscaleWarn = params.decorateTailscaleWarn ?? ((value: string) => value);
+  let tailscaleValue: string;
+  if (params.tailscaleMode === "off") {
+    // Off mode can still show DNS context when the caller wants diagnostic detail.
+    const suffix = params.includeDnsNameWhenOff ? params.tailscaleDns : null;
+    tailscaleValue = decorateTailscaleOff(suffix ? `off · ${suffix}` : "off");
+  } else {
+    const hasAddress = params.tailscaleDns && params.tailscaleHttpsUrl;
+    const value = [
+      params.tailscaleMode,
+      params.includeBackendStateWhenOn ? "unknown" : null,
+      ...(hasAddress ? [params.tailscaleDns, params.tailscaleHttpsUrl] : ["magicdns unknown"]),
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    tailscaleValue = hasAddress ? value : decorateTailscaleWarn(value);
+  }
   const gatewayAuthWarning =
     params.gatewayAuthWarningValue !== undefined
       ? params.gatewayAuthWarningValue
@@ -307,45 +288,4 @@ function formatGatewaySelfSummary(gatewaySelf: StatusGatewaySelf): string | null
         .filter(Boolean)
         .join(" ")
     : null;
-}
-
-export function buildGatewayStatusJsonPayload(
-  params: Pick<
-    Parameters<typeof buildStatusOverviewSurfaceRows>[0],
-    | "gatewayMode"
-    | "gatewayConnection"
-    | "remoteUrlMissing"
-    | "gatewayReachable"
-    | "gatewaySelf"
-    | "gatewayProbeAuthWarning"
-  > & { gatewayProbe: StatusGatewayProbe | undefined },
-) {
-  return {
-    mode: params.gatewayMode,
-    url: projectGatewayUrlForDiagnostics(params.gatewayConnection.url),
-    urlSource: params.gatewayConnection.urlSource,
-    misconfigured: params.remoteUrlMissing,
-    reachable: params.gatewayReachable,
-    ...(params.gatewayProbe?.startupPhase
-      ? { readiness: "still-starting", startupPhase: params.gatewayProbe.startupPhase }
-      : {}),
-    connectLatencyMs: params.gatewayProbe?.connectLatencyMs ?? null,
-    self: params.gatewaySelf ?? null,
-    error: params.gatewayProbe?.error ?? null,
-    authWarning: params.gatewayProbeAuthWarning ?? null,
-  };
-}
-
-export function redactStatusSecrets(text: string): string {
-  if (!text) {
-    return text;
-  }
-  let out = text;
-  out = out.replace(
-    /(\b(?:access[_-]?token|refresh[_-]?token|token|password|secret|api[_-]?key)\b\s*[:=]\s*)("?)([^"\\s]+)("?)/gi,
-    "$1$2***$4",
-  );
-  out = out.replace(/\bBearer\s+[A-Za-z0-9._-]+\b/g, "Bearer ***");
-  out = out.replace(/\bsk-[A-Za-z0-9]{10,}\b/g, "sk-***");
-  return out;
 }

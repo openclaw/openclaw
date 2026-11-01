@@ -1,14 +1,18 @@
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import type { SessionAdmissionTransition } from "../../../config/sessions/session-admission-transition.types.js";
+import type { PreparedSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import type { SessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { Model } from "../../../llm/types.js";
+import type { ReplyMessageJoinObservation } from "../../../sessions/session-controller.message-join-observation.js";
+import type { SessionControllerWatchdogAttempt } from "../../../sessions/session-controller.watchdog.js";
 import type { PreparedTtsPreferences } from "../../../tts/tts-preferences.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
 import type { ModelFallbackRouteResolution } from "../../model-fallback.types.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-runtime.types.js";
 import type { ReplyDeliveryFactsObserver } from "../../reply-completion.js";
 import type { BoundAgentRunSessionTarget } from "../../run-session-target.types.js";
+import type { AgentMessage } from "../../runtime/index.js";
 import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import type { ResolvedRunEntryModelSelection } from "../run-entry.types.js";
@@ -25,6 +29,7 @@ export type CompactionAccountingTarget = Readonly<
 /** Ordered producer observations; unknown context never borrows an older request's usage. */
 export type EmbeddedContextAccountingEvent = Readonly<
   | { kind: "compaction"; tokensAfter: number | undefined }
+  | { kind: "request"; contextTokens: number }
   | { kind: "model"; contextTokens: number | undefined; successful: boolean }
 >;
 
@@ -46,6 +51,19 @@ export type CompactionAccountingFact = Readonly<
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  /** The reply owner checkpoints the source before recovery rewrites its context. */
+  beforeRecoveryCompaction?: (context: {
+    sessionId: string;
+    provider: string;
+    model: string;
+    authProfileId?: string;
+    authProfileIdSource: "auto" | "user";
+    contextTokenBudget: number;
+  }) => Promise<string>;
+  /** A recovery checkpoint must not compact away the history it is trying to save. */
+  disableCompactionRecovery?: true;
+  /** Original admitted settings, retained by the host across private runtime selection. */
+  joinObservation?: ReplyMessageJoinObservation;
   /** The logical run already invoked model routing before preparing its candidate chain. */
   resolvedModelSelection?: ResolvedRunEntryModelSelection;
   preparedTtsPreferences?: PreparedTtsPreferences;
@@ -81,7 +99,10 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   /** Re-admit from the committed transcript without persisting the original prompt again. */
   pluginRuntimeRefreshContinuation?: true;
+  pluginRuntimeRefreshUserPrompt?: EmbeddedRunAttemptParams["pluginRuntimeRefreshUserPrompt"];
   pluginRuntimeRefreshMessages?: EmbeddedRunAttemptParams["pluginRuntimeRefreshMessages"];
+  /** Actual generation cleanup, including source callbacks after native terminal publication. */
+  runCleanupSettlement?: Promise<void>;
   /** Host-only transfer of attempt terminal resources to the logical turn. */
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   /** Aborts the logical turn when its retained embedded handle is cancelled. */
@@ -90,16 +111,26 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   onRetryWait?: (
     deadlineAtMs: number,
     signal?: AbortSignal,
+    wait?: { rateLimitStopMessage?: string },
   ) => ((completed?: boolean) => void) | undefined;
 };
 
 export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
-  Pick<RunEmbeddedAgentInternalParams, "onContextAccountingEvent" | "onCompactionRequestBudget"> & {
+  Pick<
+    RunEmbeddedAgentInternalParams,
+    | "onContextAccountingEvent"
+    | "onCompactionRequestBudget"
+    | "runCleanupSettlement"
+    | "joinObservation"
+  > & {
+    bindWatchdogAttempt?: (attempt: SessionControllerWatchdogAttempt) => void;
     /** The dispatch owner already selected this target, including any compaction successor. */
     preparedSessionTarget?: {
       readonly target: Readonly<BoundAgentRunSessionTarget & SessionTranscriptTargetBinding>;
-      assertCurrent(): void;
+      assertCurrent: PreparedSessionSourceAssertion;
     };
+    /** Frozen source-attempt model view; transcript writer custody remains unchanged. */
+    settledTurnFinalizationMessages?: readonly AgentMessage[];
     compactionCountOwner?: "subscription" | "caller";
     /** Current-run committed plan facts; retained across attempts, never loaded from history. */
     completionCheck?: EmbeddedRunCompletionCheck;

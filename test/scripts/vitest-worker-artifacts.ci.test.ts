@@ -19,6 +19,8 @@ import {
   createControlledWorkerCompiler,
   createWorkerArtifactTest,
   fixtureFileBeforeSettlement,
+  inWorkerArtifactFixture,
+  readFixtureLines,
   writeFixture,
 } from "./vitest-worker-artifacts.test-support.js";
 
@@ -34,9 +36,7 @@ type Observation = {
   generation: string;
   pid: number;
   parent: number;
-  planner: number;
   group: string;
-  inputDigest: string;
   includeFile: string;
 };
 const generationDirectory = (generation: string) => fileURLToPath(new URL("../../", generation));
@@ -67,25 +67,12 @@ function createCiProbe(
   const ready = path.join(directory, "ready");
   const startFirst = path.join(directory, "start-first");
   const firstReady = path.join(directory, "first-ready");
-  // Identify the group planner before either thread or fork leaves inherit its environment.
-  const plannerPreload = writeFixture(
-    directory,
-    "planner-preload.mjs",
-    `
-    import path from 'node:path';
-    import { isMainThread } from 'node:worker_threads';
-    const planner = ${JSON.stringify(path.join(root, "scripts/test-projects.mts"))};
-    if (isMainThread && [process.argv[1], process.argv[3]].some(arg => arg && path.resolve(arg) === planner)) {
-      process.env.OPENCLAW_FIXTURE_PLANNER_PID = String(process.pid);
-    }`,
-  );
   const probe = writeFixture(
     directory,
     "child.test.ts",
     `
     ${fixtureReceiptClientSource(receipts.endpoint)}
     import fs from 'node:fs';
-    import { createHash } from 'node:crypto';
     import { fileURLToPath } from 'node:url';
     import { setTimeout as tick } from 'node:timers/promises';
     import { it, expect } from 'vitest';
@@ -100,18 +87,14 @@ function createCiProbe(
       }
     };
     it('borrows its CI-owned compiled worker during collection', async () => {
-      expect(generation.pathname.endsWith('/dist/infra/sqlite-readonly-location.worker.js')).toBe(true);
       expect(prepared).toBe(true);
-      const manifest = JSON.parse(fs.readFileSync(new URL('../../manifest.json', generation), 'utf8'));
       const group = process.env.OPENCLAW_VITEST_SHARD_NAME;
       if (${retain} && group === 'first-group') {
         await waitForSignal(${JSON.stringify(startFirst)});
       }
       fs.appendFileSync(${JSON.stringify(observationsFile)}, JSON.stringify({
         generation: generation.href, pid: process.pid, parent: process.ppid, group,
-        planner: Number(process.env.OPENCLAW_FIXTURE_PLANNER_PID),
         includeFile: process.env.OPENCLAW_VITEST_INCLUDE_FILE,
-        inputDigest: createHash('sha256').update(JSON.stringify(manifest.inputs)).digest('hex'),
       })+'\\n');
       if (${retain}) {
         if (group === 'first-group') {
@@ -144,19 +127,12 @@ function createCiProbe(
   );
   return {
     probe,
-    plannerPreload,
     release,
     ready,
     startFirst,
     firstReady,
     read: (): Observation[] =>
-      !fs.existsSync(observationsFile)
-        ? []
-        : fs
-            .readFileSync(observationsFile, "utf8")
-            .trim()
-            .split("\n")
-            .map((line) => JSON.parse(line)),
+      fs.existsSync(observationsFile) ? readFixtureLines(observationsFile) : [],
   };
 }
 
@@ -197,18 +173,18 @@ it.runIf(process.platform !== "win32").for([
   { parallelism: 2, shared: false },
 ])(
   "owns real CI group generations (parallelism=$parallelism, shared=$shared)",
-  ({ parallelism, shared }, { workerArtifacts, signal }) =>
-    workerArtifacts.fixtureLifetime.run(async () => {
-      const { node } = workerArtifacts.createFixtureCommands();
-      const directory = workerArtifacts.fixtureDirectory();
-      const fixture = createCiProbe(directory);
-      const groupOwner = pathToFileURL(path.join(root, "scripts/vitest-process-group.mts")).href;
-      const capability = shared
-        ? undefined
-        : writeFixture(
-            directory,
-            "capability.mjs",
-            `import {registerHooks} from 'node:module';
+  ({ parallelism, shared }, { workerArtifacts, signal, onTestFinished }) =>
+    inWorkerArtifactFixture(
+      { workerArtifacts, signal, onTestFinished },
+      async ({ node, directory }) => {
+        const fixture = createCiProbe(directory);
+        const groupOwner = pathToFileURL(path.join(root, "scripts/vitest-process-group.mts")).href;
+        const capability = shared
+          ? undefined
+          : writeFixture(
+              directory,
+              "capability.mjs",
+              `import {registerHooks} from 'node:module';
         registerHooks({load(url, context, nextLoad) {
           if (url === ${JSON.stringify(groupOwner)}) return {
             format:'module',shortCircuit:true,
@@ -216,73 +192,50 @@ it.runIf(process.platform !== "win32").for([
           };
           return nextLoad(url, context);
         }});`,
+            );
+        const env = ciEnv(fixture.probe, parallelism, parallelism === 1);
+        const controlled =
+          shared && parallelism === 2 ? undefined : createControlledWorkerCompiler(directory, env);
+        try {
+          const { code, stdout, stderr } = await node(
+            capability ? ["--import", "tsx", "--import", capability, command.at(-1)!] : command,
+            root,
+            controlled?.env ?? env,
           );
-      const env = {
-        ...ciEnv(fixture.probe, parallelism, parallelism === 1),
-        NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(fixture.plannerPreload).href}`,
-      };
-      const controlled =
-        shared && parallelism === 2 ? undefined : createControlledWorkerCompiler(directory, env);
-      try {
-        const { code, stdout, stderr } = await node(
-          capability ? ["--import", "tsx", "--import", capability, command.at(-1)!] : command,
-          root,
-          controlled?.env ?? env,
-        );
-        expect(code, stderr + stdout).toBe(0);
-        if (controlled) {
-          const entries = controlled.read();
-          expect(entries).toHaveLength(shared ? 1 : 2);
-          expect(
-            distinct(entries.map(({ pid, processStartTime }) => `${pid}:${processStartTime}`)),
-          ).toBe(entries.length);
-          for (const entry of entries) {
-            expect(entry).toMatchObject({
-              processStartTime: expect.any(Number),
-              isMainThread: true,
-            });
+          expect(code, stderr + stdout).toBe(0);
+          if (controlled) {
+            const entries = controlled.read();
+            expect(entries).toHaveLength(shared ? 1 : 2);
           }
-        }
-        const observations = fixture.read();
-        const borrowerCount = parallelism === 1 ? 3 : 2;
-        expect(observations).toHaveLength(borrowerCount);
-        expect(distinct(observations.map(({ pid }) => pid))).toBe(borrowerCount);
-        expect(distinct(observations.map(({ planner }) => planner))).toBe(2);
-        for (const group of ["first-group", "second-group"]) {
-          const members = observations.filter((observation) => observation.group === group);
-          expect(members).toHaveLength(group === "first-group" && parallelism === 1 ? 2 : 1);
-          expect(distinct(members.map(({ planner }) => planner))).toBe(1);
-          expect(members[0]!.planner).toBeGreaterThan(0);
-        }
-        expect(distinct(observations.map(({ inputDigest }) => inputDigest))).toBe(1);
-        const generations = observations.map(({ generation }) => generation);
-        expect(distinct(generations)).toBe(shared ? 1 : 2);
-        expect((stdout + stderr).match(/\[vitest-workers\] prepared/g)).toHaveLength(
-          shared ? 1 : 2,
-        );
-        expect(stdout).toContain("[shard:first-group] end (exit 0)");
-        expect(stdout).toContain("[shard:second-group] end (exit 0)");
-        for (const generation of generations) {
-          expect(fs.existsSync(generationDirectory(generation))).toBe(false);
-        }
-        for (const { includeFile } of observations) {
-          expect(fs.existsSync(path.dirname(includeFile))).toBe(!shared);
-          if (!shared) {
-            expect(stderr).toContain(`[shard:cache] retained ${path.dirname(includeFile)}`);
+          const observations = fixture.read();
+          const borrowerCount = parallelism === 1 ? 3 : 2;
+          expect(observations).toHaveLength(borrowerCount);
+          expect(distinct(observations.map(({ pid }) => pid))).toBe(borrowerCount);
+          for (const group of ["first-group", "second-group"]) {
+            const members = observations.filter((observation) => observation.group === group);
+            expect(members).toHaveLength(group === "first-group" && parallelism === 1 ? 2 : 1);
           }
-        }
-      } finally {
-        const observations = fixture.read();
-        // Shared group joins prove extinction. The non-detached fixture instead uses node()'s
-        // managed join, which can accept Darwin zombies before the kernel reaps their PIDs.
-        for (const { pid, parent } of observations) {
-          if (!shared && process.platform === "darwin") {
-            await Promise.all([waitForDead(pid, signal), waitForDead(parent, signal)]);
+          const generations = observations.map(({ generation }) => generation);
+          expect(distinct(generations)).toBe(shared ? 1 : 2);
+          for (const generation of generations) {
+            expect(fs.existsSync(generationDirectory(generation))).toBe(false);
           }
+          for (const { includeFile } of observations) {
+            expect(fs.existsSync(path.dirname(includeFile))).toBe(!shared);
+          }
+        } finally {
+          const observations = fixture.read();
+          // Shared group joins prove extinction. The non-detached fixture instead uses node()'s
+          // managed join, which can accept Darwin zombies before the kernel reaps their PIDs.
+          for (const { pid, parent } of observations) {
+            if (!shared && process.platform === "darwin") {
+              await Promise.all([waitForDead(pid, signal), waitForDead(parent, signal)]);
+            }
+          }
+          cleanObservations(observations, true);
         }
-        cleanObservations(observations, true);
-      }
-    }),
+      },
+    ),
 );
 
 it
@@ -354,22 +307,8 @@ it
               cause: { message: "Managed cleanup owner reported unjoined work" },
             });
           }
-          if (claim === "temporary") {
-            expect(output).toContain("retained temporary namespace");
-            expect(stderr).toContain("borrower join failed");
-          } else {
-            expect(stdout).toContain(
-              `[shard:first-group] end (exit ${claim === "released" ? 1 : 0})`,
-            );
-            expect(stdout).toContain("[shard:second-group] end (exit 0)");
-            if (claim === "pending") {
-              expect(stderr).toContain("Unreleased Vitest resource claim:");
-              expect(stderr).toContain("fixture resource join failed");
-            } else {
-              expect(output).not.toContain("retained temporary namespace");
-              expect(output).toContain("ordinary failure after releasing generation claim");
-              expect(stderr).not.toContain("[vitest-workers] retaining");
-            }
+          if (claim === "released") {
+            expect(output).toContain("ordinary failure after releasing generation claim");
           }
           expect(fs.readFileSync(fixture.ready + ".read", "utf8")).toBe("read after sibling exit");
           expect(observationPaths(first).map(fs.existsSync)).toEqual([

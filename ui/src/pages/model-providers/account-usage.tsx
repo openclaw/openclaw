@@ -1,154 +1,83 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, onSettled, Show } from "solid-js";
+// Codex reports plan limits per signed-in account, so each OpenAI account row
+// reads its own; the page's forced refresh advances the revision.
+import { createMemo, For, Loading, onCleanup, Show } from "solid-js";
 import type { UsageSummary } from "../../../../src/infra/provider-usage.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { Icon } from "../../components/solid/icon.tsx";
-import { renderProviderUsageDetails } from "../../components/solid/provider-usage.tsx";
-import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import {
+  hasProviderUsageDetails,
+  ProviderUsagePanel,
+} from "../../components/solid/provider-usage.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
-import { createPageRequest } from "../../lib/page-request.ts";
-import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { listen } from "../../lib/reactive/listener.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 
-registerEnglishCatalog(registerSettingsEnglish);
+export type AccountUsageScope = { client: GatewayBrowserClient; agentId: string; revision: number };
 
-type ModelAccountUsageProps = {
-  client: GatewayBrowserClient | null;
-  agentId: string;
-  profileId: string;
-};
-type ModelAccountUsageMethods = { refreshUsage: () => void };
-export type ModelAccountUsageElement = SolidBridgeElement<
-  ModelAccountUsageProps,
-  ModelAccountUsageMethods
->;
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-model-account-usage": ModelAccountUsageElement;
-  }
-}
-
-type UsageState =
-  | { phase: "idle" | "pending" }
-  | { phase: "complete"; summary: UsageSummary }
-  | { phase: "error"; error: unknown };
-
-function AccountUsage(props: ModelAccountUsageProps, host: ModelAccountUsageElement) {
-  const [state, setState] = createSignal<UsageState>({ phase: "idle" });
-  let isCurrent = () => false;
-  const request = createPageRequest(() => {}, {
-    task: (
-      [client, agentId, profileId]: readonly [GatewayBrowserClient, string, string],
-      { signal },
-    ) =>
-      client.request<UsageSummary>(
+export function AccountLimits(props: { scope: AccountUsageScope; profileId: string }) {
+  // Page props rebuild the scope object on every update; only its fields mean a new read.
+  const request = createMemo(() => ({ ...props.scope, profileId: props.profileId }), {
+    equals: (a, b) =>
+      a.client === b.client &&
+      a.agentId === b.agentId &&
+      a.revision === b.revision &&
+      a.profileId === b.profileId,
+  });
+  // Retain rows during a refresh, but hide the previous account while its successor loads.
+  const account = createMemo(
+    () => {
+      const { client, agentId, profileId } = request();
+      return { client, agentId, profileId };
+    },
+    {
+      equals: (a, b) =>
+        a.client === b.client && a.agentId === b.agentId && a.profileId === b.profileId,
+    },
+  );
+  // A newer read supersedes an older one; Solid drops the stale result.
+  const result = createMemo(async () => {
+    const { client, agentId, profileId } = request();
+    const controller = new AbortController();
+    onCleanup(() => controller.abort());
+    try {
+      const summary = await client.request<UsageSummary>(
         "codex.accountUsage",
         { agentId, profileId },
-        { signal, timeoutMs: 30_000 },
-      ),
-    onComplete: (summary) => {
-      if (isCurrent()) {
-        setState({ phase: "complete", summary });
-      }
-    },
-    onError: (error) => {
-      if (isCurrent()) {
-        setState({ phase: "error", error });
-      }
-    },
-  });
-  onCleanup(request.cancel);
-
-  async function load(scope: ModelAccountUsageProps): Promise<void> {
-    request.cancel();
-    if (!scope.client || !scope.agentId || !scope.profileId) {
-      setState({ phase: "idle" });
-      return;
+        { signal: controller.signal, timeoutMs: 30_000 },
+      );
+      return { providers: summary.providers };
+    } catch (error) {
+      return { error: formatUiError(error) };
     }
-    isCurrent = () =>
-      props.client === scope.client &&
-      props.agentId === scope.agentId &&
-      props.profileId === scope.profileId;
-    setState({ phase: "pending" });
-    await request.run([scope.client, scope.agentId, scope.profileId]);
-  }
-
-  const scope = () => ({
-    client: props.client,
-    agentId: props.agentId,
-    profileId: props.profileId,
-  });
-  const refresh = () => void load(scope());
-  // Fetch usage from the Gateway for the currently presented account.
-  createEffect(scope, (current) => void load(current));
-  onSettled(() => listen(host, "model-account-usage-refresh", refresh));
-  const summary = createMemo(() => {
-    const current = state();
-    return current.phase === "complete" ? current.summary : undefined;
-  });
-  const error = createMemo(() => {
-    const current = state();
-    return current.phase === "error" ? formatUiError(current.error) : undefined;
   });
   return (
-    <Show when={props.client}>
-      <div class="model-providers__account-usage">
-        <button
-          class="model-providers__account-refresh"
-          type="button"
-          aria-label={t("common.refresh")}
-          title={t("common.refresh")}
-          disabled={state().phase === "pending"}
-          onClick={refresh}
+    <div class="model-providers__account-limits">
+      <Loading on={account()} fallback={<span>{t("common.loading")}</span>}>
+        <Show when={result().error}>
+          {(error) => <span class="provider-usage__error">{error()}</span>}
+        </Show>
+        <For
+          each={result().providers ?? []}
+          keyed={(snapshot) => snapshot.provider}
+          fallback={
+            <Show when={!result().error}>
+              <span>{t("modelProviders.noStats")}</span>
+            </Show>
+          }
         >
-          <Icon name="refresh" />
-        </button>
-        <Show when={state().phase === "pending"}>
-          <span>{t("common.loading")}</span>
-        </Show>
-        <Show when={summary()}>
-          {(value) => (
-            <For each={value().providers} fallback={<span>{t("modelProviders.noStats")}</span>}>
-              {(snapshot) => (
-                <>
-                  <Show when={snapshot.plan}>
-                    <strong>{snapshot.plan}</strong>
-                  </Show>
-                  <div>
-                    <Show
-                      when={snapshot.windows.length || snapshot.billing?.length}
-                      fallback={t("modelProviders.noStats")}
-                    >
-                      {renderProviderUsageDetails(snapshot, { groupWindows: true })}
-                    </Show>
-                  </div>
-                </>
-              )}
-            </For>
+          {(snapshot) => (
+            <>
+              <Show when={snapshot().plan}>
+                <strong>{snapshot().plan}</strong>
+              </Show>
+              <Show
+                when={hasProviderUsageDetails(snapshot())}
+                fallback={<span>{t("modelProviders.noStats")}</span>}
+              >
+                <ProviderUsagePanel usage={snapshot()} />
+              </Show>
+            </>
           )}
-        </Show>
-        <Show when={error()}>
-          <span class="provider-usage-error">{error()}</span>
-        </Show>
-      </div>
-    </Show>
+        </For>
+      </Loading>
+    </div>
   );
 }
-
-defineSolidBridge<ModelAccountUsageProps, ModelAccountUsageMethods>(
-  "openclaw-model-account-usage",
-  (props, host) => AccountUsage(props, host),
-  {
-    properties: {
-      client: { default: null, attribute: false },
-      agentId: { default: "" },
-      profileId: { default: "" },
-    },
-    methods: {
-      refreshUsage: (host) => {
-        host.dispatchEvent(new Event("model-account-usage-refresh"));
-      },
-    },
-  },
-);

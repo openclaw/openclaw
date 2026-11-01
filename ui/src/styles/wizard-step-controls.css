@@ -39,11 +39,6 @@
   letter-spacing: 0.15em;
 }
 
-.wizard-step__options {
-  display: grid;
-  gap: 8px;
-}
-
 .wizard-step__option {
   display: flex;
   align-items: flex-start;
@@ -104,14 +99,6 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg);
-}
-
-.wizard-step__waiting {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  min-height: 24px;
 }
 
 .wizard-step__spinner {

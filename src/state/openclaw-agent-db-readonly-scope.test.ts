@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import nodePath from "node:path";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   observeSqliteReadSql,
   trackSqliteStatementExecutions,
@@ -13,22 +13,30 @@ import * as nodeSqlite from "../infra/node-sqlite.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
-import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { runSqliteReadOperationSync as runRead } from "../infra/sqlite-schema-facts.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState as createState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { recordOpenClawAgentCanonicalValidation } from "./openclaw-agent-canonical-validation-receipt.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
-  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabaseByPath as closeAgentDb,
+  closeOpenClawAgentDatabaseByPathAsync as closeAgentDbAsync,
 } from "./openclaw-agent-db-lifecycle.js";
-import { OpenClawAgentDatabaseReadOnlyScope } from "./openclaw-agent-db-readonly-scope.js";
+import { OpenClawAgentDatabaseReadOnlyScope as ReadScope } from "./openclaw-agent-db-readonly-scope.js";
 import {
   retainOpenClawAgentDatabaseReadOnly,
-  withOpenClawAgentDatabaseReadOnly,
+  withOpenClawAgentDatabaseReadOnly as readAgentDb,
 } from "./openclaw-agent-db-readonly.js";
-import { releaseOpenClawAgentDatabaseReadValidation } from "./openclaw-agent-db-validation-cache.js";
 import {
-  openOpenClawAgentDatabase,
+  captureOpenClawAgentDatabaseReadValidation,
+  invalidateOpenClawAgentDatabaseValidation,
+  releaseOpenClawAgentDatabaseReadValidation,
+  setOpenClawAgentDatabaseValidation,
+} from "./openclaw-agent-db-validation-cache.js";
+import {
+  openOpenClawAgentDatabase as openAgentDb,
   runOpenClawAgentWriteTransaction,
 } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
@@ -42,507 +50,454 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
   },
 }));
 
+let state: OpenClawTestState;
+const scopes: ReadScope[] = [];
+beforeEach(async () => {
+  state = await createState({ scenario: "minimal" });
+});
+afterEach(async () => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  thread.isMainThread = true;
+  for (const scope of scopes.splice(0)) {
+    scope.close();
+  }
+  await state.cleanup();
+});
+function newScope() {
+  const scope = new ReadScope();
+  scopes.push(scope);
+  return scope;
+}
+
+async function closedDatabase() {
+  const options = { agentId: "main", env: state.env };
+  const { path } = openAgentDb(options);
+  await closeAgentDbAsync(path);
+  return { options, path };
+}
+
+function retain(options: Parameters<typeof retainOpenClawAgentDatabaseReadOnly>[0]) {
+  const result = retainOpenClawAgentDatabaseReadOnly(options);
+  expect(result.found).toBe(true);
+  if (!result.found) {
+    throw new Error("Missing synthetic agent database");
+  }
+  return result;
+}
+
 it.each([false, true])(
-  "reuses admitted metadata and reads in-process writes without probes (snapshot=%s)",
+  "reuses admission while reads observe committed writes with snapshot=%s",
   async (snapshot) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const options = { agentId: "main", env: state.env };
-      const { path } = openOpenClawAgentDatabase(options);
-      await closeOpenClawAgentDatabaseByPathAsync(path);
-      const scope = new OpenClawAgentDatabaseReadOnlyScope();
-      const writer = nodeSqlite.openNodeSqliteDatabase(path);
-      try {
-        scope.run({ agentId: "main", path }, () => {
-          withOpenClawAgentDatabaseReadOnly(({ db }) => {
-            const query = getNodeSqliteKysely<{
-              schema_meta: { meta_key: string; updated_at: number };
-            }>(db)
-              .selectFrom("schema_meta")
-              .select("updated_at")
-              .where("meta_key", "=", "primary");
-            const prepare = vi.spyOn(db, "prepare");
-            const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-            try {
-              for (let stamp = 1; stamp <= 20; stamp++) {
-                writer
-                  .prepare("UPDATE schema_meta SET updated_at = ? WHERE meta_key = 'primary'")
-                  .run(stamp);
-                for (let read = 0; read < 2; read++) {
-                  expect(
-                    withOpenClawAgentDatabaseReadOnly(
-                      (database) =>
-                        runSqliteReadOperationSync(
-                          database.db,
-                          () => executeSqliteQueryTakeFirstSync(database.db, query)?.updated_at,
-                        ),
-                      options,
-                      { snapshot },
-                    ),
-                  ).toEqual({ found: true, value: stamp });
-                }
-              }
-              const preparations = prepare.mock.calls.filter(
-                ([sql]) => sql === query.compile().sql,
-              );
-              expect(preparations.length).toBeLessThanOrEqual(2);
-              expect(
-                observation.queries.filter((sql) =>
-                  /PRAGMA data_version|FROM main\.pragma_data_version\(\)/iu.test(sql),
-                ),
-              ).toHaveLength(0);
-              expect(
-                observation.queries.filter((sql) =>
-                  /^SELECT role, schema_version, agent_id/iu.test(sql),
-                ),
-              ).toHaveLength(0);
-            } finally {
-              observation.restore();
-              prepare.mockRestore();
-            }
-          }, options);
-        });
-      } finally {
-        writer.close();
-        scope.close();
-      }
-    });
-  },
-);
+    const { options, path } = await closedDatabase();
+    const scope = newScope();
+    using writer = nodeSqlite.openNodeSqliteDatabase(path);
 
-it("keeps a multi-statement snapshot stable until the next read after an in-process write", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const options = { agentId: "main", env: state.env };
-    const { path } = openOpenClawAgentDatabase(options);
-    await closeOpenClawAgentDatabaseByPathAsync(path);
-    const scope = new OpenClawAgentDatabaseReadOnlyScope();
-    const writer = nodeSqlite.openNodeSqliteDatabase(path);
-    const readStamp = (db: EngineConnection) =>
-      db.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get()?.updated_at;
-    writer.exec("UPDATE schema_meta SET updated_at = 1 WHERE meta_key = 'primary'");
-    try {
-      scope.run({ agentId: "main", path }, () => {
-        const read = () =>
-          withOpenClawAgentDatabaseReadOnly(({ db }) => readStamp(db), options, { snapshot: true });
-        expect(read()).toEqual({ found: true, value: 1 });
-        expect(
-          withOpenClawAgentDatabaseReadOnly(
-            ({ db }) => {
-              expect(readStamp(db)).toBe(1);
-              writer.exec("UPDATE schema_meta SET updated_at = 2 WHERE meta_key = 'primary'");
-              return readStamp(db);
-            },
-            options,
-            { snapshot: true },
-          ),
-        ).toEqual({ found: true, value: 1 });
-        expect(read()).toEqual({ found: true, value: 2 });
-      });
-    } finally {
-      writer.close();
-      scope.close();
-    }
-  });
-});
-
-it("keeps one connection while nested reads retain independent committed snapshots", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const options = { agentId: "main", env: state.env };
-    const { path } = openOpenClawAgentDatabase(options);
-    await closeOpenClawAgentDatabaseByPathAsync(path);
-    const target = { agentId: "main", path };
-    const scope = new OpenClawAgentDatabaseReadOnlyScope();
-    const writer = new (requireNodeSqlite().DatabaseSync)(path);
-    let retained: EngineConnection | undefined;
-    const query = "SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'";
-    try {
-      scope.run(target, () => {
-        const first = withOpenClawAgentDatabaseReadOnly(({ db }) => {
-          retained = db;
-          return db.prepare(query).get();
-        }, options);
-        expect(first.found).toBe(true);
-        expect(retained?.isOpen).toBe(true);
-        withOpenClawAgentDatabaseReadOnly(({ db }) => {
-          expect(db).toBe(retained);
-          db.exec("BEGIN DEFERRED");
-          try {
-            const before = db.prepare(query).get();
-            writer
-              .prepare(
-                "UPDATE schema_meta SET updated_at = updated_at + 1 WHERE meta_key = 'primary'",
-              )
-              .run();
-            const committed = writer.prepare(query).get();
-            expect(committed).not.toEqual(before);
-            const nested = withOpenClawAgentDatabaseReadOnly(({ db: inner }) => {
-              expect(inner).not.toBe(db);
-              return inner.prepare(query).get();
-            }, options);
-            expect(nested).toEqual({ found: true, value: committed });
-            expect(db.prepare(query).get()).toEqual(before);
-          } finally {
-            db.exec("ROLLBACK");
-          }
-        }, options);
-        expect(
-          withOpenClawAgentDatabaseReadOnly(({ db }) => db.prepare(query).get(), options),
-        ).toEqual({ found: true, value: writer.prepare(query).get() });
-      });
-    } finally {
-      writer.close();
-      scope.close();
-    }
-    expect(retained?.isOpen).toBe(false);
-  });
-});
-
-it.each([
-  {
-    sql: "UPDATE schema_meta SET role = 'state' WHERE meta_key = 'primary'",
-  },
-])(
-  "reuses admitted format while observing fresh rows after a foreign commit: $sql",
-  async ({ sql }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const options = { agentId: "main", env: state.env };
-      const { path } = openOpenClawAgentDatabase(options);
-      await closeOpenClawAgentDatabaseByPathAsync(path);
-      const target = { agentId: "main", path };
-      const scope = new OpenClawAgentDatabaseReadOnlyScope();
-      const read = () =>
-        scope.run(target, () =>
-          withOpenClawAgentDatabaseReadOnly(
-            ({ db }) =>
-              db.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get()
-                ?.updated_at,
-            options,
-          ),
-        );
-      try {
-        expect(read()).toEqual({ found: true, value: expect.any(Number) });
-        const writer = new (requireNodeSqlite().DatabaseSync)(path);
-        try {
-          writer.exec(sql);
-          writer.exec("UPDATE schema_meta SET updated_at = 42 WHERE meta_key = 'primary'");
-        } finally {
-          writer.close();
-        }
+    scope.run({ agentId: "main", path }, () => {
+      readAgentDb(({ db: admittedDb }) => {
+        const query = getNodeSqliteKysely<{
+          schema_meta: { meta_key: string; updated_at: number };
+        }>(admittedDb)
+          .selectFrom("schema_meta")
+          .select("updated_at")
+          .where("meta_key", "=", "primary");
+        const prepare = vi.spyOn(admittedDb, "prepare");
         const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
         try {
-          expect(read()).toEqual({ found: true, value: 42 });
+          writer.exec("UPDATE schema_meta SET role = 'state' WHERE meta_key = 'primary'");
+          const stampValue = (db: EngineConnection) =>
+            executeSqliteQueryTakeFirstSync(db, query)?.updated_at;
+          const read = <T>(run: (db: EngineConnection) => T) =>
+            readAgentDb(({ db }) => runRead(db, () => run(db)), options, { snapshot });
+          const writeStamp = writer.prepare(
+            "UPDATE schema_meta SET updated_at = ? WHERE meta_key = 'primary'",
+          );
+          for (let stamp = 1; stamp <= 20; stamp++) {
+            writeStamp.run(stamp);
+            expect(
+              read((db) => {
+                expect(stampValue(db)).toBe(stamp);
+                writeStamp.run(stamp + 100);
+                return stampValue(db);
+              }),
+            ).toEqual({ found: true, value: snapshot ? stamp : stamp + 100 });
+            expect(read(stampValue)).toEqual({ found: true, value: stamp + 100 });
+          }
+          const preparations = prepare.mock.calls.filter(([sql]) => sql === query.compile().sql);
+          expect(preparations.length).toBeLessThanOrEqual(2);
           expect(
-            observation.queries.filter((query) =>
-              /sqlite_schema|sqlite_master|PRAGMA\s+(?:user_version|schema_version|integrity_check|foreign_key_check)|^SELECT role, schema_version, agent_id/iu.test(
-                query,
+            observation.queries.filter((sql) =>
+              /sqlite_schema|sqlite_master|PRAGMA\s+(?:data_version|user_version|schema_version|integrity_check|foreign_key_check)|FROM main\.pragma_data_version\(\)|^SELECT role, schema_version, agent_id/iu.test(
+                sql,
               ),
             ),
           ).toEqual([]);
         } finally {
           observation.restore();
+          prepare.mockRestore();
         }
-      } finally {
-        scope.close();
-      }
+      }, options);
     });
   },
 );
 
-it("reuses ordinary readers until idle expiry and reopens after lifecycle invalidation", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const options = { agentId: "main", env: state.env };
-    const { path } = openOpenClawAgentDatabase(options);
-    await closeOpenClawAgentDatabaseByPathAsync(path);
-    const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const read = () => withOpenClawAgentDatabaseReadOnly(({ db }) => db, options);
-    const opens = () => open.mock.calls.filter(([filename]) => filename === path).length;
-    try {
-      const first = read();
+it("keeps one connection while nested reads retain independent committed snapshots", async () => {
+  const { options, path } = await closedDatabase();
+  const target = { agentId: "main", path };
+  const scope = newScope();
+  const writer = new (requireNodeSqlite().DatabaseSync)(path);
+  let retained: EngineConnection | undefined;
+  const query = "SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'";
+  try {
+    scope.run(target, () => {
+      const first = readAgentDb(({ db }) => {
+        retained = db;
+        return db.prepare(query).get();
+      }, options);
       expect(first.found).toBe(true);
-      if (!first.found) {
-        throw new Error("Missing synthetic agent database");
-      }
-      for (let index = 0; index < 20; index++) {
-        expect(read()).toEqual(first);
-      }
-      expect(opens()).toBe(1);
-      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
-      expect(read()).toEqual(first);
-      vi.advanceTimersByTime(1);
-      expect(first.value.isOpen).toBe(true);
-      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
-      expect(first.value.isOpen).toBe(false);
-      const reopened = read();
-      expect(opens()).toBe(2);
-      closeOpenClawAgentDatabaseByPath(path);
-      expect(reopened.found && reopened.value.isOpen).toBe(false);
-      const replacement = read();
-      expect(replacement.found).toBe(true);
-      expect(opens()).toBe(3);
-      await Promise.resolve();
-      expect(replacement.found && replacement.value.isOpen).toBe(true);
-      if (replacement.found) {
-        replacement.value.close();
-      }
-      expect(() => vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS)).not.toThrow();
-      expect(read().found).toBe(true);
-      expect(opens()).toBe(4);
-    } finally {
-      vi.useRealTimers();
-      open.mockRestore();
+      expect(retained?.isOpen).toBe(true);
+      readAgentDb(({ db }) => {
+        expect(db).toBe(retained);
+        db.exec("BEGIN DEFERRED");
+        try {
+          const before = db.prepare(query).get();
+          writer
+            .prepare(
+              "UPDATE schema_meta SET updated_at = updated_at + 1 WHERE meta_key = 'primary'",
+            )
+            .run();
+          const committed = writer.prepare(query).get();
+          expect(committed).not.toEqual(before);
+          const nested = readAgentDb(({ db: inner }) => {
+            expect(inner).not.toBe(db);
+            return inner.prepare(query).get();
+          }, options);
+          expect(nested).toEqual({ found: true, value: committed });
+          expect(db.prepare(query).get()).toEqual(before);
+        } finally {
+          db.exec("ROLLBACK");
+        }
+      }, options);
+      expect(readAgentDb(({ db }) => db.prepare(query).get(), options)).toEqual({
+        found: true,
+        value: writer.prepare(query).get(),
+      });
+    });
+  } finally {
+    writer.close();
+  }
+  scope.close();
+  expect(retained?.isOpen).toBe(false);
+});
+
+it.each(["successor", "omitted"] as const)(
+  "reopens a reader with revoked admission when its next receipt is %s",
+  (nextReceipt) => {
+    const options = { agentId: "main", env: state.env };
+    const owner = openAgentDb(options);
+    const target = { agentId: owner.agentId, path: owner.path };
+    const initial = captureOpenClawAgentDatabaseReadValidation(owner);
+    if (!initial) {
+      throw new Error("Expected the owner's initial read validation");
     }
-  });
+    const scope = newScope();
+    const read = vi.fn((db: EngineConnection) => {
+      expect(
+        db.prepare("SELECT agent_id FROM schema_meta WHERE meta_key = 'primary'").get(),
+      ).toEqual({
+        agent_id: "main",
+      });
+      return db;
+    });
+    const first = scope.run({ ...target, validation: initial.validation }, () =>
+      scope.read(({ db }) => read(db), options),
+    );
+    if (!first.found) {
+      throw new Error("Expected the admitted reader");
+    }
+    expect(first.value.isOpen).toBe(true);
+    expect(first.value).not.toBe(owner.db);
+
+    invalidateOpenClawAgentDatabaseValidation(owner.path);
+    expect(Atomics.load(new Int32Array(initial.validation.valid), 0)).toBe(0);
+    setOpenClawAgentDatabaseValidation(owner);
+    const successor = captureOpenClawAgentDatabaseReadValidation(owner);
+    if (!successor) {
+      throw new Error("Expected the owner's successor read validation");
+    }
+    const nextTarget = {
+      ...target,
+      ...(nextReceipt === "successor" ? { validation: successor.validation } : {}),
+    };
+    read.mockClear();
+    const recovered = scope.run(nextTarget, () =>
+      scope.read(({ db }) => {
+        expect(first.value.isOpen).toBe(false);
+        expect(db === first.value).toBe(false);
+        return read(db);
+      }, options),
+    );
+    if (!recovered.found) {
+      throw new Error("Expected a new admitted reader");
+    }
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(Atomics.load(new Int32Array(successor.validation.valid), 0)).toBe(1);
+    expect(Atomics.load(new Int32Array(successor.validation.canonicalReady), 0)).toBe(1);
+    const reused = scope.run(nextTarget, () => scope.read(({ db }) => read(db), options));
+    expect(reused.found && reused.value).toBe(recovered.value);
+    expect(read).toHaveBeenCalledTimes(2);
+  },
+);
+
+it("reuses ordinary readers until idle expiry and reopens after lifecycle invalidation", async () => {
+  const { options, path } = await closedDatabase();
+  const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const read = () => readAgentDb(({ db }) => db, options);
+  const opens = () => open.mock.calls.filter(([filename]) => filename === path).length;
+
+  const first = read();
+  expect(first.found).toBe(true);
+  if (!first.found) {
+    throw new Error("Missing synthetic agent database");
+  }
+  for (let index = 0; index < 20; index++) {
+    expect(read()).toEqual(first);
+  }
+  expect(opens()).toBe(1);
+  vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+  expect(read()).toEqual(first);
+  vi.advanceTimersByTime(1);
+  expect(first.value.isOpen).toBe(true);
+  vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+  expect(first.value.isOpen).toBe(false);
+  const reopened = read();
+  expect(opens()).toBe(2);
+  closeAgentDb(path);
+  expect(reopened.found && reopened.value.isOpen).toBe(false);
+  const replacement = read();
+  expect(replacement.found).toBe(true);
+  expect(opens()).toBe(3);
+  await Promise.resolve();
+  expect(replacement.found && replacement.value.isOpen).toBe(true);
+  if (replacement.found) {
+    replacement.value.close();
+  }
+  expect(() => vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS)).not.toThrow();
+  expect(read().found).toBe(true);
+  expect(opens()).toBe(4);
 });
 
 it("pins retained readers through idle expiry but revokes them before database removal", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const options = { agentId: "main", env: state.env };
-    const { path } = openOpenClawAgentDatabase(options);
-    await closeOpenClawAgentDatabaseByPathAsync(path);
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      const retained = retainOpenClawAgentDatabaseReadOnly(options);
-      expect(retained.found).toBe(true);
-      if (!retained.found) {
-        throw new Error("Missing synthetic agent database");
-      }
-      expect(() =>
-        withOpenClawAgentDatabaseReadOnly(() => "wrong owner", {
-          ...options,
-          path,
-          agentId: "other",
-        }),
-      ).toThrow("belongs to agent main; requested agent other");
-      expect(retained.claim.isCurrent()).toBe(true);
-      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
-      expect(retained.claim.isCurrent()).toBe(true);
-      const other = retainOpenClawAgentDatabaseReadOnly(options);
-      expect(other.found && other.database.db).toBe(retained.database.db);
-      if (other.found) {
-        other.claim.release();
-      }
-      retained.claim.release();
-      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
-      expect(retained.database.db.isOpen).toBe(true);
-      vi.advanceTimersByTime(1);
-      expect(retained.database.db.isOpen).toBe(false);
-      const stale = retainOpenClawAgentDatabaseReadOnly(options);
-      if (!stale.found) {
-        throw new Error("Missing synthetic agent database");
-      }
-      stale.database.db.close();
-      const next = retainOpenClawAgentDatabaseReadOnly(options);
-      if (!next.found) {
-        throw new Error("Missing synthetic replacement reader");
-      }
-      next.claim.release();
-      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
-      expect(next.database.db.isOpen).toBe(false);
-      stale.claim.release();
-      const reopened = retainOpenClawAgentDatabaseReadOnly(options);
-      expect(reopened.found).toBe(true);
-      await closeOpenClawAgentDatabaseByPathAsync(path);
-      expect(reopened.found && reopened.claim.isCurrent()).toBe(false);
-      if (reopened.found) {
-        reopened.claim.release();
-      }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+  const { options, path } = await closedDatabase();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+  const retained = retain(options);
+  expect(() =>
+    readAgentDb(() => "wrong owner", {
+      ...options,
+      path,
+      agentId: "other",
+    }),
+  ).toThrow("belongs to agent main; requested agent other");
+  expect(retained.claim.isCurrent()).toBe(true);
+  vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+  expect(retained.claim.isCurrent()).toBe(true);
+  const other = retain(options);
+  expect(other.database.db).toBe(retained.database.db);
+  other.claim.release();
+  retained.claim.release();
+  vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+  expect(retained.database.db.isOpen).toBe(true);
+  vi.advanceTimersByTime(1);
+  expect(retained.database.db.isOpen).toBe(false);
+  const stale = retain(options);
+  stale.database.db.close();
+  const next = retain(options);
+  next.claim.release();
+  vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+  expect(next.database.db.isOpen).toBe(false);
+  stale.claim.release();
+  const reopened = retain(options);
+  await closeAgentDbAsync(path);
+  expect(reopened.claim.isCurrent()).toBe(false);
+  reopened.claim.release();
 });
 
 it("promotes a reused reader beyond the maintenance scope that first opened it", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const options = { agentId: "main", env: state.env };
-    const { path } = openOpenClawAgentDatabase(options);
-    await closeOpenClawAgentDatabaseByPathAsync(path);
-    const parent = createOpenClawDatabaseMaintenanceScope();
-    const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
-    const read = () => withOpenClawAgentDatabaseReadOnly(({ db }) => db, options);
-    try {
-      const first = child.run(read);
-      expect(parent.run(read)).toEqual(first);
-      await child.close();
-      expect(first.found && first.value.isOpen).toBe(true);
-      await parent.close();
-      expect(first.found && first.value.isOpen).toBe(false);
-    } finally {
-      await child.close();
-      await parent.close();
-    }
-  });
+  const { options } = await closedDatabase();
+  const parent = createOpenClawDatabaseMaintenanceScope();
+  const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
+  const read = () => readAgentDb(({ db }) => db, options);
+  try {
+    const first = child.run(read);
+    expect(parent.run(read)).toEqual(first);
+    await child.close();
+    expect(first.found && first.value.isOpen).toBe(true);
+    await parent.close();
+    expect(first.found && first.value.isOpen).toBe(false);
+  } finally {
+    await child.close();
+    await parent.close();
+  }
 });
 
 it.each(["database-missing", "schema-missing", "callback-error", "idle-expiry"] as const)(
   "keeps retries owned by their explicit scope after %s",
   async (failure) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const options = { agentId: "scope-retry", env: state.env };
-      const pathname = resolveOpenClawAgentSqlitePath(options);
-      const scope = new OpenClawAgentDatabaseReadOnlyScope();
-      const create = () => {
-        openOpenClawAgentDatabase(options);
-        closeOpenClawAgentDatabaseByPath(pathname);
-      };
-      if (failure === "callback-error" || failure === "idle-expiry") {
-        create();
-      } else if (failure === "schema-missing") {
-        fs.mkdirSync(nodePath.dirname(pathname), { recursive: true });
-        nodeSqlite.openNodeSqliteDatabase(pathname).close();
-      }
+    const options = { agentId: "scope-retry", env: state.env };
+    const pathname = resolveOpenClawAgentSqlitePath(options);
+    const scope = newScope();
+    const create = () => {
+      openAgentDb(options);
+      closeAgentDb(pathname);
+    };
+    if (failure === "callback-error" || failure === "idle-expiry") {
+      create();
+    } else if (failure === "schema-missing") {
+      fs.mkdirSync(nodePath.dirname(pathname), { recursive: true });
+      nodeSqlite.openNodeSqliteDatabase(pathname).close();
+    }
+    if (failure === "idle-expiry") {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    }
+
+    await scope.run({ agentId: options.agentId, path: pathname }, async () => {
       if (failure === "idle-expiry") {
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      }
-      try {
-        await scope.run({ agentId: options.agentId, path: pathname }, async () => {
-          if (failure === "idle-expiry") {
-            const first = withOpenClawAgentDatabaseReadOnly(({ db }) => db, options);
-            await Promise.resolve();
-            vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
-            expect(first.found && first.value.isOpen).toBe(false);
-          } else if (failure === "callback-error") {
-            const error = new Error("synthetic reader failure");
-            expect(() =>
-              withOpenClawAgentDatabaseReadOnly(() => {
-                throw error;
-              }, options),
-            ).toThrow(error);
-          } else {
-            expect(withOpenClawAgentDatabaseReadOnly(() => "unreachable", options)).toEqual({
-              found: false,
-              reason: failure,
-            });
-            create();
-          }
-          const reopened = withOpenClawAgentDatabaseReadOnly(({ db }) => db, options);
-          expect(reopened.found && reopened.value.isOpen).toBe(true);
-          scope.close();
-          expect(reopened.found && reopened.value.isOpen).toBe(false);
+        const first = readAgentDb(({ db }) => db, options);
+        await Promise.resolve();
+        vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+        expect(first.found && first.value.isOpen).toBe(false);
+      } else if (failure === "callback-error") {
+        const error = new Error("synthetic reader failure");
+        expect(() =>
+          readAgentDb(() => {
+            throw error;
+          }, options),
+        ).toThrow(error);
+      } else {
+        expect(readAgentDb(() => "unreachable", options)).toEqual({
+          found: false,
+          reason: failure,
         });
-      } finally {
-        scope.close();
-        vi.useRealTimers();
+        create();
       }
+      const reopened = readAgentDb(({ db }) => db, options);
+      expect(reopened.found && reopened.value.isOpen).toBe(true);
+      scope.close();
+      expect(reopened.found && reopened.value.isOpen).toBe(false);
     });
   },
 );
 
 it("closes generic and explicit candidate-family readers without releasing unrelated paths", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const family = state.statePath("selected.sqlite");
-    const sibling = state.statePath("selected.extra.sqlite");
-    const unrelated = state.statePath("unrelated.sqlite");
-    const options = (path: string) => ({ agentId: "main", path, env: state.env });
-    for (const path of [family, sibling, unrelated]) {
-      openOpenClawAgentDatabase(options(path));
-      await closeOpenClawAgentDatabaseByPathAsync(path);
+  const family = state.statePath("selected.sqlite");
+  const sibling = state.statePath("selected.extra.sqlite");
+  const unrelated = state.statePath("unrelated.sqlite");
+  const options = (path: string) => ({ agentId: "main", path, env: state.env });
+  for (const path of [family, sibling, unrelated]) {
+    openAgentDb(options(path));
+    await closeAgentDbAsync(path);
+  }
+  const scope = newScope();
+  const read = (path: string) => {
+    const result = readAgentDb(({ db }) => db, options(path));
+    if (!result.found) {
+      throw new Error("Missing synthetic reader database");
     }
-    const scope = new OpenClawAgentDatabaseReadOnlyScope();
-    const read = (path: string) => {
-      const result = withOpenClawAgentDatabaseReadOnly(({ db }) => db, options(path));
-      if (!result.found) {
-        throw new Error("Missing synthetic reader database");
-      }
-      return result.value;
-    };
-    const selected = read(family);
-    const explicit = scope.run(options(sibling), () => read(sibling));
-    const retained = read(unrelated);
-    const candidates = [{ path: family, scope: "sibling-family" as const }];
-    const closeReaders = () =>
-      applyAgentDatabaseReaderRequest({ kind: "close", candidates, deleted: false });
-    try {
-      await applyAgentDatabaseReaderRequest({
-        kind: "close",
-        candidates,
-        deleted: false,
-        retainedPaths: [sibling],
-      });
-      expect(selected.isOpen).toBe(false);
-      expect(explicit.isOpen).toBe(true);
-      expect(retained.isOpen).toBe(true);
-      await closeReaders();
-      expect(selected.isOpen).toBe(false);
-      expect(explicit.isOpen).toBe(false);
-      expect(retained.isOpen).toBe(true);
-      expect(read(unrelated)).toBe(retained);
+    return result.value;
+  };
+  const selected = read(family);
+  const explicit = scope.run(options(sibling), () => read(sibling));
+  const retained = read(unrelated);
+  const candidates = [{ path: family, scope: "sibling-family" as const }];
+  const closeReaders = () =>
+    applyAgentDatabaseReaderRequest({ kind: "close", candidates, deleted: false });
 
-      const reopened = scope.run(options(sibling), () => read(sibling));
-      const failure = new Error("native reader close failed");
-      const close = vi.spyOn(reopened, "close").mockImplementation(() => {
-        throw failure;
-      });
-      const causes = (error: unknown): unknown[] =>
-        error instanceof AggregateError ? error.errors.flatMap(causes) : [error];
-      try {
-        await expect(closeReaders()).rejects.toSatisfy(
-          (error: unknown) => error instanceof AggregateError && causes(error).includes(failure),
-        );
-        expect(reopened.isOpen).toBe(true);
-        close.mockRestore();
-        await closeReaders();
-        expect(reopened.isOpen).toBe(false);
-        expect(retained.isOpen).toBe(true);
-      } finally {
-        close.mockRestore();
-      }
-    } finally {
-      scope.close();
-    }
+  await applyAgentDatabaseReaderRequest({
+    kind: "close",
+    candidates,
+    deleted: false,
+    retainedPaths: [sibling],
   });
+  expect(selected.isOpen).toBe(false);
+  expect(explicit.isOpen).toBe(true);
+  expect(retained.isOpen).toBe(true);
+  await closeReaders();
+  expect(selected.isOpen).toBe(false);
+  expect(explicit.isOpen).toBe(false);
+  expect(retained.isOpen).toBe(true);
+  expect(read(unrelated)).toBe(retained);
+
+  const reopened = scope.run(options(sibling), () => read(sibling));
+  const failure = new Error("native reader close failed");
+  const close = vi.spyOn(reopened, "close").mockImplementation(() => {
+    throw failure;
+  });
+  const causes = (error: unknown): unknown[] =>
+    error instanceof AggregateError ? error.errors.flatMap(causes) : [error];
+  try {
+    await expect(closeReaders()).rejects.toSatisfy(
+      (error: unknown) => error instanceof AggregateError && causes(error).includes(failure),
+    );
+    expect(reopened.isOpen).toBe(true);
+    close.mockRestore();
+    await closeReaders();
+    expect(reopened.isOpen).toBe(false);
+    expect(retained.isOpen).toBe(true);
+  } finally {
+    close.mockRestore();
+  }
 });
 
 it("loads canonical proof before fresh full selections without trusting a copied file", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const options = { agentId: "main", env };
-    const database = openOpenClawAgentDatabase(options);
-    const sessionKey = "agent:main:receipt-read";
-    writeSessionEntry(database, sessionKey, { sessionId: "receipt-session", updatedAt: 1 });
-    writeSessionEntry(database, "agent:main:unrelated", { sessionId: "unrelated", updatedAt: 1 });
-    runOpenClawAgentWriteTransaction(recordOpenClawAgentCanonicalValidation, options);
-    await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
-    releaseOpenClawAgentDatabaseReadValidation([{ path: database.path }]);
-    const copiedPath = nodePath.join(nodePath.dirname(database.path), "copied.sqlite");
-    fs.copyFileSync(database.path, copiedPath);
-    for (const pathname of [database.path, copiedPath]) {
-      const target = { ...options, path: pathname };
-      const retained = new OpenClawAgentDatabaseReadOnlyScope();
-      try {
-        thread.isMainThread = false;
-        retained.run(target, () => {
-          const opened = withOpenClawAgentDatabaseReadOnly((reader) => reader, target);
-          if (!opened.found) {
-            throw new Error("Expected the seeded canonical database");
-          }
-          const queries = trackSqliteStatementExecutions(
-            requireNativeSqliteDatabase(opened.value.db),
-            ["inventory"],
-            (sql) =>
-              sql.includes("retained_window") && !/\bwhere\b/iu.test(sql) ? "inventory" : null,
-          );
-          try {
-            const result = readExactSessionEntriesWithLifecycle({
-              kind: "session-exact-entries",
-              database: target,
-              env,
-              projection: "full",
-              selection: { kind: "session-id", sessionId: "receipt-session" },
-            });
-            expect(result.entries[0]?.entry.sessionId).toBe("receipt-session");
-            if (pathname === database.path) {
-              expect(queries.rowCounts.inventory).toBe(0);
-            } else {
-              expect(queries.rowCounts.inventory).toBeGreaterThan(0);
-            }
-          } finally {
-            queries.restore();
-          }
+  const { env } = state;
+
+  const options = { agentId: "main", env };
+  const database = openAgentDb(options);
+  const sessionKey = "agent:main:receipt-read";
+  writeSessionEntry(database, sessionKey, { sessionId: "receipt-session", updatedAt: 1 });
+  writeSessionEntry(database, "agent:main:unrelated", { sessionId: "unrelated", updatedAt: 1 });
+  runOpenClawAgentWriteTransaction(recordOpenClawAgentCanonicalValidation, options);
+  await closeAgentDbAsync(database.path, database.agentId);
+  releaseOpenClawAgentDatabaseReadValidation([{ path: database.path }]);
+  const copiedPath = nodePath.join(nodePath.dirname(database.path), "copied.sqlite");
+  fs.copyFileSync(database.path, copiedPath);
+  for (const pathname of [database.path, copiedPath]) {
+    const target = { ...options, path: pathname };
+    const retained = newScope();
+    try {
+      thread.isMainThread = false;
+      retained.run(target, () => {
+        const opened = readAgentDb((reader) => reader, target);
+        if (!opened.found) {
+          throw new Error("Expected the seeded canonical database");
+        }
+        const queries = trackSqliteStatementExecutions(
+          requireNativeSqliteDatabase(opened.value.db),
+          ["inventory"],
+          (sql) =>
+            sql.includes("retained_window") && !/\bwhere\b/iu.test(sql) ? "inventory" : null,
+        );
+        using _ = { [Symbol.dispose]: () => queries.restore() };
+
+        const result = readExactSessionEntriesWithLifecycle({
+          kind: "session-exact-entries",
+          database: target,
+          env,
+          projection: "full",
+          selection: { kind: "session-id", sessionId: "receipt-session" },
         });
-      } finally {
-        thread.isMainThread = true;
-        retained.close();
-      }
+        expect(result.entries[0]?.entry.sessionId).toBe("receipt-session");
+        if (pathname === database.path) {
+          expect(queries.rowCounts.inventory).toBe(0);
+        } else {
+          expect(queries.rowCounts.inventory).toBeGreaterThan(0);
+        }
+      });
+    } finally {
+      thread.isMainThread = true;
+      retained.close();
     }
-  });
+  }
 });

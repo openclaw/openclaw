@@ -1,5 +1,6 @@
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
+import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
 import type { SessionParticipantRecord } from "./session-accessor.sqlite-participant-projection.js";
 import type {
   SessionEntryReplacementSelection,
@@ -13,7 +14,6 @@ import type {
   SessionTranscriptRuntimeTarget,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
 import type { SessionMember } from "./session-membership-facts.types.js";
@@ -51,9 +51,6 @@ export type SessionEntryListWorkerInput = {
   database: { agentId: string; path: string };
   scope: SessionEntryListScope & {
     cleanupSession?: string;
-    mainSessionRecovery?: true;
-    pendingInputRecovery?: true;
-    pendingExecRecovery?: { afterSessionKey?: string; limit: number };
   };
   expectedIdentity?: DatabasePathIdentity;
   continuation?: CanonicalSessionReaderContinuation;
@@ -70,8 +67,6 @@ export type SessionEntryListWorkerResult = {
   nextCronRunUpdatedAt?: number | null;
   /** Last scanned cron key when another retention page may remain. */
   nextCronRunSessionKey?: string | null;
-  /** Last selected exec owner when another recovery page may remain. */
-  nextExecRecoverySessionKey?: string | null;
 };
 
 export type SessionExactEntriesWorkerInput = {
@@ -111,7 +106,17 @@ export type SessionExactEntriesWorkerSelection =
       projection: "list";
     };
 
-export type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelection & {
+export type SessionExactEntriesWorkerRequest = (
+  | SessionExactEntriesWorkerSelection
+  | {
+      sessionKeys: readonly string[];
+      selection: {
+        kind: "transcript-aliases";
+        sessionIds: readonly string[];
+      };
+      projection: "list";
+    }
+) & {
   /** Validate current entry and conversation predicates in one reader snapshot. */
   sourceChecks?: SessionSourcePredicate[];
   manualCompact?: { sessionId: string; sources: SessionSourcePredicate[] };
@@ -125,6 +130,9 @@ export type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelectio
   includeMembers?: boolean;
   includeParticipantRecords?: boolean;
   includeAuthorization?: boolean;
+  /** Inspect authority facts without opening the original SQLite family. */
+  preserveSourceArtifacts?: true;
+  inspectionSourcePath?: string;
   replacementSelection?: SessionEntryReplacementSelection;
   creationLabel?: string;
   continuation?: CanonicalSessionReaderContinuation;
@@ -163,6 +171,8 @@ export type SessionEntryCohortRequest = Pick<
 export type SessionExactEntriesWorkerResult = {
   kind: "session-exact-entries";
   source?: SessionEntryListWorkerResult["source"];
+  /** Original copy source, distinct from the private reader's native databaseIdentity. */
+  snapshotSource?: NonNullable<SessionEntryListWorkerResult["source"]>;
   entries: SessionEntrySummary[];
   lifecycleTimestamps: SessionLifecycleTimestamps;
   sourceValidation?: SessionSourceValidation;

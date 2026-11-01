@@ -1,115 +1,70 @@
 import { describe, expect, it } from "vitest";
 import { sanitizeGoogleThinkingPayload } from "./google-thinking-payload.js";
 
-type ThinkingCase = {
-  name: string;
-  modelId: string;
-  container?: "config" | "generationConfig";
-  thinkingLevel?: Parameters<typeof sanitizeGoogleThinkingPayload>[0]["thinkingLevel"];
-  initial: Record<string, unknown>;
-  expected?: Record<string, unknown>;
-};
+type ThinkingCase = [
+  modelId: string,
+  thinkingLevel: Parameters<typeof sanitizeGoogleThinkingPayload>[0]["thinkingLevel"],
+  initial: Record<string, unknown>,
+  expected?: Record<string, unknown>,
+  container?: "config" | "generationConfig",
+];
+
+const thoughts = { includeThoughts: true };
+const budget = { thinkingBudget: 0 };
 
 describe("sanitizeGoogleThinkingPayload", () => {
   it.each<ThinkingCase>([
-    {
-      name: "maps Gemini 4 legacy budgets to medium",
-      modelId: "google/gemini-4-argon",
-      initial: { thinkingBudget: 8192, includeThoughts: true },
-      expected: { thinkingLevel: "MEDIUM", includeThoughts: true },
+    [
+      "google/gemini-4-argon",
+      undefined,
+      { thinkingBudget: 8192, ...thoughts },
+      { thinkingLevel: "MEDIUM", ...thoughts },
+    ],
+    ["gemini-4-argon", "off", budget, { thinkingLevel: "LOW" }],
+    [
+      "gemini-4-argon",
+      "adaptive",
+      { thinkingBudget: 8192, thinkingLevel: "HIGH", ...thoughts },
+      thoughts,
+    ],
+    ["gemini-2.5-pro", undefined, budget],
+    ["google/gemini-2.5-pro-preview", undefined, budget],
+    ["gemini-2.5-pro", undefined, { ...budget, ...thoughts }, thoughts],
+    ["gemini-2.5-pro", undefined, { ...budget, ...thoughts }, thoughts, "generationConfig"],
+    ["gemini-2.5-flash", undefined, budget, budget],
+    ["gemini-2.5-pro", undefined, { thinkingBudget: 1000 }, { thinkingBudget: 1000 }],
+    [
+      "gemini-3.1-pro-preview",
+      "high",
+      { thinkingBudget: 2048, ...thoughts },
+      { ...thoughts, thinkingLevel: "HIGH" },
+    ],
+    ["gemini-flash-latest", "off", budget, { thinkingLevel: "MINIMAL" }, "generationConfig"],
+    [
+      "gemini-3-flash-preview",
+      "medium",
+      { thinkingBudget: -1, ...thoughts },
+      { ...thoughts, thinkingLevel: "MEDIUM" },
+    ],
+    ["gemini-3-flash-preview", "adaptive", { thinkingBudget: 8192, ...thoughts }, thoughts],
+    [
+      "gemini-2.5-flash",
+      "adaptive",
+      { thinkingBudget: 8192, ...thoughts },
+      { ...thoughts, thinkingBudget: -1 },
+    ],
+  ])(
+    "normalizes %s / %s / %j",
+    (modelId, thinkingLevel, initial, expected, container = "config") => {
+      const config: { thinkingConfig?: Record<string, unknown> } = {
+        thinkingConfig: { ...initial },
+      };
+      sanitizeGoogleThinkingPayload({ payload: { [container]: config }, modelId, thinkingLevel });
+      if (expected === undefined) {
+        expect(config).not.toHaveProperty("thinkingConfig");
+      } else {
+        expect(config.thinkingConfig).toEqual(expected);
+      }
     },
-    {
-      name: "maps disabled Gemini 4 to low",
-      modelId: "gemini-4-argon",
-      thinkingLevel: "off",
-      initial: { thinkingBudget: 0 },
-      expected: { thinkingLevel: "LOW" },
-    },
-    {
-      name: "uses provider defaults for Gemini 4 adaptive thinking",
-      modelId: "gemini-4-argon",
-      thinkingLevel: "adaptive",
-      initial: { thinkingBudget: 8192, thinkingLevel: "HIGH", includeThoughts: true },
-      expected: { includeThoughts: true },
-    },
-    {
-      name: "removes the empty thinking config",
-      modelId: "gemini-2.5-pro",
-      initial: { thinkingBudget: 0 },
-    },
-    {
-      name: "recognizes a provider-prefixed model",
-      modelId: "google/gemini-2.5-pro-preview",
-      initial: { thinkingBudget: 0 },
-    },
-    {
-      name: "preserves other thinking config fields",
-      modelId: "gemini-2.5-pro",
-      initial: { thinkingBudget: 0, includeThoughts: true },
-      expected: { includeThoughts: true },
-    },
-    {
-      name: "normalizes native generationConfig",
-      modelId: "gemini-2.5-pro",
-      container: "generationConfig",
-      initial: { thinkingBudget: 0, includeThoughts: true },
-      expected: { includeThoughts: true },
-    },
-    {
-      name: "allows disabled thinking for Flash",
-      modelId: "gemini-2.5-flash",
-      initial: { thinkingBudget: 0 },
-      expected: { thinkingBudget: 0 },
-    },
-    {
-      name: "preserves positive budgets",
-      modelId: "gemini-2.5-pro",
-      initial: { thinkingBudget: 1000 },
-      expected: { thinkingBudget: 1000 },
-    },
-    {
-      name: "rewrites Gemini 3 Pro budgets",
-      modelId: "gemini-3.1-pro-preview",
-      thinkingLevel: "high",
-      initial: { thinkingBudget: 2048, includeThoughts: true },
-      expected: { includeThoughts: true, thinkingLevel: "HIGH" },
-    },
-    {
-      name: "maps disabled Flash latest to minimal",
-      modelId: "gemini-flash-latest",
-      container: "generationConfig",
-      thinkingLevel: "off",
-      initial: { thinkingBudget: 0 },
-      expected: { thinkingLevel: "MINIMAL" },
-    },
-    {
-      name: "overrides negative Flash budgets with an explicit level",
-      modelId: "gemini-3-flash-preview",
-      thinkingLevel: "medium",
-      initial: { thinkingBudget: -1, includeThoughts: true },
-      expected: { includeThoughts: true, thinkingLevel: "MEDIUM" },
-    },
-    {
-      name: "uses provider defaults for Gemini 3 adaptive thinking",
-      modelId: "gemini-3-flash-preview",
-      thinkingLevel: "adaptive",
-      initial: { thinkingBudget: 8192, includeThoughts: true },
-      expected: { includeThoughts: true },
-    },
-    {
-      name: "uses dynamic budgets for Gemini 2.5 adaptive thinking",
-      modelId: "gemini-2.5-flash",
-      thinkingLevel: "adaptive",
-      initial: { thinkingBudget: 8192, includeThoughts: true },
-      expected: { includeThoughts: true, thinkingBudget: -1 },
-    },
-  ])("$name", ({ modelId, container = "config", thinkingLevel, initial, expected }) => {
-    const config: { thinkingConfig?: Record<string, unknown> } = { thinkingConfig: initial };
-    sanitizeGoogleThinkingPayload({ payload: { [container]: config }, modelId, thinkingLevel });
-    if (expected === undefined) {
-      expect(config).not.toHaveProperty("thinkingConfig");
-    } else {
-      expect(config.thinkingConfig).toEqual(expected);
-    }
-  });
+  );
 });

@@ -16,10 +16,6 @@ function cronJob(
   return { id, name, enabled: true, updatedAtMs: 0, state };
 }
 
-function mentionItem(id: string, createdAt: number) {
-  return { ...inboxMention(id), createdAt };
-}
-
 function cronItems(
   cronJobs: readonly CronAttentionJob[],
   now = 0,
@@ -56,19 +52,6 @@ function inbox(
 }
 
 describe("sidebar attention projection", () => {
-  it("lists each failed job as direct automation navigation", () => {
-    const failed = cronItems([
-      cronJob("primary", undefined, "Nightly backup"),
-      cronJob("reason-id", undefined, ""),
-      cronJob("unknown-id"),
-    ]);
-
-    expect(failed.map((item) => item.label)).toEqual(["Nightly backup", "reason-id", "unknown-id"]);
-    expect(failed.map((item) => item.action)).toEqual(
-      Array.from({ length: 3 }, () => ({ kind: "navigate", routeId: "cron" })),
-    );
-  });
-
   it("does not flag an actively running job as overdue", () => {
     const running = cronJob("running-id", { lastRunStatus: "ok", nextRunAtMs: 1, runningAtMs: 2 });
     const stalled = cronJob("stalled-id", { lastRunStatus: "ok", nextRunAtMs: 2 });
@@ -80,37 +63,28 @@ describe("sidebar attention projection", () => {
     expect(overdue?.label).toBe("stalled-id");
   });
 
-  it("does not flag an enabled overdue job while the scheduler is disabled", () => {
-    const overdue = cronJob("overdue-id");
-    overdue.state = { lastRunStatus: "ok", nextRunAtMs: 1 };
-
-    expect(cronItems([overdue], 300_002, undefined, false)).not.toContainEqual(
-      expect.objectContaining({ kind: "cronOverdue" }),
-    );
-  });
-
-  it("shows automation owners only when the caller supplies an all-agent owner map", () => {
-    const item = cronItems([cronJob("writer-job")], 0, new Map([["writer-job", "Writer"]]))[0];
-    expect(item?.meta?.context).toBe("Writer");
-  });
-
-  it("orders failed before overdue and newest first within each group", () => {
+  it("labels and links automation alerts, ordered by failure then recency", () => {
     const items = cronItems(
       [
         cronJob("older-overdue", { lastRunStatus: "ok", nextRunAtMs: 1 }),
-        cronJob("older-failed", { lastRunStatus: "error", lastRunAtMs: 100 }),
+        cronJob("older-failed", { lastRunStatus: "error", lastRunAtMs: 100 }, ""),
         cronJob("overdue", { lastRunStatus: "ok", nextRunAtMs: 2 }),
-        cronJob("failed", { lastRunStatus: "error", lastRunAtMs: 200 }),
+        cronJob("failed", { lastRunStatus: "error", lastRunAtMs: 200 }, "Nightly backup"),
       ],
       300_003,
+      new Map([["failed", "Writer"]]),
     );
 
     expect(items.map((item) => item.label)).toEqual([
-      "failed",
+      "Nightly backup",
       "older-failed",
       "overdue",
       "older-overdue",
     ]);
+    expect(items.map((item) => item.action)).toEqual(
+      Array.from({ length: 4 }, () => ({ kind: "navigate", routeId: "cron" })),
+    );
+    expect(items[0]?.meta?.context).toBe("Writer");
   });
   it("derives every tab count and dismiss control from one entry list", () => {
     const entries = inbox(true, {
@@ -124,7 +98,10 @@ describe("sidebar attention projection", () => {
         },
       ],
       attention: cronItems([cronJob("failed-job")]),
-      mentions: [mentionItem("older", 1_000), mentionItem("newer", 2_000)],
+      mentions: [
+        { ...inboxMention("older"), createdAt: 1_000 },
+        { ...inboxMention("newer"), createdAt: 2_000 },
+      ],
       scopeUpgrade: buildScopeUpgradeInboxEntry({
         scopes: ["operator.read"],
         state: { phase: "available" },

@@ -1,6 +1,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { AssistantMessage, UserMessage, Usage } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildOpenAICompletionsParams } from "../../packages/ai/src/transports/openai-completions-params.js";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import {
@@ -13,7 +14,9 @@ import {
   TEST_SESSION_ID,
 } from "./embedded-agent-runner.sanitize-session-history.test-harness.js";
 import { validateReplayTurns } from "./embedded-agent-runner/replay-history.js";
+import { convertToLlm } from "./sessions/messages.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { textToolResult, textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { extractToolCallsFromAssistant } from "./tool-call-id.js";
 import type { TranscriptPolicy } from "./transcript-policy.types.js";
@@ -202,6 +205,39 @@ describe("sanitizeSessionHistory", () => {
     testTimestamp = 1;
     vi.clearAllMocks();
     sessionManager = makeMockSessionManager();
+  });
+
+  it("keeps tier-suffixed model reasoning through history sanitization and request replay", async () => {
+    const model = makeProviderModelFixture<"openai-completions">({
+      id: "deepseek-v4-flash-free",
+      provider: "custom-openai-proxy",
+      api: "openai-completions",
+      baseUrl: "https://proxy.example/v1",
+      reasoning: false,
+    });
+    const messages = await sanitize(
+      [
+        user("hello"),
+        {
+          ...assistant([thinking("Need to answer politely.", "reasoning_content"), text("Hello!")]),
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+        },
+        user("again"),
+      ],
+      { modelApi: model.api, provider: model.provider, modelId: model.id, model },
+    );
+    const request = buildOpenAICompletionsParams(
+      model,
+      { messages: convertToLlm(messages) },
+      undefined,
+    );
+    expect(request.messages).toContainEqual({
+      role: "assistant",
+      content: "Hello!",
+      reasoning_content: "Need to answer politely.",
+    });
   });
 
   it.each([

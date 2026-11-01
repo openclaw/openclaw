@@ -1,36 +1,29 @@
 import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { makeRequest, deferredOperation } from "./browser-request.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   runtimeConfig: {} as OpenClawConfig,
   runtimeSourceConfig: null as OpenClawConfig | null,
   ensureBrowserControlAuth: vi.fn(async () => ({ auth: {} })),
-  resolveBrowserControlAuth: vi.fn(() => ({})),
-  shouldAutoGenerateBrowserAuth: vi.fn(() => false),
   stopKnownBrowserProfiles: vi.fn(async () => {}),
-  isChromeReachable: vi.fn(async () => false),
-  isChromeCdpReady: vi.fn(async () => false),
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>();
-  return {
-    ...actual,
-    readRuntimeConfig: () => mocks.runtimeConfig,
-    captureRuntimeConfigAsyncReader: () => async () => mocks.runtimeConfig,
-    getRuntimeConfigSourceSnapshot: () => mocks.runtimeSourceConfig,
-    loadConfig: () => mocks.runtimeConfig,
-  };
-});
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  readRuntimeConfig: () => mocks.runtimeConfig,
+  captureRuntimeConfigAsyncReader: () => async () => mocks.runtimeConfig,
+  getRuntimeConfigSourceSnapshot: () => mocks.runtimeSourceConfig,
+  loadConfig: () => mocks.runtimeConfig,
+}));
 
+// mock-isolation: Auth generation and persistence are outside this shared-control lifecycle fixture.
 vi.mock("../browser/control-auth.js", () => ({
   ensureBrowserControlAuth: mocks.ensureBrowserControlAuth,
-  resolveBrowserControlAuth: mocks.resolveBrowserControlAuth,
-  shouldAutoGenerateBrowserAuth: mocks.shouldAutoGenerateBrowserAuth,
+  resolveBrowserControlAuth: vi.fn(() => ({})),
+  shouldAutoGenerateBrowserAuth: vi.fn(() => false),
 }));
 
 // This suite tests shared state; server auth/bind suites cover real HTTP listeners.
@@ -42,11 +35,12 @@ vi.mock("../browser/server-lifecycle.js", () => ({
   stopKnownBrowserProfiles: mocks.stopKnownBrowserProfiles,
 }));
 
+// mock-isolation: Shared-control lifecycle tests must not discover or launch a real browser.
 vi.mock("../browser/chrome.js", () => ({
   diagnoseChromeCdp: vi.fn(async () => ({ ok: false })),
   formatChromeCdpDiagnostic: vi.fn(() => "not reachable"),
-  isChromeCdpReady: mocks.isChromeCdpReady,
-  isChromeReachable: mocks.isChromeReachable,
+  isChromeCdpReady: vi.fn(async () => false),
+  isChromeReachable: vi.fn(async () => false),
   launchOpenClawChrome: vi.fn(async () => {
     throw new Error("launch should not be needed for status");
   }),
@@ -58,11 +52,12 @@ const { startBrowserControlServerFromConfig, stopBrowserControlServer } =
   await import("../server.js");
 const { getBrowserControlState, startBrowserControlServiceFromConfig, stopBrowserControlService } =
   await import("../control-service.js");
-const { runBrowserProxyCommand } = await import("../node-host/invoke-browser.js");
 const { getBridgeAuthForPort } = await import("../browser/bridge-auth-registry.js");
 const { browserHandlers } = await import("./browser-request.js");
 
 const controlPort = 18_791;
+const activePlugins = { allow: ["telegram", "browser"], entries: { browser: { enabled: true } } };
+const browserStatus = { enabled: true, profile: "openclaw" };
 function browserConfig(browser: OpenClawConfig["browser"] = {}): OpenClawConfig {
   return {
     gateway: { port: controlPort - 2 },
@@ -75,206 +70,82 @@ function browserConfig(browser: OpenClawConfig["browser"] = {}): OpenClawConfig 
   };
 }
 
-async function browserRequestStatus(): Promise<unknown> {
-  const respond = vi.fn();
-  await expectDefined(
-    browserHandlers["browser.request"],
-    "browser request handler",
-  )({
-    params: {
-      method: "GET",
-      path: "/",
-      query: { profile: "openclaw" },
-    },
-    respond: respond as never,
-    context: {
-      nodeRegistry: {
-        listConnected: () => [],
-      },
-    } as never,
-    client: null,
-    req: { type: "req", id: "req-1", method: "browser.request" },
-    isWebchatConnect: () => false,
-  });
-  const [call] = respond.mock.calls;
-  if (!call) {
-    throw new Error("expected browser request response");
-  }
-  expect(call[0]).toBe(true);
-  return call[1];
+function setConfig(source: OpenClawConfig, runtime = source) {
+  mocks.runtimeSourceConfig = source;
+  mocks.runtimeConfig = runtime;
 }
 
-describe("browser.request local control state", () => {
-  afterEach(async () => {
-    await stopBrowserControlService();
-    await stopBrowserControlServer();
-    mocks.runtimeSourceConfig = null;
-    vi.clearAllMocks();
-  });
+async function browserRequestStatus(): Promise<unknown> {
+  const respond = vi.fn();
+  await browserHandlers["browser.request"](
+    makeRequest({ method: "GET", path: "/", query: { profile: "openclaw" } }, { respond }),
+  );
+  const [ok, result] = expectDefined(respond.mock.calls[0], "browser response");
+  expect(ok).toBe(true);
+  return result;
+}
 
-  it("uses the same resolved browser config as the HTTP control service", async () => {
-    const source = {
-      ...browserConfig({
-        executablePath: "/usr/bin/google-chrome",
-        headless: true,
-        noSandbox: true,
-      }),
-      plugins: { allow: ["telegram"] },
-    };
+afterEach(async () => {
+  await stopBrowserControlService();
+  await stopBrowserControlServer();
+  mocks.runtimeSourceConfig = null;
+  vi.clearAllMocks();
+});
+
+it.each([false, true])(
+  "uses fresh browser options with runtime activation (HTTP started=%s)",
+  async (started) => {
+    const options = { executablePath: "/usr/bin/google-chrome", headless: true, noSandbox: true };
+    const source = { ...browserConfig(options), plugins: { allow: ["telegram"] } };
     const originalSource = structuredClone(source);
-    mocks.runtimeSourceConfig = source;
-    mocks.runtimeConfig = {
-      ...source,
-      plugins: { allow: ["telegram", "browser"], entries: { browser: { enabled: true } } },
-    };
-    const httpState = await startBrowserControlServerFromConfig();
-    expect(httpState?.resolved.executablePath).toBe("/usr/bin/google-chrome");
-    expect(httpState?.resolved.noSandbox).toBe(true);
-
-    // The runtime snapshot can lag behind source config after gateway startup;
-    // browser.request must not fork a second stale control state from it.
-    mocks.runtimeConfig = browserConfig({
-      headless: false,
-      noSandbox: false,
-    });
-
-    const status = (await browserRequestStatus()) as {
-      executablePath?: unknown;
-      headless?: unknown;
-      noSandbox?: unknown;
-    };
-    expect(status.executablePath).toBe("/usr/bin/google-chrome");
-    expect(status.headless).toBe(true);
-    expect(status.noSandbox).toBe(true);
+    setConfig(source, { ...browserConfig({ headless: false }), plugins: activePlugins });
+    if (started) {
+      expect((await startBrowserControlServerFromConfig())?.resolved).toMatchObject(options);
+    }
+    mocks.runtimeConfig = browserConfig({ enabled: !started, headless: false, noSandbox: false });
+    if (!started) {
+      mocks.runtimeConfig.plugins = activePlugins;
+    }
+    expect(await browserRequestStatus()).toMatchObject({ ...browserStatus, ...options });
     expect(source).toEqual(originalSource);
-  });
+  },
+);
 
-  it("honors runtime plugin activation on a cold gateway request while retaining fresh browser options", async () => {
-    const source = {
-      ...browserConfig({ headless: true }),
-      plugins: { allow: ["telegram"] },
-    };
-    const originalSource = structuredClone(source);
-    mocks.runtimeSourceConfig = source;
-    mocks.runtimeConfig = {
-      ...browserConfig({ headless: false }),
-      plugins: { allow: ["telegram", "browser"], entries: { browser: { enabled: true } } },
-    };
+it.each(["plugin", "browser"])("retains %s disablement at both cold entrypoints", async (kind) => {
+  const runtime = { ...browserConfig(), plugins: { ...activePlugins, allow: ["browser"] } };
+  const source = kind === "plugin" ? browserConfig() : { ...runtime, browser: { enabled: false } };
+  setConfig(source, kind === "plugin" ? { ...source, plugins: { allow: ["telegram"] } } : runtime);
+  expect(await startBrowserControlServiceFromConfig()).toBeNull();
+  expect(await startBrowserControlServerFromConfig()).toBeNull();
+  expect(mocks.ensureBrowserControlAuth).not.toHaveBeenCalled();
+  expect(getBrowserControlState()).toBeNull();
+});
 
-    expect(await browserRequestStatus()).toMatchObject({
-      enabled: true,
-      profile: "openclaw",
-      headless: true,
-    });
-    expect(source).toEqual(originalSource);
-  });
+it("retains port auth until a failed stop is retried successfully", async () => {
+  setConfig(browserConfig());
+  mocks.ensureBrowserControlAuth.mockResolvedValueOnce({ auth: { token: "test-token" } });
+  const state = await startBrowserControlServerFromConfig();
+  expect(state?.port).toBe(controlPort);
+  expect(getBridgeAuthForPort(controlPort)).toEqual({ token: "test-token" });
 
-  it("retains effective plugin disablement at both cold entrypoints", async () => {
-    const source = browserConfig();
-    mocks.runtimeSourceConfig = source;
-    mocks.runtimeConfig = { ...source, plugins: { allow: ["telegram"] } };
-    expect(await startBrowserControlServiceFromConfig()).toBeNull();
-    expect(await startBrowserControlServerFromConfig()).toBeNull();
-    expect(mocks.ensureBrowserControlAuth).not.toHaveBeenCalled();
-    expect(getBrowserControlState()).toBeNull();
-  });
+  mocks.stopKnownBrowserProfiles.mockRejectedValueOnce(new Error("cleanup failed"));
+  await expect(stopBrowserControlServer()).rejects.toThrow("cleanup failed");
+  expect(getBridgeAuthForPort(controlPort)).toEqual({ token: "test-token" });
 
-  it("retains a fresh browser disable even when the activated runtime options lag", async () => {
-    mocks.runtimeConfig = {
-      ...browserConfig(),
-      plugins: { allow: ["browser"], entries: { browser: { enabled: true } } },
-    };
-    mocks.runtimeSourceConfig = { ...mocks.runtimeConfig, browser: { enabled: false } };
-    expect(await startBrowserControlServiceFromConfig()).toBeNull();
-    expect(await startBrowserControlServerFromConfig()).toBeNull();
-    expect(mocks.ensureBrowserControlAuth).not.toHaveBeenCalled();
-  });
+  await stopBrowserControlServer();
+  expect(getBridgeAuthForPort(controlPort)).toBeUndefined();
+});
 
-  it("retains port auth until a failed stop is retried successfully", async () => {
-    mocks.runtimeConfig = browserConfig();
-    mocks.runtimeSourceConfig = mocks.runtimeConfig;
-    mocks.ensureBrowserControlAuth.mockResolvedValueOnce({ auth: { token: "test-token" } });
-    const state = await startBrowserControlServerFromConfig();
-    expect(state?.port).toBe(controlPort);
-    expect(getBridgeAuthForPort(controlPort)).toEqual({ token: "test-token" });
+it("clears auth when a stop queues behind cold startup", async () => {
+  setConfig(browserConfig());
+  const auth = deferredOperation<{ auth: { token: string } }>();
+  mocks.ensureBrowserControlAuth.mockImplementationOnce(auth.run);
 
-    mocks.stopKnownBrowserProfiles.mockRejectedValueOnce(new Error("cleanup failed"));
-    await expect(stopBrowserControlServer()).rejects.toThrow("cleanup failed");
-    expect(getBridgeAuthForPort(controlPort)).toEqual({ token: "test-token" });
-
-    await stopBrowserControlServer();
-    expect(getBridgeAuthForPort(controlPort)).toBeUndefined();
-  });
-
-  it("clears auth when a stop queues behind cold startup", async () => {
-    mocks.runtimeConfig = browserConfig();
-    mocks.runtimeSourceConfig = mocks.runtimeConfig;
-    const authStarted = createDeferred<void>();
-    const authGate = createDeferred<void>();
-    mocks.ensureBrowserControlAuth.mockImplementationOnce(async () => {
-      authStarted.resolve();
-      await authGate.promise;
-      return { auth: { token: "test-token" } };
-    });
-
-    const starting = startBrowserControlServerFromConfig();
-    await authStarted.promise;
-    const stopping = stopBrowserControlServer();
-    authGate.resolve();
-    await expect(starting).resolves.toBeTruthy();
-    await expect(stopping).resolves.toBeUndefined();
-    expect(getBridgeAuthForPort(controlPort)).toBeUndefined();
-  });
-
-  it("restarts node proxy control after the shared service stops", async () => {
-    const setEnabled = (enabled: boolean) => {
-      const cfg = browserConfig();
-      mocks.runtimeConfig = { ...cfg, browser: { ...cfg.browser, enabled } };
-      mocks.runtimeSourceConfig = mocks.runtimeConfig;
-    };
-    const request = JSON.stringify({ method: "GET", path: "/", profile: "openclaw" });
-    setEnabled(false);
-    await expect(runBrowserProxyCommand(request)).rejects.toThrow("browser control disabled");
-    setEnabled(true);
-    await startBrowserControlServiceFromConfig();
-    setEnabled(false);
-    await expect(runBrowserProxyCommand(request)).rejects.toThrow("browser control disabled");
-
-    setEnabled(true);
-    const first = JSON.parse(await runBrowserProxyCommand(request));
-    expect(first.result).toMatchObject({ enabled: true, profile: "openclaw" });
-    const previous = getBrowserControlState();
-    expect(previous).not.toBeNull();
-    setEnabled(false);
-    expect(JSON.parse(await runBrowserProxyCommand(request)).result).toMatchObject({
-      enabled: true,
-      profile: "openclaw",
-    });
-    expect(getBrowserControlState()).toBe(previous);
-
-    await stopBrowserControlService();
-    expect(getBrowserControlState()).toBeNull();
-
-    setEnabled(true);
-    const restarted = JSON.parse(await runBrowserProxyCommand(request));
-    expect(restarted.result).toMatchObject({ enabled: true, profile: "openclaw" });
-    expect(getBrowserControlState()).not.toBe(previous);
-    expect(getBrowserControlState()).not.toBeNull();
-
-    const stopStarted = createDeferred<void>();
-    const stopGate = createDeferred<void>();
-    mocks.stopKnownBrowserProfiles.mockImplementationOnce(async () => {
-      stopStarted.resolve();
-      await stopGate.promise;
-    });
-    const stopping = stopBrowserControlService();
-    await stopStarted.promise;
-    const duringStop = expect(runBrowserProxyCommand(request)).rejects.toThrow("stopping");
-    stopGate.resolve();
-    await stopping;
-    await duringStop;
-    expect(getBrowserControlState()).toBeNull();
-    setEnabled(false);
-    await expect(runBrowserProxyCommand(request)).rejects.toThrow("browser control disabled");
-  });
+  const starting = startBrowserControlServerFromConfig();
+  await auth.entered;
+  const stopping = stopBrowserControlServer();
+  auth.resolve({ auth: { token: "test-token" } });
+  await expect(starting).resolves.toBeTruthy();
+  await expect(stopping).resolves.toBeUndefined();
+  expect(getBridgeAuthForPort(controlPort)).toBeUndefined();
 });

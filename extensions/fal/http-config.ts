@@ -2,20 +2,19 @@ import type { AuthProfileStore, OpenClawConfig } from "openclaw/plugin-sdk/provi
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
   type ProviderRequestCapability,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const DEFAULT_FAL_BASE_URL = "https://fal.run";
 
-type FalAuthenticatedRequest = {
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-};
-
 export async function resolveFalHttpRequestConfig(params: {
-  req: FalAuthenticatedRequest;
+  req: {
+    cfg?: OpenClawConfig;
+    agentDir?: string;
+    authStore?: AuthProfileStore;
+  };
   capability: ProviderRequestCapability;
 }): Promise<ReturnType<typeof resolveProviderHttpRequestConfig>> {
   const auth = await resolveApiKeyForProvider({
@@ -31,6 +30,9 @@ export async function resolveFalHttpRequestConfig(params: {
   return resolveProviderHttpRequestConfig({
     baseUrl: normalizeOptionalString(params.req.cfg?.models?.providers?.fal?.baseUrl),
     defaultBaseUrl: DEFAULT_FAL_BASE_URL,
+    request: sanitizeConfiguredModelProviderRequest(
+      params.req.cfg?.models?.providers?.fal?.request,
+    ),
     // Configured relay URLs retain the same strict SSRF policy as public fal endpoints.
     allowPrivateNetwork: false,
     defaultHeaders: {

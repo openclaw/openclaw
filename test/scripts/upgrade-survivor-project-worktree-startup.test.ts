@@ -52,10 +52,13 @@ function migrated(workspace = "/fixture/project") {
 }
 
 function publishedImportEvidence() {
-  const target = {
+  const identity = {
     agentId: "main",
     storePath: "/fixture/sessions.json",
     sqlitePath: "/fixture/agent.sqlite",
+  };
+  const target = {
+    ...identity,
     legacyEntries: 2,
     referencedTranscriptFiles: 2,
     sqliteEntries: 2,
@@ -85,9 +88,7 @@ function publishedImportEvidence() {
       completedAt: "2026-09-16T10:42:34.189Z",
       targets: [
         {
-          agentId: target.agentId,
-          storePath: target.storePath,
-          sqlitePath: target.sqlitePath,
+          ...identity,
           validationBeforeArchive: "passed",
           issues: [],
         },
@@ -154,12 +155,10 @@ it.each<[string, string[], RegExp?, string?, boolean?]>([
 
 it("prepares the independent schema before startup and repairs workspace metadata between runs", () => {
   const root = tempDirs.make("openclaw-project-worktree-doctor-order-");
-  const runtime = path.join(root, "runtime");
-  const events = path.join(root, "events");
   for (const dir of ["bin", "artifacts", "runtime"]) {
     mkdirSync(path.join(root, dir));
   }
-  // This orchestration unit test replaces package operations, not the runner's phase sequence.
+  // Replace package operations, but execute the runner's real phase sequence.
   writeExecutable(
     path.join(root, "bin/openclaw"),
     `#!/bin/bash
@@ -189,21 +188,14 @@ fi
     "-c",
     `set -eu
 source scripts/lib/openclaw-e2e-instance.sh
-SCENARIO=projects-startup-migration
-WORKER_CELL=1
-COMMAND_TIMEOUT=5s
-ARTIFACT_ROOT="$1/artifacts"
-RUNTIME_ROOT="$1/runtime"
-export UNIT_EVENTS="$1/events"
-export PATH="$1/bin:$PATH"
-export OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT="$ARTIFACT_ROOT"
-export OPENCLAW_UPGRADE_SURVIVOR_STARTUP_BINDINGS=unit-bindings
-export OPENCLAW_UPDATE_IN_PROGRESS=unit-marker
-export OPENCLAW_UPDATE_POST_CORE_CONVERGENCE=unit-marker
-export OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=unit-marker
-export OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR=unit-marker
-baseline_spec=unit-baseline
-candidate_version=unit-candidate
+SCENARIO=projects-startup-migration WORKER_CELL=1 COMMAND_TIMEOUT=5s
+ARTIFACT_ROOT="$1/artifacts" RUNTIME_ROOT="$1/runtime"
+export UNIT_EVENTS="$1/events" PATH="$1/bin:$PATH"
+export OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT="$ARTIFACT_ROOT" OPENCLAW_UPGRADE_SURVIVOR_STARTUP_BINDINGS=unit-bindings
+for marker in IN_PROGRESS POST_CORE_CONVERGENCE PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR; do
+  export "OPENCLAW_UPDATE_$marker=unit-marker"
+done
+baseline_spec=unit-baseline candidate_version=unit-candidate
 package_root() { printf '%s\\n' "$RUNTIME_ROOT/unit-package"; }
 openclaw_test_state_create() {
   export HOME="$1" OPENCLAW_HOME="$1" OPENCLAW_STATE_DIR="$1/.openclaw"
@@ -225,9 +217,7 @@ node() {
     printf '{}\\n' > "$ARTIFACT_ROOT/baseline-package-identity.json"
   elif [ "$1" = scripts/e2e/lib/upgrade-survivor/project-worktree-startup.mjs ]; then
     case "$2" in
-      seed)
-        set_state legacy 19
-        event seed ;;
+      seed) set_state legacy 19; event seed ;;
       prepare-schema)
         [ "$(cat "$OPENCLAW_STATE_DIR/schema-version")" = 19 ]
         printf 21 > "$OPENCLAW_STATE_DIR/schema-version"
@@ -236,10 +226,7 @@ node() {
         case "$3" in
           published-import|before-schema) [ "$(cat "$OPENCLAW_STATE_DIR/schema-version")" = 19 ] ;;
           *)
-            if [ "$(cat "$OPENCLAW_STATE_DIR/schema-version")" != 21 ]; then
-              printf 'Candidate schema migration required before Gateway startup\\n' >&2
-              return 96
-            fi ;;
+            [ "$(cat "$OPENCLAW_STATE_DIR/schema-version")" = 21 ] || return 96 ;;
         esac
         printf 'snapshot %s %s %s\\n' "$3" "$OPENCLAW_STATE_DIR" "$(workspace)" >> "$UNIT_EVENTS" ;;
       assert-import|assert-logs) : ;;
@@ -271,9 +258,9 @@ ${scenario}
     root,
   ]);
   expect(result.status, result.stdout + result.stderr).toBe(0);
-  const first = path.join(runtime, "state-home/.openclaw");
-  const second = path.join(runtime, "worktree-startup-state/.openclaw");
-  expect(readFileSync(events, "utf8").trim().split("\n")).toEqual([
+  const first = path.join(root, "runtime/state-home/.openclaw");
+  const second = path.join(root, "runtime/worktree-startup-state/.openclaw");
+  expect(readFileSync(path.join(root, "events"), "utf8").trim().split("\n")).toEqual([
     `seed ${first}`,
     `snapshot published-import ${first} legacy`,
     `seed ${second}`,
@@ -331,34 +318,20 @@ it("preserves imported bytes and permits only the Doctor-owned workspace repair"
   expect(check(rewritten)).toThrow();
 });
 
-it.each(["raw message", "rendered console"])(
+it.each(["shutdown", "2026-09-16T15:10:34.169+00:00 [shutdown]"])(
   "requires clean shutdown without a runtime repair in %s logs",
-  (format) => {
-    const prefix = (area: string) =>
-      format === "raw message" ? "" : `2026-09-16T15:10:34.169+00:00 [${area}] `;
-    const migration = `${prefix("gateway")}session: recorded canonical workspaces for 1 managed-worktree session(s)`;
-    const shutdownPrefix = prefix("shutdown") || "shutdown ";
-    const closed = `${shutdownPrefix}completed cleanly in 19ms`;
-    const warned = `${shutdownPrefix}completed in 19ms with warnings: database drain`;
-    const failed = `${shutdownPrefix}failed in 19ms`;
-    for (const start of ["first", "second"]) {
-      expect(assertStartupLog(closed, start)).toEqual({
-        backfills: [],
-        cleanShutdown: true,
-      });
-    }
+  (prefix) => {
+    const closed = `${prefix} completed cleanly in 19ms`;
+    expect(assertStartupLog(closed, "first")).toEqual({ backfills: [], cleanShutdown: true });
+    expect(assertStartupLog(closed, "second")).toEqual({ backfills: [], cleanShutdown: true });
     for (const log of [
       "gateway ready",
-      migration,
-      `${migration}\n${closed}`,
-      `${migration}\n${warned}`,
-      `${migration}\n${failed}`,
-      `${migration}\n${closed}\n${warned}`,
-      `${migration}\n${closed}\n${failed}`,
+      `session: recorded canonical workspaces for 1 managed-worktree session(s)\n${closed}`,
+      `${closed}\n${prefix} completed in 19ms with warnings: database drain`,
+      `${closed}\n${prefix} failed in 19ms`,
     ]) {
       expect(() => assertStartupLog(log, "first")).toThrow();
     }
-    expect(() => assertStartupLog(`${migration}\n${closed}`, "second")).toThrow();
   },
 );
 

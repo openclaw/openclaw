@@ -87,7 +87,9 @@ export function buildCliAgentSystemPrompt(params: {
   preparedModelRuntime?: Parameters<
     typeof buildConfiguredAgentSystemPrompt
   >[0]["preparedModelRuntime"];
+  preparedRepoRoot?: string | null;
   preparedGitCoauthorPrompt?: string;
+  preparedSessionEntry?: Parameters<typeof buildSystemPromptParams>[0]["preparedSessionEntry"];
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   requireExplicitMessageTarget?: boolean;
@@ -121,7 +123,9 @@ export function buildCliAgentSystemPrompt(params: {
     agentId: params.agentId,
     workspaceDir: runtimeCwd,
     cwd: runtimeCwd,
+    preparedRepoRoot: params.preparedRepoRoot,
     preparedGitCoauthorPrompt: params.preparedGitCoauthorPrompt,
+    preparedSessionEntry: params.preparedSessionEntry,
     requesterProfileId: params.requesterProfileId,
     runtime: {
       sessionKey: params.sessionKey,
@@ -137,6 +141,7 @@ export function buildCliAgentSystemPrompt(params: {
       chatType: params.runtimeChatType,
       capabilities: params.runtimeCapabilities,
       customInlineButtonHint: params.customInlineButtonHint,
+      blind: params.preparedSessionEntry?.blindPrompt,
     },
   });
   return buildConfiguredAgentSystemPrompt({
@@ -266,7 +271,7 @@ async function writeCliImages(params: {
   for (const image of params.images) {
     const fileName = resolveCliImageFileName(image);
     const buffer = Buffer.from(image.data, "base64");
-    await store.writeText(fileName, buffer);
+    await store.writeText(fileName, buffer, { durable: false });
     paths.push(store.path(fileName));
   }
   // Keep content-addressed image paths stable across Claude CLI runs so prompt
@@ -288,9 +293,10 @@ export async function writeCliSystemPromptFile(params: {
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-cli-system-prompt-",
   });
-  const filePath = await workspace.write(
+  const filePath = await workspace.store.write(
     "system-prompt.md",
     stripSystemPromptCacheBoundary(params.systemPrompt),
+    { durable: false },
   );
   return {
     filePath,

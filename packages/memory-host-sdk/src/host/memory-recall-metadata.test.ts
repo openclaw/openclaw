@@ -134,11 +134,7 @@ it.each<[string, string | null, number, number, number]>([
           ? readCuratedMemoryTriggerCandidates(db, 1, [])
           : readCuratedProjectMemoryCandidates(db, 1, [projectKey]);
       expect(results).toMatchObject([
-        {
-          id: "selected",
-          text: "the selected fact",
-          project_key: projectKey,
-        },
+        { id: "selected", text: "the selected fact", project_key: projectKey },
       ]);
       expect(reads.counts.candidates).toBeLessThanOrEqual(maxSelects);
       expect(reads.rowCounts.candidates).toBeLessThanOrEqual(maxRows);
@@ -155,15 +151,8 @@ it.each<[string, string | null, number, number, number]>([
 
 it("stores recall metadata in a rollback-safe additive table", () => {
   using db = new DatabaseSync(":memory:");
-  db.exec(`
-        CREATE TABLE memory_index_chunks (
-          id TEXT PRIMARY KEY, path TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'memory',
-          start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, hash TEXT NOT NULL,
-          model TEXT NOT NULL, text TEXT NOT NULL, embedding TEXT NOT NULL,
-          updated_at INTEGER NOT NULL
-        ) STRICT;
-      `);
-  db.exec("BEGIN IMMEDIATE");
+  ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+  db.exec(`DROP TABLE ${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE}; BEGIN IMMEDIATE`);
   ensureMemoryRecallMetadataSchema(db);
   db.exec("ROLLBACK");
   expect(
@@ -173,16 +162,6 @@ it("stores recall metadata in a rollback-safe additive table", () => {
   ).toBeUndefined();
 
   ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
-  expect(
-    db
-      .prepare("SELECT name FROM pragma_table_info('memory_index_chunks') ORDER BY cid")
-      .all()
-      .map((row) => row.name),
-  ).toEqual(
-    "chunk_rowid id path source start_line end_line hash model text embedding updated_at".split(
-      " ",
-    ),
-  );
   const { add, insertChunk, insertMetadata, insertProvenance } = recallWriter(db);
   const project = "github.com/openclaw/openclaw";
   const projectCandidates = (limit: number) =>
@@ -201,24 +180,24 @@ it("stores recall metadata in a rollback-safe additive table", () => {
     triggers: null,
     project_key: null,
   });
-  expect(metadata.get("good")).toEqual({
+  const good = {
     id: "good",
     importance: 9,
     triggers: "when flying",
     project_key: project,
+  };
+  expect(metadata.get("good")).toEqual({
+    ...good,
     provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 2 },
   });
   expect(readCuratedMemoryTriggerCandidates(db, 10)).toEqual([
     {
-      id: "good",
+      ...good,
       path: "MEMORY.md",
       source: "memory",
       start_line: 1,
       end_line: 1,
       text: "t",
-      importance: 9,
-      triggers: "when flying",
-      project_key: project,
       origin_class: "owner",
       session_kind: "interactive",
       observed_at: 2,

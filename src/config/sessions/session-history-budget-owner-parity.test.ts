@@ -107,6 +107,7 @@ function seedReceipt(agentId: string, sessionKey: string, sessionId: string): st
     identity_login: "synthetic-owner",
     title: null,
     body: null,
+    draft: null,
     push_repository: "example/synthetic-owner-proof",
     repository: "example/synthetic-owner-proof",
     base_branch: "main",

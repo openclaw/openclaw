@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   asNonNegativeFiniteNumber,
   asPositiveFiniteNumber,
@@ -18,6 +19,8 @@ import {
 } from "../infra/agent-run-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
+import type { SessionRuntimeResolution } from "./session-runtime-resolution.js";
 import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 import {
   createSessionRowModelCacheKey,
@@ -59,11 +62,7 @@ export function buildSessionListRowMetadataContext(params: {
     configuredDefaultModelByAgent: new Map(),
     thinkingFactsByModelRef: new Map(),
     findModelCatalogEntry: (catalog, query) => {
-      let entries = catalogEntries.get(catalog);
-      if (!entries) {
-        entries = new Map();
-        catalogEntries.set(catalog, entries);
-      }
+      const entries = getOrCreateWeakOwnerMap(catalogEntries, catalog);
       const key = createSessionRowModelCacheKey(query.provider, query.modelId);
       if (!entries.has(key)) {
         entries.set(key, findModelCatalogEntry(catalog, query));
@@ -71,11 +70,7 @@ export function buildSessionListRowMetadataContext(params: {
       return entries.get(key);
     },
     selectModelCatalogRuntimeEntry: (selection) => {
-      let entries = runtimeEntries.get(selection.routeVariants);
-      if (!entries) {
-        entries = new Map();
-        runtimeEntries.set(selection.routeVariants, entries);
-      }
+      const entries = getOrCreateWeakOwnerMap(runtimeEntries, selection.routeVariants);
       const key = `${selection.runtimeId}\0${selection.allowApiFallback !== false}\0${createSessionRowModelCacheKey(selection.entry.provider, selection.entry.id)}`;
       let selected = entries.get(key);
       if (!selected) {
@@ -113,11 +108,14 @@ export function buildProjectedSubagentActivity(
 
 /** Child presentation needs live ownership and sharing facts, never the child's stored payload. */
 export function projectSessionRowChildLinks(links: readonly SessionChildLink[] | undefined) {
-  return links?.map(({ key, entry }) => ({
+  return links?.map(({ key, entry, agentId, storePath }) => ({
     key,
+    agentId,
+    storePath,
     parsedKey: parseAgentSessionKey(key),
     entry: {
       sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
       updatedAt: entry.updatedAt,
       archivedAt: entry.archivedAt,
       status: entry.status,
@@ -125,11 +123,37 @@ export function projectSessionRowChildLinks(links: readonly SessionChildLink[] |
       endedAt: entry.endedAt,
       spawnedBy: entry.spawnedBy,
       parentSessionKey: entry.parentSessionKey,
+      sidebarRoot: entry.sidebarRoot,
       createdActor: entry.createdActor,
       visibility: entry.visibility,
       incognito: entry.incognito,
     },
   }));
+}
+
+/** The compact producer includes absent fields; compare its whole shape without retaining child entries. */
+export function reuseSessionRowChildLinks(
+  links: readonly SessionChildLink[],
+  previous: Readonly<ReturnType<typeof projectSessionRowChildLinks>>,
+) {
+  return previous &&
+    previous.length === links.length &&
+    links.every(({ key, entry, agentId, storePath }, index) => {
+      const before = previous[index]!;
+      return (
+        key === before.key &&
+        agentId === before.agentId &&
+        storePath === before.storePath &&
+        // SAFETY: projectSessionRowChildLinks creates this compact entry with only SessionEntry keys.
+        (Object.keys(before.entry) as (keyof typeof before.entry)[]).every(
+          (field) =>
+            entry[field] === before.entry[field] ||
+            isDeepStrictEqual(entry[field], before.entry[field]),
+        )
+      );
+    })
+    ? previous
+    : links;
 }
 
 export function resolveTranscriptUsageFallbacks(params: {
@@ -219,27 +243,36 @@ export function resolveGatewaySessionRuntimeProjection(params: {
   preparedAcpMeta?: SessionEntry["acp"] | null;
   rowContext?: SessionListRowContext;
   metadataSnapshot?: PluginMetadataSnapshot | null;
+  runtimeResolution?: SessionRuntimeResolution;
 }) {
-  const { entry } = params;
+  const { entry, runtimeResolution } = params;
   const acpMeta = params.preparedAcpMeta ?? undefined;
-  const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
-    cfg: params.cfg,
-    agentScope: { kind: "prepared", agentId: params.agentId },
-    provider: params.provider,
-    model: params.model,
-    sessionKey: params.sessionKey,
-    sessionEntry: params.entry,
-    acpRuntime: acpMeta != null,
-    acpBackend: acpMeta?.backend,
-  });
-  if (agentRuntime.id === "auto" && entry) {
-    agentRuntime.id = resolveWorkerPlacementModelRuntime({
-      ...params,
-      entry,
-      preparedEnvironment: params.rowContext
-        ? (params.rowContext.workerPlacementEnvironment ??= captureRuntimeStateEnvironment())
-        : undefined,
+  let agentRuntime =
+    runtimeResolution?.metadata(params) ??
+    resolveCurrentSessionAgentRuntimeMetadata({
+      cfg: params.cfg,
+      agentScope: { kind: "prepared", agentId: params.agentId },
+      provider: params.provider,
+      model: params.model,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.entry,
+      acpRuntime: acpMeta != null,
+      acpBackend: acpMeta?.backend,
     });
+  if (agentRuntime.id === "auto" && entry) {
+    agentRuntime = {
+      ...agentRuntime,
+      id: resolveWorkerPlacementModelRuntime({
+        ...params,
+        entry,
+        resolveEmbeddedRuntime: runtimeResolution
+          ? () => runtimeResolution.effective(params)
+          : undefined,
+        preparedEnvironment: params.rowContext
+          ? (params.rowContext.workerPlacementEnvironment ??= captureRuntimeStateEnvironment())
+          : undefined,
+      }),
+    };
   }
   return {
     acpMeta,

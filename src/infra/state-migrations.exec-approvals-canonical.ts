@@ -7,6 +7,7 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { sanitizeOpenClawStateLeaseRows } from "../state/openclaw-state-snapshot-sanitizer.js";
+import { runClientCredentialOperation } from "./client-credential-store.js";
 import { parseLegacyExecApprovals, parsePersistedExecApprovals } from "./exec-approvals-config.js";
 import { writeExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -85,6 +86,17 @@ export async function repairLegacySqliteExecApprovals(
       const current = readRow(db);
       if (!isDeepStrictEqual(current, row)) {
         throw new Error("Exec approval policy changed during Doctor repair; source retained.");
+      }
+      if (parsed.value.socket?.path || parsed.value.socket?.token) {
+        runClientCredentialOperation(env, {
+          kind: "socket.ensure",
+          fallback: {
+            socket_key: "current",
+            socket_path: parsed.value.socket.path ?? null,
+            socket_token: parsed.value.socket.token ?? null,
+            updated_at_ms: row.updated_at_ms,
+          },
+        });
       }
       writeExecApprovalsConfigRow({ db, file: parsed.value, now: row.updated_at_ms });
     },

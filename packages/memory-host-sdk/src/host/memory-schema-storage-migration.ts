@@ -20,6 +20,7 @@ import {
   canReuseSqliteSchemaInTransaction,
   createSqliteTableContractReader,
   runSqliteImmediateTransactionSync,
+  tableExists,
   type SqliteTableContractReader,
 } from "./openclaw-runtime-sqlite.js";
 
@@ -209,6 +210,11 @@ function markInvalidMemoryEmbeddings(db: DatabaseSync, sql: string): void {
       VALUES ('memory_vector_rebuild_v1', '1')
       ON CONFLICT(key) DO UPDATE SET value = excluded.value;
     `);
+    // Standalone legacy schemas can predate the revision table. Admitted
+    // databases invalidate retained corpus facts in this same transaction.
+    if (tableExists(db, "memory_index_state")) {
+      db.exec("UPDATE main.memory_index_state SET revision = revision + 1 WHERE id = 1");
+    }
   }
 }
 
@@ -290,10 +296,9 @@ export function registerMemoryEmbeddingMigrationFunctions(
     if (!renewAuthority) {
       return;
     }
-    const now = performance.now();
-    if (now - renewedAt >= 1_000) {
+    if (performance.now() - renewedAt >= 1_000) {
       renewAuthority();
-      renewedAt = now;
+      renewedAt = performance.now();
     }
   };
   db.function("openclaw_memory_embedding_from_json", { deterministic: true }, (raw) => {
@@ -339,15 +344,17 @@ export function markInvalidImportedMemoryEmbeddings(db: DatabaseSync, schema: st
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(schema)) {
     throw new Error("Invalid legacy memory schema identifier");
   }
-  markInvalidMemoryEmbeddings(
-    db,
-    `
+  runSqliteImmediateTransactionSync(db, () =>
+    markInvalidMemoryEmbeddings(
+      db,
+      `
     SELECT chunk.rowid AS storage_rowid,
            openclaw_memory_embedding_json_valid(legacy.embedding) AS valid
     FROM ${schema}.chunks AS legacy
     JOIN main.memory_index_chunks AS chunk ON chunk.id = legacy.id
     WHERE length(chunk.embedding) = 0
   `,
+    ),
   );
 }
 

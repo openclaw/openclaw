@@ -4,7 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { inspectServiceRuntimeIntent } from "../cli/daemon-cli/status.runtime-intent.js";
 import { createConfigMachineStateStep } from "../infra/state-migrations.config-machine-state-step.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -29,6 +32,7 @@ describe("runtime pin migration before service resume", () => {
       await withOpenClawTestState({ label: "runtime-pin-resume" }, async (state) => {
         // Leave the receipt absent while creating private files on the actual host platform.
         withDaemonRuntimePinStore(state.env, true, () => undefined);
+        openOpenClawStateDatabase({ env: state.env });
         vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
         vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(state.stateDir);
         const env = { ...state.env, OPENCLAW_LAUNCHD_LABEL: "dev.openclaw.migration-fixture" };

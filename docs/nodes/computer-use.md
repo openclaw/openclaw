@@ -8,7 +8,7 @@ title: "Computer use"
 doc-schema-version: 1
 ---
 
-Computer use lets an agent see and control the Gateway's own desktop or a paired node's desktop through one built-in `computer` tool. Both hosts use the same `computer.act` and `screen.snapshot` contracts; CUA reuses the same provider implementation on either host. The provider's descriptor identifies the supported v2 action, target, observation, and delivery families, so the tool exposes only what that provider can faithfully execute. Coordinate actions bind to a provider-issued reference frame; capable providers can also address windows and elements, request background delivery, and return structured effect or refusal evidence. A vision-capable model drives the surface.
+Computer use lets an agent see and control the Gateway's own desktop or a paired node's desktop through one built-in `computer` tool. Both hosts use the same `computer.act` and `screen.snapshot` contracts; CUA reuses the same provider implementation on either host. The provider's descriptor identifies the supported v2 action, target, observation, and delivery families, and execution accepts only what that provider can faithfully execute. The session retains the initial capability-driven tool description and schema across target discovery and reconnects; observation results report the selected desktop’s current capabilities. Unavailable actions return a structured refusal with the currently available action list. Coordinate actions bind to a provider-issued reference frame; capable providers can also address windows and elements, request background delivery, and return structured effect or refusal evidence. A vision-capable model drives the surface.
 
 For [cloud sessions](/gateway/cloud-sessions#desktop-and-computer-control), the tool is bound to the session's own desktop instead of searching paired nodes. Desktop-enabled Crabbox workers provision CUA in the same desktop session shown by the web Desktop panel. Their private computer endpoint is not exposed as an ordinary paired computer, and tool arguments cannot change its node or Gateway.
 
@@ -71,7 +71,7 @@ Add `--runtime <executable>` to start the built Gateway on another runtime, such
 
 ## The `computer` agent tool
 
-The built-in `computer` tool takes one action per call. Choose `target: "gateway"` for the Gateway desktop or `target: "node"` for a paired node. Supplying `node` also selects the node route. With neither selector, the first call uses the configured Gateway computer, otherwise the sole connected computer-capable node. A configured but unavailable Gateway computer reports its error; it never silently redirects input to a node. Later calls retain the selected host unless explicitly changed. Cloud sessions retain their fixed desktop and reject host overrides.
+The built-in `computer` tool takes one action per call. Choose `target: "gateway"` for the Gateway desktop or `target: "node"` for a paired node. Supplying `node` also selects the node route. With neither selector, the first call uses the configured Gateway computer, otherwise the sole connected computer-capable node. When the Gateway has no computer provider configured, the tool schema omits `target: "gateway"` and the guidance asks the model to omit `target` or use `target: "node"`; an explicit `target: "gateway"` reports the missing provider and names the paired-node retry instead of silently redirecting input. A configured but unavailable Gateway computer reports its error; it never silently redirects input to a node. Later calls retain the selected host unless explicitly changed. Cloud sessions retain their fixed desktop and reject host overrides.
 
 On the MCP tool path, computer control belongs to the admitted agent run and is released when that run ends. A later run can then use the same computer. Recording and file-transfer actions remain unavailable on this path.
 
@@ -83,9 +83,11 @@ Coordinates are non-negative integer pixels in the most recent screenshot; the p
 - Keyboard: `type` (text), `key` (combo such as `cmd+shift+t` or `Return`), `hold_key` (`text` combo held for `duration` seconds).
 - Pacing: `wait` (`duration` seconds), followed by a screenshot. This action runs locally and is available whenever the selected provider supports screenshots; it does not require a native wait command.
 
-Providers with the v2 window/element family can additionally expose `list_apps`, `list_windows`, `get_accessibility_tree`, `get_cursor_position`, `get_window_state`, `launch_app`, `kill_app`, `bring_to_front`, `set_value`, `zoom`, `escalate_scope`, and `invoke_menu`. The provider descriptor is authoritative; unavailable actions are omitted rather than emulated through another provider.
+Providers with the v2 window/element family can additionally expose `list_apps`, `list_windows`, `get_accessibility_tree`, `get_cursor_position`, `get_window_state`, `launch_app`, `kill_app`, `bring_to_front`, `set_value`, `zoom`, `escalate_scope`, and `invoke_menu`. The provider descriptor is authoritative; unavailable actions are rejected rather than emulated through another provider.
 
 Window input coordinates follow the observation's `details.coordinateSpace`. CUA reports `image-pixels`: use pixels in the delivered image, including when OpenClaw resized it. Peekaboo reports `global-logical-points`: use desktop logical points. Accessibility element bounds retain their native screen coordinates; prefer `elementRef` when targeting those elements. Browser coordinate inputs use viewport CSS pixels.
+
+On macOS, Peekaboo omits the hosting OpenClaw process from `list_windows` and reports a warning. It also refuses accessibility-tree inspection of that process. Use the CUA provider to inspect or control OpenClaw's own windows.
 
 For a window image, use `get_window_state` with `windowRef` and `includeScreenshot: true`, then pass the returned `observationId` with window input. With CUA, `includeScreenshot: false` skips capture and refreshes accessibility elements and their references. This opt-out requires an updated node; default and `true` observations remain compatible with older nodes. Use those references for element actions; window pixel input still requires an observation with a delivered image. The native macOS Peekaboo provider rejects `includeScreenshot: false` because its window observations require capture. A desktop `frameId` cannot replace a window observation: the images can use different coordinate spaces. Like `screenshot`, `wait` returns a desktop capture and rejects target and observation references.
 
@@ -256,6 +258,8 @@ Updates preserve existing desktop configuration, explicit plugin enablement or d
 
 Provider descriptors declare `contractVersion: 2`. Invalid capability descriptors or `computer.act` result envelopes are rejected with `COMPUTER_CONTRACT_MISMATCH`.
 
+The receiver accepts optional numeric `cursorX` and `cursorY` receipt fields from independently updated paired macOS nodes, including `v2026.8.1`. Unknown fields and invalid field types remain rejected.
+
 Direct `node.invoke` calls to the provider-backed `computer.act` command must include an `executionId` UUID in the action parameters. The built-in `computer` tool supplies it automatically.
 
 For CUA, use the same `executionId` for the preceding `screen.snapshot` call. Copy its `displayFrameId` into the action and its returned `width` into `refWidth`; coordinates refer to pixels within that returned bitmap. CUA limits both image dimensions to `maxWidth` without enlarging smaller displays, so direct snapshots and the built-in tool share one coordinate space.
@@ -287,6 +291,13 @@ On macOS, default-on means a paired gateway can drive pointer and keyboard input
 `gateway.nodes.commands.deny` remains an explicit global revocation and always wins; a denied `computer.act` is withheld from the node's advertised surface together with its `computer` capability, and the Gateway records what it withheld. No fulfiller needs a `gateway.nodes.commands.allow` entry: `computer.act` is a built-in desktop platform default, so node-local enablement plus pairing approval is the whole grant on every platform and for either fulfiller. An authenticated operator with `operator.write` can invoke an enabled, paired command through `node.invoke`; there is no per-action admin check.
 
 ## Safety
+
+OpenClaw hides its native macOS human-approval panels from Peekaboo screen snapshots
+and refuses native computer input while an approval panel or menu-bar approval is
+pending. Human clicks and **Command-Return** still work. These native guards do not
+cover browser automation, the separate CUA driver, or third-party automation on
+the same machine. This is hardening, not an isolation boundary. Do not combine
+ask-mode exec with unrestricted computer use for a model you do not trust.
 
 - Tool policy, local provider enablement, and platform permissions must agree. Node targets also require Gateway command policy, pairing, and node-app settings. On macOS that includes **Allow Computer Control**, Accessibility, and Screen Recording; the native Peekaboo path also requires Event Posting. Actions execute while those durable controls remain enabled; there is no per-action confirmation.
 - The macOS fulfiller posts text one grapheme at a time, so cancellation, disconnect, pause, disable, or endpoint replacement stops it before the next grapheme. The experimental CUA Driver fulfiller passes node cancellation to the SDK for each call.

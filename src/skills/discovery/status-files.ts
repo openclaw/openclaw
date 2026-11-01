@@ -1,8 +1,8 @@
 import path from "node:path";
 import {
   readLocalSkillCardContentSync,
+  readLocalSkillCardSync,
   resolveClawHubSkillStatusLinkSync,
-  resolveLocalSkillCardStatusSync,
 } from "../lifecycle/clawhub-status.js";
 import { readClawHubSkillsLockfileStatusSync } from "../lifecycle/clawhub-store.js";
 import { resolveSkillKey } from "../loading/frontmatter.js";
@@ -41,7 +41,7 @@ export function readWorkspaceSkillStatusFacts(params: {
               lockfileScope: managed ? "managed" : "workspace",
             })
           : undefined;
-      const card = resolveLocalSkillCardStatusSync(entry.skill.baseDir);
+      const card = readLocalSkillCardSync(entry.skill.baseDir);
       const content =
         card && params.skillCardKey === skillKey
           ? readLocalSkillCardContentSync(entry.skill.baseDir)

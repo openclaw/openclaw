@@ -199,7 +199,6 @@ export function createMatrixQaRoomObserver(
         const remainingMs = Math.max(1_000, waitParams.timeoutMs - elapsedMs);
         await pollMatrixQaRoomObserver({
           ...params,
-          observedEvents: params.observedEvents,
           roomObserver,
           timeoutMs: remainingMs,
         });

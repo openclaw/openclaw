@@ -1,8 +1,9 @@
 // @vitest-environment node
-import { beforeEach, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
 import type { ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+import { assistantGroupCanOwnActiveRunStatus } from "./chat-assistant-reply.ts";
 import {
   groupsOf,
   message,
@@ -11,16 +12,13 @@ import {
   pending,
   queued,
   signedText as signed,
+  text as textBlock,
   toolResult,
 } from "./chat-thread-fixtures.test-support.ts";
-import {
-  assistantGroupCanOwnActiveRunStatus,
-  collapseCompletedTurnWork,
-  coalesceActivityRuns,
-  groupMessages,
-} from "./chat-thread-grouping.ts";
+import { groupMessages } from "./chat-thread-grouping.ts";
 import { buildItems, type CachedChatItemsProps } from "./chat-thread.test-support.ts";
 import { resetChatThreadState } from "./chat-thread.ts";
+import { collapseCompletedTurnWork, coalesceActivityRuns } from "./chat-turn-presentation.ts";
 
 const sessionKey = "agent:main:dashboard:answers";
 const cli: MessageClientSource = { id: "cli", mode: "cli", displayName: "Release helper" };
@@ -43,9 +41,7 @@ function collapse(messages: unknown[]) {
   return collapseCompletedTurnWork(cachedGroups(messages), { sessionKey, runWorking: false });
 }
 function projected(messages: unknown[]) {
-  return coalesceAgentRunFrames(coalesceActivityRuns(collapse(messages))).flatMap((item) =>
-    item.kind === "agent-run-frame" ? item.parts : [item],
-  );
+  return coalesceActivityRuns(collapse(messages));
 }
 function visible(items: ReturnType<typeof projected>) {
   return messagesOf(groupsOf(items));
@@ -68,9 +64,6 @@ function tool(id: string, timestamp: number, extra: object = {}) {
 function expectProvenance(messages: unknown[]) {
   const groups = cachedGroups(messages);
   expect(groups.map((group) => group.messages.map((source) => source.message))).toEqual([messages]);
-  expect(groups.flatMap((group) => group.messages).map((entry) => entry.duplicateCount)).toEqual(
-    messages.map(() => undefined),
-  );
   return groups;
 }
 function expectHistory(messages: unknown[], shown: number[], folded: number[]) {
@@ -234,23 +227,13 @@ it("keeps media visible and folds commentary after replacement", () => {
     tool("render-diagram", 3),
     message("assistant", "Done", 4),
   ];
-  expect(collapse(messages)).toMatchObject([
-    { kind: "group", role: "user" },
-    { kind: "work-group", groups: [{ role: "tool" }] },
-    { kind: "group", role: "assistant", messages: [{ message: preview }] },
-    { kind: "group", role: "assistant" },
-  ]);
+  expectHistory(messages, [0, 1, 3], [2]);
   const replacement = { ...preview, content: [{ type: "text", text: "Preparing a diagram" }] };
-  expect(
-    collapse(messages.map((entry) => (entry === preview ? replacement : entry))),
-  ).toMatchObject([
-    { kind: "group", role: "user" },
-    {
-      kind: "work-group",
-      groups: [{ role: "assistant", messages: [{ message: replacement }] }, { role: "tool" }],
-    },
-    { kind: "group", role: "assistant" },
-  ]);
+  expectHistory(
+    messages.map((entry) => (entry === preview ? replacement : entry)),
+    [0, 3],
+    [1, 2],
+  );
 });
 it.each([true, false])(
   "keeps work with its answer above a trailing steer (working=%s)",
@@ -321,6 +304,15 @@ it.each<[string, boolean, number[], number[]]>([
   expectHistory([first, answer, ...evidence, later], shown, folded);
 });
 
+it("keeps the earlier answer visible when a late exec completion starts the follow-up turn", () => {
+  const messages = [
+    message("user", "Review the change", 1),
+    message("assistant", "long final answer", 3),
+    message("assistant", "should I fix points 1-4?", 4, { __openclaw: { turnBoundary: true } }),
+  ];
+  expectHistory(messages, [0, 1, 2], []);
+});
+
 it("keeps independent-run trailing activity with its owner", () => {
   const messages = [
     message("user", "Watch the queue", 1),
@@ -387,4 +379,226 @@ it("retains prepared tool outcomes without content blocks as activity", () => {
   expect(buildItems({ messages: [outcome] })).toMatchObject([
     { kind: "group", role: "tool", messages: [{ message: outcome }] },
   ]);
+});
+
+// One completed turn folds its preamble, narration and tool work into a single
+// rollup above the answer; the transcript itself keeps every envelope intact.
+describe("completed-turn rollup", () => {
+  const run = { runId: "rollup-run" };
+  const ask = message("user", "Inspect the layout", 1, run);
+  const answer = message("assistant", "The layout is fixed.", 9, {
+    ...run,
+    phase: "final_answer",
+    stopReason: "stop",
+  });
+  const call = (id: string, timestamp: number, narration?: string, name = "read") =>
+    message(
+      "assistant",
+      [
+        ...(narration ? [{ type: "text", text: narration }] : []),
+        { type: "toolCall", id, name, arguments: { path: `${id}.ts` } },
+      ],
+      timestamp,
+      run,
+    );
+  function expectOneRollup(messages: unknown[], ordered: string[] = []) {
+    for (const history of [messages, structuredClone(messages)]) {
+      const items = projected(history);
+      expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
+      expect(visible(items)).toEqual([ask, answer]);
+      const folded = JSON.stringify(work(items));
+      const positions = ordered.map((text) => folded.indexOf(text));
+      expect(positions.every((position) => position >= 0)).toBe(true);
+      expect(positions).toEqual(positions.toSorted((a, b) => a - b));
+    }
+  }
+
+  it("keeps Markdown and plain narration in one ordered rollup", () => {
+    const markdown = message(
+      "assistant",
+      [
+        { type: "text", text: "Checking `layout.ts`:" },
+        { type: "toolCall", id: "first", name: "read", arguments: {} },
+        { type: "text", text: "Found **two** issues:\n- spacing\n- radius" },
+        { type: "toolCall", id: "second", name: "read", arguments: {} },
+      ],
+      2,
+      run,
+    );
+    expectOneRollup(
+      [
+        ask,
+        markdown,
+        tool("first", 3, run),
+        tool("second", 4, run),
+        call("third", 5, "Now the stylesheet."),
+        tool("third", 6, run),
+        answer,
+      ],
+      ["Checking", "first", "Found **two**", "second", "Now the stylesheet.", "third"],
+    );
+  });
+
+  it("keeps tool-result images inside their tool group", () => {
+    const frame = { type: "image", mimeType: "image/png", artifactId: "frame", omitted: true };
+    const result = toolResult("frame", "view_image", [textBlock("Loaded"), frame, frame], 3, run);
+    const messages = [ask, call("frame", 2, undefined, "view_image"), result, answer];
+    for (const history of [messages, structuredClone(messages)]) {
+      const items = projected(history);
+      expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+        "user",
+        "tool",
+        "assistant",
+      ]);
+      const images = groupsOf(items).map(
+        (group) => JSON.stringify(group.messages).match(/"artifactId":"frame"/g)?.length ?? 0,
+      );
+      expect(images).toEqual([0, 2, 0]);
+    }
+  });
+
+  it("moves work recorded after the answer above it", () => {
+    expectOneRollup(
+      [
+        ask,
+        call("before", 2),
+        tool("before", 3, run),
+        answer,
+        call("after", 10),
+        tool("after", 11, run),
+      ],
+      ["before.ts", "after.ts"],
+    );
+  });
+
+  it("leaves bubble-mode turns to the activity disclosure", () => {
+    const groups = cachedGroups([
+      ask,
+      call("bubble", 2, "Checking spacing."),
+      tool("bubble", 3, run),
+      answer,
+    ]);
+    expect(
+      collapseCompletedTurnWork(groups, { sessionKey, runWorking: false, bubbleMode: true }),
+    ).toEqual(groups);
+  });
+});
+
+it.each(["error", "aborted"])(
+  "keeps a terminal %s after the answer outside completed work",
+  (stopReason) => {
+    expectHistory(
+      [
+        message("user", "Check the files", 1),
+        tool("read-first", 2),
+        message("assistant", "The first file is correct.", 3),
+        message(
+          "assistant",
+          [{ type: "toolCall", id: "read-last", name: "read", arguments: {} }],
+          4,
+          { stopReason },
+        ),
+      ],
+      [0, 2, 3],
+      [1],
+    );
+  },
+);
+
+it("keeps each run's reply visible when completions answer without new user input", () => {
+  const run = (runId: string) => ({ __openclaw: { runId } });
+  const items = collapse([
+    message("user", "Start two subagents", 1_000),
+    message("assistant", "Spawning both.", 1_500, run("run-user")),
+    { ...toolResult("spawn", "bash", "ok", 2_000), ...run("run-user") },
+    message("assistant", "Both started.", 3_000, run("run-user")),
+    message("assistant", "Child A finished.", 4_000, run("announce:v1:child-a")),
+    { ...toolResult("lookup", "bash", "ok", 4_500), ...run("announce:v1:child-b") },
+    message("assistant", "Child B finished.", 5_000, run("announce:v1:child-b")),
+    message("assistant", "All children settled.", 6_000, run("announce:requester-settle:a,b")),
+  ]);
+  const text = (entries: unknown[]) =>
+    entries.map((entry) => (entry as { content?: unknown }).content);
+  expect(text(messagesOf(groupsOf(items)))).toEqual([
+    "Start two subagents",
+    "Both started.",
+    "Child A finished.",
+    "Child B finished.",
+    "All children settled.",
+  ]);
+  const rollup = items.find((item) => item.kind === "work-group");
+  expect(rollup?.kind === "work-group" ? text(messagesOf(rollup.groups)) : []).toEqual([
+    "Spawning both.",
+    "ok",
+    "ok",
+  ]);
+});
+
+it.each([
+  ["untagged CLI work of the first run", false, false, ["run-user", "announce:v1:child-a"]],
+  ["untagged CLI work across runs", false, true, undefined],
+  ["tagged work across runs", true, true, undefined],
+] as const)(
+  "frames completed work by its run when earlier runs keep replies: %s",
+  (_name, tagged, laterWork, frameRunIds) => {
+    // CLI runtimes import tool rows without a run id; only the persisted reply carries one.
+    const meta = (runId: string) =>
+      tagged ? { __openclaw: { runId } } : { __openclaw: { importedFrom: "claude-cli" } };
+    const items = coalesceAgentRunFrames(
+      coalesceActivityRuns(
+        collapse([
+          message("user", "Start two subagents", 1_000),
+          toolResult("spawn", "sessions_spawn", "accepted", 2_000, meta("run-user")),
+          message("assistant", "Both started.", 3_000, { __openclaw: { runId: "run-user" } }),
+          ...(laterWork
+            ? [toolResult("check", "sessions_list", "ok", 3_500, meta("announce:v1:child-a"))]
+            : []),
+          message("assistant", "Child A finished.", 4_000, {
+            __openclaw: { runId: "announce:v1:child-a" },
+          }),
+        ]),
+      ),
+    );
+    const frames = items.filter((item) => item.kind === "agent-run-frame");
+    if (frameRunIds) {
+      // The rollup stays in the frame of the run that did the work.
+      expect(items.map((item) => item.kind)).toEqual([
+        "group",
+        "agent-run-frame",
+        "agent-run-frame",
+      ]);
+      expect(frames.map((frame) => frame.runId)).toEqual(frameRunIds);
+      expect(frames[0]?.parts.map((part) => part.kind)).toEqual(["work-group", "group"]);
+    } else {
+      // Work across runs has no single owner, with or without run ids.
+      expect(items.map((item) => item.kind)).toEqual([
+        "group",
+        "work-group",
+        "agent-run-frame",
+        "agent-run-frame",
+      ]);
+    }
+  },
+);
+
+it("times completed work only against the run that owns it", () => {
+  const messages = [
+    message("user", "Start two subagents", 1_000),
+    toolResult("spawn", "sessions_spawn", "accepted", 2_000, {
+      __openclaw: { importedFrom: "claude-cli" },
+    }),
+    message("assistant", "Both started.", 3_000, { __openclaw: { runId: "run-user" } }),
+    message("assistant", "Child A finished.", 4_000, {
+      __openclaw: { runId: "announce:v1:child-a" },
+    }),
+  ];
+  const durationFor = (lastRunId: string) =>
+    collapseCompletedTurnWork(cachedGroups(messages), {
+      sessionKey,
+      runWorking: false,
+      session: { key: sessionKey, lastRunId, status: "done", runtimeMs: 7_000 },
+    }).find((item) => item.kind === "work-group")?.durationMs;
+  // The rollup belongs to the user's run; a later completion run's runtime is not its time.
+  expect(durationFor("run-user")).toBe(7_000);
+  expect(durationFor("announce:v1:child-a")).toBeNull();
 });
