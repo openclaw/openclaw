@@ -117,6 +117,20 @@ describe("applyMemoryWikiMutation", () => {
     await expect(read(target)).resolves.toBe(original);
   });
 
+  it("keeps a curated status when a synthesis is refreshed without one", async () => {
+    const { config, read } = await createVault();
+    const target = "syntheses/alpha-synthesis.md";
+    const readStatus = async () => parseWikiMarkdown(await read(target)).frontmatter.status;
+    await mutate(config, { op: "synthesis", ...synthesisInput });
+    await mutate(config, { op: "metadata", lookup: "synthesis.alpha-synthesis", status: "review" });
+
+    await mutate(config, { op: "synthesis", ...synthesisInput, body: "Refreshed summary." });
+    await expect(readStatus()).resolves.toBe("review");
+
+    await mutate(config, { op: "synthesis", ...synthesisInput, status: "stale" });
+    await expect(readStatus()).resolves.toBe("stale");
+  });
+
   it("preserves disjoint metadata updates from concurrent agent turns", async () => {
     const { config, page, read } = await createVault();
     const target = "entities/shared.md";
