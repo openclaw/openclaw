@@ -1,7 +1,7 @@
-import { expect, it, type Mock } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import type { GatewayRequestHandler, GatewayRequestHandlerOptions } from "./types.js";
 
-type RespondOptions = GatewayRequestHandlerOptions & { respond: Mock };
+type RespondOptions = GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> };
 
 /** `models.authSetApiKey` cases share the auth-status suite's mocked owners. */
 export function registerModelAuthSetApiKeyTests({
