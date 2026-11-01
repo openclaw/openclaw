@@ -104,8 +104,10 @@ export class TranscriptReaderAnchor {
     let correction = 0;
     for (const { entry, row, top } of rows) {
       const key = row.dataset.virtualRowKey;
-      const height = entry.borderBoxSize?.[0]?.blockSize ?? row.offsetHeight;
-      if (!key || !height) {
+      const box = entry.borderBoxSize?.[0];
+      const height = box?.blockSize ?? row.offsetHeight;
+      // A hidden row reports no width; it keeps its last laid-out height.
+      if (!key || (box ? !box.inlineSize : !row.offsetWidth)) {
         continue;
       }
       const first = !this.heights.has(row);
