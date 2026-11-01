@@ -256,6 +256,7 @@ describe("worker placement restart recovery", () => {
             makeClaimInput(active, "retirement-claim", "retirement-run"),
           );
           if (scenario === "pending result") {
+            await gitInit(support.testState.root);
             await placements.markWorkspaceResultPending(claim);
             await placements.handoffWorkspaceResultRecovery(claim);
           }

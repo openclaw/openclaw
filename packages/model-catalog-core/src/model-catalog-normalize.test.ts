@@ -7,8 +7,10 @@ import type { ModelCatalogProvider } from "./model-catalog-types.js";
 import {
   parseRemoteModelCatalogBundle as parseV1,
   parseRemoteModelCatalogBundleV2 as parseV2,
+  parseRemoteModelCatalogBundleV3 as parseV3,
   validateAndSanitizeRemoteModelCatalogBundle as sanitizeV1,
   validateAndSanitizeRemoteModelCatalogBundleV2 as sanitizeV2,
+  validateAndSanitizeRemoteModelCatalogBundleV3 as sanitizeV3,
 } from "./remote-catalog-bundle.js";
 
 const normalize = (value: unknown, ownedProviders = [" OpenAI "]) =>
@@ -499,4 +501,48 @@ it("limits configured-origin discovery to owned runtime catalogs", () => {
     discovery: { live: "runtime", cached: "refreshable", fixed: "static" },
     configuredEndpointDiscovery: ["live"],
   });
+});
+
+it("preserves canonical task facts on v3 and keeps chat references chat-only", () => {
+  const inference = {
+    chat: false,
+    decision: {
+      protocol: "fixture.decisions",
+      input: ["text"],
+      questions: { boolean: { probabilities: "boolean", abstention: true } },
+      limits: { maxQuestions: 32 },
+      billing: { unit: "requests", source: "provider-catalog" },
+    },
+  };
+  const native = { ...modelV2("native"), inference };
+  const dual = { ...modelV2("dual"), inference: { ...inference, chat: true } };
+  const bundle = {
+    ...validBundleV2,
+    schemaVersion: 3,
+    providers: { first: { defaultModel: "dual", recommendedModels: ["dual"] } },
+    models: [native, dual],
+  };
+  expect(parseV3(bundle).models).toEqual([native, dual]);
+  for (const provider of [
+    { defaultModel: "native" },
+    { defaultUtilityModel: "missing" },
+    { recommendedModels: ["native"] },
+  ]) {
+    const candidate = { ...bundle, providers: { first: provider } };
+    expect(() => parseV3(candidate)).toThrow();
+    expect(sanitizeV3(candidate).providers.first).toEqual(
+      provider.recommendedModels ? { recommendedModels: [] } : {},
+    );
+  }
+  const warn = vi.fn();
+  const invalid = {
+    ...native,
+    id: "invalid",
+    inference: { chat: false, decision: { protocol: "bad" } },
+  };
+  const salvaged = sanitizeV3({ ...bundle, models: [native, invalid, dual] }, warn);
+  expect(salvaged.models).toEqual([native, dual]);
+  expect(warn).toHaveBeenCalledTimes(1);
+  expect(() => parseV3({ ...bundle, models: [invalid] })).toThrow();
+  expect(() => parseV3({ ...bundle, schemaVersion: 4 })).toThrow();
 });

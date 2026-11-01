@@ -1,11 +1,17 @@
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { assertRepositoryWorkspaceDiskIdentity } from "../../state/session-repository-workspaces.authority.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import type { RepositoryWorkspaceDiskAuthority } from "../../state/session-repository-workspaces.types.js";
 import type { PreparedWorkerWorkspaceRecovery } from "./placement-reclaim-contract.js";
+import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
+import { isExactAttachedEnvironment } from "./placement-target.js";
 import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
+import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 import { withSessionRepositoryCheckpoint } from "./session-repository-checkpoints.js";
 import { sessionWorkspaceRoot, type WorkerSessionWorkspace } from "./session-workspace.js";
 import { boundedWorkerError } from "./worker-error.js";
@@ -247,4 +253,87 @@ export async function settleStagedWorkspaceResult(
     }).catch(() => undefined);
   }
   return completed;
+}
+
+export async function resolvePendingResultWorkspace(
+  deps: Pick<PlacementRecoveryDeps, "resolveWorkspace">,
+  placement: WorkerSessionPlacementRecord,
+  pending: WorkerWorkspacePendingResult,
+  preparedWorkspace?: WorkerSessionWorkspace,
+): Promise<WorkerSessionWorkspace> {
+  const workspace = preparedWorkspace ?? (await deps.resolveWorkspace(placement));
+  if (!pending.repositoryWorkspaceId) {
+    return workspace;
+  }
+  const repository = await getSessionRepositoryWorkspaceStore().get(pending.repositoryWorkspaceId);
+  if (
+    !repository ||
+    repository.agentId !== placement.agentId ||
+    repository.sessionKey !== placement.sessionKey ||
+    (workspace.kind === "repository" &&
+      workspace.repository.workspaceId !== pending.repositoryWorkspaceId)
+  ) {
+    throw new Error("Pending repository checkpoint lost its exact session workspace owner");
+  }
+  // An explicit Gateway move may already have bound a local worktree. The
+  // result's recorded source still owns its immutable artifact until settlement.
+  return { kind: "repository", repository };
+}
+
+export async function recoverRepositoryDiskResult(params: {
+  deps: PlacementRecoveryDeps;
+  placement: OwnedWorkerPlacement;
+  pending: WorkerWorkspacePendingResult;
+  authority: RepositoryWorkspaceDiskAuthority;
+  turnClaim: WorkerSessionTurnClaim;
+  workspace: WorkerSessionWorkspace;
+  assertCurrent: () => void;
+  hasPendingMove: boolean;
+}): Promise<void> {
+  const {
+    deps,
+    placement,
+    pending,
+    authority,
+    turnClaim,
+    workspace,
+    assertCurrent,
+    hasPendingMove,
+  } = params;
+  const { environments, placements } = deps;
+  const assertDiskCurrent = () => {
+    assertCurrent();
+    const environment = environments.get(authority.environmentId);
+    const current = placements.preparedWorkspaceResultPlacement(turnClaim);
+    assertRepositoryWorkspaceDiskIdentity(authority, environment);
+    if (
+      current?.state !== "active" ||
+      current.generation !== placement.generation ||
+      !isExactAttachedEnvironment(environment, current) ||
+      !environment?.nodeDeviceId ||
+      hasPendingMove ||
+      workspace.kind !== "repository" ||
+      workspace.repository.workspaceId !== pending.repositoryWorkspaceId
+    ) {
+      throw new Error(
+        "Disk-authoritative workspace recovery requires its exact active repository owner",
+      );
+    }
+  };
+  await deps.workspaceOperations.run(authority.environmentId, async () => {
+    assertDiskCurrent();
+    // Join the existing native cleanup owner; never run input or mirror reconciliation.
+    await environments.stopTunnel(placement.environmentId, placement.activeOwnerEpoch);
+    assertDiskCurrent();
+    await deps.prepareAcceptedWorkspacePublication?.(turnClaim);
+    assertDiskCurrent();
+    if (pending.workspaceAcceptedAtMs === null) {
+      await placements.acceptWorkspaceResult(turnClaim, assertDiskCurrent);
+    }
+    await placements.closeWorkerTurnToolState(turnClaim);
+    assertDiskCurrent();
+    await deps.publishAcceptedWorkspace?.(turnClaim);
+    assertDiskCurrent();
+    await placements.completeWorkspaceResultAndReleaseTurn(turnClaim, assertDiskCurrent);
+  });
 }

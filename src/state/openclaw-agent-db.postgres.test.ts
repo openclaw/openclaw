@@ -202,24 +202,22 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     expectAnchorOnly(database.path);
   });
 
-  it("closes default and explicit stores with paired handles and a PostgreSQL receipt", () => {
-    return admit(() => {
-      for (const options of [
-        { agentId: "main" },
-        { agentId: "alternate", path: path.join(root, "explicit", "openclaw-agent.sqlite") },
-      ]) {
-        const database = openDatabase(options);
-        assert(isPostgresSqlConnection(database.db));
-        const anchor = database.db.anchor;
-        closeReceipts.mockClear();
-        expect(owners.closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
-        expect([database.db.isOpen, anchor.isOpen]).toEqual([false, false]);
-        expect(closeReceipts).toHaveBeenCalledWith(
-          `agent database clean-close receipt: postgres-closed; agent=${options.agentId}`,
-          expect.objectContaining({ agentId: options.agentId, receipt: "postgres-closed" }),
-        );
-      }
-    });
+  it("closes default and explicit stores with paired handles and a PostgreSQL receipt", async () => {
+    for (const options of [
+      { agentId: "main" },
+      { agentId: "alternate", path: path.join(root, "explicit", "openclaw-agent.sqlite") },
+    ]) {
+      const database = openDatabase(options);
+      assert(isPostgresSqlConnection(database.db));
+      const anchor = database.db.anchor;
+      closeReceipts.mockClear();
+      expect(await owners.closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
+      expect([database.db.isOpen, anchor.isOpen]).toEqual([false, false]);
+      expect(closeReceipts).toHaveBeenCalledWith(
+        `agent database clean-close receipt: postgres-closed; agent=${options.agentId}`,
+        expect.objectContaining({ agentId: options.agentId, receipt: "postgres-closed" }),
+      );
+    }
   });
 
   it("reuses one idle PostgreSQL backend across sequential read-only session opens", async () => {

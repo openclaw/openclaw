@@ -53,6 +53,12 @@ backup.
 
 ## Update implementation contract
 
+Pre-update config copies publish through a temporary file and same-directory
+rename. An interrupted write preserves the previous `.pre-update` copy, and a
+later snapshot attempt can retry. Post-update recovery refuses malformed copies
+and leaves the current config intact. This repair must be present in the updater
+taking the snapshot; it does not establish power-loss durability.
+
 On macOS, Doctor reports generated service environment values surrounded by
 literal double quotes. Interactive `openclaw doctor` can back up the private env
 file and remove one outer quote pair after confirmation; unrelated bytes stay
@@ -145,7 +151,9 @@ the reason identifies the failed check, not the writer or underlying cause.
 Candidate Doctor preserves same-conversation automation continuations when adopting
 a stored inference account. It carries forward the original authenticated source
 only when its old executable revision still matches, then binds that source and
-existing standing-grant references to the restricted definition. Stale captures
+existing standing-grant references to the restricted definition. It also records
+a determinable host-managed account and its explicitly selected Codex runtime;
+native-owned and model-locked sessions remain unchanged. Stale captures
 stay stale; runtime authorization, conversation identity and revocation checks
 remain required. The candidate must contain this repair.
 

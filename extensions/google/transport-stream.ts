@@ -49,7 +49,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseGeminiAuth } from "./gemini-auth.js";
 import { stripGoogleProviderPrefix } from "./model-id.js";
-import { isGoogleNativeVideoModelId } from "./provider-models.js";
+import { isGoogleGeminiTextModelId } from "./provider-models.js";
 import { isOfficialGoogleAiStudioBaseUrl, normalizeGoogleApiBaseUrl } from "./provider-policy.js";
 import { resolveGoogleVertexBaseUrlLocation } from "./src/google-api-base-url.js";
 import {
@@ -157,7 +157,7 @@ function supportsGoogleNativeVideo(model: GoogleTransportModel): boolean {
     model.provider === "google" &&
     normalizeGoogleTransportRouteApi(model.api) === "google-generative-ai" &&
     isOfficialGoogleAiStudioBaseUrl(model.baseUrl) &&
-    isGoogleNativeVideoModelId(model.id) &&
+    isGoogleGeminiTextModelId(model.id) &&
     model.input.includes("video")
   );
 }

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import { automaticallyCleanUpdateRecovery } from "../cli/update-cli/automatic-cleanup.js";
@@ -153,7 +154,7 @@ function originalBytes(fixture: Awaited<ReturnType<typeof recoveryFixture>>) {
 function expectOriginals(originals: Map<string, Buffer>) {
   for (const [file, contents] of originals) {
     expect(fs.existsSync(file), file).toBe(true);
-    expect(fs.readFileSync(file)).toEqual(contents);
+    expectBytesEqual(fs.readFileSync(file), contents, file);
   }
 }
 function warning(detail: string) {
@@ -239,7 +240,7 @@ it.each([false, true])(
     expect(identity.ino).toBe(String(fs.statSync(source, { bigint: true }).ino));
     if (differentContent) {
       expect(result.steps.at(-1)?.advisory?.message).toContain("destination device changed");
-      expect(fs.readFileSync(backup)).toEqual(original);
+      expectBytesEqual(fs.readFileSync(backup), original, backup);
     } else {
       expect(identity.dev).toBe(String(fs.statSync(source, { bigint: true }).dev));
       expect(identity.sha256).toBe(createHash("sha256").update(original).digest("hex"));
@@ -388,9 +389,9 @@ it("allows its current Gateway owner to mutate a recovery destination during ret
       expect(fs.existsSync(file), file).toBe(false);
     }
     for (const [file, contents] of protectedOriginals) {
-      expect(fs.readFileSync(file), file).toEqual(contents);
+      expectBytesEqual(fs.readFileSync(file), contents, file);
     }
-    expect(fs.readFileSync(fixture.store.configPath)).toEqual(configBefore);
+    expectBytesEqual(fs.readFileSync(fixture.store.configPath), configBefore, "Gateway config");
     using database = new DatabaseSync(fixture.target.sqlitePath, { readOnly: true });
     expect(database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all()).toEqual(
       sessionsBefore,
@@ -455,7 +456,7 @@ it("stops owned retirement when its recovery destination file is replaced", asyn
           ? disposal.claimPath
           : undefined;
       expect(retained, file).toBeDefined();
-      expect(fs.readFileSync(retained!)).toEqual(contents);
+      expectBytesEqual(fs.readFileSync(retained!), contents, file);
     }
   } finally {
     owner.release();
@@ -526,7 +527,7 @@ it.each(["before-first-effect", "claim-publication", "first-unlink"] as const)(
       const retained = remaining();
       expect(retained).toHaveLength(phase === "first-unlink" ? 1 : 2);
       for (const { original, retained: file } of retained) {
-        expect(fs.readFileSync(file)).toEqual(originals.get(original));
+        expectBytesEqual(fs.readFileSync(file), originals.get(original)!, file);
       }
       if (phase !== "first-unlink") {
         expectOriginals(originals);

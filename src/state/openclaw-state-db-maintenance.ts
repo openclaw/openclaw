@@ -58,32 +58,20 @@ import {
   STATE_CURSOR_TABLES_V22,
 } from "./openclaw-state-db-schema-v22-columns.js";
 import { migrateTaskRunIndexesV24 } from "./openclaw-state-db-schema-v24-indexes.js";
-import {
-  migrateSessionStateHeadLayoutV26,
-  withLegacyStateHeadLayout,
-} from "./openclaw-state-db-schema-v26-layout.js";
-import {
-  migrateStateWriteIndexesV27,
-  withLegacyStateWriteIndexes,
-} from "./openclaw-state-db-schema-v27-indexes.js";
+import { migrateSessionStateHeadLayoutV26 } from "./openclaw-state-db-schema-v26-layout.js";
+import { migrateStateWriteIndexesV27 } from "./openclaw-state-db-schema-v27-indexes.js";
 import {
   needsPublicationDraftMigration,
   statePublicationDraftMigration,
 } from "./openclaw-state-db-schema-v28-publication.js";
-import {
-  stateLocalWorkspaceManifestMigration,
-  withLegacyLocalWorkspaceManifests,
-} from "./openclaw-state-db-schema-v31-workspace-manifests.js";
-import {
-  stateLocalWorkspaceCasMigration,
-  withLegacyLocalWorkspaceCas,
-} from "./openclaw-state-db-schema-v35-workspace-cas.js";
+import { stateLocalWorkspaceManifestMigration } from "./openclaw-state-db-schema-v31-workspace-manifests.js";
+import { stateLocalWorkspaceCasMigration } from "./openclaw-state-db-schema-v35-workspace-cas.js";
 import {
   stateTemplateNamesMigration,
   withLegacyTemplateStateSchema,
   withLegacyTemplateStateCompatibility,
 } from "./openclaw-state-db-schema-v36-template-names.js";
-import * as v37 from "./openclaw-state-db-schema-v37-resource-receipts.js";
+import { stateWorkerDiskMigrations } from "./openclaw-state-db-schema-v38-repository-disk.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
@@ -103,6 +91,7 @@ import {
   readStateSchemaPublicationBlocker,
   resolveStateSchemaVersionToPublish,
 } from "./openclaw-state-schema-publication.js";
+import { getOpenClawStatePredecessorSchema } from "./openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { UpdateSchemaRefusalError } from "./openclaw-update-schema-refusal.js";
 import {
@@ -294,7 +283,7 @@ function assertOpenClawStateDatabaseVersionForMigration(
   assertSqliteSchemaTablesPresent(
     database,
     options.pathname,
-    withLegacyTemplateStateSchema(v37.withLegacyWorkerResourceReceipts(OPENCLAW_STATE_SCHEMA_SQL)),
+    getOpenClawStatePredecessorSchema(options.version),
     {
       allowedMissingTables: [
         ...(options.version === 5
@@ -545,7 +534,7 @@ export const versionedStateMigrations = [
   cronIdentity.stateCronIdentityMigration,
   stateLocalWorkspaceCasMigration,
   stateTemplateNamesMigration,
-  v37.stateWorkerResourceReceiptMigration,
+  ...stateWorkerDiskMigrations,
 ] as const;
 
 /** Recent version migrations own only their tables; Doctor owns unrelated historical repair. */
@@ -570,7 +559,7 @@ export function migrateBoundedStateSchema(
     cronIdentity.stateCronIdentityMigration,
     stateLocalWorkspaceCasMigration,
     stateTemplateNamesMigration,
-    v37.stateWorkerResourceReceiptMigration,
+    ...stateWorkerDiskMigrations,
   ];
   const pending = migrations.filter(({ version }) => version > previousVersion);
   // An undeclared destination keeps the legacy full runner and full-backup requirement.
@@ -584,17 +573,7 @@ export function migrateBoundedStateSchema(
   const indexes = getCanonicalSqliteNamedIndexContracts(OPENCLAW_STATE_SCHEMA_SQL).filter((index) =>
     tables.has(index.tableName),
   );
-  const receiptSourceSchema = v37.withLegacyWorkerResourceReceipts(OPENCLAW_STATE_SCHEMA_SQL);
-  const predecessorSchema =
-    previousVersion < 36 ? withLegacyTemplateStateSchema(receiptSourceSchema) : receiptSourceSchema;
-  const casSourceSchema =
-    previousVersion < 35 ? withLegacyLocalWorkspaceCas(predecessorSchema) : predecessorSchema;
-  const manifestSourceSchema =
-    previousVersion < 31 ? withLegacyLocalWorkspaceManifests(casSourceSchema) : casSourceSchema;
-  const indexSourceSchema =
-    previousVersion < 27 ? withLegacyStateWriteIndexes(manifestSourceSchema) : manifestSourceSchema;
-  const sourceSchema =
-    previousVersion < 26 ? withLegacyStateHeadLayout(indexSourceSchema) : indexSourceSchema;
+  const sourceSchema = getOpenClawStatePredecessorSchema(previousVersion);
   // Older binaries can leave same-version repairs pending alongside a version change.
   if (
     !options.versionMigrationOnly &&

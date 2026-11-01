@@ -2,7 +2,7 @@ import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { expect, it } from "vitest";
 import { createProviderDynamicModelContext as createContext } from "../test-support/provider-model-test-helpers.js";
 import {
-  isGoogleNativeVideoModelId,
+  isGoogleGeminiTextModelId,
   isGoogleTextGenerationModelId,
   isModernGoogleModel,
   resolveGoogleGeminiForwardCompatModel,
@@ -86,7 +86,7 @@ it.each<[string, string, ProviderRuntimeModel[], Partial<ProviderRuntimeModel>]>
     google,
     "google/gemini-3-pro-preview",
     [template(google, pro)],
-    { id: "google/gemini-3.1-pro-preview", api: directApi, reasoning: true },
+    { id: "google/gemini-3.1-pro-preview", api: "google-interactions", reasoning: true },
   ],
   [
     cli,
@@ -165,14 +165,14 @@ it("resolves Gemini latest aliases from current Google templates", () => {
 
   for (const id of ["gemini-pro-latest", "gemini-flash-latest", "gemini-flash-lite-latest"]) {
     expectResolution(google, id, models, {
-      api: id === "gemini-pro-latest" ? directApi : "google-interactions",
+      api: "google-interactions",
       reasoning: true,
     });
   }
 });
 
-it.each(["gemini-4-flash", "gemini-4.1-flash-lite-preview"])(
-  "routes forward-compatible Flash %s through Interactions",
+it.each(["gemini-4-flash", "gemini-4.1-flash-lite-preview", "gemini-4.1-pro-preview"])(
+  "routes forward-compatible Gemini %s through Interactions",
   (id) => {
     expectResolution(google, id, [template(google, "gemini-4-argon")], {
       api: "google-interactions",
@@ -276,9 +276,13 @@ it("keeps non-chat Gemini surfaces out of text discovery and forward compatibili
   }
 });
 
-it("classifies only ordinary Gemini generation ids for native video", () => {
-  expect(isGoogleNativeVideoModelId("models/gemini-flash-latest")).toBe(true);
-  for (const modelId of ["tunedModels/gemini-2.5-flash", "gemini-2.5-computer-use-preview"]) {
-    expect(isGoogleNativeVideoModelId(modelId), modelId).toBe(false);
+it("classifies only ordinary Gemini generation ids as Gemini text models", () => {
+  expect(isGoogleGeminiTextModelId("models/gemini-flash-latest")).toBe(true);
+  for (const modelId of [
+    "tunedModels/gemini-2.5-flash",
+    "gemini-2.5-computer-use-preview",
+    "gemma-4-26b-a4b-it",
+  ]) {
+    expect(isGoogleGeminiTextModelId(modelId), modelId).toBe(false);
   }
 });

@@ -150,7 +150,7 @@ describe("Google catalog transport defaults", () => {
       ...apis.flatMap((api) =>
         ["provider", "model"]
           // Catalog routes admit a provider-wide API that matches the catalog row;
-          // AI Studio selects Interactions per model (or by the Flash default).
+          // AI Studio selects Interactions per model (or by the Gemini default).
           .filter(
             (scope) =>
               !(scope === "provider" && api === "google-interactions" && baseUrl === endpoints[0]),
@@ -189,5 +189,19 @@ describe("Google catalog transport defaults", () => {
       baseUrl,
       api: api ?? (baseUrl === endpoints[0] ? "google-interactions" : "google-generative-ai"),
     });
+  });
+
+  it.each([
+    ["gemini-4-argon", "google-interactions"],
+    ["gemini-3.1-pro-preview", "google-interactions"],
+    ["gemma-4-26b-a4b-it", "google-generative-ai"],
+  ] as const)("defaults %s on AI Studio to %s", (modelId, api) => {
+    const resolved = provider.normalizeResolvedModel?.({
+      provider: "google",
+      modelId,
+      model: { ...catalogModel, id: modelId, baseUrl: endpoints[0] },
+      config: {},
+    });
+    expect(resolved?.api).toBe(api);
   });
 });

@@ -165,7 +165,7 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
         ? {
             projects: [
               { id: "alpha", displayName: "Alpha", repoRoot: "/alpha", source: "registered" },
-              { id: "beta", displayName: "Beta", repoRoot: "/beta", source: "registered" },
+              { id: "beta", displayName: "Be\u0301ta", repoRoot: "/beta", source: "registered" },
             ],
           }
         : {},
@@ -210,7 +210,7 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
   expectArrow(connect, "ArrowDown", retry);
   expectArrow(retry, "ArrowDown", back);
 
-  search.value = "Beta";
+  search.value = "BÉTA";
   search.dispatchEvent(new Event("input", { bubbles: true }));
   await host.updateComplete;
   expectArrow(search, "ArrowDown", beta);
