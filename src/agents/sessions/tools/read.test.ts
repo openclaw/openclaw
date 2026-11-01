@@ -6,6 +6,7 @@ import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import JSZip from "jszip";
+import { validateToolArguments } from "@openclaw/llm-core/validation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { runNodeScript } from "../../../../test/helpers/run-node-script.js";
@@ -241,10 +242,20 @@ console.log("headless-read-ok");`,
     );
   });
 
-  it("accepts optional: false for existing files and throws for missing files", async () => {
+  it("accepts optional: false for existing files and throws for missing files through validation", async () => {
     const { tool: local } = await fileFixture("present.txt", "content");
-    await expectReadText(local, { path: "present.txt", optional: false }, "content");
-    await expect(executeRead(local, { path: "missing.txt", optional: false })).rejects.toThrow();
+    const validated = validateToolArguments(
+      { name: "read", description: "Read file", parameters: local.parameters },
+      { type: "toolCall", id: "read-call", name: "read", arguments: { path: "present.txt", optional: false } },
+    ) as { path: string; optional?: boolean };
+    expect(validated.optional).toBe(false);
+    await expectReadText(local, validated, "content");
+
+    const validatedMissing = validateToolArguments(
+      { name: "read", description: "Read file", parameters: local.parameters },
+      { type: "toolCall", id: "read-missing", name: "read", arguments: { path: "missing.txt", optional: false } },
+    ) as { path: string; optional?: boolean };
+    await expect(executeRead(local, validatedMissing)).rejects.toThrow();
   });
 
   it.runIf(process.platform !== "win32")("rejects FIFOs without a writer", async () => {
