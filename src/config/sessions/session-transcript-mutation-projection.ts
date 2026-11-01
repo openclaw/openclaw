@@ -17,6 +17,8 @@ export type TranscriptMutationOptions = {
   publicationAssistant?: SessionTranscriptAuthority["lastAssistantMessage"];
   persistActorMutation?: boolean;
   writeActorMutation?: (update: TranscriptWindowUpdate) => void;
+  /** The projection writer supplies sibling CTE postimages, which RETURNING cannot reread. */
+  writeWindowMutation?: (update: TranscriptWindowUpdate) => SessionTranscriptAuthority | undefined;
   projectionReady?: boolean;
 };
 

@@ -90,6 +90,34 @@ const sessionGenerationRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/session-delivery-generation.js"),
 );
 
+export type CronDeliverySourceGeneration = Awaited<
+  ReturnType<
+    typeof import("../../config/sessions/session-delivery-generation.js").prepareSessionGenerationFactsBatch
+  >
+>[number];
+
+/** Prepare preview source leases together; callers release every successful preparation. */
+export async function prepareCronDeliverySourceGenerations(
+  cfg: OpenClawConfig,
+  requests: readonly {
+    agentId: string;
+    sourceConversation: NonNullable<CronStoredJob["sourceConversation"]>;
+  }[],
+) {
+  if (requests.length === 0) {
+    return [];
+  }
+  const { prepareSessionGenerationFactsBatch } = await sessionGenerationRuntimeLoader.load();
+  return prepareSessionGenerationFactsBatch(
+    requests.map(({ agentId, sourceConversation }) => ({
+      agentId,
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+      ...sourceConversation,
+      lifecycleRevision: sourceConversation.lifecycleRevision ?? null,
+    })),
+  );
+}
+
 /** Read one preview batch after runtime loading, then release all source read ownership. */
 export async function prepareCronDeliveryTargetContexts(
   cfg: OpenClawConfig,
@@ -116,26 +144,6 @@ function routesSharePeer(left?: OutboundSessionRoute | null, right?: OutboundSes
   );
 }
 
-function shouldCarrySessionThread(params: {
-  resolved: ReturnType<typeof resolveSessionDeliveryTarget>;
-  explicitTo?: string;
-  route?: OutboundSessionRoute | null;
-  lastRoute?: OutboundSessionRoute | null;
-}) {
-  if (!isNonEmptyThreadId(params.resolved.threadId)) {
-    return false;
-  }
-  if (!params.explicitTo) {
-    return (
-      params.resolved.channel === params.resolved.lastChannel &&
-      params.resolved.to === params.resolved.lastTo
-    );
-  }
-  // Explicit targets may reuse a stored thread only when both targets resolve
-  // to the same channel peer; otherwise cron could reply into a stale thread.
-  return routesSharePeer(params.route, params.lastRoute);
-}
-
 function stripSelectedProviderPrefix(params: { channel: string; to?: string }): string | undefined {
   const trimmed = params.to?.trim();
   if (!trimmed) {
@@ -158,6 +166,7 @@ export async function resolveDeliveryTarget(
     dryRun?: boolean;
     inheritSessionThread?: boolean;
     sessionContext?: CronDeliveryTargetContext;
+    sourceGeneration?: CronDeliverySourceGeneration;
   },
 ): Promise<DeliveryTargetResolution> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
@@ -167,17 +176,26 @@ export async function resolveDeliveryTarget(
   const source = jobPayload.sourceConversation;
   if (source && !hasExplicitCronDeliveryTarget(jobPayload)) {
     try {
-      const { prepareSessionGenerationFacts } = await sessionGenerationRuntimeLoader.load();
-      const generation = await prepareSessionGenerationFacts({
-        agentId,
-        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
-        ...source,
-        lifecycleRevision: source.lifecycleRevision ?? null,
-      });
+      const preparedGeneration = options?.sourceGeneration;
+      if (preparedGeneration && !preparedGeneration.ok) {
+        throw preparedGeneration.error;
+      }
+      const generation =
+        preparedGeneration?.value ??
+        (await (
+          await sessionGenerationRuntimeLoader.load()
+        ).prepareSessionGenerationFacts({
+          agentId,
+          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+          ...source,
+          lifecycleRevision: source.lifecycleRevision ?? null,
+        }));
       try {
         generation.assertCurrent();
       } finally {
-        generation.release();
+        if (!preparedGeneration) {
+          generation.release();
+        }
       }
     } catch (error) {
       return {
@@ -473,25 +491,26 @@ export async function resolveDeliveryTarget(
     }
     toCandidate = routeTo;
   }
-  const lastTo = resolved.lastTo;
-  const lastRoute =
-    lastTo && resolved.lastChannel === channel
-      ? await resolveRoute({
-          accountId: resolved.lastAccountId ?? accountId,
-          target: lastTo,
-          threadId: resolved.lastThreadId,
-        })
-      : null;
-
+  let canUseSessionThread = false;
+  if (options?.inheritSessionThread !== false && isNonEmptyThreadId(resolved.threadId)) {
+    if (explicitTo) {
+      // Only explicit targets need the previous route to prove same-peer thread inheritance.
+      const lastTo = resolved.lastTo;
+      const lastRoute =
+        lastTo && resolved.lastChannel === channel
+          ? await resolveRoute({
+              accountId: resolved.lastAccountId ?? accountId,
+              target: lastTo,
+              threadId: resolved.lastThreadId,
+            })
+          : null;
+      canUseSessionThread = routesSharePeer(route, lastRoute);
+    } else {
+      canUseSessionThread =
+        resolved.channel === resolved.lastChannel && resolved.to === resolved.lastTo;
+    }
+  }
   // Thread precedence is explicit config, route canonicalization, then same-peer session history.
-  const canUseSessionThread =
-    options?.inheritSessionThread !== false &&
-    shouldCarrySessionThread({
-      resolved,
-      explicitTo,
-      route,
-      lastRoute,
-    });
   const threadId =
     explicitThreadId ?? route?.threadId ?? (canUseSessionThread ? resolved.threadId : undefined);
   const sessionRoute =

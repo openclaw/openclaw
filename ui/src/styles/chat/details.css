@@ -66,7 +66,7 @@ openclaw-chat-details[mobile] {
   min-height: 28px;
   padding: 4px 8px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--muted);
   background: var(--panel);
   font: inherit;
@@ -84,11 +84,10 @@ openclaw-chat-details[mobile] {
 .chat-details {
   position: fixed;
   inset: auto;
-  box-sizing: border-box;
   margin: 0;
   padding: 16px;
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
   background: var(--card);
   color: var(--text);
   box-shadow: var(--shadow-lg);
@@ -104,7 +103,7 @@ openclaw-chat-details[mobile] {
   width: var(--chat-details-space);
   height: 100%;
   border: 1px solid var(--overlay-border, var(--border-strong));
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
   background: var(--panel-strong);
   box-shadow: var(--shadow-md);
   overflow-wrap: anywhere;
@@ -254,7 +253,7 @@ openclaw-chat-details[mobile] {
   gap: 9px;
   min-height: 36px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -298,7 +297,7 @@ openclaw-chat-details[mobile] {
   min-height: 28px;
   padding: 4px 7px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-size: 11px;
 }
 .chat-details__participants[open] {
@@ -342,7 +341,7 @@ openclaw-chat-details[mobile] {
   width: 20px;
   height: 20px;
   flex: none;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 .chat-details__muted {
   padding: 5px 6px;
@@ -354,7 +353,7 @@ openclaw-chat-details[mobile] {
   place-items: center;
   width: 22px;
   height: 22px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   flex: none;
   color: hsl(var(--chat-details-avatar-hue) 32% 65%);
   background: hsl(var(--chat-details-avatar-hue) 22% 30% / 0.35);
@@ -534,7 +533,8 @@ button.chat-details__process:is(:hover, :focus-visible) {
   display: block;
   color: var(--muted);
 }
-.chat-details__more:is(:hover, :focus-visible) {
+.chat-details .chat-details__more:is(:hover, :focus-visible) {
+  background: none;
   color: var(--text);
 }
 @keyframes chat-details-pulse {
@@ -616,23 +616,12 @@ button.chat-details__process:is(:hover, :focus-visible) {
   margin-top: 6px;
   padding: 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--card);
 }
 .chat-details .chat-pr__actions {
   flex: none;
   margin-inline-start: auto;
-}
-.chat-details .chat-pr__actions-trigger {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  padding: 4px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--muted);
 }
 .chat-details .chat-pr__actions-trigger > .oc-menu-item__label {
   display: flex;
@@ -742,7 +731,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
   min-width: 0;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
   font: inherit;
@@ -794,7 +783,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
 }
 .chat-environment-mobile__group {
   padding-inline: 12px;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: var(--bg-hover);
 }
 .chat-environment-mobile__row {

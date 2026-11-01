@@ -102,6 +102,37 @@ function stageResult({ ref, base, current }: Awaited<ReturnType<typeof resultFix
   });
 }
 
+it.each(["base", "current"] as const)(
+  "identifies only a current-manifest path rejection before staging (%s invalid)",
+  async (invalid) => {
+    const fixture = await resultFixture(`unsafe-${invalid}`);
+    const rejected = encodeWorkspaceManifest({
+      version: 1,
+      baseCommit: null,
+      entries: [
+        {
+          path: "legacy\\notes.txt",
+          type: "file",
+          mode: 0o644,
+          size: 0,
+          sha256: "a".repeat(64),
+        },
+      ],
+    });
+    fixture[invalid] = rejected;
+    const error = await stageResult(fixture).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toHaveProperty("message", "Worker workspace manifest contains an unsafe path");
+    if (invalid === "current") {
+      expect(error).toHaveProperty("code", "WORKSPACE_STAGE_CURRENT_PATH_UNSAFE");
+    } else {
+      expect(error).not.toHaveProperty("code");
+    }
+    expect(await hasRef(fixture.ref)).toBe(false);
+    expect(await readText("result.txt")).toBe("base\n");
+  },
+);
+
 function prepareWorkspaceResult(params: {
   ref: string;
   base: ReturnType<typeof encodeWorkspaceManifest>;

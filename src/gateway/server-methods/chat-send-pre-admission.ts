@@ -420,6 +420,8 @@ export async function runChatSendPreAdmission(
         assertCurrent,
         beforeAbort,
         cascadeDescendants: true,
+        // A Gateway chat.send "/stop" is an explicit user Stop; cover Workshop review.
+        cancelExperienceReview: true,
       });
       // A stale child refusal can precede beforeAbort; the request's leaf error wins.
       if (!guard.failure && (res.error || (res.descendants && res.descendants.status !== "ok"))) {

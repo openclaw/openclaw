@@ -37,6 +37,14 @@ export const MigrationArtifactSchema = z.object({
 });
 export type MigrationArtifact = z.infer<typeof MigrationArtifactSchema>;
 export type MigrationArtifactIdentity = MigrationArtifact["identity"];
+
+export function sameSourceContent(
+  left: MigrationArtifactIdentity,
+  right: MigrationArtifactIdentity,
+) {
+  return left.sha256 === right.sha256 && left.size === right.size;
+}
+
 /** One maintenance operation owns these facts; never persist or share them across runs. */
 export type MigrationArtifactVerification = Map<
   string,

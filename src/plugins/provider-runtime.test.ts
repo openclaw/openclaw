@@ -233,10 +233,14 @@ describe("provider-runtime", () => {
           isPluginProvidersLoadInFlightMock(params),
       };
     });
-    vi.doMock("./provider-hook-runtime.js", async () => {
+    vi.doMock("./provider-hook-runtime.js", async (importOriginal) => {
       const { createProviderHookRuntime } = await import("./provider-hook-runtime-core.js");
+      const { nativePluginBindings } = await import("./loader-runtime-load.js");
       const providers = await import("./providers.runtime.js");
-      return createProviderHookRuntime(providers);
+      return {
+        ...(await importOriginal<typeof import("./provider-hook-runtime.js")>()),
+        ...createProviderHookRuntime({ ...nativePluginBindings.providerRegistry, ...providers }),
+      };
     });
     vi.doMock("./provider-external-auth.js", async () => {
       const { createProviderExternalAuthResolver } =
@@ -1434,7 +1438,7 @@ describe("provider-runtime", () => {
 
   it.each([
     { change: "API", normalized: { api: "openai-responses" as const } },
-    { change: "base URL", normalized: { baseUrl: "https://normalized.example/v1" } },
+    { change: "base URL", normalized: { baseUrl: "https://api.openai.com/v1/normalized" } },
   ])("applies foreign transport $change normalization for custom hosts", ({ normalized }) => {
     const model = {
       ...MODEL,

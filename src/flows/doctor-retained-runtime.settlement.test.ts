@@ -87,6 +87,7 @@ it.each([
       const packageRoot = path.join(root, "checkout");
       fs.mkdirSync(packageRoot);
       fs.writeFileSync(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');
+      mocks.packageRoot.mockReturnValue(packageRoot);
       const artifact = createDoctorRuntimeProjection(root, packageRoot, "Old001");
       vi.spyOn(os, "tmpdir").mockReturnValue(root);
       vi.spyOn(packageRoots, "resolveOpenClawPackageRootsSync").mockReturnValue([packageRoot]);

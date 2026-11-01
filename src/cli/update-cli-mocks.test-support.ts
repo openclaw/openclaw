@@ -358,11 +358,6 @@ vi.mock("../infra/restart-stale-pids.js", () => ({
   terminateStaleGatewayPids: (...args: unknown[]) => terminateStaleGatewayPids(...args),
 }));
 
-vi.mock("../infra/update-managed-service-handoff-cleanup.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/update-managed-service-handoff-cleanup.js")>()),
-  cleanupStaleManagedServiceUpdateHandoffs: vi.fn(async () => 0),
-}));
-
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   const { SQLITE_READONLY_CHILD_ARG } = await import("../infra/runtime-process-entrypoints.js");
@@ -440,6 +435,38 @@ vi.mock("node:child_process", async () => {
       return isMacosAclInspection(args[0], childArgs) || isPlistStdinConversion(args[0], childArgs)
         ? actual.spawn(...args)
         : spawn(...args);
+    },
+  };
+});
+
+// Synthetic CLI packages omit the candidate worker; native delegation is covered separately.
+// Keep compensation on its real live owner while replacing only the process adapter.
+vi.mock("./update-cli/update-command-cohort.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./update-cli/update-command-cohort.js")>();
+  return {
+    ...actual,
+    settleUpdatePluginCohortInCandidate: async (
+      params: Parameters<typeof actual.settleUpdatePluginCohortInCandidate>[0],
+    ) => {
+      const { settleUpdatePluginCohort } = await import("../plugins/update-cohort-recovery.js");
+      const { readUpdateConfigSnapshot } =
+        await import("./update-cli/update-command-config-snapshot.js");
+      params.configRestoration.assertCurrent();
+      const settled = await settleUpdatePluginCohort({
+        runId: params.run.runId,
+        env: params.env,
+        fence: expectDefined(params.run.executorFence, "live fixture update executor"),
+        action: "rollback",
+      });
+      params.configRestoration.assertCurrent();
+      for (const file of params.configRestoration.files) {
+        if (settled.configPaths.includes(file.path)) {
+          const snapshot = await readUpdateConfigSnapshot(file.path);
+          params.configRestoration.assertCurrent();
+          params.configRestoration.expectedHashes.set(file.path, snapshot.hash);
+        }
+      }
+      return settled;
     },
   };
 });

@@ -1,5 +1,5 @@
 // Shared CLI parsing and formatting helpers for Vitest report scripts.
-import { readJsonFile, runVitestJsonReport } from "../test-report-utils.mts";
+import { runVitestJsonReport } from "../test-report-utils.mts";
 import { intFlag, parseFlagArgs, stringFlag } from "./arg-utils.mts";
 
 type ReportDefaults = { config: string; limit: number; reportPath?: string };
@@ -28,12 +28,11 @@ export function parseVitestReportArgs(argv: readonly string[], defaults: ReportD
  * Runs Vitest JSON reporting from parsed args and loads the generated report.
  */
 export function loadVitestReportFromArgs(args: ReportLocation, prefix: string) {
-  const reportPath = runVitestJsonReport({
+  return runVitestJsonReport({
     config: args.config,
     reportPath: args.reportPath,
     prefix,
   });
-  return readJsonFile(reportPath);
 }
 
 /**

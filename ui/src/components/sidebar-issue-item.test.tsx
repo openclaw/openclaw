@@ -116,8 +116,9 @@ describe("renderSidebarMentionItem", () => {
     const summary = details.querySelector("summary")!;
     const title = summary.querySelector(".sidebar-issues-panel__entity")!;
     expect(title.textContent).toBe("Release notes");
-    expect(title.nextElementSibling?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "Riley mentioned you · 5m ago",
+    expect(title.nextElementSibling?.textContent?.trim()).toBe("5m ago");
+    expect(summary.querySelector(".sidebar-issues-panel__state")?.textContent).toBe(
+      "Riley mentioned you",
     );
     expect(container.querySelectorAll("[data-issue-row-focus]")).toHaveLength(1);
     expect(summary.hasAttribute("data-issue-row-focus")).toBe(true);

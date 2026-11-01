@@ -367,6 +367,11 @@ specific plugin, or use the Control UI Plugins page for omitted details and
 capability reviews. A saved install can outlive a failed runtime activation:
 inspect that result before retrying activation, rather than reinstalling it.
 
+Local plugin search lowercases text before NFC normalization, so canonically
+equivalent Unicode names match in inventory queries and the Installed plugins
+view. It does not remove accents or fold compatibility characters, and it does
+not change plugin identities or installation matching.
+
 ## Update plugins
 
 ```bash

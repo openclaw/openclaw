@@ -6,6 +6,14 @@ import type { createTeamScaleDuplicateReadFixture } from "./control-ui-duplicate
 import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
 import type { ControlUiSessionFixture } from "./control-ui-session-fixtures.ts";
 
+type TeamScaleHistoryContent =
+  | { type: "text"; text: string }
+  | ({ type: "image"; mimeType: string; fileName: string } & (
+      | { artifactId: string }
+      | { url: string }
+    ))
+  | ReturnType<typeof createTeamScaleDuplicateReadFixture>["attachments"][number];
+
 export type TeamScaleFixtureAsset = {
   body: string | Buffer;
   contentType: string;
@@ -56,6 +64,10 @@ export function createTeamScaleHistoryFixture(options: {
   const lateRowFacts = options.lateRowFacts
     ? {
         sessionTitle: "Synthetic linked research",
+        updateSources: [1, 2].map((index) => ({
+          sessionKey: `agent:main:dashboard:synthetic-update-source-${index}`,
+          title: `Synthetic verification ${index}`,
+        })),
         prUrl: "https://github.com/example/cold-load-fixture/pull/42",
         artifactId: "synthetic-late-row-thumbnail",
         cacheableImageSource: "media://inbound/synthetic-l245-cacheable.png",
@@ -132,7 +144,7 @@ export function createTeamScaleHistoryFixture(options: {
     content: [
       ...(options.attachments && index === options.messageCount - 1 ? options.attachments : []),
       ...(lateRowFacts && index === options.messageCount - 1
-        ? [
+        ? ([
             {
               type: "image",
               artifactId: lateRowFacts.artifactId,
@@ -145,7 +157,7 @@ export function createTeamScaleHistoryFixture(options: {
               mimeType: "image/png",
               fileName: "Synthetic cacheable thumbnail.png",
             },
-          ]
+          ] satisfies TeamScaleHistoryContent[])
         : []),
       {
         type: "text",
@@ -169,7 +181,7 @@ export function createTeamScaleHistoryFixture(options: {
             : []),
         ].join("\n\n"),
       },
-    ],
+    ] satisfies TeamScaleHistoryContent[],
   }));
   if (options.rowFacts) {
     const tail = historyMessages.slice(-3);
@@ -212,6 +224,28 @@ export function createTeamScaleHistoryFixture(options: {
         timestamp: options.now + 1,
       }),
     );
+  }
+  if (lateRowFacts) {
+    for (const [index, source] of lateRowFacts.updateSources.entries()) {
+      const id = `synthetic-update-${index}`;
+      messageIds.push(id);
+      historyMessages.push(
+        Object.assign(
+          {
+            role: "assistant",
+            content: [
+              { type: "text" as const, text: `Synthetic verification receipt ${index + 1}.` },
+            ],
+            __openclaw: { id, seq: historyMessages.length + 1, turnBoundary: true },
+            timestamp: options.now + 2 + index,
+          },
+          {
+            senderSession: { sessionKey: source.sessionKey, agentId: "main" },
+            provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+          },
+        ),
+      );
+    }
   }
   const deltaCursor = JSON.stringify([
     "team-scale-history-v1",
@@ -283,6 +317,10 @@ export function createTeamScaleHistoryFixture(options: {
         ? {
             "controlUi.sessionPreview": {
               cases: [
+                ...lateRowFacts.updateSources.map((source) => ({
+                  match: { sessionKey: source.sessionKey },
+                  response: { status: "ok", ...source, agentId: "main" },
+                })),
                 {
                   match: { sessionKey },
                   response: {

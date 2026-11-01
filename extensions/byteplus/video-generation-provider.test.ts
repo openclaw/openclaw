@@ -186,6 +186,7 @@ it.each([
     `${label}: JSON response exceeds ${16 * 1024 * 1024} bytes`,
   );
   expect(stream.wasCanceled()).toBe(true);
+  expect(stream.getReadCount()).toBeGreaterThan(16);
   expect(stream.getReadCount()).toBeLessThan(32);
   if (stage === "submit") {
     expect(release).toHaveBeenCalledOnce();

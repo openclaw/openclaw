@@ -92,6 +92,55 @@ describe("renderChatComposer controls", () => {
     expect(textarea(container).value).toBe(overrides.draft);
   });
 
+  it("sends an Enter made while the session loads once the composer is ready", async () => {
+    const loading = {
+      draft: "Ship it",
+      canCompose: true,
+      canSend: false,
+      submitPending: true,
+      submitDisabledReason: "Loading conversation…",
+    };
+    const { container, props, onSend } = renderComposer(loading);
+    expect(pressComposerEnter(container).defaultPrevented).toBe(true);
+    await waitForSolid(() =>
+      expect(query(container, ".agent-chat__input--submit-queued")).not.toBeNull(),
+    );
+    expect(onSend).not.toHaveBeenCalled();
+    expect(textarea(container).value).toBe("Ship it");
+
+    renderComposerInto(container, {
+      ...props,
+      canSend: true,
+      submitPending: false,
+      submitDisabledReason: null,
+    });
+    await waitForSolid(() => expect(onSend).toHaveBeenCalledOnce());
+    expect(query(container, ".agent-chat__input--submit-queued")).toBeNull();
+  });
+
+  it("withdraws a queued Enter when the draft changes before the session is ready", async () => {
+    const { container, props, onSend } = renderComposer({
+      draft: "First thought",
+      canCompose: true,
+      canSend: false,
+      submitPending: true,
+      submitDisabledReason: "Loading conversation…",
+    });
+    pressComposerEnter(container);
+    renderComposerInto(container, { ...props, draft: "Second thought" });
+    renderComposerInto(container, {
+      ...props,
+      draft: "Second thought",
+      canSend: true,
+      submitPending: false,
+      submitDisabledReason: null,
+    });
+    await waitForSolid(() =>
+      expect(query(container, ".agent-chat__input--submit-queued")).toBeNull(),
+    );
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   it("keeps desktop and mobile Stop available with a pending attachment", () => {
     const onAbort = vi.fn();
     const onTypingChange = vi.fn();

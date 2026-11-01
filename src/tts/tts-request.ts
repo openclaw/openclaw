@@ -112,10 +112,14 @@ export async function resolveExplicitTtsOverridesAsync(
 ): Promise<TtsDirectiveOverrides> {
   const prepared = prepareExplicitTtsOverrides(params);
   const { cfg, providerInput, modelId, voiceId, config } = prepared;
-  const prefsPath = params.prefsPath ?? (await resolveTtsPrefsPathAsync(config));
   const selectedProvider =
     canonicalizeSpeechProviderId(providerInput, cfg) ??
-    (modelId || voiceId ? await resolveTtsProviderAsync(config, prefsPath) : undefined);
+    (modelId || voiceId
+      ? await resolveTtsProviderAsync(
+          config,
+          params.prefsPath ?? (await resolveTtsPrefsPathAsync(config)),
+        )
+      : undefined);
   return resolveExplicitTtsOverridesForProvider(prepared, selectedProvider);
 }
 

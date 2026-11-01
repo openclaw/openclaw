@@ -7,6 +7,7 @@ import path from "node:path";
 import { Transform, type TransformCallback } from "node:stream";
 import { execa } from "execa";
 import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
+import { spawnInAgentExecCgroup } from "../linux-exec-cgroup.js";
 import { setProcessTimeout } from "../process-deadline.js";
 import {
   serializeExecaError,
@@ -86,6 +87,7 @@ export async function startBrokerExeca(
   argv: string[],
   options: BrokerExecaOptions,
   assertCurrent: () => void,
+  execCgroup?: string,
 ): Promise<BrokerExecaProcess> {
   const controller = new AbortController();
   const outputs = new Map<number, { receiver: Socket; transform: Transform }>();
@@ -117,7 +119,7 @@ export async function startBrokerExeca(
         : execa(argv[0]!, argv.slice(1), { ...spawnOptions, encoding });
     let subprocess: ReturnType<typeof start>;
     try {
-      subprocess = start();
+      subprocess = spawnInAgentExecCgroup(execCgroup, start);
     } catch (error) {
       throw await adoptAbandonedSpawnError(error);
     }

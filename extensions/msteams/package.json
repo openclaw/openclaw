@@ -12,13 +12,13 @@
     "@microsoft/teams.api": "2.1.1",
     "@microsoft/teams.apps": "2.1.1",
     "express": "5.3.0",
-    "typebox": "1.4.2",
+    "typebox": "1.4.3",
     "zod": "4.6.7"
   },
   "devDependencies": {
     "@microsoft/teams.common": "2.1.1",
     "@openclaw/plugin-sdk": "workspace:*",
-    "jose": "6.2.12",
+    "jose": "6.2.13",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {

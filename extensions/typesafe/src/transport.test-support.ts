@@ -1,9 +1,9 @@
 import type { IncomingMessage } from "node:http";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
 import plugin from "../index.js";
-import { resolveRuntimeConfig } from "./credentials.js";
-import { legacyWireFixture } from "./prepared.test-support.js";
 import type { EvaluationInput } from "./schema.js";
 
 export function mockFetch(implementation: typeof globalThis.fetch) {
@@ -15,11 +15,6 @@ export const mockResponse = (body?: BodyInit | null, init?: ResponseInit) =>
   mockFetch(async () => new Response(body, init));
 export const mockJsonResponse = (body: unknown, init?: ResponseInit) =>
   mockResponse(typeof body === "string" ? body : JSON.stringify(body), init);
-export const decisionContext = (model: string, budget = 1000) => ({
-  model,
-  signal: new AbortController().signal,
-  deadlineMonotonicMs: performance.now() + budget,
-});
 export function stubAmbientProxies() {
   for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]) {
     vi.stubEnv(key, "http://127.0.0.1:1");
@@ -70,7 +65,7 @@ export const mixedFixture = {
   input,
   response,
   batch: {
-    ...input,
+    state: { type: "json" as const, value: input.state },
     questions: { ...input.questions, q: { ...input.questions.q, type: "boolean" as const } },
   },
   localInput: {
@@ -103,24 +98,18 @@ export const mixedFixture = {
   },
 };
 export function registeredPreparedDecisionProvider(
-  current: () => ReturnType<OpenClawPluginApi["runtime"]["config"]["current"]>,
+  current: OpenClawPluginApi["runtime"]["config"]["current"],
 ) {
   const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
-  plugin.register({
-    runtime: { config: { current } },
+  const api = createTestPluginApi({
+    id: "typesafe",
+    runtime: createPluginRuntimeMock({ config: { current } }),
     registerDecisionProvider,
-  } as unknown as OpenClawPluginApi);
+  });
+  plugin.register(api);
   const provider = registerDecisionProvider.mock.calls[0]![0];
   if (provider.contractVersion !== 2) {
     throw new Error("Expected the prepared TypeSafe provider");
   }
   return provider;
-}
-
-export function registeredDecisionProvider(
-  current: () => ReturnType<OpenClawPluginApi["runtime"]["config"]["current"]>,
-) {
-  return legacyWireFixture(registeredPreparedDecisionProvider(current), () =>
-    resolveRuntimeConfig(current()),
-  );
 }

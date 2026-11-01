@@ -1,5 +1,6 @@
 import { getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+import type { GetReplyOptions } from "../../auto-reply/get-reply-options.types.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -48,7 +49,7 @@ it("warns about synchronous runtime timestamps while preserving the shipped resu
 });
 
 describe("inbound dispatch", () => {
-  function createOwnedInboundFixture() {
+  function createOwnedInboundFixture(observerOnly = false) {
     const registry = createEmptyPluginRegistry();
     const record = createPluginRecord({ id: "owned-channel" });
     registry.plugins.push(record);
@@ -58,7 +59,7 @@ describe("inbound dispatch", () => {
     return {
       owner,
       delivered,
-      dispatch: () =>
+      dispatch: (replyOptions?: GetReplyOptions) =>
         owner.run(() =>
           channel.inbound.dispatch({
             cfg: {},
@@ -66,7 +67,11 @@ describe("inbound dispatch", () => {
             route: { agentId: "main", sessionKey: "agent:main:owned-channel:direct:test" },
             ctxPayload: { Body: "test", CommandAuthorized: false },
             delivery: { deliver: delivered },
-            replyOptions: { onQueuedFollowupReplyBatch: delivered },
+            replyOptions:
+              replyOptions ??
+              (observerOnly
+                ? { onModelSelected: delivered, turnAdoptionLifecycle: { onAdopted() {} } }
+                : { onQueuedFollowupReplyBatch: delivered }),
           }),
         ),
     };
@@ -113,8 +118,25 @@ describe("inbound dispatch", () => {
     }
   });
 
-  it("keeps queued source callbacks live until queue settlement, then revokes them", async () => {
-    const { owner, delivered, dispatch } = createOwnedInboundFixture();
+  it("does not add adoption ownership to plain source options", async () => {
+    const { owner, dispatch } = createOwnedInboundFixture();
+    const source = new AbortController();
+    try {
+      await dispatch({ abortSignal: source.signal });
+      const turn = dispatchRoutedChannelTurn.mock.calls.at(-1)?.[0];
+      expect(turn?.replyOptions?.abortSignal).toBe(source.signal);
+      // Plain user turns detach this source signal when queued; a lifecycle would attach it.
+      expect(
+        turn?.turnAdoptionLifecycle ?? turn?.replyOptions?.turnAdoptionLifecycle,
+      ).toBeUndefined();
+      expect(owner.hasRetainedConsumers).toBe(false);
+    } finally {
+      await owner.dispose();
+    }
+  });
+
+  it.each([false, true])("owns queued callback lifetime (observer=%s)", async (observerOnly) => {
+    const { owner, delivered, dispatch } = createOwnedInboundFixture(observerOnly);
     let settle: (() => void | Promise<void>) | undefined;
     dispatchRoutedChannelTurn.mockImplementationOnce(async (turn) => {
       turn.replyOptions?.turnAdoptionLifecycle?.onDeferred?.();
@@ -128,7 +150,6 @@ describe("inbound dispatch", () => {
       }
       settle = queued.replyOptions?.turnAdoptionLifecycle?.onSettled;
       expect(owner.hasRetainedConsumers).toBe(true);
-      const deliver = queued.replyOptions?.onQueuedFollowupReplyBatch;
       const batch = {
         kind: "queued-followup" as const,
         runId: "queued-run",
@@ -136,11 +157,15 @@ describe("inbound dispatch", () => {
         payloads: [{ text: "answer" }],
         completion: { kind: "completed" as const },
       };
-      await deliver?.(batch);
-      expect(delivered).toHaveBeenCalledExactlyOnceWith(batch);
+      const model = { provider: "openai", model: "qa", thinkLevel: undefined };
+      const callback = observerOnly
+        ? () => queued.replyOptions?.onModelSelected?.(model)
+        : () => queued.replyOptions?.onQueuedFollowupReplyBatch?.(batch);
+      await callback();
+      expect(delivered).toHaveBeenCalledExactlyOnceWith(observerOnly ? model : batch);
       await settle?.();
       expect(owner.hasRetainedConsumers).toBe(false);
-      expect(() => deliver?.(batch)).toThrow("consumer is closed");
+      expect(callback).toThrow("consumer is closed");
       settle = undefined;
     } finally {
       await settle?.();

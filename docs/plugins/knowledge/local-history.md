@@ -23,10 +23,13 @@ credentials or network access are needed.
 
 ## Publication and checkpoints
 
-1. A publication validates and journals its intent, then installs the record and
-   any retained evidence.
+1. A publication validates its files and journals its intent in a short SQLite
+   transaction, then installs and syncs the record and retained evidence outside
+   the SQLite write lock. The accepted intent remains recoverable throughout.
+   Attachments likewise retain committed chunks until their files are durable.
 2. The transaction that acknowledges the publication queues the exact changed
-   bytes in `state.sqlite`.
+   bytes in `state.sqlite`, after rechecking the current request and vault
+   checkpoint. A retry after file installation settles that request once.
 3. Knowledge commits that batch outside a SQLite write transaction, then records
    the commit and receipt together in a short transaction. Queued batches stay
    ordered; a retry after interruption reuses the checkpoint commit.

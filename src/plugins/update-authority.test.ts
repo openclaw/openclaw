@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { releaseUpdateCommandPreflightForHandoff } from "../cli/update-cli/update-command-executor.js";
 import * as installMetadata from "../infra/install-source-utils.js";
+import * as clawPackageLease from "../state/claw-package-lifecycle-lease.js";
+import { createOpenClawStateLeaseCleanup } from "../state/openclaw-state-lease-cleanup.js";
 import * as clawhub from "./clawhub.js";
 import * as installer from "./install.js";
 import * as catalog from "./official-external-plugin-catalog.js";
@@ -28,6 +30,69 @@ afterEach(() => {
 });
 
 describe("plugin update authority", () => {
+  it.each(["initial", "beta-fallback"] as const)(
+    "preserves installer and lease cleanup failures during the %s ClawHub attempt",
+    async (stage) => {
+      await withPluginState("plugin-update-errors", async (state) => {
+        const installerError = new Error("plugin installer failed");
+        const cleanupError = new Error("lease cleanup failed");
+        const install = vi.spyOn(clawhub, "installPluginFromClawHub");
+        if (stage === "beta-fallback") {
+          install.mockResolvedValueOnce({
+            ok: false,
+            code: "version_not_found",
+            error: "beta release unavailable",
+          });
+        }
+        install.mockRejectedValueOnce(installerError);
+        const cleanup = createOpenClawStateLeaseCleanup({
+          revoke() {},
+          finish: async () => {
+            throw cleanupError;
+          },
+          workerOwner: () => undefined,
+        });
+        const withLease = clawPackageLease.withClawPackageLifecycleLease;
+        vi.spyOn(clawPackageLease, "withClawPackageLifecycleLease").mockImplementationOnce(
+          (artifact, operation, options) =>
+            withLease(
+              artifact,
+              (lease, identity) =>
+                cleanup.run(
+                  () => operation(lease, identity),
+                  () => {},
+                ),
+              options,
+            ),
+        );
+        const pluginId = "update-error-fixture";
+        const config = singleInstallConfig(pluginId, {
+          source: "clawhub",
+          spec: `clawhub:${pluginId}`,
+          clawhubPackage: pluginId,
+          installPath: state.statePath("extensions", pluginId),
+          version: "1.2.3",
+        });
+
+        const result = await updateNpmInstalledPlugins({
+          config,
+          ...(stage === "beta-fallback" ? { updateChannel: "beta" } : {}),
+        });
+
+        expect(result.changed).toBe(false);
+        expect(result.config).toBe(config);
+        expect(result.outcomes).toEqual([
+          expect.objectContaining({
+            pluginId,
+            status: "error",
+            message: expect.stringContaining(installerError.message),
+          }),
+        ]);
+        expect(result.outcomes[0]?.message).toContain(cleanupError.message);
+      });
+    },
+  );
+
   it.each([
     ["untrusted", "version_not_found"],
     ["blocked", "clawhub_download_blocked"],

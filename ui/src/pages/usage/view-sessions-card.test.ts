@@ -34,6 +34,7 @@ it("retires changed copy payloads and announces success and failure until feedba
       get sessions() {
         return sessions();
       },
+      selectedRows: [],
       usage: createUsageProps(),
       totalSessions: 1,
     }),

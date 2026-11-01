@@ -2,6 +2,11 @@
 import { describe, expect, it } from "vitest";
 import { copyWithPathPatch } from "../lib/config-form-utils.ts";
 import {
+  objectPropertyKeys,
+  objectPropertySchema,
+  requiredPropertyKeys,
+} from "./config-form.array-items.ts";
+import {
   arrayInputConstraints,
   canApplyArrayCandidate,
   canApplyObjectCandidate,
@@ -11,9 +16,6 @@ import {
   NO_SAFE_DEFAULT,
   normalizeNumericValue,
   numericInputConstraints,
-  objectPropertyKeys,
-  objectPropertySchema,
-  requiredPropertyKeys,
 } from "./config-form.constraints.ts";
 import { coerceConfigFormNumberString, formatConfigFormNumber } from "./config-form.numeric.ts";
 import type { JsonSchema } from "./config-form.shared.ts";

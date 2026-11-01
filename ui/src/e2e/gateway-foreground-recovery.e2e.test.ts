@@ -1,16 +1,14 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, webkit, type Browser } from "playwright";
-import { expect, it } from "vitest";
+import { expect, inject, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import {
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 
 const useWebKit = process.env.OPENCLAW_CONTROL_UI_E2E_BROWSER === "webkit";
 const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const { executablePath: chromiumExecutablePath, wsEndpoint: chromiumWsEndpoint } =
+  inject("controlUiE2eChromium");
 
 it("replaces a silent suspended socket when its tab returns to the foreground", async () => {
   const server = await startControlUiE2eServer();
@@ -21,9 +19,9 @@ it("replaces a silent suspended socket when its tab returns to the foreground", 
     }
     browser = useWebKit
       ? await webkit.launch()
-      : await chromium.launch({
-          executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
-        });
+      : chromiumWsEndpoint
+        ? await chromium.connect(chromiumWsEndpoint, { timeout: 30_000 })
+        : await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",

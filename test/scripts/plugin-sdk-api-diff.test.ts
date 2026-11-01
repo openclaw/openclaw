@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  constants as fsConstants,
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -39,6 +41,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
+const templates = useAutoCleanupTempDirTracker(afterAll);
+let template: string | undefined;
+
 const emptyDiff = {
   entrypointsAdded: [],
   entrypointsRemoved: [],
@@ -60,10 +65,16 @@ function makeFixture(name: string) {
   const repo = tempDirs.make(`plugin-sdk-${name}-repo-`);
   const runnerTemp = tempDirs.make(`plugin-sdk-${name}-temp-`);
   const binDir = tempDirs.make(`plugin-sdk-${name}-bin-`);
-  git(repo, ["init", "--quiet", "--initial-branch=main"]);
-  git(repo, ["config", "user.name", "Test"]);
-  git(repo, ["config", "user.email", "test@example.com"]);
-  git(repo, ["config", "core.hooksPath", "/dev/null"]);
+  if (!template) {
+    const seed = templates.make("plugin-sdk-unborn-template-");
+    git(seed, ["init", "--quiet", "--initial-branch=main"]);
+    git(seed, ["config", "user.name", "Test"]);
+    git(seed, ["config", "user.email", "test@example.com"]);
+    git(seed, ["config", "core.hooksPath", "/dev/null"]);
+    template = seed;
+  }
+  // Copy the unborn seed completely: refs, indexes and objects stay case-owned.
+  cpSync(template, repo, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
   return { repo, runnerTemp, binDir };
 }
 

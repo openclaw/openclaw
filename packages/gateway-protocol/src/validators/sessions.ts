@@ -375,3 +375,12 @@ export const validateSessionGitHubConfirmParams = createProtocolValidator(
   S.SessionGitHubConfirmParamsSchema,
   Checks.isSessionGitHubConfirmParams,
 );
+
+export const validateSessionsFilesPreviewParams = createProtocolValidator(
+  S.SessionsFilesPreviewParamsSchema,
+  Checks.isSessionsFilesPreviewParams,
+);
+export const validateSessionsFilesPreviewReleaseParams = createProtocolValidator(
+  S.SessionsFilesPreviewReleaseParamsSchema,
+  Checks.isSessionsFilesPreviewReleaseParams,
+);

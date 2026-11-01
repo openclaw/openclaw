@@ -35,6 +35,8 @@ export type TranscriptCallbacks = {
   onReaderScroll?: (towardEnd?: boolean) => void;
   /** The pane owns reader intent; geometry-only follow must honor that policy. */
   canFollowEnd?: () => boolean;
+  /** A queued send/latest command supersedes reader anchoring before its first frame. */
+  hasPendingScrollCommand?: () => boolean;
 };
 
 export const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
