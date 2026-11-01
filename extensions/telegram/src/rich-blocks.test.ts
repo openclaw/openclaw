@@ -299,6 +299,15 @@ describe("splitTelegramRichBlocks", () => {
 });
 
 describe("rich message plan wiring", () => {
+  it("preserves Markdown paragraph gaps in rich delivery and plain recovery", () => {
+    const [page] = pagesFor("**A**\n\n[B](https://example.com)");
+    expect(page?.plainText).toBe("A\n\nB");
+    expect(page?.richMessage?.blocks).toEqual([
+      paragraph({ type: "bold", text: "A" }),
+      paragraph(["\n", { type: "url", text: "B", url: "https://example.com" }]),
+    ]);
+  });
+
   it("preserves media sources beyond HTML depth 61", () => {
     const text =
       "<details><summary>s</summary>".repeat(61) +

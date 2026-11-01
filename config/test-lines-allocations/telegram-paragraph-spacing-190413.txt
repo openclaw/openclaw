@@ -1,0 +1,2 @@
+# Preserve Markdown blank lines in Telegram rich blocks and plain recovery.
+9
