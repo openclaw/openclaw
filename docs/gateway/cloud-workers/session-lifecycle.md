@@ -365,7 +365,23 @@ and finishes custody retirement and cleanup without reapplying an export. Missin
 exports, replaced disks, or changed session ownership keep recovery held. Existing
 mirrored pending results keep their original acceptance semantics. This uses the
 existing schema and cleanup owners; it adds no disk-mode selector or activation.
-Paused-disk preparation remains a separate prerequisite. Missing or replaced disks
+For an already-bound retained disk, explicit file reads, edits, downloads, and new
+publication snapshots request readiness from the retained lifecycle owner. That
+owner waits for the original node and current bundle; provider resume alone does
+not admit file I/O. Editor preparation runs inside the existing session mutation
+and workspace exclusion, before result custody is claimed. Downloads retain their
+current read authority across preparation and each byte window.
+
+Move records its intent and exact result custody before preparing its source and
+taking node quiescence. A runtime update may preserve the draining Move only for
+its exact original disk and retained result, including after interruption. An
+unavailable wake leaves that durable Move held for retry, without replacing its
+source. Both host admission and the native writer check that custody;
+caller revocation during installation refuses the refreshed receipt. This grants
+no new turn and does not replay input. Capture inside Move quiescence never wakes
+or refreshes the runtime again. Publication retries with
+an immutable snapshot reuse it without waking or recapturing the disk. Ordinary
+mirrored sessions and turn admission are unchanged. Missing or replaced disks
 never fall back to a stored mirror or source-only reconstruction.
 
 The shared-state schema upgrade preserves old rows with an absent receipt and

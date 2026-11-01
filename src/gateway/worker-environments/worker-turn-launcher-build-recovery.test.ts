@@ -182,6 +182,7 @@ async function createBuildRecoveryHarness(
     Parameters<typeof createProviderReplayDispatch>[0]["environments"] = {
     ...worker.unusedEnvironments(),
     prepareProjectIntent: unexpected("prepared intent"),
+    ensureRetainedRunning: unexpected("retained wake"),
     assertPreparedIntentCurrent: vi.fn(),
     getPreparedCandidates: () => [],
     schedulePreparedRefill: vi.fn(),

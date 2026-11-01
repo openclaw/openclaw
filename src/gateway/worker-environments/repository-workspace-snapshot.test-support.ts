@@ -3,11 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
+import type { WorkerRetentionObservation } from "../../plugins/worker-retention.types.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { createWorkerPlacementNodeWorkspaceBindingResolver } from "../server-worker-placement-session-target.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createNodeWorkerLaunchAdapter } from "./node-launch-adapter.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
@@ -15,8 +17,10 @@ import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-se
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import type { openDiskCleanupTransport } from "./placement-disk-cleanup.test-support.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
 import { createWorkerEnvironmentService } from "./service.js";
+import { createProvider } from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import {
   attachedEnvironment,
@@ -32,6 +36,7 @@ import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 // admission, native dispatch, HTTP uploads and durable artifact owners are real.
 export async function openRepositoryCaptureTransport(
   wire: Awaited<ReturnType<typeof openDiskCleanupTransport>>,
+  retained = false,
 ) {
   const assertCurrent = () => {};
   const records = await createWorkerEnvironmentStore({ database });
@@ -48,6 +53,15 @@ export async function openRepositoryCaptureTransport(
     profileId: "fixture",
     profileSnapshot: { settings: {}, install: "bundle" },
     provisionOperationId: "capture-provision",
+    ...(retained
+      ? {
+          retention: {
+            version: 1 as const,
+            ownerBinding: "a".repeat(64),
+            computeWindowSeconds: 600,
+          },
+        }
+      : {}),
   });
   await records.transition({
     environmentId: ENVIRONMENT_ID,
@@ -86,6 +100,26 @@ export async function openRepositoryCaptureTransport(
     receipt: resourceReceipt,
     assertCurrent,
   });
+  let observation: WorkerRetentionObservation = {
+    claimRevision: "capture-initial",
+    state: "running",
+    computeExpiresAtMs: Date.now() + 600_000,
+  };
+  if (retained) {
+    await records.recordRetentionObservation({
+      environmentId: ENVIRONMENT_ID,
+      expectedOwnerEpoch: attached.ownerEpoch,
+      observation,
+      assertCurrent,
+    });
+    await records.setRetentionRuntimeAdmission({
+      environmentId: ENVIRONMENT_ID,
+      expectedOwnerEpoch: attached.ownerEpoch,
+      expectedClaimRevision: observation.claimRevision,
+      ready: true,
+      assertCurrent,
+    });
+  }
   const original = records.get(ENVIRONMENT_ID)!;
   const events: string[] = [];
   const transfer = createNodeWorkspaceTransferService({
@@ -122,16 +156,56 @@ export async function openRepositoryCaptureTransport(
     launchNodeWorker: createNodeWorkerLaunchAdapter({ getTransport: () => wire.transport }).launch,
     validateWorkerTurn: (claim) => placements.validateTurnClaim(claim),
   });
-  const preparation = { beforeBuild: async () => {} };
+  const preparation = {
+    beforeBuild: async () => {},
+    beforeNode: async () => {},
+    beforeBundle: async () => {},
+    build,
+  };
+  // Provider observation and runtime installation are explicit synthetic boundaries.
+  // ensureRetainedRunning, its writer/replay owner and the native file transport are real.
+  let revision = 0;
+  const provider = createProvider({
+    id: "fixture",
+    supportsResourceReceipts: true,
+    inspect: async () => ({
+      status: observation.state === "running" ? "active" : "dormant",
+      resourceReceipt,
+      retention: observation,
+    }),
+    setRetainedState: vi.fn(async (lease) => {
+      lease.assertCurrent();
+      expect(lease.resourceReceipt).toEqual(resourceReceipt);
+      observation = {
+        claimRevision: "capture-" + ++revision,
+        state: lease.operation.action === "pause" ? "suspended" : "running",
+        computeExpiresAtMs: Date.now() + 600_000,
+        operation: { ...lease.operation, phase: "observed" },
+      };
+      return observation;
+    }),
+  });
   const environments = createWorkerEnvironmentService({
     scheduler: createTestGatewayScheduler(),
     store: records,
     getConfig: () => ({}),
-    resolveProvider: () => undefined,
+    resolveProvider: () => provider,
+    placementStore: createWorkerSessionPlacementGate(placements),
+    waitForRetainedNode: async (node, request) => {
+      expect(node).toBe(wire.nodeId);
+      await preparation.beforeNode();
+      request.assertCurrent();
+    },
+    ensureNodeWorkerBundle: async (request) => {
+      expect(request.deviceId).toBe(wire.nodeId);
+      await preparation.beforeBundle();
+      request.assertCurrent?.();
+      return preparation.build;
+    },
     prepareInstallation: async () => {
       await preparation.beforeBuild();
       return {
-        ...build,
+        ...preparation.build,
         install: "bundle",
         tarballBytes: 1,
         tarballSha256: "b".repeat(64),
@@ -217,6 +291,15 @@ export async function openRepositoryCaptureTransport(
       diskAuthority: { environmentId: ENVIRONMENT_ID, resourceReceipt },
       assertCurrent,
     });
+    tunnels.bindWorkspaceBindingResolver(
+      createWorkerPlacementNodeWorkspaceBindingResolver({
+        placements,
+        resolveWorkspace: async () => ({
+          kind: "repository",
+          repository: (await store.get(repository.workspaceId))!,
+        }),
+      }),
+    );
     events.length = 0;
     wire.commands.length = 0;
     return {
@@ -230,6 +313,13 @@ export async function openRepositoryCaptureTransport(
       remote: synced.remoteWorkspaceDir,
       store,
       preparation,
+      provider,
+      pause: () =>
+        environments.suspendRetained({
+          environmentId: ENVIRONMENT_ID,
+          expectedOwnerEpoch: attached.ownerEpoch,
+          assertCurrent,
+        }),
       close,
     };
   } catch (error) {

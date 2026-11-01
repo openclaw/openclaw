@@ -72,6 +72,7 @@ const enNewSessionSetup = {
       "You don't have permission to check Git for this folder. Ask the person who manages OpenClaw for access.",
     gitCheckUnavailable: "Couldn't verify Git for this folder. Choose it again to retry.",
     starting: runtime.starting,
+    tryAgain: "Try again",
     followUps: "Follow-up messages",
     followUpCommandsUnavailable: runtime.followUpCommandsUnavailable,
     followUpReloadBlocked: runtime.followUpReloadBlocked,
