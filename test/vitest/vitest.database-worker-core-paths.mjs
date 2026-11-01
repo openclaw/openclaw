@@ -792,6 +792,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli.finalizer.test.ts",
   "src/cli/update-cli.fresh-doctor.test.ts",
   "src/cli/update-cli.git-service.test.ts",
+  "src/cli/update-cli.handoff-cleanup.test.ts",
   "src/cli/update-cli.node-runtime.test.ts",
   "src/cli/update-cli.package-lifecycle.test.ts",
   "src/cli/update-cli.plugin-convergence.test.ts",
