@@ -143,7 +143,7 @@ export function prepareMessageGroupFrame(
   const showAvatar =
     normalizedRole !== "user" || Boolean(group.sender || group.senderLabel?.trim());
   const assistantName = opts.assistantName ?? "Assistant";
-  const isOwnGroup = isOwnSenderGroup(group, opts.userId);
+  const isOwnGroup = isOwnSenderGroup(group, opts);
   const isPeerGroup =
     normalizedRole === "user" && Boolean(opts.userId && group.sender) && !isOwnGroup;
   const forwardedSource = hasForwardedSource(group);
@@ -211,13 +211,11 @@ export function prepareMessageGroupFrame(
     normalizedRole === "user" &&
     ((opts.onRewind && !opts.rewindDisabled) || hasMessageActionButtons(footerActionDetails, opts));
   // Source sessions share stable sender hues; the shared participant palette owns contrast
-  // in each theme. Tint follows the peer layout: own, unattributed and undistinguished turns
-  // (a viewer without a profile, e.g. Tailscale or trusted-proxy access) keep the
-  // theme-derived accent skin on every access path.
+  // in each theme. Own and unattributed messages keep the theme-derived accent skin.
   const senderHue =
     isForwarded && sourceSessionKey
       ? resolveIdentityHue({ id: sourceSessionKey })
-      : isPeerGroup && group.sender
+      : normalizedRole === "user" && group.sender && !isOwnGroup
         ? resolveIdentityHue(group.sender)
         : null;
   const pendingSend = readPendingSendStatus(group.messages.at(-1)?.message);

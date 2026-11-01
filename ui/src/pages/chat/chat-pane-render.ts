@@ -192,6 +192,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const selfProfileId = selfUser?.identity?.type === "profile" ? selfUser.identity.id : null;
     const userPresentation = {
       userId: selfProfileId ?? this.presentationUserId,
+      userSenderId: selfProfileId ? null : (selfUser?.id ?? null),
       userName: selfUser?.name ?? state.userName,
       userAvatar: selfUser?.avatarUrl ?? state.userAvatar,
       channelAvatar: selectedSession ?? undefined,

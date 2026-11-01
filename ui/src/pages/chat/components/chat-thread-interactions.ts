@@ -163,6 +163,8 @@ export type ChatThreadProps = Omit<
     /** Configured main-session key; an agent's main source labels as the agent. */
     mainKey?: string;
     userId?: string | null;
+    /** The viewer's authenticated sender id when it has no profile (Tailscale, trusted proxy). */
+    userSenderId?: string | null;
     userName?: string | null;
     userAvatar?: string | null;
     channelAvatar?: import("../../../lib/chat/channel-sender-avatar.ts").ChannelSenderAvatarSource;

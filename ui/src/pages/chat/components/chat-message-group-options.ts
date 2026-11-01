@@ -31,6 +31,7 @@ export type RenderMessageGroupOptions = Omit<
       messageId: string,
     ) => AssistantMessageExpansionState | undefined;
     onToggleAssistantMessageExpanded?: (messageId: string) => void;
+    userSenderId?: string | null;
     userName?: string | null;
     showOwnSenderName?: boolean;
     /** Routing for peer sender names; absent leaves them plain text. */
