@@ -34,12 +34,27 @@ function readSession(sessionId: string, reads: { count: number }) {
     database,
     sessionId,
     generation: "gen-1",
-    through: 1,
+    through: 3,
     maxEvents: 10,
     readRows: (after, through) => {
       reads.count += 1;
-      return [0, 1].filter((seq) => seq > after && seq <= through).map((seq) => navigationRow(seq));
+      return [0, 1, 2, 3]
+        .filter((seq) => seq > after && seq <= through)
+        .map((seq) => navigationRow(seq));
     },
+  });
+}
+
+function readAnchor(sessionId: string, anchorId: string) {
+  return readModelContextNavigationPages({
+    database,
+    sessionId,
+    generation: "gen-1",
+    through: 3,
+    anchorId,
+    maxEvents: 10,
+    readRows: (after, through) =>
+      [0, 1, 2, 3].filter((seq) => seq > after && seq <= through).map((seq) => navigationRow(seq)),
   });
 }
 
@@ -56,6 +71,18 @@ describe("model-context navigation cache", () => {
     // One seed read per session: switching back answers from the retained snapshot.
     expect(a.count).toBe(1);
     expect(b.count).toBe(1);
+  });
+
+  it("keeps the current snapshot warm across historical anchor reads", () => {
+    const current = { count: 0 };
+    readSession("session-anchors", current);
+    for (let index = 0; index < 4; index += 1) {
+      readAnchor("session-anchors", `entry-${index}`);
+    }
+    readSession("session-anchors", current);
+
+    // Historical anchors stay transient: they never displace the current snapshot.
+    expect(current.count).toBe(1);
   });
 
   it("evicts the least recently used session once the bound is exceeded", () => {

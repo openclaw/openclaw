@@ -117,6 +117,30 @@ export function touchNavigationSnapshot(cache: NavigationSnapshotCache, key: str
   cache.entries.set(key, entry);
 }
 
+/** Recomputes retained size after a warm append and evicts past the byte budget. */
+function refreshNavigationSnapshotBytes(
+  cache: NavigationSnapshotCache,
+  key: string,
+  snapshot: NavigationSnapshot,
+): void {
+  const entry = cache.entries.get(key);
+  if (!entry) {
+    return;
+  }
+  cache.bytes -= entry.bytes;
+  entry.bytes = navigationSnapshotBytes(snapshot);
+  cache.bytes += entry.bytes;
+  while (cache.bytes > NAVIGATION_CACHE_MAX_BYTES && cache.entries.size > 1) {
+    const oldest = cache.entries.keys().next().value;
+    if (oldest === undefined || oldest === key) {
+      return;
+    }
+    const evicted = cache.entries.get(oldest)!;
+    cache.entries.delete(oldest);
+    cache.bytes -= evicted.bytes;
+  }
+}
+
 const navigationCache = createSqliteQueryCache((database): NavigationSnapshotCache => {
   const cache: NavigationSnapshotCache = { entries: new Map(), bytes: 0 };
   registerNodeSqliteDisposeCallback(sqlPublicationAnchor(database), () => {
@@ -245,10 +269,15 @@ export function readModelContextNavigationPages(params: {
   const { database, sessionId, generation, through, anchorId, maxEvents, readRows } = params;
   const cache = navigationCache(database);
   const cacheable =
-    generation !== null && maxEvents !== undefined && !hasUncommittedSqliteWrites(database);
-  // Historical anchors keep their own entry, so an anchored read cannot evict the
-  // current branch's warmed prefix facts and alternating sessions share the budget.
-  const cacheKey = anchorId === undefined ? sessionId : `${sessionId}\u0000${anchorId}`;
+    generation !== null &&
+    maxEvents !== undefined &&
+    !hasUncommittedSqliteWrites(database) &&
+    // A historical read must not evict the current branch's warmed prefix facts.
+    // Per-anchor entries kept separate keys but shared the same four-entry LRU, so
+    // four distinct anchors displaced the current snapshot; keep historical reads
+    // transient, as the base did, and let only current navigation occupy the cache.
+    anchorId === undefined;
+  const cacheKey = sessionId;
   let snapshot = cacheable ? cache.entries.get(cacheKey)?.snapshot : undefined;
   if (
     snapshot?.sessionId !== sessionId ||
@@ -319,6 +348,9 @@ export function readModelContextNavigationPages(params: {
       snapshot.through = through;
       for (const [pageIndex, page] of pages) {
         page.through = Math.min((pageIndex + 1) * MODEL_CONTEXT_PAGE_SIZE - 1, through);
+      }
+      if (cacheable) {
+        refreshNavigationSnapshotBytes(cache, cacheKey, snapshot);
       }
       return {
         rows: snapshot.rows,
