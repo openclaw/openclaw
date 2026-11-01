@@ -266,6 +266,19 @@ describe("explicit model visibility policy", () => {
     ]);
   });
 
+  it("accepts the role model-name prefix grammar in agent policies", () => {
+    const policy = createPolicy({
+      agents: { defaults: { modelPolicy: { allow: ["openai/gpt-5.6-*"] } } },
+    });
+
+    expect(policy.allows({ provider: "openai", model: "gpt-5.6-sol" })).toBe(true);
+    expect(policy.allowsByWildcard({ provider: "openai", model: "gpt-5.6-sol" })).toBe(true);
+    expect(policy.allows({ provider: "openai", model: "gpt-5.5" })).toBe(false);
+    expect(policy.allowedCatalog.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+      "openai/gpt-5.6-sol",
+    ]);
+  });
+
   it("keeps nested prefix wildcards scoped when segments carry boundary whitespace", () => {
     const policy = createPolicy({
       agents: {

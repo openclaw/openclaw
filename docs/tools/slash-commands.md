@@ -485,6 +485,10 @@ Numeric selections such as `/model 3` are not supported.
 /model status      # detailed view with endpoint and API mode
 ```
 
+For plain-text model browsing, `/models openai limit=5` selects a custom page size
+(`size=5` is an alias). Emitted **More** and out-of-range **Try** commands retain
+that size; omit it for the default 20 models per page, or use `all` to disable pagination.
+
 On Discord, the bare native `/model` and `/models` commands open an interactive
 picker. Choose a provider and model from the dropdowns, then select **Submit**.
 Discord follows the direct command behavior, including `modelSelectionScope`.

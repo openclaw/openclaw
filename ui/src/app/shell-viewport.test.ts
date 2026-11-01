@@ -115,6 +115,51 @@ describe("shell visual viewport", () => {
     },
   );
 
+  it("cancels keyboard-open drags that would pan Safari's visual viewport", () => {
+    const drag = (target: Element, deltaY: number, holdMs = 0) => {
+      const touch = (y: number, type: string, timeStamp: number) => {
+        const event = new Event(type, { bubbles: true, cancelable: true, composed: true });
+        Object.defineProperties(event, {
+          touches: { value: [{ clientX: 100, clientY: y }] },
+          timeStamp: { value: timeStamp },
+        });
+        target.dispatchEvent(event);
+        return event;
+      };
+      touch(400, "touchstart", 1000);
+      return touch(400 + deltaY, "touchmove", 1000 + holdMs + 16).defaultPrevented;
+    };
+    const thread = document.createElement("div");
+    thread.style.overflowY = "auto";
+    const message = document.createElement("p");
+    thread.append(message);
+    document.body.append(thread);
+    Object.defineProperties(thread, {
+      scrollHeight: { value: 2000 },
+      clientHeight: { value: 400 },
+    });
+    disconnect = connectShellViewport();
+    const input = editor();
+    // Without a keyboard there is no uncovered layout area to pan into.
+    expect(drag(input, -40)).toBe(false);
+    resize({ height: 480 });
+
+    expect(drag(input, -40)).toBe(true);
+    thread.scrollTop = 1600;
+    expect(drag(message, -40)).toBe(true);
+    expect(drag(message, 40)).toBe(false);
+    thread.scrollTop = 0;
+    expect(drag(message, 40)).toBe(true);
+    expect(drag(input, -40, 500)).toBe(false);
+    // Safari panned the header away; dragging down must still bring it back.
+    resize({ height: 440, offsetTop: 70 }, "scroll");
+    expect(drag(input, 40)).toBe(false);
+    expect(drag(input, -40)).toBe(true);
+
+    resize({ height: 844 });
+    expect(drag(input, -40)).toBe(false);
+  });
+
   it("captures focus before a content-resizing keyboard and restores its inset", () => {
     disconnect = connectShellViewport();
     editor();
