@@ -842,7 +842,13 @@ jobs:
               --required-plugin-packages-json '["@openclaw/codex"]'
           fi
 
-          node --import tsx scripts/resolve-openclaw-package-candidate.mts \
+          # This diagnostic branch only observes the frozen Grok candidate.
+          [[ "$SOURCE" == "ref" && "$PACKAGE_REF" == "70dff2b10c3a896ea6ef14f6d87e38f6479babc8" ]]
+          trace_observer="$RUNNER_TEMP/openclaw-root-help-observer.mjs"
+          cp scripts/ci-trace-root-help.mjs "$trace_observer"
+          trace_observer_url="$(node -e 'console.log(require("node:url").pathToFileURL(process.argv[1]).href)' "$trace_observer")"
+          NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--import=$trace_observer_url" \
+            node --import tsx scripts/resolve-openclaw-package-candidate.mts \
             --source "$SOURCE" \
             --package-ref "$PACKAGE_REF" \
             --package-spec "$PACKAGE_SPEC" \
@@ -871,6 +877,18 @@ jobs:
               exit 1
             }
           fi
+
+      - name: Verify bundled root-help phase observation
+        run: node scripts/ci-trace-root-help.mjs --verify "$RUNNER_TEMP/grok-root-help-phase.jsonl"
+
+      - name: Upload bundled root-help phase observation
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: grok-root-help-phase-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/grok-root-help-phase.jsonl
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Plan frozen source admission
         id: frozen_selection
