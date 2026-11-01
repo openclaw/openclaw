@@ -1,8 +1,12 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { Readable } from "node:stream";
 import { Command } from "commander";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { registerCapabilityCli } from "../capability-cli.js";
 import { registerModelCapabilityCommands } from "./model.js";
 
 const mocks = await vi.hoisted(async () => ({
@@ -61,6 +65,137 @@ async function runModel(...options: string[]) {
     from: "user",
   });
 }
+
+async function runPromptInput(root: string, ...options: string[]) {
+  const argv = [root, "model", "run", ...options, "--json"];
+  const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
+  await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
+  return await program.parseAsync(argv, { from: "user" });
+}
+
+it.each([
+  ["infer", "--local", "file"],
+  ["capability", "--gateway", "file"],
+  ["infer", "--local", "stdin"],
+  ["capability", "--gateway", "stdin"],
+])(
+  "reads bounded prompts through %s %s from %s without printing the input",
+  async (root, transport, source) =>
+    withOpenClawTestState({}, async (state) => {
+      const prompt = `  private UTF-8: café\n${"x".repeat(1_048_548)}🦞\n`;
+      expect(Buffer.byteLength(prompt)).toBe(1_048_576);
+      await state.writeText("prompt.txt", prompt);
+      using _ = vi.spyOn(process, "cwd").mockReturnValue(state.stateDir);
+      const bytes = Buffer.from(prompt);
+      const stream = Readable.from([bytes.subarray(0, -3), bytes.subarray(-3)]);
+      using stdin = vi.spyOn(process, "stdin", "get");
+      stdin.mockReturnValue(stream as typeof process.stdin);
+      mocks.complete.mockResolvedValue({ content: [{ type: "text", text: "answer" }] });
+      mocks.callGateway.mockResolvedValue({ result: { payloads: [{ text: "answer" }] } });
+
+      await runPromptInput(
+        root,
+        ...(source === "file" ? ["--prompt-file", "prompt.txt"] : ["--prompt-stdin"]),
+        transport,
+      );
+      expect(stream.readableDidRead).toBe(source === "stdin");
+
+      if (transport === "--local") {
+        expect(mocks.complete.mock.calls[0]?.[0]?.context.messages[0].content).toBe(prompt);
+      } else {
+        expect(mocks.callGateway.mock.calls[0]?.[0]?.params).toMatchObject({
+          message: prompt,
+          modelRun: true,
+        });
+      }
+      expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({ ok: true }),
+        2,
+      );
+      expect(
+        JSON.stringify([
+          mocks.runtime.log.mock.calls,
+          mocks.runtime.error.mock.calls,
+          mocks.runtime.writeJson.mock.calls,
+        ]),
+      ).not.toContain("private UTF-8");
+    }),
+);
+
+it.each(["missing", "empty", "oversized", "traversal", "symlink", "conflict"])(
+  "rejects %s prompt files before inference",
+  async (scenario) =>
+    withOpenClawTestState({}, async (state) => {
+      const dir = state.path("allowed");
+      await fs.mkdir(dir);
+      await fs.writeFile(state.path("private.txt"), "outside private prompt");
+      const content =
+        scenario === "empty" ? " \n" : "x".repeat(scenario === "oversized" ? 1_048_577 : 1);
+      if (scenario === "symlink") {
+        await fs.symlink(state.root, path.join(dir, "alias"), "junction");
+      } else if (scenario !== "missing") {
+        await fs.writeFile(path.join(dir, "prompt.txt"), content);
+      }
+      using _ = vi.spyOn(process, "cwd").mockReturnValue(dir);
+      const file =
+        scenario === "traversal"
+          ? "../private.txt"
+          : scenario === "symlink"
+            ? "alias/private.txt"
+            : "prompt.txt";
+
+      await expect(
+        runPromptInput(
+          "infer",
+          "--prompt-file",
+          file,
+          ...(scenario === "conflict" ? ["--prompt", "argv prompt"] : []),
+        ),
+      ).rejects.toThrow("exit 1");
+
+      expect(mocks.acquire).not.toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    }),
+);
+
+it.each([
+  { bytes: Buffer.from(" \n"), error: "empty or whitespace-only" },
+  { bytes: Buffer.from("é".repeat(524_289)), error: "limit: 1048576 bytes" },
+  { bytes: Buffer.from([0xc3, 0x28]), error: "valid UTF-8" },
+  { bytes: undefined, error: "stdin fixture read failure" },
+])("rejects invalid stdin before inference: $error", async ({ bytes, error }) => {
+  const stream = bytes
+    ? Readable.from([bytes])
+    : new Readable({
+        read() {
+          this.destroy(new Error(error));
+        },
+      });
+  using _ = vi.spyOn(process, "stdin", "get").mockReturnValue(stream as typeof process.stdin);
+  await expect(runPromptInput("infer", "--prompt-stdin")).rejects.toThrow("exit 1");
+  expect(mocks.runtime.error.mock.calls.flat().join(" ")).toContain(error);
+  expect(mocks.acquire).not.toHaveBeenCalled();
+  expect(mocks.callGateway).not.toHaveBeenCalled();
+});
+
+it.each([
+  [],
+  ["--prompt", "hello", "--prompt-stdin"],
+  ["--prompt-file", "prompt.txt", "--prompt-stdin"],
+  ["--prompt", "hello", "--prompt-file", "prompt.txt", "--prompt-stdin"],
+])(
+  "rejects conflicting or missing prompt sources without reading stdin: %j",
+  async (...options) => {
+    const stream = Readable.from(["unselected stdin"]);
+    using _ = vi.spyOn(process, "stdin", "get").mockReturnValue(stream as typeof process.stdin);
+    await expect(runPromptInput("infer", ...options)).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error.mock.calls.flat().join(" ")).toContain("Use exactly one");
+    expect(stream.readableDidRead).toBe(false);
+    expect(mocks.acquire).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  },
+);
 
 const target = 'for provider "openai" model "gpt-5.4"';
 const reasoningOnly = `Model returned reasoning but no text output ${target}.`;

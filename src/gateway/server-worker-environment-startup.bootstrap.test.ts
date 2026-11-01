@@ -33,7 +33,7 @@ import {
 import * as enrollmentModule from "./worker-environments/node-enrollment.js";
 import * as transferModule from "./worker-environments/worker-bootstrap-artifact-transfer-service.js";
 
-const { fixture } = useNodeBootstrapArtifactFixtures();
+const { fixture, createProvider } = useNodeBootstrapArtifactFixtures();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -81,6 +81,7 @@ function makeRegistry(
 async function provision(
   startup: Awaited<ReturnType<typeof loadGatewayWorkerEnvironmentStartupState>>,
   environmentId: string,
+  install: "bundle" | "npm" = "bundle",
 ) {
   return provisionStartupWorker(
     startup,
@@ -88,7 +89,7 @@ async function provision(
       environmentId,
       providerId: "fake-provider",
       profileId: "test-profile",
-      profileSnapshot: { executionMode: "remote-exec", settings: {} },
+      profileSnapshot: { executionMode: "remote-exec", install, settings: {} },
     },
     { nodeDeviceId: `${environmentId}-node` },
   );
@@ -99,7 +100,7 @@ it.skipIf(process.platform === "win32")(
   async () => {
     const installation = await fixture("package");
     vi.spyOn(temporaryRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(installation.root);
-    const original = await installation.provider.prepare();
+    const original = await createProvider({ ...installation.options, install: "bundle" }).prepare();
     const retainedBytes = gzipSync(gunzipSync(await fs.readFile(original.tarballPath)), {
       level: 1,
     });
@@ -214,7 +215,11 @@ it("refreshes registry and metadata generations, retires old artifacts, and drai
     .mockReturnValue(metadata);
   vi.spyOn(version, "resolveRuntimeServiceBuildId").mockReturnValue("gateway-source-build");
   const enrollmentFactory = vi.spyOn(enrollmentModule, "createWorkerNodeEnrollmentManager");
-  const makeProducer = (number: number, enabledPluginIds: string[]) => {
+  const makeProducer = (
+    number: number,
+    enabledPluginIds: string[],
+    install: "bundle" | "npm" = "bundle",
+  ) => {
     const closure = createDeferredCore();
     const closing = createDeferredCore();
     const artifact = {
@@ -224,6 +229,7 @@ it("refreshes registry and metadata generations, retires old artifacts, and drai
       openclawVersion: "2026.8.1",
       buildId: "gateway-source-build",
       enabledPluginIds,
+      install,
     };
     return {
       artifact,
@@ -243,10 +249,11 @@ it("refreshes registry and metadata generations, retires old artifacts, and drai
   const producers: ReturnType<typeof makeProducer>[] = [];
   const releaseAll = () => producers.forEach((producer) => producer.release());
   vi.spyOn(artifactModule, "createNodeBootstrapArtifactProvider").mockImplementation(
-    ({ plugins }) => {
+    ({ plugins, install }) => {
       const producer = makeProducer(
         producers.length + 1,
         plugins.map(({ id }) => id),
+        install,
       );
       producers.push(producer);
       return producer;
@@ -264,8 +271,8 @@ it("refreshes registry and metadata generations, retires old artifacts, and drai
       "worker environment runtime was not created",
     );
     const manager = enrollmentResult.value;
-    const begin = async (id: string) => {
-      const record = await provision(startup, id);
+    const begin = async (id: string, install: "bundle" | "npm" = "bundle") => {
+      const record = await provision(startup, id, install);
       return await manager.begin(record);
     };
     let stopping: Promise<void> | undefined;
@@ -296,6 +303,14 @@ it("refreshes registry and metadata generations, retires old artifacts, and drai
       expect(producers).toHaveLength(3);
       expect(producers[1]!.close).toHaveBeenCalledOnce();
       expect(producers[2]!.prepare).toHaveBeenCalledWith(refreshed.signal);
+      const npm = await begin("npm-generation", "npm");
+      const bundleAgain = await begin("bundle-again");
+      const npmAgain = await begin("npm-again", "npm");
+      expect(producers).toHaveLength(4);
+      expect(npm.nodeBootstrap.install).toBe("npm");
+      expect(npm.nodeBootstrap.sha256).not.toBe(refreshed.nodeBootstrap.sha256);
+      expect(npmAgain.nodeBootstrap.sha256).toBe(npm.nodeBootstrap.sha256);
+      expect(bundleAgain.nodeBootstrap.sha256).toBe(refreshed.nodeBootstrap.sha256);
 
       manager.close(first);
       producers[0]!.release();

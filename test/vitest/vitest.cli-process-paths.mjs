@@ -61,6 +61,7 @@ export const cliProcessTestFiles = [
   "src/cli/program/register.transcripts.test.ts",
   "src/cli/state-dir-gateway-check.process.test.ts",
   "src/cli/state-dir-gateway-check.server.test.ts",
+  "src/cli/cron-cli/command-env.gateway.test.ts",
   "src/cli/cron-cli/cron-suppression.gateway.test.ts",
   "src/state/openclaw-database-verify.process.test.ts",
   "src/daemon/schtasks-process.windows.test.ts",

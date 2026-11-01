@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
 import { resolveControlUiAvatarAuth } from "../app/control-ui-auth.ts";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { formatDurationCompact } from "../lib/format-duration.ts";
 import { presenceMatchesProfile, projectPresencePayload } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -74,7 +75,10 @@ export function renderSidebarSessionIndicators(
   );
   // A self filter already identifies solo ownership. Keep shared rows and
   // archive attribution visible; the participant count includes unshown faces.
-  const selfUser = createMemo(() => host().sessionDataContext?.gateway.snapshot.selfUser);
+  const selfUser = createMemo(() => {
+    const gateway = host().sessionDataContext?.gateway;
+    return gateway ? gatewayPresentationScope(gateway).displayUser : null;
+  });
   const selfProfileId = createMemo(() => selfUser()?.identity?.id ?? selfUser()?.id);
   const ownerRepeatedByFilter = createMemo(() => {
     const actor = ownerActor();
@@ -225,7 +229,7 @@ export function renderSidebarSessionIndicators(
         <span class="sidebar-recent-session__details-endcap">
           <openclaw-viewer-facepile
             prop:presencePayload={host().sessionData.presencePayload}
-            prop:selfUser={host().sessionDataContext?.gateway.snapshot.selfUser}
+            prop:selfUser={selfUser()}
             prop:selfInstanceId={host().sessionData.presenceInstanceId}
             prop:sessionKey={readSession().key}
             prop:excludeIdentities={renderedIdentities() ?? EMPTY_VIEWER_IDENTITIES}

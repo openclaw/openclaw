@@ -15,10 +15,13 @@ import {
 import type { GatewayServiceState } from "../daemon/service-types.js";
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { UpdateDoctorError } from "../infra/update-doctor-result.js";
+import { reserveGatewayStateRestoration } from "../infra/gateway-state-owner-record.js";
+import { DoctorMaintenanceRefusalError, UpdateDoctorError } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact, type UpdateFailureFact } from "../infra/update-failure-facts.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import type { createDoctorMaintenanceState } from "./doctor-maintenance-state.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import { assertDoctorServiceSelection } from "./doctor-service-repair-policy.js";
 
@@ -26,6 +29,63 @@ type StoppedGatewayInspection =
   | { kind: "owned-offline" }
   | { kind: "not-ours"; reason: string }
   | { kind: "inconclusive"; reason: string };
+
+/** Drain repair custody while retaining Gateway priority through verified restoration. */
+export async function finishDoctorGatewayMaintenance(params: {
+  state: Pick<
+    Awaited<ReturnType<typeof createDoctorMaintenanceState>>,
+    "env" | "owner" | "resources"
+  >;
+  stopped: boolean;
+  config: OpenClawConfig | undefined;
+  assertCustody?: () => void;
+  release: (assertCurrent: () => void) => Promise<Error | undefined>;
+  restore: (config: OpenClawConfig, assertCurrent: () => void) => Promise<void>;
+  isCleanupUncertain: () => boolean;
+}) {
+  let cfg = params.config;
+  const { state } = params;
+  const owner = state.owner;
+  // Config recovery and Gateway bootstrap need the database root released.
+  // Reserve their admission first so queued CLI schema writers cannot take it.
+  const restoration =
+    params.stopped && owner
+      ? reserveGatewayStateRestoration(resolveOpenClawStateSqlitePath(state.env), () =>
+          owner.assertCurrent(),
+        )
+      : undefined;
+  const assertCurrent = () => {
+    params.assertCustody?.();
+    restoration?.assertCurrent();
+  };
+  try {
+    const settledFailure = await params.release(assertCurrent);
+    if (!cfg && params.stopped) {
+      try {
+        // Restore our own stop without re-entering the readiness gate that failed.
+        const { readConfigFileSnapshot } = await import("../config/config.js");
+        cfg = (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false })).config;
+      } catch (error) {
+        throw new DoctorMaintenanceRefusalError(
+          `Doctor could not restore the Gateway because persisted repair state is not ready: ${formatErrorMessage(error)}`,
+          { kind: "data-at-risk", reason: "incomplete-migration" },
+          { cause: error },
+        );
+      }
+    }
+    if (cfg) {
+      await params.restore(cfg, assertCurrent);
+    }
+    if (settledFailure) {
+      throw settledFailure;
+    }
+  } finally {
+    // Unknown native cleanup or open writers still own this recovery interval.
+    if (!params.isCleanupUncertain() && !state.resources) {
+      restoration?.release();
+    }
+  }
+}
 
 /** Decides whether Doctor may start a managed Gateway that it did not stop itself. */
 export async function resolveUnstoppedGatewayRestoration(params: {

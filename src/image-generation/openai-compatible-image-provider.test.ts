@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { oversizedJsonResponse } from "../../test/helpers/provider-http.js";
 import {
   createOpenAiCompatibleImageGenerationProvider,
   type OpenAiCompatibleImageProviderOptions,
@@ -192,13 +193,22 @@ it("posts JSON generation requests and parses OpenAI-compatible image data", asy
 });
 
 it("rejects image JSON beyond the generated image download ceiling", async () => {
-  mockResponse([{ b64_json: "x".repeat(90 * 1024 * 1024) }], "multipart");
+  const fixture = oversizedJsonResponse({ chunkCount: 90, chunkSize: 1024 * 1024 });
+  const release = vi.fn(async () => {});
+  http.postMultipartRequest.mockResolvedValue({
+    response: fixture.response,
+    finalUrl: "https://sample.example/v1/images/edits",
+    release,
+  });
   await expect(
     generate(createProvider(), {
       prompt: "too large",
       inputImages: [{ buffer: Buffer.from("source"), mimeType: "image/png" }],
     }),
   ).rejects.toThrow("sample.image-generation: JSON response exceeds");
+  expect(fixture.wasCanceled()).toBe(true);
+  expect(fixture.getReadCount()).toBeLessThan(90);
+  expect(release).toHaveBeenCalledOnce();
   const request = http.postMultipartRequest.mock.calls[0]![0];
   expect(request.url).toBe("https://sample.example/v1/images/edits");
   expect(request.body).toBeInstanceOf(FormData);

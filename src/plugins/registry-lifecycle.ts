@@ -296,6 +296,7 @@ export function adoptPluginRegistryRecords(registryView: PluginRegistry | null |
 function closePluginRegistryAdmissions(
   registries: Iterable<PluginRegistry>,
   revokeRecords: boolean,
+  settledConsumers = false,
 ): void {
   const instances = new Set<NonNullable<ReturnType<typeof getPluginInstance>>>();
   const controllers: AbortController[] = [];
@@ -315,7 +316,11 @@ function closePluginRegistryAdmissions(
         }
         if (owner.instance) {
           for (const entry of registry.decisionProviders) {
-            entry.host.cancelConsumer(record.id);
+            // A superseded instance has already settled its work. Canceling by
+            // plugin ID here could abort its successor's calls on a retained host.
+            if (!settledConsumers) {
+              entry.host.cancelConsumer(record.id);
+            }
             if (entry.pluginId === record.id) {
               entry.host.retire();
             }
@@ -344,8 +349,29 @@ export function quiescePluginRegistry(registry: PluginRegistry | null | undefine
   closePluginRegistryAdmissions(registry ? [registry] : [], false);
 }
 
-export function markPluginRegistryRetired(registry: PluginRegistry | null | undefined): void {
-  closePluginRegistryAdmissions(registry ? [registry] : [], true);
+/** Withdraw fresh admission without revoking the exact consumers finishing on this generation. */
+export function supersedePluginRegistry(registryView: PluginRegistry): void {
+  const registry = getPluginRegistryResourceOwner(registryView);
+  const previous = registryEpochs.get(registry);
+  registryEpochs.delete(registry);
+  for (const record of registry.plugins) {
+    const owner = resolvePluginInstanceOwner(record, registry);
+    if (owner.registry === registry) {
+      owner.instance?.quiesce();
+    }
+  }
+  for (const cache of loaderCaches.get(registry) ?? []) {
+    cache.deleteValue(registry);
+  }
+  loaderCaches.delete(registry);
+  previous?.controller?.abort();
+}
+
+export function markPluginRegistryRetired(
+  registry: PluginRegistry | null | undefined,
+  options?: { settledConsumers?: true },
+): void {
+  closePluginRegistryAdmissions(registry ? [registry] : [], true, options?.settledConsumers);
 }
 
 /** Revoke all attached inspection views before any abort callback observes retirement. */

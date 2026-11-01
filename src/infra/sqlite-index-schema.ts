@@ -21,6 +21,7 @@ import {
   type SqliteSchemaSource,
   type SqliteTableContractReader,
 } from "./sqlite-schema-contract.js";
+import { isSqliteSchemaMismatchError, SqliteSchemaMismatchError } from "./sqlite-schema-issues.js";
 import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
@@ -32,6 +33,8 @@ type RepairCanonicalSqliteIndexesOptions = {
    * canonical index. No other repair failure is deferred.
    */
   allowMissingColumns?: boolean;
+  /** Bounded startup admission may rebuild projections, never uniqueness constraints. */
+  nonUniqueOnly?: boolean;
   /** Keep index repair atomic with the caller's whole-schema validation. */
   validateAfterRepair?: () => void;
   /** Reuse the inspection catalog only while its unchanged snapshot is still pinned. */
@@ -115,13 +118,18 @@ export function repairCanonicalSqliteIndexes(
             !canonicalIndexNames.has(index.name),
         );
         if (unexpected) {
-          throw new Error(
+          throw new SqliteSchemaMismatchError(
             `SQLite schema is incomplete or noncanonical for ${databaseLabel}: unexpected unique index ${unexpected.name}`,
           );
         }
         for (const index of tableIndexes) {
           const actual = actualIndexes.find((candidate) => candidate.name === index.name);
           if (JSON.stringify(actual) !== JSON.stringify(index.fingerprint)) {
+            if (options.nonUniqueOnly && (index.unique || actual?.unique === 1)) {
+              throw new SqliteSchemaMismatchError(
+                `Canonical unique index ${index.name} requires full admission`,
+              );
+            }
             repairIndexes.add(index);
           }
         }
@@ -169,7 +177,7 @@ export function repairCanonicalSqliteIndexes(
       db.exec(`RELEASE SAVEPOINT ${savepoint};`);
       return [];
     }
-    // The source was already admitted; index-only DDL needs no second whole-file scan.
+    // Index-only DDL verifies touched tables without another whole-file scan.
     for (const table of new Set([...repairIndexes].map((index) => index.tableName))) {
       assertSqliteTableIntegrity(db, databaseLabel, table);
     }
@@ -181,10 +189,16 @@ export function repairCanonicalSqliteIndexes(
     } finally {
       db.exec(`RELEASE SAVEPOINT ${savepoint};`);
     }
-    if (error instanceof Error && isTerminalSqliteIntegrityError(error)) {
+    if (
+      isSqliteSchemaMismatchError(error) ||
+      (error instanceof Error && isTerminalSqliteIntegrityError(error))
+    ) {
       throw error;
     }
     const detail = error instanceof Error ? error.message : String(error);
+    if (options.nonUniqueOnly && isMissingColumnError(error)) {
+      throw new SqliteSchemaMismatchError(detail, { cause: error });
+    }
     throw new Error(
       `SQLite canonical index ${activeIndex?.name ?? "repair"} failed for ${databaseLabel}: ${detail}`,
       { cause: error },

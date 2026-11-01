@@ -62,16 +62,13 @@ export async function exportPostgresBackup(params: {
     // The private artifact must exist before the host admits a worker's native open.
     await fs.writeFile(raw, "", { flag: "wx", mode: 0o600 });
     using db = openNodeSqliteDatabase(raw, { readBigInts: true });
-    const allocations = await readDatabasePortAllocations(
-      { engine: "postgres", db: client, namespace: anchor.namespace },
-      descriptor,
-    );
+    const source = { engine: "postgres" as const, db: client, namespace: anchor.namespace };
+    // Allocations are read inside the export snapshot so they cover every captured row ID.
     verification = await materializeDatabasePort({
-      source: { engine: "postgres", db: client, namespace: anchor.namespace },
+      source,
       destination: { engine: "sqlite", db },
       descriptor,
       storeId: anchor.storeId,
-      sourceAllocations: allocations,
       assertCurrent: params.assertCurrent,
       transformRow: params.gitIdentity
         ? createGitBackupRowTransform(
@@ -82,7 +79,8 @@ export async function exportPostgresBackup(params: {
         : undefined,
     });
     // The portable image uses SQLite allocation, while a matched PG restore retains its sequence.
-    verification.allocations = allocations;
+    // Sequences are not transactional; a later read can only leave gaps above captured rows.
+    verification.allocations = await readDatabasePortAllocations(source, descriptor);
   }
   const sanitizedDifferences: string[] = [];
   params.assertCurrent();

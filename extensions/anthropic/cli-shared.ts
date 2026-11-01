@@ -7,7 +7,10 @@ import type {
   CliBackendConfig,
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
-import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import {
+  applyExecPolicyLayer,
+  resolveExecModePolicy,
+} from "openclaw/plugin-sdk/exec-approvals-runtime";
 import {
   normalizeOptionalLowercaseString,
   normalizeSortedUniqueTrimmedStringList,
@@ -131,14 +134,11 @@ function isOpenClawRequestedYolo(context: CliBackendResolveExecutionArgsContext)
   const agentExec = context.agentId
     ? resolveAgentConfig(context.config ?? {}, context.agentId)?.tools?.exec
     : undefined;
-  const exec = agentExec ?? context.config?.tools?.exec;
-  return (
-    resolveExecModePolicy({
-      mode: exec?.mode,
-      security: exec?.security ?? "full",
-      ask: exec?.ask ?? "off",
-    }).mode === "full"
+  const exec = applyExecPolicyLayer(
+    applyExecPolicyLayer({ security: "full", ask: "off" } as const, context.config?.tools?.exec),
+    agentExec,
   );
+  return resolveExecModePolicy(exec).mode === "full";
 }
 
 /** Keep filesystem settings user-scoped and normalize native permission flags together. */

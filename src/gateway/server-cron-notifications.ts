@@ -11,6 +11,7 @@ import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CronAgentSelectionRequiredError } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
+import { commitCronConversationResult } from "../cron/conversation-result.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
@@ -30,6 +31,7 @@ import { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import {
   runWithGatewayDetachedWorkContinuation,
   runWithGatewayIndependentRootWorkContinuation,
@@ -38,6 +40,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import { captureCronJobTurnTarget } from "./cron-job-turn-target.js";
 import type { GatewayContextResolver } from "./server-methods/shared-types.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
 
@@ -565,14 +568,73 @@ async function sendGatewayCronFailureAlertUnderAdmission(
   }
 }
 
-/** Fans out completion webhooks after a cron run finishes. */
+/** Records unstarted outcomes and fans out completion webhooks. */
 export function dispatchGatewayCronFinishedNotifications(params: {
   evt: CronEvent;
   job?: CronJob;
+  runNotStarted?: boolean;
+  quietTrigger?: boolean;
+  resolveCronAgent?: CronAgentResolver;
   logger: CronLogger;
   webhookToken?: unknown;
   ssrfPolicy?: SsrFPolicy;
 }): void {
+  if (
+    params.job &&
+    params.resolveCronAgent &&
+    !params.quietTrigger &&
+    (params.evt.status === "skipped" || (params.evt.status === "error" && params.runNotStarted))
+  ) {
+    const job = params.job;
+    const resolveCronAgent = params.resolveCronAgent;
+    void runWithGatewayIndependentRootWorkContinuation(async () => {
+      const { agentId, cfg } = resolveCronAgent(job.owner?.agentId ?? job.agentId);
+      const sessionKey = job.owner?.sessionKey ?? resolveCronDeliverySessionKey(job);
+      if (
+        !sessionKey ||
+        params.evt.runAtMs === undefined ||
+        (params.evt.status === "skipped" && params.evt.triggerFired === false)
+      ) {
+        return;
+      }
+      const { entry } = await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg,
+        agentId,
+        key: sessionKey,
+      });
+      if (!entry) {
+        throw new Error("Automation owner conversation is unavailable");
+      }
+      const reason = params.evt.error ?? params.evt.summary ?? "The run was skipped.";
+      const result = await commitCronConversationResult({
+        config: cfg,
+        agentId,
+        jobId: job.id,
+        runStartedAt: params.evt.runAtMs,
+        conversation: {
+          sessionKey,
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+        },
+        payloads: [
+          {
+            text: redactSensitiveText(
+              `Automation "${job.name}" did not start: ${reason} Check automation history, resolve the cause, then run it again.`,
+            ),
+          },
+        ],
+        deliveryAttemptFence: null,
+      });
+      if (!result.ok) {
+        throw new Error(result.reason);
+      }
+    }, "cron:run-outcome-notice").catch((error: unknown) => {
+      params.logger.warn(
+        { jobId: job.id, err: formatErrorMessage(error) },
+        "cron: run outcome notice failed",
+      );
+    });
+  }
   const webhookToken = normalizeOptionalString(params.webhookToken);
   const redactedWebhookEvent = redactCommandCronEventForExternalDelivery(params.evt, params.job);
   const completionSummary =

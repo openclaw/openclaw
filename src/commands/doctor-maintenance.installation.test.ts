@@ -742,6 +742,9 @@ async function runInstallationCase(params: {
           ]);
           expect(maintenance?.warnings).toEqual([
             expect.stringContaining("openclaw gateway install --force --port 19989"),
+            ...(outcome === "recovery-pending"
+              ? [expect.stringContaining("Keep the Gateway stopped until Doctor")]
+              : []),
           ]);
           expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(outcome));
           expect(mocks.health).not.toHaveBeenCalled();

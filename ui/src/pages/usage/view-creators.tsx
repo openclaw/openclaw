@@ -106,7 +106,7 @@ export function UsageCreators(props: UsageCreatorsProps) {
     const mode = props.mode;
     return groups().reduce((sum, group) => sum + value(group, mode), 0);
   });
-  const renderRows = (rows: readonly UsageCreatorGroup[]) => (
+  const CreatorTable = (tableProps: { rows: readonly UsageCreatorGroup[] }) => (
     <table class="usage-creators-table">
       <thead>
         <tr>
@@ -117,46 +117,46 @@ export function UsageCreators(props: UsageCreatorsProps) {
         </tr>
       </thead>
       <tbody>
-        <For each={rows}>
+        <For each={tableProps.rows} keyed={(group) => group.key}>
           {(group) => (
             <tr
               class={{
-                selected: group.key === props.selectedKey,
-                "usage-creator-row--unrecorded": !group.actor,
+                selected: group().key === props.selectedKey,
+                "usage-creator-row--unrecorded": !group().actor,
               }}
-              title={group.actor ? undefined : t("usage.creators.unattributedHint")}
+              title={group().actor ? undefined : t("usage.creators.unattributedHint")}
             >
               <th scope="row">
                 <button
                   type="button"
                   class="usage-creator-select"
-                  aria-pressed={group.key === props.selectedKey ? "true" : "false"}
-                  onClick={() => props.onSelect(group.key)}
+                  aria-pressed={group().key === props.selectedKey ? "true" : "false"}
+                  onClick={() => props.onSelect(group().key)}
                 >
                   <span class="usage-creator-name">
                     <span aria-hidden="true">
-                      {group.actor?.id ? (
-                        <SessionOwnerChip owner={group.actor} size="row" />
+                      {group().actor?.id ? (
+                        <SessionOwnerChip owner={group().actor} size="row" />
                       ) : undefined}
                     </span>
-                    <span>{creatorLabel(group)}</span>
+                    <span>{creatorLabel(group())}</span>
                   </span>
                   <span class="usage-creator-track" aria-hidden="true">
                     <span
                       style={{
-                        width: `${total() > 0 ? (value(group, props.mode) / total()) * 100 : 0}%`,
+                        width: `${total() > 0 ? (value(group(), props.mode) / total()) * 100 : 0}%`,
                       }}
                     />
                   </span>
                 </button>
               </th>
               <td class={{ "usage-creator-primary": props.mode === "tokens" }}>
-                {formatUsageTokens(group.totals.totalTokens)}
+                {formatUsageTokens(group().totals.totalTokens)}
               </td>
               <td class={{ "usage-creator-primary": props.mode === "cost" }}>
-                {formatUsageCost(group.totals.totalCost)}
+                {formatUsageCost(group().totals.totalCost)}
               </td>
-              <td>{group.sessionCount}</td>
+              <td>{group().sessionCount}</td>
             </tr>
           )}
         </For>
@@ -171,7 +171,7 @@ export function UsageCreators(props: UsageCreatorsProps) {
     >
       <div class="usage-panel usage-creators">
         {groups().length > 0 ? (
-          renderRows(groups().slice(0, 8))
+          <CreatorTable rows={groups().slice(0, 8)} />
         ) : (
           <div class="usage-empty-block usage-empty-block--compact">
             {t("usage.creators.empty")}
@@ -180,7 +180,7 @@ export function UsageCreators(props: UsageCreatorsProps) {
         {groups().length > 8 ? (
           <details class="usage-creators-more">
             <summary>{t("usage.creators.more", { count: String(groups().length - 8) })}</summary>
-            {renderRows(groups().slice(8))}
+            <CreatorTable rows={groups().slice(8)} />
           </details>
         ) : undefined}
       </div>

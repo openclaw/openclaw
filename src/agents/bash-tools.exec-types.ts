@@ -22,6 +22,9 @@ import type { ExecApprovalTransport } from "./exec-approval-transport.js";
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
 import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.types.js";
 
+/** Restart notification policy captured only for a durable launch. */
+export type DurableExecOptions = { notifyOnExit: boolean; notifyOnExitEmptySuccess: boolean };
+
 export type ExecToolDefaults = ExecToolRoutingDefaults & {
   hasCronTool?: boolean;
   mode?: ExecMode;
@@ -225,6 +228,7 @@ export type ExecToolDetails = {
       noOutputTimedOut?: boolean;
       cwd?: string;
       nodeId?: string;
+      warningText?: string;
     }
   | {
       status: "approval-pending";

@@ -9,6 +9,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   buildHistoryContext,
@@ -155,7 +156,11 @@ describe("shouldRunMemoryFlush", () => {
     for (const tokenCount of [12_767, 12_768, 12_769]) {
       expect(
         shouldRunPreflightCompaction({
-          entry: { totalTokens: tokenCount, totalTokensFresh: true, totalTokensVersion: 1 },
+          entry: {
+            totalTokens: tokenCount,
+            totalTokensFresh: true,
+            totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+          },
           threshold,
         }),
       ).toBe(tokenCount >= 12_768);
@@ -168,7 +173,7 @@ describe("shouldRunMemoryFlush", () => {
         entry: {
           totalTokens: 96_000,
           totalTokensFresh: true,
-          totalTokensVersion: 1,
+          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
           compactionCount: 2,
           memoryFlush: { kind: "succeeded", compactionCount: 2 },
         },

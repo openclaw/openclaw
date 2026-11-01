@@ -20,6 +20,7 @@ import {
   runDoctorConfigWithInput,
 } from "./doctor-config-flow.test-utils.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
+import type { DoctorConfigPreflightResult } from "./doctor/shared/config-migration-result.js";
 
 type TerminalNote = (message: string, title?: string) => void;
 type RepairParams = Parameters<
@@ -29,6 +30,7 @@ type RepairParams = Parameters<
 const terminalNoteMock = vi.hoisted(() => vi.fn<TerminalNote>());
 const callGatewayMock = vi.hoisted(() => vi.fn());
 const runDoctorRepairSequenceMock = vi.hoisted(() => vi.fn());
+const preflightFacts = vi.hoisted(() => ({ value: {} as Partial<DoctorConfigPreflightResult> }));
 const createDoctorPluginMetadataSnapshotScopeParamsMock = vi.hoisted(() => vi.fn());
 const collectDoctorPreviewNotesParamsMock = vi.hoisted(() => vi.fn());
 const collectTailscaleConfigWarningsMock = vi.hoisted(() =>
@@ -206,6 +208,7 @@ vi.mock("./doctor-config-preflight.js", async (importOriginal) => {
           legacyIssues,
         },
         baseConfig: config,
+        ...preflightFacts.value,
       };
     }),
   };
@@ -267,6 +270,7 @@ describe("doctor config flow", () => {
     callGatewayMock.mockReset();
     callGatewayMock.mockResolvedValue({});
     runDoctorRepairSequenceMock.mockReset();
+    preflightFacts.value = {};
     createDoctorPluginMetadataSnapshotScopeParamsMock.mockClear();
     collectDoctorPreviewNotesParamsMock.mockClear();
     collectTailscaleConfigWarningsMock.mockClear();
@@ -768,4 +772,70 @@ describe("doctor config flow", () => {
       "Doctor warnings",
     );
   });
+
+  type SessionPlan = NonNullable<DoctorConfigPreflightResult["postSessionPluginMigration"]>;
+  const sessionPlan = (
+    step: Partial<SessionPlan["step"]> = {},
+    plannedActions: SessionPlan["plannedActions"] = [],
+  ): SessionPlan => ({
+    step: {
+      id: "plugin-doctor-post-session-state",
+      phase: "final",
+      source: [],
+      target: [],
+      requiredness: "not-required",
+      reversibility: "not-applicable",
+      ...step,
+    },
+    plannedActions,
+  });
+
+  it.each<[string, Partial<DoctorConfigPreflightResult>, boolean, boolean?]>([
+    ["settled retirement", {}, true],
+    ["missing config", {}, false, false],
+    ["another config repair", { configChanged: true }, false],
+    ["unfinished state migration", { stateMigrationUnsettled: true }, false],
+    ["unbound discovery", { postSessionPluginMigrationPlanBound: false }, false],
+    ["bound absent plan", { postSessionPluginMigration: undefined }, true],
+    [
+      "conditional session work",
+      {
+        postSessionPluginMigration: sessionPlan(
+          { requiredness: "conditional", reversibility: "checkpoint-required" },
+          [{ pluginId: "example", id: "session-repair" }],
+        ),
+      },
+      true,
+    ],
+    [
+      "refused session plan",
+      {
+        postSessionPluginMigration: sessionPlan({
+          requiredness: "conditional",
+          reversibility: "checkpoint-required",
+          refusal: { code: "step-refused", message: "Incomplete session discovery" },
+        }),
+      },
+      false,
+    ],
+    ["unsettled preflight", { preflightLegacyStateConfig: undefined }, false],
+    ["repair warning", { warnings: ["Unfinished repair"] }, false],
+  ])(
+    "admits retirement with bound session work: %s",
+    async (_name, facts, expected, exists = true) => {
+      const config: OpenClawConfig = {
+        agents: { entries: { main: {} } },
+        messages: { queue: { allowCollaborativeSteering: false } },
+      };
+      preflightFacts.value = {
+        preflightLegacyStateConfig: config,
+        postSessionPluginMigrationPlanBound: true,
+        postSessionPluginMigration: sessionPlan(),
+        ...facts,
+      };
+      mockRepair({ modelRetirementRepairRan: true, modelRetirementOnly: true });
+      await using result = await runConfig({ config, exists, repair: true });
+      expect(result.retirementOnly).toBe(expected);
+    },
+  );
 });

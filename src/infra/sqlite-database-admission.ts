@@ -12,7 +12,7 @@ import {
   type EngineConnection,
 } from "./sql-connection.js";
 import {
-  installSqliteDatabaseAdmissions,
+  exchangeSqliteDatabaseAdmission as exchange,
   sqliteDatabaseAdmissionState as state,
 } from "./sqlite-database-admission-context.js";
 import { createSqliteDatabaseAdmissionReader } from "./sqlite-database-admission-read.js";
@@ -34,6 +34,7 @@ import {
 } from "./sqlite-database-admission-record.js";
 import {
   integrityVerificationKey,
+  quickIntegrityVerificationKey,
   SqliteDatabaseCleanCloseSeals,
 } from "./sqlite-database-admission-seal.js";
 import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
@@ -115,7 +116,8 @@ export function prepareSqliteDatabaseCleanClose(database: DatabaseSync) {
   return seals.prepare(
     database,
     admission(database),
-    getSqliteDatabaseAdmission(database, integrityVerificationKey),
+    getSqliteDatabaseAdmission(database, integrityVerificationKey) ??
+      getSqliteDatabaseAdmission(database, quickIntegrityVerificationKey),
   );
 }
 
@@ -137,6 +139,7 @@ export const {
   hasSqliteDatabaseSchemaAdmissionForPath,
   getSqliteDatabaseAdmissionIdentityForPath,
   hasSqliteDatabaseSchemaAdmissionForIdentity,
+  retainSqliteDatabaseAdmissionForPath,
 } = reader;
 
 const scopedWrites = createSqliteDatabaseWriteReceipts({
@@ -160,6 +163,7 @@ export const {
   onSqliteDatabaseWriteSettled,
   retireSqliteDatabaseWriteScopes,
   retainSqliteDatabaseWriteScopesForPath,
+  prepareSqliteDatabaseScopedWriteRevisionForPath,
   withSqliteDatabaseWriteScope,
   withoutSqliteDatabaseWriteScope,
   readSqliteDatabaseScopedWriteToken,
@@ -171,29 +175,21 @@ export const {
 } = scopedWrites;
 export { sqliteSessionIdWriteScope } from "./sqlite-database-write-receipts.js";
 
-function exchange(target: string | Admission, create?: boolean): void {
-  const current = state.exchange.getStore();
-  if (!current || state.exchanging) {
-    return;
+/** Explicit readiness/readmission shares committed facts before handing off the connection. */
+export function settleSqliteDatabaseAdmissionPublication(database: DatabaseSync): boolean {
+  if (
+    database.isTransaction ||
+    getSqliteNativeAdmissionFacts(database) ||
+    hasSqlitePostCommitScope(database) ||
+    state.exchanging
+  ) {
+    return false;
   }
-  state.exchanging = true;
-  try {
-    const scope = typeof target === "string" ? { location: target } : { admissions: [target] };
-    const admissions = state.registry.captureExchange(scope, target);
-    installSqliteDatabaseAdmissions(
-      current(
-        admissions,
-        // Publications already name their generation; only opens request pathname discovery.
-        typeof target === "string" ? target : undefined,
-        create,
-      ),
-    );
-  } catch (error) {
-    state.registry.resetExchangeCursor();
-    throw error;
-  } finally {
-    state.exchanging = false;
+  const record = admission(database);
+  if (record) {
+    exchange(record, undefined, true);
   }
+  return true;
 }
 
 /** Identity descriptors stay open for the process: closing one can release SQLite's POSIX locks. */
@@ -300,6 +296,7 @@ export function prepareSqliteDatabaseAdmission(
   try {
     const file = fs.statSync(filename, { bigint: true });
     if (!file.isFile()) {
+      state.registry.observeLocation(filename, undefined);
       return undefined;
     }
     const observed = identity(file);
@@ -307,6 +304,7 @@ export function prepareSqliteDatabaseAdmission(
     return observed;
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
+      state.registry.observeLocation(filename, undefined);
       if (!create) {
         return undefined;
       }
@@ -481,7 +479,11 @@ function publishFact<T>(
     return;
   }
   state.registry.publish(record);
-  exchange(record);
+  // Reconstructible physical facts ride the next custody exchange; a blocked
+  // parent must not stall the connection that just captured its own catalog.
+  if (key.writer !== "connection") {
+    exchange(record);
+  }
 }
 
 /** Publish one row-cache revision when a local native write settles. */

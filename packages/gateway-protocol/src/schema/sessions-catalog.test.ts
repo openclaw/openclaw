@@ -190,6 +190,7 @@ describe("SessionRowSchema", () => {
     const row = {
       ...baseRow,
       lastRunId: "run-settled",
+      backgroundProcessCount: 1,
       snapshotAt: 200,
       activeLeafEntryId: "leaf-rendered",
       activeModel: "fixture-model",
@@ -223,6 +224,9 @@ describe("SessionRowSchema", () => {
       { permissionMode: "unrestricted" },
       { lastRunId: "" },
       { archiveReason: "unknown" },
+      { backgroundProcessCount: 0 },
+      { backgroundProcessCount: -1 },
+      { backgroundProcessCount: 1.5 },
     ]);
     rows.accepts(
       baseRow,

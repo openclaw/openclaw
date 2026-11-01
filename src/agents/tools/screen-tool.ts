@@ -9,7 +9,7 @@ import { jsonResult, readToolStringParam, ToolInputError } from "./common.js";
 import { withGatewayPersonalToolUser } from "./gateway-caller-context.js";
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
 
-const ACTIONS = [
+const BASE_ACTIONS = [
   "split_right",
   "split_down",
   "close_pane",
@@ -27,30 +27,41 @@ const ACTIONS = [
   "navigate",
 ] as const;
 
-const ScreenToolSchema = Type.Object(
-  {
-    action: Type.String({ enum: [...ACTIONS], description: "Action" }),
-    user: requesterProfileSchema(),
-    sessionKey: Type.Optional(Type.String({ description: "Session. Default: current" })),
-    environmentId: Type.Optional(
-      Type.String({ description: "Desktop source, or a pending portal's environment ID" }),
-    ),
-    portalId: Type.Optional(Type.String({ description: "Portal ID returned by portal open/list" })),
-    expanded: Type.Optional(
-      Type.Boolean({
-        description: "On show, fill the conversation pane; false restores split view",
+const GITHUB_IDENTITY_SETTINGS_ACTION = "github_identity_settings" as const;
+const ACTIONS = [...BASE_ACTIONS, GITHUB_IDENTITY_SETTINGS_ACTION] as const;
+
+function screenToolSchema(githubIdentitySettingsAvailable: boolean) {
+  return Type.Object(
+    {
+      action: Type.String({
+        enum: githubIdentitySettingsAvailable ? [...ACTIONS] : [...BASE_ACTIONS],
+        description: "Action",
       }),
-    ),
-    dock: Type.Optional(
-      Type.String({ enum: ["bottom", "right"], description: "Panel dock on show" }),
-    ),
-  },
-  { additionalProperties: false },
-);
+      user: requesterProfileSchema(),
+      sessionKey: Type.Optional(Type.String({ description: "Session. Default: current" })),
+      environmentId: Type.Optional(
+        Type.String({ description: "Desktop source, or a pending portal's environment ID" }),
+      ),
+      portalId: Type.Optional(
+        Type.String({ description: "Portal ID returned by portal open/list" }),
+      ),
+      expanded: Type.Optional(
+        Type.Boolean({
+          description: "On show, fill the conversation pane; false restores split view",
+        }),
+      ),
+      dock: Type.Optional(
+        Type.String({ enum: ["bottom", "right"], description: "Panel dock on show" }),
+      ),
+    },
+    { additionalProperties: false },
+  );
+}
 
 type ScreenToolOptions = {
   agentSessionKey?: string;
   agentId?: string;
+  githubIdentitySettingsAvailable?: boolean;
 };
 
 function resolveSessionKey(
@@ -76,6 +87,7 @@ function commandForAction(
   action: string,
   params: Record<string, unknown>,
   agentSessionKey: string | undefined,
+  opts: ScreenToolOptions,
 ): UiCommand {
   if (action === "split_right" || action === "split_down") {
     return {
@@ -89,6 +101,12 @@ function commandForAction(
       kind: action === "close_pane" ? "close-pane" : action,
       sessionKey: resolveSessionKey(params, agentSessionKey),
     };
+  }
+  if (action === "github_identity_settings") {
+    if (!opts.githubIdentitySettingsAvailable) {
+      throw new ToolInputError("github_identity_settings is unavailable in this Control UI");
+    }
+    return { kind: "agent-github-settings" };
   }
   if (action === "sidebar_show" || action === "sidebar_hide") {
     return { kind: "sidebar", visible: action === "sidebar_show" };
@@ -138,19 +156,19 @@ function commandForAction(
 }
 
 export function createScreenTool(opts: ScreenToolOptions = {}): AnyAgentTool {
+  const githubIdentitySettingsAvailable = opts.githubIdentitySettingsAvailable === true;
   return {
     label: "Screen",
     name: "screen",
-    description:
-      "Drive the requesting user's Control UI. desktop_show opens a native app's remote desktop using environmentId; portal_show opens a running web app's portal using portalId. Both default to the right chat sidebar. Panel show actions accept expanded:true to fill the conversation pane, or expanded:false to restore split view while retaining the selected panel and dock. desktop_hide/portal_hide hide the view without stopping the app. browser_show/browser_hide toggle the agent Browser panel; terminal_show/terminal_hide toggle Terminal; sidebar_show/sidebar_hide toggle the session list. Also supports split_right/split_down, close_pane, focus, navigate. Optional sessionKey selects the conversation; default current. Only the selected person's requesting browser is changed; it must still be connected. This changes presentation only; it does not control application input. delivery=dispatched means only that the command was sent. portal_show returns the requesting browser’s presentation diagnosis: blocked/new-tab-required needs action; unverified is not a working-preview claim, including network-reachable. Inspect the actual app before claiming delivery.",
-    parameters: ScreenToolSchema,
+    description: `Drive the requesting user's Control UI. desktop_show opens a native app's remote desktop using environmentId; portal_show opens a running web app's portal using portalId. Both default to the right chat sidebar. Panel show actions accept expanded:true to fill the conversation pane, or expanded:false to restore split view while retaining the selected panel and dock. desktop_hide/portal_hide hide the view without stopping the app. browser_show/browser_hide toggle the agent Browser panel; terminal_show/terminal_hide toggle Terminal; sidebar_show/sidebar_hide toggle the session list.${githubIdentitySettingsAvailable ? " github_identity_settings opens the current agent's GitHub identity settings so the operator can reconnect without exposing authorization data to the model." : ""} Also supports split_right/split_down, close_pane, focus, navigate. Optional sessionKey selects the conversation; default current. Only the selected person's requesting browser is changed; it must still be connected. This changes presentation only; it does not control application input. delivery=dispatched means only that the command was sent. portal_show returns the requesting browser’s presentation diagnosis: blocked/new-tab-required needs action; unverified is not a working-preview claim, including network-reachable. Inspect the actual app before claiming delivery.`,
+    parameters: screenToolSchema(githubIdentitySettingsAvailable),
     outputSchema: UiCommandResultSchema,
     requiredClientCaps: [GATEWAY_CLIENT_CAPS.UI_COMMANDS],
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
       const payload: UiCommandParams = {
-        command: commandForAction(action, params, opts.agentSessionKey),
+        command: commandForAction(action, params, opts.agentSessionKey, opts),
         ...(opts.agentSessionKey || readToolStringParam(params, "sessionKey")
           ? { sessionKey: resolveSessionKey(params, opts.agentSessionKey) }
           : {}),

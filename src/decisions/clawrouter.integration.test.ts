@@ -12,11 +12,8 @@ import { listDecisionModels } from "../gateway/server-methods/models-list-capabi
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  evaluateDecisionV2InRegistry,
-  inspectDecisionProviders,
-  prepareDecisionProviderReload,
-} from "./runtime.js";
+import { prepareDecisionProviderReload } from "./provider-reload.js";
+import { evaluateDecisionV2InRegistry } from "./runtime.js";
 import type { DecisionBatchV2 } from "./types-v2.js";
 
 const batch: DecisionBatchV2 = {
@@ -139,7 +136,11 @@ it.each(["default", "per-agent"])(
               );
               const outcome = await evaluate();
               expect(
-                listDecisionModels({ config, snapshot: prepared.snapshot.metadataSnapshot }),
+                listDecisionModels({
+                  config,
+                  snapshot: prepared.snapshot.metadataSnapshot,
+                  catalog: prepared.snapshot.modelCatalog.entries,
+                }),
               ).toContainEqual(
                 expect.objectContaining({
                   provider: "clawrouter",
@@ -169,7 +170,9 @@ it.each(["default", "per-agent"])(
                   ],
                 },
               });
-              expect(inspectDecisionProviders(config, registry)).toContainEqual(
+              expect(
+                registry.decisionProviders.map((entry) => entry.host.inspect(config)),
+              ).toContainEqual(
                 expect.objectContaining({ providerId: "clawrouter", activeRequests: 0 }),
               );
               const beforeDisabled = requests.length;

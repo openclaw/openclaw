@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { Model } from "../../../llm/types.js";
 import { getProviderRequestAuth } from "../../../plugins/provider-auth-authority.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -119,7 +119,14 @@ it.each([
   "profile-advanced",
   "resolution-error",
   "closed-after-resolve",
+  "request-aborted-during-prepare",
+  "credential-timeout",
+  "exchange-timeout",
 ] as const)("refuses retained request credentials when %s", async (scenario) => {
+  vi.useFakeTimers();
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   const model: Model = {
     id: "chat",
     name: "Synthetic request",
@@ -187,6 +194,7 @@ it.each([
     modelId: model.id,
     state,
     signal: abort.signal,
+    timeoutMs: 100,
     assertCurrent: () => {
       if (!current) {
         throw new Error("run revoked");
@@ -203,8 +211,10 @@ it.each([
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const during = scenario.includes("during");
+  let exchangeSignal: AbortSignal | undefined;
   if (during) {
-    mocks.exchangeCredential.mockImplementation(async () => {
+    mocks.exchangeCredential.mockImplementation(async ({ context }) => {
+      exchangeSignal = context.signal;
       entered.resolve();
       await release.promise;
       return { apiKey: "late-token" };
@@ -223,14 +233,31 @@ it.each([
   if (scenario === "resolution-error") {
     mocks.resolveCredential.mockRejectedValue(new Error("owner lookup failed"));
   }
+  if (scenario === "credential-timeout") {
+    mocks.resolveCredential.mockImplementation(() => release.promise);
+  }
+  if (scenario === "exchange-timeout") {
+    mocks.exchangeCredential.mockImplementation(() => release.promise);
+  }
   if (scenario === "closed-after-resolve") {
     const result = await capability.resolve({});
     controller.stopRuntimeAuthRefreshTimer();
     expect(() => result.assertCurrent()).toThrow(/closed/);
     return;
   }
-  const result = capability.resolve({});
-  const assertion = expect(result).rejects.toThrow(/closed|canceled|revoked|lookup failed/);
+  const requestAbort = new AbortController();
+  const result = capability.resolve({ signal: requestAbort.signal });
+  const observed = result.catch((error: unknown) => error);
+  if (scenario.endsWith("timeout")) {
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await Promise.race([observed, Promise.resolve("still pending")])).toMatchObject({
+      name: "AbortError",
+      message: expect.stringContaining("timed out"),
+    });
+  }
+  const assertion = expect(result).rejects.toThrow(
+    /closed|canceled|aborted|revoked|lookup failed|timed out/,
+  );
   if (during) {
     await entered.promise;
     if (scenario === "closed-during-prepare") {
@@ -238,6 +265,11 @@ it.each([
     }
     if (scenario === "aborted-during-prepare") {
       abort.abort(new Error("request canceled"));
+    }
+    if (scenario === "request-aborted-during-prepare") {
+      requestAbort.abort();
+      await Promise.resolve();
+      expect(exchangeSignal?.aborted).toBe(true);
     }
     if (scenario === "run-revoked-during-prepare") {
       current = false;

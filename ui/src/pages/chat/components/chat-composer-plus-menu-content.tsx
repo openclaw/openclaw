@@ -1,5 +1,4 @@
 import { createMemo, lazy, Show } from "solid-js";
-import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { ChatComposerPlusMenuBody } from "./chat-composer-plus-menu-body.tsx";
 import type {
@@ -11,7 +10,6 @@ const ChatComposerCapabilityInitializer = lazy(
   () => import("../chat-composer-capability-host.tsx"),
   { export: "ChatComposerCapabilityInitializer" },
 );
-warmWhenIdle(ChatComposerCapabilityInitializer.preload);
 
 export function ChatComposerPlusMenuContent(props: ChatComposerPlusMenuBodyProps) {
   const resolved = createMemo<ChatComposerPlusMenuContentProps | undefined>((previous) => {
