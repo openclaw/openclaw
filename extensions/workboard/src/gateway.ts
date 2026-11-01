@@ -335,7 +335,7 @@ export function registerWorkboardGatewayMethods(params: {
     if (CLI_OWNER_METHODS.has(method)) {
       api.registerGatewayMethod(
         `${method}.owner`,
-        async (request) => {
+        (request) => {
           if (
             typeof request.params?.expectedOwnerId !== "string" ||
             !request.params.expectedOwnerId.trim()
@@ -345,9 +345,9 @@ export function registerWorkboardGatewayMethods(params: {
               message: "expectedOwnerId is required",
               details: { mutationAccepted: false },
             });
-            return undefined;
+            return Promise.resolve();
           }
-          await requestHandler(request);
+          return requestHandler(request);
         },
         { scope },
       );
