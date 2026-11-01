@@ -17,7 +17,7 @@ Bundled and catalog-known routes take their `compat` defaults from the owning pr
 
 A custom endpoint does not inherit the original catalog route's preferred Code Mode tier. With automatic Code Mode and no custom `compat.codeMode` declaration, the embedded runtime keeps its normal tool surface. Set `compat.codeMode: "preferred"` only after verifying Code Mode on that endpoint.
 
-Provider-normalized aliases, such as an Anthropic endpoint's `/v1` suffix, keep their standard catalog capabilities.
+Provider-normalized aliases, such as an Anthropic endpoint's `/v1` suffix, keep their standard catalog capabilities. Configured output-token limits also preserve the matching route's catalog capabilities after a catalog refresh; changing that limit does not transfer capability ownership to the configured row.
 
 Gateway model capability checks also read explicit `models.providers.<id>.models[]` metadata. If a custom or proxy model accepts images, set `input: ["text", "image"]` on that model so WebChat and node-origin attachment paths pass images as native model inputs instead of text-only media refs.
 
