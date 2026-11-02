@@ -480,7 +480,7 @@ async function resumeRestartStore(
         );
       }
     }
-    for (const { sessionKey, entry: captured } of entries) {
+    for (const { sessionKey, entry: snapshotEntry } of entries) {
       let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>> | undefined;
       let interrupted = false;
       try {
@@ -502,7 +502,7 @@ async function resumeRestartStore(
             }
             const orphanedRun =
               selected.lifecycleRunId &&
-              selected.lifecycleRunId === captured.lifecycleRunId &&
+              selected.lifecycleRunId === snapshotEntry.lifecycleRunId &&
               selected.status === undefined &&
               !restartResumeSkipReason(sessionKey, selected) &&
               !hasAgentRunContextExecutionOwner(selected.lifecycleRunId) &&

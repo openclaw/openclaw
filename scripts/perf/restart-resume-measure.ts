@@ -242,11 +242,15 @@ const onTask = (value: unknown) => {
 taskDiagnostics.subscribe(onTask);
 try {
   // Startup preparation and worker initialization are distinct from warmed discovery.
-  if (values.resume) seedResume();
+  if (values.resume) {
+    seedResume();
+  }
   const coldStarted = performance.now();
   await measureOwner(0);
   const coldMs = performance.now() - coldStarted;
-  if (values.resume) seedResume();
+  if (values.resume) {
+    seedResume();
+  }
   await measureOwner(1);
   if (values.allocation) {
     inspector.connect();
@@ -261,7 +265,9 @@ try {
       const hostLoad = loadavg();
       const admissionsBefore = admissions;
       for (let iteration = 0; iteration < iterations; iteration++) {
-        if (values.resume) seedResume();
+        if (values.resume) {
+          seedResume();
+        }
         global.gc();
         if (values.allocation) {
           await inspector.post("HeapProfiler.startSampling", {
