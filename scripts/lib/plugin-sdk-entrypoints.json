@@ -312,6 +312,7 @@
   "memory-host-search",
   "message-tool-delivery-hints",
   "models-provider-runtime",
+  "skill-authoring-runtime",
   "skill-commands-runtime",
   "native-command-config-runtime",
   "native-command-registry",

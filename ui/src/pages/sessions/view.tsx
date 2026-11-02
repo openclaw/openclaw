@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { createDeferred, createMemo, Errored, isPending, Loading, Repeat, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ContextNewSessionAction } from "../../components/solid/new-session-link.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsPage,
@@ -141,15 +142,14 @@ export function SessionsView(props: SessionsProps) {
               </div>
             </Show>
             <TranscriptSearchForm {...props} phoneLayout={phoneLayout()} />
-            <button
-              class="btn btn--xs btn--icon sessions-toolbar__icon sessions-toolbar__refresh"
-              type="button"
-              aria-label={t("common.refresh")}
-              disabled={props.refreshing || props.refreshDisabled}
+            <RefreshButton
+              class="btn--xs sessions-toolbar__icon sessions-toolbar__refresh"
+              label={t("common.refresh")}
+              busy={props.refreshing}
+              disabled={props.refreshDisabled}
+
               onClick={() => props.onRefresh()}
-            >
-              <Icon name="refresh" />
-            </button>
+            />
             <SessionsAdvancedFilters
               {...props}
               searchQuery={props.searchQuery}

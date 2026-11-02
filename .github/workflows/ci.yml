@@ -6412,25 +6412,6 @@ jobs:
           cache-mode: ${{ needs.preflight.outputs.cache_write_allowed == 'true' && 'read-write' || needs.preflight.outputs.cache_mode }}
           install-native-deps: ${{ needs.preflight.outputs.use_compatible_android_ci != 'true' && 'true' || 'false' }}
 
-      - name: Mount Gradle sticky disk
-        if: &android_gradle_sticky_disk_gate vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !(contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.run_attempt > 1) && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
-        uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
-        with:
-          # One disk per matrix task keeps thin dependency sets off heavier lanes. Gradle owns invalidation.
-          key: ${{ github.repository }}-gradle-v2-${{ matrix.task }}
-          path: /var/tmp/openclaw-gradle
-          # Only successful protected pushes publish. Explicit commit:true refreshes same-size changes.
-          commit: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
-
-      - name: Point Gradle at the sticky disk
-        if: *android_gradle_sticky_disk_gate
-        shell: bash
-        run: |
-          set -euo pipefail
-          sticky_root=/var/tmp/openclaw-gradle
-          mkdir -p "$sticky_root/gradle-user-home"
-          echo "GRADLE_USER_HOME=$sticky_root/gradle-user-home" >> "$GITHUB_ENV"
-
       - name: Restore Robolectric Maven cache
         id: robolectric-cache
         if: startsWith(matrix.task, 'test-') && needs.preflight.outputs.cache_mode != 'off'

@@ -214,6 +214,7 @@ describe("CodeQL language selection", () => {
       checkoutOutcome?: string;
       actionsChanged?: string;
       javascriptChanged?: string;
+      unchangedCategories?: string[];
     } = {},
   ) {
     return { files, expected, ...options };
@@ -231,6 +232,14 @@ describe("CodeQL language selection", () => {
     selectionCase(undefined, undefined, { exitCode: 128 }),
     ...["schedule", "workflow_dispatch"].map((eventName) =>
       selectionCase(undefined, undefined, { eventName }),
+    ),
+    selectionCase(
+      undefined,
+      categories.filter((category) => category !== "network-ssrf-boundary"),
+      {
+        eventName: "schedule",
+        unchangedCategories: ["network-ssrf-boundary"],
+      },
     ),
     selectionCase(undefined, ["actions"], {
       eventName: "schedule",
@@ -263,7 +272,20 @@ describe("CodeQL language selection", () => {
           env: {
             CODEQL_CHECKOUT_OUTCOME: options.checkoutOutcome ?? "success",
             CODEQL_ACTIONS_CHANGED: options.actionsChanged,
-            CODEQL_JAVASCRIPT_CHANGED: options.javascriptChanged,
+            ...Object.fromEntries(
+              categories
+                .slice(0, -1)
+                .map((category) => [
+                  `CODEQL_${category.toUpperCase().replaceAll("-", "_")}_CHANGED`,
+                  options.javascriptChanged,
+                ]),
+            ),
+            ...Object.fromEntries(
+              (options.unchangedCategories ?? []).map((category) => [
+                `CODEQL_${category.toUpperCase().replaceAll("-", "_")}_CHANGED`,
+                "false",
+              ]),
+            ),
           },
         },
         core: {

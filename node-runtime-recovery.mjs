@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawCliRespawn } from "./cli-invocation.mjs";
-import { consumeRootOptionToken as consumeLauncherRootOptionToken } from "./cli-root-options.mjs";
+import {
+  consumeRootOptionToken as consumeLauncherRootOptionToken,
+  isUpdateCommandArgv,
+} from "./cli-root-options.mjs";
 import { isForegroundGatewayRunArgv } from "./gateway-run-argv.mjs";
 import {
   RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS,
@@ -71,6 +74,7 @@ export const runRespawnedChild = ({ command, args, env }) => {
   const launcherStopTimeoutMs = resolveLauncherStopTimeoutMs({
     platform: process.platform,
     foreground: isForegroundGatewayRunArgv(process.argv),
+    update: isUpdateCommandArgv(process.argv),
   });
   const signalExitGraceMs = launcherStopTimeoutMs - respawnSignalForceKillGraceMs;
   const stdioIsTerminal = process.stdin.isTTY || process.stdout.isTTY;
@@ -81,9 +85,9 @@ export const runRespawnedChild = ({ command, args, env }) => {
   });
   const listeners = new Map();
   // Keep signal forwarding and bounded shutdown in sync with src/entry.compile-cache.ts,
-  // which drives src/process/respawn-child-runner.ts. That runner still holds its own
-  // copies of the escalation graces and reaps on a fixed short one, so only this
-  // launcher's deadline is the one the serving Gateway derives.
+  // which drives src/process/respawn-child-runner.ts. That runner shares this escalation
+  // policy but never wraps a foreground Unix Gateway, so only this launcher's deadline
+  // is the one the serving Gateway derives.
   let signalExitTimer = null;
   let signalForceKillTimer = null;
   let firstForwardedSignal = null;

@@ -21,6 +21,26 @@
   }
 }
 
+/* The settings gear shares the tabs row instead of spending a row of its own. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .content-header.hub-page-header--stacked.plugins-hub-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "title title"
+      "tabs actions";
+    align-items: center;
+    column-gap: var(--space-2);
+  }
+
+  .plugins-hub-header .hub-page-header__tabs {
+    min-width: 0;
+  }
+
+  .plugins-hub-header .hub-tabs {
+    box-shadow: none;
+  }
+}
+
 .installed-plugins-card__head {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -189,6 +209,11 @@
   width: 100%;
   min-height: 44px;
   padding-left: 34px;
+}
+
+/* The field radius runs tighter than the control radius in square themes. */
+.plugin-catalog-search input.settings-input {
+  border-radius: max(var(--field-radius), var(--radius-md));
 }
 
 .plugin-catalog-results__empty {
@@ -449,6 +474,30 @@
     overflow-x: auto;
     flex-wrap: nowrap;
     padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+
+  .plugin-catalog-chips::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* A chip that runs past the row fades out, so it reads as more to scroll to. */
+  .plugin-catalog-chips[data-scrollable="true"][data-at-end="false"] {
+    mask-image: linear-gradient(to right, black calc(100% - 32px), transparent);
+  }
+
+  .plugin-catalog-chips[data-scrollable="true"][data-at-start="false"] {
+    mask-image: linear-gradient(to right, transparent, black 32px);
+  }
+
+  .plugin-catalog-chips[data-scrollable="true"][data-at-start="false"][data-at-end="false"] {
+    mask-image: linear-gradient(
+      to right,
+      transparent,
+      black 32px,
+      black calc(100% - 32px),
+      transparent
+    );
   }
 
   .plugin-catalog-grid {
@@ -856,6 +905,7 @@ openclaw-plugins-page
 .plugins-settings-search .settings-input {
   width: 100%;
   padding-left: calc(var(--space-3) + 24px);
+  border-radius: max(var(--field-radius), var(--radius-md));
 }
 
 .plugins-settings-row {
@@ -1516,7 +1566,8 @@ openclaw-plugins-page
     text-overflow: ellipsis;
   }
 
-  openclaw-skills-page .skill-library-search__action {
+  openclaw-skills-page .skill-library-search__action,
+  .topnav-shell__page-actions .skill-library-search__action {
     display: inline-flex;
     flex: none;
   }
@@ -1525,6 +1576,11 @@ openclaw-plugins-page
     width: var(--settings-control-height);
     height: var(--settings-control-height);
     padding: 0;
+  }
+
+  /* Refresh sits beside the page menu here, not at the end of the row. */
+  openclaw-skills-page .skill-library-search__action .btn.refresh-button {
+    justify-content: center;
   }
 
   openclaw-skills-page .skill-library-search__icon > .oc-menu-item__label {
