@@ -70,6 +70,10 @@ import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./respo
 import { createDaemonInstallActionContext, resolveDaemonInstallBlockMessage } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
 
+// Registration has already succeeded when this runs, so the wait only reports. The service keeps
+// starting after it ends; a Windows cold boot may outlast it and gets the still-starting warning.
+const GATEWAY_INSTALL_READINESS_CAP_MS = 45_000;
+
 /** Merge safe existing service environment into the current install invocation environment. */
 export function mergeInstallInvocationEnv(params: {
   env: NodeJS.ProcessEnv;
@@ -633,6 +637,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       const { checkGatewayServiceReadiness } = await import("./service-readiness.js");
       const readiness = await checkGatewayServiceReadiness({
         service,
+        deadlineCapMs: GATEWAY_INSTALL_READINESS_CAP_MS,
         ...(portOverride === null ? {} : { expectedPort: portOverride }),
       });
       if (readiness.ready) {

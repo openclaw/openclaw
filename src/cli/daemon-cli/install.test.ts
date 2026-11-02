@@ -104,6 +104,7 @@ describe("runDaemonInstall", () => {
     await vi.waitFor(() =>
       expect(checkGatewayServiceReadinessMock).toHaveBeenCalledExactlyOnceWith({
         service,
+        deadlineCapMs: 45_000,
         expectedPort: 19001,
       }),
     );

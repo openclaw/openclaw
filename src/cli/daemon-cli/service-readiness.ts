@@ -17,6 +17,8 @@ import {
 export async function checkGatewayServiceReadiness(params: {
   service: GatewayService;
   expectedPort?: number;
+  /** Shortens the platform's startup deadline for callers that only report the result. */
+  deadlineCapMs?: number;
 }): Promise<
   | { ready: true }
   | {
@@ -26,7 +28,10 @@ export async function checkGatewayServiceReadiness(params: {
     }
 > {
   const { service } = params;
-  const { deadlineMs } = resolveGatewayStartupTiming();
+  const deadlineMs = Math.min(
+    resolveGatewayStartupTiming().deadlineMs,
+    params.deadlineCapMs ?? Number.POSITIVE_INFINITY,
+  );
   const context = await resolveGatewayLifecycleContext(service);
   const port = params.expectedPort ?? context.port;
   const deadlineAt = performance.now() + deadlineMs;
