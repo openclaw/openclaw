@@ -84,8 +84,11 @@ it.each([
   expect(commandMock).not.toHaveBeenCalled();
 });
 
-it("applies shared media scope rules to link message context", async () => {
-  const match = { channel: "slack", chatType: "channel" as const, keyPrefix: "agent:main:" };
+it.each([
+  { channel: "slack", chatType: "channel", keyPrefix: "agent:main:" },
+  { keyPrefix: "slack:" },
+  { rawKeyPrefix: "agent:main:slack:" },
+] as const)("applies shared media scope %j before fetching links", async (match) => {
   const { ctx, before, run } = fixture(
     {
       Body: source,
