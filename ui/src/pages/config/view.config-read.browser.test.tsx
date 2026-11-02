@@ -209,7 +209,7 @@ it.each(["includeSections", "excludeSections"] as const)(
         "initial-draft",
       );
       field.setSelectionRange(1, 4);
-      renderConfigInto({ ...props, assistantName: "Unrelated publication" }, container);
+      renderConfigInto({ ...props, serverQueueMode: "queue" }, container);
       expect(container.querySelector("input.settings-input")).toBe(field);
       expect(field.value).toBe("initial-draft");
       expect(document.activeElement).toBe(field);
