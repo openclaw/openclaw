@@ -318,3 +318,31 @@ export const resolveDateRange = (
   }
   return { ok: true, value: { startMs, endMs: todayEndMs } };
 };
+
+/**
+ * Calendar window for a bare day-count query. `usage cost` resolves its range
+ * through these same helpers, so callers that only know `days` report the
+ * buckets the CLI prints instead of a rolling 24-hour window that spans an
+ * extra boundary day.
+ */
+export function resolveUsageDaysWindow(
+  days: number | undefined,
+): { startMs: number; endMs: number; dayBucket?: UsageDailyBucket } | { error: string } {
+  const params = days === undefined ? {} : { days };
+  // A bare day count carries no zone, which is the same interpretation the CLI
+  // `usage cost` request resolves when it sends only `{ days }`.
+  const interpretation = resolveDateInterpretation({});
+  if (!interpretation.ok) {
+    return { error: interpretation.error };
+  }
+  const range = resolveDateRange(params, interpretation.value);
+  if (!range.ok) {
+    return { error: range.error };
+  }
+  const dayBucket = resolveDayBucket(interpretation.value);
+  return {
+    startMs: range.value.startMs,
+    endMs: range.value.endMs,
+    ...(dayBucket ? { dayBucket } : {}),
+  };
+}

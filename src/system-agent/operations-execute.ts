@@ -553,8 +553,10 @@ export async function executeSystemAgentOperation(
       const crossAgent =
         operation.agentId !== undefined && operation.agentId !== opts.requesterAgentId;
       if (crossAgent && !opts.deps?.loadUsageSummary) {
+        // Accepted boundary: outside the Gateway there is no caller whose
+        // operator scope could authorize another agent's sessions.
         runtime.error(
-          "Cross-agent usage needs a Gateway connection; ask from Gateway chat or the Control UI.",
+          "Cross-agent usage needs the in-process Gateway route; this tool runs outside it.",
         );
         return { applied: false };
       }

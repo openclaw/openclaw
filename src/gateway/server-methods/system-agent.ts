@@ -72,6 +72,7 @@ import {
 import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
 import { startSetupActivationWizard } from "./system-agent-setup-wizard.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import { resolveUsageDaysWindow } from "./usage-date-range.js";
 import { loadCostUsageSummaryCached } from "./usage-result-cache.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
@@ -487,11 +488,17 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
                   "Aggregate usage includes sessions hidden by your operator role; ask an administrator to review Gateway-wide usage.",
                 );
               }
-              const endMs = Date.now();
-              const startMs = endMs - (query.days ?? 30) * 24 * 60 * 60 * 1000;
+              // Same calendar window and day bucket the `usage.cost` request
+              // resolves, so chat and CLI never disagree on which days a
+              // "7 days" answer covers.
+              const window = resolveUsageDaysWindow(query.days);
+              if ("error" in window) {
+                throw new Error(window.error);
+              }
               return await loadCostUsageSummaryCached({
-                startMs,
-                endMs,
+                startMs: window.startMs,
+                endMs: window.endMs,
+                ...(window.dayBucket ? { dayBucket: window.dayBucket } : {}),
                 config,
                 ...(query.agentScope === "all" ? { agentScope: "all" as const } : {}),
                 ...(query.agentId ? { agentId: query.agentId } : {}),

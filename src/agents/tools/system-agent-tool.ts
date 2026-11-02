@@ -639,6 +639,9 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
       try {
         await executeSystemAgentOperation(operation, capture, {
           approved: false,
+          // A bare usage read reports the turn's own agent; without this the
+          // executor falls back to the install-wide default.
+          ...(options.agentId ? { requesterAgentId: options.agentId } : {}),
           deps: {
             ...options.deps,
             setupSurface: options.surface,

@@ -93,14 +93,27 @@ export async function loadUsageForOperation(
     return await deps.loadUsageSummary(query);
   }
   if (query.agentScope === "all") {
+    // Accepted boundary: a tool running outside the Gateway (the MCP server of
+    // a CLI-backed route) has no caller to authorize an aggregate read against,
+    // so it never discloses other agents' usage.
     throw new Error(
-      "All-agent usage needs a Gateway connection; ask from Gateway chat or the Control UI.",
+      "All-agent usage needs the in-process Gateway route; this tool runs outside it.",
     );
   }
+  const { resolveUsageDaysWindow } = await import("../gateway/server-methods/usage-date-range.js");
+  const window = resolveUsageDaysWindow(query.days);
+  if ("error" in window) {
+    throw new Error(window.error);
+  }
+  // Report the agent this turn runs as, not a hardcoded install default.
+  const agentId = query.agentId ?? (await loadOverviewForOperation(deps)).defaultAgentId;
   const { loadCostUsageSummary } = await import("../infra/session-cost-usage.js");
-  const endMs = Date.now();
-  const startMs = endMs - (query.days ?? 30) * 24 * 60 * 60 * 1000;
-  return await loadCostUsageSummary({ agentId: query.agentId ?? "main", startMs, endMs });
+  return await loadCostUsageSummary({
+    agentId,
+    startMs: window.startMs,
+    endMs: window.endMs,
+    ...(window.dayBucket ? { dayBucket: window.dayBucket } : {}),
+  });
 }
 
 export async function resolveChannelSetupState() {

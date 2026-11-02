@@ -134,13 +134,15 @@ describe("openclaw tool", () => {
         missingCostEntries: 0,
       },
     });
-    const tool = createSystemAgentTool({ surface: "cli" });
+    const tool = createSystemAgentTool({ surface: "cli", agentId: "dev" });
     const result = await tool.execute("t-usage", { action: "usage" });
     const text = toolText(result);
     expect(text).toContain("Usage cost (30 days)");
     expect(text).toContain("Total: $0.12");
     expect(text).toContain("Estimate: session-derived");
-    expect(mocks.loadCostUsageSummary).toHaveBeenCalled();
+    expect(mocks.loadCostUsageSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "dev" }),
+    );
 
     const actionEnum = (
       tool.parameters as {
@@ -151,13 +153,16 @@ describe("openclaw tool", () => {
     expect(tool.description).toMatch(/Read now:.*usage/);
   });
 
-  it("forwards usage days and agentId to the executor", async () => {
-    const tool = makeTool();
+  it("forwards explicit usage scope and the turn agent to the executor", async () => {
+    const tool = makeTool({ agentId: "dev" });
     await tool.execute("t-usage-scoped", { action: "usage", days: 7, agentId: "ops" });
     expect(mocks.executeSystemAgentOperation.mock.calls[0]?.[0]).toEqual({
       kind: "usage",
       days: 7,
       agentId: "ops",
+    });
+    expect(mocks.executeSystemAgentOperation.mock.calls[0]?.[2]).toMatchObject({
+      requesterAgentId: "dev",
     });
   });
 

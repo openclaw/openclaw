@@ -12,8 +12,14 @@ export function renderGatewayCostUsageSummary(
   days: number,
   rich: boolean,
 ): string[] {
-  const formatTotals = (totals: CostUsageSummary["totals"]) =>
-    `${formatUsd(totals.totalCost) ?? "$0.00"} · ${formatTokenCount(totals.totalTokens) ?? "0"} tokens`;
+  // Unpriced usage must never read as measured zero: spending that exists but
+  // has no recorded charge is reported as unavailable, matching the estimate
+  // line the callers append.
+  const formatTotals = (totals: CostUsageSummary["totals"]) => {
+    const unpriced = totals.totalCost === 0 && totals.missingCostEntries > 0;
+    const cost = unpriced ? "unavailable" : (formatUsd(totals.totalCost) ?? "$0.00");
+    return `${cost} · ${formatTokenCount(totals.totalTokens) ?? "0"} tokens`;
+  };
   const cachePrefix = formatCostUsageCachePrefix(summary.cacheStatus);
   const lines = [
     colorize(rich, theme.heading, `Usage cost (${days} days)`),

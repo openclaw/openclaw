@@ -18,6 +18,7 @@ import {
   isPersistentSystemAgentOperation,
   parseSystemAgentOperation,
 } from "./operations.js";
+import type { SystemAgentOverview } from "./overview.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 import {
   createSystemAgentPluginMetadataTestSnapshot,
@@ -219,6 +220,7 @@ describe("system agent operations", () => {
       agentId: "qa",
       startMs: expect.any(Number),
       endMs: expect.any(Number),
+      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
     });
     expect(loggedOutput()).toContain("Usage cost (30 days)");
     expect(loggedOutput()).toContain("Total: $0.12");
@@ -254,9 +256,74 @@ describe("system agent operations", () => {
     );
     const output = loggedOutput();
     expect(output).toContain("Usage totals may be incomplete (refreshing)");
+    expect(output).toContain("Total: unavailable");
+    expect(output).not.toContain("$0.0000");
     expect(output).toContain("Estimate: unavailable (cost data missing for 2 entries)");
     expect(output).not.toContain("session-derived estimate");
     expect(output).toContain("Missing cost: 2");
+  });
+
+  it("queries the calendar window the CLI usage cost request resolves", async () => {
+    mockLoadCostUsageSummary.mockResolvedValue({
+      updatedAt: 0,
+      days: 7,
+      daily: [],
+      totals: {
+        input: 10,
+        output: 5,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 15,
+        totalCost: 0.02,
+        inputCost: 0.01,
+        outputCost: 0.01,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+      },
+    });
+    await run({ kind: "usage", days: 7 }, { requesterAgentId: "qa" });
+    const call = mockLoadCostUsageSummary.mock.calls.at(-1)?.[0] as
+      | { startMs: number; endMs: number }
+      | undefined;
+    const startOfToday = Math.floor(Date.now() / 86_400_000) * 86_400_000;
+    // Seven whole UTC days ending today, not a rolling 168-hour window that
+    // reaches back into an eighth calendar day.
+    expect(call?.startMs).toBe(startOfToday - 6 * 86_400_000);
+    expect(call?.endMs).toBe(startOfToday + 86_400_000 - 1);
+  });
+
+  it("reports the configured default agent when the caller names none", async () => {
+    mockLoadCostUsageSummary.mockResolvedValue({
+      updatedAt: 0,
+      days: 30,
+      daily: [],
+      totals: {
+        input: 10,
+        output: 5,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 15,
+        totalCost: 0.02,
+        inputCost: 0.01,
+        outputCost: 0.01,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+      },
+    });
+    await run(
+      { kind: "usage" },
+      {
+        // Fixture slice: only the default agent reaches this read.
+        deps: {
+          loadOverview: async () => ({ defaultAgentId: "work" }) as SystemAgentOverview,
+        },
+      },
+    );
+    expect(mockLoadCostUsageSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "work" }),
+    );
   });
 
   it("parses usage windows, explicit agents, and the all-agents scope", () => {
@@ -326,7 +393,9 @@ describe("system agent operations", () => {
 
   it("refuses a cross-agent read without the host loader", async () => {
     await run({ kind: "usage", agentId: "work" }, { requesterAgentId: "qa" });
-    expect(loggedOutput()).toContain("Cross-agent usage needs a Gateway connection");
+    expect(loggedOutput()).toContain(
+      "Cross-agent usage needs the in-process Gateway route; this tool runs outside it.",
+    );
   });
 
   it("redacts sensitive config values using their complete paths", async () => {
