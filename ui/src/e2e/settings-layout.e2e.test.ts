@@ -66,10 +66,8 @@ const settingsGuidanceLinks: ReadonlyArray<{
 const sectionAlignmentRoutes = [
   "appearance",
   "cloud-workers",
-  "labs",
   "mcp",
   "secrets",
-  "security",
   "talk",
   "updates",
 ] as const;
