@@ -62,7 +62,7 @@ import {
 import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
-import { REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, createReplyOperation } from "./reply-run-registry.js";
+import { createReplyOperation } from "./reply-run-registry.js";
 import { getActiveReplyRunCount } from "./reply-run-registry.registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
@@ -82,7 +82,7 @@ vi.mock("../../agents/embedded-agent.runtime.js", () => ({
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
-  preemptAndDrainEmbeddedHeartbeatRun: vi.fn().mockResolvedValue("not-heartbeat"),
+  waitForEmbeddedHeartbeatRunEnd: vi.fn().mockResolvedValue(false),
   resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
   resolveActiveEmbeddedRunSessionIdBySessionFile: vi.fn().mockReturnValue(undefined),
   resolveEmbeddedSessionLane: vi.fn().mockReturnValue("session:session-key"),
@@ -1585,7 +1585,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).not.toHaveBeenCalled();
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
-  it("queues interrupt-mode turns behind admitted recovery after heartbeat preemption", async () => {
+  it("queues interrupt-mode turns behind admitted recovery after a heartbeat finishes", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
     const storePath = "/tmp/recovery-admission-sessions.json";
@@ -1599,9 +1599,7 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(
       "session-embedded-heartbeat",
     );
-    vi.mocked(embeddedAgentRuntime.preemptAndDrainEmbeddedHeartbeatRun).mockResolvedValue(
-      "drained",
-    );
+    vi.mocked(embeddedAgentRuntime.waitForEmbeddedHeartbeatRunEnd).mockResolvedValueOnce(true);
 
     try {
       await expect(
@@ -1619,12 +1617,9 @@ describe("runPreparedReply media-only handling", () => {
     } finally {
       recoveryAdmission.release();
       vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(undefined);
-      vi.mocked(embeddedAgentRuntime.preemptAndDrainEmbeddedHeartbeatRun).mockResolvedValue(
-        "not-heartbeat",
-      );
     }
   });
-  it("drains an embedded heartbeat hidden by the visible pre-dispatch operation", async () => {
+  it("waits for a hidden embedded heartbeat before running a visible turn in steer mode", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
     const operation = createReplyOperation({
@@ -1633,74 +1628,55 @@ describe("runPreparedReply media-only handling", () => {
       turnKind: "visible",
       resetTriggered: false,
     });
+    const waiting = createDeferred();
+    const releaseHeartbeat = createDeferred();
     let embeddedRunActive = true;
-    let releaseDrain: (() => void) | undefined;
-    const drainBarrier = new Promise<void>((resolve) => {
-      releaseDrain = resolve;
-    });
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "steer" });
     vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockImplementation(() =>
-      embeddedRunActive ? "session-pre-dispatch-heartbeat" : undefined,
+      embeddedRunActive ? operation.sessionId : undefined,
     );
-    vi.mocked(embeddedAgentRuntime.preemptAndDrainEmbeddedHeartbeatRun).mockImplementation(
-      async () => {
-        await drainBarrier;
+    vi.mocked(embeddedAgentRuntime.waitForEmbeddedHeartbeatRunEnd).mockImplementationOnce(
+      async (sessionId) => {
+        expect(sessionId).toBe(operation.sessionId);
+        waiting.resolve();
+        await releaseHeartbeat.promise;
         embeddedRunActive = false;
-        return "drained";
+        return true;
       },
     );
     vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockImplementation(
       () => embeddedRunActive,
     );
-    vi.mocked(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).mockImplementation(async () => {
-      await drainBarrier;
-      embeddedRunActive = false;
-      return true;
-    });
-
     try {
-      const runPromise = runPrepared({
+      const visible = runPrepared({
         isNewSession: false,
-        sessionId: "session-pre-dispatch-heartbeat",
+        sessionId: operation.sessionId,
         opts: { replyOperation: operation } as never,
         ...turn("answer this now", {
-          ...createProviderSurface("telegram"),
+          ...createProviderSurface("slack"),
           ChatType: "direct",
-          OriginatingChannel: "telegram",
-          OriginatingTo: "user:1",
+          OriginatingChannel: "slack",
+          OriginatingTo: "user:U1",
         }),
       });
-
-      await vi.waitFor(
-        () => {
-          expect(embeddedAgentRuntime.preemptAndDrainEmbeddedHeartbeatRun).toHaveBeenCalledWith(
-            "session-pre-dispatch-heartbeat",
-            REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-          );
-        },
-        { timeout: 1_000 },
+      await awaitGateBeforeSettlement(
+        waiting.promise,
+        visible,
+        "DM bypassed the embedded heartbeat",
       );
-      expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
-      expect(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).not.toHaveBeenCalled();
-
-      releaseDrain?.();
-      await expect(runPromise).resolves.toEqual({ text: "ok" });
+      expect(runReplyAgent).not.toHaveBeenCalled();
+      releaseHeartbeat.resolve();
+      await expect(visible).resolves.toEqual({ text: "ok" });
+      expect(runReplyAgent).toHaveBeenCalledOnce();
+      expect(requireRunReplyAgentCall()).toMatchObject({ isActive: false, shouldSteer: false });
     } finally {
-      releaseDrain?.();
+      releaseHeartbeat.resolve();
       operation.complete();
       vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
         .mockReset()
         .mockReturnValue(undefined);
-      vi.mocked(embeddedAgentRuntime.preemptAndDrainEmbeddedHeartbeatRun)
-        .mockReset()
-        .mockResolvedValue("not-heartbeat");
       vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReset().mockReturnValue(false);
-      vi.mocked(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd)
-        .mockReset()
-        .mockResolvedValue(true);
     }
-
-    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
   it("refreshes goal context after interrupt admission waits", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");

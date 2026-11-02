@@ -7,7 +7,7 @@
 export {
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
-  preemptAndDrainEmbeddedHeartbeatRun,
+  waitForEmbeddedHeartbeatRunEnd,
   isEmbeddedAgentRunActive,
   isEmbeddedAgentRunStreaming,
   resolveActiveEmbeddedRunSessionId,
