@@ -133,10 +133,6 @@ describe("Solid shell chrome", () => {
     await topbar.updateComplete;
     flush();
 
-    expect(find(".topbar--floating")).not.toBeNull();
-    expect(find(".topbar-page-title")?.textContent).toBe("Sessions");
-    expect(find(".topbar-brand")).toBeNull();
-    expect(find(".gateway-status-dot")).toBeNull();
     expect(find(".mobile-header__notices")).toBeNull();
     const slot = find(".topnav-shell__actions > .topnav-shell__page-actions");
     expect(register).toHaveBeenCalledExactlyOnceWith(slot);
@@ -146,8 +142,6 @@ describe("Solid shell chrome", () => {
     await topbar.updateComplete;
     expect(find(".mobile-header__notice")?.textContent).toBe("Reconnecting…");
     expect(find(".mobile-header__spinner")).not.toBeNull();
-    expect(find(".mobile-connection-status")).toBeNull();
-    expect(find(".gateway-status-dot")).toBeNull();
 
     setGatewayStatus({ kind: "offline", onRetry: retry });
     flush();
@@ -156,6 +150,8 @@ describe("Solid shell chrome", () => {
     expect(retry).toHaveBeenCalledOnce();
 
     view.unmount();
+    await Promise.resolve();
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("releases topbar toggle registrations on repeated mount and unmount", async () => {

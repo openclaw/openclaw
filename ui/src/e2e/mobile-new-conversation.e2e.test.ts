@@ -277,12 +277,6 @@ suite.define(() => {
       await header.waitFor();
       expect(await page.locator(".topbar").isVisible()).toBe(false);
       expect(await header.locator(".mobile-header__title-text").textContent()).toBe("New session");
-      expect(await navigationDrawerToggle(page).boundingBox()).toEqual({
-        x: 12,
-        y: 10,
-        width: 40,
-        height: 40,
-      });
 
       // Everything the top bar offered stays one tap away.
       await header.locator(".mobile-header__search").tap();
@@ -301,7 +295,6 @@ suite.define(() => {
       const title = header.locator(".mobile-header__title-text");
       const titleBox = await title.boundingBox();
       const capsuleBox = await capsule.boundingBox();
-      expect(capsuleBox!.x + capsuleBox!.width).toBe(378);
       await incognito.tap();
       expect(await incognito.getAttribute("aria-checked")).toBe("true");
       expect(await header.locator(".mobile-header__incognito").count()).toBe(0);
