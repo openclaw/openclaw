@@ -73,9 +73,9 @@ describe("renderModelProviders", () => {
     await updatePickers(container);
     for (const [label, change] of [
       ["Model", onPrimaryChange],
-      ["Utility Model", onUtilityChange],
-      ["Utility Fallback Model", onUtilityFallbackChange],
-      ["Fallback Model", onFallbackChange],
+      ["Utility model", onUtilityChange],
+      ["Utility fallback model", onUtilityFallbackChange],
+      ["Fallback model", onFallbackChange],
     ] as const) {
       const picker = settingsRow(container, label).querySelector<HTMLElement>(
         "openclaw-select-picker",
@@ -132,7 +132,7 @@ describe("renderModelProviders", () => {
       onFastModeChange,
     });
     const container = mount(viewProps);
-    const speed = settingsRow(container, "Fast Mode");
+    const speed = settingsRow(container, "Fast mode");
     expect(selectedSegment(speed)).toBe("ultrafast");
     expect(speed.querySelector<HTMLInputElement>('[value="ultrafast"]')?.disabled).toBe(true);
     expect(speed.querySelector('[value="on"]')).toBeNull();
@@ -178,7 +178,7 @@ describe("renderModelProviders", () => {
     });
     const container = mount(viewProps);
     const thinking = settingsRow(container, "Thinking");
-    const fast = settingsRow(container, "Fast Mode");
+    const fast = settingsRow(container, "Fast mode");
     expect(selectedSegment(fast)).toBe("ultrafast");
     expect(text(thinking)).toContain("Ultra");
     selectSegment(thinking, "adaptive");
@@ -268,7 +268,7 @@ describe("renderModelProviders", () => {
     );
     const behavior = container.querySelector("#settings-model-behavior")!;
     const thinkingRow = settingsRow(behavior, "Thinking");
-    const fastRow = settingsRow(behavior, "Fast Mode");
+    const fastRow = settingsRow(behavior, "Fast mode");
 
     expect(selectedSegment(thinkingRow)).toBe("adaptive");
     expect(text(thinkingRow)).toContain("Adaptive");
@@ -307,7 +307,7 @@ describe("renderModelProviders", () => {
     );
     const inheritedBehavior = container.querySelector("#settings-model-behavior")!;
     const inheritedThinking = settingsRow(inheritedBehavior, "Thinking");
-    const inheritedFast = settingsRow(inheritedBehavior, "Fast Mode");
+    const inheritedFast = settingsRow(inheritedBehavior, "Fast mode");
     expect(selectedSegment(inheritedThinking)).toBe("");
     expect(selectedSegment(inheritedFast)).toBe("");
     expect(
@@ -327,7 +327,7 @@ describe("renderModelProviders", () => {
 
   it("keeps decision model help behind the standard info button", () => {
     const container = mount(props());
-    const row = settingsRow(container, "Decision Model");
+    const row = settingsRow(container, "Decision model");
     const help = row.querySelector('button[aria-label="About the decision model"]');
     expect(help).not.toBeNull();
     expect(row.querySelector(".settings-row__desc")).toBeNull();
@@ -351,7 +351,7 @@ describe("renderModelProviders", () => {
     );
     const behavior = container.querySelector("#settings-model-behavior")!;
     const thinking = settingsRow(behavior, "Thinking");
-    const fast = settingsRow(behavior, "Fast Mode");
+    const fast = settingsRow(behavior, "Fast mode");
 
     selectSegment(thinking, "");
     selectSegment(fast, "");
@@ -367,7 +367,7 @@ describe("renderModelProviders", () => {
     const container = mount(viewProps);
     const behavior = container.querySelector("#settings-model-behavior")!;
     const thinking = settingsRow(behavior, "Thinking");
-    const fastMode = settingsRow(behavior, "Fast Mode");
+    const fastMode = settingsRow(behavior, "Fast mode");
 
     selectSegment(thinking, "");
     selectSegment(fastMode, "");
@@ -552,7 +552,7 @@ describe("renderModelProviders", () => {
 
     expect(behavior).not.toBeNull();
     expect(selectedSegment(settingsRow(behavior!, "Thinking"))).toBe("high");
-    expect(selectedSegment(settingsRow(behavior!, "Fast Mode"))).toBe("on");
+    expect(selectedSegment(settingsRow(behavior!, "Fast mode"))).toBe("on");
     expect(text(container)).not.toContain("Configure a provider before selecting default models.");
     expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
     expect(container.querySelector('[data-provider-id="openai"]')).toBeNull();
@@ -800,10 +800,10 @@ describe("renderModelProviders", () => {
       await openPicker(
         automatic.querySelectorAll<HTMLElement>(
           ".model-providers__defaults openclaw-select-picker",
-        )[1]!,
+        )[2]!,
       );
       const automaticOption = automatic
-        .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+        .querySelectorAll(".model-providers__defaults openclaw-select-picker")[2]
         ?.querySelector('[role="option"][aria-selected="true"]');
       expect(text(automaticOption?.querySelector(".picker-select__label") ?? null)).toBe("Auto");
       expect(text(automaticOption?.querySelector(".picker-select__description") ?? null)).toBe(
@@ -820,12 +820,12 @@ describe("renderModelProviders", () => {
       await openPicker(
         disabled.querySelectorAll<HTMLElement>(
           ".model-providers__defaults openclaw-select-picker",
-        )[1]!,
+        )[2]!,
       );
       expect(
         text(
           disabled
-            .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+            .querySelectorAll(".model-providers__defaults openclaw-select-picker")[2]
             ?.querySelector('[role="option"][aria-selected="true"]') ?? null,
         ),
       ).toBe("Disabled");
@@ -836,10 +836,10 @@ describe("renderModelProviders", () => {
     await openPicker(
       container.querySelectorAll<HTMLElement>(
         ".model-providers__defaults openclaw-select-picker",
-      )[1]!,
+      )[2]!,
     );
     const option = container
-      .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+      .querySelectorAll(".model-providers__defaults openclaw-select-picker")[2]
       ?.querySelector(`[role="option"][data-value="${value}"]`);
     return {
       label: text(option?.querySelector(".picker-select__label") ?? null),

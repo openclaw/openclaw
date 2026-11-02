@@ -181,7 +181,7 @@ suite.define(() => {
         200,
       );
       const thinkingRow = settingsRow(page, "Thinking");
-      const fastModeRow = settingsRow(page, "Fast Mode");
+      const fastModeRow = settingsRow(page, "Fast mode");
       await radio(thinkingRow, "High").waitFor();
       expect(await radio(thinkingRow, "High").isChecked()).toBe(true);
       await expectDefaultInfo(thinkingRow, thinkingDefaultExplanation);
@@ -208,7 +208,7 @@ suite.define(() => {
 
       expect((await page.reload())?.status()).toBe(200);
       const reloadedThinkingRow = settingsRow(page, "Thinking");
-      const reloadedFastModeRow = settingsRow(page, "Fast Mode");
+      const reloadedFastModeRow = settingsRow(page, "Fast mode");
       await expectDefaultInfo(reloadedThinkingRow, thinkingDefaultExplanation);
       await expectDefaultInfo(reloadedFastModeRow, fastModeDefaultExplanation);
       expect(await radio(reloadedThinkingRow, /^Default/u).isChecked()).toBe(true);

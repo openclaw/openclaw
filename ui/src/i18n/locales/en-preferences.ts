@@ -9,7 +9,7 @@ const enPreferences = {
       title: "Model & Thinking",
       model: "Model",
       thinking: "Thinking",
-      fastMode: "Fast Mode",
+      fastMode: "Fast mode",
       default: "Default",
       modelPolicy: "Model policy",
       thinkingLevels: {

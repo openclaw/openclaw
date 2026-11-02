@@ -1223,9 +1223,9 @@ const enSettings = {
     defaults: {
       title: "Defaults for all agents",
       subtitle:
-        "Model and behavior defaults for all agents. Agent-specific settings override these defaults. View each agent's model in Agents → Overview.",
+        "Agent-specific settings override these defaults. View each agent's model in Agents → Overview.",
       primary: "Model",
-      utility: "Utility Model",
+      utility: "Utility model",
       utilityHelpLabel: "About the utility model",
       decisionHelpLabel: "About the decision model",
       utilityHelpPurpose:
@@ -1235,8 +1235,8 @@ const enSettings = {
       automatic: "Automatic (provider default)",
       automaticUnavailable: "No recommended small model",
       disabled: "Disabled",
-      fallback: "Fallback Model",
-      utilityFallback: "Utility Fallback Model",
+      fallback: "Fallback model",
+      utilityFallback: "Utility fallback model",
       noFallback: "No fallback model",
       clearFallbacks: "No fallback model (remove all {count})",
       moreFallbackOne: "1 more fallback after this one",

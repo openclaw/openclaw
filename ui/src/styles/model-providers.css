@@ -2,8 +2,25 @@
    provider-usage-* styles from usage.css and .provider-brand-icon from
    components.css. Structural surfaces come from settings.css. */
 
-.model-providers__catalog-feedback {
-  min-block-size: 3.6rem;
+/* Discovery sits on the section's heading line, so nothing moves when it comes and goes. */
+.settings-section__header:has(.model-providers__catalog-feedback) {
+  position: relative;
+}
+
+.settings-section__actions:has(.model-providers__catalog-feedback) {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-end: 0;
+}
+
+/* A failure has to be read and retried, so it takes a line of its own. */
+.settings-section__header:has(.model-providers__catalog-progress[role="alert"]) {
+  flex-wrap: wrap;
+}
+
+.settings-section__actions:has(.model-providers__catalog-progress[role="alert"]) {
+  position: static;
+  flex-basis: 100%;
 }
 
 .model-providers__installed-agent .settings-row__desc {
@@ -15,8 +32,6 @@
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
-  border-top: 1px solid var(--border);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
@@ -359,17 +374,13 @@
 }
 
 .model-providers__defaults .settings-row__control {
-  flex: 0 1 420px;
-  width: 420px;
+  flex: 0 1 340px;
+  width: 340px;
 }
 
 .model-providers__defaults .model-picker,
 .model-providers__defaults .settings-segmented {
   width: 100%;
-}
-
-.model-providers__defaults .model-picker .picker-select__trigger {
-  min-height: 48px;
 }
 
 /* Access metadata belongs to the option list, beside the model name. */

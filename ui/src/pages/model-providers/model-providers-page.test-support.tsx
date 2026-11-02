@@ -78,9 +78,9 @@ export type ModelProvidersPageTestElement = Pick<
 
 const modelPickerLabels = {
   primary: "Model",
-  utility: "Utility Model",
-  fallback: "Fallback Model",
-  decision: "Decision Model",
+  utility: "Utility model",
+  fallback: "Fallback model",
+  decision: "Decision model",
 };
 
 export function modelPicker(
