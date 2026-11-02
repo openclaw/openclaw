@@ -284,7 +284,8 @@
   white-space: nowrap;
 }
 
-.usage-header .btn--icon {
+/* The refresh button keeps its shared size, which grows on touch. */
+.usage-header .btn--icon:not(.refresh-button) {
   width: 32px;
   height: 32px;
   min-height: 32px;
