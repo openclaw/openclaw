@@ -94,9 +94,10 @@ describe("plugins cli inspect", () => {
   it.each([false, true])("distinguishes CLI loading from Gateway state (all: %s)", async (all) => {
     const plugin = createPluginRecord({ id: "cli-only", status: "loaded" });
     mockInspection(plugin);
-    resolvePluginLifecycleGatewayMock.mockResolvedValue(
-      vi.fn().mockResolvedValue({ plugins: [{ id: plugin.id, runtime: { state: "unloaded" } }] }),
-    );
+    const query = vi.fn().mockResolvedValue({
+      plugins: [{ id: plugin.id, runtime: { state: "unloaded" } }],
+    });
+    resolvePluginLifecycleGatewayMock.mockResolvedValue(query);
     const selector = all ? "--all" : plugin.id;
     await plugins("inspect", selector, "--runtime", "--json");
     const result = JSON.parse(logs.at(-1) ?? "null");
@@ -110,6 +111,11 @@ describe("plugins cli inspect", () => {
     expect(output).toContain("CLI status");
     expect(output).toContain("Gateway");
     expect(output).toContain("unloaded");
+
+    query.mockRejectedValue(new Error("Gateway unavailable"));
+    await plugins("inspect", selector, "--runtime", "--json");
+    const unavailable = JSON.parse(logs.at(-1) ?? "null");
+    expect((all ? unavailable[0] : unavailable).gatewayRuntime).toBeNull();
   });
 
   it.each([false, true])(
