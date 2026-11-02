@@ -394,6 +394,8 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
               ariaLabel: props.skill.name,
               panelId: "skill-detail-panel",
               variant: "sub",
+              carapace: true,
+              class: "plugins-settings-tabs",
               onSelect: props.view.onDetailTabChange,
             }}
           />
