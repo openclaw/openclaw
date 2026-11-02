@@ -284,7 +284,8 @@
   white-space: nowrap;
 }
 
-.usage-header .btn--icon {
+/* The refresh button keeps its shared size, which grows on touch. */
+.usage-header .btn--icon:not(.refresh-button) {
   width: 32px;
   height: 32px;
   min-height: 32px;
@@ -757,7 +758,7 @@
 }
 
 /* Identities may be long keys; numbers never break mid-value. */
-.usage-creators-table td:first-child {
+.usage-creators-table tbody th:first-child {
   overflow-wrap: anywhere;
   white-space: normal;
 }
@@ -793,6 +794,7 @@
 
 .usage-creator-select {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   width: 100%;
   gap: 7px;
   padding: 4px 0;
@@ -1924,6 +1926,23 @@
     gap: 14px;
   }
 
+  .usage-creators {
+    container-type: inline-size;
+  }
+
+  /* Numbers keep their natural width; the identity takes the rest and wraps. */
+  .usage-creators-table {
+    table-layout: auto;
+  }
+
+  .usage-creators-table th:first-child {
+    width: auto;
+  }
+
+  .usage-creators-table tbody tr {
+    border-top: 0;
+  }
+
   .usage-controls,
   .usage-filter-row,
   .usage-filters-inline {
@@ -2193,6 +2212,56 @@
   }
 }
 
+/* Phones: the panel opens by scrolling to it, its X shares the title row, and the
+   conversation filters are the page's facet menus. */
+@media (max-width: 640px) {
+  .usage-session-detail-column {
+    scroll-margin-top: var(--space-3);
+  }
+
+  .session-detail-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+  }
+
+  /* The tooltip host lays out as its button, so both claim the title row's end. */
+  .session-detail-header > openclaw-tooltip,
+  .session-detail-header .session-detail-close {
+    grid-area: 1 / 2;
+  }
+
+  .session-detail-header > .session-detail-stats {
+    grid-column: 1 / -1;
+  }
+
+  /* Side by side when both labels fit; wider mono themes wrap instead of truncating. */
+  .session-log-filters > .usage-filter-select {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .session-log-filters .usage-filter-trigger {
+    width: 100%;
+  }
+
+  .session-log-filters .usage-filter-trigger > .oc-menu-item__label {
+    justify-content: space-between;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .session-log-filters .usage-filter-trigger__label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .session-log-filters > .session-log-has-tools {
+    flex: 1 0 100%;
+  }
+}
+
 /* Legend: every stacked series with its share of the range. */
 .daily-chart-legend {
   display: flex;
@@ -2209,4 +2278,37 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+}
+
+/* Too narrow for four columns: the identity takes its own line above the numbers. */
+@container (max-width: 320px) {
+  .usage-creators-table,
+  .usage-creators-table thead,
+  .usage-creators-table tbody {
+    display: block;
+  }
+
+  .usage-creators-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr);
+  }
+
+  .usage-creators-table thead th:first-child {
+    display: none;
+  }
+
+  .usage-creators-table tbody th:first-child {
+    grid-column: 1 / -1;
+    padding-right: 0;
+    padding-bottom: 2px;
+  }
+
+  .usage-creators-table td {
+    padding-top: 4px;
+  }
+
+  .usage-creators-table :is(th, td):nth-child(2) {
+    padding-left: 0;
+    text-align: left;
+  }
 }

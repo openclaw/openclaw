@@ -54,6 +54,13 @@ decoded rows even when a caller retains the inactive handle. Predicate compariso
 baselines last only until release; a late acknowledgement cannot restore them.
 Active authorities retain their existing publication and final-effect checks.
 
+Prepared entry-only session guards consume the retained database admission's
+identity and live publication instead of polling its path. Source preparation
+still validates aliases and physical replacement before a guarded write. Missing
+stores and cross-store conversation guards retain their existing discovery checks.
+Profile authority readers retain shared-cell views, never a cached allow decision;
+each use checks the exact lifetime, generation, and mutation publication.
+
 Host file writes prepare retained session-generation authority at their final
 effect boundary, after overwrite rollback capture. The existing session worker
 validates physical sources and refreshes facts after committed native mutations;

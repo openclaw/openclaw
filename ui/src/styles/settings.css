@@ -915,6 +915,10 @@ textarea.settings-input {
   background: var(--accent);
 }
 
+.settings-status--running .settings-status__dot {
+  background: var(--status-running);
+}
+
 .settings-permission-control {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 11rem;
@@ -1146,9 +1150,13 @@ textarea.settings-input {
 .shell--embed-settings {
   --settings-control-height: 44px;
 
-  :is(button, .btn, summary, .settings-toggle, .settings-segmented__btn):where(:not([role="tab"])) {
+  :is(button, .btn, summary, .settings-toggle):where(:not([role="tab"], .settings-segmented__btn)) {
     min-width: 44px;
     min-height: 44px;
+  }
+
+  .settings-segmented > .settings-segmented__btn {
+    min-width: 44px;
   }
 
   :is(input, select, textarea),
@@ -1176,11 +1184,15 @@ textarea.settings-input {
 
     /* The shell topbar keeps one size on every route; resizing it here shifts
        the page when navigation enters or leaves Settings. */
-    :is(button, .btn, summary, .settings-toggle, .settings-segmented__btn):where(
-      :not([role="tab"], .topbar *)
+    :is(button, .btn, summary, .settings-toggle):where(
+      :not([role="tab"], .topbar *, .settings-segmented__btn)
     ) {
       min-width: 44px;
       min-height: 44px;
+    }
+
+    .settings-segmented > .settings-segmented__btn {
+      min-width: 44px;
     }
 
     :is(input, select, textarea),
@@ -1302,10 +1314,64 @@ textarea.settings-input {
       justify-content: flex-end;
     }
 
-    .settings-segmented__btn {
+    /* Read-only rows keep label and value on one line when both fit; a longer
+       value wraps beneath its label. Rows with a description stay stacked, since
+       whether they fit would vary row by row. Plugin rows nest the value in two
+       spans. */
+    .settings-row:not(
+        .settings-row--stacked,
+        .settings-row--stacked-on-narrow,
+        :has(> .settings-row__text > .settings-row__desc)
+      ):has(
+        > .settings-row__control > :is(.settings-row__value, .settings-status):only-child,
+        > .settings-row__control
+          > span:only-child
+          > span:only-child
+          > :is(.settings-row__value, .settings-status):only-child
+      ) {
+      > .settings-row__text {
+        flex: 1 1 auto;
+      }
+
+      > .settings-row__control {
+        width: auto;
+        flex: 0 1 auto;
+        justify-content: flex-end;
+      }
+
+      .settings-row__value {
+        text-align: start;
+      }
+    }
+
+    /* The help icon sits beside its label and keeps its touch target without
+       growing the header. */
+    .settings-section__header:has(
+      > .settings-section__actions > .settings-section__docs:only-child
+    ) {
+      justify-content: flex-start;
+      gap: var(--space-2);
+
+      + .settings-section__desc {
+        margin-top: calc(-1 * var(--space-2));
+      }
+    }
+
+    .settings-section__help-button {
+      position: relative;
+      min-width: 16px;
+      min-height: 16px;
+
+      &::after {
+        content: "";
+        position: absolute;
+        inset: -14px;
+      }
+    }
+
+    .settings-segmented > .settings-segmented__btn {
       max-width: 100%;
       white-space: normal;
-      overflow-wrap: anywhere;
     }
 
     .identity-name-control {
@@ -1357,8 +1423,9 @@ textarea.settings-input {
     padding: var(--space-3) var(--space-4);
   }
 
+  /* Space alone separates records: well above the gap between a record's own fields. */
   .settings-table--stacked tbody tr + tr {
-    border-top: 1px solid var(--border);
+    margin-top: var(--space-4);
   }
 
   .settings-table--stacked tbody td {
@@ -1393,6 +1460,12 @@ textarea.settings-input {
     min-width: 44px;
     min-height: 44px;
     white-space: normal;
+  }
+
+  /* Stacked records flow with the page instead of scrolling inside a bounded box. */
+  .data-table-container:has(> .settings-table--stacked) {
+    max-height: none;
+    overflow: visible;
   }
 }
 
