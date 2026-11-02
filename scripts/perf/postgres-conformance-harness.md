@@ -53,3 +53,24 @@ Initial source: `6f8748ad889`.
 Successful PR CI runs: `40256840043`, `40256709284`, `40256387656`.
 Profiles and raw synthetic measurements are local scratch; publish only
 operation counts, durations, and source attribution.
+
+### November 2 follow-up
+
+Source: `e2e3e4765ed3234099bc7cf5364cfbf59146e26c`.
+The three newest successful PR runs with all three PostgreSQL shards executed,
+at collection time, were `41429015158`, `41419559501`, and `41417862250`.
+Ranked by summed printed case duration across those runs, the top ten files are:
+
+1. `port-command.integration.test.ts`
+2. `doctor-migration.postgres.test.ts`
+3. `matrix-roots.postgres.test.ts` (fenced: profile only)
+4. `startup-client-credentials.postgres.test.ts`
+5. `port-command.recovery.integration.test.ts`
+6. `interactive-setup.integration.test.ts`
+7. `port-command.mixed.integration.test.ts`
+8. `update-preflight.conformance.test.ts`
+9. `port-command.credentials.integration.test.ts`
+10. `client-credential-update.test.ts`
+
+Use the acceptance rule above for this follow-up. Printed case durations rank
+diagnostic work; they do not establish elapsed time or savings.
