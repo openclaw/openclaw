@@ -20,9 +20,9 @@ rename, keeps its error with that action instead of adding a list error.
 On phones, swipe right across the chat to open navigation. A deliberate swipe opens the full drawer while your finger is still down, rather than holding a partly clipped sidebar over the conversation. Short drags and vertical scrolling leave navigation closed. Tap outside the drawer to close it.
 
 To work directly in a folder on a paired device, select that specific device,
-then choose **Existing folder on device** in the workspace picker. Enter an
-absolute path on that device, or, as an admin, choose **Browse folders on**
-_device_ and pick a folder from that device. The option appears only when the
+then choose **Existing folder on** _device_ in the workspace picker. Admins
+pick a folder from that device's folder browser; other operators enter an
+absolute path on that device. The option appears only when the
 connected session host advertises support; **Auto** cannot select an existing
 device folder.
 The session stays bound to that device and displays its folder path. Files stay
@@ -238,10 +238,12 @@ can differ from the personal default selected when the actual chat starts.
 
 **Start session** uses a matching prepared name if it is ready. Otherwise, normal
 initial naming runs after submission; Start never waits for the speculative call.
-While a name is pending, the sidebar and chat header show a subtle loading bar
-instead of “New session.” A ready name replaces it immediately; if naming ends
-without a name, the ordinary fallback label returns. Reduced-motion preferences
-keep the placeholder still.
+The sidebar adds no placeholder row while a session is being created: the row
+appears once the Gateway lists the session and fades in. While a name is
+pending, the chat header shows a subtle loading bar instead of “New session,”
+and the sidebar row keeps its title blank; the name fades in when it is ready. If
+naming ends without a name, the ordinary fallback label appears. Reduced-motion
+preferences skip the fades and keep the placeholder still.
 This is creation-only: later messages do not regenerate an existing session's
 name. Explicit worktree names are preserved, and typing never creates a worktree
 or runs setup.
@@ -370,6 +372,13 @@ still apply; opening Systems does not grant additional access.
 
 System details use reported facts. A connected device is not necessarily the
 machine running a session, and unavailable measurements are not shown as zero.
+The telemetry and backup overview reserves its space while those readings load,
+so the desktop and Backups stay in place. It summarizes the three volumes with
+the highest used percentage and reserves unused rows for machines with fewer
+volumes. **+N more volumes in Details** opens every volume and its history.
+**Backup details** opens the complete backup outcomes, schedules, and storage
+locations, even when no machine is selected. The overview does not scroll;
+turning off statistics keeps a compact backup area.
 See [Cloud Worker Desktop](/gateway/cloud-workers/desktop) for worker desktop
 enablement and sizing.
 
@@ -520,6 +529,12 @@ Toggle the sidebar with **⌘B** on Mac or **Ctrl+B** on Windows/Linux. Open the
 
 The search field updates immediately, while command filtering and session searches wait until you pause typing for 200 ms. Previous results stay in place during that pause but cannot be selected until the new query applies. Press Enter to apply a pending query immediately and select an available matching result. Clearing the field restores the default commands immediately.
 
+Session metadata filtering and command-palette metadata matches are case-insensitive,
+including the Greek sigma forms **Σ**, **σ**, and **ς**. Title matching also treats
+equivalent Unicode spellings and punctuation-separated words alike. Literal fields,
+such as session keys and model references, retain their punctuation. These rules do
+not change transcript search or which conversations you can access.
+
 During text composition, the command palette pauses searches and leaves Enter, Escape, and arrow keys to the input method.
 
 After token or device-token authentication, the sidebar can show its cached session roster on reload only when the browser will present the Gateway token that authenticated the previous connection, or the paired device token retained from that connection. The cached roster has no live run state and is replaced by the live list after connecting. Other authentication methods wait for the connection; see [Warm reload](/web/control-ui/offline-and-reconnect#warm-reload).
@@ -647,14 +662,19 @@ the search; Arrow Down and Enter let you select a matching owner.
 1. Open the saved session and select **Session sharing** in the chat header. In the compact header menu, select **Session sharing** there instead.
 2. Under **Public access**, select **Enable public access…**, review the warning, then select **Make public**.
 3. Select **Copy public link** to copy the normal thread URL. The **Public** badge in the chat header remains visible while the transcript is published and updates when another window changes public access.
-4. Open that same URL in a signed-out browser to verify the read-only conversation and **Log in** button. Signing in returns to the thread with your existing permissions. New user messages and assistant final answers become visible to public readers automatically.
+4. Open that same URL in a signed-out browser to verify the read-only conversation and **Log in** button. Signing in returns to the thread with your existing permissions. New user and assistant text, including progress updates, becomes visible to public readers automatically.
 5. Return to **Session sharing** and select **Disable public access** to stop anonymous reads. The same URL then returns an unavailable page to signed-out readers. Enabling access again makes that URL public again; disabling access cannot recall saved copies.
 
-The public page excludes tools, reasoning, files, images, widgets, hidden messages,
-and internal metadata. Included text is not secret-masked, so review the
-conversation for credentials and other sensitive content before publishing. Public access does not let visitors send
-messages or grant authenticated Control UI permissions. For link lifecycle, pagination,
-backup behavior, and login-proxy configuration, see
+Alongside visible conversation text, the public page can show eligible shared
+images (including tool-result images), saved inline widgets, and collapsed
+tool-step summaries.
+Other attachments appear as filename chips without download links. Raw tool-result
+text, reasoning, hidden messages, internal metadata, and pinned dashboard widgets
+remain excluded. Included text is not secret-masked, so review the conversation
+for credentials and other sensitive content before publishing. Public access does
+not let visitors send messages or grant authenticated Control UI permissions. For
+image and widget checks, content limits, link lifecycle, pagination, backup behavior,
+and login-proxy configuration, see
 [Public session transcripts](/web/urls#public-session-transcripts).
 
 ### Session placement
@@ -863,7 +883,7 @@ The model picker initially opens with the selected model’s provider section ex
 
 When you switch sessions, the composer keeps the session's known model name visible while refreshing the model options available for that session. If the model is not yet known, the control shows a loading placeholder. Locked chats also show the selected model, or **Session model** when it is not known. The lock prevents model selection changes; it does not indicate that a native runtime owns the model.
 
-If you select **Draft** and an administrator disables new Draft creation while the form is open, your selection, message, and attachments stay in place. The form explains that Draft creation is disabled. Turn off **Draft** only if you want to create a Shared session, or ask an administrator to enable Draft creation. Existing Draft conversations remain usable.
+When Draft sessions are available, the **Draft** toggle sits beside **Incognito** in the new-session page's top-right control rail (in the header on phones); it keeps the new session to yourself until you publish it. The attachment (**+**) menu offers the same choice. If you select **Draft** and an administrator disables new Draft creation while the form is open, your selection, message, and attachments stay in place. The form explains that Draft creation is disabled. Turn off **Draft** only if you want to create a Shared session, or ask an administrator to enable Draft creation. Existing Draft conversations remain usable.
 
 Once the session is created, chat opens immediately. Remote startup uses the same transcript progress indicator and elapsed timer as GitHub workspace preparation, showing provisioning, workspace preparation, startup, and first-message delivery as they happen. The composer remains editable, and ordinary follow-up messages can enter the local queue while the first message is unresolved. Their delivery waits until the initial message is resolved. Normal startup is not an error. Startup failures remain visible in the session, with **Retry** when recovery is available.
 
@@ -882,7 +902,7 @@ browser draft and restored after a reload. **Default** remains the agent's curre
 configured default, rather than a saved permission override. Successful creation
 clears the draft's choice; it does not become a default for unrelated new tasks.
 Restoring a choice does not grant access: creation still checks the current user's
-permissions, including the admin requirement for an explicit **Full Access** choice.
+permissions, including the admin requirement for an explicit **Full access** choice.
 
 <a id="register-an-existing-repository" />
 
@@ -922,6 +942,10 @@ and Gateway shutdown cancels pending refreshes and clears snapshots.
 Listings retain a session snapshot during discovery and recheck the contributing
 sessions before replying. Unrelated session creation and activity do not invalidate
 an in-flight listing; changed access to a contributing session still requires a retry.
+
+Host-session discovery uses the session's explicit task working directory.
+Repeated sessions in one checkout retain only its newest representative before
+the candidate limit, so they do not crowd out other visible checkouts.
 
 **Projects from GitHub.** Search the same picker or paste a GitHub HTTPS or `git@github.com` repository URL. For a remote destination, creation records that source and the runner fetches it during dispatch; no Gateway project clone is required. For Gateway execution, the picker clones into the Gateway-managed projects area. Recent repository sources retain their URL without inventing a local path. Public repository search and cloning work anonymously. Private remote checkout uses the effective shared `tools.github` identity; the discovery credential below only grants picker access. For affiliated and private repositories, prefer the explicit `gateway.controlUi.github.token` SecretRef so this service access has a clear runtime owner. Set `gateway.controlUi.github.host` to the selected Enterprise host; an omitted credential host means `github.com`. The shipped `GH_TOKEN` then `GITHUB_TOKEN` fallback applies only to `github.com`. A trusted host that sets `gateway.projects.nativeGitHubSearch: true` instead prepares the current native system GitHub identity for each search; this is intended for a protected `gh` wrapper or host login and retains the native identity's 60-second cache and rotation fences. Ambient `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN` requires `GH_HOST` to match the selected Enterprise host; host-specific native login remains supported. When a Control UI SecretRef is explicit, its exact environment or store name is excluded from agent execution without clearing unrelated native GitHub CLI variables. Search caches GitHub response pages for 60 seconds, sharing affiliated repositories across queries for the same credential. Expired pages return with `stale: true` while one bounded background refresh per page runs, using ETags when GitHub supplies them. Every response rechecks the requesting connection and current GitHub identity; revocation or cancellation stops delivery. Each outbound request also rechecks the initiating requester’s authority. Refreshes belong to the Gateway and stop with its lifetime. Search requires `operator.read`, cloning requires `operator.write`, and deleting a Gateway-managed cloned checkout requires `operator.admin`. Clone deletion refuses while a live session or managed worktree still references the checkout. SecretRef ownership is not an OS-user security boundary; use a sandbox, dedicated host, or dedicated OS user when same-account processes are not trusted.
 

@@ -328,6 +328,58 @@ describe("gateway request suspension admission", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
+  it("bounds branch-list authorization while retaining unfinished preparation", async () => {
+    vi.useFakeTimers();
+    using gate = createRequestGate();
+    const requestEntryLifetime = new GatewayRequestEntryLifetime();
+    const preparationSettled = vi.fn();
+    const requestSettled = vi.fn();
+    let preparationSignal: AbortSignal | undefined;
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { branches: [] }));
+    const read = dispatch("sessions.branches.list", handler, {
+      core: true,
+      requestParams: { sessionKey: "agent:main:deadline" },
+      context: {
+        ...createSuspendContext({ size: 0 }).context,
+        requestEntryLifetime,
+        async ensureSessionRowProjection() {
+          preparationSignal = getAsyncWorkSignal();
+          await gate.pause();
+          preparationSettled();
+        },
+      },
+    });
+    void read.request.then(requestSettled, requestSettled);
+    try {
+      await awaitGateBeforeSettlement(gate.entered, read.request, "authorization did not wait");
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(read.respond).not.toHaveBeenCalled();
+      expect(handler).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(read.respond).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          message: expect.stringContaining("timed out"),
+          retryable: true,
+        }),
+      );
+      expect(preparationSignal?.aborted).toBe(true);
+      expect(preparationSettled).not.toHaveBeenCalled();
+      expect(requestSettled).not.toHaveBeenCalled();
+    } finally {
+      gate.release();
+      await read.request;
+    }
+    await requestEntryLifetime.sealAndJoin();
+    expect(preparationSettled).toHaveBeenCalledOnce();
+    expect(requestSettled).toHaveBeenCalledOnce();
+    expect(handler).not.toHaveBeenCalled();
+    expect(read.respond).toHaveBeenCalledOnce();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
   it("reports a concurrent root as busy then excludes its own prepare request", async () => {
     const { active, finish } = await startHeldWork("suspend-proof.concurrent", { ok: true });
 

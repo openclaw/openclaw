@@ -128,6 +128,7 @@ export async function runWorkspaceCommand(params: {
 }): Promise<string> {
   const maxOutputBytes = params.maxOutputBytes ?? 128 * 1024;
   const result = await runCommandWithTimeout(params.argv, {
+    executionIntent: "gateway-internal",
     cwd: params.workspaceDir,
     baseEnv: workspaceCommandEnv(params.homeDir),
     ...(params.input === undefined ? {} : { input: params.input }),

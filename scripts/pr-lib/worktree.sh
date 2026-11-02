@@ -716,12 +716,13 @@ gc_pr_worktrees() {
   cd "$root"
 
   local dir
-  local removed=0
+  local removed=0 selected_status=0
   # Select before locks or remote reads: scoped cleanup must not observe sibling PRs.
   local directories=(".worktrees/pr-$selected_pr")
   [ -n "$selected_pr" ] || directories=(.worktrees/pr-*)
   for dir in "${directories[@]}"; do
     [ -d "$dir" ] || continue
+    [ -z "$selected_pr" ] || selected_status=1
     local pr
     if ! pr=$(pr_number_from_worktree_dir "$dir"); then
       echo "skipping $dir (could not parse PR number)"
@@ -752,6 +753,7 @@ gc_pr_worktrees() {
           echo "removed $dir (failed template clone)"
         fi
         removed=$((removed + 1))
+        selected_status=0
       fi
       release_pr_operation_lock
       continue
@@ -769,12 +771,14 @@ gc_pr_worktrees() {
           if remove_worktree_if_present "$dir" true; then
             echo "would remove $dir (PR #$pr state=$state)"
             removed=$((removed + 1))
+            selected_status=0
           else
             echo "skipping $dir (cleanup incomplete)"
           fi
         elif cleanup_pr_worktree "$dir"; then
           echo "removed $dir (PR #$pr state=$state)"
           removed=$((removed + 1))
+          selected_status=0
         else
           echo "skipping $dir (cleanup incomplete)"
         fi
@@ -790,6 +794,7 @@ gc_pr_worktrees() {
       echo "No merged/closed PR worktrees removed."
     fi
   fi
+  return "$selected_status"
 }
 
 pr_number_from_worktree_dir() {

@@ -156,6 +156,13 @@ function redactOptionalWebhookUrl(url: unknown): string | undefined {
   return normalized ? redactWebhookUrl(normalized) : undefined;
 }
 
+function stripCronJobDiagnostics(job: NonNullable<CronEvent["job"]>) {
+  const state = { ...job.state };
+  delete state.lastDiagnostics;
+  delete state.lastDiagnosticSummary;
+  return { ...job, state };
+}
+
 function redactCommandCronEventForExternalDelivery(evt: CronEvent, job?: CronJob): CronEvent {
   if (job?.payload.kind !== "command") {
     return evt;
@@ -200,13 +207,7 @@ function redactCommandCronEventForExternalDelivery(evt: CronEvent, job?: CronJob
     }
   }
   if (stripEmbeddedJobDiagnostics && evt.job) {
-    const state = { ...evt.job.state };
-    delete state.lastDiagnostics;
-    delete state.lastDiagnosticSummary;
-    redacted.job = {
-      ...evt.job,
-      state,
-    };
+    redacted.job = stripCronJobDiagnostics(evt.job);
   }
   return redacted;
 }
@@ -244,15 +245,9 @@ function buildCronFinishedWebhookPayload(evt: CronEvent) {
   }
   const { summary: _summary, diagnostics: _diagnostics, ...payload } = evt;
   if (evt.job) {
-    const state = { ...evt.job.state };
-    delete state.lastDiagnostics;
-    delete state.lastDiagnosticSummary;
     return {
       ...payload,
-      job: {
-        ...evt.job,
-        state,
-      },
+      job: stripCronJobDiagnostics(evt.job),
     };
   }
   return payload;
@@ -573,6 +568,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
   evt: CronEvent;
   job?: CronJob;
   runNotStarted?: boolean;
+  quietTrigger?: boolean;
   resolveCronAgent?: CronAgentResolver;
   logger: CronLogger;
   webhookToken?: unknown;
@@ -581,6 +577,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
   if (
     params.job &&
     params.resolveCronAgent &&
+    !params.quietTrigger &&
     (params.evt.status === "skipped" || (params.evt.status === "error" && params.runNotStarted))
   ) {
     const job = params.job;
@@ -588,7 +585,11 @@ export function dispatchGatewayCronFinishedNotifications(params: {
     void runWithGatewayIndependentRootWorkContinuation(async () => {
       const { agentId, cfg } = resolveCronAgent(job.owner?.agentId ?? job.agentId);
       const sessionKey = job.owner?.sessionKey ?? resolveCronDeliverySessionKey(job);
-      if (!sessionKey || params.evt.runAtMs === undefined) {
+      if (
+        !sessionKey ||
+        params.evt.runAtMs === undefined ||
+        (params.evt.status === "skipped" && params.evt.triggerFired === false)
+      ) {
         return;
       }
       const { entry } = await loadGatewaySessionEntryReadOnlyInWorker({

@@ -82,8 +82,6 @@ import {
 } from "./tool-loop-recovery.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
-
 export async function prepareEmbeddedAttemptAgentSession(input: {
   attempt: EmbeddedRunAttemptParams;
   activeContextEngineInfo?: ContextEngine["info"];
@@ -100,7 +98,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   runAbortSignal: AbortSignal;
   sessionAgentId: string;
   transcriptLifecycle: EmbeddedAttemptTranscriptLifecycle;
-  sessionManager: AttemptSessionManager;
+  sessionManager: ReturnType<typeof guardSessionManager>;
   prepareInitialUserTurnReplay?: InitialUserTurnReplayPreparation;
   prepareSystemPromptUpdate?: SystemPromptUpdatePreparation;
 }) {
@@ -589,10 +587,9 @@ export async function prepareEmbeddedAttemptSessionManager(
       ? await openSessionAfterProjectionRecovery({
           open: openSessionManager,
           target: input.sessionTarget,
-          timeoutMs: attempt.timeoutMs,
+          attempt,
           signal: openSignal,
           assertCurrent: input.assertCurrent,
-          replyOperation: attempt.replyOperation,
         })
       : undefined;
   const unguardedSessionManager =
@@ -612,6 +609,7 @@ export async function prepareEmbeddedAttemptSessionManager(
       message: preparedUserTurnMessage,
       recorder: attempt.userTurnTranscriptRecorder,
       runId: attempt.runId,
+      fallbackReason: attempt.fallbackReason,
       signal: attempt.abortSignal,
       initial: initialReplay,
     }),

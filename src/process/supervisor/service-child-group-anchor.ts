@@ -508,7 +508,7 @@ export function runServiceChildGroupAnchor(): void {
       (socket as Socket & { connect(options: { fd: number }): Socket }).connect({ fd: controlFd });
     }
 
-    if (!next.ownedWorker) {
+    if (next.executionIntent === "agent-tool") {
       enterAgentExecCgroup();
     }
     // Prepare before launch: loading this writer during TERM consumes cleanup grace

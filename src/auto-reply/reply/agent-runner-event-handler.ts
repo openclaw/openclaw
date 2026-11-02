@@ -262,6 +262,7 @@ export function createAgentRunEventHandler(params: {
         await deliverCompactionNoticePayload(
           createCompactionNoticePayload({
             phase: noticePhase,
+            summaryRefused: evt.data.summaryRefused === true,
             currentMessageId,
             applyReplyToMode: params.turn.applyReplyToMode,
           }),

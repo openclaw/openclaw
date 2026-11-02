@@ -8,6 +8,7 @@ import {
 } from "../app-navigation.ts";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
+import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { PendingSessionCreate } from "../pages/chat/pending-session-create-lazy.ts";
@@ -640,7 +641,7 @@ export function createSidebarMenus(deps: {
         <SidebarNavLink
           ref={triggerRef}
           icon={<Icon name={navigationIconForRoute(routeId)} />}
-          label={titleForRoute(routeId)}
+          label={titleForRoute(routeId, t)}
           href={sessionTarget()?.href ?? pathForRoute(routeId, view.basePath)}
           active={isSidebarRouteActive(view.activeRouteId, routeId)}
           onNavigate={() => view.onNavigate?.(routeId, sessionTarget()?.options)}

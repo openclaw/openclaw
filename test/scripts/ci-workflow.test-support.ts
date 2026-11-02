@@ -6,7 +6,7 @@ import {
 } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import path from "node:path";
+import path, { matchesGlob } from "node:path";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect } from "vitest";
@@ -68,6 +68,18 @@ export type WorkflowStep = {
   with?: Record<string, unknown>;
   "working-directory"?: string;
 };
+
+export function acceptsWorkflowPaths(patterns: readonly string[], files: readonly string[]) {
+  return files.some((file) =>
+    patterns.reduce(
+      (selected, pattern) =>
+        pattern.startsWith("!")
+          ? selected && !matchesGlob(file, pattern.slice(1))
+          : selected || matchesGlob(file, pattern),
+      false,
+    ),
+  );
+}
 
 export const readCiWorkflow = () => readWorkflow(".github/workflows/ci.yml");
 
@@ -154,11 +166,13 @@ export function evaluateWorkflowExpression(expression: unknown, context: Workflo
   }
   // Actions permits dashes in property names; preserve quoted literals while
   // translating those accesses for the JavaScript fixture evaluator.
-  const evaluableSource = source.replace(
-    /'(?:[^']|'')*'|\.([A-Za-z_][\w-]*)/gu,
-    (token: string, property: string | undefined) =>
-      property?.includes("-") ? `[${JSON.stringify(property)}]` : token,
-  );
+  const evaluableSource = source
+    .replaceAll("needs.*.result", "Object.values(needs).map(need => need.result)")
+    .replace(
+      /'(?:[^']|'')*'|\.([A-Za-z_][\w-]*)/gu,
+      (token: string, property: string | undefined) =>
+        property?.includes("-") ? `[${JSON.stringify(property)}]` : token,
+    );
   return runInNewContext(evaluableSource, {
     always: () => true,
     success: () => !context.failed && !context.cancelled,
@@ -242,6 +256,9 @@ export function evaluateWorkflowExpression(expression: unknown, context: Workflo
       ...context.steps,
     },
     needs: {
+      ...Object.fromEntries(
+        Object.entries(context.jobResults ?? {}).map(([name, result]) => [name, { result }]),
+      ),
       "build-artifacts": {
         result: context.jobResults?.["build-artifacts"] ?? "success",
         outputs: {},

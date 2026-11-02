@@ -97,9 +97,13 @@ export type UsageCostFreshnessCheckpoint =
   | Pick<UsageCostJsonlCheckpoint, "kind" | "observedSize" | "observedMtimeMs" | "device" | "inode">
   | Pick<UsageCostSqliteCheckpoint, "kind" | "maxSeq" | "eventCount" | "size" | "mtimeMs">;
 
-export function readUsageCostDeferredMetadata(
-  envelope: UsageCostRollupEnvelope,
-): { checkpoint: UsageCostFreshnessCheckpoint; scannedAt: number } | undefined {
+export function readUsageCostDeferredMetadata(envelope: UsageCostRollupEnvelope):
+  | {
+      checkpoint: UsageCostFreshnessCheckpoint;
+      scannedAt: number;
+      sqliteGenerationHash?: string;
+    }
+  | undefined {
   const source = envelope.checkpoint;
   const checkpoint: UsageCostFreshnessCheckpoint =
     source.kind === "jsonl"
@@ -117,14 +121,21 @@ export function readUsageCostDeferredMetadata(
           size: source.size,
           mtimeMs: source.mtimeMs,
         };
-  // Only numeric freshness facts fit the reserved descriptor allowance.
+  // Keep numeric checkpoints and a fixed generation digest within the descriptor allowance.
   if (
     Object.entries(checkpoint).every(
       ([key, value]) => key === "kind" || (typeof value === "number" && Number.isFinite(value)),
     ) &&
     Number.isFinite(envelope.scannedAt)
   ) {
-    return { checkpoint, scannedAt: envelope.scannedAt };
+    return {
+      checkpoint,
+      scannedAt: envelope.scannedAt,
+      // Keep generation equality within the fixed descriptor allowance, regardless of token length.
+      ...(source.kind === "sqlite"
+        ? { sqliteGenerationHash: sha256Hex(JSON.stringify(source.generation ?? null)) }
+        : {}),
+    };
   }
   return undefined;
 }

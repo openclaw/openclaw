@@ -1,4 +1,6 @@
-import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { readAcpSessionEntryAsync } from "openclaw/plugin-sdk/acp-runtime";
+import { isPluginOwnedSessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
+import { isAcpSessionKey, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -24,6 +26,7 @@ import {
   DEFAULT_THREAD_BINDING_MAX_AGE_MS,
   type ThreadBindingManager,
   type ThreadBindingRecord,
+  type ThreadBindingTargetKind,
 } from "./thread-bindings.types.js";
 
 export function createThreadBindingSessionAdapter(params: {
@@ -75,7 +78,40 @@ export function createThreadBindingSessionAdapter(params: {
       const conversationId = normalizeOptionalString(input.conversation.conversationId) ?? "";
       const createThread = input.placement === "child";
       const metadata = snapshotThreadBindingMetadata(input) ?? {};
-      const targetKind = input.targetKind === "subagent" ? "subagent" : "acp";
+      const existing = createThread ? undefined : params.manager.getByThreadId(conversationId);
+      const previous =
+        existing?.targetSessionKey === targetSessionKey &&
+        (existing.targetKind === "subagent") === (input.targetKind === "subagent")
+          ? existing
+          : undefined;
+      const classificationMetadata = { ...previous?.metadata, ...metadata };
+      let targetKind: ThreadBindingTargetKind = input.targetKind;
+      if (targetKind === "session") {
+        if (isAcpSessionKey(targetSessionKey)) {
+          targetKind = "acp";
+        } else if (!isPluginOwnedSessionBindingRecord({ metadata: classificationMetadata })) {
+          // ACP can also own main/global aliases; key spelling alone cannot classify them.
+          const session = await readAcpSessionEntryAsync({
+            cfg: params.resolveCurrentCfg(),
+            sessionKey: targetSessionKey,
+            agentId: normalizeOptionalString(metadata.agentId) ?? previous?.agentId,
+            assertCurrent: () => {
+              params.assertCurrent();
+              assertCurrent?.();
+            },
+          });
+          if (session?.storeReadFailed) {
+            throw new Error(
+              "Discord binding target could not be classified; retry when session storage is available.",
+            );
+          }
+          if (session?.acp) {
+            targetKind = "acp";
+          }
+        }
+      }
+      params.assertCurrent();
+      assertCurrent?.();
       const threadId = createThread ? undefined : conversationId || undefined;
       let channelId: string | undefined;
 

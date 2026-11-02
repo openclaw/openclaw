@@ -25,7 +25,8 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
-import { isHostGeneratedInputProvenance } from "../../sessions/input-provenance.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
+import { CRON_EXECUTION_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import type {
   ReplyToolAuthorityOverlay,
   ReplyToolAuthorityRequester,
@@ -76,12 +77,16 @@ export function captureReplyToolAuthorityContinuation({
       ? caller
       : undefined;
   const incomingProfile = continuation && readTransferredRequesterProfile(continuation.caller);
+  const provenance = snapshot.run.inputProvenance;
   // Owner guidance joins background work without borrowing its principal or
-  // replacing the scheduled/delegated execution's permissions.
+  // permissions. Completion reports into a parent keep normal direct-command admission.
   const backgroundOwner =
     continuation &&
     readReplyInputChannel(continuation.caller) &&
-    isHostGeneratedInputProvenance(snapshot.run.inputProvenance) &&
+    (isSubagentSessionKey(snapshot.run.sessionKey) ||
+      (provenance?.kind === "internal_system" &&
+        (provenance.sourceTool === "cron" ||
+          provenance.sourceTool === CRON_EXECUTION_SOURCE_TOOL))) &&
     continuation.caller.operatorAuthority?.scopes.includes("operator.admin")
       ? continuation.caller.operatorAuthority
       : undefined;

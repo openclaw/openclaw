@@ -1,5 +1,4 @@
 import { createSignal, lazy, onSettled, Show } from "solid-js";
-import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 
@@ -71,16 +70,15 @@ function ColumnCap(props: {
 }
 
 // Saved widths apply through --chat-thread-max-width from the first frame. The
-// edge's gestures and geometry stay outside chat boot: idle warmup loads them.
+// edge's gestures and geometry load on composer pointer or keyboard intent.
 const ResizeEdge = lazy(() => import("./chat-composer-width-edge.tsx"), { export: "ResizeEdge" });
 const [ready, setReady] = createSignal(false);
-/** Composer shell pointer/key intent loads the edge when idle warmup is skipped (Save-Data). */
+/** Composer shell pointer/key intent loads the edge. */
 export const prepareComposerWidthEdge = () =>
   ResizeEdge.preload().then(
     () => setReady(true),
     () => undefined,
   );
-warmWhenIdle(prepareComposerWidthEdge);
 
 /**
  * Render directly after the composer input. Saved widths on writable surfaces with a

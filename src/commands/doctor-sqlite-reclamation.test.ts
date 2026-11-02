@@ -7,7 +7,6 @@ import * as diskSpace from "../infra/disk-space.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as sqliteIntegrity from "../infra/sqlite-integrity.js";
-import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
 import { configureSqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
@@ -197,7 +196,7 @@ it.each([
       const before = fs.readFileSync(shared);
       if (replaceAfter === "none") {
         await expect(convert(state)).resolves.toEqual({ warnings: [] });
-        expect(fs.readFileSync(shared)).toEqual(before);
+        expect(fs.readFileSync(shared).equals(before), "unchanged database bytes").toBe(true);
         expect(inspect(shared).mode).toBe(mode);
         return;
       }
@@ -212,18 +211,11 @@ it.each([
           replaced = true;
         });
       };
-      const openReadOnly = sqliteSnapshot.openSqliteReadOnlyDatabase;
-      vi.spyOn(sqliteSnapshot, "openSqliteReadOnlyDatabase").mockImplementation(
-        (pathname, options) => {
-          const database = openReadOnly(pathname, options);
-          if (replaceAfter === "read" && pathname === shared && !replaced) {
-            replaceOnClose(database);
-          }
-          return database;
-        },
-      );
       vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
         const database = open(pathname, options);
+        if (replaceAfter === "read" && options?.readOnly && !replaced) {
+          replaceOnClose(database);
+        }
         if (
           replaceAfter === "write" &&
           !options?.readOnly &&
@@ -236,7 +228,7 @@ it.each([
       });
       const result = await convert(state).catch((error: unknown) => error);
       expect(replaced).toBe(true);
-      expect(fs.readFileSync(shared)).toEqual(replacementBytes);
+      expect(fs.readFileSync(shared).equals(replacementBytes), "replacement bytes").toBe(true);
       expect(inspect(shared).mode).toBe(0);
       if (replaceAfter === "read") {
         expect(inspect(original).mode).toBe(mode);
@@ -275,7 +267,7 @@ it.each(["low", "unknown"])(
       expect(result.warnings).toEqual([
         expect.stringContaining("openclaw doctor --state-sqlite compact"),
       ]);
-      expect(fs.readFileSync(shared)).toEqual(before);
+      expect(fs.readFileSync(shared).equals(before), "deferred database bytes").toBe(true);
       expect(inspect(shared).mode).toBe(0);
     });
   },
@@ -366,6 +358,6 @@ it("delivers queued cancellation after verified closure and before the next data
       }),
     ).rejects.toBe(interruption);
     expect(inspect(shared)).toMatchObject({ mode: 2, free: 0, integrity: "ok" });
-    expect(fs.readFileSync(agentTarget.path)).toEqual(agentBefore);
+    expect(fs.readFileSync(agentTarget.path).equals(agentBefore), "agent bytes").toBe(true);
   });
 });

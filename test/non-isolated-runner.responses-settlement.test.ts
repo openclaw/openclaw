@@ -13,8 +13,8 @@ import {
 import { responsesProducerFixtureFiles } from "./non-isolated-runner.responses-fixtures.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
-// Cold compilation is preparation, outside the Responses settlement deadline.
-const workers = createVitestWorkerRun(createRunnerFixtureEnv());
+// This fixture needs production runtime workers, prepared before the settlement deadline.
+const workers = createVitestWorkerRun(createRunnerFixtureEnv(), undefined, "runtime");
 afterAll(() => workers.dispose());
 try {
   await workers.prepare();
@@ -55,7 +55,7 @@ export default defineConfig({
     let child!: ChildProcess;
     const result = await runVitestShutdownCommand({
       bin: resolveTestNodeExecPath(),
-      args,
+      args: ["--worker-preset=runtime", ...args],
       cwd: repoRoot,
       env,
       workerRun: workers,

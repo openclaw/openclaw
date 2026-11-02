@@ -28,7 +28,6 @@ const aggregateOf = (result: ReportResult): VitestReportCapture =>
   json(result.reportSet!, "aggregate.json.capture.json");
 const captureOf = (part: { json: string }): VitestReportCapture =>
   json(`${part.json}.capture.json`);
-const lastPart = (entry: ReportEntry) => entry.attempts.at(-1)!;
 const project = (
   root: string,
   name: string,
@@ -101,11 +100,11 @@ it.for([
 
 describe.skipIf(process.platform === "win32")("native multi-invocation report ownership", () => {
   const cacheLifetime = createFixtureLifetime();
-  let compileCache: string;
+  let cacheRoot: string;
   let receipts: FixtureReceiptChannel;
   beforeAll(async () => {
     receipts = await openFixtureReceiptChannel();
-    compileCache = cacheLifetime.createTempDir("oc-report-compile-");
+    cacheRoot = cacheLifetime.createTempDir("oc-report-cache-");
     vi.setConfig({ maxConcurrency: 2 });
     return () => vi.resetConfig();
   });
@@ -122,11 +121,12 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       const lifetime = createFixtureLifetime();
       onTestFinished(() => lifetime.cleanup());
       const root = lifetime.createTempDir("oc-report-");
-      const invoke = createVitestReportFixture(root, { receipts, signal }, undefined, compileCache);
+      const invoke = createVitestReportFixture(root, { receipts, signal }, undefined, cacheRoot);
       await use({
         root,
-        run: (...args) => {
-          const completion = lifetime.run(() => invoke(...args));
+        run: (mode, options) => {
+          const env = { XDG_CACHE_HOME: cacheRoot, ...options?.env };
+          const completion = lifetime.run(() => invoke(mode, { ...options, env }));
           void cacheLifetime.track(completion.then(() => undefined));
           return completion;
         },
@@ -229,7 +229,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         cases = expected.slice(2);
       }
       const index = expectPublished(expect, result, cases);
-      const parts: ReportPart[] = index.entries.map(lastPart);
+      const parts: ReportPart[] = index.entries.map((entry: ReportEntry) => entry.attempts.at(-1)!);
       expect(parts).toHaveLength(2);
       const captures = parts.map(captureOf);
       for (const [partIndex, part] of parts.entries()) {

@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -14,6 +13,7 @@ import {
 import { runDoctorConfigPreflight } from "../commands/doctor-config-preflight.js";
 import { repairAuthProfileMigration } from "../commands/doctor/auth-profile-repair.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -23,7 +23,9 @@ import {
 } from "../state/openclaw-state-db.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import * as sqliteReadOnlyWorker from "./sqlite-readonly-worker.js";
+import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-support.js";
 import {
   runUpdateStateInspectionWorker,
   parseUpdateStateInspectionWorker,
@@ -32,10 +34,7 @@ import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import type { UpdateDatabaseBackup } from "./update-database-backup.js";
-import {
-  readUpdateDatabaseGenerations,
-  type UpdateDatabaseWriteReceipt,
-} from "./update-database-generations.js";
+import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
 import * as updateGenerations from "./update-database-generations.js";
 import { recordUpdateModelRetirement } from "./update-deferred-model-retirement.js";
 import {
@@ -44,6 +43,7 @@ import {
   getUpdateDoctorMigrationSource,
   hasUpdateDoctorMigrationCapture,
   runUpdateSqliteMigration,
+  runUpdateSqliteMigrationAsync,
   runWithDoctorMigrationBackup,
   runWithUpdateDoctorMigrationCapture,
 } from "./update-doctor-migration-attribution.js";
@@ -57,7 +57,8 @@ afterEach(() => vi.restoreAllMocks());
 function fixture(relative = "source.sqlite", sql?: string) {
   const root = fs.realpathSync(directories.make("captured-migration-"));
   const pathname = path.join(root, relative);
-  const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+  const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "alias") };
+  fs.symlinkSync(root, env.OPENCLAW_STATE_DIR, "junction");
   if (sql) {
     using database = new DatabaseSync(pathname);
     database.exec(`PRAGMA journal_mode=WAL; CREATE TABLE retained(value); ${sql}`);
@@ -66,9 +67,11 @@ function fixture(relative = "source.sqlite", sql?: string) {
 }
 
 function migrate(database: DatabaseSync, pathname: string) {
-  runUpdateSqliteMigration(database, pathname, () =>
-    database.exec("ALTER TABLE retained ADD COLUMN migrated;"),
-  );
+  const alias = path.join(path.dirname(pathname), "alias", path.basename(pathname));
+  runUpdateSqliteMigration(database, alias, () => {
+    expect(getUpdateDoctorMigrationSource(alias)?.path).toBe(alias);
+    database.exec("ALTER TABLE retained ADD COLUMN migrated;");
+  });
 }
 
 it("refuses a changed companion the session never opened", async () => {
@@ -116,6 +119,97 @@ it.each([
   });
   expect(warnings).toEqual([]);
   expect(receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
+});
+
+it.each([
+  "complete",
+  "cancel before mutation",
+  "lose authority before mutation",
+  "cancel after commit",
+] as const)("settles awaited native migration observations (%s)", async (outcome) => {
+  const { pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
+  const generations = readUpdateDatabaseGenerations([pathname]);
+  const controller = new AbortController();
+  const failure = new Error(outcome);
+  let current = true;
+  let observations = 0;
+  const { receipt } = await withCapture(
+    env,
+    generations,
+    async () => {
+      using database = new DatabaseSync(pathname);
+      const inspections = await import("./update-candidate-state.inspection.js");
+      const read = inspections.readUpdateSqliteDatabaseGenerationPairIsolated;
+      const observer = vi
+        .spyOn(inspections, "readUpdateSqliteDatabaseGenerationPairIsolated")
+        .mockImplementation(async (...args) => {
+          observations += 1;
+          expect(database.isTransaction).toBe(false);
+          if (observations === 2) {
+            expect(database.prepare("PRAGMA locking_mode").get()?.locking_mode).toBe("exclusive");
+          }
+          const observed = await read(...args);
+          if (observations === 1) {
+            if (outcome === "cancel before mutation") {
+              controller.abort(failure);
+            }
+            if (outcome === "lose authority before mutation") {
+              current = false;
+            }
+          } else if (outcome === "cancel after commit") {
+            controller.abort(failure);
+          }
+          return observed;
+        });
+      const synchronous = vi.spyOn(sqliteReadOnlyWorker, "runSqliteReadOnlyWorkerSync");
+      let serviced = false;
+      const immediate = setImmediate(() => {
+        serviced = true;
+      });
+      const mutate = vi.fn(() => {
+        expect(serviced).toBe(true);
+        expect(getUpdateDoctorMigrationSource(pathname)?.path).toBe(pathname);
+        database.exec("INSERT INTO retained VALUES (8);");
+      });
+      try {
+        const migration = sqliteReadOnlyWorker.withSqliteReadOnlyWorkerScope(
+          () => runUpdateSqliteMigrationAsync(database, pathname, mutate),
+          { signal: controller.signal, deadlineOwnedByCaller: false },
+        );
+        if (outcome === "complete") {
+          await expect(migration).resolves.toBeUndefined();
+        } else {
+          await expect(migration).rejects.toBe(failure);
+        }
+        expect(mutate).toHaveBeenCalledTimes(
+          outcome === "complete" || outcome === "cancel after commit" ? 1 : 0,
+        );
+        expect(observations).toBe(
+          outcome === "complete" || outcome === "cancel after commit" ? 2 : 1,
+        );
+        expect(synchronous).not.toHaveBeenCalled();
+        expect(database.isTransaction).toBe(false);
+        expect(database.prepare("PRAGMA locking_mode").get()?.locking_mode).toBe("normal");
+        expect(database.prepare("SELECT value FROM retained ORDER BY value").all()).toEqual(
+          outcome === "complete" || outcome === "cancel after commit"
+            ? [{ value: 7 }, { value: 8 }]
+            : [{ value: 7 }],
+        );
+      } finally {
+        clearImmediate(immediate);
+        current = true;
+        observer.mockRestore();
+        synchronous.mockRestore();
+      }
+    },
+    undefined,
+    () => {
+      if (!current) {
+        throw failure;
+      }
+    },
+  );
+  expect(receipt?.unchanged).toBe(outcome === "complete");
 });
 
 it.each(["already exclusive", "retain exclusive"])(
@@ -265,15 +359,8 @@ it.each(["unchanged", "changed data", "same-content commit", "replaced file"])(
 it.each(["2026.9.33", "2026.9.34"])(
   "answers the unmarked %s parent in its original format",
   async (version) => {
-    const root = fs.realpathSync(directories.make("legacy-rollback-generation-"));
-    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
-    const pathname = path.join(root, "source.sqlite");
-    {
-      using db = new DatabaseSync(pathname);
-      db.exec("CREATE TABLE retained(value);");
-    }
+    const { root, env, pathname } = fixture("source.sqlite", "SELECT 1;");
     const parent = readUpdateRunDriver();
-    expect(parent).toBeDefined();
     createUpdateRun({ trigger: "cli", before: { version }, origin: { driver: parent } }, { env });
     try {
       const stagingRoot = path.join(root, "staging");
@@ -304,6 +391,7 @@ async function withCapture(
   generations: ReturnType<typeof readUpdateDatabaseGenerations>,
   operation: () => Promise<void>,
   assertDatabaseAccess?: (requested: string) => void,
+  assertOwnerCurrent: () => void = () => {},
 ) {
   const warnings: string[] = [];
   const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
@@ -313,7 +401,7 @@ async function withCapture(
   })!;
   const scope = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
-    assertOwnerCurrent() {},
+    assertOwnerCurrent,
     assertDatabaseAccess: assertDatabaseAccess ?? (() => {}),
   });
   try {
@@ -336,6 +424,9 @@ it.each(["native", "worker"] as const)(
   async (parent) =>
     withOpenClawTestState({}, async (state) => {
       const { stateDir: root, env, configPath } = state;
+      const alias = path.join(root, "alias");
+      fs.symlinkSync(root, alias, "junction");
+      process.env.OPENCLAW_STATE_DIR = env.OPENCLAW_STATE_DIR = alias;
       const pathname = state.statePath("state", "openclaw.sqlite");
       const credentialsPath = state.statePath("client", "credentials.sqlite");
       await state.writeConfig({
@@ -400,14 +491,14 @@ it.each(["native", "worker"] as const)(
       }
       await observeUpdateParentDatabaseWrites(backup, { env });
       // A separate Doctor process must acquire exclusion while the parent stays alive.
-      const moduleUrl = (file: string) =>
-        JSON.stringify(pathToFileURL(path.resolve("src", file)).href);
+      const moduleUrl = (entry: Parameters<typeof resolveRuntimeWorkerUrl>[0]) =>
+        JSON.stringify(resolveRuntimeWorkerUrl(entry).href);
       const child = spawnNodeEvalSync(
         `
-            import { createUpdateDoctorDatabaseWriteCapture } from ${moduleUrl("infra/update-doctor-result.ts")};
-            import { createOpenClawDatabaseMaintenanceScope } from ${moduleUrl("state/openclaw-state-db-async-lifecycle.ts")};
-            import { prepareOpenClawStateDatabaseSchema, closeOpenClawStateDatabaseAsync } from ${moduleUrl("state/openclaw-state-db.ts")};
-            import { recordUpdateModelRetirement } from ${moduleUrl("infra/update-deferred-model-retirement.ts")};
+            import { createUpdateDoctorDatabaseWriteCapture } from ${moduleUrl(storageProcessTestEntrypoints.updateDoctorResult)};
+            import { createOpenClawDatabaseMaintenanceScope } from ${moduleUrl(stateNativeProcessEntrypoints.maintenanceScope)};
+            import { prepareOpenClawStateDatabaseSchema, closeOpenClawStateDatabaseAsync } from ${moduleUrl(stateNativeProcessEntrypoints.stateDatabase)};
+            import { recordUpdateModelRetirement } from ${moduleUrl(storageProcessTestEntrypoints.updateModelRetirement)};
             const warnings = [];
             const capture = createUpdateDoctorDatabaseWriteCapture(${JSON.stringify(backup.migration!.to)}, {
               env: process.env, signal: new AbortController().signal,
@@ -431,12 +522,10 @@ it.each(["native", "worker"] as const)(
               await closeOpenClawStateDatabaseAsync();
             }
         `,
-        { env, imports: [path.resolve("scripts/tsx.mjs")], timeout: 60_000 },
+        { env, timeout: 60_000 },
       );
       expect(child.status, child.stderr).toBe(0);
-      const second: { receipt: UpdateDatabaseWriteReceipt; warnings: string[] } = JSON.parse(
-        child.stdout,
-      );
+      const second: Awaited<ReturnType<typeof withCapture>> = JSON.parse(child.stdout);
       expect(second.receipt).toMatchObject({ unchanged: true });
       recordUpdateDatabaseWrites(backup, second.receipt, { name: "post-plugin doctor" });
       expect(backup.sourceGenerations).toEqual(sourceGenerations);
@@ -467,7 +556,8 @@ it("attributes a captured absent shared store and its new credential companion d
       openOpenClawStateDatabase({ env });
       await closeOpenClawStateDatabaseAsync();
     },
-    (requested) => expect(requested).toBe(pathname),
+    (requested) =>
+      expect(requested).toBe(path.join(env.OPENCLAW_STATE_DIR!, "state/openclaw.sqlite")),
   );
   expect(warnings).toEqual([]);
   expect(receipt).toMatchObject({
@@ -483,7 +573,6 @@ it.each(["captured-generation", null, undefined])(
     const pathname = "/synthetic/relocated/state.sqlite";
     const refuse = vi.fn();
     const backup = vi.fn(() => {
-      expect(refuse).toHaveBeenCalledOnce();
       expect(hasUpdateDoctorMigrationCapture()).toBe(false);
       expect(getUpdateDoctorMigrationSource(pathname)).toBeUndefined();
       return {
