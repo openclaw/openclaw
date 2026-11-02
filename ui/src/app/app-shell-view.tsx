@@ -194,6 +194,8 @@ export function ApplicationShell(props: {
                 when={
                   view().mobileNavLayout &&
                   !view().mergedChatChrome &&
+                  // New Session is already the destination of this action.
+                  view().activeRoute !== "new-session" &&
                   !view().navDrawerOpen &&
                   !view().onboarding &&
                   !view().nativeWebChrome &&

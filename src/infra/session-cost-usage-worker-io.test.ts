@@ -204,6 +204,9 @@ it("reads recorded usage across append, rewrite, and rollup replacement without 
       await probe.clear();
       await refresh();
       await expectNoRead(probe, "cache");
+      await expectNoRead(probe, "transcript-stats");
+      await refreshUsage({ agentId: "main" });
+      await expectNoRead(probe, "transcript-stats");
       const generation = transact((owner) => {
         const rewritten = rewriteSqliteTranscriptEventRowsInTransaction(owner, scope, [
           {

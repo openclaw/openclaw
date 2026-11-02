@@ -1170,7 +1170,7 @@ src/agents/lazy-process-tool.ts	1
 src/agents/live-cache-regression-policy.ts	2
 src/agents/mcp-auth-profile.ts	1
 src/agents/mcp-http-fetch.ts	3
-src/agents/mcp-json-schema-validator.ts	4
+src/agents/mcp-json-schema-validator.ts	3
 src/agents/mcp-transport-config.ts	1
 src/agents/mcp-transport.ts	2
 src/agents/mcp-ui-resource.ts	2

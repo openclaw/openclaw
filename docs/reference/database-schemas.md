@@ -77,6 +77,10 @@ Gateway lease directly in a read-only worker instead of copying the shared
 database. Fresh or unverifiable owners still prevent startup; Doctor's schema
 repair admission keeps its private snapshot on SQLite. PostgreSQL maintenance
 inspects the lease through an admitted state reader without a file snapshot.
+Synchronous CLI startup diagnostics also read the current lease directly when
+the exact SQLite database has a verified live owner. This bounded read does not
+copy the database; artifact-preserving inspection and Doctor's schema repair
+admission still use private snapshots.
 
 Borrowed worker transactions obtain their initial host grant before `BEGIN
 IMMEDIATE`; writes with domain or publication facts still revalidate those facts
@@ -215,6 +219,20 @@ When demand returns within five minutes of that retirement, one replacement
 reader stays warm for up to 90 idle seconds to avoid repeated startup work.
 Retirement uses the pool's existing task and native-resource settlement so an
 active read or retained lease is not interrupted.
+
+On Linux, transcript and shared-state SQLite readers sample `/proc/thread-self/io` at entry
+and completion. An operation that incurs at least 64 MiB of kernel-accounted
+storage reads emits one `heavy SQLite reader operation` warning through the
+existing logger, including `operation`, `readBytes`, `elapsedMs`, and worker IDs.
+The context retains the last transaction's existing session/row diagnostics,
+the outer `readerOperation`, and the agent ID for transcript workers. Nested
+owners share the outer measurement rather than counting the bytes twice.
+These are physical reads charged to the executing thread across the whole
+operation (including preparation), not logical SQLite bytes or per-file totals;
+page-cache hits contribute zero. Completed and failed operations are measured;
+a forcibly terminated worker cannot report its unfinished operation. Missing
+procfs accounting and non-Linux platforms leave diagnostics unchanged. No
+configuration, persistent counters, or background summary timer is added.
 
 If a shared-state writer worker is lost, its logical leases retire even while
 idle. Retirement joins dispatched commands but does not wait for external

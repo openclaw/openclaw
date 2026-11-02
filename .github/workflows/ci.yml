@@ -2650,7 +2650,7 @@ jobs:
             resolve("ui/src/e2e/chat-composer-picker-layout.e2e.test.ts"),
             resolve("ui/src/e2e/tooltip-first-activation.e2e.test.ts"),
             resolve("ui/src/e2e/logs-scroll.e2e.test.ts"),
-            resolve("ui/src/e2e/chat-composer-picker-layout.e2e.test.ts"),
+            resolve("ui/src/e2e/chat-history-reading-stability.e2e.test.ts"),
           ].filter(existsSync));
           const runtimeSuite = resolve("ui/src/e2e/stale-build-recovery.production.e2e.test.ts");
           let requiresWebkit = false;
@@ -6222,7 +6222,11 @@ jobs:
             run_ios_fastlane --version 2>&1 | awk 'match($0, /^fastlane [0-9]+\.[0-9]+\.[0-9]+$/) { print substr($0, RSTART + 9, RLENGTH - 9); exit }'
           )"
           xcode_version="$(xcodebuild -version | paste -sd ' ' -)"
-          test "$xcode_version" = "$IOS_SCREENSHOT_XCODE_VERSION"
+          if [[ "$xcode_version" != "$IOS_SCREENSHOT_XCODE_VERSION" ]]; then
+            printf '::error title=iOS screenshot Xcode mismatch::Expected %s, found %s\n' \
+              "$IOS_SCREENSHOT_XCODE_VERSION" "$xcode_version" >&2
+            exit 1
+          fi
           collect_args=(
             collect
             --screenshots apps/ios/fastlane/screenshots/en-US
@@ -6706,13 +6710,15 @@ jobs:
           printf '%s\n' "$acceleration"
           grep -Eiq '\bKVM\b.*\b(available|usable)\b' <<<"$acceleration"
           printf 'no\n' | avdmanager create avd --name openclaw-access --package "$SYSTEM_IMAGE" --device pixel_6
-          emulator -avd openclaw-access -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
+          /usr/bin/timeout --signal=TERM --kill-after=5s 30m emulator -avd openclaw-access -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
           emulator_pid=$!
           trust_evidence="$RUNNER_TEMP/android-native-tls-trust"
           mkdir -p "$trust_evidence"
           cleanup() {
             status=$?
             trap - EXIT
+            cp "$RUNNER_TEMP/access-emulator.log" "$trust_evidence/access-emulator.log" || status=1
+            tail -n 100 "$trust_evidence/access-emulator.log" || status=1
             # Preserve actual app/test output metadata and hashes even on native failure.
             if [[ -d apps/android/app/build/outputs/apk ]]; then
               find apps/android/app/build/outputs/apk -type f -name '*.apk' -print0 | sort -z | xargs -0 -r sha256sum > "$trust_evidence/APK.sha256" || status=1
@@ -6723,14 +6729,16 @@ jobs:
                 cp --parents "$metadata" "$trust_evidence" || status=1
               done < <(find apps/android/app/build/outputs/apk -type f -name output-metadata.json -print0)
             fi
-            adb -s emulator-5554 logcat -d -v threadtime > "$trust_evidence/logcat.txt" || status=1
-            if ! bash scripts/android-native-tls-trust.sh cleanup "$trust_evidence"; then
+            /usr/bin/timeout --signal=TERM --kill-after=2s 10s adb -s emulator-5554 logcat -d -v threadtime > "$trust_evidence/logcat.txt" || status=1
+            if ! /usr/bin/timeout --signal=TERM --kill-after=2s 60s bash scripts/android-native-tls-trust.sh cleanup "$trust_evidence"; then
               echo 'FAILED: trust cleanup; emulator is contaminated and must not be reused.' | tee "$trust_evidence/CLEANUP-FAILED.txt"
               status=1
             fi
-            adb -s emulator-5554 emu kill >"$trust_evidence/emulator-disposal.txt" 2>&1 || status=1
+            /usr/bin/timeout --signal=TERM --kill-after=2s 10s adb -s emulator-5554 emu kill >"$trust_evidence/emulator-disposal.txt" 2>&1 || status=1
+            # The owned timeout forwards TERM, then kills its emulator group after 5s.
+            kill -TERM "$emulator_pid" 2>/dev/null || true
             wait "$emulator_pid" || true
-            if avdmanager delete avd --name openclaw-access >>"$trust_evidence/emulator-disposal.txt" 2>&1; then
+            if /usr/bin/timeout --signal=TERM --kill-after=2s 15s avdmanager delete avd --name openclaw-access >>"$trust_evidence/emulator-disposal.txt" 2>&1; then
               echo 'Owned emulator process exited and AVD deleted; no snapshot or reuse.' >> "$trust_evidence/emulator-disposal.txt"
             else
               echo 'FAILED: owned AVD deletion; do not reuse runner.' >> "$trust_evidence/emulator-disposal.txt"

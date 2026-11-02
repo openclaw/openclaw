@@ -397,6 +397,17 @@ const CronDeliveryTraceSchema = closedObject({
       }),
     ),
   ),
+  receipts: Type.Optional(
+    Type.Array(
+      closedObject({
+        channel: Type.String(),
+        to: Type.String(),
+        accountId: Type.Optional(Type.String()),
+        threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+        messageId: Type.String(),
+      }),
+    ),
+  ),
   fallbackUsed: Type.Optional(Type.Boolean()),
   delivered: Type.Optional(Type.Boolean()),
 });

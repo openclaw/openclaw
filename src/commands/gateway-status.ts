@@ -26,6 +26,7 @@ import { pickBestEffortPrimaryTailnetIPv4 } from "../infra/network-discovery-dis
 import type { SshTunnel } from "../infra/ssh-tunnel.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 import { pickGatewaySelfPresence } from "./gateway-presence.js";
 import {
@@ -79,7 +80,7 @@ export async function gatewayStatusCommand(
     explicitAuth: resolveExplicitGatewayAuth(opts),
     errorHint: "Fix: pass --token or --password with --url.",
   });
-  const startedAt = Date.now();
+  const startedAt = monotonicNow();
   const cfg = await readBestEffortConfig();
   const rich = isRich() && opts.json !== true;
   const defaultTimeoutMs = 3000;
@@ -483,7 +484,7 @@ export async function gatewayStatusCommand(
       degraded,
       capability,
       ts: Date.now(),
-      durationMs: Date.now() - startedAt,
+      durationMs: Math.round(monotonicNow() - startedAt),
       timeoutMs: overallTimeoutMs,
       primaryTargetId: primary?.target.id ?? null,
       warnings,

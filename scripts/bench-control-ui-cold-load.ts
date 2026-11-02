@@ -279,6 +279,7 @@ const { values } = parseArgs({
     "row-facts": { type: "boolean", default: false },
     "late-row-facts": { type: "boolean", default: false },
     "pane-chrome-probe": { type: "boolean", default: false },
+    "pane-chrome-facts": { type: "boolean", default: false },
     "archived-session": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
@@ -841,6 +842,7 @@ const fixture = createControlUiTeamScaleFixture({
   lateRowFacts: values["late-row-facts"],
   offRosterSession: values["off-roster-route"],
   archivedSession: values["archived-session"],
+  paneChromeFacts: values["pane-chrome-facts"],
   transcriptMessages,
   dashboardWidgetFontUrl: dashboardFont
     ? `http://127.0.0.1:${address.port}${dashboardFontPath}`
@@ -1443,6 +1445,16 @@ try {
       }
     }
   }
+  await page.addInitScript((entries) => {
+    if (window !== window.top || location.protocol === "about:") {
+      return;
+    }
+    for (const [key, value] of Object.entries(entries)) {
+      if (localStorage.getItem(key) === null) {
+        localStorage.setItem(key, value);
+      }
+    }
+  }, fixture.paneChromeSettings);
   await page.addInitScript(
     ({ key, pins, mode, bootstrap, bootstrapAttribute, fixtureUrl, splitLayout }) => {
       if (window !== window.top || location.protocol === "about:") {

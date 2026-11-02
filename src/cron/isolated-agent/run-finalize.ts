@@ -406,6 +406,7 @@ export async function finalizeCronRun(params: {
       deliveryResult.deliveryAttempted &&
       !sourceDeliveryOutcome.satisfiesSourceDelivery,
     delivered: deliveryResult.delivered,
+    receipts: deliveryResult.deliveryReceipts,
   });
   if (!deliveryResult.disposition) {
     summary = deliveryResult.summary;

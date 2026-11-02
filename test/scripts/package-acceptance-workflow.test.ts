@@ -10398,7 +10398,7 @@ describe("package artifact reuse", () => {
       allow_unreleased_changelog: true,
       docker_lanes: "update-migration",
       published_upgrade_survivor_baselines: "2026.7.1 2026.8.1",
-      published_upgrade_survivor_scenarios: "mobile-pairing-reconnect watchos-direct-node",
+      published_upgrade_survivor_scenarios: "base mobile-pairing-reconnect watchos-direct-node",
       shared_image_artifact_namespace: "scheduled-upgrade-survivors",
       shared_image_policy: "no-push-artifact",
     });
