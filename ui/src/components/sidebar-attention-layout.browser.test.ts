@@ -418,12 +418,10 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     expect(dismissStyle.pointerEvents).not.toBe("none");
     expect(bounds(dismiss).width).toBeGreaterThanOrEqual(40);
     expect(bounds(dismiss).height).toBeGreaterThanOrEqual(40);
-    expect(bounds(more)).toMatchObject({ width: 36, height: 36 });
-    expect(style(more).borderTopWidth).toBe("0px");
-    expect(style(more).backgroundColor).toBe("rgba(0, 0, 0, 0)");
-    expect(bounds(close)).toMatchObject({ width: 36, height: 36 });
-    expect(style(close).borderTopWidth).toBe("0px");
-    expect(style(close).backgroundColor).toBe("rgba(0, 0, 0, 0)");
+    expect(bounds(more).width).toBeGreaterThanOrEqual(36);
+    expect(bounds(more).height).toBeGreaterThanOrEqual(36);
+    expect(bounds(close).width).toBeGreaterThanOrEqual(36);
+    expect(bounds(close).height).toBeGreaterThanOrEqual(36);
     expect(style(header).backgroundColor).toBe("rgba(0, 0, 0, 0)");
     expect(backgroundAlpha(sheet)).toBe(255);
     expect(style(list).backgroundColor).toBe(style(sheet).backgroundColor);

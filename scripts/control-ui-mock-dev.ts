@@ -66,6 +66,8 @@ import {
 } from "./control-ui-mock-channels.ts";
 import { buildCronMocks } from "./control-ui-mock-cron.ts";
 import { createStandaloneMockIsolationPlugins } from "./control-ui-mock-isolation.ts";
+import { buildLogsTailMock } from "./control-ui-mock-logs.ts";
+import { buildMeetingsMocks } from "./control-ui-mock-meetings.ts";
 import { mentionMockInitScript } from "./control-ui-mock-mentions.ts";
 import {
   buildPluginCatalogMock,
@@ -100,6 +102,7 @@ const FIXTURES = [
   "header-idle",
   "header-waiting",
   "inbox",
+  "meetings",
   "plugins-dense",
   "reactions",
   "session-design",
@@ -2489,6 +2492,7 @@ async function createChatPickerScenario(
     ],
     methodResponses: {
       ...cronMocks,
+      "logs.tail": buildLogsTailMock(),
       "agents.list": {
         agents: rosterAgents.map(({ id, name, theme, emoji, avatar }) => ({
           id,
@@ -3389,6 +3393,12 @@ async function createChatPickerScenario(
           };
         }),
       },
+    };
+  }
+  if (fixture === "meetings") {
+    scenario.methodResponses = {
+      ...scenario.methodResponses,
+      ...buildMeetingsMocks(Date.now()),
     };
   }
   if (fixture === "backgrounds") {

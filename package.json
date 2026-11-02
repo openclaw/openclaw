@@ -499,7 +499,8 @@
     "!dist/plugin-sdk/path-existence-runtime.d.ts",
     "!dist/plugin-sdk/provider-auth-markers.d.ts",
     "!dist/plugin-sdk/terminal-safe-text.d.ts",
-    "!dist/plugin-sdk/memory-core-host-transcript-stats.d.ts"
+    "!dist/plugin-sdk/memory-core-host-transcript-stats.d.ts",
+    "!dist/plugin-sdk/skill-authoring-runtime.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -1513,6 +1514,9 @@
     "./plugin-sdk/models-provider-runtime": {
       "types": "./dist/plugin-sdk/models-provider-runtime.d.ts",
       "default": "./dist/plugin-sdk/models-provider-runtime.js"
+    },
+    "./plugin-sdk/skill-authoring-runtime": {
+      "default": "./dist/plugin-sdk/skill-authoring-runtime.js"
     },
     "./plugin-sdk/skill-commands-runtime": {
       "types": "./dist/plugin-sdk/skill-commands-runtime.d.ts",

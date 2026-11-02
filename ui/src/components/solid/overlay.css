@@ -395,6 +395,14 @@ a.oc-menu-item[href] {
   display: contents;
 }
 
+/* On phones the larger trigger exposes the label's line box: center a lone glyph in the button. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  :where(.oc-menu-trigger) > .oc-menu-item__label:where(:has(> svg:only-child)) {
+    display: flex;
+    justify-content: center;
+  }
+}
+
 .oc-menu-item__icon,
 .oc-menu-item__details,
 .oc-menu-item__check,

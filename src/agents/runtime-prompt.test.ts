@@ -135,7 +135,7 @@ describe("resolveAgentRuntimePrompt", () => {
         expect(result.runtimeInfo.channel).toBe(expectedChannel);
         expect(result.runtimeChannel).toBe(channel);
         prompts.push(
-          buildConfiguredAgentSystemPrompt({ ...result, workspaceDir: "/tmp/workspace" }),
+          await buildConfiguredAgentSystemPrompt({ ...result, workspaceDir: "/tmp/workspace" }),
         );
       }
       expect(prompts[1]).toBe(prompts[0]);
