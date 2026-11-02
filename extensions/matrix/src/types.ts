@@ -29,7 +29,10 @@ export type MatrixConfig = MatrixAccountConfig & {
   accounts?: Record<string, MatrixAccountConfig>;
 };
 
-export type CoreConfig = Pick<OpenClawConfig, "commands" | "messages" | "tools" | "secrets"> & {
+export type CoreConfig = Pick<
+  OpenClawConfig,
+  "accessGroups" | "commands" | "messages" | "tools" | "secrets"
+> & {
   channels?: {
     matrix?: MatrixConfig;
     defaults?: Pick<

@@ -9,6 +9,11 @@ import {
 
 beforeEach(() => setMatrixRuntime(createPluginRuntimeMock()));
 const alice = "@alice:example.org";
+const adminsCfg = {
+  accessGroups: {
+    admins: { type: "message.senders", members: { matrix: [alice] } },
+  },
+} satisfies Pick<OpenClawConfig, "accessGroups">;
 type AccessInput = Partial<Parameters<typeof resolveMatrixMonitorAccessState>[0]>;
 
 function resolveAccess(overrides: AccessInput) {
@@ -116,11 +121,7 @@ describe("resolveMatrixMonitorAccessState", () => {
     },
   ])("resolves $name in direct messages", async ({ senderId, allowFrom, expected }) => {
     const state = await resolveAccess({
-      cfg: {
-        accessGroups: {
-          admins: { type: "message.senders", members: { matrix: [alice] } },
-        },
-      } as unknown as OpenClawConfig,
+      cfg: adminsCfg,
       allowFrom,
       dmPolicy: "allowlist",
       senderId,
@@ -135,11 +136,7 @@ describe("resolveMatrixMonitorAccessState", () => {
 
   it("resolves an access-group member in room allowlists", async () => {
     const state = await resolveAccess({
-      cfg: {
-        accessGroups: {
-          admins: { type: "message.senders", members: { matrix: [alice] } },
-        },
-      } as unknown as OpenClawConfig,
+      cfg: adminsCfg,
       groupAllowFrom: ["accessGroup:admins"],
       groupPolicy: "allowlist",
       senderId: alice,
@@ -151,11 +148,7 @@ describe("resolveMatrixMonitorAccessState", () => {
 
   it("authorizes room commands for an access-group member", async () => {
     const state = await resolveAccess({
-      cfg: {
-        accessGroups: {
-          admins: { type: "message.senders", members: { matrix: [alice] } },
-        },
-      } as unknown as OpenClawConfig,
+      cfg: adminsCfg,
       groupAllowFrom: ["accessGroup:admins"],
       groupPolicy: "allowlist",
       senderId: alice,

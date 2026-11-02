@@ -1,5 +1,4 @@
 import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-inbound";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { resolveMatrixThreadRootId } from "../relations.js";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
@@ -177,8 +176,7 @@ export async function resolveMatrixIngressAccess(config: {
   const roomUsers = roomConfig?.users ?? [];
   const { liveCfg, liveDmAllowFrom, liveGroupAllowFrom } = await resolveLiveAccountAllowlists();
   const accessState = await resolveMatrixMonitorAccessState({
-    // SAFETY: CoreConfig is the runtime OpenClawConfig view; ingress reads only accessGroups.
-    cfg: liveCfg as Pick<OpenClawConfig, "accessGroups">,
+    cfg: liveCfg,
     allowFrom: liveDmAllowFrom,
     storeAllowFrom,
     dmPolicy,

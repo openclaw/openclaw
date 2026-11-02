@@ -150,4 +150,32 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
       );
     },
   );
+
+  it("keeps thread context from an access-group member under allowlist visibility", async () => {
+    // Wrapper syntax proves ingress and context matching share Matrix normalization.
+    const members = ["MATRIX:@alice:example.org"];
+    const { ctx } = await receive(threadReply("$thread-root", "@alice:example.org"), {
+      client: {
+        getEvent: async () => root("@alice:example.org", "Member root topic"),
+      },
+      isDirectMessage: false,
+      cfg: {
+        accessGroups: {
+          admins: { type: "message.senders", members: { matrix: members } },
+        },
+        channels: {
+          matrix: {
+            contextVisibility: "allowlist",
+            groupAllowFrom: ["accessGroup:admins"],
+          },
+        },
+      },
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["accessGroup:admins"],
+      roomsConfig: { "*": {} },
+    });
+
+    expect(ctx.ThreadStarterBody).toContain("Member root topic");
+    expect(ctx.MessageThreadId).toBe("$thread-root");
+  });
 });
