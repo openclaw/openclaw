@@ -1,5 +1,5 @@
-import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile, spawnSync } from "node:child_process";
+import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:https";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +7,51 @@ import tls from "node:tls";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
 import { invokeRemoteNativeHookRelay } from "./native-hook-relay-remote-client.js";
+
+it.skipIf(process.platform === "win32")(
+  "denies a writerless FIFO credential through the relay CLI",
+  async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "native-hook-fifo-"));
+    const credential = path.join(dir, "credential.json");
+    try {
+      expect(spawnSync("mkfifo", [credential], { timeout: 5_000 }).status).toBe(0);
+      // Bound the real process: a blocked open would otherwise strand a libuv worker.
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "./scripts/tsx.mjs",
+          "src/cli/native-hook-relay-entry.ts",
+          "hooks",
+          "relay",
+          "--provider",
+          "codex",
+          "--relay-id",
+          "fifo-probe",
+          "--event",
+          "pre_tool_use",
+          "--remote-credential",
+          credential,
+          "--timeout",
+          "1000",
+        ],
+        { input: "{}", encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        hookSpecificOutput: {
+          permissionDecision: "deny",
+          permissionDecisionReason: "Native hook relay unavailable",
+        },
+      });
+      expect(result.stderr).toContain("Invalid native hook callback credential");
+      expect((await lstat(credential)).isFIFO()).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
 
 it("verifies TLS and sends only the relay capability; refuses redirects and bounds responses", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "native-hook-https-"));
@@ -103,8 +148,13 @@ it("verifies TLS and sends only the relay capability; refuses redirects and boun
     await expect(invoke()).rejects.toThrow("requires an HTTPS URL");
     await save(url + "?token=untrusted");
     await expect(invoke()).rejects.toThrow("requires an HTTPS URL");
-    await writeFile(credential, '{"token":"synthetic-relay-capability",invalid}');
-    await expect(invoke()).rejects.toThrow("Invalid native hook callback credential");
+    for (const invalid of [
+      '{"token":"synthetic-relay-capability",invalid}',
+      JSON.stringify({ url, token: "x".repeat(16_384) }),
+    ]) {
+      await writeFile(credential, invalid);
+      await expect(invoke()).rejects.toThrow("Invalid native hook callback credential");
+    }
     await Promise.all(requests);
   } finally {
     tls.setDefaultCACertificates(originalCAs);
