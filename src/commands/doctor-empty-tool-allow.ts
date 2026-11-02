@@ -46,7 +46,7 @@ export function collectEmptyToolAllowHints(cfg: OpenClawConfig): SecurityAuditFi
       checkId: "doctor.empty_tool_allow",
       severity: "info",
       title: "Note",
-      detail: `${path}.allow is [] with no deny, alsoAllow or profile, so every tool stays allowed.`,
+      detail: `${path}.allow is [] with no deny, alsoAllow or profile, so the empty list adds no restriction at this layer (global deny and built-in sub-agent hard denies still apply).`,
       remediation: [
         `If you meant "no tools", set ${path}.deny to ["*"].`,
         "If allow-all is intended, remove the empty allow list; behavior is the same.",

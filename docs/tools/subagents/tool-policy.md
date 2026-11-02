@@ -144,11 +144,16 @@ the already-resolved tool set, but it cannot **add back** a tool removed
 by `tools.profile`.
 
 > **Empty `allow` means allow-all, not deny-all.** An explicit `allow: []`
-> resolves permissive: every tool not denied stays allowed. If you mean
-> "no tools", use `deny: ["*"]`. `openclaw doctor` adds a note when
-> `tools`, `tools.subagents.tools` or an agent's `tools` has `allow: []`
-> with no `deny`, `alsoAllow` or `profile`, because that shape reads as
-> deny-all. Config validation does not warn, and runtime behavior is unchanged.
+> adds no restriction at that layer; global `deny` and the built-in
+> sub-agent hard denies still apply. If you mean "no tools", use
+> `deny: ["*"]`. One exception: under `tools.subagents.tools`, `allow: []`
+> merges with `alsoAllow`, so `{ allow: [], alsoAllow: ["read"] }` resolves
+> to `allow: ["read"]`.
+>
+> `openclaw doctor` adds a note when `tools`, `tools.subagents.tools` or an
+> agent's `tools` has `allow: []` with no `deny`, `alsoAllow` or `profile`,
+> because that shape reads as deny-all. Config validation does not warn,
+> and runtime behavior is unchanged.
 
 For example, `tools.profile: "coding"` includes
 `web_search`/`web_fetch` but not the `browser` tool. To let
