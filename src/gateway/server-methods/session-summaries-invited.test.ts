@@ -64,7 +64,7 @@ it.for(methods)("%s follows invited membership and drops a revoked source", asyn
               sessionId: "summary-" + index,
               updatedAt: 10 - index,
               visibility: "shared",
-              execCwd: "/synthetic/summary-" + index,
+              spawnedCwd: "/synthetic/summary-" + index,
               createdActor: { type: "human", source: "profile", id: owner.id },
             },
           );

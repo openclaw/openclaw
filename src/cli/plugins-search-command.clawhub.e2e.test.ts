@@ -35,6 +35,8 @@ async function startFixtureServer(signal: AbortSignal) {
         }
         response.writeHead(query === "unavailable" ? 503 : 200, {
           "content-type": "application/json",
+          // Exercise terminal error handling, not the separately tested retry schedule.
+          ...(query === "unavailable" ? { "retry-after": "61" } : {}),
         });
         const results =
           query === "empty"
