@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   normalizeNullableString,
@@ -176,6 +177,7 @@ function trackBounded(set: Set<string>, value: string): boolean {
 }
 
 export function createMatrixVerificationEventRouter(params: {
+  cfg?: Pick<OpenClawConfig, "accessGroups">;
   client: MatrixClient;
   allowFrom: string[];
   dmEnabled: boolean;
@@ -223,6 +225,7 @@ export function createMatrixVerificationEventRouter(params: {
         ? await params.readStoreAllowFrom()
         : [];
     const accessState = await resolveMatrixMonitorAccessState({
+      ...(params.cfg ? { cfg: params.cfg } : {}),
       allowFrom: params.allowFrom,
       storeAllowFrom,
       dmPolicy: params.dmPolicy,

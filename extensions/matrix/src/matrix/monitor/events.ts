@@ -1,4 +1,5 @@
 import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -196,6 +197,8 @@ export function registerMatrixMonitorEvents(params: {
     getHealthySyncSinceMs,
   });
   const { routeVerificationEvent, routeVerificationSummary } = createMatrixVerificationEventRouter({
+    // SAFETY: CoreConfig is the runtime OpenClawConfig view; the router reads only accessGroups.
+    cfg: cfg as Pick<OpenClawConfig, "accessGroups">,
     client,
     allowFrom,
     dmEnabled,

@@ -57,4 +57,17 @@ describe("resolveMatrixAllowListMatch", () => {
     expect(match.allowed).toBe(true);
     expect(match.matchSource).toBe("wildcard");
   });
+
+  it("keeps access-group references symbolic and case-sensitive", () => {
+    expect(normalizeMatrixAllowList(["accessGroup:Admins", " accessGroup:admins "])).toEqual([
+      "accessGroup:Admins",
+      "accessGroup:admins",
+    ]);
+    expect(
+      resolveMatrixAllowListMatch({
+        allowList: normalizeMatrixAllowList(["accessGroup:Admins"]),
+        userId: "@alice:example.org",
+      }).allowed,
+    ).toBe(false);
+  });
 });

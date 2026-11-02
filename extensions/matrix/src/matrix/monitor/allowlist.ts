@@ -2,6 +2,7 @@ import {
   resolveAllowlistMatchByCandidates,
   type AllowlistMatch,
 } from "openclaw/plugin-sdk/allow-from";
+import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-normalization-runtime";
 
@@ -37,6 +38,11 @@ function normalizeMatrixAllowListEntry(raw: string): string {
     return "";
   }
   if (trimmed === "*") {
+    return trimmed;
+  }
+  // Access groups stay symbolic: the ingress resolver expands them against the
+  // configured group, so lower-casing the reference would make it unresolvable.
+  if (parseAccessGroupAllowFromEntry(trimmed) != null) {
     return trimmed;
   }
   const lowered = normalizeLowercaseStringOrEmpty(trimmed);

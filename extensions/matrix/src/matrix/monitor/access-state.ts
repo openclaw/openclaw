@@ -3,10 +3,12 @@ import {
   type ChannelIngressContextBinding,
   type ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getMatrixRuntime } from "../../runtime.js";
 import { normalizeMatrixAllowList, resolveMatrixAllowListMatch } from "./allowlist.js";
 
 type MatrixMonitorAccessState = {
+  cfg?: Pick<OpenClawConfig, "accessGroups">;
   effectiveGroupAllowFrom: string[];
   effectiveRoomUsers: string[];
   messageIngress: ResolvedChannelMessageIngress;
@@ -53,6 +55,7 @@ function resolveMatrixGroupIngress(params: {
 }
 
 export async function resolveMatrixMonitorAccessState(params: {
+  cfg?: Pick<OpenClawConfig, "accessGroups">;
   allowFrom: Array<string | number>;
   storeAllowFrom: Array<string | number>;
   dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
@@ -77,6 +80,7 @@ export async function resolveMatrixMonitorAccessState(params: {
   const accountId = params.accountId ?? "default";
   const eventKind = params.eventKind ?? "message";
   const ingress = getMatrixRuntime().channel.inbound.ingress.createResolver({
+    ...(params.cfg ? { cfg: params.cfg } : {}),
     channelId: "matrix",
     accountId,
     identity: matrixIngressIdentity,
@@ -107,6 +111,7 @@ export async function resolveMatrixMonitorAccessState(params: {
   const resolved = await resolveMessageIngress();
 
   return {
+    cfg: params.cfg,
     effectiveGroupAllowFrom,
     effectiveRoomUsers,
     messageIngress: resolved,
@@ -129,6 +134,7 @@ export async function resolveMatrixMonitorCommandAccess(
     state.effectiveRoomUsers.length > 0 ? state.effectiveRoomUsers : state.effectiveGroupAllowFrom;
   const resolved = await getMatrixRuntime()
     .channel.inbound.ingress.createResolver({
+      ...(state.cfg ? { cfg: state.cfg } : {}),
       channelId: "matrix",
       accountId: state.accountId,
       identity: matrixIngressIdentity,
