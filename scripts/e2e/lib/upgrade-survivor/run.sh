@@ -698,16 +698,6 @@ assert_prepublish_fixture_idle() {
     assert-no-requests "$OPENCLAW_CLAWHUB_URL"
 }
 
-assert_prepublish_fixture_requests() {
-  if [ "$SCENARIO" = "cron-scheduled-authority" ] && [ "$baseline_version" = "2026.6.34" ]; then
-    node "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
-      assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "" \
-      "@openclaw/whatsapp" "$candidate_version" absent 2
-    return
-  fi
-  assert_prepublish_fixture_idle
-}
-
 prepublish_capability_consent_supported=""
 assert_prepublish_plugin_install() {
   local allow_pending="${1:-0}" expected_version="${2:-$candidate_version}"
@@ -747,7 +737,7 @@ assert_prepublish_plugin_install() {
     "$prepublish_capability_consent_supported" "${pending_args[@]}" "$published_companion_tarball" \
     "$candidate_version" || return "$?"
   [ "$SCENARIO" = "legacy-operator-state" ] && return 0
-  assert_prepublish_fixture_requests
+  assert_prepublish_fixture_idle
 }
 
 configure_plugin_registry() {
@@ -986,64 +976,6 @@ install_baseline() {
   fi
 }
 
-migrate_baseline_cron_authority() {
-  local bridge_prefix="$ARTIFACT_ROOT/cron-migration-bridge"
-  local bridge_install_log="$ARTIFACT_ROOT/cron-migration-bridge-install.log"
-  local bridge_cli="openclaw"
-  local bridge_version_expected="2026.9.7"
-  if [ "$baseline_version" != "$bridge_version_expected" ]; then
-    rm_rf_retry "$bridge_prefix"
-    mkdir -p "$bridge_prefix"
-    if ! openclaw_prepublish_plugin_registry_run_published openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix "$bridge_prefix" "openclaw@$bridge_version_expected" --no-fund --no-audit >"$bridge_install_log" 2>&1; then
-      echo "cron migration bridge npm install failed" >&2
-      openclaw_e2e_print_log "$bridge_install_log" >&2
-      return 1
-    fi
-    bridge_cli="$bridge_prefix/bin/openclaw"
-  fi
-  local bridge_version
-  if ! bridge_version="$(openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "$bridge_cli" --version 2>&1)"; then
-    echo "cron migration bridge openclaw --version failed" >&2
-    echo "$bridge_version" >&2
-    return 1
-  fi
-  if [[ "$bridge_version" != *"$bridge_version_expected"* ]]; then
-    echo "cron migration bridge version mismatch: expected $bridge_version_expected" >&2
-    echo "$bridge_version" >&2
-    return 1
-  fi
-  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "$bridge_cli" doctor --fix --non-interactive >"$BASELINE_DOCTOR_LOG" 2>&1
-
-  # Pre-October baselines still need the schema-20 config bridge after the
-  # authority-compatible Doctor has moved cron ownership out of JSON. Running
-  # 2026.10.1 first rejects the intentionally stale cron specimen, while
-  # stopping at 2026.9.7 leaves config keys that the candidate will not load.
-  case "$baseline_version" in
-    2026.[0-9].*)
-      local config_bridge_version_expected="2026.10.1"
-      rm_rf_retry "$bridge_prefix"
-      mkdir -p "$bridge_prefix"
-      if ! openclaw_prepublish_plugin_registry_run_published openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix "$bridge_prefix" "openclaw@$config_bridge_version_expected" --no-fund --no-audit >>"$bridge_install_log" 2>&1; then
-        echo "config migration bridge npm install failed" >&2
-        openclaw_e2e_print_log "$bridge_install_log" >&2
-        return 1
-      fi
-      bridge_cli="$bridge_prefix/bin/openclaw"
-      if ! bridge_version="$(openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "$bridge_cli" --version 2>&1)"; then
-        echo "config migration bridge openclaw --version failed" >&2
-        echo "$bridge_version" >&2
-        return 1
-      fi
-      if [[ "$bridge_version" != *"$config_bridge_version_expected"* ]]; then
-        echo "config migration bridge version mismatch: expected $config_bridge_version_expected" >&2
-        echo "$bridge_version" >&2
-        return 1
-      fi
-      openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "$bridge_cli" doctor --fix --non-interactive >>"$BASELINE_DOCTOR_LOG" 2>&1
-      ;;
-  esac
-}
-
 initialize_state() {
   local account_home=""
   openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"
@@ -1073,7 +1005,7 @@ initialize_state() {
 }
 
 seed_state() {
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed "$(package_root)"
 }
 
 apply_baseline_config_recipe() {
@@ -1430,14 +1362,9 @@ prepare_update_restart_probe() {
 }
 
 assert_baseline_state() {
-  local assertion assert_stage
+  local assertion
   for assertion in assert-exec-approvals assert-config assert-state; do
-    assert_stage=baseline
-    if { [ "$assertion" = "assert-exec-approvals" ] || [ "$assertion" = "assert-config" ]; } &&
-      [ "${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_DOCTOR_APPLIED:-0}" = "1" ]; then
-      assert_stage=survival
-    fi
-    OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE="$assert_stage" \
+    OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
       node scripts/e2e/lib/upgrade-survivor/assertions.mjs "$assertion" || return "$?"
   done
 }
@@ -2735,11 +2662,6 @@ fi
 phase prepare-update-restart-probe prepare_update_restart_probe
 phase bootstrap-mobile-pairing bootstrap_mobile_pairing
 phase seed-state seed_state
-if [ "$SCENARIO" = "cron-scheduled-authority" ]; then
-  phase migrate-baseline-cron-authority migrate_baseline_cron_authority
-  export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_DOCTOR_APPLIED=1
-  phase assert-migrated-baseline-cron-authority assert_baseline_state
-fi
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase configure-baseline-plugin-registry configure_plugin_registry baseline
   phase install-companion-plugin install_companion_plugins

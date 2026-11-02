@@ -34,6 +34,12 @@ export function usesStructuredToolSearchAtBaseline(baselineVersion) {
   return comparison !== null && comparison >= 0;
 }
 
+// The June SQLite cron codec predates persisted owners; July introduced the owner columns.
+export function usesCronOwnerAtBaseline(baselineVersion) {
+  const comparison = compareReleaseVersions(baselineVersion ?? "", "2026.7.1");
+  return comparison !== null && comparison >= 0;
+}
+
 const scenarioMinimumBaselines = new Map([
   ["custom-plugin-siblings", CUSTOM_PLUGIN_SIBLINGS_BASELINE],
   ["legacy-operator-state", `openclaw@${OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE}`],

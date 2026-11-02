@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { assertLegacyOperatorCronOwners } from "../../scripts/e2e/lib/upgrade-survivor/legacy-operator-state.mjs";
@@ -8,28 +8,72 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it.each([
-  ["base", "auto-auth"],
-  ["cron-scheduled-authority", "auto-auth"],
-  ["cron-scheduled-authority", "manual"],
-])("bootstraps %s in %s mode before publishing migration specimens", (scenario, mode) => {
-  const root = tempDirs.make("openclaw-survivor-bootstrap-");
-  const binDir = path.join(root, "bin");
-  const accountHome = path.join(root, "account");
-  const authoredPath = path.join(root, "authored.json");
-  const probePath = path.join(binDir, "openclaw");
-  const runnerPath = path.join(root, "run.sh");
-  const authoredConfig =
-    '{"plugins":{"enabled":true,"allow":["discord","whatsapp"]},"gateway":{"mode":"local"}}\n';
-  mkdirSync(binDir);
-  writeFileSync(authoredPath, authoredConfig);
-  writeFileSync(
-    path.join(binDir, "getent"),
-    `#!/bin/sh\nprintf 'fixture:x:1000:1000:Fixture:%s:/bin/sh\\n' "$FIXTURE_ACCOUNT_HOME"\n`,
-  );
-  chmodSync(path.join(binDir, "getent"), 0o755);
-  writeFileSync(
-    probePath,
-    `#!${process.execPath}
+  ["base", "auto-auth", "2026.8.1"],
+  ["cron-scheduled-authority", "auto-auth", "2026.8.1"],
+  ["cron-scheduled-authority", "manual", "2026.8.1"],
+  ["cron-scheduled-authority", "manual", "2026.6.34"],
+])(
+  "bootstraps %s in %s mode at %s before publishing migration specimens",
+  (scenario, mode, baselineVersion) => {
+    const root = tempDirs.make("openclaw-survivor-bootstrap-");
+    const binDir = path.join(root, "bin");
+    const accountHome = path.join(root, "account");
+    const authoredPath = path.join(root, "authored.json");
+    const probePath = path.join(binDir, "openclaw");
+    const runnerPath = path.join(root, "run.sh");
+    const authoredConfig =
+      '{"plugins":{"enabled":true,"allow":["discord","whatsapp"]},"gateway":{"mode":"local"}}\n';
+    mkdirSync(binDir);
+    const packageRoot = path.join(root, "fixture-package");
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: baselineVersion,
+        type: "module",
+        exports: { "./plugin-sdk/cron-store-runtime": "./cron-store-runtime.mjs" },
+      }),
+    );
+    // The package operation is substituted, but the real phase sequence must resolve
+    // its installed SDK and seed SQLite before the historical no-restart update.
+    writeFileSync(
+      path.join(packageRoot, "cron-store-runtime.mjs"),
+      `
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+const databasePath = (storePath) => path.join(path.dirname(path.dirname(storePath)), "state", "openclaw.sqlite");
+export async function saveCronStore(storePath, store) {
+  const file = databasePath(storePath);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const db = new DatabaseSync(file);
+  try {
+    db.exec("CREATE TABLE cron_jobs (job_id TEXT PRIMARY KEY, job_json TEXT NOT NULL)");
+    const insert = db.prepare("INSERT INTO cron_jobs VALUES (?, ?)");
+    for (const source of store.jobs) {
+      const job = structuredClone(source);
+      if (${JSON.stringify(baselineVersion)} === "2026.6.34") delete job.owner;
+      insert.run(job.id, JSON.stringify(job));
+    }
+  } finally { db.close(); }
+}
+export async function loadCronStore(storePath) {
+  const db = new DatabaseSync(databasePath(storePath), { readOnly: true });
+  try { return { version: 1, jobs: db.prepare("SELECT job_json FROM cron_jobs ORDER BY rowid").all().map(row => JSON.parse(row.job_json)) }; }
+  finally { db.close(); }
+}
+`,
+    );
+    writeFileSync(authoredPath, authoredConfig);
+    writeFileSync(
+      path.join(binDir, "getent"),
+      `#!/bin/sh\nprintf 'fixture:x:1000:1000:Fixture:%s:/bin/sh\\n' "$FIXTURE_ACCOUNT_HOME"\n`,
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      probePath,
+      `#!${process.execPath}
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -71,38 +115,7 @@ if (args[0] === "fixture-ready") {
   }
   process.exit(0);
 }
-if (args[0] === "doctor") {
-  assert.deepEqual(args, ["doctor", "--fix", "--non-interactive"]);
-  const legacyPath = path.join(state, "cron", "jobs.json");
-  const approvalsPath = path.join(state, "exec-approvals.json");
-  const jobs = read(legacyPath).jobs;
-  const approvals = read(approvalsPath);
-  delete approvals.agents.main.allowlist[0].lastUsedAt;
-  delete approvals.agents.main.allowlist[0].lastUsedCommand;
-  const databasePath = path.join(state, "state", "openclaw.sqlite");
-  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-  const { DatabaseSync } = require("node:sqlite");
-  const db = new DatabaseSync(databasePath);
-  db.exec("CREATE TABLE cron_jobs (job_id TEXT PRIMARY KEY, job_json TEXT NOT NULL)");
-  const insert = db.prepare("INSERT INTO cron_jobs (job_id, job_json) VALUES (?, ?)");
-  for (const job of jobs) {
-    if (job.id === "cron-encoded-account") {
-      job.scheduledToolPolicy = {
-        version: 1,
-        mode: "account",
-        ownerSessionKey: job.owner.sessionKey,
-        ownerAccountId: "personal",
-      };
-      job.owner.accountId = "personal";
-    }
-    insert.run(job.id, JSON.stringify(job));
-  }
-  db.exec("CREATE TABLE exec_approvals_config (config_key TEXT PRIMARY KEY, raw_json TEXT NOT NULL)");
-  db.prepare("INSERT INTO exec_approvals_config VALUES (?, ?)").run("current", JSON.stringify(approvals));
-  db.close();
-  fs.rmSync(legacyPath);
-  fs.rmSync(approvalsPath);
-} else if (args[0] === "config") {
+if (args[0] === "config") {
   assert.deepEqual(args, ["config", "validate"]);
   assert.equal(config, original);
   assert.equal(fs.existsSync(path.join(state, "cron", "jobs.json")), false);
@@ -187,45 +200,44 @@ if (args[0] === "doctor") {
   if (process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO === "cron-scheduled-authority") {
     const { DatabaseSync } = require("node:sqlite");
     const db = new DatabaseSync(path.join(state, "state", "openclaw.sqlite"), { readOnly: true });
-    const jobs = db.prepare("SELECT job_json FROM cron_jobs ORDER BY rowid").all()
-      .map((row) => JSON.parse(row.job_json));
-    db.close();
+    let jobs;
+    try { jobs = db.prepare("SELECT job_json FROM cron_jobs ORDER BY rowid").all().map(row => JSON.parse(row.job_json)); }
+    finally { db.close(); }
     assert.deepEqual(jobs.map((job) => job.id), ["cron-pre-cap", "cron-ownerless-cap", "cron-owner-session", "cron-encoded-account", "cron-agent-mismatch"]);
-    assert.deepEqual(jobs[3].scheduledToolPolicy, {
-      version: 1,
-      mode: "account",
-      ownerSessionKey: "agent:main:discord:personal:direct:user-1",
-      ownerAccountId: "personal",
-    });
-    assert.equal(jobs[3].owner.accountId, "personal");
-    for (const index of [0, 1, 2, 4]) {
-      assert.equal(jobs[index].scheduledToolPolicy, undefined);
+    assert.equal(jobs.every((job) => job.scheduledToolPolicy === undefined), true);
+    assert.equal(fs.existsSync(path.join(state, "cron", "jobs.json")), false);
+    if (process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION === "2026.6.34") {
+      assert.equal(jobs.every(job => job.owner === undefined), true);
+    } else {
+      assert.equal(jobs[3].owner.sessionKey, "agent:main:discord:personal:direct:user-1");
+      assert.equal(jobs[4].owner.agentId, "other");
     }
-    assert.equal(jobs[3].owner.sessionKey, "agent:main:discord:personal:direct:user-1");
-    assert.equal(jobs[4].owner.agentId, "other");
   }
   fs.writeFileSync(path.join(process.env.FIXTURE_ROOT, "updated"), "complete");
 }
 `,
-  );
-  chmodSync(probePath, 0o755);
-  writeFileSync(
-    path.join(binDir, "systemctl"),
-    `#!/bin/sh\nexec "${process.execPath}" "$FIXTURE_PROBE" fixture-systemctl "$@"\n`,
-  );
-  chmodSync(path.join(binDir, "systemctl"), 0o755);
-  const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
-  const phaseStart = source.indexOf("phase storage-preflight");
-  const updatePhase = "phase update-candidate update_candidate";
-  const phaseEnd = source.indexOf(updatePhase, phaseStart) + updatePhase.length;
-  // Run the actual phase sequence; substitute external model, package, and service operations.
-  writeFileSync(
-    runnerPath,
-    `${source.slice(0, phaseStart)}
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      path.join(binDir, "systemctl"),
+      `#!/bin/sh\nexec "${process.execPath}" "$FIXTURE_PROBE" fixture-systemctl "$@"\n`,
+      { mode: 0o755 },
+    );
+    const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
+    const phaseStart = source.indexOf("phase storage-preflight");
+    const updatePhase = "phase update-candidate update_candidate";
+    const phaseEnd = source.indexOf(updatePhase, phaseStart) + updatePhase.length;
+    // Run the actual phase sequence; substitute external model, package, and service operations.
+    writeFileSync(
+      runnerPath,
+      `${source.slice(0, phaseStart)}
 trap - EXIT ERR HUP INT TERM
 storage_preflight() { :; }
-install_baseline() { baseline_version=2026.8.1; }
-migrate_baseline_cron_authority() { openclaw doctor --fix --non-interactive; }
+install_baseline() {
+  baseline_version=${baselineVersion}
+  mkdir -p "$BASELINE_PACKAGE_ROOT"
+  cp -R "$FIXTURE_ROOT/fixture-package/." "$BASELINE_PACKAGE_ROOT/"
+}
 apply_baseline_config_recipe() {
   mkdir -p "$OPENCLAW_STATE_DIR"
   cp "$FIXTURE_AUTHORED_PATH" "$OPENCLAW_CONFIG_PATH"
@@ -250,140 +262,47 @@ ${source.slice(phaseStart, phaseEnd)}
 assert_survival
 repair_fixture_plugin_consent
 `,
-  );
-  const stateFunction = execFileSync(process.execPath, [
-    "--import",
-    "tsx",
-    "scripts/lib/openclaw-test-state.mts",
-    "shell-function",
-  ]);
-  const result = spawnSync("bash", [runnerPath], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      PATH: `${binDir}:${process.env.PATH ?? ""}`,
-      OPENCLAW_TEST_STATE_FUNCTION_B64: stateFunction.toString("base64"),
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.8.1",
-      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
-      OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: mode,
-      OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: path.join(root, "runtime"),
-      OPENCLAW_UPGRADE_SURVIVOR_STATE_HOME_ROOT: accountHome,
-      OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: path.join(root, "artifacts", "summary.json"),
-      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: "",
-      OPENCLAW_GATEWAY_TOKEN: "fixture-override-must-be-cleared",
-      OPENCLAW_GATEWAY_PASSWORD: "fixture-override-must-be-cleared",
-      FIXTURE_ROOT: root,
-      FIXTURE_ACCOUNT_HOME: accountHome,
-      FIXTURE_AUTHORED_PATH: authoredPath,
-      FIXTURE_PROBE: probePath,
-    },
-  });
-  const installError = path.join(root, "artifacts", "baseline-service-install.err");
-  expect(
-    result.status,
-    result.stdout +
-      result.stderr +
-      (existsSync(installError) ? readFileSync(installError, "utf8") : ""),
-  ).toBe(0);
-  expect(readFileSync(path.join(accountHome, ".openclaw", "openclaw.json"), "utf8")).toBe(
-    authoredConfig,
-  );
-  expect(readFileSync(path.join(root, "updated"), "utf8")).toBe("complete");
-  expect(existsSync(path.join(root, "restarted"))).toBe(mode === "auto-auth");
-  expect(existsSync(path.join(root, "served"))).toBe(mode === "auto-auth");
-});
-
-it("asserts post-Doctor config at the migrated stage", () => {
-  const root = tempDirs.make("openclaw-survivor-assert-stage-");
-  const binDir = path.join(root, "bin");
-  const tracePath = path.join(root, "trace");
-  mkdirSync(binDir);
-  writeFileSync(
-    path.join(binDir, "node"),
-    `#!/bin/sh
-printf '%s\\t%s\\n' "$OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE" "$2" >> "$TRACE_PATH"
-`,
-  );
-  chmodSync(path.join(binDir, "node"), 0o755);
-  const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
-  const start = source.indexOf("assert_baseline_state() {");
-  const end = source.indexOf("\nresolve_candidate_version()", start);
-  const result = spawnSync("bash", ["-c", `${source.slice(start, end)}\nassert_baseline_state`], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      PATH: `${binDir}:${process.env.PATH ?? ""}`,
-      TRACE_PATH: tracePath,
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_DOCTOR_APPLIED: "1",
-    },
-  });
-  expect(result.status, result.stderr).toBe(0);
-  expect(readFileSync(tracePath, "utf8").trim().split("\n")).toEqual([
-    "survival\tassert-exec-approvals",
-    "survival\tassert-config",
-    "baseline\tassert-state",
-  ]);
-});
-
-it.each([
-  ["2026.10.9", ["2026.9.7"]],
-  ["2026.6.34", ["2026.9.7", "2026.10.1"]],
-])(
-  "bridges stale cron authority from %s through compatible Doctors",
-  (baselineVersion, bridges) => {
-    const root = tempDirs.make("openclaw-survivor-cron-bridge-");
-    const tracePath = path.join(root, "trace");
-    const installTracePath = path.join(root, "install-trace");
-    const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
-    const start = source.indexOf("migrate_baseline_cron_authority() {");
-    const end = source.indexOf("\ninitialize_state()", start);
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        `${source.slice(start, end)}
-rm_rf_retry() { rm -rf "$1"; }
-openclaw_prepublish_plugin_registry_run_published() {
-  printf '%s\\n' "$*" >> "$INSTALL_TRACE_PATH"
-  case "$*" in
-    *openclaw@2026.10.1*) installed_version=2026.10.1 ;;
-    *) installed_version=2026.9.7 ;;
-  esac
-  mkdir -p "$bridge_prefix/bin"
-  cat > "$bridge_prefix/bin/openclaw" <<EOF
-#!/bin/sh
-printf '%s\\n' "\\$*" >> "$TRACE_PATH"
-if [ "\\$1" = "--version" ]; then printf '%s\\n' 'OpenClaw $installed_version'; fi
-EOF
-  chmod +x "$bridge_prefix/bin/openclaw"
-}
-openclaw_e2e_maybe_timeout() { shift; "$@"; }
-baseline_version=${baselineVersion}
-ARTIFACT_ROOT="$FIXTURE_ROOT/artifacts"
-BASELINE_DOCTOR_LOG="$FIXTURE_ROOT/doctor.log"
-COMMAND_TIMEOUT=10s
-mkdir -p "$ARTIFACT_ROOT"
-migrate_baseline_cron_authority
-`,
-      ],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          FIXTURE_ROOT: root,
-          INSTALL_TRACE_PATH: installTracePath,
-          TRACE_PATH: tracePath,
-        },
+    );
+    const stateFunction = execFileSync(process.execPath, [
+      "--import",
+      "tsx",
+      "scripts/lib/openclaw-test-state.mts",
+      "shell-function",
+    ]);
+    const result = spawnSync("bash", [runnerPath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        OPENCLAW_TEST_STATE_FUNCTION_B64: stateFunction.toString("base64"),
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE: `openclaw@${baselineVersion}`,
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+        OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: mode,
+        OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: path.join(root, "runtime"),
+        OPENCLAW_UPGRADE_SURVIVOR_STATE_HOME_ROOT: accountHome,
+        OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: path.join(root, "artifacts", "summary.json"),
+        OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: "",
+        OPENCLAW_GATEWAY_TOKEN: "fixture-override-must-be-cleared",
+        OPENCLAW_GATEWAY_PASSWORD: "fixture-override-must-be-cleared",
+        FIXTURE_ROOT: root,
+        FIXTURE_ACCOUNT_HOME: accountHome,
+        FIXTURE_AUTHORED_PATH: authoredPath,
+        FIXTURE_PROBE: probePath,
       },
+    });
+    const installError = path.join(root, "artifacts", "baseline-service-install.err");
+    expect(
+      result.status,
+      result.stdout +
+        result.stderr +
+        (existsSync(installError) ? readFileSync(installError, "utf8") : ""),
+    ).toBe(0);
+    expect(readFileSync(path.join(accountHome, ".openclaw", "openclaw.json"), "utf8")).toBe(
+      authoredConfig,
     );
-    expect(result.status, result.stderr).toBe(0);
-    const installTrace = readFileSync(installTracePath, "utf8");
-    for (const bridge of bridges) {
-      expect(installTrace).toContain(`openclaw@${bridge}`);
-    }
-    expect(readFileSync(tracePath, "utf8").trim().split("\n")).toEqual(
-      bridges.flatMap(() => ["--version", "doctor --fix --non-interactive"]),
-    );
+    expect(readFileSync(path.join(root, "updated"), "utf8")).toBe("complete");
+    expect(existsSync(path.join(root, "restarted"))).toBe(mode === "auto-auth");
+    expect(existsSync(path.join(root, "served"))).toBe(mode === "auto-auth");
   },
 );
 

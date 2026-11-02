@@ -44,54 +44,6 @@ function expectFinalFailure(stderr: string, exitCode: number) {
   expect(stderr.split("\n").filter((line) => line === summary)).toHaveLength(1);
 }
 
-it.each([
-  ["cron-scheduled-authority", "2026.6.34", "assert-prepublish-requests", "2"],
-  ["cron-scheduled-authority", "2026.9.36", "assert-no-requests", undefined],
-  ["base", "2026.6.34", "assert-no-requests", undefined],
-])(
-  "accounts for ClawHub requests from %s on %s",
-  (scenario, baselineVersion, expectedProfile, expectedAttempts) => {
-    const root = tempDirs.make("openclaw-survivor-clawhub-accounting-");
-    const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
-    const start = source.indexOf("assert_prepublish_fixture_idle() {");
-    const end = source.indexOf("prepublish_capability_consent_supported=", start);
-    const runner = join(root, "run.sh");
-    writeFileSync(
-      runner,
-      `#!/usr/bin/env bash
-set -euo pipefail
-SCENARIO=${scenario}
-baseline_version=${baselineVersion}
-candidate_version=2026.10.10
-OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR="$FIXTURE_ROOT/registry"
-OPENCLAW_CLAWHUB_URL=http://127.0.0.1:1
-node() { printf '%s\\n' "$@" >"$FIXTURE_ROOT/args"; }
-${source.slice(start, end)}
-assert_prepublish_fixture_requests
-`,
-    );
-    const result = spawnSync("bash", [runner], {
-      encoding: "utf8",
-      env: { ...process.env, FIXTURE_ROOT: root },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    const args = readFileSync(join(root, "args"), "utf8").trim().split("\n");
-    expect(args[1]).toBe(expectedProfile);
-    if (expectedProfile === "assert-prepublish-requests") {
-      expect(args).toEqual([
-        "scripts/e2e/lib/clawhub-fixture-server.cjs",
-        "assert-prepublish-requests",
-        "http://127.0.0.1:1",
-        "",
-        "@openclaw/whatsapp",
-        "2026.10.10",
-        "absent",
-        expectedAttempts,
-      ]);
-    }
-  },
-);
-
 function registryManifest(): string {
   return `${JSON.stringify({
     candidateVersion: VERSION,
