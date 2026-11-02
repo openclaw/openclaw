@@ -236,11 +236,6 @@ describe("persistent upstream fork continuation", () => {
       });
       expect(primary.forkThread).not.toHaveBeenCalled();
       expect(secondary.forkThread).toHaveBeenCalledOnce();
-      expect(native.request).not.toHaveBeenCalledWith(
-        "thread/unsubscribe",
-        { threadId: "thread-secondary-0" },
-        expect.anything(),
-      );
       const created = await vi.mocked(runtime.agent.session.createSessionEntry).mock.results[0]!
         .value;
       const identity = sessionBindingIdentity({

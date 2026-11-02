@@ -163,6 +163,8 @@ export async function createCanonicalForkFixture(params: {
       senderId?: string;
       workerOwned?: boolean;
       developerInstructions?: string;
+      /** Production turns use their own supervision process on the same Codex home. */
+      separateConnection?: boolean;
       beforeStartup?: (
         invalidate: (reason: "closed" | "aborted" | "replaced" | "claim") => Promise<void>,
       ) => Promise<void> | void;
@@ -173,6 +175,16 @@ export async function createCanonicalForkFixture(params: {
     } = {},
   ) => {
     const senderIsOwner = options.senderIsOwner ?? params.senderIsOwner;
+    // Env is part of the shared-client key but not the connection fingerprint.
+    const appServer = options.separateConnection
+      ? {
+          ...home.appServer,
+          start: {
+            ...home.appServer.start,
+            env: { ...home.appServer.start.env, OPENCLAW_TEST_TURN_CONNECTION: "1" },
+          },
+        }
+      : home.appServer;
     const session = identity(key);
     const runId = randomUUID();
     const host = await params.createHost({
@@ -253,7 +265,7 @@ export async function createCanonicalForkFixture(params: {
             pluginConfig,
             profilerEnabled: false,
             agentDir,
-            appServer: home.appServer,
+            appServer,
             usesSupervisionConnection: true,
           },
           runtimeParams: attempt,
@@ -289,7 +301,7 @@ export async function createCanonicalForkFixture(params: {
             config,
             effectiveWorkspace: workspaceDir,
             effectiveCwd: workspaceDir,
-            appServer: home.appServer,
+            appServer,
             dynamicTools: preparedTools.toolBridge.specs,
             nativeToolSurfaceEnabled: true,
             nativeProviderWebSearchSupport: "supported",

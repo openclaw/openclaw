@@ -1097,6 +1097,41 @@ describe("canonical descendant lifecycle through real owners", () => {
     180_000,
   );
 
+  it("hands a fresh canonical fork to a separate turn connection without a restart", async () => {
+    await withFixture(async (fixture, fork) => {
+      const source = await fixture.adopt();
+      await fixture.turn(source.sessionKey, "canonical");
+      const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
+      const forkOffset = fixture.native.calls.length;
+      const forked = await fork(source.sessionKey, selected.entryId);
+      expect(forked, forked.message).toMatchObject({ ok: true });
+      const childKey = expectDefined(forked.key, "child key");
+      const child = expectDefined(
+        fixture.bindingStore.read(fixture.identity(childKey)),
+        "child binding",
+      );
+      const forkCall = expectDefined(
+        fixture.native.calls.slice(forkOffset).find((call) => call.method === "thread/fork"),
+        "canonical fork request",
+      );
+      const turnOffset = fixture.native.calls.length;
+      // Live supervision turns use another app-server process on the same Codex home.
+      const continued = await fixture.turn(childKey, "warm child turn", {
+        separateConnection: true,
+      });
+      expect(continued.threadId).toBe(child.threadId);
+      const resume = expectDefined(
+        fixture.native.calls
+          .slice(turnOffset)
+          .find(
+            (call) => call.method === "thread/resume" && call.params.threadId === child.threadId,
+          ),
+        "child resume",
+      );
+      expect(resume.client).not.toBe(forkCall.client);
+    });
+  }, 180_000);
+
   it("keeps ordinary archive cleanup on the healthy client while its notification is delayed", async () => {
     await withFixture(async (fixture, fork) => {
       const source = await fixture.adopt();
@@ -1281,7 +1316,7 @@ describe("canonical descendant lifecycle through real owners", () => {
             [...fixture.native.subscriptions].some((key) =>
               key.endsWith(`:${firstBinding.threadId}`),
             ),
-          ).toBe(true);
+          ).toBe(false);
           const link = readSessionUpstreamLinkInDatabase(
             openOpenClawStateDatabase().db,
             source.sessionKey,
@@ -1829,6 +1864,7 @@ describe("canonical descendant lifecycle through real owners", () => {
       /did not preserve the exact source session and selected native model/,
     ],
     ["child lineage", /unsafe native thread identity/],
+    ["unsubscribe failure", /unsubscribe|subscription|guarded rollback/i],
   ])(
     "refuses %s without publishing an unsafe child",
     async (failure, expectedError) => {
@@ -1905,6 +1941,9 @@ describe("canonical descendant lifecycle through real owners", () => {
                 { agentId: "main" },
               );
             });
+          }
+          if (failure === "unsubscribe failure") {
+            fixture.native.setFailUnsubscribe(true);
           }
           const result =
             failure === "sandbox policy changed during initialization"
