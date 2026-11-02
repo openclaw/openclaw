@@ -299,9 +299,11 @@ it("leaves a read-ready shared store to its pending preparation owner for restar
       storePath,
     }));
     for (const target of targets) {
+      replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const entry = loadExactSessionEntry(target)?.entry;
+      assert(entry, "Restart fixture session was not created");
       replaceSessionEntrySync(target, {
-        sessionId: target.sessionId,
-        updatedAt: 1,
+        ...entry,
         resumeAfterRestart: { queuedInputIds: [] },
       });
     }
