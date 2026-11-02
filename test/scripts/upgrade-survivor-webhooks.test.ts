@@ -19,6 +19,7 @@ let retired: boolean;
 type FixtureConfig = {
   plugins?: { allow?: string[]; deny?: string[]; entries?: Record<string, unknown> };
   hooks?: { path?: string };
+  skills?: { workshop?: { autonomous?: { mode?: string } } };
 };
 
 function config(): FixtureConfig {
@@ -100,6 +101,7 @@ describe("legacy operator Webhooks retirement acceptance", () => {
     });
     seedLegacyOperatorState();
     expect(config().plugins?.allow).toEqual(["device-pair", "webhooks"]);
+    expect(config().skills?.workshop?.autonomous?.mode).toBe("off");
     const specimen = JSON.parse(
       readFileSync(path.join(root, "legacy-operator-webhooks.json"), "utf8"),
     );
@@ -150,6 +152,25 @@ describe("legacy operator Webhooks retirement acceptance", () => {
     seedLegacyOperatorState();
     expect(config().plugins?.allow).toEqual(["device-pair", "byteplus", "webhooks"]);
   });
+
+  it.each(["2026.9.2", "2026.10.9"])(
+    "preserves the Workshop opt-out authored by %s alongside the workspace skill",
+    (version) => {
+      vi.stubEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION", version);
+      available = version === "2026.9.2";
+      seedLegacyOperatorState();
+      removeWebhooks();
+      expect(() => assertLegacyOperatorConfig("survival")).not.toThrow();
+      for (const mode of [undefined, "auto"]) {
+        const broken = config();
+        broken.skills = { workshop: { autonomous: { mode } } };
+        save(broken);
+        expect(() => assertLegacyOperatorConfig("survival")).toThrow(
+          "legacy operator Workshop opt-out changed",
+        );
+      }
+    },
+  );
 
   it("allows an older baseline without Webhooks but requires the exact 9.2 specimen", () => {
     available = false;

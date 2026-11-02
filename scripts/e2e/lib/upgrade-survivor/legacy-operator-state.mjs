@@ -105,7 +105,7 @@ export function seedLegacyOperatorState() {
       ["config", "set", key, JSON.stringify(value), "--strict-json"],
       `legacy-operator-config-${key}`,
     );
-  // Only transport and model setup uses config set. Every state specimen below
+  // Configuration uses config set. Every state specimen below
   // is authored by the installed baseline, preserving its native storage era.
   set("gateway", {
     mode: "local",
@@ -144,6 +144,9 @@ export function seedLegacyOperatorState() {
     "legacy-operator-setup",
   );
   set("agents.defaults.model.primary", MODEL);
+  // Preserve an authored workspace skill without autonomous learning; the
+  // restrictive plugin allowlist intentionally excludes unrelated defaults.
+  set("skills.workshop.autonomous.mode", "off");
   seedLegacyOperatorAuth();
   // Every fixture client shares this container's loopback network namespace.
   set("plugins.entries.device-pair", {
@@ -585,6 +588,11 @@ export function assertLegacyOperatorConfig(stage) {
     );
   }
   assert.equal(config.agents?.defaults?.model?.primary, MODEL, "legacy operator model changed");
+  assert.equal(
+    config.skills?.workshop?.autonomous?.mode,
+    "off",
+    "legacy operator Workshop opt-out changed",
+  );
   assert.equal(
     fs.readFileSync(
       path.join(

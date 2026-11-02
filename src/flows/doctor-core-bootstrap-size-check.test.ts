@@ -160,6 +160,7 @@ describe("core/doctor/skill-workshop-tool-policy", () => {
       expect.objectContaining({ severity: "warning", path }),
     ]);
     expect(await detect({ plugins: { allow: ["diffs", "skill-workshop"] } })).toEqual([]);
+    expect(await detect({ plugins, skills: { workshop: workshop("off") } })).toEqual([]);
   });
 
   it("warns when autonomous capture is enabled but policy hides its tool", async () => {
