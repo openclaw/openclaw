@@ -38,15 +38,21 @@ Gateway:
 }
 ```
 
-The headless node host starts these servers, lists their tools, and publishes
-the descriptors after connecting. The Gateway can use them without matching
-MCP configuration or a JS plugin. It uses the published descriptors
-to decide which tools a turn can use. When the turn runs on the node that
-owns the MCP session, a compatible worker can call the node host directly.
-The Gateway routes calls through `mcp.tools.call.v1` for other placements,
-older workers, and tools that require Gateway-side call policy or hooks.
+The headless node host runs the MCP client. It starts command-based servers
+or connects to remote servers such as `internalApi` above, then lists their
+tools and publishes the descriptors to the Gateway. Those descriptors let the
+Gateway decide which tools a turn can use without a matching server entry or
+JS plugin on the Gateway. When the model worker runs
+on the same node as the MCP client, it can call an admitted tool through the
+node host even if the server is remote. The Gateway routes calls through
+`mcp.tools.call.v1` for other placements, older workers, and tools that require
+Gateway-side call policy or hooks.
 
-OAuth MCP servers are not supported by this node-hosted v1 path.
+For a remote server protected by OAuth, supply an externally obtained bearer
+token through the `Authorization` header, as in `internalApi`. The node host
+skips server entries that request an OpenClaw-managed OAuth flow by setting
+`auth: "oauth"` or an `oauth` block. Both execution routes use the same headless MCP client,
+which has no handler for interactive server prompts (`elicitation/create`).
 
 Current node hosts declare the built-in `mcp.tools.call.v1` command family during
 their initial pairing even when no MCP server is configured. A node paired on an
