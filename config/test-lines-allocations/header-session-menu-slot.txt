@@ -1,0 +1,2 @@
+# Extend the native two-route reload regression to cover an archived descriptor outside the cached roster.
+13

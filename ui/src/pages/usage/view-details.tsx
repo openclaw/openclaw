@@ -450,7 +450,7 @@ function SessionLogs(props: {
       const showLogData = !initialLoading && !initialError && Boolean(logs?.length);
       const message = initialLoading ? "usage.loading.badge" : "usage.details.noMessages";
 
-      const normalizedQuery = normalizeLowercaseStringOrEmpty(filters.query);
+      const normalizedQuery = normalizeLowercaseStringOrEmpty(filters.query).normalize("NFC");
       const toolOptions = Array.from(
         new Set(parsedEntries.flatMap((entry) => entry.toolInfo.tools.map(([name]) => name))),
       ).toSorted((a, b) => a.localeCompare(b));
@@ -462,7 +462,9 @@ function SessionLogs(props: {
           (filters.tools.length === 0 ||
             entry.toolInfo.tools.some(([name]) => filters.tools.includes(name))) &&
           (!normalizedQuery ||
-            normalizeLowercaseStringOrEmpty(entry.cleanContent).includes(normalizedQuery)),
+            normalizeLowercaseStringOrEmpty(entry.cleanContent)
+              .normalize("NFC")
+              .includes(normalizedQuery)),
       );
       const hasActiveFilters =
         filters.roles.length > 0 || filters.tools.length > 0 || filters.hasTools || normalizedQuery;

@@ -162,6 +162,8 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
   expect(await header.getByRole("heading", { level: 1 }).textContent()).toBe(expected.title);
   // All three routes share the settings-style header. Allow subtitle wrapping
   // to change its height, but keep the visible title and tabs left-aligned.
+  // The phone's floating header carries the title, leaving it for assistive tech.
+  const floatingHeader = (await page.locator(".shell--floating-header").count()) > 0;
   await expect
     .poll(() =>
       header.evaluate((element) => {
@@ -178,7 +180,7 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
         };
       }),
     )
-    .toEqual({ visibleTitle: true, leftAligned: true, tabsBelowIntro: true });
+    .toEqual({ visibleTitle: !floatingHeader, leftAligned: true, tabsBelowIntro: true });
   expect(await header.locator(".page-subtitle").textContent()).toContain(expected.subtitle);
   expect(await header.getByRole("link", { name: "Learn more" }).getAttribute("href")).toBe(
     expected.docs,
@@ -590,6 +592,75 @@ suite.define(() => {
         await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
         expectStableHeader(await headerGeometry(page), pluginsHeader);
         await expectHeaderCopy(page, "plugins");
+      } finally {
+        await context.close();
+      }
+    },
+  );
+  it.each([
+    {
+      locale: "en",
+      direction: "ltr",
+      wheel: 1,
+      initial: ["true", "false"],
+      final: ["false", "true"],
+    },
+    {
+      locale: "ar",
+      direction: "rtl",
+      wheel: -1,
+      initial: ["false", "true"],
+      final: ["true", "false"],
+    },
+  ])(
+    "reports physical discovery scroll edges in $direction",
+    async ({ locale, direction, wheel, initial, final }) => {
+      const context = await createContext({ width: 390, height: 844 });
+      const page = await context.newPage();
+      try {
+        const config = { ui: { prefs: { locale } } };
+        const profileId = "scroll-operator";
+        await installMockGateway(page, {
+          authMethod: "trusted-proxy",
+          authMode: "trusted-proxy",
+          presenceUsers: [{ id: profileId, self: true }],
+          bootstrapPreferences: { profileId, config, entries: {} },
+          featureMethods: [
+            "plugins.list",
+            "plugins.catalog.browse",
+            "plugins.catalog.categories",
+            "config.get",
+          ],
+          methodResponses: {
+            ...methodResponses,
+            "config.get": {
+              ...methodResponses["config.get"],
+              config,
+              sourceConfig: config,
+              runtimeConfig: config,
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "plugins");
+        await expect.poll(() => page.locator("html").getAttribute("dir")).toBe(direction);
+        const chips = page.locator(".plugin-catalog-chips");
+        await expect
+          .poll(() => chips.evaluate((element) => element.scrollWidth - element.clientWidth))
+          .toBeGreaterThan(4);
+        const edges = () =>
+          chips.evaluate((element: HTMLElement) => [
+            element.dataset.atStart,
+            element.dataset.atEnd,
+          ]);
+        await expect.poll(edges).toEqual(initial);
+        await chips.hover();
+        const distance = await chips.evaluate(
+          (element) => element.scrollWidth - element.clientWidth,
+        );
+        await page.mouse.wheel((wheel * distance) / 2, 0);
+        await expect.poll(edges).toEqual(["false", "false"]);
+        await page.mouse.wheel(wheel * distance, 0);
+        await expect.poll(edges).toEqual(final);
       } finally {
         await context.close();
       }

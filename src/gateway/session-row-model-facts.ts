@@ -15,6 +15,7 @@ import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
 import { normalizeSessionSearchLiteral } from "../shared/session-search-text.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import { addSessionListSearchModelFields } from "./session-list-search-fields.js";
+import type { SessionRuntimeResolution } from "./session-runtime-resolution.js";
 import type {
   GatewaySessionModelSource,
   SessionListRowContext,
@@ -288,6 +289,7 @@ export function readSessionRowModelFacts(params: {
   rowContext: SessionListRowContext;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   lightweightListRow?: boolean;
+  runtimeResolution?: SessionRuntimeResolution;
 }) {
   const { cfg, key, agentId, source, rowContext } = params;
   const lightweight = params.lightweightListRow === true;
@@ -326,6 +328,7 @@ export function readSessionRowModelFacts(params: {
     sessionKey: key,
     entry: params.entry,
     preparedAcpMeta: params.preparedAcpMeta,
+    runtimeResolution: params.runtimeResolution,
     modelCatalog:
       rowModelCatalog ?? (lightweight || metadataSnapshot !== undefined ? [] : undefined),
     modelCatalogRouteVariants: preparedCatalog?.routeVariants,

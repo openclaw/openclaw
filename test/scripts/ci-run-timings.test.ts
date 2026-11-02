@@ -195,7 +195,77 @@ describe("scripts/ci-run-timings.mjs", () => {
     expect(() => parseRunTimingArgs(args.split(" "))).toThrow(message);
   });
 
-  it("excludes manual, failed, and unfinished runs from recent main timings", () => {
+  const job = {
+    id: 1,
+    name: "checks",
+    status: "completed",
+    conclusion: "success",
+    started_at: "2026-08-31T00:00:10Z",
+    completed_at: "2026-08-31T00:00:40Z",
+  };
+  it.each<{
+    label: string;
+    pages: unknown[];
+    requests: number;
+    jobs: number;
+    error?: string;
+  }>([
+    {
+      label: "total reached",
+      pages: [
+        { total_count: 2, jobs: [job] },
+        { total_count: 2, jobs: [job] },
+      ],
+      requests: 2,
+      jobs: 2,
+    },
+    {
+      label: "short pages before total",
+      pages: Array.from({ length: 3 }, () => ({ total_count: 3, jobs: [job] })),
+      requests: 3,
+      jobs: 3,
+    },
+    {
+      label: "missing and nonnumeric later total",
+      pages: [
+        { total_count: 3, jobs: [job] },
+        { jobs: [job] },
+        { total_count: "unknown", jobs: [job] },
+      ],
+      requests: 3,
+      jobs: 3,
+    },
+    {
+      label: "missing totals until empty page",
+      pages: [{ jobs: [job] }, { jobs: [job] }, { jobs: [] }],
+      requests: 3,
+      jobs: 2,
+    },
+    ...[[], {}].map((empty) => ({
+      label: `terminal jobs ${JSON.stringify(empty)}`,
+      pages: [
+        { total_count: 3, jobs: [job] },
+        { total_count: 3, jobs: empty },
+      ],
+      requests: 2,
+      jobs: 1,
+    })),
+    ...[[], {}].map((empty) => ({
+      label: `initial jobs ${JSON.stringify(empty)}`,
+      pages: [{ jobs: empty }],
+      requests: 1,
+      jobs: 0,
+      error: "CI run timing summary requires at least one job",
+    })),
+    {
+      label: "25-page bound",
+      pages: Array.from({ length: 25 }, () => ({ total_count: 26, jobs: [job] })),
+      requests: 25,
+      jobs: 25,
+    },
+    { label: "invalid JSON", pages: ["{"], requests: 1, jobs: 0, error: "JSON" },
+  ])("keeps recent filtering and normalizes each job once: $label", (fixture) => {
+    const recent = fixture.label === "total reached" ? 2 : 1;
     const fixtureDir = mkdtempSync(path.join(tmpdir(), "openclaw-ci-timings-recent-"));
     const fakeGhPath = path.join(fixtureDir, "gh");
     const callsPath = path.join(fixtureDir, "calls.jsonl");
@@ -210,13 +280,18 @@ if (args[0] === "run" && args[1] === "list") {
     { databaseId: 201, event: "workflow_dispatch", headSha: "manual", status: "completed", conclusion: "success" },
     { databaseId: 202, event: "push", headSha: "failed", status: "completed", conclusion: "failure" },
     { databaseId: 203, event: "push", headSha: "running", status: "in_progress", conclusion: "" },
-    { databaseId: 204, event: "push", headSha: "first", status: "completed", conclusion: "success" },
-    { databaseId: 205, event: "push", headSha: "second", status: "completed", conclusion: "success" }
+    { databaseId: 204, event: "push", headSha: "first", status: "completed", conclusion: "success", createdAt: "2026-08-31T00:00:00Z", updatedAt: "2026-08-31T00:01:00Z", attempt: 3 },
+    { databaseId: 205, event: "push", headSha: "second", status: "completed", conclusion: "success", createdAt: "2026-08-30T23:59:00Z", updatedAt: "2026-08-31T00:01:00Z", attempt: 2 }
   ]));
 } else if (args[0] === "run" && args[1] === "view") {
-  console.log(JSON.stringify({ status: "completed", conclusion: "success", createdAt: "2026-08-31T00:00:00Z", updatedAt: "2026-08-31T00:01:00Z" }));
+  console.error("run metadata must come from the captured list observation");
+  process.exit(18);
 } else if (args[0] === "api" && args.some((arg) => arg.includes("/jobs?"))) {
-  console.log(JSON.stringify({ total_count: 1, jobs: [{ id: 1, name: "checks", status: "completed", conclusion: "success", started_at: "2026-08-31T00:00:10Z", completed_at: "2026-08-31T00:00:40Z" }] }));
+  const endpoint = args.find(arg => arg.includes("/jobs?"));
+  const page = Number(new URL(endpoint, "https://api.github.com").searchParams.get("page"));
+  const payload = ${JSON.stringify(fixture.pages)}[page - 1];
+  if (payload === undefined) process.exit(19);
+  console.log(typeof payload === "string" ? payload : JSON.stringify(payload));
 } else {
   process.exit(2);
 }
@@ -224,21 +299,66 @@ if (args[0] === "run" && args[1] === "list") {
     );
     chmodSync(fakeGhPath, 0o755);
     try {
-      const result = spawnSync(process.execPath, ["scripts/ci-run-timings.mjs", "--recent", "2"], {
-        cwd: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.."),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          GH_TOKEN: "fixture-token",
-          OPENCLAW_GH_BIN: fakeGhPath,
-          FIXTURE_CALLS_PATH: callsPath,
+      // Count reads on decoded API objects, then let the actual CLI consume its
+      // ordinary normalized objects. Cumulative normalization revisits the getters.
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          `
+        const parse = JSON.parse;
+        let normalized = 0;
+        JSON.parse = (...args) => {
+          const payload = parse(...args);
+          if (Array.isArray(payload?.jobs)) {
+            for (const item of payload.jobs) {
+              const name = item.name;
+              Object.defineProperty(item, "name", { get() { normalized++; return name; } });
+            }
+          }
+          return payload;
+        };
+        process.on("exit", () => console.error("normalized-jobs=" + normalized));
+        process.argv = [process.execPath, "scripts/ci-run-timings.mjs", "--recent", "${recent}"];
+        await import("./scripts/ci-run-timings.mjs");
+      `,
+        ],
+        {
+          cwd: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.."),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            GITHUB_REPOSITORY: "openclaw/openclaw",
+            GH_TOKEN: "fixture-token",
+            OPENCLAW_GH_BIN: fakeGhPath,
+            FIXTURE_CALLS_PATH: callsPath,
+          },
         },
-      });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.match(/CI run \d+/gu)).toEqual(["CI run 204", "CI run 205"]);
-      expect(
-        result.stdout.match(/jobs=1 {2}avg=30s {2}p90=30s {2}p95=30s {2}max=30s/gu),
-      ).toHaveLength(2);
+      );
+      const runIds = fixture.error || recent === 1 ? [204] : [204, 205];
+      if (fixture.error) {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(fixture.error);
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout.match(/CI run \d+/gu)).toEqual(runIds.map((id) => `CI run ${id}`));
+        for (const id of runIds) {
+          expect(result.stdout).toContain(
+            id === 204
+              ? "CI run 204  first  wall=60s  exec=30s  firstStartDelay=10s"
+              : "CI run 205  second  wall=120s  exec=30s  firstStartDelay=70s",
+          );
+        }
+        expect(
+          result.stdout.match(
+            new RegExp(`jobs=${fixture.jobs} {2}avg=30s {2}p90=30s {2}p95=30s {2}max=30s`, "gu"),
+          ),
+        ).toHaveLength(runIds.length);
+      }
+      expect(result.stderr.split(/\r?\n/u)).toContain(
+        `normalized-jobs=${fixture.jobs * runIds.length}`,
+      );
       const calls: string[][] = readFileSync(callsPath, "utf8")
         .trim()
         .split("\n")
@@ -248,7 +368,19 @@ if (args[0] === "run" && args[1] === "list") {
       );
       expect(
         calls.filter((args) => args[0] === "run" && args[1] === "view").map((args) => args[2]),
-      ).toEqual(["204", "205"]);
+      ).toEqual([]);
+      expect(calls[0]?.[calls[0].indexOf("--json") + 1]?.split(",")).toEqual(
+        expect.arrayContaining(["createdAt", "updatedAt", "attempt"]),
+      );
+      expect(calls.filter((args) => args[0] === "api").map((args) => args[3])).toEqual(
+        runIds.flatMap((id) =>
+          Array.from(
+            { length: fixture.requests },
+            (_, page) =>
+              `repos/openclaw/openclaw/actions/runs/${id}/attempts/${id === 204 ? 3 : 2}/jobs?per_page=100&page=${page + 1}`,
+          ),
+        ),
+      );
     } finally {
       rmSync(fixtureDir, { force: true, recursive: true });
     }

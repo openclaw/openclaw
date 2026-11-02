@@ -49,6 +49,7 @@ const { values } = parseArgs({
     pairs: { type: "string", default: "1" },
     profile: { type: "string", default: "local" },
     auth: { type: "string", default: "none" },
+    "history-format": { type: "string", default: "plain" },
     port: { type: "string" },
     worker: { type: "boolean", default: false },
     "controlled-worker": { type: "boolean", default: false },
@@ -64,10 +65,11 @@ if (
   !values.output ||
   !["local", "remote", "mobile"].includes(values.profile) ||
   !["none", "token"].includes(values.auth) ||
+  !["plain", "markdown"].includes(values["history-format"]) ||
   !["silent", "online", "visible"].includes(values["reconnect-trigger"])
 ) {
   throw new Error(
-    "Required: --bundle-dir <built UI> --output <directory> [--profile local|remote|mobile] [--auth none|token] [--pairs N] [--extended-flows] [--reconnect-trigger silent|online|visible] [--compare-source-dir <checkout>] [--compare-bundle-dir <base UI>]",
+    "Required: --bundle-dir <built UI> --output <directory> [--profile local|remote|mobile] [--auth none|token] [--history-format plain|markdown] [--pairs N] [--extended-flows] [--reconnect-trigger silent|online|visible] [--compare-source-dir <checkout>] [--compare-bundle-dir <base UI>]",
   );
 }
 if (values["compare-bundle-dir"] && !values["compare-source-dir"]) {
@@ -483,11 +485,12 @@ async function observeReconnect(page: Page) {
   }
 }
 
-function installReadiness() {
+function installReadiness(richHistory = false) {
   type Readiness = {
     startMs: number;
     transcriptMs: number | null;
     transcriptVisibleMs: number | null;
+    richTextMs: number | null;
     composerMs: number | null;
     newSessionMs: number | null;
     pageMs: number | null;
@@ -496,6 +499,7 @@ function installReadiness() {
     startMs: 0,
     transcriptMs: null,
     transcriptVisibleMs: null,
+    richTextMs: null,
     composerMs: null,
     newSessionMs: null,
     pageMs: null,
@@ -517,7 +521,34 @@ function installReadiness() {
     if (transcript && transcript.textContent?.trim()) {
       state.transcriptVisibleMs ??= performance.now() - state.startMs;
     }
-    if (recovered && correctPane && Reflect.get(pane, "transcriptReady") === true && transcript) {
+    const expectedEntry = expectedKey?.endsWith("wire-fixture-b")
+      ? "synthetic-wire-1-119"
+      : "synthetic-wire-0-119";
+    const richRow = pane?.querySelector(`[data-entry-id="${expectedEntry}"]`);
+    const richHeading = richRow?.querySelector(".chat-text h2");
+    const richStrong = richRow?.querySelector(".chat-text strong");
+    const richCode = richRow?.querySelector(".chat-text code");
+    const richCell = richRow?.querySelector(".chat-text table td");
+    const richReady =
+      !richHistory ||
+      (richHeading?.checkVisibility() &&
+        richHeading.textContent === "Synthetic result" &&
+        richStrong?.checkVisibility() &&
+        richStrong.textContent === "Measured behavior" &&
+        richCode?.checkVisibility() &&
+        richCode.textContent === "inline code" &&
+        richCell?.checkVisibility() &&
+        richCell.textContent === "Rendering");
+    if (richHistory && correctPane && richReady) {
+      state.richTextMs ??= performance.now() - state.startMs;
+    }
+    if (
+      recovered &&
+      correctPane &&
+      Reflect.get(pane, "transcriptReady") === true &&
+      transcript &&
+      richReady
+    ) {
       state.transcriptMs ??= performance.now() - state.startMs;
     }
     const composer =
@@ -563,6 +594,7 @@ function installReadiness() {
       state.startMs = performance.now();
       state.transcriptMs = null;
       state.transcriptVisibleMs = null;
+      state.richTextMs = null;
       state.composerMs = null;
       state.newSessionMs = null;
       state.pageMs = null;
@@ -731,7 +763,11 @@ async function runWorker() {
               content: [
                 {
                   type: "text",
-                  text: `Synthetic session ${index + 1}, message ${row + 1}. ${"A reproducible transcript measures the real Gateway path and browser readiness. ".repeat(row % 2 ? 20 : 3)}`,
+                  text:
+                    (values["history-format"] === "markdown" && row % 2
+                      ? "## Synthetic result\n\n**Measured behavior** with `inline code`.\n\n- Preserve the transcript.\n- Keep the composer ready.\n\n| Check | Result |\n| --- | --- |\n| Rendering | Ready |\n\n"
+                      : "") +
+                    `Synthetic session ${index + 1}, message ${row + 1}. ${"A reproducible transcript measures the real Gateway path and browser readiness. ".repeat(row % 2 ? 20 : 3)}`,
                 },
               ],
             },
@@ -914,7 +950,7 @@ async function runWorker() {
             await page.setViewportSize({ width: 1440, height: 1000 });
           }
           await page.addInitScript({
-            content: `const __name = (fn) => fn; (${installReadiness.toString()})();`,
+            content: `const __name = (fn) => fn; (${installReadiness.toString()})(${values["history-format"] === "markdown"});`,
           });
           if (values.timeline) {
             await page.addInitScript(() => {
@@ -1896,7 +1932,12 @@ async function runWorker() {
                   revision,
                   dirty,
                   bundle,
-                  fixture: { sessions: 2, messagesEach: 120, auth: values.auth },
+                  fixture: {
+                    sessions: 2,
+                    messagesEach: 120,
+                    auth: values.auth,
+                    historyFormat: values["history-format"],
+                  },
                   measurement:
                     "Real Gateway. Synthetic offline-owned state. TCP proxy measures RFC6455 headers/payloads before delivery. HTTP bytes and wire-request counts are page-observed lower bounds: encodedDataLength includes response headers, but underlying service-worker fetches are not captured. Service-worker delivery is recorded separately and does not itself prove a cache hit. Network profile describes shared bandwidth per direction and one-way application-stream latency; no simulated packet loss/congestion or TCP handshake latency. Readiness is first animation frame with visible enabled selectors; reconnect additionally requires a fresh handshake and roster. Reconnect timing starts at link restoration, excluding the separately reported outage. Board is the session Dashboard face with an empty Board; Settings is Appearance. Screenshots are outside the timed interval.",
                   samples,
@@ -2072,6 +2113,8 @@ if (values.worker) {
       values.profile,
       "--auth",
       values.auth,
+      "--history-format",
+      values["history-format"],
       "--reconnect-trigger",
       values["reconnect-trigger"],
       "--output",

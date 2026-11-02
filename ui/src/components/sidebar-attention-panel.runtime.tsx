@@ -363,9 +363,6 @@ export function SidebarAttentionPanel(
           />
           <header class="sidebar-issues-panel__header">
             <h2 id="sidebar-issues-panel-heading" class="sidebar-issues-panel__heading">
-              <span class="sidebar-issues-panel__heading-icon" aria-hidden="true">
-                <Icon name="inbox" />
-              </span>
               {t("attention.issues")}
             </h2>
             <div class="sidebar-issues-panel__header-actions">
@@ -462,9 +459,6 @@ export function SidebarAttentionPanel(
               </Show>
               <Show when={visibleEntries().length === 0 && !showMentionStatus()}>
                 <div class="sidebar-issues-panel__empty">
-                  <span class="sidebar-issues-panel__empty-icon" aria-hidden="true">
-                    <Icon name="inbox" />
-                  </span>
                   <strong>
                     {t(mentionsTab() ? "attention.mentions.emptyTitle" : "attention.emptyTitle")}
                   </strong>

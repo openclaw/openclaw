@@ -226,19 +226,25 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
         const input = page.locator(composer);
         let renderedOptions = 0;
         let menuSvgNodes = 0;
+        let menuContentWrappers = 0;
         for (let cycle = 0; cycle < 4; cycle++) {
           await input.pressSequentially("/");
           const menu = page.locator(`${pane} .slash-menu`);
           await menu.waitFor({ state: "visible" });
-          await menu.getByRole("option").filter({ hasText: "/review-199" }).waitFor();
+          await menu
+            .locator('[id$="-slash-option-command-review-199"]')
+            .waitFor({ state: "visible" });
           if (cycle === 0) {
-            renderedOptions = await menu.getByRole("option").count();
+            renderedOptions = await menu.locator(".slash-menu-item").count();
             menuSvgNodes = await menu.locator(".slash-menu-icon svg").count();
+            menuContentWrappers = await menu
+              .locator(".slash-menu-icon .chat-composer-lit-content")
+              .count();
           }
           await input.press("ArrowDown");
           await input.press("ArrowUp");
           await input.pressSequentially("comp");
-          await menu.getByRole("option").first().waitFor();
+          await menu.locator('[id$="-slash-option-command-compact"]').waitFor({ state: "visible" });
           await input.press("Tab");
           if (!(await input.inputValue()).startsWith("/compact")) {
             throw new Error("Slash completion lost the filtered command");
@@ -246,7 +252,13 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
           await input.press("ControlOrMeta+a");
           await input.press("Backspace");
         }
-        return { cycles: 4, pluginCommands: 200, renderedOptions, menuSvgNodes };
+        return {
+          cycles: 4,
+          pluginCommands: 200,
+          renderedOptions,
+          menuSvgNodes,
+          menuContentWrappers,
+        };
       },
     },
     {

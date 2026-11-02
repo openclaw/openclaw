@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
@@ -16,6 +16,7 @@ const { spawnState, freshSpawnState } = vi.hoisted(() => {
     infoAvailable: { docker: false, podman: false },
     podmanConnections: "[]\n",
     podmanInfo: "true\tfalse\t\t5.0.0\n",
+    podmanInfoDelayMs: 0,
     podmanMachines: "[]\n",
     podmanClientVersion: "podman version 5.0.0\n",
     podmanVersionExitCode: 0,
@@ -61,9 +62,25 @@ function selectMachine(label: string, port: number) {
   ]);
 }
 
-async function spawnDockerProcess(commandAndArgs: string[]) {
+async function spawnDockerProcess(commandAndArgs: string[], opts?: { cancelSignal?: AbortSignal }) {
   const [command = "", ...args] = commandAndArgs;
   spawnState.calls.push({ command, args });
+  if (command === "podman" && args[0] === "info" && spawnState.podmanInfoDelayMs > 0) {
+    const canceled = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), spawnState.podmanInfoDelayMs);
+      opts?.cancelSignal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          resolve(true);
+        },
+        { once: true },
+      );
+    });
+    if (canceled) {
+      return { ...processResult(1), isCanceled: true };
+    }
+  }
   if (spawnState.executionError) {
     throw spawnState.executionError;
   }
@@ -141,6 +158,40 @@ beforeEach(() => {
 describe("resolvePodmanSandboxRuntimeInfo", () => {
   beforeEach(() => {
     spawnState.infoAvailable.podman = true;
+  });
+
+  describe("on a busy host", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      // Node's AbortSignal.timeout ignores fake timers; route it through the fake clock.
+      vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(new DOMException("timed out", "TimeoutError")), ms);
+        return controller.signal;
+      });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it("waits for a slow but healthy podman info", async () => {
+      spawnState.podmanInfoDelayMs = 12_000;
+      const assertion = expect(
+        podmanRuntime.resolvePodmanSandboxRuntimeInfo(),
+      ).resolves.toMatchObject({ rootless: true, version: "5.0.0" });
+      await vi.advanceTimersByTimeAsync(12_000);
+      await assertion;
+    });
+
+    it("names the unresponsive Podman command when the probe times out", async () => {
+      spawnState.podmanInfoDelayMs = 60_000;
+      const assertion = expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).rejects.toThrow(
+        /^Podman did not answer `podman info` within 30s\./u,
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+      await assertion;
+    });
   });
 
   it("allows rootful Podman Machine connections", async () => {

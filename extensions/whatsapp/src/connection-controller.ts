@@ -1,9 +1,9 @@
 import type { GroupMetadata, WASocket, WAMessageKey, proto } from "baileys";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { info } from "openclaw/plugin-sdk/runtime-env";
+import { getChildLogger, info } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
+import { racePromiseWithAbortSignal, raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import {
   WHATSAPP_CONNECTION_CONTROLLER_CAPABILITY,
   WHATSAPP_CONNECTION_OWNER_PENDING_CAPABILITY,
@@ -159,13 +159,11 @@ export function closeWaSocket(
       );
       return;
     }
-    if (sock) {
-      void closeWebSocketBestEffort(sock);
-    }
   } catch {
-    if (sock) {
-      void closeWebSocketBestEffort(sock);
-    }
+    // Fall through to raw WebSocket cleanup when Baileys end throws.
+  }
+  if (sock) {
+    void closeWebSocketBestEffort(sock);
   }
 }
 
@@ -781,14 +779,14 @@ export class WhatsAppConnectionController {
     }
     connection.unregisterUnhandled?.();
     connection.unregisterTransportActivity?.();
-    if (connection.heartbeat) {
-      clearInterval(connection.heartbeat);
-    }
-    if (connection.watchdogTimer) {
-      clearInterval(connection.watchdogTimer);
-    }
+    clearInterval(connection.heartbeat ?? undefined);
+    clearInterval(connection.watchdogTimer ?? undefined);
     if (connection.backgroundTasks.size > 0) {
-      await Promise.allSettled(connection.backgroundTasks);
+      await raceWithTimeout(Promise.allSettled(connection.backgroundTasks), 15_000, () => {
+        getChildLogger({ module: "whatsapp" }).warn(
+          "Last-route writes timed out; continuing teardown",
+        );
+      });
       connection.backgroundTasks.clear();
     }
     try {

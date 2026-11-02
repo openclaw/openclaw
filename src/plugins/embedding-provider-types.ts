@@ -1,4 +1,5 @@
 /** Contracts for plugin-contributed embedding providers. */
+import type { EmbeddingUsage } from "../../packages/llm-core/src/usage-cost.js";
 import type { AcquireConfiguredProviderLocalService } from "../agents/provider-local-service-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
@@ -38,11 +39,7 @@ export type EmbeddingInput =
       >;
     };
 
-/** Provider-reported token counts for one embedding request. */
-export type EmbeddingUsage = {
-  promptTokens: number;
-  totalTokens: number;
-};
+export type { EmbeddingUsage } from "../../packages/llm-core/src/usage-cost.js";
 
 /** Per-call options passed to embedding provider calls. */
 export type EmbeddingProviderCallOptions = {

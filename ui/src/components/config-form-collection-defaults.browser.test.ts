@@ -1,15 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  expectElement,
   renderNodeFixture,
   renderArrayFixture,
   renderObjectFixture,
   expandConfigObjects,
 } from "../test-helpers/config-form-fixtures.tsx";
-
-function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
-  expect(element, label).toBeInstanceOf(Element);
-  return element!;
-}
 
 type Options = Parameters<typeof renderNodeFixture>[1];
 function fixture(

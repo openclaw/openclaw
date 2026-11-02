@@ -67,6 +67,20 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     clearMemoryPluginState();
   });
 
+  it("lets explicit skill workflow gates override execution bias while preserving user authority and safety", () => {
+    const prompt = buildConfiguredAgentSystemPrompt({
+      ...basicPromptInputs(),
+      config: {},
+      tools: [createStubTool("read")],
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>publish</name>\n    <location>/skills/publish/SKILL.md</location>\n  </skill>\n</available_skills>",
+    });
+    expect(prompt).toContain("read exact <location>");
+    expect(prompt).toContain(
+      "## Execution Bias\n- Actionable request: act now. Explicit skill workflow gates override this bias; user instructions, prior authorization, safety, and tool policy remain authoritative.",
+    );
+  });
+
   it.each(["available", "source-reply-only", "absent"] as const)(
     "advertises ClawHub from the actual %s message tool schema",
     (surface) => {

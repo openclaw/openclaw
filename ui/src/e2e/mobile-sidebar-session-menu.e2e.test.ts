@@ -32,6 +32,7 @@ const widthOf = (item: Locator) =>
   item.evaluate((element) => element.getBoundingClientRect().width);
 const pageOptions = (width: number, height: number, hasTouch: boolean): BrowserContextOptions => ({
   colorScheme: "dark",
+  reducedMotion: "reduce",
   hasTouch,
   viewport: { width, height },
 });
@@ -73,13 +74,13 @@ async function expectSessionGeometry(row: Locator, multiline = false) {
   expect(title.x + title.width).toBeLessThanOrEqual(button.x);
   expectVerticalOverlap(button, title);
   if (multiline) {
-    expect(button.width).toBeCloseTo(44, 4);
+    expect(button.width).toBeCloseTo(36, 4);
     expect(button.height).toBeCloseTo(44, 4);
     expect(title.x).toBeGreaterThanOrEqual(bounds.x);
     expectVerticalBounds(button, bounds);
   } else {
     expectHorizontalBounds(button, bounds);
-    expect(button.width).toBe(44);
+    expect(button.width).toBe(36);
     expect(bounds.height).toBeCloseTo(44, 1);
   }
 }
@@ -246,7 +247,7 @@ suite.define(() => {
         expect(await rail.locator(".sidebar-recent-session").count()).toBe(0);
         for (const width of [320, 390, 768]) {
           await page.setViewportSize({ width, height: 844 });
-          expect((await rail.boundingBox())?.width).toBe(52);
+          expect((await rail.boundingBox())?.width).toBe(49);
           for (const row of [pinned, plugin]) {
             const shortcut = row.getByRole("link");
             await row.hover();
@@ -356,7 +357,7 @@ suite.define(() => {
         const drawerBox = await page.locator(".shell-nav").boundingBox();
         expect(drawerBox?.width).toBeGreaterThanOrEqual(330);
         expect(drawerBox?.width).toBeLessThanOrEqual(336);
-        // Reserve one 44px menu target without starving the title beside the rail.
+        // Reserve one 36px menu target without starving the title beside the rail.
         expect(restingWidth).toBeGreaterThanOrEqual(180);
         const plainRow = page.locator(`[data-session-key="${plainKey}"]`);
         const plainTitle = part(plainRow, "name");
@@ -384,9 +385,9 @@ suite.define(() => {
           await plainTitle.evaluate((element) => ({
             clipped: element.scrollWidth > element.clientWidth,
             overflow: getComputedStyle(element).textOverflow,
-            mask: getComputedStyle(element).maskImage,
+            fades: getComputedStyle(element).maskImage.includes("linear-gradient"),
           })),
-        ).toEqual({ clipped: true, overflow: "ellipsis", mask: "none" });
+        ).toEqual({ clipped: true, overflow: "clip", fades: true });
         await (pointer === "coarse" ? menuButton.tap() : menuButton.click());
 
         const menu = page.getByRole("menu", { name: "Actions for Mobile sidebar menu" });
