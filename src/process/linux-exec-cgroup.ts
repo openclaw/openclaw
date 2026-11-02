@@ -4,6 +4,8 @@ import path from "node:path";
 const cgroupMount = "/sys/fs/cgroup";
 const controllers = ["cpu", "io", "memory"];
 
+export type ProcessExecutionIntent = "agent-tool" | "gateway-internal";
+
 /** Delegation is a kernel capability, resolved from this process's own service leaf. */
 export function resolveGatewayServiceCgroupDirectory(): string | undefined {
   const relative = /^0::(.+)$/mu.exec(fs.readFileSync("/proc/self/cgroup", "utf8"))?.[1];

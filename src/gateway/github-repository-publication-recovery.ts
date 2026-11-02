@@ -24,6 +24,7 @@ import {
 import {
   assertReceiptOwner,
   captureCheckpoint,
+  type RepositoryDiskPublicationSource,
   prepareReceiptOwner,
   resolveReceiptOwner,
 } from "./github-repository-publication-workspace.js";
@@ -162,6 +163,7 @@ export function createRepositoryGitHubPublicationRecovery(params: {
   placements: WorkerSessionPlacementStore;
   recovery?: GitHubPublicationRecoveryBackoff;
   getCommittedRuntimeConfig: () => OpenClawConfig;
+  disk?: RepositoryDiskPublicationSource;
   isExecuting: (requestId: string) => boolean;
   assertCurrent: () => void;
   execute: (
@@ -183,12 +185,13 @@ export function createRepositoryGitHubPublicationRecovery(params: {
         ownerProfileId: null,
         pending: true,
       });
-      for (const row of pending.filter(
+      const selected = pending.filter(
         (candidate) =>
           !candidate.checkpoint_ref &&
           (candidate.claim_id === null ||
             matchesRepositoryGitHubPublicationClaim(candidate, claim)),
-      )) {
+      );
+      for (const row of selected) {
         try {
           await placements.prepareWorkspaceResultClaim(claim);
           const requester = await restoreGitHubPublicationRequester(
@@ -233,6 +236,10 @@ export function createRepositoryGitHubPublicationRecovery(params: {
                 );
               },
               authority,
+              params.disk && {
+                ...params.disk,
+                captureRequestIds: selected.map((entry) => entry.request_id),
+              },
             );
           } finally {
             requester.release();

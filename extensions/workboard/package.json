@@ -9,7 +9,7 @@
     "@openclaw/workboard-contract": "workspace:*",
     "@solidjs/web": "2.0.0-rc.18",
     "solid-js": "2.0.0-rc.18",
-    "typebox": "1.4.2",
+    "typebox": "1.4.3",
     "zod": "4.6.7"
   },
   "devDependencies": {

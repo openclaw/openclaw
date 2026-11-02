@@ -1,9 +1,9 @@
 import { For, Show, createMemo } from "solid-js";
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "./chat-details-subagents.css";
 import "./chat-subagents-working.css";
@@ -44,6 +44,11 @@ function statusLabel(row: Subagent, workingLabel: string) {
   return row.status === "running" ? workingLabel : t(STATUS_KEYS[row.status]);
 }
 
+/** Settled rows recede in the list so working children stay prominent. */
+function isFinished(row: Subagent) {
+  return row.status === "done" || row.status === "failed" || row.status === "stopped";
+}
+
 function SubagentAvatar(props: { row: Subagent; summary?: boolean }) {
   return (
     <span
@@ -72,7 +77,10 @@ function SubagentRow(props: ChatDetailsSubagentsProps & { row: Subagent }) {
     <div role="listitem">
       <button
         type="button"
-        class="chat-details-subagents__row"
+        class={[
+          "chat-details-subagents__row",
+          { "chat-details-subagents__row--finished": isFinished(props.row) },
+        ]}
         data-subagent-session-key={props.row.key}
         aria-label={`${props.row.label} ${statusLabel(props.row, props.workingLabel)}`}
         onClick={() => props.onOpenSubagent(props.row.key)}
@@ -87,7 +95,8 @@ function SubagentRow(props: ChatDetailsSubagentsProps & { row: Subagent }) {
             {
               "sr-only":
                 props.row.status === "done" || (props.mobile && props.row.status === "running"),
-              "chat-details-subagents__working": !props.mobile && props.row.status === "running",
+              "chat-details-subagents__working text-shimmer":
+                !props.mobile && props.row.status === "running",
             },
           ]}
         >

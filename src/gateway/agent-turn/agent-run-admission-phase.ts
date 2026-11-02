@@ -420,6 +420,8 @@ export async function prepareAgentRunDispatch(
   try {
     subagentAdmission = await prepareGatewaySubagentRun({
       ...params,
+      agentDir: replyDispatchRuntime.agentDir,
+      workspaceDir: replyDispatchRuntime.workspaceDir,
       lifecycleStorePath,
       retainPluginSubagentAdmission: (reject) => {
         rejectPluginSubagentAdmission = reject;

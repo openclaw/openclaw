@@ -267,11 +267,20 @@ suite.define(() => {
                   ".empty-state__title",
                 );
               } else if (group === "skeleton-content") {
-                await assertShadowParentStyles(
-                  page,
-                  "openclaw-panel-loading-skeleton",
-                  ".skeleton.line",
-                );
+                const styles = await page
+                  .locator("openclaw-panel-loading-skeleton .skeleton.line")
+                  .first()
+                  .evaluate((element) => {
+                    const style = getComputedStyle(element);
+                    return {
+                      background: style.backgroundColor,
+                      overflow: style.overflow,
+                      radius: Number.parseFloat(style.borderRadius),
+                    };
+                  });
+                expect(styles.background).not.toBe("rgba(0, 0, 0, 0)");
+                expect(styles.overflow).toBe("hidden");
+                expect(styles.radius).toBeGreaterThan(0);
               }
             }
           },

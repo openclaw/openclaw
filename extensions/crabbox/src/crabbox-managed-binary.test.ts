@@ -138,6 +138,55 @@ async function fixture(version = "0.66.0") {
 }
 
 describe("managed Crabbox", () => {
+  it.each(["0.80.0-local.g22111202", "missing"])(
+    "keeps the managed fallback when the deployed default is %s",
+    async (version) => {
+      const test = await fixture();
+      const deployed = path.join(test.root, "deployed-crabbox");
+      if (version !== "missing") {
+        await fs.writeFile(deployed, version);
+      }
+      const probes = vi.fn(runCommand);
+      await expect(
+        ensureManagedCrabboxBinary({
+          binary: test.candidate,
+          fallbackBinary: deployed,
+          env: test.env,
+          runCommand: probes,
+        }),
+      ).resolves.toEqual(test.installed);
+      expect(probes.mock.calls.some(([argv]) => argv[0] === deployed)).toBe(true);
+      if (version === "missing") {
+        await expect(fs.access(deployed)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        expect(await fs.readFile(deployed, "utf8")).toBe(version);
+      }
+    },
+  );
+
+  it("cancels during the deployed-default probe before managed acquisition", async () => {
+    const test = await fixture();
+    const deployed = path.join(test.root, "deployed-crabbox");
+    const controller = new AbortController();
+    await expect(
+      ensureManagedCrabboxBinary({
+        binary: test.candidate,
+        fallbackBinary: deployed,
+        env: test.env,
+        signal: controller.signal,
+        runCommand: async (argv, options) => {
+          if (argv[0] === deployed) {
+            controller.abort(new Error("deployment probe cancelled"));
+            return versionResult("0.80.0+local.g22111202");
+          }
+          return runCommand(argv, options);
+        },
+      }),
+    ).rejects.toThrow("deployment probe cancelled");
+    expect(test.fetch).not.toHaveBeenCalled();
+    await expect(fs.access(test.env.OPENCLAW_STATE_DIR)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("probes the executable in the caller's supplied environment and working directory", async () => {
     const root = tempDirs.make("crabbox-probe-env-");
     const binary = path.join(root, "crabbox");

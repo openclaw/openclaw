@@ -823,11 +823,17 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
     expect(onDelete).toHaveBeenCalledTimes(3);
   });
 
-  it("does not fetch another notification stream after close returns", async () => {
+  it("does not fetch another notification stream after close returns", async (ctx) => {
+    vi.useFakeTimers();
+    ctx.onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const notificationStarted = createDeferredCore();
     let getCount = 0;
     const fetchMock = initializedFetch({
       onGet: () => {
         getCount += 1;
+        notificationStarted.resolve();
         return new Response(new ReadableStream({ start: (controller) => controller.close() }), {
           headers: { "content-type": "text/event-stream" },
         });
@@ -843,13 +849,14 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
       },
     });
     const client = new Client({ name: "test", version: "1" });
+    ctx.onTestFinished(() => client.close());
     await client.connect(transport);
-    await vi.waitFor(() => expect(getCount).toBe(1));
+    await notificationStarted.promise;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getCount).toBe(1);
 
     await client.close();
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 80);
-    });
+    await vi.advanceTimersByTimeAsync(80);
     expect(getCount).toBe(1);
   });
 

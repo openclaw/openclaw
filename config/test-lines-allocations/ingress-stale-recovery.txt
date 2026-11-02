@@ -1,0 +1,2 @@
+# Extend the existing drain lifecycle regression with stale-owner recovery and bounded genuine failure.
+3

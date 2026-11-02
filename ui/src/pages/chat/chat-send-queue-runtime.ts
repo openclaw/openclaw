@@ -1,9 +1,11 @@
-import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
+import {
+  GatewayPayloadLimitError,
+  GatewayProtocolRequestTimeoutError,
+} from "@openclaw/gateway-client/browser";
 import {
   isGatewayRestartUnavailableError,
   isGatewaySuspendUnavailableError,
 } from "../../../../packages/gateway-protocol/src/restart-unavailable.ts";
-import { GatewayPayloadLimitError } from "../../api/gateway-browser-socket.ts";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";

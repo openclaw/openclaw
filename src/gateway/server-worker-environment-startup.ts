@@ -19,7 +19,10 @@ import { resolveRuntimeServiceBuildId } from "../version.js";
 import { configuredDefaultRepository } from "./configured-default-repository.js";
 import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
-import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
+import {
+  waitForNodeWorkerSupervisor,
+  type NodeWorkerSupervisorTransport,
+} from "./node-registry-private.js";
 import type { GatewayContextResolver, GatewayRequestContext } from "./server-methods/types.js";
 import { createWorkerRuntimeInstallProgressPublisher } from "./server-worker-runtime-install-progress.js";
 import { retryGatewayWorkerStartupRecovery } from "./server-worker-startup-recovery.js";
@@ -49,6 +52,7 @@ import {
   writePreparedPoolPresenceDemand,
 } from "./worker-environments/prepared-pool-presence-worker.js";
 import type { WorkerPlacementDispatchContract } from "./worker-environments/service-contract.js";
+import { requireInstall } from "./worker-environments/service-validation.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 import type { WorkerEnvironmentServiceOptions } from "./worker-environments/service.types.js";
 import { listRetainedWorkerBundleHashes } from "./worker-environments/worker-bundle-retention.js";
@@ -253,7 +257,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   const nodeWorkerBundleTransfer = createNodeWorkerBundleTransferService();
   const nodeBootstrapTransfer = createWorkerBootstrapArtifactTransferService();
   const bootstrapProducers = new Map<
-    WorkerExecutionMode,
+    `${WorkerExecutionMode}:${"bundle" | "npm"}`,
     {
       registry: ReturnType<typeof params.getPluginRegistry>;
       metadata: ReturnType<typeof getGatewayPluginMetadataSnapshot>;
@@ -317,9 +321,11 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   };
   const prepareNodeArtifact = async (profileSnapshot: WorkerProfile, signal?: AbortSignal) => {
     const mode = profileSnapshot.executionMode === "remote-exec" ? "remote-exec" : "worker-turn";
+    const install = requireInstall({ profileSnapshot });
+    const artifactKey = `${mode}:${install}` as const;
     let registry = params.getPluginRegistry();
     let metadata = getGatewayPluginMetadataSnapshot();
-    let generation = bootstrapProducers.get(mode);
+    let generation = bootstrapProducers.get(artifactKey);
     if (!generation || generation.registry !== registry || generation.metadata !== metadata) {
       const [{ createNodeBootstrapArtifactProvider }, { resolveNodeBootstrapPlugins }] =
         await Promise.all([
@@ -329,7 +335,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       signal?.throwIfAborted();
       registry = params.getPluginRegistry();
       metadata = getGatewayPluginMetadataSnapshot();
-      generation = bootstrapProducers.get(mode);
+      generation = bootstrapProducers.get(artifactKey);
       if (!generation || generation.registry !== registry || generation.metadata !== metadata) {
         const packageRoot = resolveOpenClawPackageRootSync({
           moduleUrl: import.meta.url,
@@ -345,6 +351,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
         const producer = createNodeBootstrapArtifactProvider({
           packageRoot,
           runningBuildId,
+          install,
           plugins: resolveNodeBootstrapPlugins({
             registry,
             metadata,
@@ -356,7 +363,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
           retireBootstrapProducer(generation.producer);
         }
         generation = { registry, metadata, producer };
-        bootstrapProducers.set(mode, generation);
+        bootstrapProducers.set(artifactKey, generation);
       }
     }
     return generation.producer.prepare(signal);
@@ -414,6 +421,13 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   });
   const workerEnvironmentService = createWorkerEnvironmentService({
     resolveGatewayContext: params.resolveGatewayContext,
+    waitForRetainedNode: async (nodeId, options) => {
+      const context = params.resolveGatewayContext();
+      if (!context) {
+        throw new Error("Worker node registry is unavailable");
+      }
+      await waitForNodeWorkerSupervisor(context.nodeRegistry, nodeId, options);
+    },
     scheduler: params.scheduler,
     projectNamespace: nodeWorkerGatewayNamespace,
     prepareComputer: computers.prepare,

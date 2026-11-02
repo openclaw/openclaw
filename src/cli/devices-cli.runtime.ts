@@ -50,7 +50,7 @@ import {
   resolveLocalPairingFallback,
 } from "./devices-cli-fallback.js";
 import { callDevicesGateway, type DevicesRpcOpts } from "./devices-cli.rpc.js";
-import { ExpectedCliError } from "./failure-output.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 import { prepareCliGatewayStateAccess } from "./gateway-rpc.runtime.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { formatConnectionFlagReminder } from "./nodes-cli/cli-utils.js";

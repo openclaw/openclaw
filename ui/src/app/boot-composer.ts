@@ -16,11 +16,13 @@ export type BootComposerDraft = {
   submit: boolean;
   focused: boolean;
   selection: readonly [start: number, end: number, direction: "forward" | "backward" | "none"];
+  scroll: readonly [left: number, top: number];
 };
 
 const BOOT_COMPOSER_ID = "openclaw-boot-composer";
 
 let element: HTMLTextAreaElement | null = null;
+let scroll: readonly [left: number, top: number] = [0, 0];
 let stopHistory: (() => void) | undefined;
 let stopReloadGuard: (() => void) | undefined;
 
@@ -35,6 +37,14 @@ export function adoptBootComposer(applicationRoute: boolean): void {
     return;
   }
   element = candidate;
+  scroll = [candidate.scrollLeft, candidate.scrollTop];
+  // The pane takes the draft after its loading frame detaches. Keep the last
+  // connected viewport; a detached textarea has no scrollable layout box.
+  const stopScroll = listen(candidate, "scroll", () => {
+    if (candidate.isConnected) {
+      scroll = [candidate.scrollLeft, candidate.scrollTop];
+    }
+  });
   // Until the chat pane takes this element, its text has no durable draft owner.
   const releaseGuard = registerControlUiReloadGuard(
     () => candidate.value.length === 0,
@@ -47,6 +57,7 @@ export function adoptBootComposer(applicationRoute: boolean): void {
     }
   });
   stopReloadGuard = () => {
+    stopScroll();
     releaseGuard();
     stopBeforeUnload();
   };
@@ -67,6 +78,7 @@ export function settleBootComposer(): void {
     document.activeElement !== element
   ) {
     element.focus({ preventScroll: true });
+    [element.scrollLeft, element.scrollTop] = scroll;
   }
 }
 
@@ -81,6 +93,7 @@ export function takeBootComposer(): BootComposerDraft | null {
     submit: textarea.hasAttribute("data-submit-queued"),
     focused: textarea.hasAttribute("data-focused"),
     selection: [textarea.selectionStart, textarea.selectionEnd, textarea.selectionDirection],
+    scroll: textarea.isConnected ? [textarea.scrollLeft, textarea.scrollTop] : scroll,
   };
   retireBootComposer();
   return draft;
@@ -94,4 +107,5 @@ export function retireBootComposer(): void {
   stopHistory = undefined;
   element?.remove();
   element = null;
+  scroll = [0, 0];
 }

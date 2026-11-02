@@ -1,6 +1,8 @@
+import { createHash, type Hash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { isProxy } from "node:util/types";
 import type { ModelRequestHeaders } from "@openclaw/llm-core";
+import { writeStableStringify } from "@openclaw/normalization-core";
 import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput, ResponseOutputItem } from "openai/resources/responses/responses.js";
@@ -11,17 +13,20 @@ import {
   type SessionResourceOwner,
 } from "../session-resources.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
+import { getResponsesCompactionInputIdentity } from "./openai-responses-compaction-window.js";
 import type { OpenAIResponsesRequestParams } from "./openai-responses-contracts.js";
 import {
   canReferenceResponsesReasoningHistory,
   replayResponsesReasoningUpdates,
   type ResponsesConfigurationUpdate,
 } from "./openai-responses-reasoning-update.js";
+import { retainedJsonBytes } from "./openai-responses-retained-bytes.js";
 import {
   normalizeOpenAIResponsesFunctionCallId,
   shouldNormalizeOpenAIResponsesToolCallId,
   splitOpenAIFunctionCallPairing,
 } from "./openai-responses-tool-call-id-shape.js";
+import { isSanitizedFrozenResponsesInput } from "./responses-image-payload-sanitizer.js";
 import { sha256Hex } from "./transport-utils.js";
 
 // Keep completed baselines across ordinary conversation gaps; ready entries are
@@ -349,10 +354,89 @@ export function responsesContinuationRequestFingerprint(
   return sha256StableValue(projectJsonObject(requestWithoutInput(request))).digest;
 }
 
+type ResponsesPrefixCheckpoint = { previous?: ResponsesPrefixCheckpoint; digest?: Hash };
+const emptyPrefix = { digest: createHash("sha256").update("[") };
+const prefixCheckpoints = new WeakMap<object, ResponsesPrefixCheckpoint>();
+
+function appendPrefixValues(digest: Hash, values: readonly unknown[], offset: number): void {
+  let text = "";
+  let index = offset;
+  const write = (chunk: string) => {
+    text += chunk;
+    if (text.length >= 16_384) {
+      digest.update(text);
+      text = "";
+    }
+  };
+  for (const value of values) {
+    if (index > 0) {
+      write(",");
+    }
+    writeStableStringify(projectJsonValue(value, String(index++), new Set()) ?? null, write);
+  }
+  digest.update(text);
+}
+
 export function responsesContinuationPrefixFingerprint(
   input: readonly unknown[],
   output: readonly unknown[] = [],
 ): string {
+  // These hashes are persisted. Copy the SHA state, never substitute a hash of entry hashes.
+  // The complete immutable identity chain fences rewrites, branches and replay reordering.
+  const immutable = getAiTransportHost().immutableData;
+  let prefix: ResponsesPrefixCheckpoint = emptyPrefix;
+  let retainedDigest = emptyPrefix.digest;
+  let retainedLength = 0;
+  let length = 0;
+  for (const item of input) {
+    if (!item || typeof item !== "object") {
+      break;
+    }
+    const compactionIdentity = getResponsesCompactionInputIdentity(item);
+    const identity = compactionIdentity ?? item;
+    let next = prefixCheckpoints.get(identity);
+    if (
+      !next &&
+      !compactionIdentity &&
+      !isSanitizedFrozenResponsesInput(item) &&
+      !immutable?.isDeeplyFrozenPlainData(item)
+    ) {
+      break;
+    }
+    if (next?.previous !== prefix) {
+      next = { previous: prefix };
+      prefixCheckpoints.set(identity, next);
+    }
+    prefix = next;
+    length++;
+    if (next.digest) {
+      retainedDigest = next.digest;
+      retainedLength = length;
+    }
+  }
+  if (length > 0) {
+    const digest = retainedDigest.copy();
+    if (retainedLength < length) {
+      appendPrefixValues(
+        digest,
+        normalizeAssistantReplayInput(input.slice(retainedLength, length)),
+        retainedLength,
+      );
+      // One SHA checkpoint per requested boundary, not per historical entry.
+      prefix.digest = digest.copy();
+    }
+    if (length < input.length || output.length > 0) {
+      appendPrefixValues(
+        digest,
+        [
+          ...normalizeAssistantReplayInput(input.slice(length)),
+          ...normalizeAssistantReplayInput(output, true),
+        ],
+        length,
+      );
+    }
+    return digest.update("]").digest("hex");
+  }
   return sha256StableValue(
     projectJsonObject([
       ...normalizeAssistantReplayInput(input),
@@ -522,7 +606,7 @@ type HttpContinuationEntry =
       state: ResponsesContinuationState;
       idleTimer: ReturnType<typeof setTimeout>;
       retainedBytes: number;
-      strings: ReadonlyMap<string, number>;
+      jsonBytes: ReadonlyMap<string | object, number>;
     }
   | { kind: "claimed"; sessionId: string; owner: SessionResourceOwner };
 
@@ -599,27 +683,6 @@ function connectionIdentity(params: HttpContinuationIdentity): string {
   );
 }
 
-// Strings are immutable: reuse their exact byte counts by value, never by mutable
-// item identity. Each ready entry retains only its current strings; eviction and
-// session cleanup drop the counts with the baseline.
-function retainedJsonBytes(value: unknown, previous?: ReadonlyMap<string, number>) {
-  const strings = new Map<string, number>();
-  let stringBytes = 0;
-  const skeleton = JSON.stringify(value, (_key, member: unknown) => {
-    if (typeof member !== "string") {
-      return member;
-    }
-    let bytes = strings.get(member) ?? previous?.get(member);
-    if (bytes === undefined) {
-      bytes = Buffer.byteLength(JSON.stringify(member), "utf8") - 2;
-    }
-    strings.set(member, bytes);
-    stringBytes += bytes;
-    return "";
-  });
-  return { retainedBytes: stringBytes + Buffer.byteLength(skeleton, "utf8"), strings };
-}
-
 export function claimOpenAIResponsesHttpContinuation(
   params: HttpContinuationIdentity & {
     sessionId: string;
@@ -661,7 +724,7 @@ export function claimOpenAIResponsesHttpContinuation(
         previous !== undefined && dispatchedPreviousResponseId === previous.state.lastResponseId,
       );
       // Serialized-content budget, not JavaScript heap overhead.
-      const { retainedBytes, strings } = retainedJsonBytes(state, previous?.strings);
+      const { retainedBytes, jsonBytes } = retainedJsonBytes(state, previous?.jsonBytes);
       if (retainedBytes > MAX_HTTP_CONTINUATION_RETAINED_BYTES) {
         // Keep other sessions when this baseline cannot fit alone. Its next
         // request sends full history; the completed response remains valid.
@@ -675,7 +738,7 @@ export function claimOpenAIResponsesHttpContinuation(
         state,
         idleTimer: owner.runInDetachedAsyncContext(() => createHttpContinuationTimer(key)),
         retainedBytes,
-        strings,
+        jsonBytes,
       } satisfies Extract<HttpContinuationEntry, { kind: "ready" }>;
       httpContinuationRetainedBytes += retainedBytes;
       httpContinuationEntries.set(key, ready);

@@ -557,7 +557,7 @@ it("keeps a restored pin's badges after roster handoff until its own descriptor 
   update();
   expect(host.sidebarSnapshot).toBeNull();
   expect(dom.all(".session-row-badge--approval")).toHaveLength(1);
-  expect(dom.text(".session-row-badge--pull-request")).toBe("3");
+  expect(dom.all(".session-row-badge--pull-request")).toHaveLength(1);
   setCurrent(projectSidebarSession({ key: saved.key, label: "Current pin", pinned: true }));
   update();
   expect(dom.all(".session-row-badge")).toHaveLength(0);

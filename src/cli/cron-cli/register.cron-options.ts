@@ -66,7 +66,7 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
     .option("--command-cwd <path>", "Working directory for command payloads")
     .option(
       "--command-env <KEY=VALUE>",
-      "Environment override for command payloads (repeatable)",
+      "Environment override for command payloads (repeatable; edit replaces all stored overrides)",
       collectOption,
     )
     .option("--command-input <text>", "stdin for command payloads")

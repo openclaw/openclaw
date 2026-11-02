@@ -4,6 +4,7 @@ import { resolveGatewayOwnerOnlyToolDenylist } from "../../security/dangerous-to
 import {
   bindActiveCronCreatorAuthorityResolver,
   bindCronManagementGrant,
+  bindCronRequesterGrant,
 } from "../cron-creator-authority-context.js";
 import { AUTOMATIONS_TOOL_NAME } from "./automations-tool-name.js";
 import { getInProcessGatewayToolContext } from "./in-process-gateway.js";
@@ -30,6 +31,7 @@ export function prepareSessionPortalToolAccess(input: {
   const hasAutomationGrant = Boolean(
     input.cronSelfRemoveOnlyJobId ||
     cronCreatorAuthorityResolver ||
+    bindCronRequesterGrant(input.runId) ||
     bindCronManagementGrant(input.runId),
   );
   const sessionPortalTarget =

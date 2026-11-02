@@ -19,6 +19,7 @@ import type {
   GatewayProtocolTiming,
 } from "./protocol-client-contract.js";
 import {
+  GatewayPayloadLimitError,
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
   type GatewayProtocolRequestOptions,
@@ -26,6 +27,7 @@ import {
 import { clearGatewayConnectTimeout, startGatewayConnectTimeout } from "./timeouts.js";
 
 export {
+  GatewayPayloadLimitError,
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
   type GatewayProtocolRequestOptions,
@@ -418,6 +420,7 @@ export class GatewayProtocolClient<TPlan> {
           return;
         }
         this.helloReceived = true;
+        this.requests.maxPayloadBytes = hello.policy?.maxPayload;
         this.requests.setSuspensionPhase(hello.snapshot?.suspension?.phase);
         this.clearHandshakeTimer();
         this.connectFailure = undefined;

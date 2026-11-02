@@ -133,13 +133,14 @@ function transportFixture(
     db,
     sent,
     waits,
+    elapse: (ms: number) => (now += ms),
     normal: () => (mode = "normal"),
     command: (value: string) => (command = value),
     rejectQuery: (error: PostgresErrorData) => (queryError = error),
   };
 }
 
-it("reuses a returned transport for another schema without checkout or release messages", () => {
+it.each([0, 999, 1000, 1001])("validates reuse after %d idle ms", (idleMs) => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const fixture = transportFixture("normal");
   const params = {
@@ -159,6 +160,7 @@ it("reuses a returned transport for another schema without checkout or release m
     withEngineStoreAdmission(() => fixture.db.prepare("SELECT 7 AS value").get());
     fixture.sent.mockClear();
     fixture.db.releaseIdleTransport();
+    fixture.elapse(idleMs);
     const reader = withEngineStoreAdmission(
       () =>
         new PostgresSyncConnection(params.url, "schema_b", harness.nativeDatabase(), "store_b", {
@@ -168,12 +170,8 @@ it("reuses a returned transport for another schema without checkout or release m
     next = reader;
     expect(create).not.toHaveBeenCalled();
     expect(fixture.sent).not.toHaveBeenCalled();
-    expect(withEngineStoreAdmission(() => reader.prepare("SELECT 7 AS value").get())).toEqual({
-      value: 7,
-    });
-    expect(withEngineStoreAdmission(() => reader.prepare("SELECT 7 AS value").get())).toEqual({
-      value: 7,
-    });
+    const read = () => withEngineStoreAdmission(() => reader.prepare("SELECT 7 AS value").get());
+    expect([read(), read()]).toEqual([{ value: 7 }, { value: 7 }]);
     expect(fixture.sent.mock.calls.map(([request]) => request)).toEqual([
       {
         operation: "query",
@@ -181,6 +179,7 @@ it("reuses a returned transport for another schema without checkout or release m
         sql: "SELECT 7 AS value",
         parameters: [],
         reconnectIfIdle: true,
+        ...(idleMs >= 1000 ? { validateIfIdle: true } : {}),
         id: 3,
       },
       { operation: "query", schema: "schema_b", sql: "SELECT 7 AS value", parameters: [], id: 4 },

@@ -768,23 +768,36 @@ describe("AgentsPage gateway lifecycle", () => {
     expect(page.read().readData().cron.cronJobs).toEqual([job]);
   });
 
-  it("reads the current owner roster across provider replacement", () => {
+  it("reads the current owner roster and hydrates only its selection across provider replacement", async () => {
     const client = {} as GatewayBrowserClient;
     const currentGateway = gateway(snapshot(client, false));
-    const selection = settingsSelection(agentsList);
     const agents = agentsCapability(async () => files("main", "unused"));
     agents.state.agentsList = {
       ...agentsList,
-      agents: [...agentsList.agents, { id: "ordinary-looking-id", kind: "system" }],
+      agents: [
+        ...agentsList.agents,
+        { id: "research", name: "Research" },
+        { id: "ordinary-looking-id", kind: "system" },
+      ],
     };
+    const selection = settingsSelection(agents.state.agentsList);
     const route = agentsRouteData(currentGateway, agentsList, "main", selection);
     const context = { ...pageContext(currentGateway, agents), settingsAgentSelection: selection };
-    const ensureIdentities = vi.fn(async () => {});
+    const ensureIdentities = vi.fn<ApplicationContext["agentIdentity"]["ensure"]>(async () => {});
     context.agentIdentity.ensure = ensureIdentities;
     const page = createAgentsPage(context, route);
     expect(page.read().readData().agentsList).toBe(agents.state.agentsList);
     expect(page.read().selectedAgentId).toBe("main");
-    expect(ensureIdentities).toHaveBeenLastCalledWith(["main"]);
+    expect(new Set(ensureIdentities.mock.calls.flatMap(([ids]) => ids))).toEqual(new Set(["main"]));
+
+    ensureIdentities.mockClear();
+    selection.set("research");
+    await waitForFast(() => {
+      expect(page.read().selectedAgentId).toBe("research");
+      expect(new Set(ensureIdentities.mock.calls.flatMap(([ids]) => ids))).toEqual(
+        new Set(["research"]),
+      );
+    });
 
     page.dispose();
     const replacementAgents = agentsCapability(async () => files("main", "unused"));

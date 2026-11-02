@@ -92,6 +92,8 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
   eventRouting?: EventSessionRoutingPolicy;
   messageProvider?: string;
   currentChannelId?: string;
+  /** Conversation reply destination, including a thread created from the arrival channel. */
+  currentMessagingTarget?: string;
   currentThreadTs?: string;
   /** Channel-owned sender/chat metadata. Exec subprocesses receive only sender/chat IDs. */
   channelContext?: PluginHookChannelContext;
@@ -228,6 +230,7 @@ export type ExecToolDetails = {
       noOutputTimedOut?: boolean;
       cwd?: string;
       nodeId?: string;
+      warningText?: string;
     }
   | {
       status: "approval-pending";

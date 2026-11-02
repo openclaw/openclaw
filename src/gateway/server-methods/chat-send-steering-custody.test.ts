@@ -159,6 +159,7 @@ describe("steering input custody", () => {
     async ({ scenario, allowCollaborativeSteering }, { signal }) => {
       const startOwnerTurn = scenario === "same permissions across profiles";
       const background = scenario.includes(" into ");
+      const subagent = scenario === "owner into subagent";
       const nonowner = scenario === "nonowner into loop";
       const continuation = scenario.startsWith("same requester ") || background;
       const sandboxedSessionWriter = scenario.includes("sandboxed");
@@ -173,11 +174,10 @@ describe("steering input custody", () => {
         ? ensureProfileForEmail("other-steering@example.test")
         : profile;
       const fixture = await createBrowserFollowupFixture({
-        // This matrix compares task collaborators; main requester changes have separate coverage.
         sessionKey:
           scenario === "owner into cron"
             ? "agent:main:cron:steering-automation"
-            : "agent:main:dashboard:steering-collaboration",
+            : `agent:main:${subagent ? "subagent" : "dashboard"}:steering-collaboration`,
         preserveContent: true,
         active: !startOwnerTurn,
         // Both callers may write here; their caps still differ for other sessions.
@@ -185,7 +185,6 @@ describe("steering input custody", () => {
           ? { createdActor: { type: "human", source: "profile", id: incomingProfile.id } as const }
           : {}),
       });
-      // Naming has separate coverage; this fixture owns only steering and its backing turn.
       await patchSessionEntryCore(fixture.scope, () => ({ displayName: "Steering custody" }));
       const initialConfig = fixture.context.getRuntimeConfig();
       const initialQueue = { ...initialConfig.messages?.queue };
@@ -394,14 +393,15 @@ describe("steering input custody", () => {
           run.operatorAuthority = undefined;
           run.originatingChannel = undefined;
           run.run.messageProvider = "internal";
-          run.run.inputProvenance =
-            scenario === "owner into subagent"
-              ? { kind: "inter_session", sourceTool: "sessions_spawn", sourceRole: "subagent" }
-              : {
-                  kind: "internal_system",
-                  sourceTool: scenario === "owner into cron" ? "cron" : "cron_execution",
-                };
-          if (scenario !== "owner into subagent") {
+          // Child launches carry their session lineage, not inter-session report provenance.
+          run.run.spawnedBy = subagent ? "agent:main:dashboard:steering-parent" : undefined;
+          run.run.inputProvenance = subagent
+            ? undefined
+            : {
+                kind: "internal_system",
+                sourceTool: scenario === "owner into cron" ? "cron" : "cron_execution",
+              };
+          if (scenario === "owner into cron") {
             run.run.scheduledToolPolicy = { version: 1, mode: "trusted" };
           }
         }

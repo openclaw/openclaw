@@ -6,13 +6,13 @@ import { moduleResolve } from "import-meta-resolve";
 import { walkDirectorySync } from "../infra/fs-safe.js";
 import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
 import { createJiti } from "./jiti-factory.js";
-import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import { capturePluginGenerationArtifactInScope } from "./plugin-generation-capture.js";
 import { visitPluginSourceReferences } from "./plugin-source-references.js";
 
 /** Acquire the same literal module inputs as execution, without evaluating plugin code. */
 export function inspectPluginSourceDependencies(
   entries: readonly { rootDir: string; entryFile: string }[],
-  dependencyLookupBoundary?: Parameters<typeof capturePluginGenerationArtifact>[5],
+  dependencyLookupBoundary?: Parameters<typeof capturePluginGenerationArtifactInScope>[5],
 ) {
   const files = new Set<string>();
   const packageRoots = new Set<string>();
@@ -27,7 +27,7 @@ export function inspectPluginSourceDependencies(
     seenEntries.add(source);
     const root = fs.realpathSync(entry.rootDir);
     // This scope grants source acquisition only. No module evaluation or registration runs here.
-    const artifact = capturePluginGenerationArtifact(
+    const artifact = capturePluginGenerationArtifactInScope(
       root,
       source,
       (run) => run(),
@@ -149,7 +149,7 @@ export function inspectPluginGenerationSources(
     const key = `${entry.rootDir}\0${entry.entryFile ?? ""}`;
     let digest = bySource.get(key);
     if (digest === undefined) {
-      const artifact = capturePluginGenerationArtifact(entry.rootDir, entry.entryFile);
+      const artifact = capturePluginGenerationArtifactInScope(entry.rootDir, entry.entryFile);
       try {
         digest = artifact.sourceDigest;
         bySource.set(key, digest);

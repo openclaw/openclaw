@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { readSqliteDatabaseScopedWriteToken } from "../../infra/sqlite-database-admission.js";
 import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
 
 const projectionReceipts = new AsyncLocalStorage<SessionTranscriptProjectionReceipt | undefined>();
@@ -18,14 +19,21 @@ export function withSessionTranscriptProjectionReceipt<T>(
 export function readSessionTranscriptProjectionReceipt(
   database: { db: EngineConnection; path: string },
   sessionId: string,
+  version?: SessionTranscriptContextVersion,
 ) {
   const receipt = projectionReceipts.getStore();
   if (
     !receipt ||
     receipt.sessionId !== sessionId ||
     hasUncommittedSqliteWrites(database.db) ||
-    // The scoped token binds the admitted physical store and its committed revision.
-    readSqliteDatabaseScopedWriteToken(database.db, receipt.writeScopes) !== receipt.writeToken
+    (receipt.contextOnly
+      ? !version ||
+        !receipt.contextStatsVersion ||
+        version.generation !== receipt.contextStatsVersion.generation ||
+        version.rawSeq !== receipt.contextStatsVersion.rawSeq ||
+        version.updatedAt !== receipt.contextStatsVersion.updatedAt
+      : // The scoped token binds the admitted physical store and its committed revision.
+        readSqliteDatabaseScopedWriteToken(database.db, receipt.writeScopes) !== receipt.writeToken)
   ) {
     return undefined;
   }

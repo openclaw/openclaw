@@ -340,7 +340,7 @@ export async function captureCronCreatorSession(
     loaded &&
     creatorSession &&
     operatorAuthority &&
-    operatorScopeSatisfied("operator.write", operatorAuthority.scopes) &&
+    operatorScopeSatisfied("operator.cron", operatorAuthority.scopes) &&
     job.payload.kind === "agentTurn" &&
     isCronOperatorSourceParent(
       { sessionTarget: job.sessionTarget, sourceConversation },

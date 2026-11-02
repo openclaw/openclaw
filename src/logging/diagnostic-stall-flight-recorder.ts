@@ -8,6 +8,7 @@ import {
   parseNativeCpuProfile,
   sanitizeDiagnosticProfileFrame,
 } from "./diagnostic-profile.js";
+import { createStallKernelRecorder } from "./diagnostic-stall-kernel.js";
 
 const WINDOW_MS = 5_000;
 const SAMPLE_MS = 25;
@@ -37,17 +38,21 @@ function formatStallFrames(
   const render = () =>
     `${header} inclusive=${JSON.stringify(inclusive)} reportTruncated=${reportTruncated} self=${JSON.stringify(self)} deepest=${JSON.stringify(deepest)}`;
   let report = render();
-  // Preserve sampled leaves ahead of inclusive ancestors; never cut JSON mid-frame.
+  // Keep the hottest caller and leaf together; omit lower-ranked samples first.
   while (Buffer.byteLength(report) > MAX_REPORT_BYTES) {
     reportTruncated = true;
     if (inclusive.length) {
       inclusive.pop();
     } else if (deepest.length > 1) {
       deepest.pop();
-    } else if ((deepest[0]?.[1].length ?? 0) > 1) {
-      deepest[0]![1].shift();
-    } else {
+    } else if (self.length > 1) {
       self.pop();
+    } else if ((deepest[0]?.[1].length ?? 0) > 3) {
+      deepest[0]![1].splice(1, 2, "[...]");
+    } else if (self.length) {
+      self.pop();
+    } else {
+      deepest.pop();
     }
     report = render();
   }
@@ -56,12 +61,14 @@ function formatStallFrames(
 
 /** Two short native profiles retain recent stacks without a listener or on-demand heap scan. */
 export function createStallFlightRecorder(warn: (message: string) => void) {
+  let kernel: ReturnType<typeof createStallKernelRecorder>;
   let active: v8.SyncCPUProfileHandle | undefined;
   let previous: { json: string; endedAt: number } | undefined;
   let startedAt = 0;
   let disabled = !isMainThread || Boolean(versions.bun) || Number(versions.node.split(".")[0]) < 26;
   let packageRoot: string | null = null;
   const stop = () => {
+    kernel?.stop();
     disabled = true;
     previous = undefined;
     const handle = active;
@@ -84,13 +91,15 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
       packageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
       active = start();
       startedAt = performance.now();
+      kernel = createStallKernelRecorder(warn);
     }
   } catch {
     disabled = true;
     warn("stall flight recorder unavailable: profiler-start-failed");
   }
   return {
-    sample(stall?: { startedAt: number; endedAt: number }): string | undefined {
+    sample(stall?: { startedAt: number; endedAt: number; task?: string }): string | undefined {
+      const kernelSummary = kernel?.take(stall) ?? "";
       if (disabled || !active || (!stall && performance.now() - startedAt < WINDOW_MS)) {
         return undefined;
       }
@@ -186,12 +195,24 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
               cursor = parents.get(cursor);
             }
             if (leaf) {
+              const asyncTask =
+                app === null && stall.task && stall.task !== "unattributed"
+                  ? `[async task:${stall.task.slice(0, 160)}]`
+                  : null;
+              if (asyncTask) {
+                frames.push(asyncTask);
+                app = asyncTask;
+              }
               const key = JSON.stringify([leaf, app]);
               const total = selfFrames.get(key) ?? { frame: leaf, app, samples: 0, timeUs: 0 };
               total.samples += cost.samples;
               total.timeUs += cost.timeUs;
               selfFrames.set(key, total);
-              const tail = frames.slice(0, 8).toReversed();
+              const tail = frames.slice(0, Math.min(16, app ? frames.indexOf(app) + 1 : 16));
+              if (app && tail.at(-1) !== app) {
+                tail.push("[...]", app);
+              }
+              tail.reverse();
               const stackKey = JSON.stringify(tail);
               const stack = stacks.get(stackKey) ?? { frames: tail, samples: 0, timeUs: 0 };
               stack.samples += cost.samples;
@@ -201,7 +222,7 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
           }
         }
         return formatStallFrames(
-          `windowMs=${Math.round(stall.endedAt - stall.startedAt)} windowStartMs=${Math.round(performance.timeOrigin + stall.startedAt)} windowEndMs=${Math.round(performance.timeOrigin + stall.endedAt)} reportedAtMs=${Math.round(performance.timeOrigin + performance.now())} samples=${samples} intervalMs=${SAMPLE_MS} truncated=${truncated}`,
+          `windowMs=${Math.round(stall.endedAt - stall.startedAt)} windowStartMs=${Math.round(performance.timeOrigin + stall.startedAt)} windowEndMs=${Math.round(performance.timeOrigin + stall.endedAt)} reportedAtMs=${Math.round(performance.timeOrigin + performance.now())} samples=${samples} intervalMs=${SAMPLE_MS} truncated=${truncated}${kernelSummary}`,
           counts,
           selfFrames,
           stacks,

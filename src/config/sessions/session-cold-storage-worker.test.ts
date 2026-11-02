@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import * as snapshots from "../../infra/sqlite-transaction.js";
@@ -52,7 +53,11 @@ function prepare(options: Fixture["options"]) {
 function largestEventBytes(events: Fixture["original"]["events"]) {
   return events
     .filter((event) => event.session_id === historicalId)
-    .reduce((bytes, event) => Math.max(bytes, Buffer.byteLength(event.event_json)), 0);
+    .reduce((bytes, event) => {
+      // The original snapshot precedes archival and decodes compressed payloads.
+      assert(event.event_json !== null);
+      return Math.max(bytes, Buffer.byteLength(event.event_json));
+    }, 0);
 }
 
 it("defers event size reads until preparation and rejects oversized bytes before snapshotting", () =>

@@ -37,7 +37,7 @@ export type PluginNodeCapabilityClient = {
 };
 
 /** Prepare credentials before publication; the returned commit only swaps owned records. */
-export function prepareClientPluginNodeCapabilities(params: {
+function prepareClientPluginNodeCapabilities(params: {
   client: PluginNodeCapabilityClient;
   surfaces: readonly PluginNodeCapabilitySurface[];
   changedPluginIds: ReadonlySet<string>;
@@ -142,6 +142,33 @@ export function reconcileClientPluginNodeCapabilities(
     close,
   });
   return false;
+}
+
+/** Prepare one reload's credentials, then reconcile handshakes before swapping them. */
+export function preparePluginNodeCapabilityPublication(
+  clients: Iterable<Parameters<typeof reconcileClientPluginNodeCapabilities>[0]>,
+  surfaces: readonly PluginNodeCapabilitySurface[],
+  changedPluginIds: ReadonlySet<string>,
+): () => void {
+  const indexed = indexPluginNodeCapabilitySurfaces(surfaces);
+  const publications = [...clients].map((client) =>
+    prepareClientPluginNodeCapabilities({
+      client,
+      surfaces,
+      changedPluginIds,
+      ...(client.connect.role === "node"
+        ? { allowedSurfaces: new Set(client.connect.caps ?? []) }
+        : {}),
+    }),
+  );
+  return () => {
+    for (const client of clients) {
+      reconcileClientPluginNodeCapabilities(client, indexed);
+    }
+    for (const publish of publications) {
+      publish();
+    }
+  };
 }
 
 export type NormalizedPluginNodeCapabilityUrl = {

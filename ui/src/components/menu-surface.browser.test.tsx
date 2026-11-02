@@ -236,9 +236,7 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
     const submenuShown = new Promise<void>((resolve) => {
       submenu.addEventListener("overlay-after-show", () => resolve(), { once: true });
     });
-    const highlight = colorSwatch(
-      input === "pointer" ? "var(--surface-selected-hover)" : "var(--surface-selected)",
-    );
+    const highlight = colorSwatch("var(--surface-hover)");
 
     await openMenu(container);
     await expect.poll(() => document.activeElement).toBe(parent);
@@ -333,7 +331,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       await useDesktopViewport();
       document.documentElement.dataset.theme = theme;
       document.documentElement.dataset.themeMode = theme;
-      highlight = colorSwatch("var(--bg-hover)");
+      highlight = colorSwatch("var(--surface-hover)");
       host = document.body.appendChild(document.createElement("div"));
     });
 
@@ -366,8 +364,13 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
           },
           {
             name: "expanded",
-            menu: ["--surface-selected", "--surface-selected-hover", "1"],
+            menu: ["--surface-hover", "--surface-hover", "1"],
             plain: ["--bg-hover", "--bg-hover", "1"],
+          },
+          {
+            name: "unchecked",
+            menu: ["transparent", "--menu-hover", "1"],
+            plain: ["transparent", "--bg-hover", "1"],
           },
           {
             name: "checked",
@@ -387,22 +390,22 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
           {
             name: "disabled",
             menu: ["transparent", "transparent", "0.5"],
-            plain: ["transparent", "transparent", "0.42"],
+            plain: ["transparent", "transparent", "0.5"],
           },
           {
             name: "aria-disabled",
             menu: ["transparent", "transparent", "0.5"],
-            plain: ["transparent", "transparent", "0.42"],
+            plain: ["transparent", "transparent", "0.5"],
           },
           {
             name: "disabled-expanded",
             menu: ["transparent", "transparent", "0.5"],
-            plain: ["--bg-hover", "--bg-hover", "0.42"],
+            plain: ["--bg-hover", "--bg-hover", "0.5"],
           },
           {
             name: "aria-disabled-expanded",
             menu: ["transparent", "transparent", "0.5"],
-            plain: ["--bg-hover", "--bg-hover", "0.42"],
+            plain: ["--bg-hover", "--bg-hover", "0.5"],
           },
         ] as const;
         for (const className of [
@@ -429,6 +432,9 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
               if (enabled) {
                 item.setAttribute(attribute, "true");
               }
+            }
+            if (state === "unchecked") {
+              item.setAttribute("aria-checked", "false");
             }
             if (danger) {
               item.dataset.variant = "danger";

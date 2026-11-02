@@ -473,6 +473,22 @@ export function readSessionTranscriptBoundedActiveContextCore(
             sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
           ])
           .where("active.session_id", "=", projection.resolved.sessionId)
+          // Exclude known ordinary identities as a set before reading payloads. Joining
+          // identities here can rescan the event-type index once per active event.
+          .where((eb) =>
+            eb.or([
+              eb("active.context_eligible", "=", 0),
+              eb(
+                "active.event_seq",
+                "not in",
+                db
+                  .selectFrom("transcript_event_identities")
+                  .select("seq")
+                  .where("session_id", "=", projection.resolved.sessionId)
+                  .where("event_type", "not in", ["custom", "reset", "branch_summary"]),
+              ),
+            ]),
+          )
           .$if(fence !== undefined, (query) =>
             query.where("active.event_seq", "<", fence!.beforeRawSeq),
           )

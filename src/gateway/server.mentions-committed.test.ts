@@ -1,8 +1,10 @@
 import { X509Certificate } from "node:crypto";
 import { createServer } from "node:http";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
@@ -18,7 +20,9 @@ import {
 import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
-it("delivers a committed human mention once through authenticated chat.send", async () => {
+it("delivers a committed human mention once through authenticated chat.send", async ({
+  signal,
+}) => {
   const state = await createOpenClawTestState({
     label: "committed-mention",
     env: {
@@ -31,6 +35,10 @@ it("delivers a committed human mention once through authenticated chat.send", as
   });
   await using cleanup = new AsyncDisposableStack();
   cleanup.defer(() => state.cleanup());
+  const providerStarted = createDeferred();
+  const releaseProvider = createDeferred();
+  const committed = createDeferred<unknown>();
+  const inboxChanged = createDeferred();
   const alice = ensureProfileForEmail("alice@committed-mention.example.test");
   const bob = ensureProfileForEmail("bob@committed-mention.example.test");
   setDisplayName(alice.id, "Alice");
@@ -39,7 +47,9 @@ it("delivers a committed human mention once through authenticated chat.send", as
   setUserProfileRole(bob.id, "administrator");
   const provider = createServer((request, response) => {
     void readRequestText(request)
-      .then(() => {
+      .then(async () => {
+        providerStarted.resolve();
+        await releaseProvider.promise;
         writeOpenAiResponsesText(response, {
           text: "Acknowledged.",
           messageId: "mention-reply",
@@ -87,6 +97,11 @@ it("delivers a committed human mention once through authenticated chat.send", as
     clientName: "openclaw-control-ui",
     mode: "webchat",
     scopes: ["operator.admin"],
+    onEvent: (event) => {
+      if (event.event === "mentions.changed") {
+        inboxChanged.resolve();
+      }
+    },
     cfg: {
       agents: {
         defaults: {
@@ -142,16 +157,28 @@ it("delivers a committed human mention once through authenticated chat.send", as
     deviceIdentity: loadOrCreateDeviceIdentity({
       path: state.path("sender-device", "client", "credentials.sqlite"),
     }),
+    onEvent: (event) => {
+      const payload = asOptionalRecord(event.payload);
+      const message = asOptionalRecord(payload?.message);
+      if (
+        event.event === "session.message" &&
+        message?.idempotencyKey === "mention-original:user"
+      ) {
+        committed.resolve(payload?.messageSeq);
+      }
+    },
   });
   cleanup.defer(() => disconnectGatewayClient(sender));
   const created = await sender.request<{ key: string }>("sessions.create", { agentId: "main" });
   const target = created.key;
-  const seed = await sender.request<{ runId: string }>("chat.send", {
+  await sender.request("sessions.messages.subscribe", { key: target });
+  cleanup.defer(() => releaseProvider.resolve());
+  await sender.request("chat.send", {
     sessionKey: target,
     message: "Start this conversation.",
     idempotencyKey: "mention-seed",
   });
-  await gateway.client.request("agent.wait", { runId: seed.runId, timeoutMs: 30_000 });
+  await withinTest(providerStarted.promise, signal);
   const lookup = await sender.request<{ users: { profileId: string }[] }>("users.mentionable", {
     sessionKey: target,
     query: "Bob",
@@ -161,14 +188,15 @@ it("delivers a committed human mention once through authenticated chat.send", as
     sessionKey: target,
     message: "@Bob Please review.",
     idempotencyKey: "mention-original",
+    // Exercise pending custody in its own turn rather than steering the seed run.
+    queueMode: "followup",
     mentions: [{ profileId: bob.id, start: 0, end: 4 }],
   };
-  const accepted = await sender.request<{ runId: string; messageSeq: number }>(
-    "chat.send",
-    request,
-  );
-  expect(accepted.messageSeq).toBeGreaterThan(0);
-  await gateway.client.request("agent.wait", { runId: accepted.runId, timeoutMs: 30_000 });
+  const accepted = await sender.request<{ runId: string }>("chat.send", request);
+  releaseProvider.resolve();
+  // A pending ACK owns input without a transcript position; wait for its committed identity.
+  expect(await withinTest(committed.promise, signal)).toBeGreaterThan(0);
+  await withinTest(inboxChanged.promise, signal);
   const inbox = await gateway.client.request<{ items: unknown[] }>("mentions.list", {});
   expect(inbox.items).toHaveLength(1);
   expect(inbox.items[0]).toMatchObject({

@@ -1,5 +1,5 @@
-import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { filterLocalModelLeanTools } from "./local-model-lean.js";
 import { resolveNativeWebSearchRoute } from "./native-web-search.js";

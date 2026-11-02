@@ -1,10 +1,17 @@
 import fs from "node:fs";
+import { threadId } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
+import {
+  withDevicePairingLock,
+  withDevicePairingWaitObservation,
+  type DevicePairingWaitObservation,
+} from "../infra/device-pairing-lock.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { testApi } from "../logging/logger.test-support.js";
 import { loggingState } from "../logging/state.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   formatForLog,
   logWs,
@@ -80,6 +87,45 @@ afterEach(() => {
   resetLogger();
   vi.restoreAllMocks();
 });
+
+test.each([999, 1_000])(
+  "attributes a held pairing writer only in a slow connect log (%i ms)",
+  async (waitMs) => {
+    setLogStyle("full");
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    const output = captureConsole();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const writer = withDevicePairingLock(async () => {
+      entered.resolve();
+      await release.promise;
+    }, "devicePairing.rotateToken");
+    await entered.promise;
+    clock.mockReturnValue(1_500);
+    const frame = { connId: "pairing-holder", id: `wait-${waitMs}`, method: "connect" };
+    logWs("in", "req", frame);
+    const observation: DevicePairingWaitObservation = {};
+    const waiter = withDevicePairingWaitObservation(observation, () =>
+      withDevicePairingLock(async () => {}, "devicePairing.ensureToken"),
+    );
+    clock.mockReturnValue(1_500 + waitMs);
+    release.resolve();
+    await Promise.all([writer, waiter]);
+    logWs("out", "res", { ...frame, ok: true, pairingLockWait: observation.longestWait });
+    const message = output.mock.calls.at(-1)?.[0];
+    if (waitMs === 999) {
+      expect(message).not.toContain("pairingLockWait");
+    } else {
+      expect(message).toContain(
+        `pairingLockWait=${JSON.stringify({
+          waitMs: 1_000,
+          holderAtEnqueue: { operation: "devicePairing.rotateToken", threadId, heldMs: 500 },
+        })}`,
+      );
+    }
+  },
+);
 
 test("keeps failures and one-second responses at info while retaining successful traffic at debug", async () => {
   const output = captureConsole();
