@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { withConnectorSource } from "../../agents/artha-connector-context.mjs";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import type {
   CompactionAccountingFact,
@@ -379,7 +380,37 @@ export async function runEmbeddedFallbackCandidate(
             })()
           : undefined,
       };
-      return runEmbeddedAgent(embeddedRunParams);
+      // Source custody is evaluated for every HTTP request, not captured in the
+      // session-cached MCP transport. Detached work loses this scope at settle.
+      // 9.1 has no source-revocation fence (main's assertSourceCurrent); the abort
+      // signal is the only liveness check, and DFS bounds each attestation to this
+      // message, this bearer and 90 seconds.
+      return withConnectorSource(
+        () => {
+          const run = turn.followupRun.run;
+          if (
+            turn.isHeartbeat ||
+            run.scheduledToolPolicy ||
+            run.trustedInternalHandoff ||
+            run.spawnedBy ||
+            (run.inputProvenance && run.inputProvenance.kind !== "external_user") ||
+            params.runAbortSignal?.aborted
+          ) {
+            return undefined;
+          }
+          const messageId = turn.followupRun.messageId ?? embeddedRunParams.currentMessageId;
+          if (!messageId) return undefined;
+          return {
+            sessionKey: embeddedRunParams.sessionKey,
+            messageId: String(messageId),
+            channel: embeddedRunParams.messageChannel ?? embeddedRunParams.messageProvider,
+            accountId: embeddedRunParams.agentAccountId,
+            senderId: embeddedRunParams.senderId,
+            assertCurrent: () => params.runAbortSignal?.throwIfAborted(),
+          };
+        },
+        () => runEmbeddedAgent(embeddedRunParams),
+      );
     });
     const resultCompactionCount = Math.max(0, result.meta?.agentMeta?.compactionCount ?? 0);
     attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);

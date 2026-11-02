@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logDebug } from "../logger.js";
 import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
+import { withArthaConnectorContext } from "./artha-connector-context.mjs";
 import { withArthaGatewayContext } from "./artha-office365-context.mjs";
 import { resolveMcpAuthProfileId, withMcpAuthProfileBearer } from "./mcp-auth-profile.js";
 import {
@@ -172,13 +173,21 @@ export function resolveMcpTransport(
   // Per-RPC deadlines belong to client calls, not this transport fetch.
   // Innermost wrapper: it sees the bearer that withMcpOAuthBearer attached and
   // signs the host-owned requester route for the Artha MCP resource only.
-  const baseFetch = withArthaGatewayContext(
-    buildMcpHttpFetch({
-      sslVerify: resolved.sslVerify,
-      clientCert: resolved.clientCert,
-      clientKey: resolved.clientKey,
-      resourceUrl: resolved.url,
-    }),
+  const baseFetch = withArthaConnectorContext(
+    withArthaGatewayContext(
+      buildMcpHttpFetch({
+        sslVerify: resolved.sslVerify,
+        clientCert: resolved.clientCert,
+        clientKey: resolved.clientKey,
+        resourceUrl: resolved.url,
+      }),
+      {
+        auth: resolved.auth,
+        identity: resolved.oauth?.identity,
+        requesterScope,
+        sessionKey: options?.sessionKey,
+      },
+    ),
     {
       auth: resolved.auth,
       identity: resolved.oauth?.identity,

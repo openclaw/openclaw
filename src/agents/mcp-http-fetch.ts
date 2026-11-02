@@ -126,7 +126,7 @@ export function buildMcpHttpFetch(params: {
       url: request.url,
       init: request.init,
       fetchImpl: fetchWithUndiciGuard,
-      maxRedirects: MCP_HTTP_MAX_REDIRECTS,
+      maxRedirects: request.init?.redirect === "error" ? 0 : MCP_HTTP_MAX_REDIRECTS,
       allowCrossOriginUnsafeRedirectReplay: true,
       auditContext: "mcp-http",
       useEnvProxyForEligibleUrls: true,
