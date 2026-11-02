@@ -248,8 +248,11 @@ function* createOpenClawToolsSteps(
     widgetPresenters,
     widgetPresenterContext,
   );
+  // Scheduled runs must not borrow a remembered client as an inline renderer.
+  const scheduledCaller = Boolean(options?.gatewayCallerScheduled || options?.scheduledToolTargets);
+  const widgetClientCaps = scheduledCaller ? options?.clientCaps : options?.listingClientCaps;
   const inlineWidgetClientAvailable =
-    (options?.listingClientCaps ?? options?.clientCaps)?.includes("inline-widgets") === true;
+    (widgetClientCaps ?? options?.clientCaps)?.includes("inline-widgets") === true;
   const sessionKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);
   const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
   const deliveryContext = {
@@ -428,11 +431,7 @@ function* createOpenClawToolsSteps(
     denylist: explicitFactoryDenylist,
   });
   const widgetBoardSessionKey = scheduledTargets?.boardSessionKey ?? sessionKey;
-  // Admitted Control UI recovery and explicitly capped scheduled turns can
-  // keep authoring their durable board without claiming an inline renderer.
-  // A run admitted with scheduled tool targets is a scheduled turn on every runtime.
-  const scheduledCaller =
-    options?.gatewayCallerScheduled === true || scheduledTargets !== undefined;
+  // Authorized recovery and capped scheduled turns can author boards without an inline renderer.
   const pinnedWidgetAuthoringAdmitted =
     (options?.pinnedWidgetAuthoring === true ||
       (scheduledCaller && scheduledWidgetExplicitlyAllowed)) &&
