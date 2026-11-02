@@ -46,12 +46,13 @@ it("keeps capability guidance bound to catalog order, visibility and prepared pr
     id: "native",
     name: "Native",
     provider: "row-provider-must-not-win",
-    inference: { decision },
+    inference: { chat: false, decision },
   };
   const later = {
     ...model,
     id: "undeclared",
     inference: {
+      chat: false,
       decision: {
         ...decision,
         limits: { maxQuestions: 7 },
