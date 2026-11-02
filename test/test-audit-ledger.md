@@ -106,23 +106,26 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 ## Current qualification
 
 Pinned main eca83d7d00f9: snapshot the registry fleet test's expected realpath
-before installing its work-count spy. The expected-value expression currently
-calls that spy, so it can satisfy the following called assertion even when the
-actual normalizer reuses a prepared identity. Keep every assertion and all ten
-declarations/cases across the main, maintenance and worker suites. No production
-change.
+before installing its work-count spy. The subject normalizer must now supply
+the observed call itself. All ten declarations/cases across the main,
+maintenance and worker suites, every original assertion/input and all production
+code remain.
 
-Fresh entries, owner, direct supports, callers, selected history and normal
-agents-core routing are qualified. Untouched official baseline, an actual
-prepared-cache normalizer fault against the original/repaired oracle, exact
-restoration, clean candidate/final proof, focused checks, exact one-line
-allocation, fresh review and CI remain pending. History d84c03e3f52 carried the existing
-oracle from an earlier prepared-identity case; its original introduction is
-untraced.
+Untouched official baseline passes all ten cases. An actual prepared-cache
+return in the normalizer passes the old fleet case, whose expected-value
+expression calls the spy, and fails the repaired called assertion with no
+subject resolution. Temporary owner/test bytes were restored exactly. Clean
+candidate passes all ten cases. Typed lint, scoped core-test types, format,
+ledger MDX and whitespace pass. An exact one-line allocation owns the independent
+expected snapshot; the shared scalar is unchanged. Fresh review, final published
+proof and CI remain pending.
 
-No declaration, input, existing assertion, helper or export retirement; removal
-scans do not apply to this proof repair. Local mocked-watch and maintenance
-contracts do not prove native watch transport, an actual worker or SQLite flow.
+History d84c03e3f52 carried the existing oracle from an earlier prepared-identity
+case; its original introduction is untraced. No declaration, existing assertion,
+input, helper or export retirement; removal scans do not apply to this proof
+repair. No public API, runtime configuration, migration or state contract change.
+Local mocked-watch and maintenance contracts are not native watch transport,
+an actual worker or SQLite proof.
 
 ## Completed source review
 
