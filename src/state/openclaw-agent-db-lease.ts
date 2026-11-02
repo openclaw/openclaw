@@ -24,10 +24,6 @@ import {
 } from "./agent-deletion-journal.js";
 import { withExistingAgentLeaseWrite } from "./openclaw-agent-db-existing-write.js";
 import {
-  OpenClawAgentDatabaseLeaseActiveError,
-  readAgentDatabaseLeases,
-} from "./openclaw-agent-db-lease-inspection.js";
-import {
   createAgentDatabaseLeaseStaleReasonReader,
   mayShareAgentDatabaseFile,
   readAgentDatabaseLeaseProvenance,
@@ -71,6 +67,27 @@ export const AGENT_DATABASE_MAINTENANCE_LEASE = {
   scope: "core:agent-database-maintenance",
   key: "global",
 } as const;
+
+export class OpenClawAgentDatabaseLeaseActiveError extends Error {
+  constructor(
+    message: string,
+    /** Live owner PIDs observed by a read-only check; diagnostic evidence, never authority. */
+    readonly ownerPids: readonly number[] = [],
+  ) {
+    super(message);
+    this.name = "OpenClawAgentDatabaseLeaseActiveError";
+  }
+}
+
+export function readAgentDatabaseLeases(database: EngineConnection, leaseId?: string) {
+  const db =
+    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "agent_database_leases">>(database);
+  const query = db.selectFrom("agent_database_leases").selectAll();
+  return executeSqliteQuerySync(
+    database,
+    leaseId === undefined ? query : query.where("lease_id", "=", leaseId),
+  ).rows;
+}
 
 /** Ordinary agent worker routing cannot borrow native maintenance authority. */
 export function hasAgentDatabaseMaintenanceAuthority(): boolean {

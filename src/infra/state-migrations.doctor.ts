@@ -46,7 +46,10 @@ import {
   normalizeAgentId,
 } from "../routing/session-key.js";
 import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
-import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
+import {
+  isArtifactPreservingStateRead,
+  withArtifactPreservingStateReads,
+} from "../state/artifact-preserving-state-reads.js";
 import { inspectOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import { STATE_SCHEMA_MIGRATION_DESCRIPTIONS } from "../state/openclaw-state-db-contract.js";
 import {
@@ -252,13 +255,18 @@ export async function detectLegacyStateMigrations(
     ...env,
     OPENCLAW_STATE_DIR: resolveStateDir(env, params.homedir ?? os.homedir),
   };
-  return withOpenClawStateDatabaseReadSnapshot(
-    async () => {
-      await getActiveOpenClawStateDatabaseReadSnapshotAsync({ env: readEnv });
-      return detect();
-    },
-    { env: readEnv, signal: resolveSqliteInspectionSignal() },
-  );
+  const inspect = () =>
+    withOpenClawStateDatabaseReadSnapshot(
+      async () => {
+        await getActiveOpenClawStateDatabaseReadSnapshotAsync({ env: readEnv });
+        return detect();
+      },
+      { env: readEnv, signal: resolveSqliteInspectionSignal() },
+    );
+  // Select the source policy before preparing the image consumed by all detectors.
+  return params.artifactPreservingReadOnly
+    ? withArtifactPreservingStateReads(inspect, { agentDatabases: true })
+    : inspect();
 }
 
 async function detectLegacyStateMigrationsInReadSnapshot(

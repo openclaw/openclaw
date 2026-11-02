@@ -30,7 +30,7 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { defaultRuntime } from "../runtime.js";
 import * as databaseBackup from "../snapshot/database-backup.js";
-import { OpenClawAgentDatabaseLeaseActiveError } from "../state/openclaw-agent-db-lease-inspection.js";
+import { OpenClawAgentDatabaseLeaseActiveError } from "../state/openclaw-agent-db-lease.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import * as nocow from "./doctor-sqlite-nocow.js";
 

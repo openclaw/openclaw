@@ -52,10 +52,8 @@ import { getActiveSecretsRuntimeSnapshotState } from "../secrets/runtime-state.j
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
-import {
-  assertNoOpenClawAgentDatabaseLeasesReadOnly,
-  OpenClawAgentDatabaseLeaseActiveError,
-} from "../state/openclaw-agent-db-lease-inspection.js";
+import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease-inspection.js";
+import { OpenClawAgentDatabaseLeaseActiveError } from "../state/openclaw-agent-db-lease.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import * as schema from "../state/openclaw-agent-db-schema.js";
 import {

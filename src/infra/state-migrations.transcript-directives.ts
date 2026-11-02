@@ -7,10 +7,8 @@ import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db-contract.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
-import {
-  OpenClawAgentDatabaseLeaseActiveError,
-  assertNoOpenClawAgentDatabaseLeasesReadOnly,
-} from "../state/openclaw-agent-db-lease-inspection.js";
+import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease-inspection.js";
+import { OpenClawAgentDatabaseLeaseActiveError } from "../state/openclaw-agent-db-lease.js";
 import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-maintenance-authority.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import {

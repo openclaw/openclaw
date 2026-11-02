@@ -27,7 +27,7 @@ import type {
 import { inspectDoctorDatabaseLegacyMigrations } from "./doctor-database-legacy-inspection.js";
 
 serveWorkerTasks<DoctorDatabaseEngineInspection, DoctorDatabaseEngineInspectionInput>(
-  async (input) => {
+  async (input, _channel, control) => {
     const env = { ...input.env, OPENCLAW_STATE_DIR: input.stateDir };
     const stores: DatabaseStoreDiagnostic[] = [];
     const result: DoctorDatabaseEngineInspection = {
@@ -201,13 +201,17 @@ serveWorkerTasks<DoctorDatabaseEngineInspection, DoctorDatabaseEngineInspectionI
         ? withOpenClawStateDatabaseReadSnapshot(inspect, { env })
         : inspect();
     // The caller's inspection context does not cross this worker boundary.
-    await withPluginSourceCaptureStorage({ stateDir: input.stateDir, placement: "temporary" }, () =>
-      withArtifactPreservingStateReads(
-        () =>
-          withSqliteReadOnlyWorkerScope(() =>
-            selection ? withDatabaseEngineSelection(selection, inspectState) : inspectState(),
-          ),
-        { agentDatabases: true },
+    await control.runNativeSection(() =>
+      withPluginSourceCaptureStorage({ stateDir: input.stateDir, placement: "temporary" }, () =>
+        withArtifactPreservingStateReads(
+          () =>
+            withSqliteReadOnlyWorkerScope(
+              () =>
+                selection ? withDatabaseEngineSelection(selection, inspectState) : inspectState(),
+              { signal: control.signal, deadlineOwnedByCaller: true },
+            ),
+          { agentDatabases: true },
+        ),
       ),
     );
     return result;

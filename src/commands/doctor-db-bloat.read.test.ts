@@ -12,6 +12,14 @@ import { readSqliteDatabaseBloat } from "./doctor-db-bloat.read.js";
 vi.mock("../state/openclaw-agent-db-registry-listing.js", () => ({
   readRegisteredAgentDatabases: () => [],
 }));
+vi.mock("../state/openclaw-state-db-readonly.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../state/openclaw-state-db-readonly.js")>();
+  return {
+    ...actual,
+    // This file isolates size admission; the real registry snapshot runs in the worker test.
+    withOpenClawStateDatabaseReadSnapshot: async (operation: () => Promise<unknown>) => operation(),
+  };
+});
 
 afterEach(() => vi.restoreAllMocks());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -78,4 +86,17 @@ it.each([
     expect(await read()).toEqual([]);
   }
   expect(prepare).toHaveBeenCalledOnce();
+});
+
+it("cancels database-size preparation instead of swallowing the aborted inspection", async () => {
+  const controller = new AbortController();
+  const reason = new Error("Doctor inspection cancelled");
+  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(() => {
+    controller.abort(reason);
+    throw reason;
+  });
+  const pathname = createSizedFile(BLOAT_MIN_FILE_BYTES);
+  await expect(
+    readSqliteDatabaseBloat({ path: pathname, env: {}, signal: controller.signal }),
+  ).rejects.toThrow(reason);
 });

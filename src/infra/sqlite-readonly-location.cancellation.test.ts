@@ -9,6 +9,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
+import { waitForFixtureFile } from "../../test/helpers/process-wait.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
@@ -160,14 +161,12 @@ it.skipIf(process.platform === "win32")(
       preload,
       `
     import fs from "node:fs";
-    ${fixtureReceiptClientSource(receipts.endpoint)}
     const open = fs.openSync;
     fs.openSync = (pathname, ...args) => {
       const descriptor = open(pathname, ...args);
       if (String(pathname).endsWith("database.sqlite.partial") &&
           process.argv.includes(${JSON.stringify(SQLITE_READONLY_CHILD_ARG)})) {
         fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify({ pid: process.pid, partial: String(pathname) }));
-        sendReceipt(${JSON.stringify(ready)}, "ready");
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
       }
       return descriptor;
@@ -214,15 +213,8 @@ it.skipIf(process.platform === "win32")(
     });
     const closed = once(child, "close");
     try {
-      await withinTest(
-        Promise.race([
-          receipts.waitFor(ready, "ready"),
-          closed.then(() => {
-            throw new Error(`Snapshot exited before copying: ${stderr}`);
-          }),
-        ]),
-        signal,
-      );
+      // The copy deliberately blocks its event loop, so a socket receipt cannot flush.
+      await withinTest(waitForFixtureFile(ready, closed), signal);
       const { pid: snapshotPid, partial } = JSON.parse(fs.readFileSync(ready, "utf8"));
       expect(fs.existsSync(partial)).toBe(true);
       child.kill("SIGTERM");

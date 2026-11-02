@@ -420,17 +420,18 @@ it.each([false, true])(
       indeterminate: [],
     });
     // Substitute only storage transport; run the real heartbeat queries against retained rows.
-    vi.spyOn(stateReadOnly, "withExistingOpenClawStateDatabaseReadOnly").mockImplementation(
-      (operation) => {
-        const selectedPath = getDatabaseEngineInput("state") ? storePath : anchorPath;
-        const db = new DatabaseSync(selectedPath, { readOnly: true });
-        try {
-          return operation({ db, path: selectedPath });
-        } finally {
-          db.close();
-        }
-      },
-    );
+    vi.spyOn(
+      stateReadOnly,
+      "withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync",
+    ).mockImplementation(async (operation) => {
+      const selectedPath = getDatabaseEngineInput("state") ? storePath : anchorPath;
+      const db = new DatabaseSync(selectedPath, { readOnly: true });
+      try {
+        return operation({ db, path: selectedPath });
+      } finally {
+        db.close();
+      }
+    });
     const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     const before = f.snapshot();
 

@@ -65,8 +65,12 @@ it("reports logical bytes and distinct eligibility counts by kind through status
     fs.mkdirSync(state.statePath("state"), { recursive: true });
     const original = state.statePath("state", "openclaw.sqlite.pre-startup-migration-old.bak");
     fs.writeFileSync(original, Buffer.alloc(19));
+    // Counts and eligibility do not depend on cold worker startup or CI load.
+    // The time-limit case below owns the elapsed-time cutoff.
+    using scanClock = vi.spyOn(performance, "now");
+    scanClock.mockReturnValue(0);
     const usage = await collectRecoveryDiskUsage({ cfg: {}, env: state.env });
-    expect(usage.incomplete).toBe(false);
+    expect(usage.incomplete, usage.incompleteReasons.join(", ")).toBe(false);
     expect(usage.total).toEqual({
       count: 4,
       logicalBytes: 60,

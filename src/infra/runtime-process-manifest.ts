@@ -39,6 +39,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     doctorDatabaseEngineInspection: runtimeProcessEntrypoint(
       "commands/doctor-database-engine-inspection.worker",
     ),
+    doctorDatabaseBloat: runtimeProcessEntrypoint("commands/doctor-db-bloat.worker"),
     backupDatabaseDiscovery: runtimeProcessEntrypoint("infra/backup-database-discovery.worker"),
     sqliteHeaderProbe: runtimeProcessEntrypoint("infra/sqlite-header-probe.worker"),
     databaseBackup: runtimeProcessEntrypoint("snapshot/database-backup.worker"),

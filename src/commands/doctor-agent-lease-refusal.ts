@@ -4,6 +4,7 @@ import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-messag
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { OpenClawAgentDatabaseLeaseActiveError } from "../state/openclaw-agent-db-lease.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { sleep } from "../utils/sleep.js";
 import {
@@ -104,7 +105,7 @@ export async function assertDoctorAgentLeaseAdmission(
   env: NodeJS.ProcessEnv,
   signal = resolveSqliteInspectionSignal(),
 ): Promise<void> {
-  const { assertNoOpenClawAgentDatabaseLeasesReadOnly, OpenClawAgentDatabaseLeaseActiveError } =
+  const { assertNoOpenClawAgentDatabaseLeasesReadOnly } =
     await import("../state/openclaw-agent-db-lease-inspection.js");
   try {
     await assertNoOpenClawAgentDatabaseLeasesReadOnly(
@@ -160,7 +161,7 @@ export async function admitDoctorAgentLeases(params: {
   signal: AbortSignal;
   log: (message: string) => void;
 }): Promise<void> {
-  const { readActiveOpenClawAgentDatabaseLeasesReadOnly, OpenClawAgentDatabaseLeaseActiveError } =
+  const { readActiveOpenClawAgentDatabaseLeasesReadOnly } =
     await import("../state/openclaw-agent-db-lease-inspection.js");
   // Doctor never waits for a lease it holds itself.
   const foreignHolders = (pids: readonly number[]) =>
