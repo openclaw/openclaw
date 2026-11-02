@@ -215,34 +215,67 @@ describe("session workspace file reference resolution", () => {
     });
   });
 
-  it("uses the resolved nested path for oversized-file metadata", async () => {
-    const nestedPath = "labs/output/REPORT.md";
-    const getFile = vi.fn<SessionWorkspaceHost["sessions"]["getFile"]>(async (sessionKey, path) => {
-      if (path === `/workspace/${nestedPath}`) {
-        throw new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "session file too large",
-          details: { type: "session_file_too_large", size: 4096 },
+  it.each([true, false])(
+    "retains the canonical oversized-file target and opener eligibility (%s)",
+    async (canOpenInSystem) => {
+      const nestedPath = "labs/output/REPORT.md";
+      const getFile = vi.fn<SessionWorkspaceHost["sessions"]["getFile"]>(
+        async (sessionKey, path) => {
+          if (path === `/workspace/${nestedPath}`) {
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "session file too large",
+              details: {
+                type: "session_file_too_large",
+                size: 300 * 1024,
+                root: "/workspace",
+                workspacePath: "canonical/REPORT.md",
+                canOpenInSystem,
+              },
+            });
+          }
+          throw missingFileError();
+        },
+      );
+      const listFiles = vi.fn().mockResolvedValue(
+        searchListing("REPORT.md", {
+          entries: [{ path: nestedPath, name: "REPORT.md", kind: "file" }],
+        }),
+      );
+      const state = createReferenceState(createSessionCapabilityFixture({ getFile, listFiles }));
+
+      const reveal = vi.spyOn(state.client!, "request").mockResolvedValue({ ok: true });
+      void openSessionWorkspaceFile(state, { path: "REPORT.md" });
+
+      const sidebarContent = await loadedSidebarContent(state);
+      if (sidebarContent.kind !== "markdown") {
+        throw new Error("expected Markdown preview for REPORT.md");
+      }
+      expect(sidebarContent.fileDownload?.path).toBe("canonical/REPORT.md");
+      expect(sidebarContent.file?.absolutePath).toBe("/workspace/canonical/REPORT.md");
+      expect(sidebarContent.rawText).toContain("canonical/REPORT.md");
+      await sidebarContent.fileDownload?.download(new AbortController().signal);
+      expect(downloadSessionFile).toHaveBeenLastCalledWith(
+        state,
+        {
+          sessionKey: "agent:main:current",
+          agentId: "main",
+          path: "/workspace/canonical/REPORT.md",
+        },
+        expect.any(AbortSignal),
+      );
+      expect(Boolean(sidebarContent.openInSystem)).toBe(canOpenInSystem);
+      if (canOpenInSystem) {
+        await sidebarContent.openInSystem!();
+        expect(reveal).toHaveBeenCalledExactlyOnceWith("sessions.files.reveal", {
+          key: "agent:main:current",
+          agentId: "main",
+          path: "/workspace/canonical/REPORT.md",
+          expectedRoot: "/workspace",
         });
       }
-      throw missingFileError();
-    });
-    const listFiles = vi.fn().mockResolvedValue(
-      searchListing("REPORT.md", {
-        entries: [{ path: nestedPath, name: "REPORT.md", kind: "file" }],
-      }),
-    );
-    const state = createReferenceState(createSessionCapabilityFixture({ getFile, listFiles }));
-
-    void openSessionWorkspaceFile(state, { path: "REPORT.md" });
-
-    const sidebarContent = await loadedSidebarContent(state);
-    if (sidebarContent.kind !== "markdown") {
-      throw new Error("expected Markdown preview for REPORT.md");
-    }
-    expect(sidebarContent.fileDownload?.path).toBe(`/workspace/${nestedPath}`);
-    expect(sidebarContent.rawText).toContain(`/workspace/${nestedPath}`);
-  });
+    },
+  );
 
   it.each([
     { label: "managed", root: "/workspace", replaced: false },

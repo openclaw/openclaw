@@ -155,15 +155,14 @@ it("opens the selected original host file without a preview-size limit", async (
 it("keeps host-path authority synchronous at the opener effect", async () => {
   const fixture = prepareHostFileRead({ permissionMode: "full" });
   const selected = outsideFile("original");
-  const authority = vi.fn<NonNullable<GatewayRequestHandlerOptions["withSessionTurnAuthority"]>>(
-    async (_target, consume) => {
-      const result = consume(fixture.entry);
-      expect(result).not.toBeInstanceOf(Promise);
-      return result;
-    },
-  );
+  const authority = vi.fn();
   const result = await fixture.files.ok("reveal", selected, undefined, {
-    withSessionTurnAuthority: authority,
+    withSessionTurnAuthority: async (_target, consume) => {
+      const consumed = consume(fixture.entry);
+      expect(consumed).not.toBeInstanceOf(Promise);
+      authority();
+      return consumed;
+    },
   });
   expect(result).toMatchObject({ ok: true, path: selected });
   expect(authority).toHaveBeenCalled();
@@ -408,6 +407,8 @@ it("keeps host previews bounded and classifies image and unsupported bytes", asy
         maxPreviewBytes: 256 * 1024,
         size: bytes.length,
         root: workspaceRoot,
+        workspacePath: outsidePath,
+        canOpenInSystem: true,
       });
     } else {
       const { file } = expectOkPayload(result);

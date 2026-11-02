@@ -323,6 +323,7 @@ async function handleSessionFilesRead(
               respondSessionFileTooLarge(respond, file, request.params.path, {
                 root: repository ? undefined : loaded.root,
                 source: source.source,
+                canOpenInSystem,
               });
           }
           result = fileResult;

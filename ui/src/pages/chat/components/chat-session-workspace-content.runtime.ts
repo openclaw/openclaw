@@ -506,11 +506,19 @@ async function readSessionFileReference(
           root: "root" in details ? details.root : undefined,
           source: "source" in details ? details.source : undefined,
         };
+        const workspacePath =
+          "workspacePath" in details && typeof details.workspacePath === "string"
+            ? details.workspacePath
+            : undefined;
         const result: SessionWorkspaceGetResult = {
           sessionKey,
           ...(isSessionFileReadMetadata(metadata) ? metadata : {}),
+          ...("canOpenInSystem" in details && details.canOpenInSystem === true
+            ? { canOpenInSystem: true }
+            : {}),
           file: {
             path: actionPath,
+            workspacePath,
             name: pathDisplayName(actionPath),
             size: details.size,
             kind: "read",
@@ -518,7 +526,12 @@ async function readSessionFileReference(
             previewKind: "unsupported",
           },
         };
-        return { result, actionPath };
+        return {
+          result,
+          actionPath: workspacePath
+            ? workspaceBrowserFilePath(result.root, workspacePath)
+            : actionPath,
+        };
       }
       throw error;
     }
