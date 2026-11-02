@@ -241,6 +241,7 @@ export {
   leaveMeetingWithBrowser,
   readMeetingTranscriptWithBrowser,
 } from "../meeting-bot/browser-session-control.js";
+export { evaluateMeetingBrowser } from "../meeting-bot/browser-act-lock.js";
 export {
   asMeetingBrowserTabs,
   readMeetingBrowserTab,
@@ -284,6 +285,8 @@ export { createMeetingNodeHost, type MeetingNodeHostOptions } from "../meeting-b
 
 export { runMeetingParticipationWithBrowser } from "../meeting-bot/participation-browser.js";
 export type {
+  MeetingParticipationAction,
+  MeetingParticipationEffectResult,
   MeetingParticipationRequest,
   MeetingParticipationSource,
   MeetingParticipationAttempt,
