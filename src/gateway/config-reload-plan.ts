@@ -274,7 +274,6 @@ const DEFAULT_RELOAD_POLICIES: ReloadPolicy[] = [
       "worktreeAcceleration",
       "security.audit.suppressions",
       "security.installPolicy",
-      "security.preset",
       "diagnostics.cacheTrace.enabled",
       "acp",
       "attachments.ttlHours",

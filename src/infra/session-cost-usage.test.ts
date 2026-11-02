@@ -166,57 +166,26 @@ const writeMessages = async (...entries: unknown[]) => {
   return file;
 };
 
-it("counts a stored request the provider never ran as zero usage, not a lower bound", async () => {
-  const failed = (timestamp: string, content: unknown[], extra: Record<string, unknown> = {}) =>
+it("counts only measured turns; a turn with unknown usage still counts as a message", async () => {
+  const unknown = (timestamp: string, content: unknown[], counters: Record<string, number>) =>
     assistant(
       timestamp,
-      {
-        input: 0,
-        output: 0,
-        totalTokens: 0,
-        cost: { total: 0 },
-        usageReport: { state: "unavailable" },
-      },
-      {
-        api: "openai-responses",
-        provider: "openai",
-        model: "gpt-5.5",
-        content,
-        stopReason: "error",
-        errorMessage: "Connection error.",
-        ...extra,
-      },
+      { ...counters, cost: { total: 0.01 }, usageReport: { state: "unavailable" } },
+      { provider: "openai", model: "gpt-5.5", content, stopReason: "error" },
     );
-  // Written before transports recorded unbilled failures as zero usage.
   const sessionFile = await writeMessages(
     modelMessage("2026-02-05T12:00:00.000Z", 10),
-    failed("2026-02-05T12:01:00.000Z", []),
+    // A request that failed before any output, and one interrupted after partial counters.
+    unknown("2026-02-05T12:01:00.000Z", [], { input: 0, output: 0, totalTokens: 0 }),
+    unknown("2026-02-05T12:02:00.000Z", [textBlock("partial")], { input: 500, totalTokens: 600 }),
   );
   const summary = await readSummary({ sessionFile });
   expect(summary).toMatchObject({
     totalTokens: 10,
     missingCostEntries: 0,
-    messageCounts: { assistant: 2, errors: 1 },
+    messageCounts: { assistant: 3, errors: 2 },
   });
-  expect(summary?.usageReport).toBeUndefined();
-  // Accepted then dropped, failed after output, or tool calls dropped by transport cleanup.
-  for (const [sessionId, entry] of [
-    ["dropped-after-acceptance", failed("2026-02-05T12:02:00.000Z", [], { responseId: "resp_1" })],
-    ["failed-after-output", failed("2026-02-05T12:03:00.000Z", [textBlock("partial answer")])],
-    [
-      "tool-call-dropped",
-      failed("2026-02-05T12:04:00.000Z", [], {
-        api: "anthropic-messages",
-        responseId: "msg_1",
-        errorBody: { type: "overloaded_error" },
-      }),
-    ],
-  ] as const) {
-    const file = await writeTranscript(sessionId, entry);
-    expect((await readSummary({ sessionFile: file }))?.usageReport).toEqual({
-      state: "unavailable",
-    });
-  }
+  expect(summary).not.toHaveProperty("usageReport");
 });
 
 it("prices and aggregates usage with each row's agent-local registry", async () => {
@@ -826,25 +795,17 @@ it.each<PricingCase>([
     ]);
 
     const summary = await loadSessionCostSummary(params);
-    const expectedReport = usageUnavailable ? { state: "unavailable" } : undefined;
+    // A turn with unknown usage adds no tokens, cost or missing-cost entry.
     expect(summary).toMatchObject({
       totalTokens: usageUnavailable ? 0 : 1_700,
-      missingCostEntries: expectedCost === undefined ? 1 : 0,
+      missingCostEntries: expectedCost === undefined && !usageUnavailable ? 1 : 0,
     });
-    expect([
-      summary?.usageReport,
-      summary?.dailyBreakdown?.[0]?.usageReport,
-      summary?.modelUsage?.[0]?.totals.usageReport,
-      summary?.dailyModelUsage?.[0]?.usageReport,
-      summary?.utcQuarterHourTokenUsage?.find((bucket) => bucket.quarterIndex === 48)?.usageReport,
-    ]).toEqual(Array(5).fill(expectedReport));
     expect(summary?.totalCost).toBeCloseTo(expectedCost ?? 0, 8);
     for (const field of ["input", "output", "cacheRead", "cacheWrite"] as const) {
       expect(summary?.[`${field}Cost`]).toBeCloseTo(expectedBreakdown?.[field] ?? 0, 8);
     }
 
     const series = await loadSessionUsageTimeSeries(params);
-    expect(series?.usageReport).toEqual(expectedReport);
     expect(series?.points).toMatchObject(
       usageUnavailable ? [] : [{ totalTokens: 1_700, cost: expect.closeTo(expectedCost ?? 0, 8) }],
     );

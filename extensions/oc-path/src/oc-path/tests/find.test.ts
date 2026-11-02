@@ -51,9 +51,9 @@ function limitEntryReads(root: JsoncValue | null, budget: number) {
 
 describe("empty string keys", () => {
   it.each([
-    ["f.json", parseJsonc, '{"":"old","keep":"unchanged"}', '""'],
+    ["f.json", parseJsonc, '{"":"first","":"old","keep":"unchanged"}', '""'],
     ["f.yaml", parseYaml, '"": old\nkeep: unchanged\n', '""'],
-    ["f.jsonl/L1", parseJsonl, '{"":"old","keep":"unchanged"}\n', '""'],
+    ["f.jsonl/L1", parseJsonl, '{"":"first","":"old","keep":"unchanged"}\n', '""'],
     ["f.json", parseJsonc, '{"":{"value":"old"},"keep":"unchanged"}', '""/value'],
     ["f.yaml", parseYaml, '"":\n  value: old\nkeep: unchanged\n', '""/value'],
     ["f.jsonl/L1", parseJsonl, '{"":{"value":"old"},"keep":"unchanged"}\n', '""/value'],
@@ -139,9 +139,9 @@ describe("findOcPaths — JSONC", () => {
     expect(leafValues(out)).toEqual(["t", "u"]);
   });
 
-  it("filters object members by boolean values and preserves leaf types", () => {
+  it("filters effective object members by boolean values and preserves leaf types", () => {
     const ast = parseJsonc(
-      '{"plugins":{"github":{"enabled":true},"slack":{"enabled":false},"jira":{"enabled":true}}}',
+      '{"plugins":{"github":{"enabled":false,"enabled":true},"slack":{"enabled":true},"slack":{"enabled":false},"jira":{"enabled":true}}}',
     );
     const out = find(ast, "oc://config/plugins/[enabled=true]/enabled");
     expect(out.map(({ path }) => path.item)).toEqual(["github", "jira"]);
@@ -235,7 +235,7 @@ describe("findOcPaths — JSONL", () => {
 
   it.each([
     ["*/**/**", ["oc://session/L1"], ["oc://session/L3"]],
-    ["**/**/**", ["oc://session", "oc://session/L1", "oc://session/L3"], []],
+    ["**/**/**", ["oc://session", "oc://session/L1"], ["oc://session/L3"]],
     ["{L1,$first,$last}/**/**", ["oc://session/L1"], ["oc://session/L3"]],
   ])("retains distinct physical-line targets for %s", (pattern, prefix, nextLine) => {
     const lineAst = parseJsonl('{"a":{"b":1},"a.b":2}\n\n{"a":{"b":1},"a.b":2}\n');
@@ -277,9 +277,9 @@ describe("findOcPaths — JSONL", () => {
     }
   });
 
-  it("keeps valid line addresses after recursive zero-width routes", () => {
+  it.each(["**/**/event", "**/event"])("keeps valid line addresses for %s", (pattern) => {
     const lineAst = parseJsonl('{"nest":{"event":"x"}}\n');
-    const out = find(lineAst, "oc://session/**/**/event");
+    const out = find(lineAst, "oc://session/" + pattern);
     expect(formattedPaths(out)).toEqual(["oc://session/L1/nest/event"]);
     expect(leafValues(out)).toEqual(["x"]);
   });
@@ -495,9 +495,9 @@ describe("findOcPaths — Markdown", () => {
     ]);
   });
 
-  it("enumerates frontmatter keys", () => {
+  it.each(["*", "**", '{missing,{name,"name"},role,*}'])("finds frontmatter via %s", (key) => {
     const ast = parseMd("---\nname: drafter\nrole: writer\n---\n");
-    const out = find(ast, "oc://SOUL.md/[frontmatter]/*");
+    const out = find(ast, "oc://SOUL.md/[frontmatter]/" + key);
     expect(out.map(({ path }) => path.item)).toEqual(["name", "role"]);
     expect(leafValues(out)).toEqual(["drafter", "writer"]);
   });

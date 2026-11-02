@@ -166,6 +166,7 @@ it.each([
   ["settlement-failed", undefined],
   ["committed", "restart"],
   ["committed", "rpc"],
+  ["committed", "timeout"],
 ] as const)(
   "transfers failed preparation cleanup exactly once for %s input custody (stop=%s)",
   async (custody, stopReason) => {
@@ -224,9 +225,7 @@ it.each([
         await expect(preparation).rejects.toBe(failure);
       }
       if (custody === "committed" || custody === "settlement-failed") {
-        expect(finish).toHaveBeenCalledExactlyOnceWith(
-          stopReason === "rpc" ? "cancelled" : "interrupted",
-        );
+        expect(finish).toHaveBeenCalledExactlyOnceWith("cancelled");
       }
       expect(cleanup).toHaveBeenCalledTimes(1);
       expect(onUserTurnMediaPersisted).toHaveBeenCalledTimes(custody === "unretained" ? 0 : 1);

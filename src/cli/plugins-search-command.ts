@@ -7,7 +7,7 @@ import { searchInstallablePluginPackages } from "../plugins/catalog-search.js";
 import { isBareNpmPackageName } from "../plugins/install-source-spec.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
-import { ExpectedCliError } from "./failure-output.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 import { formatVersionLabel } from "./version-format.js";
 
 export type PluginsSearchOptions = {

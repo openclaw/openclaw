@@ -26,7 +26,6 @@ import type { NodeWorkerProcessInput } from "../worker/worker-process-observatio
 import { NodeWorkerCapacity } from "./node-worker-capacity.js";
 import { NodeWorkerChildLifecycle } from "./node-worker-child-lifecycle.js";
 import { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
-import { snapshotNodeWorkerEnv } from "./node-worker-environment.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import type { NodeWorkerLaunchClaim } from "./node-worker-journal.types.js";
 import { NodeWorkerLaunchStore, type NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
@@ -38,6 +37,7 @@ import {
 import {
   NODE_WORKER_STOP_GRACE_MS,
   NODE_WORKER_FORCE_STOP_WAIT_MS,
+  prepareNodeWorkerSupervisorEnvironment,
   nodeWorkerEnvironmentBinding,
   nodeWorkerEnvironmentKey,
   nodeWorkerEnvironmentMatches,
@@ -63,7 +63,7 @@ class NodeWorkerSupervisor {
   private readonly turns: NodeWorkerTurnStore;
   private readonly admissions = new Map<string, NodeWorkerPendingAdmission>();
   private readonly retentions = new Set<Promise<NodeWorkerWorkspaceRetainResult>>();
-  private readonly workerEnv: NodeJS.ProcessEnv;
+  private readonly workerEnv: (homeDir?: string) => NodeJS.ProcessEnv;
   private readonly capacity: NodeWorkerCapacity;
   private readonly workspace: NodeWorkerWorkspaceRuntime;
   private readonly containerLifecycle?: NodeWorkerContainerLifecycle;
@@ -75,25 +75,21 @@ class NodeWorkerSupervisor {
 
   constructor(options: NodeWorkerSupervisorOptions = {}) {
     const env = options.env ?? process.env;
-    const startup = {
-      nativeInferenceSnapshot: options.nativeInferenceSnapshot,
-      workerEnv: snapshotNodeWorkerEnv(env),
-      engineEnv: { ...process.env, ...env },
-    };
+    const startup = prepareNodeWorkerSupervisorEnvironment(env, options);
     const bundleRoot = path.resolve(
       options.bundleRoot ?? path.join(resolveStateDir(env), "node-host"),
     );
     this.journal = new NodeWorkerJournalWorker({ env });
     this.store = new NodeWorkerLaunchStore(this.journal);
     this.turns = new NodeWorkerTurnStore(this.journal);
-    this.workerEnv = startup.workerEnv;
+    this.workerEnv = startup.projectWorkerEnv;
     const containerEngine = options.containerEngine;
     this.containerLifecycle = options.containerEngine
       ? new NodeWorkerContainerLifecycle(options.containerEngine, bundleRoot, this.store)
       : undefined;
     this.workspace =
       options.workspace ??
-      new NodeWorkerWorkspaceRuntime({ root: bundleRoot, env: this.workerEnv });
+      new NodeWorkerWorkspaceRuntime({ root: bundleRoot, env: startup.workerEnv });
     this.capacity = new NodeWorkerCapacity(this.store, options);
     this.recoverRunning = createNodeWorkerLaunchRecovery({
       store: this.store,
@@ -331,7 +327,7 @@ class NodeWorkerSupervisor {
         };
         launchSignal?.addEventListener("abort", cancelClaimed, { once: true });
         const startup = this.children.startChild({
-          workerEnv: homeDir ? snapshotNodeWorkerEnv(this.workerEnv, homeDir) : this.workerEnv,
+          workerEnv: this.workerEnv(homeDir),
           homeDir,
           input,
           descriptor,

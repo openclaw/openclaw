@@ -124,10 +124,13 @@ function prepared(
     NonNullable<Parameters<typeof awaitAgentHarnessAgentEndHook>[0]["hookRunner"]>,
     "hasHooks" | "runAgentEnd"
   > | null = null,
+  callableTools = tools,
 ) {
   return {
     bootstrap: { shouldRecordCompletedBootstrapTurn: record },
     bundleTools: { uncompactedEffectiveTools: tools },
+    // A prompt hook's toolsAllow narrows the bundle to the callable surface.
+    promptToolPolicy: { current: { uncompactedEffectiveTools: callableTools } },
     toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
     sessionRuntime: {
       sessionManager,
@@ -450,7 +453,11 @@ describe("embedded attempt phase lifecycle state", () => {
       const enumerateAttempt = vi.fn(Reflect.ownKeys);
       await completeEmbeddedAttemptAfterTurn(
         {
-          ...finalizationInput(prepared(sessionManager)),
+          ...finalizationInput(
+            prepared(sessionManager, true, [{ name: "read" }, { name: "write" }], null, [
+              { name: "read" },
+            ]),
+          ),
           attempt: new Proxy(
             {
               runId: "run-1",
@@ -520,7 +527,7 @@ describe("embedded attempt phase lifecycle state", () => {
         modelId: "model",
         modelContextWindowTokens: 180_000,
         authProfileId: "profile-1",
-        skillWorkshopAvailable: false,
+        toolNames: ["read"],
         compacted: false,
         trace: {
           traceId: "11111111111111111111111111111111",

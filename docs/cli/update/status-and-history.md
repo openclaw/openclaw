@@ -185,7 +185,11 @@ the detached updater and the restarted Gateway, so reconnecting does not lose
 the outcome. An external supervisor's native update keeps the run ID from its
 `update migrate` receipt. It is recorded as a succeeded CLI run, starting at
 migration, when the supervisor accepts the release and runs `update finish`.
-Retrying `update finish` keeps that one record. Post-core finalization children report back to their parent without
+Retrying `update finish` keeps that one record. Native updates record pending
+advisory Doctor inspections before running them against the serving Gateway.
+Their findings appear in the same history; interrupted or incomplete inspections
+remain retryable with `update finish` without changing the accepted outcome.
+Post-core finalization children report back to their parent without
 creating a separate update run, including when an older updater cannot forward
 a run ID.
 
@@ -439,6 +443,12 @@ version is not proof of the version currently serving requests. Optional Doctor
 diagnostic failures remain warnings, while refused config writes and incomplete
 required migrations remain errors. Historical runs cannot recover facts that
 their updater never recorded.
+
+Reviewed public failure reports keep known ledger diagnostics when a matching
+restart sentinel has no exit code or failure facts. Supplied errors use the same
+bounded public diagnostic redaction as failed steps; private paths, commands, and
+arbitrary error text remain excluded. The reporting Gateway or CLI must contain
+this fix; it does not repair the failed update itself.
 
 If a candidate check exits by signal, its failed step retains `termination`,
 `signal`, and a redacted `stderrTail` (up to 80 lines, 512 characters per line,

@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
 import { groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MessageGroup as MessageGroupData, ToolCard } from "../../../lib/chat/chat-types.ts";
 import {
@@ -14,7 +15,6 @@ import {
   readPreparedActivity,
 } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";

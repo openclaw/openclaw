@@ -333,6 +333,11 @@ export function assertLegacyOperatorExternalPlugin(expectedVersion) {
 }
 
 function seedLegacyOperatorApprovals() {
+  // Keep the requested policy aligned with the restrictive host migration specimen.
+  cli(
+    ["config", "set", "tools.exec.mode", JSON.stringify("allowlist"), "--strict-json"],
+    "legacy-operator-exec-policy",
+  );
   const approvals = approvalsCommand();
   const policyInput = artifact("legacy-operator-policy-input.json");
   const nativeEligibility = artifact("native-assignment-eligibility.json");

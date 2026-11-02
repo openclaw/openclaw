@@ -7,7 +7,7 @@ import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime, writeRuntimeJson } from "../../runtime.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { formatInvalidPortOption } from "../error-format.js";
-import { ExpectedCliError } from "../failure-output.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
 import { formatHelpExamples } from "../help-format.js";
 import { addNodeCommandOptions, createNodeWorkerCommand } from "./command-options.js";
 import { resolveNodeGatewayOptions, resolveNodePairGatewayOptions } from "./gateway-options.js";

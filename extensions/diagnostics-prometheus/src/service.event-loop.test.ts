@@ -256,6 +256,21 @@ it("retains cumulative worker work, messages, selections and GC across retiremen
           payloadBytesByRequestClass: { "audit.writer.process": 1000, other: 234 },
           unmeasuredMessages: 2,
         },
+        {
+          kind: "authority",
+          direction: "from_worker",
+          messages: 3,
+          payloadBytes: 567,
+          payloadBytesByRequestClass: { "session.actor.completeTurn": 500, other: 67 },
+          unmeasuredMessages: 1,
+        },
+        {
+          kind: "authority",
+          direction: "to_worker",
+          messages: 1,
+          payloadBytes: 0,
+          unmeasuredMessages: 1,
+        },
       ],
       sessionRowSelections: {
         selections: [{ kind: "parent" as const, task: "control-ui-pr", calls: 4, rows: 12 }],
@@ -300,6 +315,11 @@ openclaw_worker_messages_total{direction="from_worker",kind="sqlite_reply"} 4
 openclaw_worker_message_payload_bytes_total{direction="from_worker",kind="sqlite_reply",request_class="audit.writer.process"} 1000
 openclaw_worker_message_payload_bytes_total{direction="from_worker",kind="sqlite_reply",request_class="other"} 234
 openclaw_worker_message_unmeasured_total{direction="from_worker",kind="sqlite_reply"} 2
+openclaw_worker_message_payload_bytes_total{direction="from_worker",kind="authority",request_class="session.actor.completeTurn"} 500
+openclaw_worker_message_payload_bytes_total{direction="from_worker",kind="authority",request_class="other"} 67
+openclaw_worker_message_payload_bytes_total{direction="to_worker",kind="authority",request_class="other"} 0
+openclaw_worker_messages_total{direction="from_worker",kind="authority"} 3
+openclaw_worker_message_unmeasured_total{direction="from_worker",kind="authority"} 1
 openclaw_session_row_selections_total{kind="parent",task="control-ui-pr"} 4
 openclaw_session_row_selection_rows_total{kind="parent",task="control-ui-pr"} 12
 openclaw_session_row_selection_resets_total 2
@@ -540,10 +560,10 @@ it("exports completed SQLite request phases without inventing missing or invalid
   expectMetrics(
     rendered,
   )(`openclaw_worker_request_seconds_sum{kind="sqlite_writer",request_class="transcripts"} 28
-openclaw_worker_request_phase_seconds_bucket{kind="sqlite_writer",le="0.005",phase="dispatch",request_class="transcripts"} 1`);
+openclaw_worker_request_seconds_count{kind="sqlite_writer",request_class="transcripts"} 1`);
   expect(
     rendered
       .split("\n")
-      .filter((line) => line.startsWith("openclaw_worker_request_phase_seconds_count")),
-  ).toHaveLength(7);
+      .filter((line) => /^openclaw_worker_request(?:_phase)?_seconds_bucket/.test(line)),
+  ).toEqual(Array.from({ length: 8 }, () => expect.stringContaining('le="+Inf"')));
 });

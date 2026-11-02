@@ -21,6 +21,7 @@
  * This exercises a real catalog worker, not a complete Gateway or its client workload.
  * --built-worker /path/to/build uses an already-built dist worker with the native stress
  * loader, excluding TypeScript transform caches from the worker heap. Build before running.
+ * --configured-models grows authored provider definitions; --models grows remote catalog rows.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -31,6 +32,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import workerThreads from "node:worker_threads";
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { prepareModelCatalogWorkerContext } from "../../src/agents/prepared-model-catalog-fingerprints.js";
 import type {
   PreparedModelCatalogWorkerTask,
@@ -42,6 +44,7 @@ const { values } = parseArgs({
     output: { type: "string" },
     workspaces: { type: "string", default: "20" },
     models: { type: "string", default: "5000" },
+    "configured-models": { type: "string", default: "1" },
     "owner-dir": { type: "string" },
     snapshot: { type: "boolean", default: false },
     "built-worker": { type: "string" },
@@ -61,6 +64,7 @@ assert(values.output, "--output must name a new synthetic fixture directory");
 const root = path.resolve(values.output);
 assert(!fs.existsSync(root), "Refusing to reuse an existing fixture directory");
 const rows = Number(values.models);
+const configuredModels = Number(values["configured-models"]);
 const workspaces = Number(values.workspaces);
 const idleSeconds = Number(values["idle-seconds"]);
 const taskRounds = Number(values["task-rounds"]);
@@ -76,6 +80,7 @@ const providerIds = Array.from({ length: providers }, (_, index) =>
   index === 0 ? "fixture-provider" : `fixture-provider-${index}`,
 );
 assert(Number.isSafeInteger(rows) && rows > 0);
+assert(Number.isSafeInteger(configuredModels) && configuredModels > 0);
 assert(Number.isSafeInteger(workspaces) && workspaces > 0);
 assert(Number.isSafeInteger(taskRounds) && taskRounds > 0);
 assert(Number.isSafeInteger(idleSeconds) && idleSeconds >= 0, "--idle-seconds must be nonnegative");
@@ -239,21 +244,21 @@ const config = {
       "fixture-provider": {
         baseUrl: "https://fixture.invalid/v1",
         api: "openai-completions" as const,
-        models: [
-          {
-            id: "fixture-model",
-            name: "Fixture model",
-            reasoning: false,
-            input: ["text" as const],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 8192,
-            maxTokens: 1024,
-          },
-        ],
+        models: Array.from({ length: configuredModels }, (_, index) => ({
+          id: index === 0 ? "fixture-model" : `fixture-model-${index}`,
+          name: index === 0 ? "Fixture model" : `Fixture model ${index}`,
+          reasoning: false,
+          input: ["text" as const],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 1024,
+        })),
       },
     },
   },
 };
+// Provider inventory does not select agent models. Empty request facts remain valid as it grows.
+assert.equal(collectConfiguredModelRefs(config).length, 0);
 fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(config));
 const inputs = Array.from({ length: workspaces }, (_, index) => {
   const agentId = `synthetic-${index}`;
@@ -324,7 +329,10 @@ const requests: Array<{
   workspace: number;
   elapsedMs: number;
   entries: number;
+  configuredEntries: number;
+  runtimeModels: number;
   hash: string;
+  runtimeHash: string;
 }> = [];
 async function sample(
   name: string,
@@ -352,7 +360,15 @@ async function sample(
   const result = JSON.parse(fs.readFileSync(reply, "utf8"));
   assert(result.ok, JSON.stringify(result));
   console.log(
-    JSON.stringify({ phase: name, commands, workspaces, rows, hostLoad: os.loadavg(), ...result }),
+    JSON.stringify({
+      phase: name,
+      commands,
+      workspaces,
+      rows,
+      configuredModels,
+      hostLoad: os.loadavg(),
+      ...result,
+    }),
   );
 }
 function createRemoteCatalog(revision: number) {
@@ -404,7 +420,25 @@ async function runRevision(revision: number, count = workspaces, timed = false) 
     );
     const elapsedMs = performance.now() - started;
     assert(result.status === "ok" && result.kind === "catalog", JSON.stringify(result));
-    assert(result.snapshot.entries.some((entry) => entry.id === "fixture-model"));
+    const configuredEntries = result.snapshot.entries.filter(
+      (entry) => entry.provider === "fixture-provider" && /^fixture-model(?:-\d+)?$/.test(entry.id),
+    );
+    const configuredIds = new Set(configuredEntries.map((entry) => entry.id));
+    assert.equal(configuredEntries.length, configuredModels);
+    assert.equal(configuredIds.size, configuredModels);
+    assert.equal(result.configuredRuntimeModels.length, 0);
+    const runtimeById = new Map(
+      result.runtimeModels.get("fixture-provider")?.map((model) => [model.id, model]),
+    );
+    for (const model of config.models.providers["fixture-provider"].models) {
+      assert(configuredIds.has(model.id));
+      const runtimeModel = runtimeById.get(model.id);
+      assert(runtimeModel, `Missing runtime model ${model.id}`);
+      assert.equal(runtimeModel.api, config.models.providers["fixture-provider"].api);
+      assert.equal(runtimeModel.baseUrl, config.models.providers["fixture-provider"].baseUrl);
+      assert.equal(runtimeModel.contextWindow, model.contextWindow);
+      assert.equal(runtimeModel.maxTokens, model.maxTokens);
+    }
     if (values["runtime-plugin"]) {
       for (const provider of providerIds) {
         assert(
@@ -420,7 +454,15 @@ async function runRevision(revision: number, count = workspaces, timed = false) 
       workspace: index,
       elapsedMs,
       entries: result.snapshot.entries.length,
+      configuredEntries: configuredEntries.length,
+      runtimeModels: [...result.runtimeModels.values()].reduce(
+        (total, models) => total + models.length,
+        0,
+      ),
       hash: createHash("sha256").update(JSON.stringify(result.snapshot)).digest("hex"),
+      runtimeHash: createHash("sha256")
+        .update(JSON.stringify([...result.runtimeModels]))
+        .digest("hex"),
     });
     commands++;
     if (index === 0 && revision === 0) {

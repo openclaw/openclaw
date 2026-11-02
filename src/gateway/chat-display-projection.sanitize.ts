@@ -541,19 +541,14 @@ export function sanitizeChatHistoryMessage(
     role === "assistant" && !shouldPreserveAssistantControlReplyText(entry);
 
   const projectText = (text: string) => {
+    const res = truncateChatHistoryText(text, maxChars, preserveExactToolPayload, resultMaxChars);
     const controlStripped = stripAssistantMedia
-      ? stripAssistantMediaDirectivesForDisplay(text, managedMedia.urls)
-      : text;
-    changed ||= controlStripped !== text;
-    const res = truncateChatHistoryText(
-      controlStripped,
-      maxChars,
-      preserveExactToolPayload,
-      resultMaxChars,
-    );
+      ? stripAssistantMediaDirectivesForDisplay(res.text, managedMedia.urls)
+      : res.text;
+    changed ||= controlStripped !== res.text;
     changed ||= res.truncated;
     truncated ||= res.truncated;
-    return res.text;
+    return controlStripped;
   };
   if (typeof entry.content === "string") {
     entry.content = projectText(entry.content);

@@ -60,6 +60,8 @@ export type SessionMutationAuthorizationParams = {
   context: GatewayRequestContext;
   /** Trusted prepared identity; never adopt a later target while capturing authority. */
   expectedTarget?: ExpectedSessionMutationTarget;
+  /** Recorded-principal input requires an existing, unarchived physical destination. */
+  assertPrincipalTargetCurrent?: (target: SessionSharingTarget | null) => void;
   /** The router's actual alternative admission, not other grants on the same client. */
   sessionScope?: SessionOperatorScope;
   /** Database access classified by the host-owned method registry. */
@@ -407,7 +409,7 @@ export function resolvePreparedTalkAuthorizationTarget(
 }
 
 export function findPreparedSharingTarget(
-  params: SessionMutationAuthorizationParams,
+  params: Pick<SessionMutationAuthorizationParams, "preparedTargets">,
   targetRef: { sessionKey?: string; key?: string; agentId?: string },
 ) {
   const sessionKey = normalizeOptionalString(targetRef.sessionKey ?? targetRef.key);

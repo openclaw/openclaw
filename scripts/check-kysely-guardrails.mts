@@ -41,6 +41,9 @@ const rawSqliteAllowPathGroups = {
   "native close conformance on disposable probe databases": [
     "src/infra/bun-sqlite-close-probe.worker.ts",
   ],
+  "immutable inspection reader cache/mmap PRAGMAs are connection-local SQLite primitives": [
+    "src/infra/sqlite-snapshot.ts",
+  ],
   "native Kysely adapter and sync execution": [
     "src/infra/kysely-node-sqlite.ts",
     "src/infra/kysely-sync-cache-state.ts",

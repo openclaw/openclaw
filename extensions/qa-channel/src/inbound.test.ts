@@ -362,18 +362,25 @@ describe("QA preview terminal ownership", () => {
     expect(sendQaBusMessage).toHaveBeenCalledOnce();
   });
 
-  it("preserves the dispatch failure when preview cleanup also fails", async () => {
-    const failure = new Error("dispatch failed");
-    vi.mocked(deleteQaBusMessage).mockRejectedValueOnce(new Error("cleanup failed"));
-    await expect(
-      runQaInbound(async (turn) => {
-        await turn.replyOptions?.onPartialReply?.({ text: "unfinished" });
-        throw failure;
-      }),
-    ).rejects.toBe(failure);
-    expect(deleteQaBusMessage).toHaveBeenCalledOnce();
-    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
-  });
+  it.each([
+    { label: "Error", failure: new Error("dispatch failed") },
+    { label: "undefined", failure: undefined },
+  ])(
+    "preserves the $label dispatch failure when preview cleanup also fails",
+    async ({ failure }) => {
+      const dispatch = createDeferred<void>();
+      vi.mocked(deleteQaBusMessage).mockRejectedValueOnce(new Error("cleanup failed"));
+      await expect(
+        runQaInbound(async (turn) => {
+          await turn.replyOptions?.onPartialReply?.({ text: "unfinished" });
+          dispatch.reject(failure);
+          await dispatch.promise;
+        }),
+      ).rejects.toBe(failure);
+      expect(deleteQaBusMessage).toHaveBeenCalledOnce();
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
+    },
+  );
 });
 
 it("admits symbolic group members from each supplied config snapshot", async () => {

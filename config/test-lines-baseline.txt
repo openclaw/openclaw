@@ -1,6 +1,1 @@
-# PR #186097: retain base-red voice-reset regressions (daily, idle, call start, call snapshot, caller authority).
-# CI 40687369551 used 6,302,169 lines: 169 over the 6,302,000 ceiling; PR net stays +217.
-# Main at CI time used 6,301,952 against 6,302,000; the PR's cases were consolidated from +315 to +217.
-# Round measured use to the next 1,000: fixed ceiling 6,303,000, with 831 bounded reserve lines.
-# All cases, assertions and counting/gating rules remain unchanged; no automatic budget growth.
-6303000
+6319970

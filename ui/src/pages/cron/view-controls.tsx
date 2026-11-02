@@ -1,6 +1,6 @@
 import { createMemo, createUniqueId, Errored, Loading } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
-import { Icon } from "../../components/solid/icon.tsx";
+import { Icon, sessionIcon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { SettingsToggle } from "../../components/solid/settings-ui.tsx";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
@@ -71,7 +71,7 @@ export function JobMenu(props: CronJobActionProps & { job: CronJob }) {
       class="cron-job-menu"
       triggerClass="btn btn--sm btn--ghost cron-job-menu__trigger"
       triggerAttributes={{ title: t("cron.actions.moreJob", { name: displayName() }) }}
-      trigger={<Icon name="moreHorizontal" />}
+      trigger={sessionIcon("moreHorizontal", 16, 1.5)}
       placement="bottom-end"
       items={[
         ...(props.job.schedule.kind === "event"
@@ -88,7 +88,7 @@ export function JobMenu(props: CronJobActionProps & { job: CronJob }) {
           id: "clone",
           label: t("cron.actions.clone"),
           class: "cron-job-menu__item",
-          disabled: props.busy || !props.canManage,
+          disabled: props.busy || !(props.canCreate ?? props.canManage),
         },
         {
           id: "remove",
@@ -107,6 +107,9 @@ export function JobMenu(props: CronJobActionProps & { job: CronJob }) {
             props.onRun(props.job, "due");
             break;
           case "clone":
+            if (!(props.canCreate ?? props.canManage)) {
+              return;
+            }
             props.onClone(props.job);
             break;
           case "remove":

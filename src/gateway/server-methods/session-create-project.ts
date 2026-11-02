@@ -102,7 +102,7 @@ export function resolveSessionRepositoryCreation(
 
 export function prepareSessionRepositoryWorkspace(
   repository: RepositorySource,
-  options: { runSetupScript: boolean; assertCurrent: () => void },
+  options: { runSetupScript: boolean; branchPrefix?: string; assertCurrent: () => void },
 ): PrepareGatewaySessionLifecycle {
   const { assertCurrent } = options;
   return async (target) => {
@@ -133,6 +133,7 @@ export function prepareSessionRepositoryWorkspace(
       url: repository.url,
       requestedRef: repository.ref,
       runSetupScript: options.runSetupScript,
+      branchPrefix: options.branchPrefix,
       assertCurrent: assertSourceCurrent,
     });
     const withCommit: NonNullable<PreparedGatewaySessionLifecycle["withCommit"]> = (run) =>
@@ -559,6 +560,7 @@ export async function prepareSessionWorkspaceForRun(params: {
                 // initialize its prompt in the final execution directory.
                 const bound = await commitPreparedSessionWorkspace({
                   prepared: promptWorkspace,
+                  signal,
                   target,
                   projectId: project?.id,
                   assertCurrent: assertRunOwnership,
@@ -581,6 +583,7 @@ export async function prepareSessionWorkspaceForRun(params: {
       }
       const bound = await commitPreparedSessionWorkspace({
         prepared,
+        signal,
         target,
         projectId: project?.id,
         assertCurrent: assertRunOwnership,

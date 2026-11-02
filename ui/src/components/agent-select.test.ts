@@ -111,17 +111,19 @@ it("retains agent row content while selection and roster details change", async 
       { value: "beta", label: "Beta", agent: { id: "beta", identity: { emoji: "🦊" } } },
     ],
   });
+  expect(element.querySelectorAll("[data-agent-option]")).toHaveLength(0);
+  element.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+  await waitForSolid(() => expect(element.querySelectorAll("[data-agent-option]")).toHaveLength(2));
   const alpha = element.querySelector<HTMLElement>('[data-agent-option][value="alpha"]')!;
   const beta = element.querySelector<HTMLElement>('[data-agent-option][value="beta"]')!;
   const alphaAvatar = alpha.querySelector(".agent-select__avatar");
   const betaAvatar = beta.querySelector(".agent-select__avatar");
   expect(alphaAvatar).not.toBeNull();
   expect(betaAvatar).not.toBeNull();
-
   element.value = "beta";
   await waitForSolid(() => {
-    expect(beta.getAttribute("aria-checked")).toBe("true");
-    expect(alpha.getAttribute("aria-checked")).toBe("false");
+    expect(beta.getAttribute("aria-selected")).toBe("true");
+    expect(alpha.getAttribute("aria-selected")).toBe("false");
     expect(alpha.querySelector(".agent-select__avatar")).toBe(alphaAvatar);
     expect(beta.querySelector(".agent-select__avatar")).toBe(betaAvatar);
   });
@@ -149,6 +151,8 @@ it("retains agent row content while selection and roster details change", async 
     expect(beta.querySelector(".agent-select__avatar")).toBe(betaAvatar);
     expect(element.querySelector(".agent-select__label")?.textContent).toBe("Research");
   });
+  element.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+  await waitForSolid(() => expect(element.querySelectorAll("[data-agent-option]")).toHaveLength(0));
 });
 
 it("keeps a failed avatar on its fallback until the image changes", async () => {
@@ -201,7 +205,7 @@ it("retires a missing-option fallback without poisoning its replacement image", 
   await waitForSolid(() => expect(avatarSrc(element, "trigger")).toBe(avatar));
 });
 
-it("keeps both option routes and the selected avatar with token auth", async () => {
+it("loads only the selected avatar until opening, then retains both option routes", async () => {
   const { createObjectURL, revokeObjectURL } = stubAvatarUrls();
   createObjectURL.mockReturnValueOnce("blob:alpha").mockReturnValueOnce("blob:beta");
   const response = createDeferred<Response>();
@@ -228,9 +232,17 @@ it("keeps both option routes and the selected avatar with token auth", async () 
       });
       expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
         `${globalThis.location.origin}/avatar/alpha`,
-        `${globalThis.location.origin}/avatar/beta`,
       ]);
     });
+    expect(element.querySelectorAll("[data-agent-option]")).toHaveLength(0);
+    element.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+    await element.updateComplete;
+    await waitForFast(() =>
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+        `${globalThis.location.origin}/avatar/alpha`,
+        `${globalThis.location.origin}/avatar/beta`,
+      ]),
+    );
 
     response.resolve(
       new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
@@ -425,7 +437,10 @@ it("keeps avatar text out of typeahead and announces option metadata", async () 
     ),
     value: "beta",
   });
+  element.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+  await element.updateComplete;
 
+  await waitForSolid(() => expect(element.querySelectorAll("[data-agent-option]")).toHaveLength(2));
   const items = Array.from(
     element.querySelectorAll<HTMLElement & { value: string }>("[data-agent-option]"),
   );

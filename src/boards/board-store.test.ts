@@ -197,7 +197,7 @@ it("isolates sessions, snapshots and metadata from callers and HTML document bod
 it("preserves native identity and layout through edits, reopen, and replacement", async () => {
   const { store, put, ops, current: readSnapshot, reopen, target } = fixture();
   const putCard = (name: string, props?: Record<string, unknown>) =>
-    put({ name, content: pluginContent(props) });
+    put({ name, content: pluginContent(props), placement: { tabId: "main" } });
   const props = {
     instanceId: "caller-selected",
     pluginInstanceId: "caller-selected",
@@ -219,34 +219,34 @@ it("preserves native identity and layout through edits, reopen, and replacement"
   expect(await readBoardHtml(store, target, "work-item")).toBeUndefined();
   expect(await store.readWidgetMcpApp(target, "work-item")).toBeUndefined();
 
-  const moved = await ops({ kind: "widget_move", name: "work-item", after: "right" });
-  expect(moved.widgets.map((widget) => widget.name)).toEqual(["left", "right", "work-item"]);
-  expect(moved.widgets[2]?.props).toEqual(props);
-  expect(moved.widgets[2]?.instanceId).toBe(instanceId);
-  const [left, right] = moved.widgets;
+  const moved = await ops({ kind: "widget_move", name: "work-item", after: "left" });
+  expect(moved.widgets.map((widget) => widget.name)).toEqual(["left", "work-item", "right"]);
+  expect(moved.widgets[1]?.props).toEqual(props);
+  expect(moved.widgets[1]?.instanceId).toBe(instanceId);
+  const [left, , right] = moved.widgets;
   const cleared = await putCard("work-item");
   expect(cleared.widgets).toEqual([
     left,
-    right,
     expect.objectContaining({ instanceId, revision: 2 }),
+    right,
   ]);
-  expect(cleared.widgets[2]).not.toHaveProperty("props");
+  expect(cleared.widgets[1]).not.toHaveProperty("props");
   const edited = await put({
     name: "work-item",
     title: "Updated status",
     content: pluginContent(props),
-    placement: { after: "left" },
+    placement: { after: "right" },
   });
   expect(edited.widgets).toEqual([
     left,
+    { ...right, position: 1 },
     expect.objectContaining({ title: "Updated status", instanceId, revision: 3, props }),
-    { ...right, position: 2 },
   ]);
   const resized = await ops({ kind: "widget_resize", name: "work-item", sizeW: 8, sizeH: 6 });
   await reopen();
   const persisted = await readSnapshot();
   expect(persisted).toEqual(resized);
-  expect(persisted.widgets[1]).toMatchObject({ sizeW: 8, sizeH: 6 });
+  expect(persisted.widgets[2]).toMatchObject({ sizeW: 8, sizeH: 6 });
   expect((await store.getSnapshotWithHtmlViewMetadata(target)).htmlViewMetadata.size).toBe(0);
   await ops({ kind: "widget_remove", name: "work-item" });
   const replacement = await put({ name: "work-item", content: pluginContent() });

@@ -50,6 +50,25 @@ still independently rereads complete source identity after the immutable fetch.
 Publication revalidates immediately before each Git/GraphQL write, after transport
 preparation, and compares the successful publication observation before acquisition.
 
+PR-branch publication defaults to `OPENCLAW_PR_PUSH_MODE=auto`. Signed ranges
+use Git; unsigned linear ranges use GitHub’s verified `createCommitOnBranch`
+route when head-repository metadata is available. A range containing a merge
+uses Git to preserve its parents and must pass the existing signature checks
+or have the explicit `OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH=1` override. Signature
+checks cover first-parent commits, or all non-baseline task commits when an
+authenticated publication baseline is present. The override does not
+change the unsigned-linear default. Explicit `graphql` mode still refuses merge
+ancestry. A Git permission failure can fall back to GraphQL only for a linear
+range; a merge preserves the original Git failure instead. Uncertain outcomes
+never authorize another publication.
+
+The explicit pending-proof publication purpose always requires the original
+signed Git commit. It rejects unsigned overrides and GraphQL commit aliases,
+including permission-error fallback. Its canonical landing observation must
+show no auto-merge request or queue membership before publication; missing facts
+refuse. This purpose produces publication evidence only, leaving the correction
+review and ordinary landing gates unresolved.
+
 Ordinary immediate squash prefers REST. Explicit recovery of a validated retained
 intent starts with GraphQL; normal fallback and immediate-only recovery gates
 still apply. Admission reads switch transports only

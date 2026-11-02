@@ -6,7 +6,7 @@ import {
 } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import path from "node:path";
+import path, { matchesGlob } from "node:path";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect } from "vitest";
@@ -68,6 +68,18 @@ export type WorkflowStep = {
   with?: Record<string, unknown>;
   "working-directory"?: string;
 };
+
+export function acceptsWorkflowPaths(patterns: readonly string[], files: readonly string[]) {
+  return files.some((file) =>
+    patterns.reduce(
+      (selected, pattern) =>
+        pattern.startsWith("!")
+          ? selected && !matchesGlob(file, pattern.slice(1))
+          : selected || matchesGlob(file, pattern),
+      false,
+    ),
+  );
+}
 
 export const readCiWorkflow = () => readWorkflow(".github/workflows/ci.yml");
 
@@ -326,6 +338,9 @@ export function runWorkflowCommand(
   args: string[],
   options: Omit<SpawnSyncOptions, "encoding" | "killSignal"> = {},
 ) {
+  // System Bash avoids Darwin's pipe-backed heredoc deadlocks. Explicit paths
+  // from resolveWorkflowBash still preserve Linux fixtures' Bash 5 semantics.
+  const executable = process.platform === "darwin" && command === "bash" ? "/bin/bash" : command;
   const timeout = options.timeout ?? WORKFLOW_COMMAND_TIMEOUT_MS;
   // Node shares detached handling between spawn and spawnSync; its types expose it on spawn only.
   const childOptions = {
@@ -336,7 +351,7 @@ export function runWorkflowCommand(
     // Synchronous fixture children must terminate even if they ignore SIGTERM.
     killSignal: "SIGKILL",
   } satisfies SpawnSyncOptionsWithStringEncoding & Pick<SpawnOptions, "detached">;
-  const result = spawnSync(command, args, childOptions);
+  const result = spawnSync(executable, args, childOptions);
   const error: NodeJS.ErrnoException | undefined = result.error;
   if (error) {
     if (process.platform !== "win32" && result.pid > 0) {
@@ -349,7 +364,7 @@ export function runWorkflowCommand(
     }
     const reason = error.code === "ETIMEDOUT" ? `timed out after ${timeout} ms` : error.message;
     throw new Error(
-      `Workflow fixture command ${reason}: ${[command, ...args].map(quoteShell).join(" ")}\n${result.stdout ?? ""}${result.stderr ?? ""}`,
+      `Workflow fixture command ${reason}: ${[executable, ...args].map(quoteShell).join(" ")}\n${result.stdout ?? ""}${result.stderr ?? ""}`,
       { cause: error },
     );
   }

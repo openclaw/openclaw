@@ -36,7 +36,7 @@ Managed worktree sessions use the worktree checkout as `sessionRoot`. A nested w
 
 File tools recognize aliases of the session's trusted root and working directory, including absolute paths using those aliases. This does not expand the boundary: unrelated external symlinks pointing inward remain denied, as do symlinks and raw `symlink/..` traversal that escape the root. In `read-only` mode, OpenClaw-managed mutation tools remain omitted.
 
-New sessions, including managed worktree sessions, inherit the configured global or per-agent tool/exec policy when no mode is specified. Exec and file-tool settings are independent. The default personal preset selects full exec and unrestricted `apply_patch`; corporate selects workspace containment. Explicit file settings and required roots still apply. See [apply_patch containment](/tools/apply-patch#notes) for the file settings, session-mode precedence, and whole-agent worker defaults.
+New sessions, including managed worktree sessions, inherit the configured global or per-agent tool/exec policy when no mode is specified. Exec and file-tool settings are independent: host `apply_patch` permits paths outside the workspace by default, consistently with unrestricted file tools. Set `tools.exec.applyPatch.workspaceOnly: true` or use a restricted session mode for containment. See [apply_patch containment](/tools/apply-patch#notes) for the file settings, session-mode precedence, and whole-agent worker defaults.
 
 Creating a worktree pins the working directory without selecting a permission mode. Explicit modes and modes already saved on existing sessions remain unchanged.
 
@@ -64,7 +64,7 @@ handoffs still need a direct operator session. See
 
 ## Change permissions during a task
 
-Choose a mode from the chat composer's **Execution permissions** menu. The icon-only picker immediately shows the selected mode's icon while the change settles, and temporarily blocks another selection for that session. Other clients see the mode after the Gateway publishes the updated session. If the change fails, the picker reconciles with the authoritative session state and shows an error; if that state cannot be refreshed yet, it keeps the optimistic selection until a fresh permission read or update for that session confirms the saved mode.
+Choose a mode from the chat composer's **Execution permissions** menu. On wider web composers, the picker shows the current mode beside its icon, including the resolved mode when using Default. Compact composers keep the icon-only control. The picker immediately shows the selected mode while the change settles, and temporarily blocks another selection for that session. Other clients see the mode after the Gateway publishes the updated session. If the change fails, the picker reconciles with the authoritative session state and shows an error; if that state cannot be refreshed yet, it keeps the optimistic selection until a fresh permission read or update for that session confirms the saved mode.
 
 - **Codex:** OpenClaw interrupts the active native turn and stops its background terminals, then continues in the same conversation with the new permissions and an internal **Permission change** notice. It does not reset the conversation or replay the original request.
 - **OpenClaw native runtime:** OpenClaw refreshes the active tool policy without restarting the conversation. Subsequent tool calls use the updated permissions.

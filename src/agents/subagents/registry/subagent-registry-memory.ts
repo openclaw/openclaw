@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { revokeGoalContinuationReturn } from "../../../auto-reply/reply/goal-continuation-return.js";
-import type { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { prepareGatewayContextBindingOwner } from "../../../plugins/runtime/gateway-context-binding-owner.js";
 import {
   bindGatewayContextResolver,
@@ -8,6 +7,7 @@ import {
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import type { OperationalRunInstanceRef } from "../../operational-run-instance.js";
 import { transferFollowupCohort } from "../completion/session-followup-cohort.js";
 import {
   matchesSubagentChildSessionOwner,
@@ -16,6 +16,7 @@ import {
 } from "./subagent-child-owner-match.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import type { SubagentCompletionCustody } from "./subagent-registry-memory.types.js";
 import {
   publishSubagentRunChanges,
   subscribeSubagentRunChanges,
@@ -85,7 +86,6 @@ export function compactSubagentRunForMemory(entry: SubagentRunRecord): SubagentR
   if (compact.delivery) {
     delete compact.delivery.payload;
   }
-  delete compact.operatorRecoverySource;
   bindGatewayContextResolver(compact, getGatewayContextResolver(entry));
   recordSubagentRunPayloadEviction(compact, entry);
   return immutableSubagentRun(compact);
@@ -102,7 +102,6 @@ export function restoreSubagentRunPayload(
   const restored = copySubagentRunRuntimeOwner(resident, {
     ...resident,
     task: full.task,
-    operatorRecoverySource: full.operatorRecoverySource,
     ...(resident.delivery
       ? { delivery: { ...resident.delivery, payload: full.delivery?.payload } }
       : {}),
@@ -278,22 +277,12 @@ function completeRetirementPublication(publication: SubagentRetirementPublicatio
   publication.resolve();
 }
 
-type CompletionAuthority = NonNullable<
-  Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>
->;
-type CompletionCustody = {
-  authority: CompletionAuthority;
-  entry: SubagentRunRecord;
-  stop: () => void;
-};
-
 class SubagentRunMap extends Map<string, SubagentRunRecord> {
   readLookup = new SubagentSessionReadLookup();
   readonly workIndex = new SubagentRunWorkIndex();
-  private readonly completionAuthorities = new Map<object, CompletionCustody>();
+  private readonly completionAuthorities = new Map<object, SubagentCompletionCustody>();
   // A tombstone rejects stale callbacks without retaining closed Gateway/source contexts.
-  // True marks restart custody; false marks a live admitted source.
-  private readonly requiredCompletionEntries = new WeakMap<object, boolean>();
+  private readonly requiredCompletionEntries = new WeakSet<object>();
   private readonly retiredCompletionEntries = new WeakSet<object>();
 
   retireCompletionAuthority(observed: SubagentRunRecord): void {
@@ -311,15 +300,15 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     return getCurrentSubagentRunOwner(this, entry) ?? entry;
   }
 
-  requireCompletionAuthority(entry: SubagentRunRecord): void {
-    this.requiredCompletionEntries.set(getSubagentRunRuntimeKey(entry), true);
-  }
-
-  bindCompletionAuthority(row: SubagentRunRecord, source: CompletionAuthority, recovered = false) {
+  bindCompletionAuthority(
+    row: SubagentRunRecord,
+    source: SubagentCompletionCustody["authority"],
+    requesterRunInstance?: OperationalRunInstanceRef,
+  ) {
     const entry = this.currentValue(row);
     const key = getSubagentRunRuntimeKey(entry);
     // A committed row with captured custody stays restricted if its source expires before publication.
-    this.requiredCompletionEntries.set(key, this.requiredCompletionEntries.get(key) ?? recovered);
+    this.requiredCompletionEntries.add(key);
     source.assertCurrent();
     if (
       this.retiredCompletionEntries.has(key) &&
@@ -328,11 +317,12 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       throw new Error("Subagent completion retry no longer owns its source");
     }
     this.releaseCompletionAuthority(entry);
-    this.requiredCompletionEntries.set(key, recovered);
+    this.requiredCompletionEntries.add(key);
     this.retiredCompletionEntries.delete(key);
-    const custody: CompletionCustody = {
+    const custody: SubagentCompletionCustody = {
       authority: source,
       entry,
+      requesterRunInstance,
       stop: () => source.signal.removeEventListener("abort", revoked),
     };
     const revoked = () => this.releaseCompletionAuthority(custody.entry);
@@ -341,6 +331,20 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     if (source.signal.aborted) {
       revoked();
     }
+  }
+
+  /** Steering adopts an existing execution without replacing its completion source. */
+  bindRequesterRunInstance(entry: SubagentRunRecord, instance?: OperationalRunInstanceRef): void {
+    const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
+    if (custody && instance && isSameSubagentRunOwner(this.get(entry.runId), entry)) {
+      custody.requesterRunInstance = instance;
+    }
+  }
+
+  getRequesterRunInstance(entry: SubagentRunRecord): OperationalRunInstanceRef | undefined {
+    return isSameSubagentRunOwner(this.get(entry.runId), entry)
+      ? this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.requesterRunInstance
+      : undefined;
   }
 
   releaseCompletionAuthority(observed: SubagentRunRecord): void {
@@ -390,8 +394,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   private isCancellationNotice(entry: SubagentRunRecord): boolean {
     return (
       entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-      entry.execution.outcome?.status === "error" &&
-      !this.requiredCompletionEntries.get(getSubagentRunRuntimeKey(entry))
+      entry.execution.outcome?.status === "error"
     );
   }
 
@@ -432,14 +435,8 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       }
       custody?.authority.assertCurrent();
       const source = custody?.authority.operatorAuthority;
-      // Siblings re-admitted independently share durable input evidence, not an old capability.
-      const sameRecoveredSource =
-        this.requiredCompletionEntries.get(getSubagentRunRuntimeKey(resultEntry)) &&
-        this.requiredCompletionEntries.get(getSubagentRunRuntimeKey(entry)) &&
-        resultEntry.operatorRecoverySource !== undefined &&
-        isDeepStrictEqual(resultEntry.operatorRecoverySource, entry.operatorRecoverySource);
       if (
-        (!sameRecoveredSource && source?.source !== first?.source) ||
+        source?.source !== first?.source ||
         !isDeepStrictEqual(source?.scopes, first?.scopes) ||
         !isDeepStrictEqual(custody?.authority.scopes, firstCustody?.authority.scopes)
       ) {
@@ -457,9 +454,8 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     if (this.retiredCompletionEntries.has(previousKey)) {
       this.retiredCompletionEntries.add(nextKey);
     }
-    const recovered = this.requiredCompletionEntries.get(previousKey);
-    if (recovered !== undefined) {
-      this.requiredCompletionEntries.set(nextKey, recovered);
+    if (this.requiredCompletionEntries.has(previousKey)) {
+      this.requiredCompletionEntries.add(nextKey);
     }
     const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(previous));
     if (!custody) {

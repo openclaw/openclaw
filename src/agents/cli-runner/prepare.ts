@@ -105,7 +105,11 @@ import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import { assertNativeCronCreatorCapabilities } from "../tools/cron-tool-creator-cap.js";
-import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
+import {
+  redactRunIdentifier,
+  resolveRunBootstrapWorkspaceDir,
+  resolveRunWorkspaceDir,
+} from "../workspace-run.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
   isWorkspaceBootstrapPending as isWorkspaceBootstrapPendingImpl,
@@ -141,8 +145,10 @@ import { runWithCliPreparationSource } from "./prepare-source.js";
 import {
   capCliToolAvailability,
   keptManagedNativeTools,
+  withCliToolSearch,
   resolveCliBootstrapFileAccess,
   resolveCliRuntimeToolPolicy,
+  resolveCliToolAvailabilityHash,
 } from "./prepare-tool-policy.js";
 import {
   buildCliVisibleReplyGuidance,
@@ -675,11 +681,15 @@ async function prepareCliRunContextWithinReadFence(
   const canonicalWorkspace = resolveUserPath(
     resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
   );
+  const bootstrapWorkspaceDir = resolveRunBootstrapWorkspaceDir(
+    { ...params, ...workspaceResolution, sessionRoot: params.sessionEntry?.sessionRoot },
+    params.bootstrapWorkspaceDir ?? canonicalWorkspace,
+  );
   const { bootstrapFiles, contextFiles: resolvedContextFiles } = skipsTurnPreparation
     ? { bootstrapFiles: [], contextFiles: [] }
     : await resolveBootstrapContextForRunImpl({
-        workspaceDir: params.bootstrapWorkspaceDir ?? canonicalWorkspace,
-        executionWorkspaceDir: workspaceDir,
+        workspaceDir: bootstrapWorkspaceDir,
+        executionWorkspaceDir: params.sessionEntry?.sessionRoot ?? workspaceDir,
         config: params.config,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
@@ -690,7 +700,7 @@ async function prepareCliRunContextWithinReadFence(
         runKind: params.bootstrapContextRunKind,
         warn: makeBootstrapWarnImpl({
           sessionLabel,
-          workspaceDir: params.bootstrapWorkspaceDir ?? canonicalWorkspace,
+          workspaceDir: bootstrapWorkspaceDir,
           warn: (message) => cliBackendLog.warn(message),
         }),
       });
@@ -848,6 +858,7 @@ async function prepareCliRunContextWithinReadFence(
   );
   // Mirror the embedded runner's bootstrap routing for backends that transport
   // OpenClaw's system prompt, using the final native or mediated file access.
+  params = withCliToolSearch(params, backendResolved.nativeToolSearch);
   const hasBootstrapFileAccess = resolveCliBootstrapFileAccess({
     backend: backendResolved,
     params,
@@ -952,17 +963,8 @@ async function prepareCliRunContextWithinReadFence(
     nativeAuthorityAllowed: !skipsTurnPreparation && !nodeClaudePlacement,
     projectNativeToolAuthority: backendResolved.projectNativeToolAuthority,
   });
-  const toolBoundExtraSystemPromptHash = params.cliToolAvailability
-    ? hashCliSessionText(
-        JSON.stringify([
-          baseExtraSystemPromptHash ?? null,
-          params.cliToolAvailability.native.toSorted(),
-          params.cliToolAvailability.openClaw.toSorted(),
-        ]),
-      )
-    : baseExtraSystemPromptHash;
   const extraSystemPromptHash = resolveCliBootstrapPromptHash({
-    baseHash: toolBoundExtraSystemPromptHash,
+    baseHash: resolveCliToolAvailabilityHash(baseExtraSystemPromptHash, params.cliToolAvailability),
     bootstrapMode,
     bootstrapTruncationNotice,
     contextFiles,
@@ -1088,7 +1090,9 @@ async function prepareCliRunContextWithinReadFence(
           })()
         : undefined;
     const rawLoopbackServerConfig = mcpLoopbackRuntime
-      ? createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
+      ? createMcpLoopbackServerConfig(mcpLoopbackRuntime.port, {
+          deferTools: Boolean(params.cliToolAvailability?.discovery?.length),
+        })
       : undefined;
     const loopbackServerConfig =
       rawLoopbackServerConfig && backendResolved.bundleMcpMode === "claude-config-file"
@@ -1575,7 +1579,6 @@ async function prepareCliRunContextWithinReadFence(
         // Operator-kept orchestration tools that survived every later native-tool cap.
         nativeDelegationTools: keptManagedNativeTools(managedNativeTools, params),
         runtimeContextFragments: params.runtimeContextFragments,
-        // Caller-owned memory cannot grant access to persisted interrupted inputs.
         sessionTarget: params.isolatedCompletion ? undefined : replayableTarget(cliHistoryWriter),
         context: [promptBuildHookResult?.appendContext, authorizedPromptBuildResult?.appendContext],
       }));

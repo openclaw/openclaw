@@ -10,6 +10,8 @@ import {
 export type ContextEntry = SessionTreeEntry & { seq: number };
 export type ModelContextRequest = {
   entry: ContextEntry;
+  /** The payload stays at its acceptance row; this marker owns its model-visible position. */
+  placement?: ContextEntry;
   omitCheckpoint: boolean;
   toolResultOmission?: string;
 };

@@ -1,6 +1,7 @@
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { patchSettings } from "../../app/settings.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
@@ -11,11 +12,11 @@ import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts"
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
-import type { ChatWelcomeProps } from "../chat/components/chat-welcome.tsx";
 import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
 import * as catalog from "./catalog-target.ts";
 import type { NewSessionComposerOptions } from "./composer.tsx";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
+import { selectedDraftProjectId } from "./draft-create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import {
   activateDraft,
@@ -27,6 +28,7 @@ import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import type { createNewSessionTitle } from "./draft-title.ts";
+import type { DraftWelcomeOptions } from "./draft-welcome.tsx";
 import { NewSessionDraft } from "./draft.ts";
 import { forgetInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
@@ -109,7 +111,7 @@ export class NewSessionPageOwner {
     }
   };
   imageLightbox: ImageLightboxItem | null = null;
-  agentPickerOpen = false;
+  readAgentIdentityTargets: () => readonly string[] = () => [];
   agentPicker: HTMLSpanElement | undefined;
   readonly draft: NewSessionDraft;
   readonly gateway: DraftGatewayState;
@@ -295,9 +297,9 @@ export class NewSessionPageOwner {
       this.connectMachine.close();
     }
     this.gateway.retryPendingCatalogTarget();
-    void this.context?.agentIdentity.ensure(
-      this.agentPickerOpen ? this.place.agents().map((agent) => agent.id) : [this.place.agentId],
-    );
+    void this.context?.agentIdentity.ensure([
+      ...new Set([this.place.agentId, ...this.readAgentIdentityTargets()]),
+    ]);
     const agentsReady = this.draft.agentsReady();
     this.place.modelControl.loadCatalogTargets(
       this.context,
@@ -402,6 +404,7 @@ export class NewSessionPageOwner {
       context,
       isCatalogTarget,
       draftOwnerKey,
+      commandProjectId: selectedDraftProjectId(place),
       get message() {
         return submission.message;
       },
@@ -416,6 +419,8 @@ export class NewSessionPageOwner {
       get submitting() {
         return submission.submitting;
       },
+      chatMessageMaxWidth: preferences?.chatMessageMaxWidth,
+      onComposerWidthChange: (value) => patchSettings({ chatMessageMaxWidth: value }),
 
       get messageLocked() {
         return Boolean(submission.pendingPlacement.sessionKey);
@@ -439,7 +444,7 @@ export class NewSessionPageOwner {
     };
   }
 
-  welcomeOptions(): Omit<ChatWelcomeProps, "composer"> {
+  welcomeOptions(): DraftWelcomeOptions {
     const agent = this.place.selectedAgent();
     const identity = this.context?.agentIdentity.get(this.place.agentId);
     const gateway = this.context?.gateway.snapshot;
@@ -459,7 +464,6 @@ export class NewSessionPageOwner {
       fadeSecondaryContent: this.submission.message.trim().length > 0,
       modelSetupRequired: this.submission.requiresModelSetup(),
       onModelSetup: () => this.context?.navigate("model-setup"),
-      sessions: this.context?.sessions.state.result,
       sessionKey: buildAgentMainSessionKey({
         agentId: this.place.agentId || "main",
         mainKey: this.context?.agents.state.agentsList?.mainKey,

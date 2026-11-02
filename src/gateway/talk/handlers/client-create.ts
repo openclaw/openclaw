@@ -30,7 +30,6 @@ import {
   type ClientVoiceSessionWriter,
 } from "../../../talk/client-voice-session-write.js";
 import {
-  appendClientVoiceTranscript,
   closeClientVoiceSession,
   closeStaleClientVoiceSessions,
   createOrResumeClientVoiceSession,
@@ -56,6 +55,7 @@ import {
   type TalkClientRunAuthority,
 } from "../client-run-authority.js";
 import { resolveTalkAgentConsultAuthority } from "../client-tool-authority.js";
+import { appendTalkClientTranscript } from "../client-transcript.js";
 import { talkRequestError } from "../request-error.js";
 import {
   assertTalkClientSessionEntryDeadline,
@@ -339,7 +339,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
           closingFailure
             ? Promise.reject(toErrorObject(closingFailure.error, "Voice session close failed"))
             : withVoiceWriter((writer) =>
-                appendClientVoiceTranscript(
+                appendTalkClientTranscript(
                   {
                     agentId,
                     sessionKey,
@@ -351,6 +351,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
                     providerOwned: controlSource === "delegation",
                     config: runtimeConfig,
                   },
+                  context,
                   writer,
                 ),
               ),

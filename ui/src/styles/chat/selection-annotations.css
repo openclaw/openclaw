@@ -41,11 +41,6 @@ div.chat-thread:where(.chat-thread--comment-pins) {
   position: relative;
 }
 
-/* Reserve a narrow gutter for pins even when a selected line fills the viewport. */
-div.chat-thread:where(.chat-thread--comment-pins) .chat-thread-inner {
-  padding-inline-end: 28px;
-}
-
 openclaw-chat-comment-pins {
   contain: layout;
   position: absolute;
@@ -75,9 +70,7 @@ openclaw-chat-comment-pins {
 .chat-comment-preview {
   --openclaw-tooltip-max-width: min(360px, calc(100vw - 24px));
   --openclaw-tooltip-padding: 12px;
-  --openclaw-tooltip-background-color: var(--session-hovercard-surface);
-  --openclaw-tooltip-border-color: var(--border);
-  --openclaw-tooltip-border-radius: var(--radius-lg);
+  --openclaw-tooltip-border-radius: var(--menu-radius);
 }
 
 .chat-comment-preview__scroll {
@@ -194,10 +187,7 @@ openclaw-chat-comment-pins {
 }
 
 .chat-comment-preview--editable {
-  --openclaw-tooltip-background-color: var(--popover);
   --openclaw-tooltip-padding: 6px;
-  --openclaw-tooltip-border-radius: var(--radius-lg);
-  --openclaw-tooltip-shadow: var(--shadow-md);
 }
 
 .chat-comment-preview--editable .chat-comment-preview__scroll {

@@ -14,7 +14,6 @@ import type { startNostrBus } from "./nostr-bus.js";
 import type { NostrIngressLifecycle } from "./nostr-ingress.js";
 import { setNostrRuntime } from "./runtime.js";
 import {
-  NOSTR_SANITIZER_CASES,
   TEST_HEX_PUBLIC_KEY,
   TEST_RESOLVED_PRIVATE_KEY,
   buildResolvedNostrAccount,
@@ -240,8 +239,8 @@ describe("nostr inbound", () => {
 
 describe("nostr outbound", () => {
   it("suppresses an outbound internal-trace-only reply", () => {
-    const { text, expected } = NOSTR_SANITIZER_CASES[3]!;
-    expect(nostrPlugin.outbound?.sanitizeText?.({ text, payload: { text } })).toBe(expected);
+    const text = "\u26a0\ufe0f \u{1f6e0}\ufe0f `search repos (agent)` failed";
+    expect(nostrPlugin.outbound?.sanitizeText?.({ text, payload: { text } })).toBe("");
   });
 
   it("chunks oversized encrypted replies without splitting Unicode", () => {

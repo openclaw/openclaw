@@ -19,6 +19,10 @@ import {
   reserveSessionControllerSource,
   tryClaimSessionControllerTask,
 } from "../../sessions/session-controller.mailbox.js";
+import {
+  captureSessionControllerStop,
+  stopSession,
+} from "../../sessions/session-controller.stop.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../../state/agent-database-admission-error.js";
 import {
@@ -421,7 +425,7 @@ it.each(["old", "new"] as const)(
   },
 );
 
-it("retires queued followups and callbacks when one-way restart drain begins", async () => {
+it("retires queued followups and callbacks when restart shutdown commits", async () => {
   const abandoned = vi.fn();
   const settled = vi.fn();
   const staleCalls: FollowupRun[] = [];
@@ -446,6 +450,11 @@ it("retires queued followups and callbacks when one-way restart drain begins", a
   expect(queuedState()?.items).toEqual([queued]);
 
   markGatewayRestartDraining();
+  expect(queuedState()?.items).toEqual([queued]);
+  await stopSession({
+    source: "restart",
+    capture: captureSessionControllerStop({ inputs: [queued.controllerInput!] }),
+  }).completed;
   await queued.controllerInput!.settlement.promise;
 
   expect(queuedState()).toBeUndefined();
@@ -483,6 +492,12 @@ it.each(["outside the turn", "inside the turn"] as const)(
       } else {
         markGatewayRestartDraining();
       }
+      expect(getExistingFollowupQueue(otherKey)?.items).toEqual([queued]);
+      expect(waiting.abortSignal.aborted).toBe(false);
+      await stopSession({
+        source: "restart",
+        capture: captureSessionControllerStop({ inputs: [queued.controllerInput!, waiting] }),
+      }).completed;
       await queued.controllerInput!.settlement.promise;
       await waiting.settlement.promise;
       expect(isAgentRunRestartAbortReason(waiting.abortSignal.reason)).toBe(true);

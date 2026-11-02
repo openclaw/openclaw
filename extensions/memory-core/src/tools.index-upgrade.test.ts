@@ -147,8 +147,8 @@ describe("memory_search index versions", () => {
 
   it("discloses a full retry handed to detached maintenance before embedding finishes", async () => {
     const cfg = uncachedConfig();
-    const now = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const now = performance.now();
+    const clock = vi.spyOn(performance, "now").mockReturnValue(now);
     let failSync = false;
     let holdSync = false;
     const entered = createDeferred<void>();

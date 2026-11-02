@@ -53,7 +53,7 @@ function pinIndex(key: string, text: string): void {
 // Builds the provider-style caller context from the host-resolved hook audience.
 function callerContext(ctx: HookContext): MemoryCallerContext | undefined {
   const audience = ctx.memoryAudience;
-  if (!ctx.sessionKey || ctx.sandboxed || audience?.kind !== "owner-private") {
+  if (!ctx.sessionKey || ctx.sandboxed || !audience) {
     return undefined;
   }
   return {
@@ -71,8 +71,10 @@ function callerContext(ctx: HookContext): MemoryCallerContext | undefined {
   };
 }
 
-/** Reads the rendered standing index for an owner-private session, or "" when the
- * session has no owner-private audience or the agent has no provisioned store. */
+/** Reads the rendered standing index for a session that reads the private
+ * partition (the owner's audience, or a conversation the owner granted read
+ * access), or "" for any other session or when the agent has no provisioned
+ * store. Conversation partitions have no standing index. */
 export async function readMemoryIndex(
   stores: Stores,
   ctx: HookContext,
@@ -82,13 +84,25 @@ export async function readMemoryIndex(
   if (!context || !ctx.agentId) {
     return "";
   }
-  const principal = memoryPrincipal(context, ctx.agentId, false, "default");
+  // Grants live in the registry; the first turn after a restart waits for it.
+  await stores.ensure();
+  const principal = memoryPrincipal(context, ctx.agentId, false, "default", stores.grantFor);
+  // An ungranted conversation gets no index. A grant made or revoked mid-session
+  // changes the prompt on the next turn: the owner's change is the invalidation.
+  if (!principal().sessionPrivate) {
+    return "";
+  }
   // Reading never provisions: an agent without a store has nothing to index.
   const opened = await stores.open(principal, { provision: false });
   if (opened.kind !== "ready") {
     return "";
   }
   const { runtime, access, binding } = opened;
+  // A grant revoked while the store opened pins a conversation principal; only
+  // a principal pinned to the private partition may reuse or render the index.
+  if (access.scope.visibility !== "private") {
+    return "";
+  }
   // A binding can move to a different physical store (share, then use own), so the
   // vault identity keys the pin too.
   const key = JSON.stringify([
@@ -112,7 +126,7 @@ export async function readMemoryIndex(
   return result.text;
 }
 
-/** Appends the standing Knowledge index to owner-private sessions' system prompt.
+/** Appends the standing Knowledge index to private-partition sessions' system prompt.
  * Failures omit the index; they never block the turn. */
 export function registerMemoryIndexHook(api: OpenClawPluginApi, stores: Stores): void {
   api.on("before_prompt_build", async (event, ctx) => {

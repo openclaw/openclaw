@@ -3,16 +3,12 @@ import { buildCronSelfDescription } from "./cron-tool-presentation.js";
 export function buildCronToolDescription(params: {
   triggersEnabled: boolean;
   callerScoped: boolean;
-  readOnly?: boolean;
   selfRemoveOnly?: boolean;
   activeRun?: boolean;
   nextCheckEnabled?: boolean;
   managementOnly?: boolean;
   allowCommandJobs?: boolean;
 }): string {
-  if (params.readOnly) {
-    return `Inspect recorded automation state during recovery. Available actions: ${params.managementOnly ? "list, get" : "list, get, runs"}.${params.selfRemoveOnly ? " Only the current automation is accessible." : " Existing caller visibility restrictions apply."} Use get with a known jobId for saved state and streamStatus; list includes disabled jobs only with includeDisabled:true. A missing list entry does not establish deletion or source termination. If the recorded state cannot establish an interrupted action's outcome, report it as unknown. Mutations are unavailable in this recovery continuation; this does not mean the user needs to change permissions.`;
-  }
   if (params.selfRemoveOnly) {
     return params.managementOnly
       ? "Inspect or remove only the current automation. Actions: list [includeDisabled] (enabled only by default), get jobId (saved state), remove jobId. Use the current job ID; other jobs and management actions are unavailable."
@@ -64,7 +60,7 @@ STREAM CONSENT: creation, source changes and reactivation require current creato
     : "";
   return `Schedule reminders, delayed self-wakeups, recurring work${params.triggersEnabled ? ", event watchers" : ""}. Never exec sleep/poll as timer.
 
-ACTIONS: status | list (enabled-only summaries by default; includeDisabled:true includes paused records; follow nextOffset) | get jobId (full details) | add job | update jobId job (partial; null clears) | remove jobId (operator removal requests active-run cancellation) | run jobId (runMode:"force"=now; waits up to timeoutMs, default 60s; unfinished runs return runId) | runs jobId runId? (history) | wake text (caller-owned session; mode defaults to next-heartbeat) | bind jobId (owner turn in the automation's parent conversation; links a key-only automation to this conversation). Check unfinished runs later with runs, never a scheduled verification job. wake has no delay; for a later resume use an at job below.
+ACTIONS: status | list (enabled-only summaries by default; includeDisabled:true includes paused records; follow nextOffset) | get jobId (full details) | add job | update jobId job (partial; null clears) | remove jobId (operator removal requests active-run cancellation) | run jobId (runMode:"force"=now; waits up to timeoutMs, default 60s; unfinished runs return runId) | runs jobId [runId,limit,offset] (recorded outcomes and delivery receipts) | wake text (caller-owned session; mode defaults to next-heartbeat) | bind jobId (owner turn in the automation's parent conversation; links a key-only automation to this conversation). Check unfinished runs later with runs, never a scheduled verification job. wake has no delay; for a later resume use an at job below.
 
 To pause a saved watcher without deleting its record, update job:{enabled:false}, or turn off its Active switch on the Automations page. The enabled flag and list absence do not prove source termination; use get jobId to inspect state.streamStatus.
 
