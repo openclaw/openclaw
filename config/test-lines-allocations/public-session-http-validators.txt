@@ -1,0 +1,2 @@
+# Extend existing HTML/widget/image fixtures for weak/list validators and revocation before304.
+9
