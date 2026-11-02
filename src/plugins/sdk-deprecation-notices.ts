@@ -27,7 +27,7 @@ export function buildPluginSdkDeprecationNotices(pluginId: string): DeprecatedSd
   const message =
     removalDate && formattedDate
       ? isRemovalDatePast(removalDate)
-        ? `Uses OpenClaw APIs that retired on ${formattedDate}. Migration is overdue; check the migration guide.`
+        ? `Uses OpenClaw APIs whose migration date passed on ${formattedDate}. The APIs remain available; plugin authors should migrate. See the migration guide.`
         : `Uses OpenClaw APIs that retire on ${formattedDate}. It keeps working until then; check for a plugin update.`
       : "Uses older OpenClaw APIs. It keeps working for now; check for a plugin update.";
   return [

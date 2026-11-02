@@ -135,6 +135,10 @@ function renderNotice(overrides: Partial<typeof notice> = {}) {
 }
 
 it("localizes a mounted compatibility notice from its structured removal date", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-06-15T12:00:00Z"));
+  onTestFinished(() => vi.useRealTimers());
+
   onTestFinished(captureI18nStateForTesting());
   const translate = i18n.t.bind(i18n);
   const translation = vi.spyOn(i18n, "t").mockImplementation((key, params) => {
@@ -160,6 +164,10 @@ it("localizes a mounted compatibility notice from its structured removal date", 
 });
 
 it("uses catalog copy when a compatibility notice has no removal date", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-06-15T12:00:00Z"));
+  onTestFinished(() => vi.useRealTimers());
+
   const { container } = renderNotice({
     message: "Server-only English fallback",
     removalDate: undefined,
@@ -169,13 +177,31 @@ it("uses catalog copy when a compatibility notice has no removal date", () => {
   );
 });
 
-it("states overdue migration once the removal date has passed", () => {
+it("states an elapsed migration date once the removal date has passed", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-06-15T12:00:00Z"));
+  onTestFinished(() => vi.useRealTimers());
   const { container } = renderNotice({
     message: "Server-only English fallback",
     removalDate: "2020-01-01",
   });
   expect(container.textContent).toBe(
-    "Uses OpenClaw APIs that retired on Jan 1, 2020. Migration is overdue; check the migration guide. Details",
+    "Uses OpenClaw APIs whose migration date passed on Jan 1, 2020. The APIs remain available; plugin authors should migrate. See the migration guide. Details",
+  );
+});
+
+it("keeps dated copy on the final compatibility day and switches the next UTC day", () => {
+  vi.useFakeTimers();
+  onTestFinished(() => vi.useRealTimers());
+  vi.setSystemTime(new Date("2026-12-31T12:00:00Z"));
+  const finalDay = renderNotice({ removalDate: "2026-12-31" });
+  expect(finalDay.container.textContent).toContain(
+    "Uses OpenClaw APIs that retire on Dec 31, 2026.",
+  );
+  vi.setSystemTime(new Date("2027-01-01T00:00:01Z"));
+  const nextDay = renderNotice({ removalDate: "2026-12-31" });
+  expect(nextDay.container.textContent).toContain(
+    "Uses OpenClaw APIs whose migration date passed on Dec 31, 2026.",
   );
 });
 
