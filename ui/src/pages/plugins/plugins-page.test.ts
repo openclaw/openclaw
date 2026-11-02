@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { retainGatewayResponsePayload } from "../../../../packages/gateway-client/src/protocol-request.js";
 import { buildCapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
@@ -34,6 +34,8 @@ import {
 } from "./plugins-page.test-support.ts";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
+// Keep cold lazy-view transforms outside the mutation tests’ short render waits.
+beforeAll(() => Promise.all([import("./settings-view.tsx"), import("./catalog-detail.tsx")]));
 beforeEach(async () => {
   await i18n.setLocale("en");
   vi.mocked(showConfirmDialog).mockReset().mockResolvedValue(true);
