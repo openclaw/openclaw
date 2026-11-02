@@ -319,6 +319,20 @@ export const projectsHandlers: GatewayRequestHandlers = {
           resolveCreatorSandbox(cfg, resolveOperatorSessionCreation(client)) === "required",
         assertCurrent,
         signal,
+        onRefresh: () => {
+          if (
+            client?.connId &&
+            hasCurrentClientAuthority?.() !== false &&
+            context.getRuntimeConfig() === cfg &&
+            client.authenticatedUserProfile?.profileId === profileId
+          ) {
+            context.broadcastToConnIds(
+              "projects.checkoutOptions.changed",
+              { projectId: params.projectId, agentId: params.agentId },
+              new Set([client.connId]),
+            );
+          }
+        },
       });
       assertCurrent();
       const currentDenial = authorizeGatewaySessionCreation({
@@ -336,7 +350,11 @@ export const projectsHandlers: GatewayRequestHandlers = {
       ).allowed;
       respond(
         true,
-        { current: canCreate && options.current, worktree: canCreate && options.worktree },
+        {
+          current: canCreate && options.current,
+          worktree: canCreate && options.worktree,
+          ...(canCreate && options.refreshing ? { refreshing: true } : {}),
+        },
         undefined,
       );
     },

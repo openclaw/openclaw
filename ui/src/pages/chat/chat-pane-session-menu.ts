@@ -18,6 +18,7 @@ import {
 import { isCloudWorkerPlacementState } from "../../components/session-row-badge-presentation.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { requestCheckoutSnapshot } from "../../lib/checkout-snapshot.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
@@ -376,8 +377,13 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       if (!entry.loading) {
         entry.loading = true;
         loads.push(
-          client
-            .request<WorktreesBranchesResult>("worktrees.branches", { repoRoot: knownRoot })
+          requestCheckoutSnapshot<WorktreesBranchesResult>(
+            this.context.gateway,
+            "worktrees.branches",
+            {
+              repoRoot: knownRoot,
+            },
+          )
             .then((result) => {
               entry.value = result.headBranch ?? null;
             })

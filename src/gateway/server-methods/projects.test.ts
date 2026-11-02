@@ -295,7 +295,7 @@ test("checkout options preserve permitted Current access without exposing paths"
     const workspace = await initializeRepository(state.root, "workspace");
     const outside = await initializeRepository(state.root, "outside");
     const project = await registerProjectRegistry({ path: outside });
-    using gitReads = vi.spyOn(worktreeGit, "runGit");
+    using gitReads = vi.spyOn(worktreeGit, "runGit").mockRejectedValue(new Error("Git is stalled"));
     const cfg: OpenClawConfig = {
       agents: { entries: { main: { workspace, sandbox: { mode: "off" } } } },
     };
@@ -311,7 +311,7 @@ test("checkout options preserve permitted Current access without exposing paths"
           scopes,
         ),
       ).toEqual({ ok: true, payload: { current: true, worktree: true }, error: undefined });
-      expect(gitReads).toHaveBeenCalledTimes(2);
+      expect(gitReads).not.toHaveBeenCalled();
       gitReads.mockClear();
     }
     const params = { projectId: project.id, agentId: "main" };

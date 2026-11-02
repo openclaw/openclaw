@@ -93,6 +93,7 @@ export const ProjectsCheckoutOptionsParamsSchema = closedObject({
 export const ProjectsCheckoutOptionsResultSchema = closedObject({
   current: Type.Boolean(),
   worktree: Type.Boolean(),
+  refreshing: Type.Optional(Type.Boolean()),
 });
 export type ProjectsCheckoutOptionsResult = Static<typeof ProjectsCheckoutOptionsResultSchema>;
 

@@ -11,6 +11,7 @@ import {
   type DiffReadCacheMissReason,
   type DiffReadTiming,
 } from "./diff-read-timing.js";
+import { createBranchReadCache } from "./git-branch-read-cache.js";
 import type { GitReadOperation, GitReadOperations } from "./git-read-operations.js";
 import type { GitWorkerOperations } from "./git-worker-contract.js";
 import { runGitWorkerOperation } from "./git-worker.js";
@@ -22,6 +23,9 @@ const log = createSubsystemLogger("git/read");
 export type GitReadOptions = {
   /** Refresh unversioned layouts; known revisions are always revalidated. */
   refresh?: boolean;
+  /** Return the recorded picker facts while discovery finishes independently. */
+  snapshot?: boolean;
+  onRefresh?: () => void;
   signal?: AbortSignal;
   diffTiming?: DiffReadTiming;
   /** Bound cold diff waits; share completed cold results for one second. */
@@ -537,11 +541,7 @@ function createReadCaches() {
         joinPending: true,
       },
     ),
-    branches: createReadCache(
-      (input: GitReadOperations["repository.branches"]["input"], signal) =>
-        runGitWorkerOperation({ type: "repository.branches", input }, { signal }),
-      0,
-    ),
+    branches: createBranchReadCache(gitEnvironment),
     baseline: createReadCache(
       (input: GitReadOperations["checkout.baseline"]["input"], signal) =>
         runGitWorkerOperation({ type: "checkout.baseline", input }, { signal }),

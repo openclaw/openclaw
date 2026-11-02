@@ -11,6 +11,7 @@ import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
+import { requestCheckoutSnapshot } from "../../lib/checkout-snapshot.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
@@ -32,6 +33,7 @@ export class WorktreesModel {
   createName = "";
   createBaseRef = "";
   createBranches: string[] = [];
+  createBranchesRefreshing = false;
   gateway!: ReturnType<typeof useGatewayPage>;
   private readonly listRequest = createPageRequest(() => this.update({}), {
     task: (scope: GatewayConnectionScope, { signal }) =>
@@ -45,13 +47,29 @@ export class WorktreesModel {
     },
   });
   private readonly branchesRequest = createPageRequest(() => this.update({}), {
-    task: ({ scope, repoRoot }: { scope: GatewayConnectionScope; repoRoot: string }, { signal }) =>
-      scope.client.request<WorktreesBranchesResult>("worktrees.branches", { repoRoot }, { signal }),
+    task: ({ repoRoot }: { scope: GatewayConnectionScope; repoRoot: string }, { signal }) =>
+      requestCheckoutSnapshot<WorktreesBranchesResult>(
+        this.context.gateway,
+        "worktrees.branches",
+        { repoRoot },
+        {
+          signal,
+          onSnapshot: (result) => {
+            if (!result.refreshing) {
+              return;
+            }
+            this.createBranches = result.branches.map((branch) => branch.name);
+            this.createBranchesRefreshing = true;
+            this.publish();
+          },
+        },
+      ),
     onComplete: (result) => {
       this.createBranches = result.branches.map((branch) => branch.name);
+      this.createBranchesRefreshing = false;
     },
     onError: () => {
-      this.createBranches = [];
+      this.createBranchesRefreshing = false;
     },
   });
 
@@ -90,6 +108,7 @@ export class WorktreesModel {
     this.presentationLifetime = Promise.withResolvers<void>();
     this.listRequest.cancel();
     this.branchesRequest.cancel();
+    this.createBranchesRefreshing = false;
     this.update({ operation: null });
   }
 

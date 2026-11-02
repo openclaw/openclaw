@@ -14,6 +14,17 @@ import { runGitWorkerOperation } from "./git-worker.js";
 
 vi.mock("./git-worker.js", () => ({ runGitWorkerOperation: vi.fn() }));
 
+const branchChanges = vi.hoisted(() => new Map<string, (file?: string, event?: string) => void>());
+// mock-isolation: drive native ref events without installing watchers on synthetic checkout paths.
+vi.mock("./owned-directory-observation.js", () => ({
+  observeOwnedDirectory: vi.fn(
+    (directory: string, changed: (file?: string, event?: string) => void) => {
+      branchChanges.set(directory, changed);
+      return { close: () => branchChanges.delete(directory), isWatching: () => true };
+    },
+  ),
+}));
+
 const gitRead = vi.fn<typeof runGitWorkerOperation>();
 const readRevision = vi.fn<() => Promise<GitReadOperations["checkout.revision"]["output"]>>();
 
@@ -77,6 +88,77 @@ function collectCheckoutDiffPhases() {
 }
 
 describe("typed Git read ownership", () => {
+  it("returns branch snapshots while one shared Git read is blocked", async () => {
+    const ready = {
+      branches: [{ name: "main", kind: "local" as const }],
+      repositoryStatus: "git" as const,
+    };
+    const held = holdRead("repository.branches", ready);
+    const operation = {
+      type: "repository.branches" as const,
+      input: { repoRoot: "/slow-picker", includeRepositoryStatus: true },
+    };
+    const changed = vi.fn();
+    let replies: unknown;
+    const calls = Promise.all(
+      Array.from({ length: 8 }, () =>
+        runGitReadOperation(operation, { snapshot: true, onRefresh: changed }),
+      ),
+    );
+    void calls.then((value) => {
+      replies = value;
+    });
+    await vi.waitFor(
+      () =>
+        expect(replies).toEqual(
+          Array.from({ length: 8 }, () => ({ branches: [], refreshing: true })),
+        ),
+      { timeout: 200 },
+    );
+    expect(workerCalls("repository.branches")).toHaveLength(1);
+    held.resolve(ready);
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(8));
+    expect(await runGitReadOperation(operation, { snapshot: true })).toEqual(ready);
+    expect(workerCalls("repository.branches")).toHaveLength(1);
+
+    // Ref publication invalidates the recorded facts without discarding usable rows.
+    branchChanges.get("/slow-picker/.git")!("packed-refs", "rename");
+    const refreshed = { ...ready, branches: [{ name: "next", kind: "local" as const }] };
+    const refresh = holdRead("repository.branches", refreshed);
+    expect(await runGitReadOperation(operation, { snapshot: true, onRefresh: changed })).toEqual({
+      ...ready,
+      refreshing: true,
+    });
+    expect(
+      await runGitReadOperation(
+        { ...operation, input: { repoRoot: "/slow-picker" } },
+        { snapshot: true },
+      ),
+    ).toEqual({ branches: ready.branches, refreshing: true });
+    expect(workerCalls("repository.branches")).toHaveLength(2);
+    const discovered = {
+      ...refreshed,
+      observation: { root: "/slow-picker", gitDir: "/slow-picker/.git", commonDir: "/shared.git" },
+    };
+    refresh.resolve(discovered);
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(9));
+    expect(await runGitReadOperation(operation, { snapshot: true })).toEqual(refreshed);
+    // A newly discovered shared/reftable layout replaces the initial metadata watch.
+    branchChanges.get("/shared.git/reftable")!("tables.list", "rename");
+    const failed = holdRead("repository.branches", refreshed);
+    expect(await runGitReadOperation(operation, { snapshot: true, onRefresh: changed })).toEqual({
+      ...refreshed,
+      refreshing: true,
+    });
+    failed.reject(new Error("blocked Git"));
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(10));
+    expect(await runGitReadOperation(operation, { snapshot: true })).toEqual({
+      ...refreshed,
+      branchesUnavailable: true,
+    });
+    await drainGlobalSingletonLifecycleState();
+  });
+
   it("retains interleaved PR histories while sharing checks of the same checkout refs", async () => {
     const read = (sha: string, branch = "feature", refreshIndex = false) =>
       runGitReadOperation({
