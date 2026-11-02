@@ -130,6 +130,7 @@ export async function buildHookedRequestBody(params: {
     params.options?.signal,
   );
   if (nextBody !== undefined) {
+    // SAFETY: The host payload hook replaces this adapter's request body, preserving its wire shape.
     body = nextBody as RequestBody;
   }
   if (restoreUsers) {
