@@ -40,7 +40,7 @@ import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.j
 import { migrateDaemonRuntimePins } from "../infra/state-migrations.daemon-runtime-pins.js";
 import { readMeetingTranscriptMigrationDetectionState } from "../infra/state-migrations.meeting-transcripts-detection.js";
 import { createUpdateRunAsync, recordUpdateRunStepAsync } from "../infra/update-run-write.async.js";
-import { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "./openclaw-agent-db-lease.js";
+import { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "./openclaw-agent-db-lease-inspection.js";
 import { repairOpenClawAgentDatabasePaths } from "./openclaw-agent-db-path-repair.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
@@ -567,19 +567,25 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         }
         withEngineStoreAdmission(() => {
           expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
-          for (const artifactPreservingReadOnly of [false, true]) {
-            expect(
-              readMeetingTranscriptMigrationDetectionState({ env, artifactPreservingReadOnly })
-                .pendingImportCount,
-            ).toBe(1);
-          }
+        });
+        for (const artifactPreservingReadOnly of [false, true]) {
           expect(
-            readActiveOpenClawAgentDatabaseLeasesReadOnly(
+            (
+              await readMeetingTranscriptMigrationDetectionState({
+                env,
+                artifactPreservingReadOnly,
+              })
+            ).pendingImportCount,
+          ).toBe(1);
+        }
+        expect(
+          (
+            await readActiveOpenClawAgentDatabaseLeasesReadOnly(
               options,
               openDoctorStateSchemaReadAdmission,
-            ).map((row) => row.lease_id),
-          ).toEqual(["diagnostic-lease"]);
-        });
+            )
+          ).map((row) => row.lease_id),
+        ).toEqual(["diagnostic-lease"]);
         const reply = await withArtifactPreservingStateReads(() =>
           withOpenClawStateDatabaseReadSnapshot(
             () =>

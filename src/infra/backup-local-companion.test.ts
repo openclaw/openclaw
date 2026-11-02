@@ -28,7 +28,7 @@ vi.mock("../snapshot/database-backup.js", async (original) => ({
   capturePostgresBackup: mocks.exportPostgres,
 }));
 
-it("captures companion anchors and fixed-local credentials without exporting PostgreSQL rows", async () => {
+it("combines companion and template exclusions without exporting PostgreSQL rows", async () => {
   await withIsolatedBackupState({ layout: "state-only", scenario: "empty" }, async (state) => {
     const shared = state.statePath("state/openclaw.sqlite");
     const agent = state.statePath("agents/retained/agent/openclaw-agent.sqlite");
@@ -77,6 +77,10 @@ it("captures companion anchors and fixed-local credentials without exporting Pos
     for (const relative of [...diagnostics, ...durable]) {
       await fs.writeFile(path.join(codexHome, relative), `synthetic ${relative}`);
     }
+    const template = state.statePath("worktrees/template-generation");
+    const templateCache = path.join(template, "cache.bin");
+    await fs.mkdir(template, { recursive: true });
+    await fs.writeFile(templateCache, "regenerable template");
     const unrelatedLog = state.statePath("logs_2.sqlite");
     await fs.writeFile(unrelatedLog, "unrelated user database");
     const codex = loadPluginManifest(path.resolve("extensions/codex"));
@@ -100,36 +104,43 @@ it("captures companion anchors and fixed-local credentials without exporting Pos
     for (const relative of diagnostics) {
       expect(fullResources.isIncluded(path.join(codexHome, relative))).toBe(true);
     }
-    const resources = await createBackupResourcePlan({
-      ...resourceInput,
-      localCompanion: true,
-    });
     const nowMs = Date.parse("2026-10-16T00:00:00Z");
     const { buildBackupArchiveRoot } = await import("../commands/backup-shared.js");
     const archiveRoot = buildBackupArchiveRoot(nowMs);
-    mocks.plan.mockResolvedValue({
-      resources,
-      stateDir: state.stateDir,
-      configPath: state.configPath,
-      oauthDir: state.statePath("credentials"),
-      workspaceDirs: [],
-      skipped: [],
-      included: [
-        {
-          kind: "state",
-          sourcePath: state.stateDir,
-          displayPath: state.stateDir,
-          archivePath: buildBackupArchivePath(archiveRoot, state.stateDir),
+    mocks.plan.mockImplementation(
+      async (
+        options: Parameters<
+          typeof import("../commands/backup-shared.js").resolveBackupPlanFromDisk
+        >[0] = {},
+      ) => ({
+        resources: await createBackupResourcePlan({
+          ...resourceInput,
+          localCompanion: options.localCompanion,
+          excludedWorktreeTemplateDirs: options.excludeWorktreeTemplates ? [template] : [],
+        }),
+        stateDir: state.stateDir,
+        configPath: state.configPath,
+        oauthDir: state.statePath("credentials"),
+        workspaceDirs: [],
+        skipped: [],
+        included: [
+          {
+            kind: "state",
+            sourcePath: state.stateDir,
+            displayPath: state.stateDir,
+            archivePath: buildBackupArchivePath(archiveRoot, state.stateDir),
+          },
+        ],
+        databaseSelection: {
+          effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+          postgres: { connection: "postgresql://synthetic-unreachable", schemaPrefix: "synthetic" },
         },
-      ],
-      databaseSelection: {
-        effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
-        postgres: { connection: "postgresql://synthetic-unreachable", schemaPrefix: "synthetic" },
-      },
-    });
+      }),
+    );
     const result = await createBackupArchive({
       output: state.path("companion.tar.gz"),
       localCompanion: true,
+      excludeWorktreeTemplates: true,
       nowMs,
     });
     await expect(verifyBackupArchive(result.archivePath)).resolves.toMatchObject({
@@ -154,6 +165,10 @@ it("captures companion anchors and fixed-local credentials without exporting Pos
     );
     expect(manifest.postgresAnchors).toHaveLength(2);
     expect(mocks.exportPostgres).not.toHaveBeenCalled();
+    await expect(
+      fs.stat(path.join(target, buildBackupArchivePath(archiveRoot, templateCache))),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(templateCache, "utf8")).toBe("regenerable template");
     for (const relative of diagnostics) {
       const source = path.join(codexHome, relative);
       await expect(

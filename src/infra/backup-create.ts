@@ -84,6 +84,7 @@ export type BackupCreateOptions = {
   output?: string;
   dryRun?: boolean;
   includeWorkspace?: boolean;
+  excludeWorktreeTemplates?: boolean;
   onlyConfig?: boolean;
   verify?: boolean;
   json?: boolean;
@@ -106,6 +107,7 @@ export type BackupCreateResult = {
   archivePath: string;
   dryRun: boolean;
   includeWorkspace: boolean;
+  excludeWorktreeTemplates?: boolean;
   onlyConfig: boolean;
   localCompanion?: boolean;
   verified: boolean;
@@ -208,6 +210,7 @@ function buildManifest(
     nodeVersion: process.version,
     options: {
       includeWorkspace: result.includeWorkspace,
+      ...(result.excludeWorktreeTemplates ? { excludeWorktreeTemplates: true } : {}),
       onlyConfig: result.onlyConfig,
     },
     paths: {
@@ -307,6 +310,7 @@ async function createBackupArchiveInScope(
     preparedPlan ??
     (await resolveBackupPlanFromDisk({
       includeWorkspace,
+      excludeWorktreeTemplates: opts.excludeWorktreeTemplates,
       localCompanion: opts.localCompanion,
       onlyConfig,
       nowMs,
@@ -374,6 +378,7 @@ async function createBackupArchiveInScope(
     archivePath: outputPath,
     dryRun: Boolean(opts.dryRun),
     includeWorkspace,
+    ...(opts.excludeWorktreeTemplates ? { excludeWorktreeTemplates: true } : {}),
     onlyConfig,
     ...(opts.localCompanion ? { localCompanion: true } : {}),
     verified: false,

@@ -3,6 +3,7 @@ summary: "OpenClaw CLI index: command list, global flags, and links to per-comma
 read_when:
   - Finding the right `openclaw` subcommand
   - Looking up global flags or output styling rules
+  - Preparing an exact PostgreSQL shared-state target while offline
 title: "CLI reference"
 ---
 
@@ -152,6 +153,7 @@ openclaw [--dev] [--profile <name>] <command>
     schema
     validate
   database
+    prepare-state
     port
     preflight
     preflight-agent
@@ -514,8 +516,8 @@ Plugins can add additional top-level commands, such as
 
 ## Database
 
-`openclaw database` provides schema preflight, preservation verification,
-shared-state ownership, and offline database-family engine porting. See
+`openclaw database` provides shared-state preparation, schema preflight,
+preservation verification, shared-state ownership, and offline database-family engine porting. See
 [database schemas](/reference/database-schemas) for compatibility contracts.
 
 ```bash
@@ -542,6 +544,50 @@ undo mechanism. Reverse-port before a raw package-manager downgrade. See the
 [port runbook](/reference/database-engines#port-existing-stores) for
 backup contents, interruption recovery, and restart guidance.
 
+### Prepare exact PostgreSQL shared state
+
+Use `prepare-state` to initialize an absent PostgreSQL shared-state namespace or
+validate an existing one for the installed OpenClaw version. It requires valid
+PostgreSQL configuration for the `state` family and an **existing matching local
+anchor** in the selected profile/state directory; it does not create or replace
+an anchor, port SQLite data, or select a new store identity.
+
+Stop the Gateway and embedded agents first. The command acquires exclusive
+shared-state schema custody without waiting for another owner and closes its
+native resources before releasing custody. It does not stop a running owner or
+bypass an unfinished database port.
+
+```bash
+openclaw database prepare-state --expected-store-id <uuid> --expected-namespace <namespace> --json
+```
+
+Both identity options are required:
+
+- `--expected-store-id <uuid>` must exactly match the store UUID in the existing
+  PostgreSQL anchor. Do not generate a replacement UUID.
+- `--expected-namespace <namespace>` must exactly match both the anchor's namespace
+  and `<schemaPrefix>_state_<uuid-prefix>` for the configured
+  `database.postgres.schemaPrefix`. Here, `uuid-prefix` is the first 16 characters
+  of the store UUID with hyphens removed. The namespace accepts lowercase letters,
+  digits, and underscores, starting with a letter or underscore.
+
+Only a namespace that is entirely absent is bootstrapped with the installed
+schema. An existing namespace, even an empty or incomplete one, is never treated
+as new: it must pass existing-only identity, metadata, catalog, and current
+schema-version validation. This command does not migrate or repair existing state.
+See [anchors and catalog admission](/reference/database-engines#anchors-and-backups).
+
+Success reports `prepared` after bootstrap or `ready` for an already valid store.
+With `--json`, the result includes `ok`, `status`, `path` (the local anchor),
+`storeId`, `namespace`, and `schemaVersion`. Without it, the command prints
+`Shared state: <status> (<namespace>).` Failures exit nonzero; `--json` uses the
+[JSON failure envelope](/cli#json-failures).
+
+If identity validation fails, check the selected profile, configuration, and
+matched anchor before retrying. For incompatible or incomplete existing storage,
+use a compatible OpenClaw version or restore a matched backup; do not delete the
+namespace or edit its metadata to force preparation.
+
 ### Exact SQLite migration capture
 
 An external controller can capture a running local Gateway only while it holds a
@@ -560,6 +606,9 @@ under the same bounded suspension without writing to the source database or jour
 files. The Gateway keeps its live ownership heartbeat: its own lease timestamps can
 advance during suspension. Capture does not stop those renewals or treat a captured
 lease as authority to activate restored state.
+Filesystem archive creation and verification run in a joined subprocess so blocking
+SQLite or filesystem work does not prevent suspension renewal. The archive step has
+a 30-minute deadline; cancellation waits for the child to stop before capture returns.
 It renews only the supplied controller request and refuses changed owners, expired
 suspensions, pending writes, and PostgreSQL sources. The controller must retain the
 suspension until capture finishes, then decide whether to resume or stop its Gateway.
