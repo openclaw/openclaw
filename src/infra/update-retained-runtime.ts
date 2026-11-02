@@ -18,11 +18,12 @@ import { withRuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import {
-  claimUpdateArtifact,
   maintainRetainedUpdateRuntimes,
+  registerRetainedUpdateRuntime,
   removeTemporaryArtifacts,
   reportRetainedUpdateRuntime,
   resolveRetainedUpdateRuntimeParents,
+  stampRetainedUpdateRuntime,
 } from "./temp-artifact-cleanup.js";
 import {
   parseUpdateStateInspectionWorker,
@@ -57,8 +58,8 @@ export type RetainUpdateRuntime = (params: {
   timeoutMs: number;
   signal?: AbortSignal;
   assertCurrent: () => void;
-  /** Cleanup of prior runs' artifacts, for the run report. It never affects the update. */
-  onArtifactCleanup?: (report: { lines: string[]; warnings: string[] }) => void;
+  /** The update run creating this runtime, stamped so later cleanup can see it settle. */
+  runId?: string;
 }) => Promise<RetainedUpdateRuntimeMetrics | void>;
 
 /** The command retains its own workers through reporting, rollback, and native settlement. */
@@ -141,23 +142,14 @@ async function runWithRetainedUpdateRuntime<T>(
           ) {
             return undefined;
           }
-          const warnings: string[] = [];
-          const { readDatabaseSnapshotCustody } =
-            await import("./update-database-snapshot-custody.js");
-          const lines = await maintainRetainedUpdateRuntimes({
+          const { readUpdateRunSettlement } = await import("./update-run-settlement.js");
+          await maintainRetainedUpdateRuntimes({
             packageRoots: [sourceRoot],
             temporaryDirectories: temporaryRoot ? [temporaryRoot] : undefined,
             repair: true,
             assertCurrent,
-            onWarning: (warning) => warnings.push(warning),
-            decideDatabaseSnapshot: readDatabaseSnapshotCustody(env ?? process.env),
-          }).catch((error: unknown) => {
-            const warning = `Could not clean up earlier update artifacts: ${formatErrorMessage(error)}`;
-            log.warn(warning);
-            warnings.push(warning);
-            return [warning];
+            readUpdateRun: (runId) => readUpdateRunSettlement(runId, env ?? process.env),
           });
-          params.onArtifactCleanup?.({ lines, warnings });
           assertCurrent();
           // Package inventories include their module owner, and native activation
           // replaces its whole project. Scratch must stay outside both boundaries.
@@ -178,7 +170,7 @@ async function runWithRetainedUpdateRuntime<T>(
               const parentStat = await fs.stat(parent);
               if (sourceStat.dev === parentStat.dev) {
                 directory = await fs.mkdtemp(path.join(parent, "openclaw-update-runtime-"));
-                unregister = claimUpdateArtifact(directory);
+                unregister = registerRetainedUpdateRuntime(directory);
               }
             } catch (error) {
               if (
@@ -201,7 +193,7 @@ async function runWithRetainedUpdateRuntime<T>(
             }
             assertCurrent();
             directory = await fs.mkdtemp(path.join(temporary, "openclaw-update-runtime-"));
-            unregister = claimUpdateArtifact(directory);
+            unregister = registerRetainedUpdateRuntime(directory);
           }
           const privateRoot = await fs.realpath(directory);
           assertCurrent();
@@ -262,6 +254,15 @@ async function runWithRetainedUpdateRuntime<T>(
               `${retained.unusableReason}; continuing update without a verified retained rollback runtime`,
             );
             return undefined;
+          }
+          if (params.runId) {
+            // Without the stamp, cleanup keeps this runtime while any OpenClaw process runs.
+            await stampRetainedUpdateRuntime(candidateRoot, params.runId).catch((error: unknown) =>
+              log.warn(
+                `Could not stamp the retained runtime's update run: ${formatErrorMessage(error)}`,
+              ),
+            );
+            assertCurrent();
           }
           const { relocations: retainedRelocations, fileCount, ...metrics } = retained;
           const files = await readRetainedRuntimeFileList(privateRoot, { fileCount });

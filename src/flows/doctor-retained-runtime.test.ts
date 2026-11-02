@@ -14,7 +14,13 @@ import {
   resolvePackageActivationAnchor,
   resolvePackageActivationJournalPath,
 } from "../infra/package-update-activation-paths.js";
+import { stampRetainedUpdateRuntime } from "../infra/temp-artifact-cleanup.js";
+import { createUpdateRun, finishUpdateRun } from "../infra/update-run-ledger.js";
 import * as processGroups from "../process/supervisor/service-child-group-ownership.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   createDoctorRuntimeProjection,
@@ -54,8 +60,10 @@ beforeEach(() => {
   vi.spyOn(os, "tmpdir").mockReturnValue(parent);
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
   mocks.note.mockClear();
   mocks.packageRoots.mockReset();
   mocks.census.mockReset();
@@ -233,12 +241,13 @@ it("Doctor reclaims an npm-prefix runtime and releases its activation journal ha
 it.each([
   ["Doctor does not hold Gateway maintenance", false, { pids: [] }, false],
   ["PIDs: 4242", true, { pids: [4242] }, false],
+  ["fixture census unavailable", true, { error: "fixture census unavailable" }, false],
   ["the creating update still owns this runtime", true, { pids: [] }, true],
 ] as const)(
   "Doctor preserves a projection when %s",
   async (reason, maintenance, census, creator) => {
     const directory = projection("Old002");
-    mocks.census.mockReturnValue({ pids: [...census.pids] });
+    mocks.census.mockReturnValue("error" in census ? census : { pids: [...census.pids] });
     const { registerRetainedUpdateRuntime } = await import("../infra/temp-artifact-cleanup.js");
     const release = creator ? registerRetainedUpdateRuntime(directory) : undefined;
     try {
@@ -256,33 +265,36 @@ it.each([
   },
 );
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-it.each([
-  // A failed census usually clears on the next sweep, and a live holder may be behind it.
-  ["census failure", { error: "fixture census failure" }, "fixture census failure", 8, 2],
-  ["evidence gap", { pids: [], incomplete: "fixture evidence gap" }, "fixture evidence gap", 2, 0],
-])(
-  "Doctor reclaims only a projection old enough for a %s",
-  async (_label, census, reason, old, recent) => {
-    const age = (directory: string, days: number) =>
-      fs.utimesSync(
-        directory,
-        new Date(Date.now() - days * DAY_MS),
-        new Date(Date.now() - days * DAY_MS),
-      );
-    const kept = projection("Yng001");
-    age(kept, recent);
-    const removed = projection("Old003");
-    age(removed, old);
-    mocks.census.mockReturnValue(census);
-    const output = await runDoctor(true);
-    expect(fs.existsSync(kept)).toBe(true);
-    expect(fs.existsSync(removed)).toBe(false);
-    expect(output).toContain(`Runtime retained at ${kept}: ${reason}; keeping it until`);
-    expect(output).toContain(`Removing updater runtime ${removed} by age: ${reason}`);
-    expect(output).toContain(`Removed abandoned updater runtime: ${removed}`);
-  },
-);
+it("Doctor reclaims a stamped runtime once its run settles, past running OpenClaw processes", async () => {
+  const options = { env: { HOME: parent, OPENCLAW_STATE_DIR: path.join(parent, "state") } };
+  const settled = createUpdateRun({ trigger: "cli" }, options).runId;
+  finishUpdateRun(settled, { status: "succeeded" }, options);
+  const running = createUpdateRun({ trigger: "cli" }, options).runId;
+  const stamped = async (suffix: string, runId: string) => {
+    const directory = projection(suffix);
+    await stampRetainedUpdateRuntime(projectedPath(directory, packageRoot), runId);
+    return directory;
+  };
+  const reclaimed = await stamped("Stmp01", settled);
+  const pending = await stamped("Stmp02", running);
+  const legacy = projection("Lgcy01");
+  // The real census is proven in temp-artifact-cleanup.process.test.ts. Here a titled Gateway
+  // shows no path evidence, so it holds only runtimes that are not judged by path alone.
+  mocks.census.mockImplementation((_directory, census) => ({
+    pids: census?.pathEvidenceOnly ? [] : [4242],
+  }));
+  const output = await runDoctor(true);
+  expect(fs.existsSync(reclaimed)).toBe(false);
+  expect(output).toContain(`Removed abandoned updater runtime: ${reclaimed}`);
+  expect(fs.existsSync(pending)).toBe(true);
+  expect(output).toContain(
+    `Runtime retained at ${pending}: its update run ${running} has not settled`,
+  );
+  expect(fs.existsSync(legacy)).toBe(true);
+  expect(output).toContain(
+    `Runtime retained at ${legacy}: other OpenClaw processes are still running (PIDs: 4242)`,
+  );
+});
 
 it("Doctor preserves unmarked directories and symbolic-link targets", async () => {
   const foreign = path.join(parent, "openclaw-update-runtime-Odd001");

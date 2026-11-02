@@ -1,6 +1,7 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveOpenClawPackageRootsSync } from "../infra/openclaw-root.js";
 import { maintainRetainedUpdateRuntimes } from "../infra/temp-artifact-cleanup.js";
+import { readUpdateRunSettlement } from "../infra/update-run-settlement.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { inspectDoctorTemporaryDirectories } from "./doctor/shared/temporary-directories.js";
 
@@ -32,6 +33,7 @@ export async function prepareRetainedUpdateRuntimeCleanup(
           maintenance.assertAdmission();
         }),
       assertResourcesSettled: authority?.assertResourcesSettled,
+      readUpdateRun: (runId) => readUpdateRunSettlement(runId, env),
     });
     lines.push(...warnings);
     if (lines.length) {

@@ -62,22 +62,6 @@ export function readUpdateRunRecord(db: EngineConnection, runId: string) {
   return row ? decodeRun(row) : undefined;
 }
 
-/**
- * Every run whose stored steps contain the text, across the whole retained history.
- * LIKE wildcards in the text only widen the match, so callers verify what they find.
- * A store without the table cannot show that no run mentions it, so that is an error.
- */
-export function readUpdateRunsMentioning(db: EngineConnection, text: string) {
-  if (!tableExists(db, "update_runs")) {
-    throw new Error("Update run history is unavailable");
-  }
-  const query = getNodeSqliteKysely<Pick<DB, "update_runs">>(db)
-    .selectFrom("update_runs")
-    .selectAll()
-    .where("steps_json", "like", `%${text}%`);
-  return executeSqliteQuerySync(db, query).rows.map(decodeRun);
-}
-
 /** Read activity on the caller's connection so maintenance can fence its mutation. */
 export function readActiveUpdateRun(db: EngineConnection) {
   return readUpdateRuns(db, { limit: 1, active: true })[0];

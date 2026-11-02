@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
@@ -11,61 +10,21 @@ import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { runBestEffortCleanup } from "./non-fatal-cleanup.js";
 import { isPathInside } from "./path-guards.js";
-import type { DecideDatabaseSnapshot } from "./update-database-snapshot-custody.js";
-import { isGitDatabaseSnapshotName } from "./update-runtime-staging.js";
 
 const log = createSubsystemLogger("infra:temp-artifacts");
 const retainedRuntimes = resolveGlobalSingleton(
   Symbol.for("openclaw.retainedUpdateRuntimes"),
   () => new Set<string>(),
 );
-// Released by the update that created them in this process, so their run is known to be done.
-const releasedRuntimes = resolveGlobalSingleton(
-  Symbol.for("openclaw.releasedUpdateRuntimes"),
-  () => new Set<string>(),
-);
-const UPDATE_ARTIFACT_REMOVING_SUFFIX = ".removing";
-const UPDATE_ARTIFACT_SWEEP_BUDGET_MS = 10_000;
-// Nothing records which run made an artifact. This is longer than any update run, so an
-// artifact this old and unused belongs to a run that has ended.
-const UNPROVEN_UPDATE_ARTIFACT_RETENTION_HOURS = 24;
-// A failed census on a host that can usually answer is nearly always transient, and the next
-// sweep decides. This only ends retention on a host where it keeps failing.
-const FAILED_CENSUS_UPDATE_ARTIFACT_RETENTION_HOURS = 7 * 24;
-const HOUR_MS = 60 * 60 * 1000;
 
 /** Registration lasts through worker settlement, including failed update reporting. */
 export function registerRetainedUpdateRuntime(directory: string): () => void {
   retainedRuntimes.add(directory);
-  releasedRuntimes.delete(directory);
-  return () => {
-    retainedRuntimes.delete(directory);
-    releasedRuntimes.add(directory);
-  };
+  return () => void retainedRuntimes.delete(directory);
 }
 
-/** Protect an update's scratch directory from sweeps in this process until it is released. */
-export function claimUpdateArtifact(directory: string): () => void {
-  // The sweep looks this up by native spelling; macOS's default TMPDIR is a symlinked path.
-  let identity = directory;
-  try {
-    identity = resolveIdentityPathViaExistingAncestorSync(directory);
-  } catch {
-    // The spelling it was created with still protects it from a sweep using the same one.
-  }
-  return registerRetainedUpdateRuntime(identity);
-}
-
-export function resolveWindowsUpdatePreflightBaseDirectory(): string {
-  return path.win32.join(process.env.SystemDrive ?? "C:", "ocu");
-}
-
-export function reportRetainedUpdateRuntime(
-  directory: string,
-  reason: string,
-  label = "Runtime",
-): string {
-  const message = `${label} retained at ${directory}: ${reason}`;
+export function reportRetainedUpdateRuntime(directory: string, reason: string): string {
+  const message = `Runtime retained at ${directory}: ${reason}`;
   try {
     log.warn(message);
   } catch {
@@ -98,20 +57,61 @@ export function resolveRetainedUpdateRuntimeParents(
   return parents;
 }
 
-async function isRetainedRuntimeMarker(marker: string): Promise<boolean> {
+// The projected package manifest marks a retained runtime. Updaters with this fix also stamp
+// the update run that created it there, so reclamation can ask the ledger whether it settled.
+const RETAINED_RUNTIME_RUN_KEY = "openclawUpdateRunId";
+
+type RetainedRuntimeMarker = { runId?: string };
+
+async function readRetainedRuntimeMarker(
+  marker: string,
+): Promise<RetainedRuntimeMarker | undefined> {
   if ((await fs.realpath(marker).catch(() => undefined)) !== marker) {
-    return false;
+    return undefined;
   }
   const value: unknown = JSON.parse(await fs.readFile(marker, "utf8"));
-  return isRecord(value) && value.name === "openclaw";
+  if (!isRecord(value) || value.name !== "openclaw") {
+    return undefined;
+  }
+  const runId = value[RETAINED_RUNTIME_RUN_KEY];
+  return typeof runId === "string" && runId ? { runId } : {};
 }
 
-async function recognizesRetainedRuntime(directory: string, packageRoot: string): Promise<boolean> {
+/**
+ * Stamp the creating update run into a projected runtime's marker. The projection can hard
+ * link the installed manifest, so this replaces the file instead of writing through it.
+ */
+export async function stampRetainedUpdateRuntime(projectedRoot: string, runId: string) {
+  const marker = path.join(projectedRoot, "package.json");
+  const [contents, stat] = await Promise.all([fs.readFile(marker, "utf8"), fs.stat(marker)]);
+  const value: unknown = JSON.parse(contents);
+  if (!isRecord(value)) {
+    throw new Error("Retained runtime marker is not a JSON object");
+  }
+  const temporary = `${marker}.${process.pid}.stamp`;
+  await fs.writeFile(
+    temporary,
+    `${JSON.stringify({ ...value, [RETAINED_RUNTIME_RUN_KEY]: runId }, null, 2)}\n`,
+    { flag: "wx", mode: stat.mode & 0o777 },
+  );
+  try {
+    await fs.rename(temporary, marker);
+  } catch (error) {
+    await fs.rm(temporary, { force: true });
+    throw error;
+  }
+}
+
+async function recognizesRetainedRuntime(
+  directory: string,
+  packageRoot: string,
+): Promise<RetainedRuntimeMarker | undefined> {
   const base = path.parse(packageRoot).root;
   const tree = path.join(directory, "tree", Buffer.from(base).toString("hex"));
   const projectedRoot = path.join(tree, path.relative(base, packageRoot));
-  if (await isRetainedRuntimeMarker(path.join(projectedRoot, "package.json"))) {
-    return true;
+  const projected = await readRetainedRuntimeMarker(path.join(projectedRoot, "package.json"));
+  if (projected) {
+    return projected;
   }
   // Shipped projections encode the old source path, not the currently installed
   // pnpm version. Search only sibling package versions in that same projected store.
@@ -125,7 +125,7 @@ async function recognizesRetainedRuntime(directory: string, packageRoot: string)
     path.basename(store) !== ".pnpm" ||
     (await fs.realpath(store).catch(() => undefined)) !== store
   ) {
-    return false;
+    return undefined;
   }
   let inspected = 0;
   for await (const entry of await fs.opendir(store)) {
@@ -135,119 +135,30 @@ async function recognizesRetainedRuntime(directory: string, packageRoot: string)
         "retained pnpm version inventory exceeds the bounded lookup; inspect it before manual cleanup",
       );
     }
-    if (
-      entry.isDirectory() &&
-      entry.name.startsWith("openclaw@") &&
-      (await isRetainedRuntimeMarker(
+    if (entry.isDirectory() && entry.name.startsWith("openclaw@")) {
+      // Shipped pnpm projections predate the stamp.
+      const marker = await readRetainedRuntimeMarker(
         path.join(store, entry.name, "node_modules/openclaw/package.json"),
-      ))
-    ) {
-      return true;
+      );
+      if (marker) {
+        return {};
+      }
     }
   }
-  return false;
+  return undefined;
 }
 
-type UpdateArtifactKind = {
-  label: string;
-  removed: string;
-  pattern: Pick<RegExp, "test">;
-  /** Pre-migration data: its update's outcome, not a process owner, decides. */
-  databaseSnapshot?: true;
-  /** Top-level entries a prior run leaves behind, which identify its directory. */
-  entries?: readonly string[];
-};
-
-const updateArtifactKinds: readonly UpdateArtifactKind[] = [
-  {
-    label: "Runtime",
-    removed: "updater runtime",
-    pattern: /^openclaw-update-runtime-[A-Za-z0-9]{6}$/u,
-  },
-  {
-    label: "Update preflight worktree",
-    removed: "update preflight worktree",
-    pattern: /^(?:\.openclaw-update-preflight-|ocu-pf-)[A-Za-z0-9]{6}$/u,
-    entries: ["worktree", "wt"],
-  },
-  {
-    label: "Update inspection repository",
-    removed: "update inspection repository",
-    pattern: /^openclaw-git-admission-[A-Za-z0-9]{6}$/u,
-    entries: ["repository.git"],
-  },
-  {
-    label: "Update database snapshot",
-    removed: "update database snapshot",
-    pattern: { test: isGitDatabaseSnapshotName },
-    databaseSnapshot: true,
-  },
-];
-
-async function recognizesUpdateArtifact(
-  kind: UpdateArtifactKind,
-  directory: string,
-  packages: readonly string[],
-): Promise<boolean> {
-  if (kind.databaseSnapshot) {
-    return true;
-  }
-  if (kind.entries) {
-    const entries = await fs.readdir(directory);
-    return entries.every((entry) => kind.entries?.includes(entry));
-  }
-  for (const packageRoot of packages) {
-    if (await recognizesRetainedRuntime(directory, packageRoot)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Update artifacts are disposable once nothing uses them. Keep one for its live owning
- * run or a process actually using its path, never for merely sharing a host with OpenClaw.
- * Missing evidence means age decides, with a warning, and cleanup never fails the caller.
- */
+/** Marked updater projections are disposable; live owners and maintenance fence reclamation. */
 export async function maintainRetainedUpdateRuntimes(params: {
   packageRoots: readonly string[];
   temporaryDirectories?: readonly string[];
   repair: boolean;
   assertCurrent: () => void;
   assertResourcesSettled?: () => void;
-  onWarning?: (warning: string) => void;
-  /** Snapshots stay out of this sweep unless the caller can read their update's outcome. */
-  decideDatabaseSnapshot?: DecideDatabaseSnapshot;
-  /** Bounds how long the caller waits; started removals finish in the background. */
-  budgetMs?: number;
+  /** Whether a stamped run has settled in this state directory's ledger; undefined if absent. */
+  readUpdateRun?: (runId: string) => "settled" | "running" | undefined;
 }): Promise<string[]> {
   const messages: string[] = [];
-  const warn = (message: string) => {
-    messages.push(message);
-    params.onWarning?.(message);
-  };
-  const deadline = Date.now() + (params.budgetMs ?? UPDATE_ARTIFACT_SWEEP_BUDGET_MS);
-  const removals: {
-    kind: UpdateArtifactKind;
-    directory: string;
-    finished?: true;
-    failure?: string;
-    settled: Promise<void>;
-  }[] = [];
-  let waited = false;
-  const remove = (kind: UpdateArtifactKind, directory: string, target: string) => {
-    const removal: (typeof removals)[number] = { kind, directory, settled: Promise.resolve() };
-    removal.settled = removeTemporaryArtifacts(target, kind.removed, (error) => {
-      removal.failure = `cleanup failed: ${formatErrorMessage(error)}`;
-      if (waited) {
-        // Nobody reads the result after the caller moved on; the next sweep retries.
-        reportRetainedUpdateRuntime(directory, removal.failure, kind.label);
-      }
-    }).then(() => {
-      removal.finished = true;
-    });
-    removals.push(removal);
-  };
   // Native spelling matches the projection, registration, and marker realpaths
   // even when callers pass a Windows 8.3 or differently cased spelling.
   const packages = params.packageRoots.map(resolveIdentityPathViaExistingAncestorSync);
@@ -255,64 +166,38 @@ export async function maintainRetainedUpdateRuntimes(params: {
     [
       os.tmpdir(),
       ...(params.temporaryDirectories ?? []),
-      ...packages.flatMap((root) => [
-        ...resolveRetainedUpdateRuntimeParents(root),
-        path.join(root, ".artifacts"),
-      ]),
-      ...(process.platform === "win32" ? [resolveWindowsUpdatePreflightBaseDirectory()] : []),
+      ...packages.flatMap((root) => resolveRetainedUpdateRuntimeParents(root)),
     ].map(resolveIdentityPathViaExistingAncestorSync),
   );
-  let inspected = 0;
   for (const parent of roots) {
     try {
       for (const entry of await fs.readdir(parent, { withFileTypes: true })) {
-        const name = entry.name.endsWith(UPDATE_ARTIFACT_REMOVING_SUFFIX)
-          ? entry.name.slice(0, -UPDATE_ARTIFACT_REMOVING_SUFFIX.length)
-          : entry.name;
-        const kind = updateArtifactKinds.find(({ pattern }) => pattern.test(name));
-        if (!kind || (kind.databaseSnapshot && !params.decideDatabaseSnapshot)) {
+        if (!/^openclaw-update-runtime-[A-Za-z0-9]{6}$/u.test(entry.name)) {
           continue;
         }
-        const directory = path.join(parent, name);
+        const directory = path.join(parent, entry.name);
         try {
-          if (inspected++ > 0 && Date.now() >= deadline) {
-            messages.push(
-              `${kind.label} at ${directory} waits for a later update: this cleanup pass reached its time limit`,
-            );
-            continue;
-          }
-          const before = await fs.lstat(path.join(parent, entry.name));
+          const before = await fs.lstat(directory);
           if (!before.isDirectory() || (process.getuid && before.uid !== process.getuid())) {
             throw new Error("directory ownership is unknown; inspect it before manual cleanup");
           }
-          if (name !== entry.name) {
-            // A renamed artifact already passed these checks; an earlier removal stopped midway.
-            if (params.repair) {
-              remove(kind, directory, path.join(parent, entry.name));
-            }
-            continue;
-          }
-          const keep = (reason: string) =>
-            messages.push(reportRetainedUpdateRuntime(directory, reason, kind.label));
           if (retainedRuntimes.has(directory)) {
-            keep("the creating update still owns this runtime");
-            continue;
+            throw new Error("the creating update still owns this runtime");
           }
-          if (!(await recognizesUpdateArtifact(kind, directory, packages))) {
+          let marker: RetainedRuntimeMarker | undefined;
+          for (const packageRoot of packages) {
+            marker = await recognizesRetainedRuntime(directory, packageRoot);
+            if (marker) {
+              break;
+            }
+          }
+          if (!marker) {
             throw new Error("no recognized runtime marker; inspect it before manual cleanup");
           }
           if (!params.repair) {
             messages.push(
-              `${kind.label} retained at ${directory}: run \`openclaw doctor --fix\` after its workers stop`,
+              `Runtime retained at ${directory}: run \`openclaw doctor --fix\` after its workers stop`,
             );
-            continue;
-          }
-          const ageMs = Date.now() - before.mtimeMs;
-          const snapshot = kind.databaseSnapshot
-            ? params.decideDatabaseSnapshot?.(directory, ageMs)
-            : undefined;
-          if (snapshot && "keep" in snapshot) {
-            keep(snapshot.keep);
             continue;
           }
           const { inspectOtherOpenClawProcesses } = await import("./openclaw-process-census.js");
@@ -325,96 +210,50 @@ export async function maintainRetainedUpdateRuntimes(params: {
           ) {
             throw new Error("directory identity or custody changed");
           }
+          // A run from another state directory, or no stamp at all, keeps the conservative rule.
+          const run = marker.runId ? params.readUpdateRun?.(marker.runId) : undefined;
+          if (run === "running") {
+            throw new Error(`its update run ${marker.runId} has not settled`);
+          }
           params.assertCurrent();
-          const census = inspectOtherOpenClawProcesses(directory);
-          for (const warning of "error" in census ? [] : (census.warnings ?? [])) {
+          const census = inspectOtherOpenClawProcesses(directory, {
+            pathEvidenceOnly: run === "settled",
+          });
+          if ("error" in census) {
+            throw new Error(census.error);
+          }
+          for (const warning of census.warnings ?? []) {
             if (!messages.includes(warning)) {
               messages.push(warning);
             }
           }
-          if (!("error" in census) && census.pids.length) {
-            keep(
-              `processes are still using it (PIDs: ${census.pids.join(", ")}); let these holders finish, then rerun openclaw doctor --fix, or the next update reclaims it`,
+          if (census.pids.length) {
+            throw new Error(
+              `other OpenClaw processes are still running (PIDs: ${census.pids.join(", ")}); let these holders finish, then rerun openclaw doctor --fix`,
             );
-            continue;
-          }
-          const gap = "error" in census ? census.error : census.incomplete;
-          if (snapshot) {
-            if (gap) {
-              // Age never overrides missing holder evidence for the only copy of this data.
-              warn(reportRetainedUpdateRuntime(directory, gap, kind.label));
-              continue;
-            }
-            const reason = `Removing ${kind.removed} ${directory}: ${snapshot.remove}`;
-            log.info(reason);
-            messages.push(reason);
-          } else {
-            const hours =
-              "error" in census
-                ? FAILED_CENSUS_UPDATE_ARTIFACT_RETENTION_HOURS
-                : UNPROVEN_UPDATE_ARTIFACT_RETENTION_HOURS;
-            // Only this process can know that a run is over without waiting for age.
-            if (ageMs < hours * HOUR_MS && !releasedRuntimes.has(directory)) {
-              const reason = `${gap ?? "no process uses it, but the update that made it may still be running"}; keeping it until it is ${hours} hours old`;
-              if (gap) {
-                warn(reportRetainedUpdateRuntime(directory, reason, kind.label));
-              } else {
-                const kept = `${kind.label} retained at ${directory}: ${reason}`;
-                log.info(kept);
-                messages.push(kept);
-              }
-              continue;
-            }
-            const byAge = releasedRuntimes.has(directory)
-              ? `Removing ${kind.removed} ${directory}: the update that made it in this process has finished${gap ? `, though ${gap}` : ""}`
-              : `Removing ${kind.removed} ${directory} by age: ${gap ?? "no process uses it"}, and it is over ${hours} hours old`;
-            if (gap) {
-              log.warn(byAge);
-              warn(byAge);
-            } else {
-              log.info(byAge);
-              messages.push(byAge);
-            }
           }
           params.assertResourcesSettled?.();
           params.assertCurrent();
-          // Rename first: an in-use Windows tree refuses as a whole instead of partially
-          // deleting, and an interrupted removal stays recognizable to the next sweep.
-          const removing = `${directory}${UPDATE_ARTIFACT_REMOVING_SUFFIX}`;
-          await fs.rename(directory, removing);
-          remove(kind, directory, removing);
+          let failure: string | undefined;
+          await removeTemporaryArtifacts(directory, "Updater runtime", (error) => {
+            failure = `cleanup failed: ${formatErrorMessage(error)}`;
+          });
+          messages.push(
+            failure
+              ? reportRetainedUpdateRuntime(directory, failure)
+              : `Removed abandoned updater runtime: ${directory}`,
+          );
         } catch (error) {
           if (!hasErrnoCode(error, "ENOENT")) {
-            warn(reportRetainedUpdateRuntime(directory, formatErrorMessage(error), kind.label));
+            messages.push(reportRetainedUpdateRuntime(directory, formatErrorMessage(error)));
           }
         }
       }
     } catch (error) {
       if (!hasErrnoCode(error, "ENOENT")) {
-        const message = `Cannot inspect updater runtimes in ${parent}: ${formatErrorMessage(error)}`;
-        log.warn(message);
-        warn(message);
+        messages.push(`Cannot inspect updater runtimes in ${parent}: ${formatErrorMessage(error)}`);
       }
     }
-  }
-  if (removals.length) {
-    await raceWithTimeout(
-      Promise.all(removals.map(({ settled }) => settled)),
-      Math.max(0, deadline - Date.now()),
-      () => undefined,
-    );
-    waited = true;
-  }
-  for (const { kind, directory, finished, failure } of removals) {
-    if (failure) {
-      warn(reportRetainedUpdateRuntime(directory, failure, kind.label));
-      continue;
-    }
-    const outcome = finished
-      ? `Removed abandoned ${kind.removed}: ${directory}`
-      : `Removing abandoned ${kind.removed} in the background: ${directory}`;
-    log.info(outcome);
-    messages.push(outcome);
   }
   return messages;
 }

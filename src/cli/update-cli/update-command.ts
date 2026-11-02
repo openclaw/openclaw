@@ -467,7 +467,6 @@ async function updateCommandInternal(
       };
       const retentionStartedAt = Date.now();
       await progress.onStepStart?.(retentionStep);
-      const artifactCleanup: { lines: string[]; warnings: string[] } = { lines: [], warnings: [] };
       const retention = await retainRuntime({
         mutationRoots: [root, ...(switchToGit ? [resolveGitInstallDir()] : [])],
         installTarget,
@@ -475,20 +474,15 @@ async function updateCommandInternal(
         timeoutMs: updateStepTimeoutMs,
         signal: run.deadline?.signal,
         assertCurrent: executionGuards.assertCurrent,
-        onArtifactCleanup: (report) => Object.assign(artifactCleanup, report),
+        runId: run.runId,
       });
-      const diagnostics = [
-        ...(retention ? [JSON.stringify(retention)] : []),
-        ...artifactCleanup.lines,
-      ];
       retainedRuntimeStep = {
         name: retentionStep.name,
         command: retentionStep.command,
         cwd: root,
         durationMs: Date.now() - retentionStartedAt,
         exitCode: 0,
-        diagnostics: diagnostics.length ? diagnostics : undefined,
-        ...(artifactCleanup.warnings.length ? { warnings: artifactCleanup.warnings } : {}),
+        diagnostics: retention ? [JSON.stringify(retention)] : undefined,
       };
       await reportUpdateStepCompletion(progress, { ...retentionStep, ...retainedRuntimeStep });
       mutableUpdatePrepared = true;
