@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
+import type { NativeModelSource } from "./native-subagent-monitor-types.js";
 import {
   readCodexNotificationThreadId,
   readCodexNotificationTurnId,
@@ -9,9 +10,6 @@ import {
 import { isJsonObject } from "./protocol.js";
 import { retainSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 
-type RetainedSource = NonNullable<
-  ReturnType<NonNullable<EmbeddedRunAttemptParamsV2["hostCapabilities"]["retainSourceAuthority"]>>
->;
 type NativeTurn = { threadId: string; turnId: string };
 type NativeCommand = NativeTurn & { itemId: string };
 type ProcessCustody = { terminate: () => Promise<void> };
@@ -20,6 +18,7 @@ type CommandAdmission = NativeCommand & {
   client: CodexNativeProcessClient;
   parentTurn: NativeTurn;
   accepting: boolean;
+  background?: { processId: string | null; confirmed: boolean };
   processes: Set<ProcessCustody>;
   assertActive: () => void;
   releaseClient?: () => void;
@@ -40,11 +39,56 @@ export function getCodexNativeProcessClient(
   return owner;
 }
 
-export function hasCodexNativeBackgroundProcesses(
-  client: CodexAppServerClient,
-  threadId: string,
-): boolean {
-  return clients.get(client)?.hasProcesses(threadId) ?? false;
+/** Read the native process owner's live inventory, never infer custody from a start event. */
+export async function readCodexRetainedBackgroundCommands(params: {
+  client: CodexAppServerClient;
+  threadId: string;
+  turnId: string;
+  commands: ReadonlyMap<string, string | null>;
+  authority?: CodexNativeProcessAuthority;
+  assertCurrent: () => void;
+  signal: AbortSignal;
+  timeoutMs: number;
+}): Promise<() => ReadonlyMap<string, string>> {
+  params.assertCurrent();
+  const retain = !params.authority?.requiresProcessAdmission
+    ? params.authority?.prepareBackgroundCommands(params.client, params, params.commands)
+    : undefined;
+  const { data } = await params.client
+    .request(
+      "thread/backgroundTerminals/list",
+      { threadId: params.threadId },
+      { signal: params.signal, timeoutMs: params.timeoutMs },
+    )
+    .catch((error: unknown) => {
+      retain?.(new Map());
+      throw error;
+    });
+  params.signal.throwIfAborted();
+  params.assertCurrent();
+  // Consumption follows a second notification drain. Recheck source custody then,
+  // so revocation during that await cannot turn an orphan into retained work.
+  return () => {
+    params.signal.throwIfAborted();
+    params.assertCurrent();
+    const retained = new Map<string, string>();
+    for (const { itemId, processId } of data) {
+      if (
+        params.commands.has(itemId) &&
+        // Approval starts omit the process ID; the native inventory supplies it.
+        (params.commands.get(itemId) === null || params.commands.get(itemId) === processId) &&
+        (!params.authority?.requiresProcessAdmission ||
+          params.authority.ownsCurrentCommand(params.client, {
+            threadId: params.threadId,
+            turnId: params.turnId,
+            itemId,
+          }))
+      ) {
+        retained.set(itemId, processId);
+      }
+    }
+    return retain?.(retained) ?? retained;
+  };
 }
 
 export class CodexNativeProcessClient {
@@ -61,7 +105,24 @@ export class CodexNativeProcessClient {
       const threadId = readCodexNotificationThreadId(notification.params);
       const turnId = readCodexNotificationTurnId(notification.params);
       const commands = threadId ? this.threads.get(threadId) : undefined;
-      if (!commands || !turnId) {
+      if (!commands) {
+        return;
+      }
+      if (
+        notification.method === "thread/closed" ||
+        notification.method === "thread/archived" ||
+        notification.method === "thread/deleted"
+      ) {
+        // Codex unloads an unsubscribed thread by dropping its listener before
+        // shutdown, so its background terminals end without an item/completed
+        // this connection can observe. The thread-level receipt is final.
+        for (const command of commands.values()) {
+          command.background = undefined;
+          this.closeAdmission(command);
+        }
+        return;
+      }
+      if (!turnId) {
         return;
       }
       if (notification.method === "turn/completed") {
@@ -74,7 +135,15 @@ export class CodexNativeProcessClient {
         const item = notification.params.item;
         const command =
           isJsonObject(item) && typeof item.id === "string" ? commands.get(item.id) : undefined;
-        if (command?.turnId === turnId) {
+        if (
+          command?.turnId === turnId &&
+          isJsonObject(item) &&
+          item.type === "commandExecution" &&
+          (!command.background?.processId ||
+            typeof item.processId !== "string" ||
+            item.processId === command.background.processId)
+        ) {
+          command.background = undefined;
           this.closeAdmission(command);
         }
       }
@@ -98,7 +167,7 @@ export class CodexNativeProcessClient {
     receipt: NativeCommand,
     parentTurn: NativeTurn,
     assertActive: () => void,
-  ): void {
+  ): CommandAdmission {
     if (this.closed) {
       throw new Error("Codex process source client is closed");
     }
@@ -106,7 +175,7 @@ export class CodexNativeProcessClient {
     const existing = commands?.get(receipt.itemId);
     if (existing) {
       if (existing.owner === owner && existing.turnId === receipt.turnId && existing.accepting) {
-        return;
+        return existing;
       }
       throw new Error("Codex reused an unsettled native command identity");
     }
@@ -127,12 +196,7 @@ export class CodexNativeProcessClient {
     };
     commands.set(receipt.itemId, command);
     owner.commands.add(command);
-  }
-
-  hasProcesses(threadId: string): boolean {
-    return [...(this.threads.get(threadId)?.values() ?? [])].some(
-      (command) => command.processes.size > 0,
-    );
+    return command;
   }
 
   claim(metadata: unknown, terminate: () => Promise<void>) {
@@ -162,21 +226,18 @@ export class CodexNativeProcessClient {
     assertAdmission();
     const process = { terminate };
     command.processes.add(process);
-    let settled = false;
     return {
       assertAdmission,
       assertCurrent: () => {
         command.owner.assertCurrent();
-        if (this.closed || settled) {
+        if (this.closed || !command.processes.has(process)) {
           throw new Error("Codex native process authority has ended");
         }
       },
       settle: () => {
-        if (settled) {
+        if (!command.processes.delete(process)) {
           return;
         }
-        settled = true;
-        command.processes.delete(process);
         this.forgetSettled(command);
       },
       fail: (error: unknown) => command.owner.reportSettlementFailure(error),
@@ -188,8 +249,17 @@ export class CodexNativeProcessClient {
     this.forgetSettled(command);
   }
 
+  /** Steering can retain earlier sources' processes in the same selected native turn. */
+  cancelTurn(threadId: string, turnId: string): Promise<void> {
+    return terminateCommands(
+      [...(this.threads.get(threadId)?.values() ?? [])].filter(
+        (command) => command.turnId === turnId,
+      ),
+    );
+  }
+
   private forgetSettled(command: CommandAdmission): void {
-    if (command.accepting || command.processes.size > 0) {
+    if (command.accepting || command.background || command.processes.size > 0) {
       return;
     }
     const commands = this.threads.get(command.threadId);
@@ -214,7 +284,7 @@ export class CodexNativeProcessAuthority {
   private released = false;
   private cancellation?: Promise<void>;
   private parentTurn?: NativeTurn & { client: CodexAppServerClient };
-  private readonly source: RetainedSource | undefined;
+  private readonly source: NativeModelSource | undefined;
   private readonly onAbort = () => {
     if (!this.cancelled) {
       void this.cancel().catch(this.onCleanupFailure);
@@ -224,6 +294,7 @@ export class CodexNativeProcessAuthority {
   constructor(
     host: EmbeddedRunAttemptParamsV2["hostCapabilities"],
     private readonly onCleanupFailure: (error: unknown) => void,
+    readonly requiresProcessAdmission = true,
   ) {
     this.source = host.retainSourceAuthority?.();
     this.source?.signal?.addEventListener("abort", this.onAbort, { once: true });
@@ -238,13 +309,43 @@ export class CodexNativeProcessAuthority {
     }
     try {
       this.source?.assertCurrent();
-      if (this.cancelled || this.released) {
-        throw new Error("Codex native process source has ended");
-      }
     } catch (error) {
       this.onAbort();
       throw error;
     }
+  }
+
+  static assertCleanup(
+    authority: CodexNativeProcessAuthority | undefined,
+    host: EmbeddedRunAttemptParamsV2["hostCapabilities"],
+  ): void {
+    if (authority?.source) {
+      authority.assertCurrent();
+    } else {
+      host.assertActive();
+    }
+  }
+
+  hasCurrentProcesses(client: CodexAppServerClient, threadId: string): boolean {
+    this.assertCurrent();
+    return [...this.commands].some(
+      (command) =>
+        command.client === clients.get(client) &&
+        command.threadId === threadId &&
+        (command.processes.size > 0 || command.background?.confirmed === true),
+    );
+  }
+
+  ownsCurrentCommand(client: CodexAppServerClient, receipt: NativeCommand): boolean {
+    this.assertCurrent();
+    return [...this.commands].some(
+      (command) =>
+        command.client === clients.get(client) &&
+        command.threadId === receipt.threadId &&
+        command.turnId === receipt.turnId &&
+        command.itemId === receipt.itemId &&
+        command.processes.size > 0,
+    );
   }
 
   bindTurn(client: CodexAppServerClient, threadId: string, turnId: string): void {
@@ -256,7 +357,7 @@ export class CodexNativeProcessAuthority {
     receipt: NativeCommand,
     assertAdmissionCurrent: () => void,
     childParentThreadId?: string,
-  ): void {
+  ): CommandAdmission {
     this.assertCurrent();
     if (this.holds === 0) {
       throw new Error("Codex native process admission is closed");
@@ -271,7 +372,41 @@ export class CodexNativeProcessAuthority {
       throw new Error("Codex native command does not belong to its admitted turn");
     }
     assertAdmissionCurrent();
-    getCodexNativeProcessClient(client).admit(this, receipt, parent, assertAdmissionCurrent);
+    return getCodexNativeProcessClient(client).admit(this, receipt, parent, assertAdmissionCurrent);
+  }
+
+  /** Native inventory confirms lifetime only; these receipts never admit sandbox execution. */
+  prepareBackgroundCommands(
+    client: CodexAppServerClient,
+    turn: NativeTurn,
+    pending: ReadonlyMap<string, string | null>,
+  ): (retained: Map<string, string>) => ReadonlyMap<string, string> {
+    const entries = new Map<string, CommandAdmission>();
+    for (const [itemId, processId] of pending) {
+      const command = this.admit(
+        client,
+        { threadId: turn.threadId, turnId: turn.turnId, itemId },
+        () => this.assertCurrent(),
+      );
+      command.accepting = false;
+      command.background = { processId, confirmed: false };
+      entries.set(itemId, command);
+    }
+    return (retained) => {
+      for (const [itemId, command] of entries) {
+        const processId = retained.get(itemId);
+        if (!this.commands.has(command)) {
+          // Completion may arrive while the inventory RPC or projection drain is pending.
+          retained.delete(itemId);
+        } else if (processId) {
+          command.background = { processId, confirmed: true };
+        } else {
+          command.background = undefined;
+          command.client.closeAdmission(command);
+        }
+      }
+      return retained;
+    };
   }
 
   retainAdmission(): () => void {
@@ -293,6 +428,9 @@ export class CodexNativeProcessAuthority {
     this.holds -= 1;
     if (this.holds === 0) {
       for (const command of this.commands) {
+        if (!command.background?.confirmed) {
+          command.background = undefined;
+        }
         command.client.closeAdmission(command);
       }
     }
@@ -310,7 +448,7 @@ export class CodexNativeProcessAuthority {
 
   cancelTurn(client: CodexAppServerClient, threadId: string, turnId: string): Promise<void> {
     const owner = getCodexNativeProcessClient(client);
-    return this.terminate(
+    return terminateCommands(
       [...this.commands].filter(
         (command) =>
           command.client === owner &&
@@ -321,7 +459,7 @@ export class CodexNativeProcessAuthority {
   }
 
   cancelClient(client: CodexNativeProcessClient): void {
-    void this.terminate([...this.commands].filter((command) => command.client === client)).catch(
+    void terminateCommands([...this.commands].filter((command) => command.client === client)).catch(
       this.onCleanupFailure,
     );
   }
@@ -337,24 +475,25 @@ export class CodexNativeProcessAuthority {
 
   private cancel(): Promise<void> {
     this.cancelled = true;
-    return (this.cancellation ??= this.terminate([...this.commands]));
+    return (this.cancellation ??= terminateCommands([...this.commands]));
   }
+}
 
-  private async terminate(commands: CommandAdmission[]): Promise<void> {
-    const processes = commands.flatMap((command) => {
-      command.client.closeAdmission(command);
-      return [...command.processes];
-    });
-    // These closures own concrete children. Native numeric process IDs may already belong to a successor.
-    const results = await Promise.allSettled(processes.map((process) => process.terminate()));
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
+async function terminateCommands(commands: CommandAdmission[]): Promise<void> {
+  const processes = commands.flatMap((command) => {
+    command.background = undefined;
+    command.client.closeAdmission(command);
+    return [...command.processes];
+  });
+  // These closures own concrete children. Native numeric process IDs may already belong to a successor.
+  const results = await Promise.allSettled(processes.map((process) => process.terminate()));
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures,
+      "Codex native process cleanup failed; background work remains unsettled",
     );
-    if (failures.length > 0) {
-      throw new AggregateError(
-        failures,
-        "Codex native process cleanup failed; background work remains unsettled",
-      );
-    }
   }
 }

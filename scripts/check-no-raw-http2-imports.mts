@@ -1,4 +1,3 @@
-// Rejects raw Node http2 imports in source and extension code.
 import fs from "node:fs";
 import path from "node:path";
 import { collectFilesSync, isCodeFile, toPosixPath } from "./check-file-utils.ts";

@@ -10,6 +10,8 @@ export {
 export {
   resolveRuntimePluginRegistry,
   acquirePluginRegistryForInspection,
+  loadAndActivateRootPluginRegistry,
+  loadOpenClawPluginsAsync,
 } from "./loader-runtime-load.js";
 
 /** Loads a caller-owned registry value without changing the process-wide active registry. */
@@ -24,11 +26,6 @@ export async function loadOpenClawPluginCliRegistry(options: PluginLoadOptions =
     mode: "cli-metadata",
     activate: false,
   });
-}
-
-/** Loads and installs the registry owned by a process composition root. */
-export function loadAndActivateRootPluginRegistry(options: PluginLoadOptions = {}) {
-  return loadOpenClawPlugins({ ...options, activate: true });
 }
 
 export { loadOpenClawPlugins };

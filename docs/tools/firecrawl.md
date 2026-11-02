@@ -9,7 +9,7 @@ read_when:
 title: "Firecrawl"
 ---
 
-OpenClaw can use **Firecrawl** in three ways:
+OpenClaw can use [Firecrawl](https://www.firecrawl.dev/) in three ways:
 
 - as the `web_search` provider
 - as explicit plugin tools: `firecrawl_search` and `firecrawl_scrape`
@@ -41,6 +41,7 @@ Firecrawl registers two `web_search` providers:
 The explicitly selected Firecrawl `web_fetch` fallback is also keyless. The
 explicit `firecrawl_search` and `firecrawl_scrape` tools require an API key. Add
 `FIRECRAWL_API_KEY` in the gateway environment or configure it for higher limits.
+Get a key from the [Firecrawl dashboard](https://www.firecrawl.dev/app/api-keys).
 
 ## Configure Firecrawl search
 
@@ -77,6 +78,10 @@ Notes:
 - For Firecrawl-specific controls like `sources`, `categories`, or result scraping, use `firecrawl_search`.
 - `baseUrl` defaults to hosted Firecrawl at `https://api.firecrawl.dev`. Self-hosted overrides are allowed only for private/internal endpoints; HTTP is accepted only for those private targets.
 - `FIRECRAWL_BASE_URL` is the shared env fallback for Firecrawl search and scrape base URLs.
+- Search and scrape select their own `webSearch` or `webFetch` connection settings.
+  If that scope has neither an API key nor a base URL, the sibling connection is
+  reused. Once either field is configured, missing fields use the shared environment
+  or hosted defaults; credentials and endpoints are never mixed across scopes.
 - Firecrawl search requests default to a 30-second timeout; `firecrawl_search`'s `timeoutSeconds` parameter overrides it per call.
 
 Both Firecrawl `web_search` providers and `firecrawl_search` use

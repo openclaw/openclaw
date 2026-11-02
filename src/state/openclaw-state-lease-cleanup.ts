@@ -1,4 +1,4 @@
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
@@ -9,6 +9,7 @@ import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context
 export function createOpenClawStateLeaseCleanup(params: {
   maintenanceScope?: OpenClawDatabaseMaintenanceScope;
   context?: OpenClawStateWorkerContext;
+  nativeIdentity?(): DatabasePathIdentity | undefined;
   revoke(): void;
   finish(): Promise<void>;
   workerOwner():
@@ -22,7 +23,7 @@ export function createOpenClawStateLeaseCleanup(params: {
   let complete = false;
   let attempt: Promise<void> | undefined;
   let unregister: (() => void) | undefined;
-  const databaseIdentity = params.context?.admission.identity;
+  let databaseIdentity = params.context?.admission.identity;
   const finish = (): Promise<void> => {
     if (complete) {
       return Promise.resolve();
@@ -70,6 +71,13 @@ export function createOpenClawStateLeaseCleanup(params: {
       try {
         const workerOwner = params.workerOwner();
         prepareCleanup();
+        if (!unregister) {
+          // Native callbacks may close shared state themselves. Retain only their settled cleanup.
+          databaseIdentity = params.nativeIdentity?.();
+          if (databaseIdentity) {
+            unregister = registerOpenClawStateDatabaseAsyncResource(resource);
+          }
+        }
         try {
           await finish();
         } catch (cleanupError) {

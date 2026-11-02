@@ -1,5 +1,6 @@
 // Registry Jiti mock helpers install Vitest mocks for plugin registry import tests.
 import { vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 
 const registryJitiMocks = vi.hoisted(() => ({
   createJiti: vi.fn(),

@@ -1,7 +1,7 @@
 import { resolveThinkingDefaultWithRuntimeCatalogCore } from "../agents/model-thinking-default.js";
 import {
-  getPreparedModelCatalogSnapshot,
   readPreparedModelCatalog,
+  refreshExpiredPreparedModelCatalog,
   type LoadPreparedModelCatalogParams,
 } from "../agents/prepared-model-catalog.js";
 /**
@@ -11,13 +11,12 @@ import {
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 
 export {
-  listAgentIds,
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentDir,
   setAgentEffectiveModelPrimary,
 } from "../agents/agent-scope.js";
-export { resolveSessionAgentIds } from "./agent-scope-runtime.js";
+export { listAgentIds, resolveSessionAgentIds } from "./agent-scope-runtime.js";
 
 export { DEFAULT_PROVIDER } from "../agents/defaults.js";
 // Consumed by the codex plugin's app-server usage surface.
@@ -34,7 +33,8 @@ export {
 export { resolveApiKeyForProviderCore as resolveApiKeyForProvider } from "../agents/model-auth.js";
 export { findModelInCatalog, modelSupportsVision } from "../agents/model-catalog.js";
 export type { ModelCatalogEntry } from "../agents/model-catalog.js";
-export { getPreparedModelCatalogSnapshot };
+/** Preserve the shipped SDK getter's background renewal; internal observations stay passive. */
+export { refreshExpiredPreparedModelCatalog as getPreparedModelCatalogSnapshot };
 
 /** Preserves the public SDK's writable default while internal catalog reads stay passive. */
 export async function loadPreparedModelCatalog(params: LoadPreparedModelCatalogParams = {}) {
@@ -77,7 +77,7 @@ export async function loadModelCatalog(params: LoadModelCatalogCompatibilityPara
     ...(workspaceDir ? { workspaceDir } : {}),
   };
   if (cacheOnly) {
-    return getPreparedModelCatalogSnapshot(preparedParams)?.entries ?? [];
+    return refreshExpiredPreparedModelCatalog(preparedParams)?.entries ?? [];
   }
   return await loadPreparedModelCatalog(preparedParams);
 }
@@ -122,20 +122,32 @@ export {
 
 // Intentional public runtime surface: channel plugins use ingress agent helpers directly.
 export { agentCommandFromIngress } from "../agents/agent-command.js";
-export { getTtsProvider, resolveTtsConfig, resolveTtsPrefsPath } from "../tts/tts.js";
+export {
+  getTtsProvider,
+  getTtsProviderAsync,
+  resolveTtsConfig,
+  resolveTtsPrefsPath,
+  resolveTtsPrefsPathAsync,
+} from "../tts/tts.js";
 export type { ResolvedTtsConfig } from "../tts/tts.js";
 
 export {
   listProfilesForProvider,
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreForRuntimeAsync,
   replaceRuntimeAuthProfileStoreSnapshots,
+  replaceRuntimeAuthProfileStoreSnapshotsAsync,
   saveAuthProfileStore,
   findPersistedAuthProfileCredential,
+  findPersistedAuthProfileCredentialAsync,
   resolvePersistedAuthProfileOwnerAgentDir,
+  resolvePersistedAuthProfileOwnerAgentDirAsync,
   clearExpiredCooldowns,
   isProfileInCooldown,
   markAuthProfileBlockedUntil,
@@ -153,6 +165,10 @@ export type {
   AuthProfileStore,
   OAuthCredential,
 } from "../agents/auth-profiles.js";
+export {
+  isPendingOAuthRefreshFence,
+  isSameOAuthRefreshGeneration,
+} from "../agents/auth-profiles/oauth-refresh-marker.js";
 
 export { buildConfiguredModelCatalog } from "../agents/model-selection-shared.js";
 export { extractEmbeddedAssistantText as extractAssistantText } from "../agents/embedded-agent-utils.js";

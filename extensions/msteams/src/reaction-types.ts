@@ -1,4 +1,3 @@
-// Msteams plugin module implements reaction type normalization.
 const TEAMS_REACTION_EMOJI: Record<string, string> = {
   like: "\u{1F44D}",
   heart: "\u2764\uFE0F",

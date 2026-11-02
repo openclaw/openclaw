@@ -1,21 +1,5 @@
-/**
- * OpenAI-compatible conversation turn detector.
- *
- * Some providers reject requests without a non-empty user/assistant turn; this
- * helper checks the loose message payload shape before transport submission.
- */
+// Some providers require a non-empty user or assistant turn before submission.
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
-
-function hasNonEmptyContentPart(part: unknown): boolean {
-  if (!part || typeof part !== "object") {
-    return false;
-  }
-  const record = part as Record<string, unknown>;
-  if (record.type === "text") {
-    return hasNonEmptyString(record.text);
-  }
-  return true;
-}
 
 function hasNonEmptyMessageContent(content: unknown): boolean {
   if (hasNonEmptyString(content)) {
@@ -24,17 +8,16 @@ function hasNonEmptyMessageContent(content: unknown): boolean {
   if (!Array.isArray(content)) {
     return false;
   }
-  return content.some(hasNonEmptyContentPart);
-}
-
-function hasAssistantToolCall(message: Record<string, unknown>): boolean {
-  const toolCalls = message.tool_calls;
-  return (
-    Array.isArray(toolCalls) &&
-    toolCalls.some((toolCall) => {
-      return Boolean(toolCall && typeof toolCall === "object");
-    })
-  );
+  return content.some((part) => {
+    if (!part || typeof part !== "object") {
+      return false;
+    }
+    const record = part as Record<string, unknown>;
+    if (record.type === "text") {
+      return hasNonEmptyString(record.text);
+    }
+    return true;
+  });
 }
 
 /** Returns whether an OpenAI-compatible messages payload contains a usable turn. */
@@ -51,7 +34,14 @@ export function hasOpenAICompatibleConversationTurn(messages: unknown): boolean 
       return hasNonEmptyMessageContent(record.content);
     }
     if (record.role === "assistant") {
-      return hasNonEmptyMessageContent(record.content) || hasAssistantToolCall(record);
+      if (hasNonEmptyMessageContent(record.content)) {
+        return true;
+      }
+      const toolCalls = record.tool_calls;
+      return (
+        Array.isArray(toolCalls) &&
+        toolCalls.some((toolCall) => toolCall && typeof toolCall === "object")
+      );
     }
     return false;
   });

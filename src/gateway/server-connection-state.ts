@@ -1,8 +1,10 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { parseAgentSessionKey } from "../routing/session-key.js";
-// Gateway connection and run registries.
+import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 // This state is transport-fed but can be constructed without HTTP or WebSocket servers.
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { createEventWebPushDelivery } from "./event-web-push.js";
 import { createMentionInbox } from "./mention-inbox.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
@@ -14,45 +16,105 @@ import {
 } from "./server-chat-state.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
-import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
+import type { GatewayClient } from "./server-methods/client-types.js";
+import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
-import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
+import { ConnectionSessionRows } from "./session-ancestor-references.js";
+import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { resolveSessionEventAgentScope } from "./session-request-agent.js";
-import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { canReceiveSessionEvent, prepareProjectedSessionSharing } from "./session-sharing.js";
+import type { SessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 
 /** Creates transport-independent connection, subscription, and run state. */
 export function createGatewayConnectionState(params: {
+  scheduler: GatewayScheduler;
   bootId: string;
+  resolveGatewayContext?: GatewayContextResolver;
   cfg: import("../config/config.js").OpenClawConfig;
   getRuntimeConfig?: () => import("../config/config.js").OpenClawConfig;
 }) {
   const loadRuntimeConfig = params.getRuntimeConfig ?? (() => params.cfg);
   let sessionRowProjection: SessionRowProjection | undefined;
-  const clients = new GatewayClientRegistry();
+  const connectionRows = new WeakMap<GatewayClient, ConnectionSessionRows>();
+  const clients = new GatewayClientRegistry(undefined, (client) => {
+    connectionRows.get(client)?.clear("close");
+    connectionRows.delete(client);
+    client.presenceSnapshot = undefined;
+  });
+  // Subscription changes revoke ancestor certification, not socket-held wire rows.
+  const forgetConnectionAncestors = (connId: string) => {
+    const client = clients.getByConnectionId(connId);
+    if (client) {
+      connectionRows.get(client)?.clearAncestors();
+    }
+  };
+  const clearConnectionRows = () => {
+    const histories = new Map<object, object>();
+    for (const client of clients) {
+      connectionRows.get(client)?.clear("projection", histories);
+    }
+  };
+  const clearAncestors = () => {
+    const histories = new Map<object, object>();
+    for (const client of clients) {
+      connectionRows.get(client)?.clearAncestors(histories);
+    }
+  };
+  const forgetAncestor = (key: string) => {
+    const histories = new Map<object, object>();
+    for (const client of clients) {
+      connectionRows.get(client)?.forget(key, histories);
+    }
+  };
   // RPCs survive ordinary disconnects, so connection-owned projections still
   // validate the live transport before publishing into a retired connection.
   const isConnectionActive = (connId: string) => {
     const client = clients.getByConnectionId(connId);
-    return Boolean(client && !client.invalidated);
+    return Boolean(client && !client.invalidated && !client.connectionSignal?.aborted);
   };
-  const sessionEventSubscribers = createSessionEventSubscriberRegistry(isConnectionActive);
-  const sessionMessageSubscribers = createSessionMessageSubscriberRegistry(isConnectionActive);
-  const eventWebPush = createEventWebPushDelivery({ getRuntimeConfig: loadRuntimeConfig });
+  const sessionEventSubscribers = createSessionEventSubscriberRegistry(
+    isConnectionActive,
+    forgetConnectionAncestors,
+  );
+  const sessionMessageSubscribers = createSessionMessageSubscriberRegistry(
+    isConnectionActive,
+    forgetConnectionAncestors,
+  );
+  // Lifecycle owns viewer declarations; agent-finished pushes fail open until it attaches them.
+  let sessionViewers: SessionViewerPresenceDeclarations | undefined;
+  const eventWebPush = createEventWebPushDelivery(
+    loadRuntimeConfig,
+    {
+      isViewedOnDevice: (deviceId, sessionKey) =>
+        sessionViewers?.isViewedOnDevice(deviceId, sessionKey) === true,
+    },
+    () => sessionRowProjection,
+  );
   const gatewayBroadcaster = createGatewayBroadcaster({
     clients,
     preparePresenceProjection: (presence) =>
-      createPresenceRecipientProjection({ cfg: loadRuntimeConfig(), presence }),
+      createPresenceRecipientProjection({
+        cfg: loadRuntimeConfig(),
+        presence,
+        projection: sessionRowProjection,
+      }),
     sessionMessageSubscribers,
+    onSessionDeliveryLost: (client) => {
+      if (hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS)) {
+        connectionRows.get(client)?.clear("delivery-lost");
+      }
+    },
     canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) => {
       try {
         const projection = sessionRowProjection;
         const cfg = loadRuntimeConfig();
+        const policyConfig = projection?.getPolicyConfig() ?? cfg;
         const prepared = projection
           ? {
               sharing: prepareProjectedSessionSharing({
-                cfg,
+                cfg: policyConfig,
                 client,
                 isMember: (target, identity) =>
                   projection.hasMembership(target.storePath, target.storeKey, identity),
@@ -63,14 +125,18 @@ export function createGatewayConnectionState(params: {
               },
             }
           : undefined;
+        if (!prepared) {
+          return false;
+        }
         return canReceiveSessionEvent({
           cfg,
+          policyConfig,
           client,
           sessionKeys,
           agentId,
           event,
           payload,
-          ...(prepared ? { prepared } : {}),
+          prepared,
         });
       } catch {
         return false;
@@ -78,107 +144,51 @@ export function createGatewayConnectionState(params: {
     },
     prepareSessionEventProjection(event, payload, eventScope) {
       const projection = sessionRowProjection;
-      if (
-        !projection ||
-        (event !== "sessions.changed" && event !== "session.message") ||
-        !isRecord(payload)
-      ) {
+      if (!projection) {
         return undefined;
       }
-      const source = payload;
-      if (source.reason === "delete" || typeof source.sessionKey !== "string") {
-        return undefined;
-      }
-      const scope = resolveSessionEventAgentScope(
-        loadRuntimeConfig(),
-        source.sessionKey,
-        typeof source.agentId === "string" ? source.agentId : eventScope.agentId,
+      return (eventScope.prepareSessionProjection ?? prepareSessionEventProjection(projection))(
+        event,
+        payload,
+        eventScope,
+        {
+          isCurrentProjection: (owner) => owner === sessionRowProjection,
+          resolveAgentScope: (key, agentId) =>
+            resolveSessionEventAgentScope(loadRuntimeConfig(), key, agentId),
+          forgetAncestors: (key) => {
+            if (key !== undefined) {
+              forgetAncestor(key);
+            } else {
+              clearAncestors();
+            }
+          },
+          references: (client) => {
+            let references = connectionRows.get(client);
+            if (!references) {
+              references = new ConnectionSessionRows();
+              connectionRows.set(client, references);
+            }
+            return references;
+          },
+          createRunProjector: () =>
+            createVisibleActiveSessionRunProjector(
+              projection.state.rowContext.projectedAgentRuns,
+              undefined,
+              params.resolveGatewayContext,
+              projection.physicalPaths,
+            ),
+        },
       );
-      if (!scope?.[1] || (!scope[0] && !scope[2] && !parseAgentSessionKey(source.sessionKey))) {
-        return undefined;
-      }
-      const query = { key: source.sessionKey, agentId: scope[1] };
-      const record = projection.describe(query);
-      if (
-        !record ||
-        (typeof source.sessionId === "string" && source.sessionId !== record.entry.sessionId)
-      ) {
-        return () => undefined;
-      }
-      const base = isRecord(source.session)
-        ? source
-        : {
-            ...buildGatewaySessionSnapshot({
-              sessionRow: projection.snapshot(query).row,
-              agentId: scope[0],
-              includeSession: true,
-            }),
-            ...source,
-          };
-      const sourceRow = base.session;
-      if (
-        !isRecord(sourceRow) ||
-        sourceRow.sessionId !== record.entry.sessionId ||
-        (sourceRow.lifecycleRevision !== undefined &&
-          sourceRow.lifecycleRevision !== record.entry.lifecycleRevision)
-      ) {
-        return () => undefined;
-      }
-      const now = Date.now();
-      const ancestors = projection.ancestorRows(record);
-      return (client) => {
-        if (!projection.isCurrent(record)) {
-          return undefined;
-        }
-        const { projectedAgentRuns } = projection.state.rowContext;
-        const presentation = prepareProjectedSessionPresentation(
-          projection,
-          client,
-          now,
-          (selection) =>
-            resolveVisibleActiveSessionRunState({
-              ...selection,
-              context: { chatAbortControllers },
-              projectedAgentRunIndex: projectedAgentRuns,
-            }),
-        );
-        const enrichment = { includeDerivedTitles: true, includeLastMessage: true };
-        const { row } = presentation.snapshot(query, enrichment);
-        if (!row) {
-          return undefined;
-        }
-        const projected: Record<string, unknown> = {
-          ...base,
-          session: row,
-          ancestorSessions: ancestors?.every((ancestor) => projection.isCurrent(ancestor))
-            ? ancestors.flatMap((ancestor) => {
-                if (presentation.sharing.entryFilter?.(ancestor.key, ancestor.entry) === false) {
-                  return [];
-                }
-                const presented = presentation.present(ancestor, enrichment);
-                return presented ? [presented] : [];
-              })
-            : undefined,
-          visibility: row.visibility,
-          sharingRole: row.sharingRole,
-          ...(isRecord(base.activitySummary) && row.activitySummary
-            ? {
-                activitySummary: {
-                  ...base.activitySummary,
-                  canEnsure: row.activitySummary.canEnsure,
-                },
-              }
-            : {}),
-        };
-        if (Object.hasOwn(projected, "childSessions")) {
-          projected.childSessions = row.childSessions;
-        }
-        return projected;
-      };
     },
-    onBroadcast: (event, payload, opts) => eventWebPush.handleEvent(event, payload, opts),
+    onBroadcast: (event, payload, opts) =>
+      eventWebPush.handleEvent(
+        event,
+        payload,
+        opts ? { agentId: opts.agentId, sessionKeys: opts.sessionKeys } : undefined,
+      ),
   });
   const mentionInbox = createMentionInbox({
+    scheduler: params.scheduler,
     gatewayInstanceId: params.bootId,
     getRuntimeConfig: loadRuntimeConfig,
     *getClients() {
@@ -199,25 +209,40 @@ export function createGatewayConnectionState(params: {
   });
   const agentRunSeq = new Map<string, number>();
   const dedupe = new Map<string, import("./server-shared.js").DedupeEntry>();
-  const chatRunState = createChatRunState();
+  const chatRunState = createChatRunState(isConnectionActive);
   const chatRunRegistry = chatRunState.registry;
   const addChatRun = chatRunRegistry.add;
   const removeChatRun = chatRunRegistry.remove;
-  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
-  const chatQueuedTurns = new Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>();
   const toolEventRecipients = chatRunState.toolEventRecipients;
 
   return {
     getSessionRowProjection: () => sessionRowProjection,
     attachSessionRowProjection(this: void, projection: SessionRowProjection) {
       sessionRowProjection = projection;
+      clearConnectionRows();
+      const unsubscribe = sessionChanges.subscribeFacts((change) => {
+        if (!("all" in change) && change.scope === "acp") {
+          return;
+        }
+        if ("all" in change) {
+          clearAncestors();
+        } else if (change.factsInvalidated || (change.facts && change.facts.kind !== "unchanged")) {
+          forgetAncestor(change.sessionKey);
+        }
+      });
       return () => {
+        unsubscribe();
         if (sessionRowProjection === projection) {
           sessionRowProjection = undefined;
+          clearConnectionRows();
         }
       };
     },
+    attachSessionViewerPresence(this: void, declarations: SessionViewerPresenceDeclarations) {
+      sessionViewers = declarations;
+    },
     clients,
+    forgetConnectionAncestors,
     connectionWork: new GatewayConnectionWork(),
     mentionInbox,
     isConnectionActive,
@@ -227,8 +252,6 @@ export function createGatewayConnectionState(params: {
     chatRunState,
     addChatRun,
     removeChatRun,
-    chatAbortControllers,
-    chatQueuedTurns,
     toolEventRecipients,
     sessionEventSubscribers,
     sessionMessageSubscribers,

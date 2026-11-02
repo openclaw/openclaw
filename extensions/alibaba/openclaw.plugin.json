@@ -32,6 +32,11 @@
   "contracts": {
     "videoGenerationProviders": ["alibaba"]
   },
+  "videoGenerationProviderMetadata": {
+    "alibaba": {
+      "authSignals": [{ "provider": "alibaba" }]
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

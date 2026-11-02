@@ -8,87 +8,116 @@ import {
   type VitestWorkerManifest,
 } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
-import { createDeferred, withTestTimeout } from "../helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeFixture } from "./vitest-worker-artifacts.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+type Group = "inputs" | "outputs";
+const source = "expected";
 
-it("keeps the runner event loop responsive while verifying a completed generation", async () => {
-  const directory = tempDirs.make("vitest-worker-verification-");
-  fs.mkdirSync(path.join(directory, "dist"));
+function generation(directory: string, groups: Partial<Record<Group, string[]>>) {
+  const hash = hashVitestWorkerArtifact(source);
   const manifest: VitestWorkerManifest = {
-    identity: "verification-fixture",
+    identity: "fixture",
     inputs: {},
     outputs: {},
     durationMs: 0,
   };
-  const source = "export const value = 1;\n";
-  const hash = hashVitestWorkerArtifact(source);
-  for (let index = 0; index < 64; index++) {
-    const input = path.join(directory, `input-${index}.ts`);
-    const output = `output-${index}.js`;
-    fs.writeFileSync(input, source);
-    fs.writeFileSync(path.join(directory, "dist", output), source);
-    manifest.inputs[input] = hash;
-    manifest.outputs[output] = hash;
+  for (const group of ["inputs", "outputs"] as const) {
+    for (const name of groups[group] ?? []) {
+      const parent = group === "inputs" ? directory : path.join(directory, "dist");
+      const filename = writeFixture(parent, name, source);
+      manifest[group][group === "inputs" ? filename : name] = hash;
+    }
   }
+  return manifest;
+}
 
+function controlledReads(held: string, options: { synthetic?: Set<string>; failed?: string } = {}) {
+  const started = createDeferred(),
+    release = createDeferred(),
+    failedRead = createDeferred();
+  const observedReads: string[] = [];
+  const readFile = fs.readFile.bind(fs);
+  const reader = vi.spyOn(fs, "readFile").mockImplementation((...args) => {
+    const [filename, callback] = args;
+    const synthetic = typeof filename === "string" && options.synthetic?.has(filename);
+    if (synthetic) {
+      observedReads.push(filename);
+    }
+    const deliver = () => (synthetic ? callback(null, Buffer.from(source)) : readFile(...args));
+    if (filename === held) {
+      started.resolve();
+      void release.promise.then(deliver);
+    } else if (filename === options.failed) {
+      readFile(filename, (error, bytes) => {
+        callback(error, bytes);
+        failedRead.resolve();
+      });
+    } else if (synthetic) {
+      queueMicrotask(deliver);
+    } else {
+      readFile(...args);
+    }
+  });
+  return { started, release, failedRead, observedReads, reader };
+}
+
+it("keeps the runner event loop responsive while verifying a generation with microtask reads", async () => {
+  const directory = tempDirs.make("vitest-worker-verification-");
+  const names = Array.from({ length: 64 }, (_, i) => `${i}.js`);
+  const manifest = generation(directory, { inputs: names, outputs: names });
+  const files = new Set([
+    ...Object.keys(manifest.inputs),
+    ...Object.keys(manifest.outputs).map((name) => path.join(directory, "dist", name)),
+  ]);
+
+  const { release, observedReads, reader } = controlledReads(path.join(directory, "0.js"), {
+    synthetic: files,
+  });
   let completed = false;
-  // Supply the manifest so an asynchronous manifest read alone cannot satisfy
-  // the assertion: the source/artifact traversal itself must yield to I/O.
-  const verification = Promise.resolve(verifyVitestWorkerArtifacts(directory, manifest)).then(
-    () => {
-      completed = true;
-    },
-  );
+  // Supplying the manifest means the artifact reads themselves must yield.
+  let verification: Promise<void> | undefined;
   try {
+    verification = Promise.resolve(verifyVitestWorkerArtifacts(directory, manifest)).then(() => {
+      completed = true;
+    });
     await nextTurn();
     expect(completed, "verification blocked the runner until every file was hashed").toBe(false);
+    expect(observedReads, "one slow input must not stall unrelated input reads").toHaveLength(64);
   } finally {
-    await verification;
+    release.resolve();
+    try {
+      await verification;
+    } finally {
+      reader.mockRestore();
+    }
   }
+  expect(observedReads.toSorted()).toEqual([...files].toSorted());
 });
 
-it.each(["inputs", "outputs"] as const)(
-  "drains active %s reads before failed verification releases the generation",
-  async (group) => {
+it.for([
+  { group: "inputs", damage: "changed" },
+  { group: "outputs", damage: "changed" },
+  { group: "inputs", damage: "missing" },
+  { group: "outputs", damage: "missing" },
+] as const)(
+  "drains active $group reads before $damage verification releases the generation",
+  async ({ group, damage }, { signal }) => {
     const owner = createVitestWorkerRun();
     const directory = owner.descriptor.directory;
     const files = group === "inputs" ? directory : path.join(directory, "dist");
-    fs.mkdirSync(files, { recursive: true });
     const bad = path.join(files, "changed.js");
     const held = path.join(files, "held.js");
-    fs.writeFileSync(bad, "changed");
-    fs.writeFileSync(held, "expected");
-    const hash = hashVitestWorkerArtifact("expected");
-    const manifest: VitestWorkerManifest = {
-      identity: "drain-fixture",
-      durationMs: 0,
-      inputs: {},
-      outputs: {},
-    };
-    manifest[group] = Object.fromEntries(
-      [bad, held].map((filename) => [
-        group === "inputs" ? filename : path.basename(filename),
-        hash,
-      ]),
-    );
+    const manifest = generation(directory, { [group]: ["changed.js", "held.js"] });
+    if (damage === "changed") {
+      fs.writeFileSync(bad, "changed");
+    } else {
+      fs.unlinkSync(bad);
+    }
     fs.writeFileSync(path.join(directory, "manifest.json"), JSON.stringify(manifest));
-    const started = createDeferred();
-    const failedRead = createDeferred();
-    const release = createDeferred();
-    const readFile = fs.promises.readFile.bind(fs.promises);
-    const reader = vi.spyOn(fs.promises, "readFile").mockImplementation(async (...args) => {
-      if (args[0] === held) {
-        started.resolve();
-        await release.promise;
-      }
-      const bytes = await readFile(...args);
-      if (args[0] === bad) {
-        failedRead.resolve();
-      }
-      return bytes;
-    });
+    const { started, failedRead, release, reader } = controlledReads(held, { failed: bad });
     let completed = false;
     let failure: unknown;
     const disposal = owner
@@ -100,11 +129,8 @@ it.each(["inputs", "outputs"] as const)(
         completed = true;
       });
     try {
-      await withTestTimeout(
-        Promise.all([started.promise, failedRead.promise]),
-        5_000,
-        "verification did not admit both reads",
-      );
+      const admitted = Promise.all([started.promise, failedRead.promise]);
+      await withinTest(awaitGateBeforeSettlement(admitted, disposal, "reads not admitted"), signal);
       await nextTurn();
       expect(completed).toBe(false);
       expect(fs.readFileSync(held, "utf8")).toBe("expected");
@@ -117,32 +143,11 @@ it.each(["inputs", "outputs"] as const)(
       group === "inputs"
         ? "Source changed during compiled subprocess invocation"
         : "Compiled subprocess artifact changed";
-    expect(failure).toMatchObject({ message: expect.stringContaining(diagnostic) });
+    if (damage === "missing") {
+      expect(failure).toMatchObject({ code: "ENOENT" });
+    } else {
+      expect(failure).toMatchObject({ message: expect.stringContaining(diagnostic) });
+    }
     expect(fs.existsSync(directory)).toBe(false);
   },
 );
-
-it("rejects a byte-identical input at the compiler-time ctime cutoff", async () => {
-  const directory = tempDirs.make("vitest-worker-source-change-");
-  const filename = path.join(directory, "input.ts");
-  const original = "export const value = 1;\n";
-  fs.writeFileSync(filename, original);
-  const manifest: VitestWorkerManifest = {
-    identity: "source-change-fixture",
-    inputs: { [filename]: hashVitestWorkerArtifact(original) },
-    outputs: {},
-    durationMs: 0,
-  };
-  fs.writeFileSync(filename, "export const value = 2;\n");
-  fs.writeFileSync(filename, original);
-  // Filesystem timestamps need not advance in lockstep with the wall clock.
-  const inputsChangedAfter = fs.statSync(filename).ctimeMs;
-  await expect(
-    verifyVitestWorkerArtifacts(directory, manifest, {
-      inputsChangedAfter: inputsChangedAfter + 1,
-    }),
-  ).resolves.toBeUndefined();
-  await expect(
-    verifyVitestWorkerArtifacts(directory, manifest, { inputsChangedAfter }),
-  ).rejects.toThrow("Source changed during compiled subprocess invocation");
-});

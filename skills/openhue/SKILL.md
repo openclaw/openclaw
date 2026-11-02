@@ -41,7 +41,7 @@ Use when:
 Do not use when:
 
 - Non-Hue smart devices (other brands) -> not supported
-- HomeKit scenes or Shortcuts -> use Apple's ecosystem
+- HomeKit scenes or Shortcuts -> use Apple's Home app or Shortcuts
 - TV or entertainment system control
 - Thermostat or HVAC
 - Smart plugs (unless Hue smart plugs)

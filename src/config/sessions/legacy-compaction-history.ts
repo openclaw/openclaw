@@ -14,6 +14,26 @@ type LegacyCompactionHistory = {
   tokensAfter?: number;
 };
 
+export type LegacyCompactionMetrics = Array<{
+  entryId: string;
+  tokensBefore?: number;
+  tokensAfter?: number;
+}>;
+
+export function readLegacyCompactionMetrics(entry: unknown): LegacyCompactionMetrics {
+  try {
+    return readLegacyCompactionHistory(entry).flatMap((checkpoint) => {
+      const entryId = checkpoint.postCompaction.entryId;
+      return entryId
+        ? [{ entryId, tokensBefore: checkpoint.tokensBefore, tokensAfter: checkpoint.tokensAfter }]
+        : [];
+    });
+  } catch {
+    // Corrupt legacy metadata cannot hide readable transcript history.
+    return [];
+  }
+}
+
 export function readLegacyCompactionSnapshotPaths(entry: unknown): string[] {
   return readLegacyCompactionHistory(entry).flatMap((checkpoint) =>
     [

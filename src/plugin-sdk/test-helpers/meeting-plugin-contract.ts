@@ -5,6 +5,7 @@ import type { TranscriptSourceProvider } from "../../transcripts/provider-types.
 import { createTestPluginApi } from "../plugin-test-api.js";
 import { createMeetingBrowserFixture, createMeetingLogger } from "./meeting-browser.js";
 import type { useMeetingTestState } from "./meeting-state.js";
+import { createPluginGatewayRuntimeMock } from "./plugin-runtime-gateway-mock.js";
 
 type GatewayHandler = (options: {
   client?: { internal?: { pluginRuntimeOwnerId?: string } };
@@ -40,7 +41,7 @@ export function createMeetingPluginFixture(options: MeetingPluginFixtureOptions)
       config: {},
       pluginConfig: {},
       runtime: {
-        gateway: { isAvailable: vi.fn(async () => false), request: vi.fn() },
+        gateway: createPluginGatewayRuntimeMock(),
       } as unknown as OpenClawPluginApi["runtime"],
       logger: createMeetingLogger(),
       ...overrides,

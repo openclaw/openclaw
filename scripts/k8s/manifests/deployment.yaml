@@ -69,6 +69,9 @@ spec:
               value: /home/node
             - name: OPENCLAW_CONFIG_DIR
               value: /home/node/.openclaw
+            # Private SQLite snapshots need a writable cache on the read-only rootfs.
+            - name: XDG_CACHE_HOME
+              value: /home/node/.openclaw/.cache
             - name: NODE_ENV
               value: production
             - name: OPENCLAW_GATEWAY_TOKEN

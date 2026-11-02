@@ -1,3 +1,5 @@
+import { listen } from "../../lib/reactive/listener.ts";
+
 const PORTAL_REACHABILITY_TIMEOUT_MS = 4_000;
 
 /**
@@ -8,32 +10,24 @@ const PORTAL_REACHABILITY_TIMEOUT_MS = 4_000;
  */
 export type PortalReachability = "reachable" | "unreachable" | "blocked";
 
-function isProbeViolation(event: SecurityPolicyViolationEvent, target: URL): boolean {
-  try {
-    return new URL(event.blockedURI).origin === target.origin;
-  } catch {
-    // Keyword blockedURI values ("inline", "eval") never describe this fetch.
-    return false;
-  }
-}
-
 export async function probePortalReachable(url: string): Promise<PortalReachability> {
-  let target: URL;
-  try {
-    target = new URL(url);
-  } catch {
+  const target = URL.parse(url);
+  if (!target) {
     return "unreachable";
   }
   let blocked = false;
   const onViolation = (event: Event) => {
-    if (isProbeViolation(event as SecurityPolicyViolationEvent, target)) {
+    // Keyword blockedURI values ("inline", "eval") never describe this fetch.
+    if (URL.parse((event as SecurityPolicyViolationEvent).blockedURI)?.origin === target.origin) {
       blocked = true;
     }
   };
   // Callable outside a DOM (tests, any non-browser import): without a document
   // there is no violation signal, so the probe stays reachable/unreachable.
-  const violationTarget = typeof document === "undefined" ? undefined : document;
-  violationTarget?.addEventListener("securitypolicyviolation", onViolation);
+  const stopViolation =
+    typeof document === "undefined"
+      ? undefined
+      : listen(document, "securitypolicyviolation", onViolation);
   try {
     await fetch(url, {
       mode: "no-cors",
@@ -47,6 +41,6 @@ export async function probePortalReachable(url: string): Promise<PortalReachabil
     });
     return blocked ? "blocked" : "unreachable";
   } finally {
-    violationTarget?.removeEventListener("securitypolicyviolation", onViolation);
+    stopViolation?.();
   }
 }

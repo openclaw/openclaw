@@ -1,12 +1,10 @@
-// Creates private temporary workspaces for downloads.
-import "./fs-safe-defaults.js";
 import path from "node:path";
 import {
   buildRandomTempFilePath as buildRandomTempFilePathBase,
   sanitizeTempFileName,
 } from "@openclaw/fs-safe/advanced";
+import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { tempWorkspace } from "./private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 const logger = createSubsystemLogger("infra:temp-download");
@@ -26,11 +24,6 @@ type TempDownloadTarget = {
 
 function resolveTempRoot(tmpDir?: string): string {
   return tmpDir ?? resolvePreferredOpenClawTmpDir();
-}
-
-function sanitizeTempPrefix(prefix: string): string {
-  const normalized = prefix.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
-  return normalized || "tmp";
 }
 
 /** Build a stable temp path shape while keeping caller-controlled text filename-safe. */
@@ -57,7 +50,7 @@ export async function createTempDownloadTarget(params: {
 }): Promise<TempDownloadTarget> {
   const workspace = await tempWorkspace({
     rootDir: resolveTempRoot(params.tmpDir),
-    prefix: sanitizeTempPrefix(params.prefix),
+    prefix: params.prefix.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "tmp",
   });
   const fileName = params.fileName;
   const file = (nextName?: string) =>

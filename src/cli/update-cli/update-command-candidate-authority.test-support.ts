@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { vitestWorkerRuntimeAssets } from "../../../scripts/lib/vitest-worker-declarations.mts";
+import { fixtureReceiptClientSource } from "../../../test/helpers/fixture-receipts.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 
@@ -16,33 +18,26 @@ export async function prepareCandidateAuthorityRuntime(root: string) {
       recursive: true,
       mode: fs.constants.COPYFILE_FICLONE,
     });
-    await fs.promises.copyFile(
-      path.join(preparedRoot, "node-host-launcher.mjs"),
-      path.join(root, "node-host-launcher.mjs"),
-    );
+    for (const filename of vitestWorkerRuntimeAssets) {
+      await fs.promises.copyFile(path.join(preparedRoot, filename), path.join(root, filename));
+    }
     const dependencies = path.resolve("node_modules");
     const fixtureDependencies = path.join(root, "node_modules");
+    const link = (source: string, name: string, directory: boolean) =>
+      fs.promises.symlink(
+        source,
+        path.join(fixtureDependencies, name),
+        directory ? (process.platform === "win32" ? "junction" : "dir") : "file",
+      );
     await fs.promises.mkdir(fixtureDependencies);
     for (const entry of await fs.promises.readdir(dependencies, { withFileTypes: true })) {
       if (entry.name === "openclaw" || (!entry.isDirectory() && !entry.isSymbolicLink())) {
         continue;
       }
       const source = path.join(dependencies, entry.name);
-      await fs.promises.symlink(
-        source,
-        path.join(fixtureDependencies, entry.name),
-        (await fs.promises.stat(source)).isDirectory()
-          ? process.platform === "win32"
-            ? "junction"
-            : "dir"
-          : "file",
-      );
+      await link(source, entry.name, (await fs.promises.stat(source)).isDirectory());
     }
-    await fs.promises.symlink(
-      root,
-      path.join(fixtureDependencies, "openclaw"),
-      process.platform === "win32" ? "junction" : "dir",
-    );
+    await link(root, "openclaw", true);
     // Doctor resolves its loaded module's package before argv/cwd. A package
     // boundary prevents it from finding and rebuilding the source checkout's UI.
     await fs.promises.copyFile(path.resolve("package.json"), path.join(root, "package.json"));
@@ -55,21 +50,20 @@ export async function prepareCandidateAuthorityRuntime(root: string) {
       distWorkerPath,
       root: installedRoot,
     });
+  const doctorHealth = sibling(
+    "../../extensions/memory-core/doctor-health-api",
+    "extensions/memory-core/doctor-health-api.js",
+  );
+  const installedIndexReader = sibling(
+    "../plugins/test-helpers/installed-plugin-index",
+    "plugins/test-helpers/installed-plugin-index.js",
+  );
   return {
     worker: resolveRuntimeWorkerUrl({ ...workerDeclaration, root: installedRoot }),
     cli: sibling("../entry", "entry.js"),
-    runtime: sibling("../runtime", "runtime.js"),
     doctorResult: sibling("update-doctor-result", "infra/update-doctor-result.js"),
-    bundledPluginsDir: path.dirname(
-      path.dirname(
-        fileURLToPath(
-          sibling(
-            "../../extensions/memory-core/doctor-health-api",
-            "extensions/memory-core/doctor-health-api.js",
-          ),
-        ),
-      ),
-    ),
+    installedIndexReader,
+    bundledPluginsDir: path.dirname(path.dirname(fileURLToPath(doctorHealth))),
   };
 }
 
@@ -80,14 +74,21 @@ export function writeCandidateAuthorityEntrypoints(params: {
   events: string;
   ready: string;
   proceed: string;
+  receiptEndpoint: string;
   boundary: "candidate" | "doctor";
 }): string {
   const workerPath = path.join(params.root, "dist", workerDeclaration.distWorkerPath);
-  const { worker: candidateAuthorityWorker, cli, runtime, doctorResult } = params.runtime;
+  const {
+    worker: candidateAuthorityWorker,
+    cli,
+    doctorResult,
+    installedIndexReader,
+  } = params.runtime;
   const bootstrap = `
     import fs from 'node:fs';
     import fsp from 'node:fs/promises';
     import {setTimeout} from 'node:timers/promises';
+    ${fixtureReceiptClientSource(params.receiptEndpoint)}
     ${candidateAuthorityWorker.pathname.endsWith(".ts") ? `process.env.TSX_TSCONFIG_PATH=${JSON.stringify(path.resolve("tsconfig.json"))}; await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/tsx.mjs")).href)});` : ""}
     const source=${JSON.stringify(candidateAuthorityWorker.href)};
     const role=process.argv[2]==='--doctor'?'doctor':process.argv[2]==='config'?'validate':process.argv.includes('--lint')?'readiness':process.argv[2]==='doctor'?'doctor':'candidate';
@@ -102,11 +103,17 @@ export function writeCandidateAuthorityEntrypoints(params: {
         const {getUpdateDoctorConfigWriteAuthority}=await import(${JSON.stringify(doctorResult.href)});
         const observation={event:'config-backup',role,pid:process.pid,ppid:process.ppid,source,
           doctorAuthority:!!getUpdateDoctorConfigWriteAuthority(process.env.OPENCLAW_CONFIG_PATH)};
-        event(observation);
         if(role===${JSON.stringify(params.boundary)}) {
-          fs.writeFileSync(${JSON.stringify(params.ready + ".tmp")},JSON.stringify(observation));
+          const {readPersistedInstalledPluginIndexRowSync}=await import(${JSON.stringify(installedIndexReader.href)});
+          const boundaryObservation={...observation,
+            index:readPersistedInstalledPluginIndexRowSync({env:process.env,artifactPreservingReadOnly:true})};
+          event(boundaryObservation);
+          fs.writeFileSync(${JSON.stringify(params.ready + ".tmp")},JSON.stringify(boundaryObservation));
           fs.renameSync(${JSON.stringify(params.ready + ".tmp")},${JSON.stringify(params.ready)});
+          sendReceipt(${JSON.stringify(params.ready)},'config-backup');
           while(!fs.existsSync(${JSON.stringify(params.proceed)})) await setTimeout(10);
+        } else {
+          event(observation);
         }
       }
       return handle;
@@ -120,24 +127,6 @@ export function writeCandidateAuthorityEntrypoints(params: {
   fs.writeFileSync(
     path.join(params.root, "dist", "index.js"),
     `${bootstrap}
-    const output={stdout:'',stderr:''};
-    for(const name of ['stdout','stderr']) {
-      const stream=process[name];
-      const write=stream.write.bind(stream);
-      stream.write=(chunk,...args)=>{output[name]+=String(chunk);return write(chunk,...args);};
-    }
-    process.on('exit',(code)=>event({event:'exit',code,...output}));
-    const {defaultRuntime}=await import(${JSON.stringify(runtime.href)});
-    const writeJson=defaultRuntime.writeJson;
-    defaultRuntime.writeJson=(value,...args)=>{
-      event({event:'runtime-json',value});
-      return writeJson(value,...args);
-    };
-    const error=defaultRuntime.error;
-    defaultRuntime.error=(...args)=>{
-      event({event:'runtime-error',args});
-      return error(...args);
-    };
     // Enter the actual executable bootstrap. Internal owners are bundled chunks,
     // not stable dist/cli or dist/state paths a package adapter may import.
     const {fileURLToPath}=await import('node:url');

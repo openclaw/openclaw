@@ -31,7 +31,7 @@ function parseLinuxProcessStat(raw: string) {
   };
 }
 
-function boundProcessGroupDiagnostics(details: string) {
+export function boundProcessGroupDiagnostics(details: string) {
   if (details.length <= 2_048) {
     return details;
   }

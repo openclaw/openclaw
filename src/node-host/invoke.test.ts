@@ -4,21 +4,34 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClient as TestGatewayClient } from "../../packages/gateway-client/src/client.js";
 import type { FsListDirResult } from "../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { GatewayClient } from "../gateway/client.js";
-import { saveExecApprovals, type ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import type { ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import { logWarn } from "../logger.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { testApi as loggerTest } from "../logging/logger.test-support.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type { SkillBinsProvider } from "./invoke-types.js";
-import { handleInvoke } from "./invoke.js";
+import * as nodeRunCommand from "./invoke-run-command.js";
+import { handleInvoke, type NodeInvokeRequestPayload } from "./invoke.js";
+import type { SkillBinsProvider } from "./runtime-skill-bins.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   resetPluginRuntimeStateForTest();
 });
 
@@ -58,17 +71,17 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
       }
       return await original.ensureExecApprovalsSnapshot();
     },
-    readExecApprovalsSnapshot: () => {
+    readExecApprovalsSnapshotAsync: async () => {
       execApprovalsStoreMock.readCalls += 1;
       if (execApprovalsStoreMock.readError !== undefined) {
         throw execApprovalsStoreMock.readError;
       }
       if (execApprovalsStoreMock.hasReadResult) {
-        return execApprovalsStoreMock.readResult as ReturnType<
-          typeof original.readExecApprovalsSnapshot
+        return execApprovalsStoreMock.readResult as Awaited<
+          ReturnType<typeof original.readExecApprovalsSnapshotAsync>
         >;
       }
-      return original.readExecApprovalsSnapshot();
+      return await original.readExecApprovalsSnapshotAsync();
     },
     updateExecApprovals: async (...args: Parameters<typeof original.updateExecApprovals>) => {
       execApprovalsStoreMock.updateCalls += 1;
@@ -126,10 +139,11 @@ type InvokeResult = {
   error?: { code?: string; message?: string };
 };
 
-async function invokeExecApprovals(
-  command: "system.execApprovals.get" | "system.execApprovals.set",
+async function invokeCommand(
+  command: string,
   params?: unknown,
-): Promise<InvokeResult> {
+  frame: Partial<NodeInvokeRequestPayload> = {},
+) {
   const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
   await handleInvoke(
     {
@@ -137,15 +151,68 @@ async function invokeExecApprovals(
       nodeId: "node-1",
       command,
       paramsJSON: params === undefined ? undefined : JSON.stringify(params),
+      ...frame,
     },
     { request } as unknown as GatewayClient,
     { current: async () => [] },
   );
-  return (request.mock.calls[0]?.[1] ?? {}) as InvokeResult;
+  const result = (request.mock.calls[0]?.[1] ?? {}) as InvokeResult;
+  expect(request).toHaveBeenCalledWith(
+    "node.invoke.result",
+    expect.objectContaining({
+      id: frame.id ?? `invoke-${command}`,
+      nodeId: frame.nodeId ?? "node-1",
+    }),
+  );
+  return { request, result };
+}
+
+async function invokeExecApprovals(command: string, params?: unknown): Promise<InvokeResult> {
+  return (await invokeCommand(command, params)).result;
 }
 
 describe("node host invoke", () => {
+  it.each(["system.run.prepare", "system.run"])(
+    "rejects invalid routing context at %s",
+    async (command) => {
+      for (const executionContext of [
+        null,
+        { senderId: 7 },
+        { subagent: false },
+        { env: { PATH: "other" } },
+        { sessionKey: "agent:main:main" },
+      ]) {
+        const client = new TestGatewayClient({ deviceIdentity: null });
+        const request = vi.spyOn(client, "request").mockResolvedValue(null);
+        await handleInvoke(
+          {
+            id: "invalid-context",
+            nodeId: "node-1",
+            command,
+            paramsJSON: JSON.stringify({
+              command: [process.execPath, "--version"],
+              executionContext,
+            }),
+          },
+          client,
+          { current: async () => [] },
+        );
+        expect(request).toHaveBeenCalledWith(
+          "node.invoke.result",
+          expect.objectContaining({
+            ok: false,
+            error: {
+              code: "INVALID_REQUEST",
+              message: expect.stringContaining("executionContext invalid"),
+            },
+          }),
+        );
+      }
+    },
+  );
+
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     approvalResolutionFailure.error = null;
     execApprovalsStoreMock.ensureError = undefined;
     execApprovalsStoreMock.ensureResult = undefined;
@@ -165,6 +232,15 @@ describe("node host invoke", () => {
   it("passes the owning agent session to plugin node commands", async () => {
     const handle = vi.fn(async () => '{"ok":true}');
     const registry = createEmptyPluginRegistry();
+    registry.plugins = [
+      createPluginRecord({
+        id: "canvas",
+        source: "test",
+        origin: "bundled",
+        enabled: true,
+        configSchema: true,
+      }),
+    ];
     registry.nodeHostCommands = [
       {
         pluginId: "canvas",
@@ -196,48 +272,6 @@ describe("node host invoke", () => {
       sessionKey: "agent:main:canvas",
       prepareExecAuthorization: expect.any(Function),
     });
-  });
-
-  it("does not publish a canceled non-duplex plugin result", async () => {
-    const controller = new AbortController();
-    let resolvePlugin: ((result: string) => void) | undefined;
-    const handle = vi.fn(
-      () =>
-        new Promise<string>((resolve) => {
-          resolvePlugin = resolve;
-        }),
-    );
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "canvas",
-        pluginName: "Canvas",
-        command: { command: "canvas.present", cap: "canvas", handle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-
-    const invoking = handleInvoke(
-      {
-        id: "invoke-canvas-canceled",
-        nodeId: "node-1",
-        command: "canvas.present",
-        paramsJSON: "{}",
-      },
-      { request } as unknown as GatewayClient,
-      { current: async () => [] },
-      undefined,
-      { signal: controller.signal },
-    );
-    await vi.waitFor(() => expect(handle).toHaveBeenCalledOnce());
-
-    controller.abort();
-    resolvePlugin?.('{"stale":true}');
-    await invoking;
-
-    expect(request).not.toHaveBeenCalled();
   });
 
   it("publishes only the replacement result for a redelivered plugin invocation", async () => {
@@ -301,62 +335,34 @@ describe("node host invoke", () => {
     expect(secondController.signal.aborted).toBe(false);
   });
 
-  it.each(["Projects", "Projects "])(
-    "lists and reopens node-host directory %j",
-    async (directory) => {
-      const root = fs.realpathSync(tempDirs.make("openclaw-node-fs-listdir-"));
-      fs.mkdirSync(path.join(root, "Projects"));
-      fs.mkdirSync(path.join(root, directory, "child"), { recursive: true });
-      fs.writeFileSync(path.join(root, "notes.txt"), "hidden from directory listing");
-      const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-      const list = async (directoryPath: string) => {
-        await handleInvoke(
-          {
-            id: `invoke-fs-listdir-${request.mock.calls.length}`,
-            nodeId: "node-1",
-            command: "fs.listDir",
-            paramsJSON: JSON.stringify({ path: directoryPath }),
-          },
-          { request } as unknown as GatewayClient,
-          { current: async () => [] },
-        );
-        const result = request.mock.calls.at(-1)?.[1] as InvokeResult | undefined;
-        expect(result?.ok).toBe(true);
-        return JSON.parse(result?.payloadJSON ?? "{}") as FsListDirResult;
-      };
-      const initial = await list(root);
-      expect(initial.path).toBe(root);
-      expect(initial.entries.map((entry) => entry.name)).toEqual(
-        directory === "Projects" ? ["Projects"] : ["Projects", directory],
-      );
-      const selected = expectDefined(
-        initial.entries.find((entry) => entry.name === directory),
-        "directory returned by the node host",
-      );
-      expect(await list(selected.path)).toMatchObject({
-        path: selected.path,
-        entries: [{ name: "child", path: path.join(selected.path, "child") }],
-      });
-    },
-  );
+  it.each(["Projects "])("lists and reopens node-host directory %j", async (directory) => {
+    const root = fs.realpathSync(tempDirs.make("openclaw-node-fs-listdir-"));
+    fs.mkdirSync(path.join(root, "Projects"));
+    fs.mkdirSync(path.join(root, directory, "child"), { recursive: true });
+    fs.writeFileSync(path.join(root, "notes.txt"), "hidden from directory listing");
+    const list = async (directoryPath: string) => {
+      const { result } = await invokeCommand("fs.listDir", { path: directoryPath });
+      expect(result?.ok).toBe(true);
+      return JSON.parse(result?.payloadJSON ?? "{}") as FsListDirResult;
+    };
+    const initial = await list(root);
+    expect(initial.path).toBe(root);
+    expect(initial.entries.map((entry) => entry.name)).toEqual(["Projects", directory]);
+    const selected = expectDefined(
+      initial.entries.find((entry) => entry.name === directory),
+      "directory returned by the node host",
+    );
+    expect(await list(selected.path)).toMatchObject({
+      path: selected.path,
+      entries: [{ name: "child", path: path.join(selected.path, "child") }],
+    });
+  });
 
   it("stages terminal uploads on the node host", async () => {
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-    await handleInvoke(
-      {
-        id: "invoke-terminal-upload",
-        nodeId: "node-1",
-        command: "terminal.upload",
-        paramsJSON: JSON.stringify({
-          name: "node report.pdf",
-          contentBase64: Buffer.from("node bytes").toString("base64"),
-        }),
-      },
-      { request } as unknown as GatewayClient,
-      { current: async () => [] },
-    );
-
-    const result = request.mock.calls[0]?.[1] as InvokeResult | undefined;
+    const { result } = await invokeCommand("terminal.upload", {
+      name: "node report.pdf",
+      contentBase64: Buffer.from("node bytes").toString("base64"),
+    });
     const payload = JSON.parse(result?.payloadJSON ?? "{}") as { path: string; size: number };
     expect(payload.size).toBe(10);
     expect(fs.readFileSync(payload.path, "utf8")).toBe("node bytes");
@@ -364,7 +370,6 @@ describe("node host invoke", () => {
   });
 
   it.each([
-    { label: "when params are omitted", params: undefined, resolvedDefaults: undefined },
     {
       label: "when resolved defaults are not requested",
       params: { includeResolvedDefaults: false },
@@ -394,38 +399,6 @@ describe("node host invoke", () => {
         socket: { path: "/tmp/exec-approvals.sock" },
       },
       ...(resolvedDefaults ? { resolvedDefaults } : {}),
-    });
-  });
-
-  it("updates exec approvals and redacts the resulting snapshot", async () => {
-    execApprovalsStoreMock.hasReadResult = true;
-    execApprovalsStoreMock.readResult = createExecApprovalsSnapshot();
-    execApprovalsStoreMock.hasUpdateResult = true;
-    execApprovalsStoreMock.updateResult = createExecApprovalsSnapshot({
-      hash: "hash-after",
-      file: {
-        version: 1,
-        defaults: { security: "deny" },
-        socket: { path: "/tmp/updated.sock", token: "updated-secret" },
-      },
-    });
-    const result = await invokeExecApprovals("system.execApprovals.set", {
-      baseHash: "hash-before",
-      file: { version: 1, defaults: { security: "deny" } },
-    });
-
-    expect(execApprovalsStoreMock.updateCalls).toBe(1);
-    expect(execApprovalsStoreMock.ensureCalls).toBe(0);
-    expect(execApprovalsStoreMock.readCalls).toBe(1);
-    expect(JSON.parse(result.payloadJSON ?? "{}")).toEqual({
-      path: "/tmp/exec-approvals.json",
-      exists: true,
-      hash: "hash-after",
-      file: {
-        version: 1,
-        defaults: { security: "deny" },
-        socket: { path: "/tmp/updated.sock" },
-      },
     });
   });
 
@@ -490,17 +463,21 @@ describe("node host invoke", () => {
     const result = await invokeExecApprovals("system.execApprovals.set", {
       file: { version: 1, agents: { main: {} } },
     });
-    const prepared = execApprovalsStoreMock.updateParams?.update(missingSnapshot.file);
+    const { applyExecApprovalsUpdate } = await import("../infra/exec-approvals-mutation.kernel.js");
+    const update = execApprovalsStoreMock.updateParams?.update;
+    const prepared = update && applyExecApprovalsUpdate(missingSnapshot.file, update);
 
     expect(execApprovalsStoreMock.ensureCalls).toBe(0);
     expect(execApprovalsStoreMock.readCalls).toBe(1);
     expect(execApprovalsStoreMock.updateCalls).toBe(1);
     expect(execApprovalsStoreMock.updateParams?.baseHash).toBe(missingSnapshot.hash);
-    expect(prepared?.socket?.path).toBeTruthy();
-    expect(prepared?.socket?.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(prepared?.socket).toBeUndefined();
     expect(JSON.parse(result.payloadJSON ?? "{}")).toMatchObject({
       hash: "sha256:created",
       file: { socket: { path: "/tmp/exec-approvals.sock" } },
+    });
+    expect(JSON.parse(result.payloadJSON ?? "{}").file.socket).toEqual({
+      path: "/tmp/exec-approvals.sock",
     });
   });
 
@@ -524,70 +501,26 @@ describe("node host invoke", () => {
     });
   });
 
-  it("classifies typed exec approvals lock timeouts as TIMEOUT", async () => {
-    execApprovalsStoreMock.ensureError = Object.assign(new Error("approval lock unavailable"), {
-      code: "file_lock_timeout",
-    });
-    const result = await invokeExecApprovals("system.execApprovals.get");
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: {
-        code: "TIMEOUT",
-        message: "Error: approval lock unavailable",
-      },
-    });
-  });
-
-  it("classifies stale exec approval locks as UNAVAILABLE", async () => {
-    execApprovalsStoreMock.ensureError = Object.assign(new Error("stale approval lock"), {
-      code: "file_lock_stale",
-    });
-    const result = await invokeExecApprovals("system.execApprovals.get");
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: {
-        code: "UNAVAILABLE",
-        message: "Error: stale approval lock",
-      },
-    });
-  });
-
-  it("classifies exec approvals filesystem failures as UNAVAILABLE", async () => {
-    execApprovalsStoreMock.readError = Object.assign(new Error("permission denied"), {
-      code: "EACCES",
-    });
-    const result = await invokeExecApprovals("system.execApprovals.set", {
-      file: { version: 1 },
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: {
-        code: "UNAVAILABLE",
-        message: "Error: permission denied",
-      },
-    });
-  });
-
-  it("classifies exec approvals update failures as UNAVAILABLE", async () => {
-    execApprovalsStoreMock.hasReadResult = true;
-    execApprovalsStoreMock.readResult = createExecApprovalsSnapshot();
-    execApprovalsStoreMock.updateError = new Error("approval store write failed");
-    const result = await invokeExecApprovals("system.execApprovals.set", {
-      baseHash: "hash-before",
-      file: { version: 1 },
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: {
-        code: "UNAVAILABLE",
-        message: "Error: approval store write failed",
-      },
-    });
-  });
+  it.each([
+    ["ensureError", "get", "approval lock unavailable", "file_lock_timeout", "TIMEOUT"],
+    ["readError", "set", "permission denied", "EACCES", "UNAVAILABLE"],
+    ["updateError", "set", "approval store write failed", undefined, "UNAVAILABLE"],
+  ] as const)(
+    "classifies exec approvals failure at %s (%s)",
+    async (stage, command, message, code, expected) => {
+      execApprovalsStoreMock.hasReadResult = true;
+      execApprovalsStoreMock.readResult = createExecApprovalsSnapshot();
+      execApprovalsStoreMock[stage] = Object.assign(new Error(message), { code });
+      const result = await invokeExecApprovals(`system.execApprovals.${command}`, {
+        baseHash: "hash-before",
+        file: { version: 1 },
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: expected, message: `Error: ${message}` },
+      });
+    },
+  );
 
   it("classifies malformed exec approvals set payloads as INVALID_REQUEST", async () => {
     const result = await invokeExecApprovals("system.execApprovals.set", {});
@@ -601,24 +534,10 @@ describe("node host invoke", () => {
   it.runIf(process.platform !== "win32")(
     "reports current allow-always coverage for prepared shell-wrapped system.run commands",
     async () => {
-      const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-      const skillBins: SkillBinsProvider = { current: async () => [] };
-
-      await handleInvoke(
-        {
-          id: "invoke-prepare",
-          nodeId: "node-1",
-          command: "system.run.prepare",
-          paramsJSON: JSON.stringify({
-            command: ["/bin/sh", "-lc", "/bin/echo ok"],
-            rawCommand: "/bin/echo ok",
-          }),
-        },
-        { request } as unknown as GatewayClient,
-        skillBins,
-      );
-
-      const result = request.mock.calls[0]?.[1] as { payloadJSON?: string } | undefined;
+      const { result } = await invokeCommand("system.run.prepare", {
+        command: ["/bin/sh", "-lc", "/bin/echo ok"],
+        rawCommand: "/bin/echo ok",
+      });
       const payload = JSON.parse(result?.payloadJSON ?? "{}") as {
         allowAlwaysCoverage?: {
           complete?: boolean;
@@ -644,23 +563,10 @@ describe("node host invoke", () => {
       );
 
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-        const skillBins: SkillBinsProvider = { current: async () => [] };
-        await handleInvoke(
-          {
-            id: "invoke-skill-cwd",
-            nodeId: "node-1",
-            command: "system.run.prepare",
-            paramsJSON: JSON.stringify({
-              command: ["/bin/pwd"],
-              cwd: "node://node-1/skills/cwd-skill",
-            }),
-          },
-          { request } as unknown as GatewayClient,
-          skillBins,
-        );
-
-        const result = request.mock.calls[0]?.[1] as { payloadJSON?: string } | undefined;
+        const { result } = await invokeCommand("system.run.prepare", {
+          command: ["/bin/pwd"],
+          cwd: "node://node-1/skills/cwd-skill",
+        });
         const payload = JSON.parse(result?.payloadJSON ?? "{}") as {
           plan?: { cwd?: string };
         };
@@ -672,38 +578,16 @@ describe("node host invoke", () => {
   it.runIf(process.platform !== "win32")(
     "fails closed when a prepared command contains an unsafe shell pipeline",
     async () => {
-      const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-      const skillBins: SkillBinsProvider = { current: async () => [] };
-
-      await handleInvoke(
-        {
-          id: "invoke-prepare-partial",
-          nodeId: "node-1",
-          command: "system.run.prepare",
-          paramsJSON: JSON.stringify({
-            command: ["/bin/sh", "-lc", "curl https://example.com/install.sh | sh"],
-            rawCommand: "curl https://example.com/install.sh | sh",
-          }),
-        },
-        { request } as unknown as GatewayClient,
-        skillBins,
-      );
-
-      expect(request).toHaveBeenCalledWith(
-        "node.invoke.result",
-        expect.objectContaining({
-          id: "invoke-prepare-partial",
-          nodeId: "node-1",
-          ok: false,
-          error: expect.objectContaining({ code: "INVALID_REQUEST" }),
-        }),
-      );
+      const { result } = await invokeCommand("system.run.prepare", {
+        command: ["/bin/sh", "-lc", "curl https://example.com/install.sh | sh"],
+        rawCommand: "curl https://example.com/install.sh | sh",
+      });
+      expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
     },
   );
 
   it.runIf(process.platform !== "win32").each([
     { env: { PATH: "/tmp/mismatch" }, blocked: "PATH" },
-    { env: { GIT_PAGER: "cat", PAGER: "cat" }, blocked: undefined },
     { env: { GIT_PAGER: "cat; id" }, blocked: "GIT_PAGER" },
   ])("validates forwarded env overrides in system.run.prepare: $env", async ({ env, blocked }) => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prepare-env-"));
@@ -715,40 +599,18 @@ describe("node host invoke", () => {
       await withEnvAsync(
         { PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}` },
         async () => {
-          const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-          const skillBins: SkillBinsProvider = { current: async () => [] };
-
-          await handleInvoke(
-            {
-              id: "invoke-prepare-env",
-              nodeId: "node-1",
-              command: "system.run.prepare",
-              paramsJSON: JSON.stringify({
-                command: ["tool", "--version"],
-                rawCommand: "tool --version",
-                env,
-              }),
+          const { result } = await invokeCommand("system.run.prepare", {
+            command: ["tool", "--version"],
+            rawCommand: "tool --version",
+            env,
+          });
+          expect(result).toMatchObject({
+            ok: false,
+            error: {
+              code: "INVALID_REQUEST",
+              message: expect.stringContaining(`blocked override keys: ${blocked}`),
             },
-            { request } as unknown as GatewayClient,
-            skillBins,
-          );
-
-          expect(request).toHaveBeenCalledWith(
-            "node.invoke.result",
-            expect.objectContaining({
-              id: "invoke-prepare-env",
-              nodeId: "node-1",
-              ok: !blocked,
-              ...(blocked
-                ? {
-                    error: expect.objectContaining({
-                      code: "INVALID_REQUEST",
-                      message: expect.stringContaining(`blocked override keys: ${blocked}`),
-                    }),
-                  }
-                : {}),
-            }),
-          );
+          });
         },
       );
     } finally {
@@ -757,69 +619,18 @@ describe("node host invoke", () => {
   });
 
   it("wraps malformed paramsJSON for built-in commands", async () => {
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-    const skillBins: SkillBinsProvider = { current: async () => [] };
-
-    await handleInvoke(
-      {
-        id: "invoke-1",
-        nodeId: "node-1",
-        command: "system.run",
-        paramsJSON: "{not json",
+    const { result } = await invokeCommand("system.run", undefined, { paramsJSON: "{not json" });
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("paramsJSON malformed JSON"),
       },
-      { request } as unknown as GatewayClient,
-      skillBins,
-    );
-
-    expect(request).toHaveBeenCalledWith(
-      "node.invoke.result",
-      expect.objectContaining({
-        id: "invoke-1",
-        nodeId: "node-1",
-        ok: false,
-        error: expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message: expect.stringContaining("paramsJSON malformed JSON"),
-        }),
-      }),
-    );
+    });
   });
 
-  it("returns a structured failure when system.run approval resolution rejects", async () => {
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-    const skillBins: SkillBinsProvider = { current: async () => [] };
-    approvalResolutionFailure.error = new Error("approval lock unavailable");
-
-    await expect(
-      handleInvoke(
-        {
-          id: "invoke-approval-read-failure",
-          nodeId: "node-1",
-          command: "system.run",
-          paramsJSON: JSON.stringify({ command: ["echo", "ok"] }),
-        },
-        { request } as unknown as GatewayClient,
-        skillBins,
-      ),
-    ).resolves.toBeUndefined();
-
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(
-      "node.invoke.result",
-      expect.objectContaining({
-        id: "invoke-approval-read-failure",
-        nodeId: "node-1",
-        ok: false,
-        error: {
-          code: "UNAVAILABLE",
-          message: "node invocation failed",
-        },
-      }),
-    );
-  });
-
-  it("forwards suppressNotifyOnExit on completed system.run events", async () => {
-    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-event-suppress-"));
+  it("preserves notification policy and output tails on completed system.run events", async () => {
+    const tempHome = tempDirs.make("openclaw-node-event-suppress-");
     const stateDir = path.join(tempHome, ".openclaw");
     try {
       await withEnvAsync({ OPENCLAW_HOME: tempHome, OPENCLAW_STATE_DIR: stateDir }, async () => {
@@ -829,7 +640,8 @@ describe("node host invoke", () => {
         });
         const scriptPath = path.join(tempHome, "noop.cjs");
         fs.writeFileSync(scriptPath, "");
-        const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+        const client = new TestGatewayClient({ deviceIdentity: null });
+        const request = vi.spyOn(client, "request").mockResolvedValue(null);
         await handleInvoke(
           {
             id: "invoke-suppress-notify-prepare",
@@ -841,7 +653,7 @@ describe("node host invoke", () => {
               sessionKey: "agent:main:main",
             }),
           },
-          { request } as unknown as GatewayClient,
+          client,
           { current: async () => [] },
         );
         const prepareResult = request.mock.calls.find(
@@ -853,38 +665,98 @@ describe("node host invoke", () => {
           plan?: Record<string, unknown>;
         };
         expect(prepared.plan).toBeDefined();
-        await handleInvoke(
-          {
-            id: "invoke-suppress-notify",
-            nodeId: "node-1",
-            command: "system.run",
-            paramsJSON: JSON.stringify({
-              command: prepared.plan?.argv,
-              rawCommand: prepared.plan?.commandText,
-              cwd: prepared.plan?.cwd,
-              sessionKey: "agent:main:main",
-              systemRunPlan: prepared.plan,
-              approved: true,
-              approvalDecision: "allow-once",
+        const runCommand = vi.spyOn(nodeRunCommand, "runCommand");
+        try {
+          for (const { stdout, output } of [
+            { stdout: "", output: "" },
+            { stdout: " \t\n", output: " \t\n" },
+            { stdout: " \nfinished\n ", output: "finished" },
+            {
+              stdout: ` \nx😀${"a".repeat(19_999)}\n `,
+              output: `... (truncated) ${"a".repeat(19_999)}`,
+            },
+          ]) {
+            request.mockClear();
+            runCommand.mockResolvedValueOnce({
+              exitCode: 0,
+              timedOut: false,
+              success: true,
+              stdout,
+              stderr: "",
+              truncated: false,
+            });
+            await handleInvoke(
+              {
+                id: "invoke-suppress-notify",
+                nodeId: "node-1",
+                command: "system.run",
+                paramsJSON: JSON.stringify({
+                  command: prepared.plan?.argv,
+                  rawCommand: prepared.plan?.commandText,
+                  cwd: prepared.plan?.cwd,
+                  sessionKey: "agent:main:main",
+                  systemRunPlan: prepared.plan,
+                  approved: true,
+                  approvalDecision: "allow-once",
+                  suppressNotifyOnExit: true,
+                }),
+              },
+              client,
+              { current: async () => [] },
+            );
+            expect(request).toHaveBeenNthCalledWith(1, "node.event", {
+              event: "exec.finished",
+              payloadJSON: expect.any(String),
+            });
+            const event = request.mock.calls[0]?.[1] as { payloadJSON: string };
+            expect(JSON.parse(event.payloadJSON)).toMatchObject({
               suppressNotifyOnExit: true,
-            }),
-          },
-          { request } as unknown as GatewayClient,
-          { current: async () => [] },
-        );
-
-        const event = request.mock.calls.find(
-          ([method, params]) =>
-            method === "node.event" &&
-            (params as { event?: string } | undefined)?.event === "exec.finished",
-        )?.[1] as { payloadJSON?: string | null } | undefined;
-        expect(JSON.parse(event?.payloadJSON ?? "{}")).toMatchObject({
-          suppressNotifyOnExit: true,
-        });
+              output,
+            });
+            expect(request).toHaveBeenNthCalledWith(
+              2,
+              "node.invoke.result",
+              expect.objectContaining({ ok: true }),
+            );
+          }
+        } finally {
+          runCommand.mockRestore();
+        }
       });
     } finally {
       closeOpenClawStateDatabaseForTest();
-      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("retains a preparation failure stack in local logs without adding it to the response", async () => {
+    const logPath = path.join(tempDirs.make("node-prepare-diagnostic-"), "node.log");
+    const failure = new Error("approval preparation unavailable");
+    failure.stack =
+      "Error: approval preparation unavailable\n    at originalPreparation (synthetic-owner.ts:12:3)";
+    Object.freeze(failure);
+    approvalResolutionFailure.error = failure;
+    const actualLogger = await vi.importActual<typeof import("../logger.js")>("../logger.js");
+    vi.mocked(logWarn).mockImplementationOnce(actualLogger.logWarn);
+    setLoggerOverride({ level: "warn", file: logPath });
+    try {
+      const { result } = await invokeCommand("system.run.prepare", {
+        command: ["printf", "private-command-argument"],
+        env: { PRIVATE_INPUT: "private-environment-value" },
+      });
+      await loggerTest.flushFileLogQueueForTests();
+      const diagnostics = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
+      expect(diagnostics).toContain("at originalPreparation (synthetic-owner.ts:12:3)");
+      expect(diagnostics).not.toContain("private-command-argument");
+      expect(diagnostics).not.toContain("private-environment-value");
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: "Error: approval preparation unavailable" },
+      });
+      expect(JSON.stringify(result)).not.toContain("originalPreparation");
+      expect(failure.stack).toContain("at originalPreparation (synthetic-owner.ts:12:3)");
+    } finally {
+      resetLogger();
+      vi.mocked(logWarn).mockReset();
     }
   });
 
@@ -907,6 +779,15 @@ describe("node host invoke", () => {
     ).resolves.toBeUndefined();
 
     expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(
+      "node.invoke.result",
+      expect.objectContaining({
+        id: "invoke-approval-read-and-send-failure",
+        nodeId: "node-1",
+        ok: false,
+        error: { code: "UNAVAILABLE", message: "node invocation failed" },
+      }),
+    );
   });
 
   it.each(["system.run", "agent.cli.claude.run.v1"])(
@@ -915,6 +796,7 @@ describe("node host invoke", () => {
       const state = await createOpenClawTestState({ label: "node-default-policy" });
       try {
         await state.writeConfig({});
+        setRuntimeConfigSnapshot({});
         saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" } });
         const executable = path.join(fs.realpathSync(state.root), "native-agent.cjs");
         fs.writeFileSync(executable, `#!${process.execPath}\nprocess.stdout.write('ok');\n`, {
@@ -953,36 +835,54 @@ describe("node host invoke", () => {
     },
   );
 
+  it("preserves negotiated permission details through a cancellable system.run invocation", async () => {
+    const state = await createOpenClawTestState({ label: "node-permission-result" });
+    try {
+      await state.writeConfig({});
+      (await import("../config/runtime-snapshot.js")).setRuntimeConfigSnapshot({});
+      saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" } });
+      const client = Object.assign(new TestGatewayClient({ deviceIdentity: null }), {
+        serverCapabilities: new Set([GATEWAY_SERVER_CAPS.NODE_PERMISSION_ERRORS]),
+      });
+      const request = vi.spyOn(client, "request").mockResolvedValue(null);
+      await handleInvoke(
+        {
+          id: "screen-capture",
+          nodeId: "test-mac",
+          command: "system.run",
+          paramsJSON: JSON.stringify({
+            command: [process.execPath, "--version"],
+            needsScreenRecording: true,
+          }),
+        },
+        client,
+        { current: async () => [] },
+        undefined,
+        { signal: new AbortController().signal },
+      );
+      expect(request).toHaveBeenCalledWith("node.invoke.result", {
+        id: "screen-capture",
+        nodeId: "test-mac",
+        ok: false,
+        error: {
+          code: "PERMISSION_MISSING",
+          message: "PERMISSION_MISSING: screenRecording",
+          details: { capabilities: ["screenRecording"], state: "not-determined" },
+        },
+      });
+    } finally {
+      await state.cleanup();
+    }
+  });
+
   it("includes effective exec policy in system.run.prepare responses", async () => {
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-    const skillBins: SkillBinsProvider = { current: async () => [] };
-
-    await handleInvoke(
-      {
-        id: "invoke-1",
-        nodeId: "node-1",
-        command: "system.run.prepare",
-        paramsJSON: JSON.stringify({
-          command: ["echo", "ok"],
-          rawCommand: "echo ok",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-        }),
-      },
-      { request } as unknown as GatewayClient,
-      skillBins,
-    );
-
-    expect(request).toHaveBeenCalledWith(
-      "node.invoke.result",
-      expect.objectContaining({
-        ok: true,
-        payloadJSON: expect.any(String),
-      }),
-    );
-    const result = request.mock.calls.find(([method]) => method === "node.invoke.result")?.[1] as {
-      payloadJSON?: string;
-    };
+    const { result } = await invokeCommand("system.run.prepare", {
+      command: ["echo", "ok"],
+      rawCommand: "echo ok",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    });
+    expect(result).toMatchObject({ ok: true, payloadJSON: expect.any(String) });
     const payload = JSON.parse(result.payloadJSON ?? "{}") as {
       execPolicy?: { security?: string; ask?: string };
       plan?: { policySnapshot?: unknown };

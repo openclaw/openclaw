@@ -13,6 +13,9 @@ scenario:
       - channels.qa-channel-final-reply
   regressionRefs:
     - openclaw/openclaw#117308
+  gatewayConfigPatch:
+    tools:
+      toolSearch: false
   objective: Verify naturally fired isolated one-shot cron parents with empty or heartbeat-only replies deliver their children's exact replies before retiring.
   successCriteria:
     - Each isolated parent successfully spawns exactly one child and finishes with either no assistant text or a heartbeat acknowledgment.
@@ -26,6 +29,7 @@ scenario:
     - src/cron/isolated-agent/run-finalize.ts
     - src/cron/isolated-agent/delivery-dispatch.ts
     - src/cron/isolated-agent/subagent-followup.ts
+    - src/agents/run-wait.ts
     - src/cron/service/timer-outcomes.ts
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:

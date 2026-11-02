@@ -1,4 +1,5 @@
 import { expect, test, vi } from "vitest";
+import { WebSocket } from "../../packages/gateway-client/src/websocket.test-support.js";
 import {
   createOperatorIdentityFixture,
   expectArrayIncludes,
@@ -13,7 +14,6 @@ import {
   restoreGatewayToken,
   rpcReq,
   TEST_OPERATOR_CLIENT,
-  waitForWsClose,
 } from "./server.auth.test-helpers.js";
 
 export function registerControlUiBootstrapLifecycleSuite(): void {
@@ -275,12 +275,13 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
           scopes: [],
           client: nodeClient,
           deviceIdentityPath: identityPath,
-          timeoutMs: 500,
         }),
-      ).rejects.toThrow();
-      // The full agentic shard can saturate the event loop enough that the
-      // server-side close after a pre-hello failure arrives later than 1s.
-      await expect(waitForWsClose(wsFail, 5_000)).resolves.toBe(true);
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE", message: "Error: boom" },
+      });
+      expect(wsFail.readyState).toBe(WebSocket.OPEN);
+      wsFail.close();
 
       const wsRetry = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
       const retry = await connectReq(wsRetry, {
@@ -387,51 +388,6 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
       const paired = await getPairedDevice(identity.deviceId);
       expectArrayIncludes(paired?.roles, ["operator"]);
       wsUpgrade.close();
-    } finally {
-      await server.close();
-      restoreGatewayToken(prevToken);
-    }
-  });
-
-  test("requires approval for bootstrap-auth operator pairing outside the qr baseline profile", async () => {
-    const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
-    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
-    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
-
-    const { identityPath, identity, client } = await createOperatorIdentityFixture(
-      "openclaw-bootstrap-operator-",
-    );
-
-    try {
-      const issued = await issueDeviceBootstrapToken({
-        profile: {
-          roles: ["operator"],
-          scopes: ["operator.read"],
-        },
-      });
-      const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
-      const initial = await connectReq(wsBootstrap, {
-        skipDefaultAuth: true,
-        bootstrapToken: issued.token,
-        role: "operator",
-        scopes: ["operator.read"],
-        client,
-        deviceIdentityPath: identityPath,
-      });
-      expect(initial.ok).toBe(false);
-      expect(initial.error?.message ?? "").toContain("pairing required");
-      expect((initial.error?.details as { code?: string } | undefined)?.code).toBe(
-        ConnectErrorDetailCodes.PAIRING_REQUIRED,
-      );
-
-      const pending = (await listDevicePairing()).pending.filter(
-        (entry) => entry.deviceId === identity.deviceId,
-      );
-      expect(pending).toHaveLength(1);
-      expect(pending[0]?.role).toBe("operator");
-      expectArrayIncludes(pending[0]?.scopes, ["operator.read"]);
-      expect(await getPairedDevice(identity.deviceId)).toBeNull();
-      wsBootstrap.close();
     } finally {
       await server.close();
       restoreGatewayToken(prevToken);

@@ -8,19 +8,25 @@ import {
   releaseUpdateCommandPreflightForHandoff,
   withUpdateCommandExecutor,
 } from "./update-command-executor.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 export function registerExecutorRootOwnershipTests(
   fixture: () => { root: string; replaceOwner: (installationRoot?: string) => void },
 ) {
+  function roots(withService = true) {
+    const state = fixture();
+    const serviceRoot = path.join(state.root, "service-A");
+    if (withService) {
+      fs.mkdirSync(serviceRoot);
+    }
+    return { ...state, serviceRoot, store: createManagedHandoffLeaseStore() };
+  }
   it.each(["package", "service", "neither"] as const)(
     "admits both roots before parent mutation and preserves an unrelated owner: %s busy",
     async (busy) => {
-      const { root } = fixture();
-      const serviceRoot = path.join(root, "service-A");
+      const { root, serviceRoot, store } = roots();
       const siblingRoot = path.join(root, "unrelated-C");
-      fs.mkdirSync(serviceRoot);
       fs.mkdirSync(siblingRoot);
-      const store = createManagedHandoffLeaseStore();
       const sibling = store.acquire(siblingRoot, "unrelated", { kind: "update" });
       assert(sibling.kind === "acquired");
       const busyRoot = busy === "package" ? root : serviceRoot;
@@ -34,7 +40,9 @@ export function registerExecutorRootOwnershipTests(
       let mutated = false;
       const work = withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(root, { serviceRoot });
-        expect(captureUpdateCommandExecutorAuthority(fence).installKey).toBe(root);
+        const authority = captureUpdateCommandExecutorAuthority(fence);
+        expect(authority.installKey).toBe(root);
+        expect(Object.isFrozen(authority)).toBe(true);
         for (const admitted of [root, serviceRoot]) {
           expect(store.acquire(admitted, "contender", { kind: "update" }).kind).toBe("busy");
         }
@@ -52,18 +60,17 @@ export function registerExecutorRootOwnershipTests(
         await work;
         expect(mutated).toBe(true);
       }
-      expect(store.read(root)).toEqual({ kind: "absent" });
-      expect(store.read(serviceRoot)).toEqual({ kind: "absent" });
+      expect([store.read(root), store.read(serviceRoot)]).toEqual([
+        { kind: "absent" },
+        { kind: "absent" },
+      ]);
       expect(store.current(sibling.lease)).toBe(true);
       expect(store.release(sibling.lease)).toBe(true);
     },
   );
 
   it("releases both preflight roots before helper admission and never reactivates them", async () => {
-    const { root } = fixture();
-    const serviceRoot = path.join(root, "service-A");
-    fs.mkdirSync(serviceRoot);
-    const store = createManagedHandoffLeaseStore();
+    const { root, serviceRoot, store } = roots();
     await withUpdateCommandExecutor(randomUUID(), async (executor) => {
       const fence = await executor.enter(root, { serviceRoot, preflight: true });
       releaseUpdateCommandPreflightForHandoff(fence);
@@ -71,23 +78,88 @@ export function registerExecutorRootOwnershipTests(
       for (const admitted of [root, serviceRoot]) {
         expect(store.read(admitted)).toEqual({ kind: "absent" });
       }
+      const acquired = store.acquire(root, "independent-helper", { kind: "update" });
+      assert(acquired.kind === "acquired");
+      try {
+        await expect(executor.enter(root)).rejects.toThrow("closed or busy");
+        expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
+      } finally {
+        expect(store.release(acquired.lease)).toBe(true);
+      }
     });
   });
 
-  it("invalidates the package fence if its service owner is replaced", async () => {
-    const { root, replaceOwner } = fixture();
-    const serviceRoot = path.join(root, "service-A");
-    fs.mkdirSync(serviceRoot);
-    await expect(
-      withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(root, { serviceRoot });
-        replaceOwner(serviceRoot);
-        expect(fence.assertCurrent).toThrow("no longer current");
-      }),
-    ).rejects.toThrow();
-    expect(createManagedHandoffLeaseStore().read(serviceRoot)).toMatchObject({
-      kind: "current",
-      lease: { owner: "replacement" },
+  it.each(["preflight", "service"] as const)(
+    "refuses stale %s authority and preserves the replacement lease",
+    async (owner) => {
+      const preflight = owner === "preflight";
+      const { root, serviceRoot, replaceOwner, store } = roots(!preflight);
+      const replacedRoot = preflight ? root : serviceRoot;
+      let refusal: unknown;
+      await expect(
+        withUpdateCommandExecutor(randomUUID(), async (executor) => {
+          const fence = await executor.enter(root, preflight ? { preflight } : { serviceRoot });
+          replaceOwner(replacedRoot);
+          try {
+            if (preflight) {
+              releaseUpdateCommandPreflightForHandoff(fence);
+            } else {
+              fence.assertCurrent();
+            }
+          } catch (error) {
+            refusal = error;
+          }
+        }),
+      ).rejects.toThrow();
+      expect(refusal).toBeInstanceOf(UpdateCommandRecoveryPendingError);
+      expect(refusal).toMatchObject({ message: expect.stringContaining("no longer current") });
+      expect(store.read(replacedRoot)).toMatchObject({
+        kind: "current",
+        lease: { owner: "replacement" },
+      });
+    },
+  );
+
+  it("recovery acquires a fresh owner without reactivating the original fence", async () => {
+    const { root } = fixture();
+    const store = createManagedHandoffLeaseStore();
+    const runId = randomUUID();
+    const original = await withUpdateCommandExecutor(runId, async (executor) => {
+      const fence = await executor.enter(root);
+      const current = store.read(root);
+      assert(current.kind === "current", "Original executor was not acquired");
+      return {
+        fence,
+        lease: current.lease,
+        authority: captureUpdateCommandExecutorAuthority(fence),
+      };
     });
+    expect(Object.isFrozen(original.authority)).toBe(true);
+    expect(original.authority.owner).toBe(original.lease.owner);
+    expect(() => captureUpdateCommandExecutorAuthority(original.fence)).toThrow(
+      "no longer current",
+    );
+    await withUpdateCommandExecutor(
+      runId,
+      async (executor) => {
+        const fence = await executor.enter(root);
+        const current = store.read(root);
+        assert(current.kind === "current", "Recovery executor was not acquired");
+        expect(current.lease.owner).not.toBe(original.lease.owner);
+        expect(current.lease.helper.pid).toBe(process.pid);
+        const recoveredAuthority = captureUpdateCommandExecutorAuthority(fence);
+        expect(recoveredAuthority).toEqual({
+          ...original.authority,
+          owner: current.lease.owner,
+        });
+        expect(Object.isFrozen(recoveredAuthority)).toBe(true);
+        expect(store.current(original.lease)).toBe(false);
+        expect(store.release(original.lease)).toBe(false);
+        expect(original.fence.assertCurrent).toThrow("no longer current");
+        fence.assertCurrent();
+      },
+      { existingAuthority: original.authority },
+    );
+    expect(store.read(root)).toEqual({ kind: "absent" });
   });
 }

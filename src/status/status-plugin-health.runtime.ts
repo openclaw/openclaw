@@ -19,45 +19,28 @@ import type {
   PluginCompatibilityHealthNotice,
   PluginDiagnosticRecord,
   PluginHealthRecord,
-  RuntimeToolQuarantineRecord,
   StatusPluginHealthSnapshot,
 } from "./status-plugin-health.js";
 
-// The normalize* helpers project registry records onto the snapshot types while
-// omitting absent fields entirely, so snapshot merges never see explicitly
-// undefined values and test fixtures stay minimal.
+// Project only health fields, omitting absent values from registry records.
 function normalizeSnapshotPlugin(plugin: PluginHealthRecord): PluginHealthRecord {
-  const normalized: PluginHealthRecord = { id: plugin.id };
-  if (plugin.status !== undefined) {
-    normalized.status = plugin.status;
-  }
-  if (plugin.enabled !== undefined) {
-    normalized.enabled = plugin.enabled;
-  }
-  if (plugin.error !== undefined) {
-    normalized.error = plugin.error;
-  }
-  if (plugin.dependencyStatus !== undefined) {
-    normalized.dependencyStatus = plugin.dependencyStatus;
-  }
-  if (plugin.failurePhase !== undefined) {
-    normalized.failurePhase = plugin.failurePhase;
-  }
-  return normalized;
+  return {
+    id: plugin.id,
+    ...(plugin.status !== undefined ? { status: plugin.status } : {}),
+    ...(plugin.enabled !== undefined ? { enabled: plugin.enabled } : {}),
+    ...(plugin.error !== undefined ? { error: plugin.error } : {}),
+    ...(plugin.dependencyStatus !== undefined ? { dependencyStatus: plugin.dependencyStatus } : {}),
+    ...(plugin.failurePhase !== undefined ? { failurePhase: plugin.failurePhase } : {}),
+  };
 }
 
 function normalizeDiagnostic(diagnostic: PluginDiagnosticRecord): PluginDiagnosticRecord {
-  const normalized: PluginDiagnosticRecord = {
+  return {
     level: diagnostic.level,
     message: diagnostic.message,
+    ...(diagnostic.pluginId ? { pluginId: diagnostic.pluginId } : {}),
+    ...(diagnostic.code ? { code: diagnostic.code } : {}),
   };
-  if (diagnostic.pluginId) {
-    normalized.pluginId = diagnostic.pluginId;
-  }
-  if (diagnostic.code) {
-    normalized.code = diagnostic.code;
-  }
-  return normalized;
 }
 
 function normalizeCompatibilityNotice(
@@ -130,44 +113,31 @@ function collectChannelPluginFailures(params: {
   }
 }
 
-function parsePluginOwner(owner: string | undefined): string | undefined {
-  const prefix = "plugin:";
-  if (!owner?.startsWith(prefix)) {
-    return undefined;
-  }
-  const pluginId = owner.slice(prefix.length).trim();
-  return pluginId.length > 0 ? pluginId : undefined;
-}
-
-function filterRuntimeToolQuarantinesForRegistry(params: {
-  quarantines: readonly RuntimeToolQuarantineRecord[];
-  plugins: readonly PluginHealthRecord[];
-}): RuntimeToolQuarantineRecord[] {
-  const loadedPluginIds = new Set(
-    params.plugins
-      .filter((plugin) => plugin.enabled !== false && plugin.status !== "disabled")
-      .map((plugin) => plugin.id),
-  );
-  return params.quarantines.filter((quarantine) => {
-    const pluginId = parsePluginOwner(quarantine.owner);
-    return !pluginId || loadedPluginIds.has(pluginId);
-  });
-}
-
 // Compact status reads only the active registry and persisted health stores;
 // full config-driven channel inspection is reserved for the installed path.
-export function collectRuntimePluginHealthSnapshot(): StatusPluginHealthSnapshot {
+export async function collectRuntimePluginHealthSnapshot(): Promise<StatusPluginHealthSnapshot> {
+  const [contextEngineQuarantines, runtimeToolQuarantines] = await Promise.all([
+    listContextEngineQuarantines(),
+    listPersistedRuntimeToolSchemaQuarantines(),
+  ]);
   const registry = getActiveRuntimePluginRegistry();
   const diagnostics = (registry?.diagnostics ?? []).map(normalizeDiagnostic);
   const plugins = (registry?.plugins ?? []).map(normalizeSnapshotPlugin);
   const runtimeLoadedPluginIds = listLoadedRuntimePluginIds();
+  const loadedPluginIds = new Set(
+    plugins
+      .filter((plugin) => plugin.enabled !== false && plugin.status !== "disabled")
+      .map((plugin) => plugin.id),
+  );
   return {
     plugins,
     diagnostics,
-    contextEngineQuarantines: listContextEngineQuarantines(),
-    runtimeToolQuarantines: filterRuntimeToolQuarantinesForRegistry({
-      quarantines: listPersistedRuntimeToolSchemaQuarantines(),
-      plugins,
+    contextEngineQuarantines,
+    runtimeToolQuarantines: runtimeToolQuarantines.filter((quarantine) => {
+      const pluginId = quarantine.owner?.startsWith("plugin:")
+        ? quarantine.owner.slice("plugin:".length).trim()
+        : undefined;
+      return !pluginId || loadedPluginIds.has(pluginId);
     }),
     channelPluginFailures: collectChannelPluginFailures({
       diagnostics,
@@ -182,7 +152,7 @@ export async function collectInstalledPluginHealthSnapshot(params: {
 }): Promise<StatusPluginHealthSnapshot> {
   const { buildPluginCompatibilityNotices, buildPluginSnapshotReport } =
     await import("../plugins/status.js");
-  const runtime = collectRuntimePluginHealthSnapshot();
+  const runtime = await collectRuntimePluginHealthSnapshot();
   const report = buildPluginSnapshotReport({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -230,12 +200,8 @@ export async function collectInstalledPluginHealthSnapshot(params: {
   };
 }
 
-// Configured memory embedding providers that no loaded plugin registers, surfaced on the
-// detailed /status path only. Needs the live runtime registry to know what a loaded plugin
-// actually serves; without config or an active registry we cannot tell "configured but
-// unavailable" from "not yet loaded", so degrade to no signal (no line). Resolved lazily so
-// the compact path never pulls the startup-plan module. Observer-only: any resolution failure
-// degrades to no set rather than breaking /status.
+// Detailed status needs a live registry to distinguish unavailable providers from
+// providers not yet loaded. Missing facts or failed resolution produce no signal.
 async function resolveUnregisteredMemoryEmbeddingProviders(params: {
   config?: OpenClawConfig;
   registry: ReturnType<typeof getActiveRuntimePluginRegistry>;
@@ -258,10 +224,7 @@ async function resolveUnregisteredMemoryEmbeddingProviders(params: {
   }
 }
 
-// Should-run plugin ids from the gateway startup plan. Detailed-status only and resolved
-// lazily so the compact path never pulls the startup-plan module. Observer-only: any
-// resolution failure (or absent config) degrades to no should-run set rather than breaking
-// /status.
+// Keep startup-plan loading off compact status; failed diagnostics never break status.
 async function resolveShouldRunPluginIds(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -276,12 +239,7 @@ async function resolveShouldRunPluginIds(params: {
       await import("../plugins/activation-source-config.js");
     const { resolveGatewayStartupPluginActivationConfig } =
       await import("../gateway/plugin-activation-runtime-config.js");
-    // Build the should-run plan with the exact assembly gateway boot uses, via the shared
-    // resolveGatewayStartupPluginActivationConfig helper. params.config is the live runtime
-    // snapshot; resolvePluginActivationSourceConfig maps it back to the operator source config
-    // the loader activates against, then the helper auto-enables that source and merges it into
-    // the runtime config (preserving runtime/defaulted fields). Reusing gateway boot's own helper
-    // keeps this set from drifting from prepareGatewayPluginBootstrap's plan.
+    // Reuse Gateway boot's source-config activation and runtime/default merge.
     const sourceConfig = resolvePluginActivationSourceConfig({ config: params.config });
     const effectiveConfig = resolveGatewayStartupPluginActivationConfig({
       runtimeConfig: params.config,

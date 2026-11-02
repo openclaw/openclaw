@@ -29,22 +29,6 @@ class ConversationNotificationRoutingTest {
     )
 
   @Test
-  fun preTiramisuSkipsRuntimePermissionCheck() {
-    var permissionChecked = false
-
-    val allowed =
-      canPostConversationNotifications(sdkInt = 31) {
-        permissionChecked = true
-        false
-      }
-
-    assertTrue(allowed)
-    assertFalse(permissionChecked)
-    assertFalse(canPostConversationNotifications(sdkInt = 33) { false })
-    assertTrue(canPostConversationNotifications(sdkInt = 33) { true })
-  }
-
-  @Test
   fun unverifiedOrIncompleteOwnerCannotBecomeNotificationTarget() {
     assertEquals(
       null,

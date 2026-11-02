@@ -1,94 +1,40 @@
-import path from "node:path";
-import { afterEach, describe, expect, it, onTestFinished } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { isRestartRecoveryTerminalDeliveryFailClosed } from "../../config/sessions/restart-recovery-receipt.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
-import { createReplyAgentRestartRecoveryController } from "./agent-runner-execute.js";
-import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import { expect, it } from "vitest";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
+import { createDeliverySuite } from "./agent-runner-delivery-suite.test-support.js";
+import { createReplyActorFixture } from "./reply-actor.test-support.js";
+import { createReplyInputAdmission } from "./reply-input-admission.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { createFixture } = createDeliverySuite();
 
-describe("admitted Gateway source identity", () => {
-  it.each(["claimless", "recovered"] as const)(
-    "keeps a %s turn steerable after an unrelated terminal tombstone",
-    async (admission) => {
-      const root = tempDirs.make("openclaw-source-identity-");
-      const storePath = path.join(root, "sessions.json");
-      const sessionKey = "agent:main:source-identity";
-      const sessionId = "session-1";
-      const admissionRunId = "gateway-current-run";
-      const sourceTurnId = admission === "recovered" ? "gateway-original-source" : admissionRunId;
-      let entry: SessionEntry = {
-        sessionId,
-        status: "running",
-        updatedAt: 1,
-        restartRecoveryTerminalRunIds: ["gateway-previous-run"],
-        ...(admission === "recovered"
-          ? {
-              restartRecoveryDeliveryRunId: admissionRunId,
-              restartRecoveryDeliverySourceRunId: sourceTurnId,
-            }
-          : {}),
-      };
-      await replaceSessionEntry({ storePath, sessionKey }, entry);
-      const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-      onTestFinished(() => operation.complete());
-      operation.setPhase("running");
-      operation.attachBackend({
-        kind: "embedded",
-        runId: "backend-run",
-        cancel: () => {},
-        messageInjection: {
-          isAvailable: () => true,
-          queueMessage: async () => {},
-        },
-      });
-      const controller = createReplyAgentRestartRecoveryController({
-        activeSessionStore: undefined,
-        cfg: {},
-        followupRun: {
-          prompt: "Continue the current task",
-          enqueuedAt: 1,
-          run: {
-            agentId: "main",
-            agentDir: root,
-            sessionId,
-            sessionKey,
-            sessionFile: sessionKey,
-            workspaceDir: root,
-            config: {},
-            provider: "openai",
-            model: "gpt-5.5",
-            timeoutMs: 1_000,
-            blockReplyBreak: "message_end",
-          },
-        },
-        getActiveSessionEntry: () => entry,
-        opts: undefined,
-        replyOperation: operation,
-        restartRecoverySourceTurnId: undefined,
-        runtimePolicySessionKey: undefined,
-        sessionCtx: {
-          Provider: "webchat",
-          OriginatingChannel: "webchat",
-          MessageSid: admissionRunId,
-        },
-        sessionKey,
-        setActiveSessionEntry: (next) => {
-          entry = next;
-        },
-        storePath,
-      });
-
-      await expect(controller.admitUserTurn()).resolves.toBe("admitted");
-
-      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey);
-      expect(target).toMatchObject({ sourceTurnId });
-      expect(
-        isRestartRecoveryTerminalDeliveryFailClosed(entry, sessionId, target?.sourceTurnId ?? ""),
-      ).toBe(false);
-      expect(entry.restartRecoveryTerminalRunIds).toEqual(["gateway-previous-run"]);
-    },
-  );
+it("binds the admitted source identity for ordinary steering", async () => {
+  const fixture = await createFixture();
+  const { storePath, replyOperation: operation, followupRun } = fixture.context;
+  const sessionKey = fixture.context.sessionKey!;
+  await fixture.replace({ sessionId: fixture.sessionId, updatedAt: 1 });
+  await using actor = createReplyActorFixture({
+    agentId: "main",
+    storePath,
+    sessionKey,
+    getSessionId: () => operation.sessionId,
+    operation,
+  });
+  await actor.bind();
+  operation.attachBackend({
+    kind: "embedded",
+    runId: "backend-run",
+    cancel: () => {},
+    messageInjection: { isAvailable: () => true, queueMessage: async () => {} },
+  });
+  const input = createReplyInputAdmission({
+    followupRun,
+    replyOperation: operation,
+    sourceTurnId: "current-source",
+    sessionKey,
+    storePath,
+    setEntry: () => {},
+  });
+  await input.admitUserTurn();
+  expect(captureCurrentReplyMessageInjectionTarget(sessionKey)).toMatchObject({
+    sourceTurnId: "current-source",
+  });
 });

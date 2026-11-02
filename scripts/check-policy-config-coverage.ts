@@ -24,26 +24,10 @@ type CoverageConfig = {
   readonly classifications: readonly CoverageClassification[];
 };
 
-type ConfigDocBaseline = {
-  readonly coreEntries: readonly ConfigDocBaselineEntry[];
-  readonly channelEntries: readonly ConfigDocBaselineEntry[];
-  readonly pluginEntries: readonly ConfigDocBaselineEntry[];
-};
-
-function flattenConfigDocBaselineEntries(
-  baseline: ConfigDocBaseline,
-): readonly ConfigDocBaselineEntry[] {
-  return [...baseline.coreEntries, ...baseline.channelEntries, ...baseline.pluginEntries];
-}
-
 type ClassifiedEntry = {
   readonly path: string;
   readonly kind: ConfigDocBaselineEntry["kind"];
   readonly classification?: CoverageClassification;
-};
-
-type UnmatchedMonitoredPattern = {
-  readonly pattern: string;
 };
 
 const args = new Set(process.argv.slice(2));
@@ -67,11 +51,14 @@ const configPath = path.join(repoRoot, "scripts/lib/policy-config-coverage.jsonc
 
 const config = JSON5.parse(await fs.readFile(configPath, "utf8")) as CoverageConfig;
 const { baseline } = await renderConfigDocBaselineArtifacts();
-const monitoredEntries = flattenConfigDocBaselineEntries(baseline)
-  .filter((entry) => !entry.hasChildren)
-  .filter((entry) => matchesAny(config.monitored, entry.path))
+const leafEntries = [
+  ...baseline.coreEntries,
+  ...baseline.channelEntries,
+  ...baseline.pluginEntries,
+].filter((entry) => !entry.hasChildren);
+const monitoredEntries = leafEntries
+  .filter((entry) => config.monitored.some((pattern) => pathMatchesPattern(pattern, entry.path)))
   .toSorted((left, right) => left.path.localeCompare(right.path));
-const leafEntries = flattenConfigDocBaselineEntries(baseline).filter((entry) => !entry.hasChildren);
 const unmatchedMonitored = config.monitored
   .filter(
     (pattern) =>
@@ -114,38 +101,24 @@ if (json) {
     ),
   );
 } else {
-  printTextReport({
-    monitoredPaths: monitoredEntries.length,
-    counts: summaryCounts,
-    unclassified,
-    unmatchedMonitored,
-    stale,
-    classified,
-  });
+  printTextReport();
 }
 
 if (check && (unclassified.length > 0 || stale.length > 0 || unmatchedMonitored.length > 0)) {
   process.exit(1);
 }
 
-function printTextReport(input: {
-  readonly monitoredPaths: number;
-  readonly counts: Record<string, number>;
-  readonly unclassified: readonly ClassifiedEntry[];
-  readonly unmatchedMonitored: readonly UnmatchedMonitoredPattern[];
-  readonly stale: readonly CoverageClassification[];
-  readonly classified: readonly ClassifiedEntry[];
-}): void {
-  console.log(`Policy config coverage: ${input.monitoredPaths} monitored config leaf paths`);
-  for (const [key, count] of Object.entries(input.counts).toSorted(([a], [b]) =>
+function printTextReport(): void {
+  console.log(`Policy config coverage: ${monitoredEntries.length} monitored config leaf paths`);
+  for (const [key, count] of Object.entries(summaryCounts).toSorted(([a], [b]) =>
     a.localeCompare(b),
   )) {
     console.log(`  ${key}: ${count}`);
   }
 
-  if (input.unclassified.length > 0) {
+  if (unclassified.length > 0) {
     console.log("\nUnclassified config paths:");
-    for (const entry of input.unclassified) {
+    for (const entry of unclassified) {
       console.log(`  - ${entry.path} (${entry.kind})`);
     }
     console.log(
@@ -155,25 +128,25 @@ function printTextReport(input: {
     console.log("\nNo unclassified monitored config paths.");
   }
 
-  if (input.unmatchedMonitored.length > 0) {
+  if (unmatchedMonitored.length > 0) {
     console.log("\nMonitored patterns with no matching config paths:");
-    for (const entry of input.unmatchedMonitored) {
+    for (const entry of unmatchedMonitored) {
       console.log(`  - ${entry.pattern}`);
     }
   } else {
     console.log("\nNo monitored patterns without matching config paths.");
   }
 
-  if (input.stale.length > 0) {
+  if (stale.length > 0) {
     console.log("\nStale coverage classifications:");
-    for (const entry of input.stale) {
+    for (const entry of stale) {
       console.log(`  - ${entry.pattern} (${entry.area}, ${entry.status})`);
     }
   }
 
   if (showCovered) {
     console.log("\nCovered paths:");
-    for (const entry of input.classified) {
+    for (const entry of classified) {
       const classification = entry.classification;
       console.log(
         `  - ${entry.path}: ${classification?.area ?? "unclassified"} / ${
@@ -194,10 +167,6 @@ function summarize(entries: readonly ClassifiedEntry[]): Record<string, number> 
     counts[key] = (counts[key] ?? 0) + 1;
   }
   return counts;
-}
-
-function matchesAny(patterns: readonly string[], value: string): boolean {
-  return patterns.some((pattern) => pathMatchesPattern(pattern, value));
 }
 
 function pathMatchesPattern(pattern: string, value: string): boolean {

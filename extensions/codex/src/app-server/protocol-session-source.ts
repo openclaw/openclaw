@@ -12,7 +12,7 @@ export type CodexThreadSourceKind =
   | "subAgentOther"
   | "unknown";
 
-export type CodexSubAgentThreadSpawnSource = {
+type CodexSubAgentThreadSpawnSource = {
   parent_thread_id: string;
   depth?: number;
   agent_path?: string | null;

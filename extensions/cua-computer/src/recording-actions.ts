@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { CuaComputerActParams } from "./action-targets.js";
 import type { CuaDriverSession, CuaToolResult } from "./driver-client.js";
+import { projectedToolDetails } from "./driver-result.js";
 import type { CuaExecutionResources } from "./execution-resources.js";
 
 const RecordingStateSchema = z.object({
@@ -47,16 +48,7 @@ function structured(result: CuaToolResult, tool: string): unknown {
   if (result.isError) {
     throw driverError(result, tool);
   }
-  if (!result.structuredJson) {
-    throw new Error(`COMPUTER_DRIVER_ERROR: ${tool} returned no structuredContent`);
-  }
-  try {
-    return JSON.parse(result.structuredJson) as unknown;
-  } catch (error) {
-    throw new Error(`COMPUTER_DRIVER_ERROR: ${tool} returned invalid structuredContent`, {
-      cause: error,
-    });
-  }
+  return projectedToolDetails(result, tool);
 }
 
 function projectRecordingState(
@@ -74,11 +66,11 @@ function projectRecordingState(
   };
 }
 
-async function stopOwnedRecording(params: {
+export async function closeRecordingExecution(params: {
   driver: CuaDriverSession;
   state: CuaRecordingState;
   resources: CuaExecutionResources;
-  discard: boolean;
+  reason: string;
 }): Promise<void> {
   const active = params.state.active;
   params.state.active = undefined;
@@ -94,7 +86,7 @@ async function stopOwnedRecording(params: {
   } catch (error) {
     failure = error;
   }
-  if (params.discard) {
+  if (params.reason !== "completion") {
     try {
       await params.resources.discard(active.resourceHandle);
     } catch (error) {
@@ -117,18 +109,6 @@ function projectReplayTurn(turn: z.infer<typeof ReplayTurnSchema>) {
     projected.parseError = true;
   }
   return projected;
-}
-
-export async function closeRecordingExecution(params: {
-  driver: CuaDriverSession;
-  state: CuaRecordingState;
-  resources: CuaExecutionResources;
-  reason: string;
-}): Promise<void> {
-  await stopOwnedRecording({
-    ...params,
-    discard: params.reason !== "completion",
-  });
 }
 
 export async function handleRecordingAct(

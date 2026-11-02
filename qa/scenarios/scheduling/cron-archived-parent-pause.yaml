@@ -1,0 +1,186 @@
+title: Cron pauses when its parent conversation is archived
+
+scenario:
+  id: cron-archived-parent-pause
+  surface: cron
+  coverage:
+    primary:
+      - automation.isolated-cron-execution
+    secondary:
+      - automation.manual-cron-runs
+  objective: Verify an automation linked to the conversation that created it pauses with one notice, without running, once that conversation is archived.
+  successCriteria:
+    - A job created for an existing conversation runs normally while that conversation is current.
+    - After the conversation is archived, a forced run is skipped before any agent turn starts, and the model receives no request for it.
+    - The skipped run records a notice naming the archived conversation and the re-enable command.
+    - The job is disabled, so it does not keep running against the archived conversation.
+  docsRefs:
+    - docs/automation/cron-jobs.md
+  codeRefs:
+    - src/cron/execution-context.ts
+    - src/cron/execution-context-admission.ts
+    - src/cron/service/occurrence-admission.ts
+    - src/cron/service/timer-outcomes.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Archives the job's parent conversation.
+    channel: qa-channel
+    retryCount: 0
+    timeoutMs: 240000
+    summary: Create a conversation, create an isolated job bound to it, archive the conversation, and prove the next forced run pauses the job instead of running.
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: qa-cron-archived-parent
+      readyMarker: QA-CRON-PARENT-READY
+
+flow:
+  steps:
+    - name: creates a job bound to a live conversation
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: archived parent pause proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: parentSessionKey
+          value:
+            expr: "`agent:qa:qa-channel:group:group:${config.conversationId}`"
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: group
+            senderId: qa-driver
+            senderName: QA Driver
+            text:
+              expr: "`@openclaw Cron parent QA check: ready. Reply exactly \\`${config.readyMarker}\\`.`"
+        - call: waitForCondition
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.some((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === config.conversationId && message.text.includes(config.readyMarker)) || undefined"
+            - 60000
+            - 100
+        - call: env.gateway.call
+          saveAs: added
+          args:
+            - cron.add
+            - agentId: qa
+              sessionKey:
+                ref: parentSessionKey
+              name:
+                expr: "`qa-cron-archived-parent-${randomUUID()}`"
+              enabled: true
+              deleteAfterRun: false
+              schedule:
+                kind: every
+                everyMs: 3600000
+              sessionTarget: isolated
+              wakeMode: now
+              payload:
+                kind: agentTurn
+                message: Cron parent QA check, reply with a short status line.
+              delivery:
+                mode: none
+            - timeoutMs: 30000
+        - set: jobId
+          value:
+            expr: added.id
+        - set: firstRunStartedAt
+          value:
+            expr: "Date.now()"
+        - call: env.gateway.call
+          args:
+            - cron.run
+            - id:
+                ref: jobId
+              mode: force
+            - timeoutMs: 30000
+        - call: waitForCronRunCompletion
+          saveAs: firstRun
+          args:
+            - callGateway:
+                expr: "env.gateway.call.bind(env.gateway)"
+              jobId:
+                ref: jobId
+              afterTs:
+                ref: firstRunStartedAt
+        - assert:
+            expr: "firstRun.status === 'ok'"
+            message:
+              expr: "`run with a current parent did not succeed: ${JSON.stringify(firstRun)}`"
+
+    - name: archiving the parent pauses the job with one notice
+      actions:
+        - call: env.gateway.call
+          saveAs: described
+          args:
+            - sessions.describe
+            - key:
+                ref: parentSessionKey
+              agentId: qa
+            - timeoutMs: 30000
+        - call: env.gateway.call
+          args:
+            - sessions.patch
+            - key:
+                ref: parentSessionKey
+              expectedSessionId:
+                expr: described.session.sessionId
+              archived: true
+            - timeoutMs: 30000
+        - set: jobPromptRequestsBefore
+          value:
+            expr: "[...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => String(request.prompt ?? '').includes('Cron parent QA check, reply with a short status line.')).length"
+        - assert:
+            expr: "jobPromptRequestsBefore >= 1"
+            message: the run with a current parent never reached the model
+        - set: pausedRunStartedAt
+          value:
+            expr: "Date.now()"
+        - call: env.gateway.call
+          args:
+            - cron.run
+            - id:
+                ref: jobId
+              mode: force
+            - timeoutMs: 30000
+        - call: waitForCronRunCompletion
+          saveAs: pausedRun
+          args:
+            - callGateway:
+                expr: "env.gateway.call.bind(env.gateway)"
+              jobId:
+                ref: jobId
+              afterTs:
+                ref: pausedRunStartedAt
+        - assert:
+            expr: "pausedRun.status === 'skipped' && String(pausedRun.error ?? '').includes(parentSessionKey) && String(pausedRun.error ?? '').includes('it was archived') && String(pausedRun.error ?? '').includes(`openclaw automations enable ${jobId}`)"
+            message:
+              expr: "`archived parent did not pause the run: ${JSON.stringify(pausedRun)}`"
+        - call: env.gateway.call
+          saveAs: pausedJob
+          args:
+            - cron.get
+            - id:
+                ref: jobId
+            - timeoutMs: 30000
+        - assert:
+            expr: "pausedJob.enabled === false"
+            message:
+              expr: "`paused job stayed enabled: ${JSON.stringify(pausedJob)}`"
+        # Final-effect check: the paused occurrence never reached the model.
+        - set: jobPromptRequestsAfter
+          value:
+            expr: "[...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => String(request.prompt ?? '').includes('Cron parent QA check, reply with a short status line.')).length"
+        - assert:
+            expr: "jobPromptRequestsAfter === jobPromptRequestsBefore"
+            message:
+              expr: "`paused run reached the model: ${jobPromptRequestsBefore} -> ${jobPromptRequestsAfter}`"

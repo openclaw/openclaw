@@ -1,10 +1,10 @@
-/** Normalizes ACP runtime turn event/result streams into manager-facing outcomes. */
 import type {
   AcpRuntime,
   AcpRuntimeEvent,
   AcpRuntimeTurnInput,
-  AcpRuntimeTurnResult,
 } from "@openclaw/acp-core/runtime/types";
+import { runWithAgentToolSourceExecutionScope } from "../../agents/agent-tool-source-execution-guard.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import { normalizeAcpErrorCode } from "./manager.utils.js";
 import { normalizeText } from "./runtime-options.js";
@@ -15,22 +15,10 @@ type AcpTurnEventGate = {
   pendingDelivery?: Promise<void>;
 };
 
-/** Summary of whether a turn stream emitted user-visible output or terminal events. */
 type AcpTurnStreamOutcome = {
   sawOutput: boolean;
   terminalStatus?: "completed" | "cancelled";
 };
-
-function isCancellationStopReason(stopReason: string | undefined): boolean {
-  return stopReason === "cancel" || stopReason === "cancelled" || stopReason === "manual-cancel";
-}
-
-/** Resolves legacy and current done events to the manager's canonical terminal status. */
-function resolveAcpTurnTerminalStatus(
-  event: Extract<AcpRuntimeEvent, { type: "done" }>,
-): "completed" | "cancelled" {
-  return event.status ?? (isCancellationStopReason(event.stopReason) ? "cancelled" : "completed");
-}
 
 async function consumeAcpTurnEvents(params: {
   events: AsyncIterable<AcpRuntimeEvent>;
@@ -51,7 +39,13 @@ async function consumeAcpTurnEvents(params: {
     let forwardedEvent = event;
     if (event.type === "done") {
       // Legacy runTurn adapters may omit status but retain the cancellation reason.
-      terminalStatus = resolveAcpTurnTerminalStatus(event);
+      terminalStatus =
+        event.status ??
+        (event.stopReason === "cancel" ||
+        event.stopReason === "cancelled" ||
+        event.stopReason === "manual-cancel"
+          ? "cancelled"
+          : "completed");
       forwardedEvent = { ...event, status: terminalStatus };
     } else if (event.type === "error") {
       streamError = new AcpRuntimeError(
@@ -85,44 +79,9 @@ async function consumeAcpTurnEvents(params: {
   };
 }
 
-function errorFromTurnResult(result: Extract<AcpRuntimeTurnResult, { status: "failed" }>) {
-  return new AcpRuntimeError(
-    normalizeAcpErrorCode(result.error.code),
-    normalizeText(result.error.message) || "ACP turn failed before completion.",
-    result.error.detailCode ? { detailCode: result.error.detailCode } : undefined,
-  );
-}
-
 function waitForQueuedEvents(): Promise<"pending"> {
   return new Promise((resolve) => {
     setTimeout(() => resolve("pending"), 0);
-  });
-}
-
-async function notifyTerminalResult(params: {
-  result: AcpRuntimeTurnResult;
-  eventGate: AcpTurnEventGate;
-  onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
-}): Promise<void> {
-  if (!params.eventGate.open) {
-    return;
-  }
-  if (params.result.status === "completed" || params.result.status === "cancelled") {
-    await params.onEvent?.({
-      type: "done",
-      status: params.result.status,
-      ...(params.result.stopReason ? { stopReason: params.result.stopReason } : {}),
-    });
-    return;
-  }
-  await params.onEvent?.({
-    type: "error",
-    code: normalizeAcpErrorCode(params.result.error.code),
-    ...(params.result.error.detailCode ? { detailCode: params.result.error.detailCode } : {}),
-    message: normalizeText(params.result.error.message) || "ACP turn failed before completion.",
-    ...(params.result.error.retryable === undefined
-      ? {}
-      : { retryable: params.result.error.retryable }),
   });
 }
 
@@ -134,9 +93,9 @@ export async function emitCancelledAcpTurn(
   return { sawOutput: false, terminalStatus: "cancelled" };
 }
 
-/** Consumes runtime turn APIs and emits normalized events while tracking output/terminal state. */
 export async function consumeAcpTurnStream(params: {
   runtime: AcpRuntime;
+  source?: SessionSourceAssertion;
   turn: AcpRuntimeTurnInput;
   eventGate: AcpTurnEventGate;
   onBeforePrompt?: () => Promise<void> | void;
@@ -162,7 +121,11 @@ export async function consumeAcpTurnStream(params: {
   }
   if (params.runtime.startTurn) {
     // Submission readiness and terminal cleanup are independent backend-owned turn boundaries.
-    const turn = params.runtime.startTurn(params.turn);
+    const startTurn = params.runtime.startTurn.bind(params.runtime);
+    const { turn } = await runWithAgentToolSourceExecutionScope(params.source, async () => {
+      params.source?.();
+      return { turn: startTurn(params.turn) };
+    });
     let promptReadinessOpen = true;
     let promptNotificationStarted = false;
     const readinessPromise = turn.promptStarted?.then(
@@ -228,30 +191,18 @@ export async function consumeAcpTurnStream(params: {
       await params.onPromptStarted?.({ authoritative: false });
     }
 
-    let eventOutcome: AcpTurnStreamOutcome | null = null;
-    let result: AcpRuntimeTurnResult | null = null;
     const firstOutcome = await Promise.race([eventsPromise, resultPromise]);
     if (firstOutcome.kind === "event-error") {
       throw firstOutcome.error;
     }
-    if (firstOutcome.kind === "events") {
-      eventOutcome = firstOutcome.outcome;
-    } else if (firstOutcome.kind === "result-error") {
+    const terminalOutcome = firstOutcome.kind === "events" ? await resultPromise : firstOutcome;
+    if (terminalOutcome.kind === "result-error") {
       await turn.closeStream({ reason: "turn-result-error" }).catch(() => {});
-      throw firstOutcome.error;
-    } else {
-      result = firstOutcome.result;
+      throw terminalOutcome.error;
     }
+    const result = terminalOutcome.result;
 
-    if (!result) {
-      const terminalOutcome = await resultPromise;
-      if (terminalOutcome.kind === "result-error") {
-        await turn.closeStream({ reason: "turn-result-error" }).catch(() => {});
-        throw terminalOutcome.error;
-      }
-      result = terminalOutcome.result;
-    }
-
+    let eventOutcome = firstOutcome.kind === "events" ? firstOutcome.outcome : null;
     let closedTerminalStream = false;
     while (!eventOutcome) {
       // Channel delivery can outlive the backend result. Only an idle event
@@ -274,13 +225,30 @@ export async function consumeAcpTurnStream(params: {
     if (result.status !== "completed" && !closedTerminalStream) {
       await turn.closeStream({ reason: `turn-result-${result.status}` }).catch(() => {});
     }
-    await notifyTerminalResult({
-      result,
-      eventGate: params.eventGate,
-      onEvent: params.onEvent,
-    });
+    const { eventGate, onEvent } = params;
+    if (eventGate.open) {
+      if (result.status === "completed" || result.status === "cancelled") {
+        await onEvent?.({
+          type: "done",
+          status: result.status,
+          ...(result.stopReason ? { stopReason: result.stopReason } : {}),
+        });
+      } else {
+        await onEvent?.({
+          type: "error",
+          code: normalizeAcpErrorCode(result.error.code),
+          ...(result.error.detailCode ? { detailCode: result.error.detailCode } : {}),
+          message: normalizeText(result.error.message) || "ACP turn failed before completion.",
+          ...(result.error.retryable === undefined ? {} : { retryable: result.error.retryable }),
+        });
+      }
+    }
     if (result.status === "failed") {
-      throw errorFromTurnResult(result);
+      throw new AcpRuntimeError(
+        normalizeAcpErrorCode(result.error.code),
+        normalizeText(result.error.message) || "ACP turn failed before completion.",
+        result.error.detailCode ? { detailCode: result.error.detailCode } : undefined,
+      );
     }
     return {
       sawOutput: eventOutcome.sawOutput,
@@ -288,7 +256,7 @@ export async function consumeAcpTurnStream(params: {
     };
   }
 
-  const events = params.runtime.runTurn(params.turn);
+  const events = startLegacyTurnEvents(params.runtime, params.turn, params.source);
   await params.onPromptStarted?.({ authoritative: false });
   return await consumeAcpTurnEvents({
     events,
@@ -296,4 +264,28 @@ export async function consumeAcpTurnStream(params: {
     onEvent: params.onEvent,
     onOutputEvent: params.onOutputEvent,
   });
+}
+
+async function* startLegacyTurnEvents(
+  runtime: AcpRuntime,
+  turn: AcpRuntimeTurnInput,
+  source: SessionSourceAssertion | undefined,
+): AsyncGenerator<AcpRuntimeEvent> {
+  let iterator: AsyncIterator<AcpRuntimeEvent> | undefined;
+  try {
+    const started = await runWithAgentToolSourceExecutionScope(source, async () => {
+      source?.();
+      const current = runtime.runTurn(turn)[Symbol.asyncIterator]();
+      iterator = current;
+      return { iterator: current, next: await current.next() };
+    });
+    let next = started.next;
+    while (!next.done) {
+      yield next.value;
+      next = await started.iterator.next();
+    }
+    iterator = undefined;
+  } finally {
+    await iterator?.return?.();
+  }
 }

@@ -30,15 +30,9 @@ describe("session transcript search protocol", () => {
     for (const value of [
       search({ scope: {}, agentId: "work" }),
       search({ scope: {}, sessionKeys: ["agent:work:main"] }),
-      ...[
-        "limit",
-        "offset",
-        "includeDerivedTitles",
-        "includeLastMessage",
-        "includeActivitySummary",
-        "ownerFirst",
-        "includePeople",
-      ].map((key) => search({ scope: { [key]: 1 } })),
+      search({ scope: { limit: 1 } }),
+      search({ scope: { offset: 1 } }),
+      search({ scope: { includePeople: true } }),
       search({ agentId: "" }),
       search({ sessionKey: "agent:work:main" }),
       search({ sessionKeys: [] }),

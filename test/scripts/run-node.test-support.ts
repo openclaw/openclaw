@@ -1,17 +1,15 @@
-// Shared filesystem and process fixtures for the node launcher boundary.
-// Tests node process runner lifecycle and captured output.
 import { execFileSync, spawnSync as realSpawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expect, it as baseIt, vi } from "vitest";
+import { copyBundledPluginMetadata } from "../../scripts/copy-bundled-plugin-metadata.mts";
 import {
   bundledDistPluginFile,
   bundledPluginFile,
   bundledPluginRoot,
-} from "openclaw/plugin-sdk/test-fixtures";
-import { expect, it as baseIt } from "vitest";
-import { copyBundledPluginMetadata } from "../../scripts/copy-bundled-plugin-metadata.mts";
+} from "../../scripts/lib/bundled-plugin-paths.mjs";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
@@ -20,12 +18,16 @@ import {
   writeBuildStamp,
   writeRuntimePostBuildStamp,
 } from "../../scripts/lib/local-build-metadata.mts";
-import {
-  UPDATE_COMPATIBILITY_INVENTORY_FILE,
-  writeUpdateCompatibilityChunks,
-} from "../../scripts/lib/update-compat-chunks.mts";
-import { runNodeMain } from "../../scripts/run-node.mts";
+import { writeUpdateCompatibilityChunks } from "../../scripts/lib/update-compat-chunks.mts";
 import { withTestDir } from "../../src/test-helpers/temp-dir.js";
+import { runNodeMain } from "./run-node-boundary.test-support.js";
+// These launcher fixtures have no service. Publication custody is covered at its owner.
+vi.mock("../../src/cli/update-cli/update-command-service-publication.js", () => ({
+  withGatewayRuntimeArtifactPublication: async (
+    _params: unknown,
+    publish: () => Promise<unknown>,
+  ) => publish(),
+}));
 import {
   previousReleaseInventory,
   writeUpdateCompatibilityBuildFixture,
@@ -62,13 +64,11 @@ export const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT = "dist/shared-Y6bNiw2w.js";
 export const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT = "dist/shared-DTaQo6Hi.js";
 export const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108 = "dist/shared-1Uyqkfns.js";
 export const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_2026_9_1 = "dist/shared-DFJEouXv.js";
-export const DIST_LEGACY_CLI_EXIT_COMPAT = "dist/memory-state-CcqRgDZU.js";
-export const DIST_LEGACY_CLI_EXIT_COMPAT_ALT = "dist/memory-state-DwGdReW4.js";
 export const DIST_STABLE_ROOT_RUNTIME_SOURCE = "dist/model-catalog.runtime-AbCd1234.js";
 export const DIST_STABLE_ROOT_RUNTIME_SOURCE_ALT = "dist/model-catalog.runtime-EfGh5678.js";
 export const DIST_STABLE_ROOT_RUNTIME_ALIAS = "dist/model-catalog.runtime.js";
-export const DIST_LEGACY_ROOT_RUNTIME_TARGET = "dist/abort.runtime.js";
-export const DIST_LEGACY_ROOT_RUNTIME_COMPAT = "dist/abort.runtime-DX6vo4yJ.js";
+export const DIST_LEGACY_ROOT_RUNTIME_TARGET = "dist/text-transforms.runtime.js";
+export const DIST_LEGACY_ROOT_RUNTIME_COMPAT = "dist/text-transforms.runtime-sEqsN4pN.js";
 export const QA_LAB_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-lab.js";
 export const QA_RUNTIME_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-runtime.js";
 export const EXTENSION_INDEX = bundledPluginFile("demo", "index.ts");
@@ -112,15 +112,19 @@ const BASE_PROJECT_FILES = {
   [BUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
 } as const;
 
-export function createExitedProcess(code: number | null, signal: string | null = null) {
-  return {
-    on: (event: string, cb: (code: number | null, signal: string | null) => void) => {
-      if (event === "exit") {
-        queueMicrotask(() => cb(code, signal));
-      }
-      return undefined;
-    },
+type ExitCallback = (code: number | null, signal: string | null) => void;
+
+function exitListener(notify: (cb: ExitCallback) => void) {
+  return (event: string, cb: ExitCallback) => {
+    if (event === "exit") {
+      queueMicrotask(() => notify(cb));
+    }
+    return undefined;
   };
+}
+
+export function createExitedProcess(code: number | null, signal: string | null = null) {
+  return { on: exitListener((cb) => cb(code, signal)) };
 }
 
 export function createPipedExitedProcess(params: {
@@ -134,20 +138,15 @@ export function createPipedExitedProcess(params: {
   return {
     stdout,
     stderr,
-    on: (event: string, cb: (code: number | null, signal: string | null) => void) => {
-      if (event === "exit") {
-        queueMicrotask(() => {
-          if (params.stdout) {
-            stdout.emit("data", Buffer.from(params.stdout));
-          }
-          if (params.stderr) {
-            stderr.emit("data", Buffer.from(params.stderr));
-          }
-          cb(params.code ?? 0, params.signal ?? null);
-        });
+    on: exitListener((cb) => {
+      if (params.stdout) {
+        stdout.emit("data", Buffer.from(params.stdout));
       }
-      return undefined;
-    },
+      if (params.stderr) {
+        stderr.emit("data", Buffer.from(params.stderr));
+      }
+      cb(params.code ?? 0, params.signal ?? null);
+    }),
   };
 }
 
@@ -174,19 +173,18 @@ export function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } 
 
 export async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
   await fs.mkdir(path.join(tmp, "extensions"), { recursive: true });
-  await writeProjectFiles(tmp, {
+  const files = {
     [DIST_PLUGIN_SDK_CORE]: "export const core = true;\n",
     [DIST_CHANNEL_CATALOG]: '{"entries":[]}\n',
     [DIST_BUILD_INFO]: '{"buildId":"test-build"}\n',
     [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT]: "export function resolveNodeRunner() {}\n",
     [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT]: "export function resolveNodeRunner() {}\n",
     [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108]: "export function resolveNodeRunner() {}\n",
-    [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
-    [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]: "export function hasMemoryRuntime() { return false; }\n",
     [DIST_OPENCLAW_ALIAS_PACKAGE]:
       '{"name":"openclaw","type":"module","exports":{"./plugin-sdk/core":"./plugin-sdk/core.js"}}\n',
     [DIST_OPENCLAW_ALIAS_PLUGIN_SDK_CORE]: "export * from '../../../../plugin-sdk/core.js';\n",
-  });
+  };
+  await writeProjectFiles(tmp, files);
   writeUpdateCompatibilityBuildFixture(tmp);
   writeUpdateCompatibilityChunks({
     distDir: path.join(tmp, "dist"),
@@ -196,27 +194,24 @@ export async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> 
   await touchProjectFiles(
     tmp,
     [
-      DIST_CHANNEL_CATALOG,
-      DIST_BUILD_INFO,
-      DIST_PLUGIN_SDK_CORE,
-      DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT,
-      DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT,
-      DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108,
-      `dist/${UPDATE_COMPATIBILITY_INVENTORY_FILE}`,
+      ...Object.keys(files),
       ...previousReleaseInventory.releases.flatMap((release) =>
         release.chunks.map((chunk) => `dist/${chunk.path}`),
       ),
-      DIST_LEGACY_CLI_EXIT_COMPAT,
-      DIST_LEGACY_CLI_EXIT_COMPAT_ALT,
-      DIST_OPENCLAW_ALIAS_PACKAGE,
-      DIST_OPENCLAW_ALIAS_PLUGIN_SDK_CORE,
     ],
     BUILD_TIME,
   );
 }
 
 export function expectedBuildSpawn() {
-  return [process.execPath, "--import", "tsx", "scripts/build-all.mts", "qaRuntime"];
+  return [
+    process.execPath,
+    "--import",
+    expect.stringMatching(/\/scripts\/tsx\.mjs$/),
+    expect.stringMatching(/[\\/]scripts[\\/]lib[\\/]dist-artifact-ownership\.mts$/),
+    expect.stringMatching(/\/scripts\/build-all\.mts$/),
+    "qaRuntime",
+  ];
 }
 
 export function statusCommandSpawn() {
@@ -240,17 +235,11 @@ export function resolvePath(tmp: string, relativePath: string) {
 }
 
 export function isTsxScriptArgs(args: string[], scriptPath: string): boolean {
-  return args[0] === "--import" && args[1] === "tsx" && args[2] === scriptPath;
+  return args[0] === "--import" && args.some((arg) => arg.endsWith(scriptPath));
 }
 
 export async function expectPathMissing(targetPath: string): Promise<void> {
-  let accessError: unknown;
-  try {
-    await fs.access(targetPath);
-  } catch (error) {
-    accessError = error;
-  }
-  expect((accessError as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
+  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 async function writeProjectFiles(tmp: string, files: Record<string, string>) {
@@ -265,27 +254,20 @@ async function writeProjectFiles(tmp: string, files: Record<string, string>) {
 
 export async function touchProjectFiles(tmp: string, relativePaths: string[], time: Date) {
   await Promise.all(
-    relativePaths.map(async (relativePath) => {
-      const absolutePath = resolvePath(tmp, relativePath);
-      await fs.utimes(absolutePath, time, time);
-    }),
+    relativePaths.map((relativePath) => fs.utimes(resolvePath(tmp, relativePath), time, time)),
   );
 }
 
-export async function setupTrackedProject(
-  tmp: string,
-  options: {
-    files?: Record<string, string>;
-    oldPaths?: string[];
-    buildPaths?: string[];
-    newPaths?: string[];
-  } = {},
-) {
+type ProjectOptions = {
+  files?: Record<string, string>;
+  oldPaths?: string[];
+  buildPaths?: string[];
+  newPaths?: string[];
+};
+
+export async function setupTrackedProject(tmp: string, options: ProjectOptions = {}) {
   await writeRuntimePostBuildScaffold(tmp);
-  await writeProjectFiles(tmp, {
-    ...BASE_PROJECT_FILES,
-    ...options.files,
-  });
+  await writeProjectFiles(tmp, { ...BASE_PROJECT_FILES, ...options.files });
   await touchProjectFiles(tmp, options.oldPaths ?? [], OLD_TIME);
   await touchProjectFiles(tmp, options.buildPaths ?? [], BUILD_TIME);
   await touchProjectFiles(tmp, options.newPaths ?? [], NEW_TIME);
@@ -293,13 +275,7 @@ export async function setupTrackedProject(
 
 export async function setupStampedProject(
   tmp: string,
-  options: {
-    files?: Record<string, string>;
-    oldPaths?: string[];
-    newPaths?: string[];
-    rootSource?: boolean;
-    trackConfig?: boolean;
-  },
+  options: Omit<ProjectOptions, "buildPaths"> & { rootSource?: boolean; trackConfig?: boolean },
 ): Promise<void> {
   const files = {
     ...(options.rootSource === false ? {} : { [ROOT_SRC]: "export const value = 1;\n" }),
@@ -314,9 +290,9 @@ export async function setupStampedProject(
   ];
   await setupTrackedProject(tmp, {
     files,
-    ...(options.oldPaths ? { oldPaths: options.oldPaths } : {}),
+    oldPaths: options.oldPaths,
     buildPaths,
-    ...(options.newPaths ? { newPaths: options.newPaths } : {}),
+    newPaths: options.newPaths,
   });
 }
 
@@ -326,12 +302,9 @@ export async function writeImmutableDeploymentManifest(tmp: string): Promise<voi
   });
 }
 
-export function createSpawnRecorder(
-  options: {
-    gitHead?: string;
-    gitStatus?: string;
-  } = {},
-) {
+type GitState = { gitHead?: string; gitStatus?: string };
+
+export function createSpawnRecorder(options: GitState = {}) {
   const spawnCalls: string[][] = [];
   const spawn = (cmd: string, args: string[]) => {
     spawnCalls.push([cmd, ...args]);
@@ -349,38 +322,28 @@ export function createSpawnRecorder(
   return { spawnCalls, spawn, spawnSync };
 }
 
-export function createCurrentGitSpawnRecorder(
-  options: { gitHead?: string; gitStatus?: string } = {},
-) {
+export function createCurrentGitSpawnRecorder(options: GitState = {}) {
   return createSpawnRecorder({ gitHead: "abc123\n", gitStatus: "", ...options });
 }
 
 export function createBuildRequirementDeps(
   tmp: string,
-  options: {
-    gitStatus?: string;
-    env?: Record<string, string>;
-  } = {},
+  options: { gitStatus?: string; env?: Record<string, string> } = {},
 ) {
   const { spawnSync } = createCurrentGitSpawnRecorder({ gitStatus: options.gitStatus ?? "" });
   return {
     cwd: tmp,
-    env: {
-      ...process.env,
-      ...options.env,
-    },
+    env: { ...process.env, ...options.env },
     fs: fsSync,
     spawnSync,
     distRoot: path.join(tmp, "dist"),
     distEntry: path.join(tmp, DIST_ENTRY),
     buildStampPath: path.join(tmp, BUILD_STAMP),
     runtimePostBuildStampPath: path.join(tmp, RUNTIME_POSTBUILD_STAMP),
-    sourceRoots: [path.join(tmp, "src"), path.join(tmp, bundledPluginRoot("demo"))].map(
-      (sourceRoot) => ({
-        name: path.relative(tmp, sourceRoot).replaceAll("\\", "/"),
-        path: sourceRoot,
-      }),
-    ),
+    sourceRoots: ["src", bundledPluginRoot("demo")].map((sourceRoot) => ({
+      name: sourceRoot.replaceAll("\\", "/"),
+      path: path.join(tmp, sourceRoot),
+    })),
     configFiles: [ROOT_TSCONFIG, ROOT_PACKAGE, ROOT_TSDOWN].map((filePath) =>
       path.join(tmp, filePath),
     ),
@@ -423,16 +386,19 @@ type RunNodeTestOptions = NonNullable<Parameters<typeof runNodeMain>[0]> & {
 };
 type RunNodeResult = Awaited<ReturnType<typeof runNodeMain>>;
 
-export async function runNodeCommand(
-  tmp: string,
-  options: RunNodeTestOptions,
-): Promise<RunNodeResult> {
+export async function runNodeCommand(tmp: string, options: RunNodeTestOptions) {
   const { env, ...overrides } = options;
   return await runNodeMain({
     cwd: tmp,
     args: ["status"],
     ...overrides,
-    env: { ...process.env, OPENCLAW_RUNNER_LOG: "0", ...env },
+    // Each fixture selects its CLI runtime independently of the Vitest worker.
+    env: {
+      ...process.env,
+      OPENCLAW_RUNNER_LOG: "0",
+      OPENCLAW_VITEST_RUNTIME: "node",
+      ...env,
+    },
     execPath: process.execPath,
     platform: options.platform ?? process.platform,
   } as RunNodeTestOptions);
@@ -445,16 +411,10 @@ type RunCommandParams = {
   spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
   stderr?: NodeJS.WriteStream;
   env?: Record<string, string>;
-  runRuntimePostBuild?: (params?: {
-    cwd?: string;
-    env?: Record<string, string | undefined>;
-  }) => void | Promise<void>;
+  runRuntimePostBuild?: RunNodeTestOptions["runRuntimePostBuild"];
 };
 
-export async function runStatusCommand({
-  tmp,
-  ...options
-}: RunCommandParams): Promise<RunNodeResult> {
+export async function runStatusCommand({ tmp, ...options }: RunCommandParams) {
   return await runNodeCommand(tmp, options);
 }
 

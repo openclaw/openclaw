@@ -17,8 +17,7 @@ export function sanitizeEmbeddingCacheHeaders(
   );
   return Object.entries(headers)
     .filter(([key]) => !excluded.has(normalizeLowercaseStringOrEmpty(key)))
-    .toSorted(([a], [b]) => a.localeCompare(b))
-    .map(([key, value]) => [key, value]);
+    .toSorted(([a], [b]) => a.localeCompare(b));
 }
 
 /** Convert custom-id keyed batch embeddings back to request-index order. */

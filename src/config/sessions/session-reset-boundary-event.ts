@@ -1,4 +1,13 @@
 import { randomUUID } from "node:crypto";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import {
+  isPendingBackgroundResultMessage,
+  projectPlacedBackgroundResultMessage,
+  readBackgroundResultPlacement,
+} from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
+import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
+import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { selectRecentUserAssistantReplayRecords } from "./transcript-replay.js";
 import { selectSessionTranscriptLeafControlledPath } from "./transcript-tree.js";
 
@@ -21,11 +30,7 @@ type SessionResetBoundaryEvent = {
 };
 
 function recordId(record: unknown): string | undefined {
-  if (!record || typeof record !== "object" || Array.isArray(record)) {
-    return undefined;
-  }
-  const id = (record as { id?: unknown }).id;
-  return typeof id === "string" && id.trim() ? id : undefined;
+  return readNonBlankString(asOptionalRecord(record)?.id);
 }
 
 function uniqueBoundaryId(records: readonly unknown[]): string {
@@ -38,12 +43,32 @@ function uniqueBoundaryId(records: readonly unknown[]): string {
   }
 }
 
+export function createSessionResetBoundaryId(): string {
+  return randomUUID();
+}
+
 function projectLatestBoundaryWindow(entries: readonly unknown[]): unknown[] {
+  if (
+    entries.some(
+      (entry) =>
+        readBackgroundResultPlacement(entry) ||
+        isPendingBackgroundResultMessage(asOptionalRecord(entry)?.message),
+    )
+  ) {
+    return Array.from(
+      iterateSessionContextEntries(entries.filter(isIndexedSessionEntry)),
+      ({ entry, placement }) =>
+        placement && entry.type === "message"
+          ? {
+              ...placement,
+              type: "message",
+              message: projectPlacedBackgroundResultMessage(entry.message),
+            }
+          : entry,
+    );
+  }
   const boundaryIndex = entries.findLastIndex((entry) => {
-    const type =
-      entry && typeof entry === "object" && !Array.isArray(entry)
-        ? (entry as { type?: unknown }).type
-        : undefined;
+    const type = asOptionalRecord(entry)?.type;
     return type === "compaction" || type === "reset";
   });
   if (boundaryIndex < 0) {
@@ -72,24 +97,23 @@ function projectLatestBoundaryWindow(entries: readonly unknown[]): unknown[] {
 export function buildSessionResetBoundaryEvent(
   params: {
     events: readonly unknown[];
+    boundaryId?: string;
   } & SessionResetBoundaryRequest,
 ): SessionResetBoundaryEvent {
-  const entries = params.events.filter(
-    (event) =>
-      event !== null &&
-      typeof event === "object" &&
-      !Array.isArray(event) &&
-      (event as { type?: unknown }).type !== "session",
-  );
+  const entries = params.events.filter((event) => isRecord(event) && event.type !== "session");
   const activeEntries = selectSessionTranscriptLeafControlledPath(entries) ?? entries;
   const keptEntries =
     params.context === "preserve-tail"
       ? selectRecentUserAssistantReplayRecords(projectLatestBoundaryWindow(activeEntries))
       : [];
   const firstKeptEntryId = recordId(keptEntries[0]);
+  const boundaryId = params.boundaryId?.trim() || uniqueBoundaryId(params.events);
+  if (params.events.some((event) => recordId(event) === boundaryId)) {
+    throw new Error(`Reset boundary ID already exists: ${boundaryId}`);
+  }
   return {
     type: "reset",
-    id: uniqueBoundaryId(params.events),
+    id: boundaryId,
     parentId: recordId(activeEntries.at(-1)) ?? null,
     timestamp: new Date().toISOString(),
     reason: params.reason,

@@ -1,12 +1,11 @@
 /** Existing-session action waits, navigation verification, and deadline ownership. */
 import { setTimeout as sleep } from "node:timers/promises";
 import { EXISTING_SESSION_NAVIGATION_RECHECK_DELAYS_MS } from "../act-policy.js";
+import type { ChromeMcpTargetOperation } from "../chrome-mcp-contracts.js";
 import {
   ChromeMcpDocumentUnavailableError,
   evaluateChromeMcpScript,
   withChromeMcpDocument,
-  type ChromeMcpOperationOptions,
-  type ChromeMcpProfileOptions,
 } from "../chrome-mcp.js";
 import { normalizeBrowserEvaluateFunctionSource } from "../evaluate-source.js";
 import {
@@ -28,15 +27,15 @@ export function createExistingSessionDeadline(
     : controller.signal;
   const error =
     typeof label === "string" ? new Error(`${label} timed out after ${timeoutMs}ms`) : label;
-  const deadlineAt = Date.now() + timeoutMs;
+  const deadlineAt = performance.now() + timeoutMs;
   const timer = setTimeout(() => controller.abort(error), timeoutMs);
   timer.unref?.();
   return {
     signal,
-    remainingMs: () => Math.max(0, deadlineAt - Date.now()),
+    remainingMs: () => Math.max(0, deadlineAt - performance.now()),
     throwIfAborted: () => {
       // A busy event loop must not turn a late completion into a successful action.
-      if (Date.now() >= deadlineAt && !signal.aborted) {
+      if (performance.now() >= deadlineAt && !signal.aborted) {
         controller.abort(error);
       }
       signal.throwIfAborted();
@@ -45,30 +44,23 @@ export function createExistingSessionDeadline(
   };
 }
 
-export type ExistingSessionOperation = ChromeMcpOperationOptions & {
-  profileName: string;
-  profile?: ChromeMcpProfileOptions;
-  userDataDir?: string;
-  targetId: string;
-};
-
-async function readExistingSessionLocationHref(params: ExistingSessionOperation): Promise<string> {
+async function readExistingSessionLocationHref(params: ChromeMcpTargetOperation): Promise<string> {
   const currentUrl = await evaluateChromeMcpScript({
     ...params,
     fn: "() => window.location.href",
   });
   if (typeof currentUrl !== "string") {
-    throw new Error("Location probe returned a non-string result");
+    throw new Error("Location check returned a non-string result");
   }
   const normalizedUrl = currentUrl.trim();
   if (!normalizedUrl) {
-    throw new Error("Location probe returned an empty URL");
+    throw new Error("Location check returned an empty URL");
   }
   return normalizedUrl;
 }
 
 export async function assertExistingSessionPostInteractionNavigationAllowed(
-  params: ExistingSessionOperation &
+  params: ChromeMcpTargetOperation &
     BrowserNavigationPolicyOptions & {
       listTabs: () => Promise<Array<{ targetId: string; url: string }>>;
       initialTabTargetIds: ReadonlySet<string>;
@@ -116,11 +108,7 @@ export async function assertExistingSessionPostInteractionNavigationAllowed(
       signal: params.signal,
       ...navigationPolicy,
     });
-    if (currentUrl === lastObservedUrl) {
-      sawStableAllowedUrl = true;
-    } else {
-      sawStableAllowedUrl = false;
-    }
+    sawStableAllowedUrl = currentUrl === lastObservedUrl;
     lastObservedUrl = currentUrl;
   }
 
@@ -151,20 +139,28 @@ export async function assertExistingSessionPostInteractionNavigationAllowed(
       }
     } catch {
       params.signal?.throwIfAborted();
-      // Probe failed — fall through to throw
     }
   }
 
   throw new Error("Unable to verify stable post-interaction navigation");
 }
 
-function buildExistingSessionWaitPredicate(params: {
-  text?: string;
-  textGone?: string;
-  selector?: string;
-  loadState?: "load" | "domcontentloaded" | "networkidle";
-  fn?: string;
-}): string | null {
+export async function waitForExistingSessionCondition(
+  params: ChromeMcpTargetOperation & {
+    timeMs?: number;
+    text?: string;
+    textGone?: string;
+    selector?: string;
+    url?: string;
+    loadState?: "load" | "domcontentloaded" | "networkidle";
+    fn?: string;
+    ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+    browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
+  },
+): Promise<void> {
+  if (params.timeMs && params.timeMs > 0) {
+    await sleep(params.timeMs, undefined, { signal: params.signal });
+  }
   const checks = [
     params.text && `Boolean(document.body?.innerText?.includes(${JSON.stringify(params.text)}))`,
     params.textGone && `!document.body?.innerText?.includes(${JSON.stringify(params.textGone)})`,
@@ -192,31 +188,11 @@ function buildExistingSessionWaitPredicate(params: {
     // Preserve its async semantics; document binding guards scheduler rebinding.
     params.fn && `Boolean(await (${normalizeBrowserEvaluateFunctionSource(params.fn)})())`,
   ];
-  return (
+  const predicate =
     checks
       .filter(Boolean)
       .map((check) => `(${check})`)
-      .join(" && ") || null
-  );
-}
-
-export async function waitForExistingSessionCondition(
-  params: ExistingSessionOperation & {
-    timeMs?: number;
-    text?: string;
-    textGone?: string;
-    selector?: string;
-    url?: string;
-    loadState?: "load" | "domcontentloaded" | "networkidle";
-    fn?: string;
-    ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
-    browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
-  },
-): Promise<void> {
-  if (params.timeMs && params.timeMs > 0) {
-    await sleep(params.timeMs, undefined, { signal: params.signal });
-  }
-  const predicate = buildExistingSessionWaitPredicate(params);
+      .join(" && ") || null;
   if (!predicate && !params.url) {
     return;
   }

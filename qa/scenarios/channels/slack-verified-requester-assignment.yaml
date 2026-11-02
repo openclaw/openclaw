@@ -1,0 +1,223 @@
+title: Verified Slack requester can receive an agent-spawned session
+
+scenario:
+  id: slack-verified-requester-assignment
+  surface: channels
+  coverage:
+    primary:
+      - gateway.identity-and-presence-apis
+      - slack.http-transport
+  objective: Prove signed Slack HTTP ingress lets a linked administrator request ownership of a visible session created by the agent's own sessions_spawn tool, while an unlinked sender receives neither requester metadata nor the sessions tool.
+  gatewayConfigPatch:
+    session:
+      dmScope: per-channel-peer
+    gateway:
+      roles:
+        default: slack-requester-member
+        definitions:
+          slack-requester-member:
+            agents: "*"
+            scopes: [operator.read, operator.write]
+            sessions:
+              others: view
+          slack-requester-admin:
+            agents: "*"
+            scopes: [operator.admin]
+            sessions:
+              others: write
+    tools:
+      codeMode: false
+      toolSearch: false
+  successCriteria:
+    - A native Crabline Slack event crosses the real signature-verified HTTP receiver.
+    - The provider receives the exact linked profile id in user-role requester_profile metadata and the sessions tool.
+    - The model creates a visible session through sessions_spawn, with the agent as its creator and owner.
+    - On a later Slack turn the model assigns that session to requester_profile.id and the Gateway retains that human owner.
+    - An unlinked Slack sender reaches the provider without requester_profile or the sessions tool.
+  docsRefs:
+    - docs/channels/slack.md
+    - docs/gateway/audit.md
+  codeRefs:
+    - extensions/qa-lab/src/crabline-slack-ingress.ts
+    - extensions/slack/src/monitor/provider.ts
+    - src/auto-reply/reply/inbound-meta.ts
+  execution:
+    kind: flow
+    channel: slack
+    providerMode: mock-openai
+    suiteIsolation: isolated
+    isolationReason: Seeds a personal profile while the Gateway is stopped, then changes its role and Slack identity link through public RPCs.
+    retryCount: 0
+    timeoutMs: 180000
+    summary: Uses Crabline's signed HTTP ingress, the real Slack plugin, an ephemeral Gateway, and captured mock-provider requests. The target is created by the agent through visible sessions_spawn; public RPCs only inspect its creator and owner.
+    config:
+      requiredChannelDriver: crabline
+
+flow:
+  steps:
+    - name: links a personal administrator through the Gateway
+      actions:
+        - assert:
+            expr: "env.providerMode === 'mock-openai' && transport.id === 'crabline'"
+            message: requester proof requires mock-openai and the Crabline Slack driver
+        - set: profile
+          value: {}
+        - call: env.gateway.restartAfterStateMutation
+          args:
+            - lambda:
+                async: true
+                params: [ctx]
+                expr: |-
+                  Object.assign(profile, await runQaCli({ ...env, gateway: { ...env.gateway, cliCommand: {
+                    executablePath: env.gateway.cliCommand?.executablePath ?? (await qaImport('node:process')).execPath,
+                    argsPrefix: ['--import', 'tsx', path.join(env.repoRoot, 'test/e2e/qa-lab/slack-requester-profile.fixture.ts')],
+                    cwd: env.repoRoot
+                  } } }, [ctx.stateDir, ctx.tempRoot], { json: true }))
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - assert:
+            expr: "typeof profile.id === 'string' && profile.id !== 'gateway-owner'"
+            message: personal profile fixture did not create a durable person
+        - call: env.gateway.call
+          args:
+            - users.setRole
+            - profileId: { ref: profile.id }
+              role: slack-requester-admin
+        - call: env.gateway.call
+          saveAs: link
+          args:
+            - users.linkChannelIdentity
+            - profileId: { ref: profile.id }
+              identity:
+                channelId: slack
+                accountId: { ref: transport.accountId }
+                senderId: U0123456789
+        - assert:
+            expr: "link.profileId === profile.id && link.identity.senderId === 'U0123456789'"
+            message: Gateway did not retain the native-case Slack identity
+
+    - name: offers linked requester metadata and the owner-only sessions tool
+      actions:
+        - set: linkedCursor
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - sendInbound:
+            conversation: { id: D0123456789, kind: direct }
+            senderId: U0123456789
+            senderName: Linked QA Requester
+            text: "Reply exactly: QA-SLACK-REQUESTER-CONTEXT"
+        - waitForOutbound:
+            textIncludes: QA-SLACK-REQUESTER-CONTEXT
+            timeoutMs: 60000
+        - set: linkedRequest
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${linkedCursor}`)).find((request) => request.requestKind === 'agent-initial')"
+        - set: requester
+          value:
+            expr: "(await qaImport('./providers/mock-openai/mock-openai-input.js')).extractCurrentRuntimeContextTexts(linkedRequest.body.input).flatMap((text) => [...text.matchAll(/Conversation info:[^\\n]*\\n```json\\n([\\s\\S]*?)\\n```/gu)].map((match) => JSON.parse(match[1]))).find((value) => value.requester_profile)?.requester_profile"
+        - assert:
+            expr: "requester?.id === profile.id && Object.keys(requester).every((key) => key === 'id' || key === 'display_name')"
+            message: linked Slack profile did not reach the provider in per-turn user-role requester_profile metadata
+        - assert:
+            expr: "linkedRequest.body.tools.some((tool) => tool.name === 'sessions' || tool.function?.name === 'sessions') && !JSON.stringify([linkedRequest.body.instructions, ...linkedRequest.body.input.filter((item) => item.role === 'system' || item.role === 'developer')]).includes(profile.id)"
+            message: linked administrator lacks the sessions tool or leaked per-turn profile data into system instructions
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', ingress: 'signed Slack HTTP', profileId: profile.id, requesterProfileInUserRole: true, sessionsOffered: true })"
+
+    - name: creates a visible work session through the agent tool
+      actions:
+        - set: spawnCursor
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - sendInbound:
+            conversation: { id: D0123456789, kind: direct }
+            senderId: U0123456789
+            senderName: Linked QA Requester
+            text: "Slack agent-owned requester QA spawn. Create a separate visible work session for me."
+        - waitForOutbound:
+            textIncludes: QA-SLACK-SPAWN-RESULT
+            timeoutMs: 60000
+        - set: spawnRequests
+          value:
+            expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${spawnCursor}`)"
+        - set: spawnCall
+          value:
+            expr: "spawnRequests.find((request) => request.plannedToolName === 'sessions_spawn')"
+        - assert:
+            expr: "spawnCall?.plannedToolArgs.visible === true"
+            message: provider did not call the visible sessions_spawn tool
+        - set: spawnResult
+          value:
+            expr: "JSON.parse(spawnRequests.find((request) => request.toolOutputCallId === spawnCall.plannedToolCallId)?.toolOutput ?? '{}')"
+        - assert:
+            expr: "spawnResult.status === 'accepted' && typeof spawnResult.childSessionKey === 'string'"
+            message:
+              expr: "`visible sessions_spawn failed: ${JSON.stringify(spawnResult)}`"
+        - call: env.gateway.call
+          saveAs: spawnedSession
+          args:
+            - sessions.describe
+            - key: { ref: spawnResult.childSessionKey }
+        - assert:
+            expr: "spawnedSession.session.createdActor?.type === 'agent' && spawnedSession.session.createdActor.id === 'qa' && spawnedSession.session.owner?.actor?.type === 'agent' && spawnedSession.session.owner.actor.id === 'qa'"
+            message:
+              expr: "`expected an agent-created, agent-owned target: ${JSON.stringify(spawnedSession.session)}`"
+      detailsExpr: "JSON.stringify({ childSessionKey: spawnResult.childSessionKey, createdActor: spawnedSession.session.createdActor, owner: spawnedSession.session.owner, visibility: spawnedSession.session.visibility })"
+
+    - name: assigns the agent-owned work session to the verified Slack requester
+      actions:
+        - set: assignCursor
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - sendInbound:
+            conversation: { id: D0123456789, kind: direct }
+            senderId: U0123456789
+            senderName: Linked QA Requester
+            text: "Slack agent-owned requester QA assign. Assign it to me."
+        - waitForOutbound:
+            textIncludes: QA-SLACK-ASSIGN-
+            timeoutMs: 60000
+        - set: assignmentRequests
+          value:
+            expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${assignCursor}`)"
+        - set: assignmentCall
+          value:
+            expr: "assignmentRequests.find((request) => request.plannedToolName === 'sessions' && request.plannedToolArgs?.action === 'assign_owner')"
+        - assert:
+            expr: "assignmentCall?.plannedToolArgs.sessionKey === spawnResult.childSessionKey && assignmentCall.plannedToolArgs.ownerType === 'human' && assignmentCall.plannedToolArgs.ownerId === profile.id"
+            message: assignment did not use the actual spawn receipt key and verified requester profile
+        - set: assignmentResult
+          value:
+            expr: "JSON.parse(assignmentRequests.find((request) => request.toolOutputCallId === assignmentCall.plannedToolCallId)?.toolOutput ?? '{}')"
+        - call: env.gateway.call
+          saveAs: assignedSession
+          args:
+            - sessions.describe
+            - key: { ref: spawnResult.childSessionKey }
+        - assert:
+            expr: "assignmentResult.status === 'updated' && assignedSession.session.owner?.actor?.type === 'human' && assignedSession.session.owner.actor.id === profile.id"
+            message:
+              expr: "`agent-owned session assignment failed: ${JSON.stringify({ assignmentResult, childSessionKey: spawnResult.childSessionKey, creator: assignedSession.session.createdActor, persistedOwner: assignedSession.session.owner, visibility: assignedSession.session.visibility })}`"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', childSessionKey: spawnResult.childSessionKey, requesterProfileId: profile.id, owner: assignedSession.session.owner })"
+
+    - name: withholds requester metadata and session administration from an unlinked sender
+      actions:
+        - set: unlinkedCursor
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - sendInbound:
+            conversation: { id: D9876543210, kind: direct }
+            senderId: U9876543210
+            senderName: Unlinked QA Requester
+            text: "Reply exactly: QA-SLACK-UNLINKED-OK"
+        - waitForOutbound:
+            textIncludes: QA-SLACK-UNLINKED-OK
+            timeoutMs: 60000
+        - set: unlinkedRequest
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${unlinkedCursor}`)).find((request) => request.requestKind === 'agent-initial')"
+        - assert:
+            expr: "unlinkedRequest && !JSON.stringify(unlinkedRequest.body.input).includes('requester_profile') && !unlinkedRequest.body.tools.some((tool) => tool.name === 'sessions' || tool.function?.name === 'sessions')"
+            message: unlinked Slack sender received requester metadata or the owner-only sessions tool
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', ingress: 'signed Slack HTTP', senderLinked: false, requesterProfilePresent: false, sessionsOffered: false })"

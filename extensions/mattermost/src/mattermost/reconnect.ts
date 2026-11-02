@@ -1,115 +1,47 @@
-// Mattermost plugin module implements reconnect behavior.
-type ReconnectOutcome = "resolved" | "rejected";
+import { setTimeout as delay } from "node:timers/promises";
 
-type ShouldReconnectParams = {
-  attempt: number;
-  delayMs: number;
-  outcome: ReconnectOutcome;
-  error?: unknown;
-};
-
-type RunWithReconnectOpts = {
-  abortSignal?: AbortSignal;
-  onError?: (err: unknown) => void;
-  onReconnect?: (delayMs: number) => void;
-  initialDelayMs?: number;
-  maxDelayMs?: number;
-  jitterRatio?: number;
-  random?: () => number;
-  shouldReconnect?: (params: ShouldReconnectParams) => boolean;
-};
-
-/**
- * Reconnection loop with exponential backoff.
- *
- * Calls `connectFn` in a while loop. On normal resolve (connection closed),
- * the backoff resets. On thrown error (connection failed), the current delay is
- * used, then doubled for the next retry.
- * The loop exits when `abortSignal` fires.
- */
 export async function runWithReconnect(
   connectFn: () => Promise<void>,
-  opts: RunWithReconnectOpts = {},
+  opts: {
+    abortSignal?: AbortSignal;
+    onError?: (err: unknown) => void;
+    onReconnect?: (delayMs: number) => void;
+    reconnectAfterClose?: boolean;
+  } = {},
 ): Promise<void> {
-  const { initialDelayMs = 2000, maxDelayMs = 60_000 } = opts;
-  const jitterRatio = Math.max(0, opts.jitterRatio ?? 0);
-  const random = opts.random ?? Math.random;
-  const backoff = createReconnectBackoff(initialDelayMs, maxDelayMs);
-  let attempt = 0;
-
+  let retryDelay = 2000;
   while (!opts.abortSignal?.aborted) {
-    let outcome: ReconnectOutcome = "resolved";
-    let error: unknown;
+    let failed = false;
     try {
       await connectFn();
-      backoff.reset();
     } catch (err) {
       if (opts.abortSignal?.aborted) {
         return;
       }
-      outcome = "rejected";
-      error = err;
+      failed = true;
       opts.onError?.(err);
     }
     if (opts.abortSignal?.aborted) {
       return;
     }
-    const delayMs = withJitter(backoff.current(), jitterRatio, random);
-    const shouldReconnect =
-      opts.shouldReconnect?.({
-        attempt,
-        delayMs,
-        outcome,
-        error,
-      }) ?? true;
-    if (!shouldReconnect) {
+    if (!failed) {
+      retryDelay = 2000;
+    }
+    const spread = retryDelay * 0.2;
+    const delayMs = Math.round(retryDelay - spread + Math.random() * spread * 2);
+    if (!failed && opts.reconnectAfterClose === false) {
       return;
     }
     opts.onReconnect?.(delayMs);
-    await sleepAbortable(delayMs, opts.abortSignal);
-    if (outcome === "rejected") {
-      backoff.increase();
+    try {
+      await delay(delayMs, undefined, { signal: opts.abortSignal });
+    } catch (delayError) {
+      if (!opts.abortSignal?.aborted) {
+        throw delayError;
+      }
     }
-    attempt++;
-  }
-}
-
-function createReconnectBackoff(initialDelayMs: number, maxDelayMs: number) {
-  let retryDelay = initialDelayMs;
-  return {
-    current: () => retryDelay,
-    reset: () => {
-      retryDelay = initialDelayMs;
-    },
-    increase: () => {
-      retryDelay = Math.min(retryDelay * 2, maxDelayMs);
-    },
-  };
-}
-
-function withJitter(baseMs: number, jitterRatio: number, random: () => number): number {
-  if (jitterRatio <= 0) {
-    return baseMs;
-  }
-  const normalized = Math.max(0, Math.min(1, random()));
-  const spread = baseMs * jitterRatio;
-  return Math.max(1, Math.round(baseMs - spread + normalized * spread * 2));
-}
-
-function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal?.aborted) {
-      resolve();
-      return;
+    if (failed) {
+      retryDelay = Math.min(retryDelay * 2, 60_000);
     }
-    const onAbort = () => {
-      clearTimeout(timer);
-      resolve();
-    };
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
+  }
 }

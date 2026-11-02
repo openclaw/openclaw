@@ -131,6 +131,7 @@ describeLive("Codex app-server approval requester real-binary bridge", () => {
         const host = await createAgentHarnessHostCapabilitiesForTest({
           attempt: params,
           pluginId: "codex",
+          nativeModelPolicySupport: "exact",
         });
         params.hostCapabilities = host.capabilities;
         closeHost = host.close;

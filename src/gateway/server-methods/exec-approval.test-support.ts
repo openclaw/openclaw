@@ -2,6 +2,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi, type TestContext } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createPreparedTestApprovalManager,
   createTestApprovalFixture,
@@ -13,12 +18,17 @@ import {
 } from "./approval-request.test-support.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 
-const execApprovalNoop = () => false;
 type ExecApprovalHandlers = ReturnType<typeof createExecApprovalHandlers>;
-type ExecApprovalGetArgs = Parameters<ExecApprovalHandlers["exec.approval.get"]>[0];
 export type ExecApprovalRequestArgs = Parameters<ExecApprovalHandlers["exec.approval.request"]>[0];
-export type ExecApprovalResolveArgs = Parameters<ExecApprovalHandlers["exec.approval.resolve"]>[0];
-type ExecApprovalWaitArgs = Parameters<ExecApprovalHandlers["exec.approval.waitDecision"]>[0];
+
+type ApprovalCall = {
+  handlers: ExecApprovalHandlers;
+  respond: ExecApprovalRequestArgs["respond"];
+  client?: ExecApprovalRequestArgs["client"];
+};
+type ApprovalById = ApprovalCall & { id: string };
+type ApprovalContext = { broadcast: (event: string, payload: unknown) => void };
+type PushDelivery = ReturnType<typeof createIosPushDelivery>;
 
 export const defaultExecApprovalRequestParams = {
   command: "echo ok",
@@ -78,144 +88,81 @@ export function createApprovalRuntimeClient(
   });
 }
 
-function toExecApprovalRequestContext(context: {
-  broadcast: (event: string, payload: unknown) => void;
-  hasExecApprovalClients?: () => boolean;
-  chatAbortedRuns?: Map<string, number>;
-}): ExecApprovalRequestArgs["context"] {
-  return {
-    getRuntimeConfig: () => ({}),
-    ...context,
-  } as unknown as ExecApprovalRequestArgs["context"];
-}
-
-function toExecApprovalResolveContext(
-  context: { broadcast?: (event: string, payload: unknown) => void } = {},
-): ExecApprovalResolveArgs["context"] {
-  return {
-    getRuntimeConfig: () => ({}),
-    ...context,
-  } as unknown as ExecApprovalResolveArgs["context"];
-}
-
-export async function getExecApproval(params: {
-  handlers: ExecApprovalHandlers;
-  id: string;
-  respond: ReturnType<typeof vi.fn>;
-  client?: ExecApprovalGetArgs["client"];
-}) {
+function callApproval(
+  method: string,
+  options: ApprovalCall,
+  params: Record<string, unknown>,
+  context: object = {},
+) {
   return expectDefined(
-    params.handlers["exec.approval.get"],
-    'params.handlers["exec.approval.get"] test invariant',
+    options.handlers[method],
+    `${method} handler`,
   )({
-    params: { id: params.id } as ExecApprovalGetArgs["params"],
-    respond: params.respond as unknown as ExecApprovalGetArgs["respond"],
-    context: toExecApprovalResolveContext(),
-    client: params.client ?? null,
-    req: { id: "req-get", type: "req", method: "exec.approval.get" },
-    isWebchatConnect: execApprovalNoop,
+    req: { id: "request", type: "req", method },
+    params,
+    respond: options.respond,
+    client: options.client ?? null,
+    context: (method === "exec.approval.waitDecision"
+      ? context
+      : { getRuntimeConfig: () => ({}), ...context }) as ExecApprovalRequestArgs["context"],
+    isWebchatConnect: () => false,
   });
 }
 
-export async function listExecApprovals(params: {
-  handlers: ExecApprovalHandlers;
-  respond: ReturnType<typeof vi.fn>;
-  client?: ExecApprovalResolveArgs["client"];
-}) {
-  return expectDefined(
-    params.handlers["exec.approval.list"],
-    'params.handlers["exec.approval.list"] test invariant',
-  )({
-    params: {} as never,
-    respond: params.respond as never,
-    context: toExecApprovalResolveContext(),
-    client: params.client ?? null,
-    req: { id: "req-list", type: "req", method: "exec.approval.list" },
-    isWebchatConnect: execApprovalNoop,
-  });
+export async function getExecApproval(params: ApprovalById) {
+  return callApproval("exec.approval.get", params, { id: params.id });
 }
 
-export async function requestExecApproval(params: {
-  handlers: ExecApprovalHandlers;
-  respond: ExecApprovalRequestArgs["respond"];
-  context: { broadcast: (event: string, payload: unknown) => void };
-  params?: Record<string, unknown>;
-  client?: ExecApprovalRequestArgs["client"];
-}) {
-  const requestParams = {
+export async function listExecApprovals(params: ApprovalCall) {
+  return callApproval("exec.approval.list", params, {});
+}
+
+export async function requestExecApproval(
+  params: ApprovalCall & {
+    context: ApprovalContext;
+    params?: Record<string, unknown>;
+  },
+) {
+  const requestParams: ExecApprovalRequestArgs["params"] = {
     ...defaultExecApprovalRequestParams,
     ...params.params,
-  } as unknown as ExecApprovalRequestArgs["params"];
+  };
   const hasExplicitPlan =
     params.params !== undefined && Object.hasOwn(params.params, "systemRunPlan");
   if (
     !hasExplicitPlan &&
-    (requestParams as { host?: string }).host === "node" &&
-    Array.isArray((requestParams as { commandArgv?: unknown }).commandArgv)
+    requestParams.host === "node" &&
+    Array.isArray(requestParams.commandArgv)
   ) {
-    const commandArgv = (requestParams as { commandArgv: unknown[] }).commandArgv.map((entry) =>
-      String(entry),
-    );
-    const cwdValue =
-      typeof (requestParams as { cwd?: unknown }).cwd === "string"
-        ? ((requestParams as { cwd: string }).cwd ?? null)
-        : null;
-    const commandText =
-      typeof (requestParams as { command?: unknown }).command === "string"
-        ? ((requestParams as { command: string }).command ?? null)
-        : null;
+    const commandArgv = requestParams.commandArgv.map((entry) => String(entry));
+    const cwdValue = typeof requestParams.cwd === "string" ? requestParams.cwd : null;
+    const commandText = typeof requestParams.command === "string" ? requestParams.command : null;
     requestParams.systemRunPlan = {
       argv: commandArgv,
       cwd: cwdValue,
       commandText: commandText ?? commandArgv.join(" "),
-      agentId:
-        typeof (requestParams as { agentId?: unknown }).agentId === "string"
-          ? ((requestParams as { agentId: string }).agentId ?? null)
-          : null,
-      sessionKey:
-        typeof (requestParams as { sessionKey?: unknown }).sessionKey === "string"
-          ? ((requestParams as { sessionKey: string }).sessionKey ?? null)
-          : null,
+      agentId: typeof requestParams.agentId === "string" ? requestParams.agentId : null,
+      sessionKey: typeof requestParams.sessionKey === "string" ? requestParams.sessionKey : null,
     };
   }
-  return expectDefined(
-    params.handlers["exec.approval.request"],
-    'params.handlers["exec.approval.request"] test invariant',
-  )({
-    params: requestParams,
-    respond: params.respond as unknown as ExecApprovalRequestArgs["respond"],
-    context: toExecApprovalRequestContext({
-      hasExecApprovalClients: () => true,
-      ...params.context,
-    }),
-    client: params.client ?? null,
-    req: { id: "req-1", type: "req", method: "exec.approval.request" },
-    isWebchatConnect: execApprovalNoop,
+  return callApproval("exec.approval.request", params, requestParams, {
+    hasExecApprovalClients: () => true,
+    ...params.context,
   });
 }
 
-export async function resolveExecApproval(params: {
-  handlers: ExecApprovalHandlers;
-  id: string;
-  decision?: "allow-once" | "allow-always" | "deny";
-  respond: ReturnType<typeof vi.fn>;
-  context: { broadcast: (event: string, payload: unknown) => void };
-  client?: ExecApprovalResolveArgs["client"];
-}) {
-  return expectDefined(
-    params.handlers["exec.approval.resolve"],
-    'params.handlers["exec.approval.resolve"] test invariant',
-  )({
-    params: {
-      id: params.id,
-      decision: params.decision ?? "allow-once",
-    } as ExecApprovalResolveArgs["params"],
-    respond: params.respond as unknown as ExecApprovalResolveArgs["respond"],
-    context: toExecApprovalResolveContext(params.context),
-    client: params.client ?? null,
-    req: { id: "req-2", type: "req", method: "exec.approval.resolve" },
-    isWebchatConnect: execApprovalNoop,
-  });
+export async function resolveExecApproval(
+  params: ApprovalById & {
+    decision?: "allow-once" | "allow-always" | "deny";
+    context: ApprovalContext;
+  },
+) {
+  return callApproval(
+    "exec.approval.resolve",
+    params,
+    { id: params.id, decision: params.decision ?? "allow-once" },
+    params.context,
+  );
 }
 
 export async function resolveExecApprovalForTest(
@@ -226,33 +173,19 @@ export async function resolveExecApprovalForTest(
   return respond;
 }
 
-export async function waitExecApproval(params: {
-  handlers: ExecApprovalHandlers;
-  id: string;
-  respond: ReturnType<typeof vi.fn>;
-  context: object;
-}) {
-  return expectDefined(
-    params.handlers["exec.approval.waitDecision"],
-    'params.handlers["exec.approval.waitDecision"] test invariant',
-  )({
-    params: { id: params.id },
-    respond: params.respond as unknown as ExecApprovalWaitArgs["respond"],
-    context: params.context as ExecApprovalWaitArgs["context"],
-    client: null,
-    req: { id: "req-wait", type: "req", method: "exec.approval.waitDecision" },
-    isWebchatConnect: execApprovalNoop,
-  });
+export async function waitExecApproval(params: ApprovalById & { context: object }) {
+  return callApproval("exec.approval.waitDecision", params, { id: params.id }, params.context);
 }
 
 export async function createExecApprovalFixture(
   testContext: TestContext,
-  opts?: { config?: OpenClawConfig; preparePersistence?: boolean },
+  opts?: { config?: OpenClawConfig; preparePersistence?: boolean; scheduler?: GatewayScheduler },
 ) {
+  const managerOptions = { scheduler: opts?.scheduler };
   const fixture =
     opts?.preparePersistence === false
-      ? createTestApprovalFixture(testContext)
-      : await createPreparedTestApprovalManager(testContext);
+      ? createTestApprovalFixture(testContext, managerOptions)
+      : await createPreparedTestApprovalManager(testContext, managerOptions);
   const { manager } = fixture;
   const handlers = createExecApprovalHandlers(manager);
   const broadcasts: Array<{ event: string; payload: unknown }> = [];
@@ -275,33 +208,29 @@ export async function expectRejectedExecApprovalRequest(
 ) {
   const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
   return await fixture.run(async () => {
-    const { handlers, respond, context } = fixture;
-    await requestExecApproval({ handlers, respond, context, params });
-    const call = expectDefined(respond.mock.calls[0], "expected rejected exec approval response");
-    expect(call[0]).toBe(false);
-    expect(call[1]).toBeUndefined();
-    expect(call[2]).toBeTypeOf("object");
-    expect(call[2]).toMatchObject({ message });
+    const { respond } = fixture;
+    await requestExecApproval({ ...fixture, params });
+    expect(respond.mock.calls[0]?.slice(0, 3)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({ message }),
+    ]);
   });
 }
 
 export function getRequestedExecApprovalPayload(
   broadcasts: Array<{ event: string; payload: unknown }>,
 ): { approvalKind: "exec"; id: string; request: Record<string, unknown> } {
-  const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-  if (!requested) {
-    throw new Error("exec approval requested broadcast missing");
-  }
-  const payload = requested.payload as {
+  const payload = expectDefined(
+    broadcasts.find((entry) => entry.event === "exec.approval.requested"),
+    "exec approval requested broadcast",
+  ).payload as {
     approvalKind?: unknown;
     id?: unknown;
     request?: Record<string, unknown>;
   };
-  if (payload.approvalKind !== "exec") {
-    throw new Error("exec approval requested kind missing");
-  }
-  if (typeof payload.id !== "string" || payload.id.length === 0) {
-    throw new Error("exec approval requested id missing");
+  if (payload.approvalKind !== "exec" || typeof payload.id !== "string" || !payload.id.length) {
+    throw new Error("exec approval requested kind or id missing");
   }
   return {
     approvalKind: payload.approvalKind,
@@ -313,27 +242,32 @@ export function getRequestedExecApprovalPayload(
 type RequestedExecApproval = Awaited<ReturnType<typeof createExecApprovalFixture>> &
   ReturnType<typeof getRequestedExecApprovalPayload> & { requestPromise: Promise<void> };
 
-export async function withAcceptedExecApproval(
+type ApprovalInput = {
+  request?: Record<string, unknown>;
+  client?: ExecApprovalRequestArgs["client"];
+  fixtureOptions?: Parameters<typeof createExecApprovalFixture>[1];
+};
+
+export async function withRequestedExecApproval(
   testContext: TestContext,
-  params: {
-    request: Record<string, unknown>;
-    client?: ExecApprovalRequestArgs["client"];
-  },
+  params: ApprovalInput,
   inspect: (approval: RequestedExecApproval) => Promise<void>,
+  accepted = false,
 ) {
-  const fixture = await createExecApprovalFixture(testContext);
+  const fixture = await createExecApprovalFixture(testContext, params.fixtureOptions);
   await fixture.run(async () => {
-    const { pending: requestPromise } = await waitForApprovalAccepted(fixture.respond, (respond) =>
+    const request = (respond: ExecApprovalRequestArgs["respond"] = fixture.respond) =>
       fixture.track(
         requestExecApproval({
-          handlers: fixture.handlers,
+          ...fixture,
           respond,
-          context: fixture.context,
           params: params.request,
           client: params.client,
         }),
-      ),
-    );
+      );
+    const { pending: requestPromise } = accepted
+      ? await waitForApprovalAccepted(fixture.respond, request)
+      : await waitForApprovalRequested(fixture.context, "exec.approval.requested", request);
     await inspect({
       ...fixture,
       ...getRequestedExecApprovalPayload(fixture.broadcasts),
@@ -343,38 +277,12 @@ export async function withAcceptedExecApproval(
   });
 }
 
-export async function withRequestedExecApproval(
+export async function withAcceptedExecApproval(
   testContext: TestContext,
-  params: {
-    request?: Record<string, unknown>;
-    client?: ExecApprovalRequestArgs["client"];
-    fixtureOptions?: Parameters<typeof createExecApprovalFixture>[1];
-  },
+  params: Pick<ApprovalInput, "client"> & { request: Record<string, unknown> },
   inspect: (approval: RequestedExecApproval) => Promise<void>,
 ) {
-  const fixture = await createExecApprovalFixture(testContext, params.fixtureOptions);
-  await fixture.run(async () => {
-    const { pending: requestPromise } = await waitForApprovalRequested(
-      fixture.context,
-      "exec.approval.requested",
-      () =>
-        fixture.track(
-          requestExecApproval({
-            handlers: fixture.handlers,
-            respond: fixture.respond,
-            context: fixture.context,
-            params: params.request,
-            client: params.client,
-          }),
-        ),
-    );
-    await inspect({
-      ...fixture,
-      ...getRequestedExecApprovalPayload(fixture.broadcasts),
-      requestPromise,
-    });
-    await requestPromise;
-  });
+  return withRequestedExecApproval(testContext, params, inspect, true);
 }
 
 export async function requestExecApprovalForTest(
@@ -382,34 +290,43 @@ export async function requestExecApprovalForTest(
   request: Record<string, unknown>,
   fixtureOptions?: Parameters<typeof createExecApprovalFixture>[1],
 ) {
-  const fixture = await createExecApprovalFixture(testContext, fixtureOptions);
-  return await fixture.run(async () => {
-    await requestExecApproval({
-      handlers: fixture.handlers,
-      respond: fixture.respond,
-      context: fixture.context,
-      params: request,
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const fixture = await createExecApprovalFixture(testContext, { ...fixtureOptions, scheduler });
+  try {
+    return await fixture.run(async () => {
+      const { pending } = await waitForApprovalRequested(
+        fixture.context,
+        "exec.approval.requested",
+        () => fixture.track(requestExecApproval({ ...fixture, params: request })),
+      );
+      const payload = getRequestedExecApprovalPayload(fixture.broadcasts);
+      const record = expectDefined(
+        fixture.manager.getLocalSnapshot(payload.id),
+        "registered approval deadline",
+      );
+      using dateNow = vi.spyOn(Date, "now");
+      dateNow.mockImplementation(clock.clock.now);
+      await clock.advanceTo(record.expiresAtMs);
+      await pending;
+      return { ...fixture, ...payload };
     });
-    return { ...fixture, ...getRequestedExecApprovalPayload(fixture.broadcasts) };
-  });
+  } finally {
+    await scheduler.stop();
+  }
 }
 
 export async function createForwardingExecApprovalFixture(
   testContext: TestContext,
   opts?: {
-    webPushDelivery?: {
-      handleRequested: ReturnType<typeof vi.fn>;
-      handleResolved: ReturnType<typeof vi.fn>;
-      handleExpired: ReturnType<typeof vi.fn>;
-    };
-    iosPushDelivery?: {
-      handleRequested: ReturnType<typeof vi.fn>;
-      handleResolved: ReturnType<typeof vi.fn>;
-      handleExpired: ReturnType<typeof vi.fn>;
-    };
+    webPushDelivery?: PushDelivery;
+    iosPushDelivery?: PushDelivery;
   },
 ) {
-  const fixture = await createPreparedTestApprovalManager(testContext);
+  // Prepare persistence before forwarding tests replace the host's timers.
+  const scheduler = createTestGatewayScheduler("fake-timers");
+  testContext.onTestFinished(() => scheduler.stop());
+  const fixture = await createPreparedTestApprovalManager(testContext, { scheduler });
   const { manager } = fixture;
   const forwarder = {
     handleRequested: vi.fn(async () => false),
@@ -448,12 +365,4 @@ export function createIosPushDelivery(
   };
 }
 
-export function createWebPushDelivery(
-  handleRequested: ReturnType<typeof vi.fn> = vi.fn(async () => true),
-) {
-  return {
-    handleRequested,
-    handleResolved: vi.fn(async () => {}),
-    handleExpired: vi.fn(async () => {}),
-  };
-}
+export const createWebPushDelivery = createIosPushDelivery;

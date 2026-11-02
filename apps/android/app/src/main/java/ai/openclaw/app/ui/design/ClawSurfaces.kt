@@ -13,6 +13,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
 /**
@@ -25,24 +26,23 @@ import androidx.compose.ui.unit.dp
 internal fun ClawPanel(
   modifier: Modifier = Modifier,
   contentPadding: PaddingValues = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+  verticalArrangement: Arrangement.Vertical = Arrangement.Top,
+  color: Color = ClawTheme.colors.surface,
   content: @Composable () -> Unit,
 ) {
   Surface(
     modifier = modifier.fillMaxWidth(),
     shape = RoundedCornerShape(ClawTheme.radii.panel),
-    color = ClawTheme.colors.surface,
+    color = color,
     contentColor = ClawTheme.colors.text,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
-    Column(modifier = Modifier.padding(contentPadding)) {
+    Column(modifier = Modifier.padding(contentPadding), verticalArrangement = verticalArrangement) {
       content()
     }
   }
 }
 
-/**
- * Shared empty state used when a screen has no records but can still offer an action.
- */
 @Composable
 internal fun ClawEmptyState(
   title: String,
@@ -63,9 +63,6 @@ internal fun ClawEmptyState(
   }
 }
 
-/**
- * Shared loading placeholder that keeps async screen states visually consistent.
- */
 @Composable
 internal fun ClawLoadingState(
   title: String,

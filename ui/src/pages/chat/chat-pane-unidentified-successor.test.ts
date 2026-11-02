@@ -2,24 +2,29 @@
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import {
-  installTranscriptDomMocks,
-  resetTranscriptTestDom,
-} from "./components/chat-transcript.test-support.ts";
+import * as transcriptDom from "./components/chat-transcript.test-support.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 
-beforeEach(installTranscriptDomMocks);
-afterEach(resetTranscriptTestDom);
+beforeEach(transcriptDom.installTranscriptDomMocks);
+afterEach(transcriptDom.resetTranscriptTestDom);
+
+function makeMessage(id: string, seq: number, idempotencyKey?: string) {
+  return {
+    role: "user",
+    content: id,
+    __openclaw: { id, seq, ...(idempotencyKey ? { idempotencyKey } : {}) },
+  };
+}
 
 it.each(
   (["event", "list"] as const).flatMap((admission) =>
-    (["live predecessor", "live run", "live stream", "empty", "optimistic-only"] as const).map(
+    (["live predecessor", "live stream", "empty", "optimistic-only"] as const).map(
       (transcript) => ({ admission, transcript }),
     ),
   ),
@@ -34,161 +39,107 @@ it.each(
       updatedAt: 1,
     };
     const successor = { ...previous, sessionId: "successor-session", updatedAt: 2 };
-    const predecessorMessage = {
-      role: "user",
-      content: "Predecessor input received while its first history is pending",
-      __openclaw: { id: "predecessor-live", seq: 1 },
-    };
-    const nextPredecessorMessage = {
-      role: "user",
-      content: "Another message for the same incarnation before its first history",
-      __openclaw: { id: "predecessor-live-next", seq: 2 },
-    };
-    const successorMessage = {
-      role: "user",
-      content: "Successor input belongs to another physical transcript",
-      __openclaw: { id: "successor-live", seq: 1, idempotencyKey: "initial-send:user" },
-    };
+    const predecessors = [1, 2].map((seq) => makeMessage(`predecessor-${seq}`, seq));
+    const successorMessage = makeMessage("successor-live", 1, "initial-send:user");
+    const expectedMessages = predecessors.map((item) => expect.objectContaining(item));
     const initialHistory = createDeferred<ChatHistoryResult>();
     void initialHistory.promise.catch(() => undefined);
     const historyEntered = createDeferred();
     const successorHistory = createDeferred<ChatHistoryResult>();
-    let successorExists = false;
+    let currentHistory = initialHistory.promise;
     const history = () => {
-      if (successorExists) {
-        return successorHistory.promise;
-      }
       historyEntered.resolve();
-      return initialHistory.promise;
+      return currentHistory;
     };
     let listedRows: GatewaySessionRow[] = [];
-    const { sessions, mount, emitGatewayEvent } = createMountedPanes(
-      [previous],
-      "main",
-      undefined,
-      {
-        "sessions.list": () => sessionsResult(listedRows, 2),
-        "chat.history": history,
-        "chat.startup": history,
-      },
-    );
+    const responses = {
+      "sessions.list": () => sessionsResult(listedRows, 2),
+      "chat.history": history,
+      "chat.startup": history,
+    };
+    const fixture = createMountedPanes([previous], "main", undefined, responses);
+    const { sessions, mount, emitGatewayEvent } = fixture;
+    const emitMessage = (row: GatewaySessionRow, message: ReturnType<typeof makeMessage>) =>
+      emitGatewayEvent("session.message", {
+        sessionKey: row.key,
+        agentId: "main",
+        sessionId: row.sessionId,
+        messageId: message["__openclaw"].id,
+        messageSeq: message["__openclaw"].seq,
+        message,
+        session: row,
+        ancestorSessions: [],
+      });
     let reading: ReturnType<typeof refreshPane> | undefined;
     try {
       await sessions.refresh({ agentId: "main", force: true });
       const pane = mount(previous.key);
+      const { state } = pane;
       reading = refreshPane(pane);
       await historyEntered.promise;
-      // A separate scoped metadata read may finish before the transcript request.
-      expect(sessions.captureReconcile()(previous, undefined, { resultAgentId: "main" })).toBe(
-        true,
-      );
-      expect(selectedChatSessionRow(pane.state)).toMatchObject(previous);
-      expect(pane.state.currentSessionId ?? null).toBeNull();
+      const reconcile = sessions.captureReconcile();
+      expect(reconcile(previous, undefined, { resultAgentId: "main" })).toBe(true);
+      expect(selectedChatSessionRow(state)).toMatchObject(previous);
+      expect(state.currentSessionId ?? null).toBeNull();
 
       if (transcript === "live predecessor") {
-        emitGatewayEvent("session.message", {
-          sessionKey: previous.key,
-          agentId: "main",
-          sessionId: previous.sessionId,
-          messageId: "predecessor-live",
-          messageSeq: 1,
-          message: predecessorMessage,
-          session: previous,
-          ancestorSessions: [],
-        });
-        // Existing live content must not block the next same-incarnation message.
-        emitGatewayEvent("session.message", {
-          sessionKey: previous.key,
-          agentId: "main",
-          sessionId: previous.sessionId,
-          messageId: "predecessor-live-next",
-          messageSeq: 2,
-          message: nextPredecessorMessage,
-          session: previous,
-          ancestorSessions: [],
-        });
-        expect(pane.state.chatMessages).toEqual([
-          expect.objectContaining(predecessorMessage),
-          expect.objectContaining(nextPredecessorMessage),
-        ]);
-      } else if (transcript === "live run" || transcript === "live stream") {
+        for (const message of predecessors) {
+          emitMessage(previous, message);
+        }
+        expect(state.chatMessages).toEqual(expectedMessages);
+      } else if (transcript === "live stream") {
+        const text = "Predecessor is still working.";
         emitGatewayEvent("chat", {
           sessionKey: previous.key,
           agentId: "main",
           runId: "predecessor-live-run",
           seq: 1,
           state: "delta",
-          deltaText: transcript === "live stream" ? "Predecessor is still working." : "",
+          deltaText: text,
+          message: { role: "assistant", content: [{ type: "text", text }] },
         });
-        expect(pane.state.chatRunId).toBe("predecessor-live-run");
-        expect(getChatSessionProjection(pane.state).entries).toEqual([]);
+        await vi.waitFor(() =>
+          expect(state).toMatchObject({ chatRunId: "predecessor-live-run", chatStream: text }),
+        );
+        expect(getChatSessionProjection(state).entries).toEqual([]);
       } else if (transcript === "optimistic-only") {
-        reduceChatSessionProjection(pane.state, {
+        reduceChatSessionProjection(state, {
           type: "sendPending",
           runId: "initial-send",
           message: {
-            role: "user",
-            content: successorMessage.content,
+            ...successorMessage,
             __openclaw: { idempotencyKey: "initial-send:user" },
           },
         });
-        expect(getChatSessionProjection(pane.state).entries).toEqual([
-          expect.objectContaining({ pending: true }),
-        ]);
+        expect(getChatSessionProjection(state)).toMatchObject({ entries: [{ pending: true }] });
       } else {
-        expect(pane.state.chatMessages).toEqual([]);
+        expect(state.chatMessages).toEqual([]);
       }
-      expect(pane.state.currentSessionId ?? null).toBeNull();
-      const displayed = pane.state.chatMessages;
-      const activeRun = pane.state.chatRunId;
-      const stream = pane.state.chatStream;
-      successorExists = true;
+      expect(state.currentSessionId ?? null).toBeNull();
+      const { chatMessages: displayed, chatRunId: activeRun, chatStream: stream } = state;
+      currentHistory = successorHistory.promise;
       if (admission === "list") {
         listedRows = [successor];
         await sessions.refresh({ agentId: "main", force: true });
-        expect(selectedChatSessionRow(pane.state)).toMatchObject(successor);
-        expect(pane.state.currentSessionId ?? null).toBeNull();
+        expect(selectedChatSessionRow(state)).toMatchObject(successor);
+        expect(state.currentSessionId ?? null).toBeNull();
       }
-      emitGatewayEvent("session.message", {
-        sessionKey: successor.key,
-        agentId: "main",
-        sessionId: successor.sessionId,
-        messageId: "successor-live",
-        messageSeq: 1,
-        message: successorMessage,
-        session: successor,
-        ancestorSessions: [],
-      });
-      expect(selectedChatSessionRow(pane.state)).toMatchObject(successor);
-      if (
-        transcript === "live predecessor" ||
-        transcript === "live run" ||
-        transcript === "live stream"
-      ) {
-        expect.soft(pane.state.chatMessages).toBe(displayed);
-        expect.soft(pane.state.chatRunId).toBe(activeRun);
-        expect.soft(pane.state.chatStream).toBe(stream);
-        if (transcript === "live predecessor") {
-          expect(pane.state.chatMessages).toEqual([
-            expect.objectContaining(predecessorMessage),
-            expect.objectContaining(nextPredecessorMessage),
-          ]);
-        } else {
-          expect(pane.state.chatMessages).toEqual([]);
-        }
-      } else {
-        expect(pane.state.chatMessages).toEqual([expect.objectContaining(successorMessage)]);
-        expect(getChatSessionProjection(pane.state).entries.every((entry) => !entry.pending)).toBe(
-          true,
+      emitMessage(successor, successorMessage);
+      expect(selectedChatSessionRow(state)).toMatchObject(successor);
+      if (transcript === "live predecessor" || transcript === "live stream") {
+        expect.soft(state.chatMessages).toBe(displayed);
+        expect.soft(state).toMatchObject({ chatRunId: activeRun, chatStream: stream });
+        expect(state.chatMessages).toEqual(
+          transcript === "live predecessor" ? expectedMessages : [],
         );
+      } else {
+        expect(state.chatMessages).toEqual([expect.objectContaining(successorMessage)]);
+        expect(getChatSessionProjection(state).entries.some((entry) => entry.pending)).toBe(false);
       }
     } finally {
       // The Gateway refuses A's held history after its selected session changes.
       initialHistory.reject(
-        new GatewayRequestError({
-          code: "UNAVAILABLE",
-          message: "session changed while reading history; reload the conversation",
-        }),
+        new GatewayRequestError({ code: "UNAVAILABLE", message: "session changed while reading" }),
       );
       successorHistory.resolve({
         messages: [successorMessage],

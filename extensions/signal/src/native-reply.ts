@@ -4,11 +4,6 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SignalNativeReplyContext } from "./monitor/event-handler.types.js";
 
-type SignalNativeReplyIdPlan = {
-  peek: () => string | undefined;
-  markSent: () => void;
-};
-
 function resolveSignalNativeReplyId(params: {
   payload: ReplyPayload;
   replyContext?: SignalNativeReplyContext;
@@ -33,23 +28,22 @@ function resolveSignalNativeReplyId(params: {
   return payloadReplyToId ?? contextReplyToId;
 }
 
-function isSignalStatusNoticePayload(payload: ReplyPayload): boolean {
-  return Boolean(payload.isCompactionNotice || payload.isFallbackNotice || payload.isStatusNotice);
-}
-
 export function createSignalNativeReplyIdPlan(params: {
   payload: ReplyPayload;
   replyContext?: SignalNativeReplyContext;
   replyToMode: ReplyToMode;
-}): SignalNativeReplyIdPlan {
+}) {
   const replyToId = resolveSignalNativeReplyId(params);
   if (!replyToId) {
     return { peek: () => undefined, markSent: () => undefined };
   }
   const isExplicitReply =
     params.payload.replyToTag === true || params.payload.replyToCurrent === true;
-  const isStatusNotice = isSignalStatusNoticePayload(params.payload);
-  if (isStatusNotice) {
+  if (
+    params.payload.isCompactionNotice ||
+    params.payload.isFallbackNotice ||
+    params.payload.isStatusNotice
+  ) {
     const resolve = params.replyToMode === "off" ? () => undefined : () => replyToId;
     return { peek: resolve, markSent: () => undefined };
   }

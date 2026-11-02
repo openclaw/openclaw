@@ -1,0 +1,459 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sessionActorReplicaTargetKey } from "../config/sessions/session-actor-replica-index.js";
+import type { SessionTranscriptMaintenanceFacts } from "../config/sessions/session-transcript-hydration.types.js";
+import { sameSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
+import {
+  captureOwnedTranscriptWriteAssertion,
+  getOwnedSessionTranscriptActor,
+} from "../config/sessions/transcript-write-context.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { registerOpenClawAgentDatabaseSyncResource } from "../state/openclaw-agent-db-resources.js";
+import { stringifyCodeModeJsonSafe } from "./code-mode-json.js";
+import type { PendingBridgeRequest } from "./code-mode-worker-types.js";
+import type { SessionManager } from "./sessions/session-manager.js";
+import type { ToolSearchCatalogRef, ToolSearchToolContext } from "./tool-search-types.js";
+
+const CUSTOM_TYPE = "openclaw.code-mode-store";
+const MAX_VALUE_BYTES = 256 * 1024;
+const MAX_TOTAL_BYTES = 1024 * 1024;
+type StoredValue = { json: string; bytes: number; networkContent: boolean };
+type Projection = Map<string, StoredValue>;
+type WithOwnedTranscriptWrite = <T>(operation: () => T | Promise<T>) => Promise<T>;
+type SessionStore = {
+  manager: SessionManager;
+  withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
+  counterScope?: string;
+  scope?: string;
+  controller: AbortController;
+  projection?: Promise<Projection>;
+  commitTail: Promise<void>;
+};
+
+// The catalog owns the projection, while the transcript alone owns durable state.
+const stores = new WeakMap<ToolSearchCatalogRef, SessionStore>();
+
+type ReplaySnapshot = {
+  generation: string;
+  ids: string[];
+  projection: Projection;
+  sessionKey: string;
+  bytes: number;
+  unregister: () => void;
+};
+const replaySnapshots = resolveGlobalSingleton<{
+  entries: Map<string, ReplaySnapshot>;
+  unsubscribe: (() => void) | undefined;
+}>(
+  Symbol.for("openclaw.codeModeReplaySnapshots"),
+  () => ({
+    entries: new Map<string, ReplaySnapshot>(),
+    unsubscribe: undefined,
+  }),
+  (cache) => {
+    cache.unsubscribe?.();
+    cache.unsubscribe = undefined;
+    for (const snapshot of cache.entries.values()) {
+      snapshot.unregister();
+    }
+    cache.entries.clear();
+  },
+);
+
+function discardReplaySnapshot(key: string) {
+  replaySnapshots.entries.get(key)?.unregister();
+  replaySnapshots.entries.delete(key);
+}
+
+function replayAdmitted(
+  entries: NonNullable<SessionTranscriptMaintenanceFacts["events"]>,
+  generation: string | null | undefined,
+  target: Parameters<typeof getOwnedSessionTranscriptActor>[0],
+): Projection {
+  const binding = getOwnedSessionTranscriptActor(target);
+  if (!binding || !generation) {
+    return replay(entries);
+  }
+  const key = JSON.stringify([
+    sessionActorReplicaTargetKey(binding.actor.target),
+    target.sessionId,
+  ]);
+  const cached = replaySnapshots.entries.get(key);
+  // Custom-entry rewrites rotate generation; appends preserve earlier IDs and bytes.
+  if (
+    cached?.generation === generation &&
+    cached.ids.length === entries.length &&
+    entries.every((entry, index) => isRecord(entry) && entry.id === cached.ids[index])
+  ) {
+    replaySnapshots.entries.delete(key);
+    replaySnapshots.entries.set(key, cached);
+    return cached.projection;
+  }
+  discardReplaySnapshot(key);
+  const projection = replay(entries);
+  // Bound metadata as well as JSON. Large histories keep the uncached replay path.
+  if (entries.length > 4096 || projection.size > 1024) {
+    return projection;
+  }
+  const ids: string[] = [];
+  let bytes = key.length * 2 + 256;
+  for (const entry of entries) {
+    if (!isRecord(entry) || typeof entry.id !== "string") {
+      return projection;
+    }
+    ids.push(entry.id);
+    bytes += entry.id.length * 2 + 32;
+  }
+  for (const [name, value] of projection) {
+    bytes += (name.length + value.json.length) * 2 + 128;
+  }
+  const maxBytes = 8 * 1024 * 1024;
+  if (bytes > maxBytes) {
+    return projection;
+  }
+  replaySnapshots.unsubscribe ??= sessionChanges.subscribeFacts((change) => {
+    if ("all" in change || change.facts?.kind === "removed") {
+      for (const [scope, snapshot] of replaySnapshots.entries) {
+        if ("all" in change || snapshot.sessionKey === change.sessionKey) {
+          discardReplaySnapshot(scope);
+        }
+      }
+    }
+  });
+  const unregister = registerOpenClawAgentDatabaseSyncResource({
+    agentId: binding.database.agentId,
+    path: binding.database.path,
+    revoke: () => discardReplaySnapshot(key),
+    close: () => discardReplaySnapshot(key),
+  });
+  replaySnapshots.entries.set(key, {
+    generation,
+    ids,
+    projection,
+    sessionKey: binding.actor.target.sessionKey,
+    bytes,
+    unregister,
+  });
+  let retainedBytes = 0;
+  for (const snapshot of replaySnapshots.entries.values()) {
+    retainedBytes += snapshot.bytes;
+  }
+  for (const [scope, snapshot] of replaySnapshots.entries) {
+    if (replaySnapshots.entries.size <= 16 && retainedBytes <= maxBytes) {
+      break;
+    }
+    retainedBytes -= snapshot.bytes;
+    discardReplaySnapshot(scope);
+  }
+  return projection;
+}
+
+export function disposeCodeModeSessionStore(owner: ToolSearchCatalogRef): void {
+  const store = stores.get(owner);
+  stores.delete(owner);
+  store?.controller.abort();
+  // Restriction/replacement retires accesses, but the session binding belongs to
+  // the enclosing attempt. Actual teardown clears current before disposal.
+  if (store && owner.current) {
+    stores.set(owner, {
+      manager: store.manager,
+      withOwnedTranscriptWrite: store.withOwnedTranscriptWrite,
+      scope: store.scope,
+      counterScope: owner.current.counterScope,
+      controller: new AbortController(),
+      commitTail: store.commitTail,
+    });
+  }
+}
+
+export function bindCodeModeSessionStore(
+  owner: ToolSearchCatalogRef,
+  manager: SessionManager,
+  withOwnedTranscriptWrite: WithOwnedTranscriptWrite = async (operation) => operation(),
+): void {
+  stores.get(owner)?.controller.abort();
+  stores.set(owner, {
+    manager,
+    withOwnedTranscriptWrite,
+    counterScope: owner.current?.counterScope,
+    controller: new AbortController(),
+    commitTail: Promise.resolve(),
+  });
+}
+
+function readKey(key: unknown): string {
+  if (typeof key !== "string" || key.length === 0 || key.length > 256) {
+    throw new TypeError(
+      "Code Mode store key must be a non-empty string of at most 256 characters.",
+    );
+  }
+  return key;
+}
+
+function encode(value: unknown, networkContent: boolean): StoredValue {
+  const json = stringifyCodeModeJsonSafe(value);
+  const bytes = Buffer.byteLength(json, "utf8");
+  if (bytes > MAX_VALUE_BYTES) {
+    throw new RangeError(
+      `Code Mode store value exceeds 256 KiB of serialized JSON (${bytes} bytes). Store unchanged; catch RangeError and save a summary or smaller value. Use results.save(value) for larger data needed only in this reply.`,
+    );
+  }
+  return { json, bytes, networkContent };
+}
+
+function applyWrites(projection: Projection, writes: ReadonlyMap<string, StoredValue | null>) {
+  const next = new Map(projection);
+  for (const [key, value] of writes) {
+    if (value === null) {
+      next.delete(key);
+    } else {
+      next.set(key, value);
+    }
+  }
+  let bytes = 0;
+  for (const value of next.values()) {
+    bytes += value.bytes;
+  }
+  if (bytes > MAX_TOTAL_BYTES) {
+    throw new RangeError(
+      "Code Mode store exceeds 1 MiB of serialized JSON. Store unchanged; catch RangeError and delete unneeded keys or save a summary before retrying the write.",
+    );
+  }
+  return next;
+}
+
+function replay(entries: readonly unknown[]): Projection {
+  const projection: Projection = new Map();
+  let bytes = 0;
+  for (const entry of entries) {
+    if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== CUSTOM_TYPE) {
+      continue;
+    }
+    const data = entry.data;
+    if (
+      !isRecord(data) ||
+      !isRecord(data.set) ||
+      !Array.isArray(data.delete) ||
+      !isRecord(data.networkContent)
+    ) {
+      throw new Error(
+        "Code Mode session store contains an invalid transcript entry; repair the session before using store/load.",
+      );
+    }
+    for (const [key, value] of Object.entries(data.set)) {
+      const networkContent = data.networkContent[key];
+      if (typeof networkContent !== "boolean") {
+        throw new Error(
+          "Code Mode session store contains invalid content provenance; repair the session before using store/load.",
+        );
+      }
+      const name = readKey(key);
+      const encoded = encode(value, networkContent);
+      bytes += encoded.bytes - (projection.get(name)?.bytes ?? 0);
+      projection.set(name, encoded);
+    }
+    for (const key of data.delete) {
+      const name = readKey(key);
+      bytes -= projection.get(name)?.bytes ?? 0;
+      projection.delete(name);
+    }
+    // Replay owns this map. Preserve historical budget errors, but check the
+    // total only after the entry's deletes, just like a committed cell's writes.
+    if (bytes > MAX_TOTAL_BYTES) {
+      throw new RangeError(
+        "Code Mode store exceeds 1 MiB of serialized JSON; delete keys or store less data.",
+      );
+    }
+  }
+  return projection;
+}
+
+export type CodeModeSessionStoreAccess = ReturnType<typeof createCodeModeSessionStoreAccess>;
+
+/** store/load reuse the results bridge methods with a "session" selector (see the controller shim). */
+export function isCodeModeSessionStoreRequest(request: PendingBridgeRequest): boolean {
+  return (
+    (request.method === "resultSave" ||
+      request.method === "resultLoad" ||
+      request.method === "resultDelete") &&
+    request.args[1] === "session"
+  );
+}
+
+/** Commits a completed cell's writes; returns a warning when persistence is unconfirmed. */
+export async function commitCodeModeSessionStore(
+  access: CodeModeSessionStoreAccess | undefined,
+): Promise<string | undefined> {
+  try {
+    await access?.commit();
+    return undefined;
+  } catch {
+    return "Code Mode session store persistence could not be confirmed. The cell completed; verify the session transcript before relying on these values in a later cell or reply.";
+  }
+}
+
+/** Each cell retains a private write buffer and the exact admitted run projection. */
+export function createCodeModeSessionStoreAccess(ctx: ToolSearchToolContext, signal: AbortSignal) {
+  const owner = ctx.catalogRef;
+  const store = owner ? stores.get(owner) : undefined;
+  const scope = JSON.stringify([ctx.agentId, ctx.runId, ctx.sessionId, ctx.sessionKey]);
+  const sessionId = store?.manager.getSessionId();
+  const target = store?.manager.getSessionTarget();
+  const writes = new Map<string, StoredValue | null>();
+  let closed = false;
+  let committing = false;
+  const assertOwner = (): SessionStore => {
+    ctx.abortSignal?.throwIfAborted();
+    if (
+      !owner?.current ||
+      !store ||
+      stores.get(owner) !== store ||
+      store.controller.signal.aborted ||
+      owner.current.counterScope !== store.counterScope
+    ) {
+      throw new Error(
+        "Code Mode store/load requires an active session-bound run; start a new interactive reply with a session.",
+      );
+    }
+    store.scope ??= scope;
+    if (
+      store.scope !== scope ||
+      store.manager.getSessionId() !== sessionId ||
+      !sameSessionTranscriptTargetBinding(target, store.manager.getSessionTarget())
+    ) {
+      throw new Error(
+        "Code Mode store/load belongs to a different run or session; start a new interactive reply.",
+      );
+    }
+    return store;
+  };
+  const assertCell = () => {
+    signal.throwIfAborted();
+    if (closed) {
+      throw new Error("Code Mode store/load is unavailable after the cell closed.");
+    }
+    return assertOwner();
+  };
+  const projection = async () => {
+    const active = assertCell();
+    active.projection ??= (async () => {
+      const manager = active.manager;
+      if (target) {
+        const { prepareSessionManagerHydration } =
+          await import("./sessions/session-manager-incognito.js");
+        assertOwner();
+        const replaySignal = ctx.abortSignal
+          ? AbortSignal.any([ctx.abortSignal, active.controller.signal])
+          : active.controller.signal;
+        return active.withOwnedTranscriptWrite(async () => {
+          assertOwner();
+          const leaf = manager.getLeafId();
+          const reader = prepareSessionManagerHydration(target, { signal: replaySignal, manager });
+          const assertOwned = captureOwnedTranscriptWriteAssertion(reader.target);
+          assertOwned();
+          const { events, version } = await reader
+            .readMaintenance({
+              operation: "custom-branch",
+              leafEntryId: leaf,
+              customType: CUSTOM_TYPE,
+            })
+            .finally(assertOwned);
+          reader.assertCurrent();
+          assertOwner();
+          if (manager.getLeafId() !== leaf || !events) {
+            throw new Error(
+              "Code Mode session store could not match the active transcript branch; retry in a new reply.",
+            );
+          }
+          return replayAdmitted(events, version?.generation, reader.target);
+        });
+      }
+      return replay(manager.getBranch());
+    })().catch((error: unknown) => {
+      if (error instanceof TypeError || error instanceof RangeError) {
+        throw new Error(
+          "Code Mode session store replay failed; repair the session before using store/load.",
+          { cause: error },
+        );
+      }
+      throw error;
+    });
+    const current = await active.projection;
+    assertCell();
+    return current;
+  };
+  const write = async (name: string, value: StoredValue | null) => {
+    const current = await projection();
+    if (committing) {
+      throw new Error("Code Mode store/load is unavailable while the cell is committing.");
+    }
+    const proposed = new Map(writes).set(name, value);
+    applyWrites(current, proposed);
+    writes.set(name, value);
+  };
+  return {
+    async save(key: unknown, value: unknown, networkContent: boolean): Promise<void> {
+      await write(readKey(key), value === undefined ? null : encode(value, networkContent));
+    },
+    async delete(key: unknown): Promise<void> {
+      await write(readKey(key), null);
+    },
+    async load(key: unknown): Promise<{ value?: unknown; networkContent: boolean }> {
+      const name = readKey(key);
+      const current = await projection();
+      const value = writes.has(name) ? writes.get(name) : current.get(name);
+      return value
+        ? { value: JSON.parse(value.json) as unknown, networkContent: value.networkContent }
+        : { networkContent: false };
+    },
+    async commit(): Promise<void> {
+      if (writes.size === 0) {
+        return;
+      }
+      const active = assertCell();
+      if (committing) {
+        throw new Error("Code Mode session store is already committing this cell.");
+      }
+      committing = true;
+      const pending = active.commitTail.then(async () => {
+        const current = await projection();
+        const next = applyWrites(current, writes);
+        const set = Object.fromEntries(
+          [...writes].flatMap(([key, value]) =>
+            value ? [[key, JSON.parse(value.json) as unknown]] : [],
+          ),
+        );
+        const deleted = [...writes].filter(([, value]) => value === null).map(([key]) => key);
+        const networkContent = Object.fromEntries(
+          [...writes].flatMap(([key, value]) => (value ? [[key, value.networkContent]] : [])),
+        );
+        const { withSessionManagerWriteAssertion } =
+          await import("./sessions/session-manager-write-admission.js");
+        assertCell();
+        await active.withOwnedTranscriptWrite(() =>
+          withSessionManagerWriteAssertion(active.manager, assertCell, () =>
+            active.manager.appendCustomEntryAsync(CUSTOM_TYPE, {
+              set,
+              delete: deleted,
+              networkContent,
+            }),
+          ),
+        );
+        assertCell();
+        active.projection = Promise.resolve(next);
+        writes.clear();
+      });
+      active.commitTail = pending.catch(() => {});
+      try {
+        await pending;
+      } finally {
+        closed = true;
+        writes.clear();
+      }
+    },
+    close(): void {
+      closed = true;
+      writes.clear();
+    },
+  };
+}

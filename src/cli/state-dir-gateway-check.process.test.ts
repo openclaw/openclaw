@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import {
   closeActiveGatewayServers,
@@ -25,16 +26,13 @@ describe("CLI Gateway state target guard", () => {
       configPath: path.join(gatewayStateDir, "openclaw.json"),
     });
     await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        gateway: {
-          mode: "local",
-          port: Number(new URL(gateway.url).port),
-          auth: { mode: "none" },
-        },
-      }),
-    );
+    await writeFixtureJson(configPath, {
+      gateway: {
+        mode: "local",
+        port: Number(new URL(gateway.url).port),
+        auth: { mode: "none" },
+      },
+    });
 
     const result = await runCliProcessChild({
       nodeArgs: [
@@ -42,6 +40,7 @@ describe("CLI Gateway state target guard", () => {
         "tsx",
         "src/entry.ts",
         "models",
+        "--json",
         "auth",
         "paste-token",
         "--provider",
@@ -68,7 +67,16 @@ describe("CLI Gateway state target guard", () => {
     });
 
     expect(result, JSON.stringify(result)).toMatchObject({ code: 1, signal: null });
-    expect(result.stderr).toContain("No credentials or configuration were written");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: expect.stringContaining("No credentials or configuration were written"),
+      },
+    });
+    expect(result.stderr).toBe(
+      "[openclaw] The CLI command failed.\n[openclaw] For help, run `openclaw doctor`.\n",
+    );
     expect(JSON.parse(await fs.readFile(configPath, "utf8"))).not.toHaveProperty("auth.profiles");
   });
 });

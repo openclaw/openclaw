@@ -1,16 +1,35 @@
-type TtsAttemptReasonCode =
-  | "success"
-  | "no_provider_registered"
-  | "not_configured"
-  | "unsupported_for_streaming"
-  | "unsupported_for_telephony"
-  | "timeout"
-  | "provider_error";
+/** Buffered speech synthesis result plus file/voice-note compatibility metadata. */
+export type SpeechSynthesisResult = {
+  audioBuffer: Buffer;
+  outputFormat: string;
+  fileExtension: string;
+  voiceCompatible: boolean;
+};
+
+/** Streaming speech synthesis result; release frees provider transport resources. */
+export type SpeechSynthesisStreamResult = Omit<SpeechSynthesisResult, "audioBuffer"> & {
+  audioStream: ReadableStream<Uint8Array>;
+  release?: () => Promise<void>;
+};
+
+/** Telephony synthesis result with sample-rate metadata for call transports. */
+export type SpeechTelephonySynthesisResult = {
+  audioBuffer: Buffer;
+  outputFormat: string;
+  sampleRate: number;
+};
 
 export type TtsProviderAttempt = {
   provider: string;
   outcome: "success" | "skipped" | "failed";
-  reasonCode: TtsAttemptReasonCode;
+  reasonCode:
+    | "success"
+    | "no_provider_registered"
+    | "not_configured"
+    | "unsupported_for_streaming"
+    | "unsupported_for_telephony"
+    | "timeout"
+    | "provider_error";
   persona?: string;
   personaBinding?: "applied" | "missing" | "none";
   latencyMs?: number;

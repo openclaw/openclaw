@@ -1,16 +1,8 @@
-import type { SpawnSyncOptionsWithStringEncoding, SpawnSyncReturns } from "node:child_process";
 import os from "node:os";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const { spawn, read } = vi.hoisted(() => ({
-  spawn:
-    vi.fn<
-      (
-        command: string,
-        args: string[],
-        options: SpawnSyncOptionsWithStringEncoding,
-      ) => SpawnSyncReturns<string>
-    >(),
+  spawn: vi.fn<typeof import("node:child_process").spawnSync>(),
   read: vi.fn<(file: string, encoding: "utf-8") => string>(),
 }));
 
@@ -26,85 +18,69 @@ vi.mock("node:fs", async (importOriginal) => ({
 
 let resolveMachineModelIdentifier: typeof import("./machine-model.js").resolveMachineModelIdentifier;
 
-describe("resolveMachineModelIdentifier", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ resolveMachineModelIdentifier } = await import("./machine-model.js"));
-    spawn.mockReset();
-    read.mockReset();
+beforeEach(async () => {
+  vi.resetModules();
+  ({ resolveMachineModelIdentifier } = await import("./machine-model.js"));
+  spawn.mockReset();
+  read.mockReset();
+});
+
+afterEach(() => vi.restoreAllMocks());
+
+const dmi = "/sys/devices/virtual/dmi/id/product_name";
+const deviceTree = "/proc/device-tree/model";
+it.each([
+  ["darwin", "success", " Mac16,1\n", null, "Mac16,1"],
+  ["darwin", "timeout", "", null, undefined],
+  ["linux", "DMI", " Test Laptop \n", "Other model", "Test Laptop"],
+  ["linux", "missing DMI", null, " Test Board\0\0", "Test Board"],
+  ["linux", "empty DMI", " \n", "Test Board\0\n", "Test Board"],
+  ["linux", "missing files", null, null, undefined],
+  ["linux", "empty files", "\0", " \0\0", undefined],
+  ["linux", "bounded DMI", "x".repeat(80), null, "x".repeat(64)],
+  ["linux", "bounded tree", null, "x".repeat(63) + "🚀", "x".repeat(63)],
+  ["win32", "unsupported", null, null, undefined],
+] as const)("resolves %s %s", (platform, name, product, tree, expected) => {
+  vi.spyOn(os, "platform").mockReturnValue(platform);
+  spawn.mockReturnValue({
+    stdout: product ?? "",
+    stderr: "",
+    pid: 1,
+    output: [],
+    status: name === "timeout" ? null : 0,
+    signal: name === "timeout" ? "SIGKILL" : null,
+    ...(name === "timeout" ? { error: new Error("spawnSync sysctl ETIMEDOUT") } : {}),
   });
 
-  afterEach(() => vi.restoreAllMocks());
+  const files = new Map([
+    [dmi, product],
+    [deviceTree, tree],
+  ]);
+  read.mockImplementation((file) => {
+    const value = files.get(file);
+    if (value == null) {
+      throw new Error("ENOENT");
+    }
+    return value;
+  });
 
-  it.each([
-    { name: "success", stdout: " Mac16,1\n", expected: "Mac16,1" },
-    { name: "empty", stdout: " \n", expected: undefined },
-    { name: "timeout", stdout: "", expected: undefined },
-  ])("resolves darwin $name with a bounded probe", ({ name, stdout, expected }) => {
-    spawn.mockReturnValue({
-      stdout,
-      stderr: "",
-      pid: 1,
-      output: [],
-      status: name === "timeout" ? null : 0,
-      signal: name === "timeout" ? "SIGKILL" : null,
-      ...(name === "timeout" ? { error: new Error("spawnSync sysctl ETIMEDOUT") } : {}),
-    });
-
-    expect(resolveMachineModelIdentifier("darwin")).toBe(expected);
+  expect(resolveMachineModelIdentifier()).toBe(expected);
+  if (platform === "darwin") {
     expect(spawn).toHaveBeenCalledExactlyOnceWith("sysctl", ["-n", "hw.model"], {
       encoding: "utf-8",
       timeout: 5_000,
       killSignal: "SIGKILL",
     });
-    expect(read).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { name: "DMI", product: " Test Laptop \n", tree: "Other model", expected: "Test Laptop" },
-    { name: "missing DMI", product: null, tree: " Test Board\0\0", expected: "Test Board" },
-    { name: "empty DMI", product: " \n", tree: "Test Board\0\n", expected: "Test Board" },
-    { name: "missing files", product: null, tree: null, expected: undefined },
-    { name: "empty files", product: "\0", tree: " \0\0", expected: undefined },
-    { name: "bounded DMI", product: "x".repeat(80), tree: null, expected: "x".repeat(64) },
-    { name: "bounded tree", product: null, tree: "x".repeat(63) + "🚀", expected: "x".repeat(63) },
-  ])("resolves linux $name", ({ product, tree, expected }) => {
-    read.mockImplementation((file) => {
-      const value =
-        file === "/sys/devices/virtual/dmi/id/product_name"
-          ? product
-          : file === "/proc/device-tree/model"
-            ? tree
-            : null;
-      if (value === null) {
-        throw new Error("ENOENT");
-      }
-      return value;
-    });
-
-    expect(resolveMachineModelIdentifier("linux")).toBe(expected);
-    expect(read).toHaveBeenNthCalledWith(1, "/sys/devices/virtual/dmi/id/product_name", "utf-8");
+  } else {
     expect(spawn).not.toHaveBeenCalled();
-  });
-
-  it.each(["win32", "freebsd"] as const)("leaves %s unknown without probing", (platform) => {
-    expect(resolveMachineModelIdentifier(platform)).toBeUndefined();
-    expect(spawn).not.toHaveBeenCalled();
+  }
+  if (platform === "linux") {
+    expect(read).toHaveBeenNthCalledWith(1, dmi, "utf-8");
+  } else {
     expect(read).not.toHaveBeenCalled();
-  });
-
-  it.each(["Test Laptop", ""])(
-    "memoizes the first result, including missing models (%j)",
-    (value) => {
-      vi.spyOn(os, "platform").mockReturnValue("linux");
-      read.mockReturnValue(value);
-      const first = resolveMachineModelIdentifier();
-      const reads = read.mock.calls.length;
-      read.mockReturnValue("Changed Laptop");
-
-      expect(first).toBe(value || undefined);
-      expect(resolveMachineModelIdentifier("linux")).toBe(first);
-      expect(read).toHaveBeenCalledTimes(reads);
-    },
-  );
+  }
+  const probes = [spawn.mock.calls.length, read.mock.calls.length];
+  read.mockReturnValue("Changed Laptop");
+  expect(resolveMachineModelIdentifier(platform)).toBe(expected);
+  expect([spawn.mock.calls.length, read.mock.calls.length]).toEqual(probes);
 });

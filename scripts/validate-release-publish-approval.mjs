@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Validates that a referenced release-publish workflow run is usable for approval.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { verifyAndroidNativeCi } from "./android-native-ci.mjs";
@@ -48,6 +47,22 @@ function positiveRunAttempt(value) {
     fail("Expected release publish run attempt must be a positive integer.");
   }
   return Number(value);
+}
+
+function resolveRemoteReleaseTag(tag) {
+  // Release tags may be signed annotated tags; prefer their peeled commit.
+  const ref = `refs/tags/${tag}`;
+  const refs = execFileSync("git", ["ls-remote", "--tags", "origin", ref, `${ref}^{}`], {
+    encoding: "utf8",
+    timeout: 60_000,
+    maxBuffer: 1024 * 1024,
+  })
+    .trim()
+    .split("\n")
+    .map((line) => line.split(/\s+/u));
+  return (
+    refs.find(([, name]) => name === `${ref}^{}`)?.[0] ?? refs.find(([, name]) => name === ref)?.[0]
+  );
 }
 
 if (["clawhub-bootstrap", "npm-stable-bootstrap"].includes(approvalKind) && !approvalPath) {
@@ -110,24 +125,7 @@ if (approvalPath) {
     });
     expectedApproval = approval;
     mismatchMessage = "Stable npm bootstrap approval mismatch.";
-    const refs = execFileSync(
-      "git",
-      [
-        "ls-remote",
-        "--tags",
-        "origin",
-        `refs/tags/${approval.releaseTag}`,
-        `refs/tags/${approval.releaseTag}^{}`,
-      ],
-      { encoding: "utf8", timeout: 60_000, maxBuffer: 1024 * 1024 },
-    )
-      .trim()
-      .split("\n")
-      .map((line) => line.split(/\s+/u));
-    const tagSha =
-      refs.find(([, ref]) => ref === `refs/tags/${approval.releaseTag}^{}`)?.[0] ??
-      refs.find(([, ref]) => ref === `refs/tags/${approval.releaseTag}`)?.[0];
-    if (tagSha !== approval.targetSha) {
+    if (resolveRemoteReleaseTag(approval.releaseTag) !== approval.targetSha) {
       fail("Stable npm bootstrap release tag no longer matches the approved target.");
     }
   } else {
@@ -139,24 +137,7 @@ if (approvalPath) {
   if (approvalKind === "android") {
     const tag = process.env.RELEASE_TAG;
     const target = process.env.RELEASE_TARGET_SHA;
-    // Match the publisher's live direct/peeled tag contract; release tags may
-    // be signed annotated tags while protected tooling tags must be lightweight.
-    const refs = execFileSync(
-      "git",
-      ["ls-remote", "--tags", "origin", `refs/tags/${tag}`, `refs/tags/${tag}^{}`],
-      {
-        encoding: "utf8",
-        timeout: 60_000,
-        maxBuffer: 1024 * 1024,
-      },
-    )
-      .trim()
-      .split("\n")
-      .map((line) => line.split(/\s+/u));
-    const targetSha =
-      refs.find(([, ref]) => ref === `refs/tags/${tag}^{}`)?.[0] ??
-      refs.find(([, ref]) => ref === `refs/tags/${tag}`)?.[0];
-    if (targetSha !== target) {
+    if (resolveRemoteReleaseTag(tag) !== target) {
       fail(`Release tag ${tag} no longer resolves to approved target ${target}.`);
     }
     const release = JSON.parse(

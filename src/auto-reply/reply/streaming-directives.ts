@@ -1,21 +1,20 @@
-// Converts streaming reply directives into payload delivery decisions.
-import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import {
   parseInlineDirectives,
   stripInlineDirectiveTagsForDelivery,
 } from "../../utils/directive-tags.js";
-import {
-  isSilentReplyPrefixText,
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
-  stripLeadingSilentToken,
-} from "../tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { stripMixedSilentReplyTokens } from "./mixed-silent-reply-tokens.js";
 import type { ReplyDirectiveParseResult } from "./reply-directives.js";
 
 type ConsumeOptions = {
   final?: boolean;
-  silentToken?: string;
+};
+
+export type StreamingDirectiveAccumulator = {
+  readonly sourceText: string;
+  consume(raw: string, options?: ConsumeOptions): ReplyDirectiveParseResult | null;
+  reset(): void;
 };
 
 // TRANSITIONAL(marker-retirement): streaming tail-buffering exists only because
@@ -29,13 +28,11 @@ export const splitTrailingDirective = (
   let bufferStart = text.length;
   let trimTextBeforeTail = false;
 
-  // 1. Unclosed `[[…` reply/audio directive tail.
+  // Unclosed `[[…` reply/audio directive tail.
   const openIndex = text.lastIndexOf("[[");
   if (openIndex >= 0 && !text.includes("]]", openIndex + 2)) {
-    if (openIndex < bufferStart) {
-      bufferStart = openIndex;
-      trimTextBeforeTail = true;
-    }
+    bufferStart = openIndex;
+    trimTextBeforeTail = true;
   }
   if (text.endsWith("[") && text.length - 1 < bufferStart) {
     bufferStart = text.length - 1;
@@ -44,35 +41,33 @@ export const splitTrailingDirective = (
 
   // Keep a possible final-reply MEDIA directive out of partial streaming
   // payloads. The final message parser still owns legacy MEDIA delivery.
-  const lastNewline = text.lastIndexOf("\n");
-  const lastLine = lastNewline < 0 ? text : text.slice(lastNewline + 1);
+  const mediaLineStart = Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r")) + 1;
+  const lastLine = text.slice(mediaLineStart);
   if (/^\s*MEDIA:/i.test(lastLine) || /^[\t ]*(MEDIA|MEDI|MED|ME|M)$/i.test(lastLine)) {
-    const mediaLineStart = lastNewline < 0 ? 0 : lastNewline + 1;
-    if (mediaLineStart < bufferStart) {
-      bufferStart = mediaLineStart;
-    }
+    bufferStart = Math.min(bufferStart, mediaLineStart);
   }
 
   if (bufferStart >= text.length) {
     return { text, tail: "" };
   }
 
+  const head = text.slice(0, bufferStart);
   return {
-    text:
-      trimTextBeforeTail && !options?.preserveTrailingWhitespace
-        ? text.slice(0, bufferStart).trimEnd()
-        : text.slice(0, bufferStart),
+    text: trimTextBeforeTail && !options?.preserveTrailingWhitespace ? head.trimEnd() : head,
     tail: text.slice(bufferStart),
   };
 };
 
-export function createStreamingDirectiveAccumulator() {
+export function createStreamingDirectiveAccumulator(): StreamingDirectiveAccumulator {
   let pendingTail = "";
   let pendingSeparator = "";
   let replyToId: string | undefined;
   let replyToCurrent = false;
   let replyToTag = false;
   let hasReturnedText = false;
+  let pendingProtocol = "";
+  let protocolResolved = false;
+  let sourceText = "";
 
   const reset = () => {
     pendingTail = "";
@@ -81,12 +76,45 @@ export function createStreamingDirectiveAccumulator() {
     replyToCurrent = false;
     replyToTag = false;
     hasReturnedText = false;
+    pendingProtocol = "";
+    protocolResolved = false;
+    sourceText = "";
   };
 
   const consume = (raw: string, options?: ConsumeOptions): ReplyDirectiveParseResult | null => {
+    let prepared = raw ?? "";
+    if (!protocolResolved) {
+      pendingProtocol += prepared;
+      const stripped = stripMixedSilentReplyTokens(pendingProtocol);
+      if (stripped !== null) {
+        prepared = stripped;
+        protocolResolved = true;
+      } else if (options?.final) {
+        if (isSilentReplyText(pendingProtocol)) {
+          pendingProtocol = "";
+          protocolResolved = true;
+          return null;
+        }
+        prepared = pendingProtocol;
+        protocolResolved = true;
+      } else {
+        const candidate = pendingProtocol.trimStart().toUpperCase();
+        if (
+          !candidate ||
+          SILENT_REPLY_TOKEN.startsWith(candidate) ||
+          isSilentReplyText(candidate)
+        ) {
+          return null;
+        }
+        prepared = pendingProtocol;
+        protocolResolved = true;
+      }
+      pendingProtocol = "";
+    }
+    sourceText += prepared;
     const hadPendingTail = pendingTail.length > 0;
     const heldSeparator = pendingSeparator;
-    let combined = `${pendingTail}${raw ?? ""}`;
+    let combined = `${pendingTail}${prepared}`;
     pendingTail = "";
     pendingSeparator = "";
 
@@ -110,14 +138,6 @@ export function createStreamingDirectiveAccumulator() {
 
     const parsed = combined.includes("[[") ? parseInlineDirectives(combined) : undefined;
     let text = parsed && (parsed.hasReplyTag || parsed.hasAudioTag) ? parsed.text : combined;
-    const silentToken = options?.silentToken ?? SILENT_REPLY_TOKEN;
-    const isSilent =
-      isSilentReplyText(text, silentToken) || isSilentReplyPrefixText(text, silentToken);
-    if (isSilent) {
-      text = "";
-    } else if (startsWithSilentToken(text, silentToken)) {
-      text = stripLeadingSilentToken(text, silentToken);
-    }
     if (hadPendingTail && heldSeparator && text.startsWith("[")) {
       text = heldSeparator + text;
     }
@@ -138,10 +158,9 @@ export function createStreamingDirectiveAccumulator() {
       replyToCurrent,
       replyToTag,
       audioAsVoice: parsed?.audioAsVoice ?? false,
-      isSilent,
     };
 
-    if (!hasOutboundReplyContent(combinedResult) && !combinedResult.audioAsVoice) {
+    if (!hasReplyPayloadContent(combinedResult) && !combinedResult.audioAsVoice) {
       return null;
     }
 
@@ -150,6 +169,9 @@ export function createStreamingDirectiveAccumulator() {
   };
 
   return {
+    get sourceText() {
+      return sourceText;
+    },
     consume,
     reset,
   };

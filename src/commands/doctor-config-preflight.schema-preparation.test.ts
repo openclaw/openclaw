@@ -1,215 +1,170 @@
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { gunzipSync } from "node:zlib";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it as baseIt, vi } from "vitest";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
+import { readConfigFileSnapshot } from "../config/config.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
-import { prepareLegacyStateDatabaseSchema } from "../infra/state-migrations.doctor.js";
-import { createStateSchemaMigrationStep } from "../infra/state-migrations.state-schema.js";
-import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
+import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import * as stateRepair from "../state/openclaw-state-db-repair.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
+import { runSetupWizard } from "../wizard/setup.js";
+import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import { runNonInteractiveSetup } from "./onboard-non-interactive.js";
+import { setupCommand } from "./setup.js";
+import { makePrompter, makeRuntime } from "./setup/__tests__/test-utils.js";
 
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await cleanupSessionStateForTest();
+const it = baseIt.extend<{ home: string }>({
+  home: ({ task: _task }, use) =>
+    withDoctorConfigPreflightHome((home) =>
+      withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, () => use(home)),
+    ),
 });
 
-it.each(["current", "historical", "missing index"] as const)(
-  "prepares %s shared state without replacing the later full Doctor repair",
-  async (shape) => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      const stateDir = path.join(home, ".openclaw");
-      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      const databasePath = openOpenClawStateDatabase({ env }).path;
-      await closeOpenClawStateDatabaseAsync();
-      if (shape === "historical") {
-        fs.writeFileSync(
-          databasePath,
-          gunzipSync(fs.readFileSync("test/fixtures/sqlite/openclaw-state-v2026.7.1-2.sqlite.gz")),
-        );
-      } else if (shape === "missing index") {
-        const database = new DatabaseSync(databasePath);
-        try {
-          database.exec("DROP INDEX idx_audit_events_time");
-        } finally {
-          database.close();
+const repairOptions = {
+  observe: false,
+  invocationPurpose: "doctor",
+  repairPrefixedConfig: true,
+  doctorOnlyStateMigrations: true,
+  preparePluginMetadataSnapshot: true,
+} as const;
+
+async function damageState(databasePath: string, sql: string) {
+  await closeOpenClawStateDatabaseAsync();
+  using database = new DatabaseSync(databasePath);
+  database.exec(`PRAGMA foreign_keys=OFF; ${sql}`);
+}
+
+it.for([
+  ["state-schema", "INSERT INTO task_delivery_state(task_id) VALUES('missing-task')", false],
+  [
+    "legacy-state-migrations",
+    `INSERT INTO workspace_generated_bootstrap_hashes
+            (workspace_key,filename,sha256) VALUES('missing-workspace','fixture.md','fixture-hash')`,
+    true,
+  ],
+] as const)(
+  "preserves plugin obligations after damage at %s",
+  async ([phase, sql, refuses], { home }) => {
+    const workspace = path.join(home, ".openclaw", "workspace");
+    await writeOpenClawConfig(home, {
+      gateway: { mode: "local" },
+      agents: { ownership: "explicit", defaults: { workspace }, entries: { main: {} } },
+      plugins: { entries: { "missing-preparation-fixture": { enabled: true } } },
+    });
+    await fs.mkdir(workspace, { recursive: true });
+    const databasePath = openOpenClawStateDatabase().path;
+    await closeOpenClawStateDatabaseAsync();
+
+    let injected = false;
+    const operation = runDoctorConfigPreflight({
+      ...repairOptions,
+      measure: async (name, run) => {
+        if (!injected && name === `doctor.config-preflight.${phase}`) {
+          await damageState(databasePath, sql);
+          injected = true;
         }
-      }
-      const repair = vi.spyOn(stateRepair, "repairStateSchema");
-      const prepared = await prepareLegacyStateDatabaseSchema(env);
-      expect(prepared.warnings).toEqual([]);
-      expect(repair.mock.calls.filter((call) => call[2] === "doctor")).toHaveLength(
-        shape === "current" ? 0 : 1,
+        return await run();
+      },
+    });
+    if (refuses) {
+      await expect(operation).rejects.toThrow(/foreign_key_check|state migration refused/);
+    } else {
+      await operation;
+      const { db } = openOpenClawStateDatabase();
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    }
+    expect(injected).toBe(true);
+    using inspected = new DatabaseSync(databasePath, { readOnly: true });
+    expect(
+      inspected
+        .prepare(
+          "SELECT id FROM migration_runs WHERE id LIKE 'deferred-plugin-migration:%' AND status='pending'",
+        )
+        .all(),
+    ).toEqual([{ id: "deferred-plugin-migration:missing-preparation-fixture" }]);
+    if (refuses) {
+      expect(inspected.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
       );
-      const inspected = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        expect(inspected.prepare("PRAGMA user_version").get()?.user_version).toBe(
-          OPENCLAW_STATE_SCHEMA_VERSION,
-        );
-        expect(
-          inspected
-            .prepare("SELECT name FROM sqlite_schema WHERE name = 'config_machine_state'")
-            .get(),
-        ).toEqual({ name: "config_machine_state" });
-        expect(
-          inspected
-            .prepare("SELECT name FROM sqlite_schema WHERE name = 'idx_audit_events_time'")
-            .get(),
-        ).toEqual({ name: "idx_audit_events_time" });
-      } finally {
-        inspected.close();
-      }
-      repair.mockClear();
-      const result = await createStateSchemaMigrationStep({
-        stateDir,
-        env,
-        mode: "doctor",
-        requiredness: "conditional",
-      }).run();
-      expect(result.warnings).toEqual([]);
-      expect(repair).toHaveBeenCalledExactlyOnceWith(databasePath, env, "doctor");
-    });
-  },
-);
-
-it.each(["persisted quarantine", "orphan delivery"] as const)(
-  "recovers %s before plugin preparation reads current state",
-  async (damage) => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      const stateDir = path.join(home, ".openclaw");
-      const workspace = path.join(stateDir, "workspace");
-      await writeOpenClawConfig(home, {
-        gateway: { mode: "local" },
-        agents: { ownership: "explicit", defaults: { workspace }, entries: { main: {} } },
-        plugins: { entries: { "missing-preparation-fixture": { enabled: true } } },
-      });
-      fs.mkdirSync(workspace, { recursive: true });
-      const databasePath = openOpenClawStateDatabase().path;
-      await closeOpenClawStateDatabaseAsync();
-      let injected = false;
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        await runDoctorConfigPreflight({
-          observe: false,
-          invocationPurpose: "doctor",
-          repairPrefixedConfig: true,
-          doctorOnlyStateMigrations: true,
-          preparePluginMetadataSnapshot: true,
-          measure: async (name, run) => {
-            if (!injected && name === "doctor.config-preflight.state-schema") {
-              await closeOpenClawStateDatabaseAsync();
-              if (damage === "persisted quarantine") {
-                expect(
-                  recordOpenClawDatabaseQuarantine({
-                    kind: "state",
-                    path: databasePath,
-                    reason: "previously detected synthetic damage",
-                  }),
-                ).toBe(true);
-              } else {
-                const database = new DatabaseSync(databasePath);
-                try {
-                  database.exec(`PRAGMA foreign_keys=OFF;
-                    INSERT INTO task_delivery_state(task_id)
-                    VALUES('missing-task');`);
-                } finally {
-                  database.close();
-                }
-              }
-              injected = true;
-            }
-            return await run();
-          },
-        });
-      });
-      expect(injected).toBe(true);
-      const opened = openOpenClawStateDatabase();
-      expect(opened.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(
-        opened.db
-          .prepare("SELECT id FROM migration_runs WHERE id = ? AND status = 'pending'")
-          .get("deferred-plugin-migration:missing-preparation-fixture"),
-      ).toEqual({ id: "deferred-plugin-migration:missing-preparation-fixture" });
-    });
+        inspected.prepare("SELECT workspace_key FROM workspace_generated_bootstrap_hashes").all(),
+      ).toEqual([{ workspace_key: "missing-workspace" }]);
+    }
   },
 );
 
-it.each(["early convergence", "later repair"] as const)(
-  "preserves committed plugin obligations when same-version integrity fails before %s",
-  async (boundary) => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      const stateDir = path.join(home, ".openclaw");
-      const workspace = path.join(stateDir, "workspace");
-      await writeOpenClawConfig(home, {
-        gateway: { mode: "local" },
-        agents: { ownership: "explicit", defaults: { workspace }, entries: { main: {} } },
-        plugins: { entries: { "missing-preparation-fixture": { enabled: true } } },
-      });
-      fs.mkdirSync(workspace, { recursive: true });
-      const databasePath = openOpenClawStateDatabase().path;
-      await closeOpenClawStateDatabaseAsync();
-      let injected = false;
-      const faultStep =
-        boundary === "early convergence"
-          ? "doctor.config-preflight.plugin-plan"
-          : "doctor.config-preflight.legacy-state-migrations";
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        await expect(
-          runDoctorConfigPreflight({
-            observe: false,
-            invocationPurpose: "doctor",
-            repairPrefixedConfig: true,
-            doctorOnlyStateMigrations: true,
-            preparePluginMetadataSnapshot: true,
-            measure: async (name, run) => {
-              if (!injected && name === faultStep) {
-                await closeOpenClawStateDatabaseAsync();
-                const database = new DatabaseSync(databasePath);
-                try {
-                  database.exec(`PRAGMA foreign_keys=OFF;
-                  INSERT INTO workspace_generated_bootstrap_hashes
-                    (workspace_key,filename,sha256)
-                    VALUES('missing-workspace','fixture.md','fixture-hash');`);
-                } finally {
-                  database.close();
-                }
-                injected = true;
-              }
-              return await run();
-            },
-          }),
-        ).rejects.toThrow(/foreign_key_check|state migration refused/);
-      });
-      expect(injected).toBe(true);
-      const inspected = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        expect(inspected.prepare("PRAGMA user_version").get()?.user_version).toBe(
-          OPENCLAW_STATE_SCHEMA_VERSION,
-        );
-        expect(
-          inspected.prepare("SELECT workspace_key FROM workspace_generated_bootstrap_hashes").all(),
-        ).toEqual([{ workspace_key: "missing-workspace" }]);
-        expect(
-          inspected
-            .prepare(`SELECT id FROM migration_runs
-          WHERE id LIKE 'deferred-plugin-migration:%' AND status='pending'`)
-            .all(),
-        ).toEqual(
-          boundary === "later repair"
-            ? [{ id: "deferred-plugin-migration:missing-preparation-fixture" }]
-            : [],
-        );
-      } finally {
-        inspected.close();
-      }
+it("points failed setup to a repair that works without a terminal", async ({ home }) => {
+  const repairHint =
+    "Config invalid. Run `openclaw doctor --fix` to apply supported repairs, then re-run setup.";
+  const ttyMock = createCliTtyMock([process.stdin]);
+  ttyMock.set(false);
+  try {
+    const workspace = path.join(home, "workspace");
+    const configPath = await writeOpenClawConfig(home, {
+      agents: {
+        defaults: { skipBootstrap: true, systemAgent: { agentId: "main" } },
+        entries: { main: { workspace } },
+      },
+      browser: { enabled: false, actionTimeoutTypoMs: 5000 },
+      gateway: { mode: "local" },
+      logging: { level: "info", file: path.join(home, "doctor.log") },
+      plugins: { enabled: false },
     });
-  },
-);
+    const original = await fs.readFile(configPath, "utf8");
+
+    const baseline = makeRuntime();
+    await expect(setupCommand({ json: true }, baseline)).rejects.toThrow("exit:1");
+    const nonInteractive = makeRuntime();
+    await expect(
+      runNonInteractiveSetup(
+        { nonInteractive: true, acceptRisk: true, json: true },
+        nonInteractive,
+      ),
+    ).rejects.toThrow("exit:1");
+    const prompter = makePrompter({
+      select: vi.fn(async () => {
+        throw new Error("Invalid config must stop before setup prompts");
+      }),
+    });
+    await expect(runSetupWizard({ acceptRisk: true }, makeRuntime(), prompter)).rejects.toThrow(
+      "exit:1",
+    );
+    expect(prompter.select).not.toHaveBeenCalled();
+    expect(prompter.outro).toHaveBeenCalledWith(repairHint);
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+
+    await using guided = await prepareDoctorContext(configPath, { options: {} });
+    expect(guided.prompter.repairMode.nonInteractive).toBe(true);
+    await runInitialConfigWriteHealth(guided);
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+
+    await using repair = await prepareDoctorContext(configPath, { options: { repair: true } });
+    await runInitialConfigWriteHealth(repair);
+    const repaired = await readConfigFileSnapshot();
+    expect(repaired.valid).toBe(true);
+    expect(repaired.config.browser).toEqual({ enabled: false });
+    expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
+
+    const retry = makeRuntime();
+    await setupCommand({ json: true }, retry);
+    expect(retry.exit).not.toHaveBeenCalled();
+    expect(retry.error).not.toHaveBeenCalled();
+    expect(JSON.parse(String(vi.mocked(retry.log).mock.calls[0]?.[0]))).toMatchObject({
+      ok: true,
+      workspaceDir: workspace,
+      configStatus: "unchanged",
+    });
+
+    expect(baseline.error).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+    expect(nonInteractive.error).toHaveBeenCalledWith(repairHint);
+  } finally {
+    ttyMock.restore();
+  }
+}, 30_000);

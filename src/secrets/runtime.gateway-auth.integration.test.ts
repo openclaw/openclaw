@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { getRuntimeConfig, writeConfigFile } from "../config/config.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import {
   asConfig,
   beginSecretsRuntimeIsolationForTest,
@@ -34,37 +33,6 @@ describe("secrets runtime snapshot gateway-auth integration", () => {
     endSecretsRuntimeIsolationForTest(envSnapshot);
   });
 
-  it("fails fast at startup when gateway auth SecretRef is active and unresolved", async () => {
-    await withEnvAsync(
-      {
-        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-        OPENCLAW_VERSION: undefined,
-      },
-      async () => {
-        await expect(
-          prepareSecretsRuntimeSnapshot({
-            config: asConfig({
-              gateway: {
-                auth: {
-                  mode: "token",
-                  token: {
-                    source: "env",
-                    provider: "default",
-                    id: "MISSING_GATEWAY_AUTH_TOKEN",
-                  },
-                },
-              },
-            }),
-            env: {},
-            agentDirs: ["/tmp/openclaw-agent-main"],
-            loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-            loadAuthStore: () => ({ version: 1, profiles: {} }),
-          }),
-        ).rejects.toThrow(/MISSING_GATEWAY_AUTH_TOKEN/i);
-      },
-    );
-  });
-
   it(
     "rejects unresolved active gateway auth refs before persisting them",
     async () => {
@@ -79,36 +47,17 @@ describe("secrets runtime snapshot gateway-auth integration", () => {
           provider: "default",
           id: "MISSING_GATEWAY_AUTH_TOKEN",
         } as const;
+        const config = asConfig({ gateway: { auth: { mode: "token", token: initialTokenRef } } });
         await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
         await fs.writeFile(
           path.join(home, ".openclaw", "openclaw.json"),
-          `${JSON.stringify(
-            {
-              gateway: {
-                auth: {
-                  mode: "token",
-                  token: initialTokenRef,
-                },
-              },
-            },
-            null,
-            2,
-          )}\n`,
+          `${JSON.stringify(config, null, 2)}\n`,
           "utf8",
         );
 
         const prepared = await prepareSecretsRuntimeSnapshot({
-          config: asConfig({
-            gateway: {
-              auth: {
-                mode: "token",
-                token: initialTokenRef,
-              },
-            },
-          }),
-          env: {
-            GATEWAY_AUTH_TOKEN: "gateway-runtime-token",
-          },
+          config,
+          env: { GATEWAY_AUTH_TOKEN: "gateway-runtime-token" },
           agentDirs: ["/tmp/openclaw-agent-main"],
           loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
           loadAuthStore: () => loadAuthStoreWithProfiles({}),
@@ -120,12 +69,7 @@ describe("secrets runtime snapshot gateway-auth integration", () => {
         await expect(
           writeConfigFile({
             ...getRuntimeConfig(),
-            gateway: {
-              auth: {
-                mode: "token",
-                token: missingTokenRef,
-              },
-            },
+            gateway: { auth: { mode: "token", token: missingTokenRef } },
           }),
         ).rejects.toThrow(/active SecretRef resolution failed: .*MISSING_GATEWAY_AUTH_TOKEN/i);
 

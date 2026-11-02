@@ -1,12 +1,13 @@
 // Shared fixtures for session-history sanitization tests.
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { SessionManager } from "./sessions/index.js";
 
 type SessionEntry = { type: string; customType: string; data: unknown };
 export type SanitizeSessionHistoryFn =
   typeof import("./embedded-agent-runner/replay-history.js").sanitizeSessionHistory;
-type SanitizeSessionHistoryMockedHelpers = typeof import("./embedded-agent-helpers.js");
+type SanitizeSessionHistoryMockedHelpers = typeof import("./embedded-agent-helpers/images.js");
 export type SanitizeSessionHistoryHarness = {
   sanitizeSessionHistory: SanitizeSessionHistoryFn;
   mockedHelpers: SanitizeSessionHistoryMockedHelpers;
@@ -36,36 +37,32 @@ export function makeInMemorySessionManager(
   activeBranchEntries: SessionEntry[] = entries,
 ): SessionManager {
   return {
+    getSessionTarget: () => undefined,
     getEntries: vi.fn(() => entries),
     getBranch: vi.fn(() => activeBranchEntries),
-    appendCustomEntry: vi.fn((customType: string, data: unknown) => {
+    appendCustomEntryAsync: vi.fn(async (customType: string, data: unknown) => {
       const entry = { type: "custom", customType, data };
       entries.push(entry);
       if (activeBranchEntries !== entries) {
         activeBranchEntries.push(entry);
       }
+      return `custom-entry-${entries.length}`;
     }),
   } as unknown as SessionManager;
 }
 
 export function makeMockSessionManager(): SessionManager {
   return {
+    getSessionTarget: () => undefined,
     getEntries: vi.fn().mockReturnValue([]),
     getBranch: vi.fn().mockReturnValue([]),
-    appendCustomEntry: vi.fn(),
+    appendCustomEntryAsync: vi.fn(async () => "custom-entry"),
   } as unknown as SessionManager;
 }
 
-export function makeSimpleUserMessages(): AgentMessage[] {
-  const messages = [{ role: "user", content: "hello" }];
-  return messages as unknown as AgentMessage[];
-}
-
-export async function createSanitizeSessionHistoryHelpersMock(extra: Record<string, unknown> = {}) {
+export function createSanitizeSessionHistoryImagesMock() {
   return {
-    ...(await vi.importActual("./embedded-agent-helpers.js")),
     sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
-    ...extra,
   };
 }
 
@@ -80,7 +77,7 @@ export async function createSanitizeSessionHistoryProviderRuntimeMock(
     // Default to no provider plugin participation; individual tests opt in to
     // hooks so ownership boundaries stay explicit.
     resolveProviderRuntimePlugin: vi.fn(() => undefined),
-    sanitizeProviderReplayHistoryWithPlugin: vi.fn(() => undefined),
+    sanitizeProviderReplayHistoryWithPluginAsync: vi.fn(() => undefined),
     validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
     ...extra,
   };
@@ -111,7 +108,7 @@ export async function loadSanitizeSessionHistoryWithCleanMocks(): Promise<Saniti
   vi.resetAllMocks();
   // Reload replay-history after mocks reset so each suite sees the same module
   // graph the production runner would import.
-  const mockedHelpers = await import("./embedded-agent-helpers.js");
+  const mockedHelpers = await import("./embedded-agent-helpers/images.js");
   vi.mocked(mockedHelpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
   const mod = await import("./embedded-agent-runner/replay-history.js");
   return {
@@ -151,67 +148,4 @@ export function makeReasoningAssistantMessages(opts?: {
   ];
 
   return messages as unknown as AgentMessage[];
-}
-
-export async function sanitizeWithOpenAIResponses(params: {
-  sanitizeSessionHistory: SanitizeSessionHistoryFn;
-  messages: AgentMessage[];
-  sessionManager: SessionManager;
-  modelId?: string;
-}) {
-  return await params.sanitizeSessionHistory({
-    messages: params.messages,
-    modelApi: "openai-responses",
-    provider: "openai",
-    sessionManager: params.sessionManager,
-    modelId: params.modelId,
-    sessionId: TEST_SESSION_ID,
-  });
-}
-
-export function expectOpenAIResponsesStrictSanitizeCall(
-  sanitizeSessionMessagesImagesMock: unknown,
-  messages: AgentMessage[],
-) {
-  // OpenAI Responses replay preserves strict tool-call ids; downgrading ids here
-  // would make later assistant/tool turns impossible to correlate.
-  const mock = sanitizeSessionMessagesImagesMock as {
-    mock?: { calls: Array<[AgentMessage[], string, Record<string, unknown>]> };
-  };
-  const call = mock.mock?.calls[0];
-  expect(call?.[0]).toBe(messages);
-  expect(call?.[1]).toBe("session:history");
-  expect(call?.[2]?.sanitizeMode).toBe("images-only");
-  expect(call?.[2]?.sanitizeToolCallIds).toBe(false);
-  expect(call?.[2]?.toolCallIdMode).toBe("strict");
-}
-
-function makeSnapshotChangedOpenAIReasoningScenario() {
-  const sessionEntries = [
-    makeModelSnapshotEntry({
-      provider: "anthropic",
-      modelApi: "anthropic-messages",
-      modelId: "claude-3-7",
-    }),
-  ];
-  return {
-    sessionManager: makeInMemorySessionManager(sessionEntries),
-    messages: makeReasoningAssistantMessages({
-      thinkingSignature: "object",
-      includeText: true,
-    }),
-    modelId: "gpt-5.4",
-  };
-}
-
-export async function sanitizeSnapshotChangedOpenAIReasoning(params: {
-  sanitizeSessionHistory: SanitizeSessionHistoryFn;
-}) {
-  const { sessionManager, messages, modelId } = makeSnapshotChangedOpenAIReasoningScenario();
-  return await sanitizeWithOpenAIResponses({
-    sanitizeSessionHistory: params.sanitizeSessionHistory,
-    messages,
-    modelId,
-    sessionManager,
-  });
 }

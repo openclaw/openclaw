@@ -1,41 +1,41 @@
-import type { ToolStreamHost } from "./tool-stream-contract.ts";
+import type { ToolStreamState } from "./tool-stream-contract.ts";
 
-export function syncToolStreamMessages(host: ToolStreamHost) {
+export function syncToolStreamMessages(host: ToolStreamState) {
   host.chatToolMessages = host.toolStreamOrder
     .map((id) => host.toolStreamById.get(id)?.message)
     .filter((msg): msg is Record<string, unknown> => Boolean(msg));
 }
 
-export function cancelToolStreamSync(host: ToolStreamHost) {
+export function cancelToolStreamSync(host: Pick<ToolStreamState, "toolStreamSyncTimer">) {
   if (host.toolStreamSyncTimer != null) {
     clearTimeout(host.toolStreamSyncTimer);
     host.toolStreamSyncTimer = null;
   }
 }
 
-export function resetToolStream(host: ToolStreamHost) {
+export function resetToolStream(
+  host: ToolStreamState,
+  options?: { preserveStreamSegments?: boolean },
+) {
   cancelToolStreamSync(host);
   host.toolStreamById.clear();
   host.toolStreamOrder = [];
   host.activityEventSeqById?.clear();
   host.chatToolMessages = [];
-  host.chatStreamSegments = [];
+  if (!options?.preserveStreamSegments) {
+    host.chatStreamSegments = [];
+  }
   host.knownAgentRunIds?.clear();
   host.waitingApprovalStatuses?.clear();
   // Resolution can beat the overlay queue update. Keep tombstones across transient stream resets
   // until snapshot reconciliation observes the approval leaving the queue.
 }
 
-export function resetToolStreamRun(host: ToolStreamHost, runId: string) {
+export function resetToolStreamRun(host: ToolStreamState, runId: string) {
   cancelToolStreamSync(host);
-  const removedIdentities = new Set<string>();
-  for (const identity of host.toolStreamOrder) {
-    const entry = host.toolStreamById.get(identity);
-    if (entry?.runId !== runId) {
-      continue;
-    }
-    removedIdentities.add(identity);
-  }
+  const removedIdentities = new Set(
+    host.toolStreamOrder.filter((identity) => host.toolStreamById.get(identity)?.runId === runId),
+  );
   for (const identity of removedIdentities) {
     host.toolStreamById.delete(identity);
   }

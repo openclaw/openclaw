@@ -1,10 +1,12 @@
-// Skill discovery status helpers summarize installed, workspace, and bundled skills.
 import path from "node:path";
+import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { prepareBinaryAvailability } from "../../shared/config-eval.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../../shared/entry-status.js";
+import { isOsRequirementSatisfied } from "../../shared/requirements.js";
 import { CONFIG_DIR } from "../../utils.js";
-import { loadSkillLibrarySelection } from "../library/selection.js";
+import { prepareSkillLibrarySelection } from "../library/selection.js";
 import { resolveBundledSkillsDir } from "../loading/bundled-dir.js";
 import {
   hasBinary,
@@ -13,6 +15,7 @@ import {
   isSkillConfigPathTruthy,
   resolveBundledAllowlist,
   resolveSkillConfig,
+  resolveSkillRequiredBins,
   resolveSkillsInstallPreferences,
 } from "../loading/config.js";
 import { resolveSkillKey } from "../loading/frontmatter.js";
@@ -22,12 +25,12 @@ import {
   prepareWorkspaceSkillEntries,
 } from "../loading/workspace-skill-loader.js";
 import type { WorkspaceSkillSources } from "../loading/workspace-skill-sources.js";
+import { prepareSkillStatusFacts } from "../runtime/refresh.js";
 import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
 import type {
   SkillEntry,
   SkillEligibilityContext,
   SkillInstallSpec,
-  SkillsInstallPreferences,
   SkillSnapshot,
 } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
@@ -86,102 +89,6 @@ export function resolveSkillStatusEntry<T extends Pick<SkillStatusEntry, "name" 
   return null;
 }
 
-function selectPreferredInstallSpec(
-  install: SkillInstallSpec[],
-  prefs: SkillsInstallPreferences,
-  hasLocalBin: typeof hasBinary,
-): SkillInstallSpec | undefined {
-  const findKind = (kind: SkillInstallSpec["kind"]) => install.find((spec) => spec.kind === kind);
-
-  const brewSpec = findKind("brew");
-  const brewAvailable = brewSpec && hasLocalBin("brew");
-  return (
-    (prefs.preferBrew && brewAvailable ? brewSpec : undefined) ??
-    findKind("uv") ??
-    findKind("node") ??
-    // Only prefer brew when available to avoid guaranteed failure on Linux/Docker.
-    (brewAvailable ? brewSpec : undefined) ??
-    findKind("go") ??
-    // Prefer download over an unavailable brew spec.
-    findKind("download") ??
-    // Last resort: surface descriptive brew-missing error instead of "no installer found".
-    brewSpec ??
-    install[0]
-  );
-}
-
-function normalizeInstallOptions(
-  entry: SkillEntry,
-  prefs: SkillsInstallPreferences,
-  hasLocalBin: typeof hasBinary,
-  platform: string,
-): SkillInstallOption[] {
-  // Recipes execute where the workspace dependencies live.
-  const requiredOs = entry.metadata?.os ?? [];
-  if (requiredOs.length > 0 && !requiredOs.includes(platform)) {
-    return [];
-  }
-
-  const install = entry.metadata?.install ?? [];
-  if (install.length === 0) {
-    return [];
-  }
-
-  const supportsPlatform = (spec: SkillInstallSpec) => {
-    const osList = spec.os ?? [];
-    return osList.length === 0 || osList.includes(platform);
-  };
-  const filtered = install.filter(supportsPlatform);
-  if (filtered.length === 0) {
-    return [];
-  }
-
-  const toOption = (spec: SkillInstallSpec, index: number): SkillInstallOption => {
-    const id = (spec.id ?? `${spec.kind}-${index}`).trim();
-    const bins = spec.bins ?? [];
-    let label = (spec.label ?? "").trim();
-    if (spec.kind === "node" && spec.package) {
-      label = `Install ${spec.package} (${prefs.nodeManager})`;
-    }
-    if (!label) {
-      if (spec.kind === "brew" && spec.formula) {
-        label = `Install ${spec.formula} (brew)`;
-      } else if (spec.kind === "node" && spec.package) {
-        label = `Install ${spec.package} (${prefs.nodeManager})`;
-      } else if (spec.kind === "go" && spec.module) {
-        label = `Install ${spec.module} (go)`;
-      } else if (spec.kind === "uv" && spec.package) {
-        label = `Install ${spec.package} (uv)`;
-      } else if (spec.kind === "download" && spec.url) {
-        const url = spec.url.trim();
-        const last = url.split("/").pop();
-        label = `Download ${last && last.length > 0 ? last : url}`;
-      } else {
-        label = "Run installer";
-      }
-    }
-    return { id, kind: spec.kind, label, bins };
-  };
-
-  const allDownloads = filtered.every((spec) => spec.kind === "download");
-  if (allDownloads) {
-    const options: SkillInstallOption[] = [];
-    for (const [index, spec] of install.entries()) {
-      if (supportsPlatform(spec)) {
-        options.push(toOption(spec, index));
-      }
-    }
-    return options;
-  }
-
-  const preferred = selectPreferredInstallSpec(filtered, prefs, hasLocalBin);
-  if (!preferred) {
-    return [];
-  }
-  // installSkill resolves implicit IDs in the original metadata list, before OS filtering.
-  return [toOption(preferred, install.indexOf(preferred))];
-}
-
 type SkillRequirementsContext = {
   config?: OpenClawConfig;
   hasWorkspaceBin: typeof hasBinary;
@@ -190,16 +97,8 @@ type SkillRequirementsContext = {
   allowBundled: ReadonlySet<string> | undefined;
 };
 
-type BuildSkillStatusContext = Readonly<
-  SkillRequirementsContext & {
-    prefs: SkillsInstallPreferences;
-    agentSkillSet: ReadonlySet<string> | undefined;
-    files: WorkspaceSkillStatusFacts["files"];
-  }
->;
-
 function buildSkillRequirements(entry: SkillEntry, context: SkillRequirementsContext) {
-  const skillKey = resolveSkillKey(entry.skill, entry);
+  const skillKey = resolveSkillKey(entry);
   const { config, eligibility, allowBundled } = context;
   const skillConfig = resolveSkillConfig(config, skillKey);
   const disabled = skillConfig?.enabled === false;
@@ -238,71 +137,6 @@ function buildSkillRequirements(entry: SkillEntry, context: SkillRequirementsCon
   };
 }
 
-function buildSkillStatus(entry: SkillEntry, context: BuildSkillStatusContext): SkillStatusEntry {
-  const { prefs, agentSkillSet } = context;
-  const {
-    skillKey,
-    always,
-    disabled,
-    blockedByAllowlist,
-    eligible,
-    emoji,
-    homepage,
-    required,
-    missing,
-    configChecks,
-  } = buildSkillRequirements(entry, context);
-  const blockedByAgentFilter = agentSkillSet !== undefined && !agentSkillSet.has(entry.skill.name);
-  const skillSource = resolveSkillSource(entry.skill);
-  // Loader provenance owns bundled status; a matching name cannot establish source.
-  const bundled = skillSource === "openclaw-bundled" || skillSource === "openclaw-custodian";
-  // Resolve platform incompatibility through the shared requirement evaluator's
-  // `missing.os` (which already accounts for remote macOS node eligibility)
-  // rather than a local-only process.platform check, so a macOS-only skill a
-  // remote node can satisfy is not flagged incompatible.
-  const platformIncompatible = missing.os.length > 0;
-  const availableToAgent = eligible && !blockedByAgentFilter;
-  const userInvocable = isSkillUserInvocable(entry);
-
-  const fileFacts = context.files.find(
-    (facts) => facts.name === entry.skill.name && facts.filePath === entry.skill.filePath,
-  );
-  const clawhub = fileFacts?.clawhub;
-  const card = fileFacts?.skillCard;
-  // Card bodies belong to skills.skillCard, not the inventory response.
-  const skillCard = card
-    ? { present: true as const, path: card.path, sizeBytes: card.sizeBytes }
-    : undefined;
-
-  return {
-    name: entry.skill.name,
-    description: entry.skill.description,
-    source: skillSource,
-    bundled,
-    filePath: entry.skill.filePath,
-    baseDir: entry.skill.baseDir,
-    skillKey,
-    primaryEnv: entry.metadata?.primaryEnv,
-    emoji,
-    homepage,
-    always,
-    disabled,
-    blockedByAllowlist,
-    blockedByAgentFilter,
-    eligible,
-    platformIncompatible,
-    modelVisible: availableToAgent && isSkillPromptVisible(entry),
-    userInvocable,
-    commandVisible: availableToAgent && userInvocable,
-    requirements: required,
-    missing,
-    configChecks,
-    install: normalizeInstallOptions(entry, prefs, context.hasWorkspaceBin, context.platform),
-    ...(clawhub ? { clawhub } : {}),
-    ...(skillCard ? { skillCard } : {}),
-  };
-}
-
 type WorkspaceSkillStatusOptions = {
   config?: OpenClawConfig;
   managedSkillsDir?: string;
@@ -316,8 +150,8 @@ function prepareWorkspaceSkillRequirements(
   opts?: WorkspaceSkillStatusOptions & { runtime?: WorkspaceSkillSources["runtime"] },
 ) {
   const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
-  const bundledSkillsDir = resolveBundledSkillsDir();
-  if (!bundledSkillsDir && !hasWarnedMissingBundledDir) {
+  const bundledSkillsDir = opts?.entries === undefined ? resolveBundledSkillsDir() : undefined;
+  if (opts?.entries === undefined && !bundledSkillsDir && !hasWarnedMissingBundledDir) {
     hasWarnedMissingBundledDir = true;
     skillsLogger.warn(
       "Bundled skills directory could not be resolved; built-in skills may be missing.",
@@ -387,36 +221,35 @@ export async function prepareWorkspaceSkillStatus(
   if (sources.runtime && !sources.status) {
     throw new Error("Remote workspace skill status is unavailable");
   }
-  const localEntries = sources.status
-    ? [
-        ...loadSkillLibrarySelection(opts?.librarySelections ?? []),
-        ...sources.entries.filter((entry) => entry.skill.fileHost === "gateway"),
-      ]
-    : sources.entries;
-  const localFacts =
-    localEntries.length || !sources.status
-      ? readWorkspaceSkillStatusFacts({
-          entries: localEntries,
+  const libraryEntries = opts?.librarySelections?.length
+    ? await prepareSkillLibrarySelection(opts.librarySelections, {}, () => {})
+    : [];
+  const entriesWithoutFacts = sources.status ? libraryEntries : sources.entries;
+  const additionalFacts =
+    entriesWithoutFacts.length > 0
+      ? await prepareSkillStatusFacts({
+          entries: entriesWithoutFacts,
           workspaceDir,
           managedSkillsDir: opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills"),
           skillCardKey: opts?.skillCardKey,
         })
       : undefined;
-  const hostPaths = new Set(
-    sources.entries
-      .filter((entry) => entry.skill.fileHost === "workspace")
-      .map((entry) => entry.skill.filePath),
+  const selectedPaths = new Set(sources.entries.map((entry) => entry.skill.filePath));
+  const files = [...(sources.status?.files ?? []), ...(additionalFacts?.files ?? [])].filter(
+    (file) => selectedPaths.has(file.filePath),
   );
-  const files = [
-    ...(sources.status?.files.filter((file) => hostPaths.has(file.filePath)) ?? []),
-    ...(localFacts?.files ?? []),
-  ];
+  let runtime = sources.runtime;
+  if (!getAgentWorkspaceAccess(workspaceDir, "loadSkills")?.loadSkills) {
+    const bins = [...new Set(["brew", ...sources.entries.flatMap(resolveSkillRequiredBins)])];
+    const facts = await prepareBinaryAvailability(bins);
+    runtime = { platform: process.platform, bins: bins.filter(facts.hasBinary) };
+  }
   return {
     report: buildWorkspaceSkillStatus(workspaceDir, {
       ...opts,
       entries: sources.entries,
       files,
-      runtime: sources.runtime,
+      runtime,
     }),
     files,
   };
@@ -439,19 +272,119 @@ export function buildWorkspaceSkillStatus(
       workspaceDir,
       managedSkillsDir,
     }).files;
-  const statusContext: BuildSkillStatusContext = {
-    ...context,
-    prefs,
-    agentSkillSet: agentSkillFilter === undefined ? undefined : new Set(agentSkillFilter),
-    files,
-  };
-  return {
+  const agentSkillSet = agentSkillFilter === undefined ? undefined : new Set(agentSkillFilter);
+  const report: SkillStatusReport = {
     workspaceDir,
     managedSkillsDir,
     agentId: opts?.agentId,
     agentSkillFilter,
-    skills: skillEntries.map((entry) => buildSkillStatus(entry, statusContext)),
+    skills: [],
   };
+  for (const entry of skillEntries) {
+    const { required, ...requirements } = buildSkillRequirements(entry, context);
+    const skillSource = resolveSkillSource(entry.skill);
+    // Learned Workshop skills are always visible to their agent; allowlists never hide them.
+    const blockedByAgentFilter =
+      skillSource !== "openclaw-workshop" &&
+      agentSkillSet !== undefined &&
+      !agentSkillSet.has(entry.skill.name);
+    // Loader provenance owns bundled status; a matching name cannot establish source.
+    const bundled = skillSource === "openclaw-bundled" || skillSource === "openclaw-custodian";
+    const availableToAgent = requirements.eligible && !blockedByAgentFilter;
+    const userInvocable = isSkillUserInvocable(entry);
+
+    const fileFacts = files.find(
+      (facts) => facts.name === entry.skill.name && facts.filePath === entry.skill.filePath,
+    );
+    const clawhub = fileFacts?.clawhub;
+    const card = fileFacts?.skillCard;
+    // Card bodies belong to skills.skillCard, not the inventory response.
+    const skillCard = card
+      ? { present: true as const, path: card.path, sizeBytes: card.sizeBytes }
+      : undefined;
+
+    const modelVisible = availableToAgent && isSkillPromptVisible(entry);
+    let installOptions: SkillInstallOption[] = [];
+    // Recipes execute where the workspace dependencies live.
+    if (isOsRequirementSatisfied(entry.metadata?.os ?? [], [context.platform])) {
+      const install = entry.metadata?.install ?? [];
+      const supportsPlatform = (spec: SkillInstallSpec) =>
+        isOsRequirementSatisfied(spec.os ?? [], [context.platform]);
+      const filtered = install.filter(supportsPlatform);
+
+      const toOption = (spec: SkillInstallSpec, index: number): SkillInstallOption => {
+        const id = (spec.id ?? `${spec.kind}-${index}`).trim();
+        const bins = spec.bins ?? [];
+        let label = (spec.label ?? "").trim();
+        if (spec.kind === "node" && spec.package) {
+          label = `Install ${spec.package} (${prefs.nodeManager})`;
+        }
+        if (!label) {
+          if (spec.kind === "brew" && spec.formula) {
+            label = `Install ${spec.formula} (brew)`;
+          } else if (spec.kind === "go" && spec.module) {
+            label = `Install ${spec.module} (go)`;
+          } else if (spec.kind === "uv" && spec.package) {
+            label = `Install ${spec.package} (uv)`;
+          } else if (spec.kind === "download" && spec.url) {
+            const url = spec.url.trim();
+            const last = url.split("/").pop();
+            label = `Download ${last && last.length > 0 ? last : url}`;
+          } else {
+            label = "Run installer";
+          }
+        }
+        return { id, kind: spec.kind, label, bins };
+      };
+
+      if (filtered.every((spec) => spec.kind === "download")) {
+        installOptions = install.flatMap((spec, index) =>
+          supportsPlatform(spec) ? [toOption(spec, index)] : [],
+        );
+      } else {
+        const findKind = (kind: SkillInstallSpec["kind"]) =>
+          filtered.find((spec) => spec.kind === kind);
+        const brewSpec = findKind("brew");
+        const brewAvailable = brewSpec && context.hasWorkspaceBin("brew");
+        const preferred =
+          (prefs.preferBrew && brewAvailable ? brewSpec : undefined) ??
+          findKind("uv") ??
+          findKind("node") ??
+          // Only prefer brew when available to avoid guaranteed failure on Linux/Docker.
+          (brewAvailable ? brewSpec : undefined) ??
+          findKind("go") ??
+          // Prefer download over an unavailable brew spec.
+          findKind("download") ??
+          // Last resort: surface descriptive brew-missing error instead of "no installer found".
+          brewSpec ??
+          filtered[0];
+        // installSkill resolves implicit IDs in the original metadata list, before OS filtering.
+        installOptions = preferred ? [toOption(preferred, install.indexOf(preferred))] : [];
+      }
+    }
+
+    report.skills.push({
+      name: entry.skill.name,
+      description: entry.skill.description,
+      source: skillSource,
+      bundled,
+      filePath: entry.skill.filePath,
+      baseDir: entry.skill.baseDir,
+      ...requirements,
+      primaryEnv: entry.metadata?.primaryEnv,
+      blockedByAgentFilter,
+      // The evaluator includes remote OS eligibility.
+      platformIncompatible: requirements.missing.os.length > 0,
+      modelVisible,
+      userInvocable,
+      commandVisible: availableToAgent && userInvocable,
+      requirements: required,
+      install: installOptions,
+      ...(clawhub ? { clawhub } : {}),
+      ...(skillCard ? { skillCard } : {}),
+    });
+  }
+  return report;
 }
 
 /** Readiness uses the same discovery and requirements without detailed install metadata. */

@@ -1,139 +1,84 @@
-// Browser tests cover register.navigation plugin behavior.
-import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as browserCliResizeModule from "../browser-cli-resize.js";
-import * as browserCliSharedModule from "../browser-cli-shared.js";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   createBrowserProgram,
-  getBrowserCliRuntime,
+  mockBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
+  mockBrowserGateway,
 } from "../browser-cli.test-support.js";
-import * as cliCoreApiModule from "../core-api.js";
 
-const mocks = vi.hoisted(() => ({
-  callBrowserRequest: vi.fn<
-    (
-      opts?: unknown,
-      req?: unknown,
-      extra?: { timeoutMs?: number },
-    ) => Promise<Record<string, unknown>>
-  >(async () => ({ url: "https://example.test/landing" })),
-  runBrowserResizeWithOutput: vi.fn(async () => {}),
-}));
+const gatewayMock = mockBrowserGateway();
+const capture = getBrowserCliRuntimeCapture();
+mockBrowserCliRuntime();
 
-vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
-vi.spyOn(browserCliResizeModule, "runBrowserResizeWithOutput").mockImplementation(
-  mocks.runBrowserResizeWithOutput,
-);
-const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
-  browserCliRuntime.writeJson,
-);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+const { registerBrowserActionInputCommands } = await import("./register.js");
 
-const { registerBrowserNavigationCommands } = await import("./register.navigation.js");
-
-function createNavigationProgram(): Command {
+function run(...args: string[]) {
   const { program, browser, parentOpts } = createBrowserProgram();
   browser.option("--timeout <ms>", "Timeout in ms", "30000");
-  registerBrowserNavigationCommands(browser, parentOpts);
-  return program;
+  registerBrowserActionInputCommands(browser, parentOpts);
+  return program.parseAsync(["browser", ...args], { from: "user" });
 }
 
 describe("browser navigation commands", () => {
   beforeEach(() => {
-    mocks.callBrowserRequest.mockClear();
-    mocks.runBrowserResizeWithOutput.mockClear();
-    getBrowserCliRuntimeCapture().resetRuntimeCapture();
+    gatewayMock.mockClear();
+    gatewayMock.mockResolvedValue({ url: "https://example.test/landing" });
+    capture.resetRuntimeCapture();
   });
 
   it.each(["30000", "60000"])(
     "sends navigate requests with the URL, target id, and inherited %s ms timeout",
     async (timeout) => {
-      const program = createNavigationProgram();
       const parentArgs = timeout === "30000" ? [] : ["--timeout", timeout];
 
-      await program.parseAsync(
-        ["browser", ...parentArgs, "navigate", "https://example.test/page", "--target-id", "tab-1"],
-        { from: "user" },
-      );
+      await run(...parentArgs, "navigate", "https://example.test/page", "--target-id", "tab-1");
 
-      const request = mocks.callBrowserRequest.mock.calls.at(-1)?.[1] as
-        | { method?: string; path?: string; body?: Record<string, unknown> }
-        | undefined;
-      expect(request).toMatchObject({
-        method: "POST",
-        path: "/navigate",
-        body: { url: "https://example.test/page", targetId: "tab-1" },
-      });
-      expect(mocks.callBrowserRequest).toHaveBeenLastCalledWith(
-        expect.objectContaining({ timeout }),
-        expect.objectContaining({ path: "/navigate" }),
+      expect(gatewayMock).toHaveBeenLastCalledWith(
+        "browser.request",
+        expect.objectContaining({ timeout: String(Number(timeout) + 130_000) }),
+        expect.objectContaining({
+          method: "POST",
+          path: "/navigate",
+          body: { url: "https://example.test/page", targetId: "tab-1" },
+          timeoutMs: Number(timeout),
+        }),
+        expect.objectContaining({ scopes: ["operator.admin"] }),
       );
+      expect(capture.runtimeLogs).toContain("navigated to https://example.test/landing");
     },
   );
 
-  it("passes normalized resize dimensions and target id to the resize helper", async () => {
-    const program = createNavigationProgram();
-
-    await program.parseAsync(
-      ["browser", "--timeout", "60000", "resize", "1024", "768", "--target-id", "tab-2"],
-      {
-        from: "user",
-      },
+  it("sends normalized resize dimensions and target id with the inherited timeout", async () => {
+    await run(
+      "--timeout=60000",
+      "--browser-profile=work",
+      "resize",
+      "1024",
+      "768",
+      "--target-id=tab-2",
     );
 
-    expect(mocks.runBrowserResizeWithOutput).toHaveBeenCalledWith(
+    expect(gatewayMock).toHaveBeenLastCalledWith(
+      "browser.request",
+      expect.objectContaining({ timeout: "190000" }),
       expect.objectContaining({
-        width: 1024,
-        height: 768,
-        targetId: "tab-2",
-        parent: expect.objectContaining({ timeout: "60000" }),
-        successMessage: "resized to 1024x768",
+        method: "POST",
+        path: "/act",
+        query: { profile: "work" },
+        body: { kind: "resize", width: 1024, height: 768, targetId: "tab-2" },
+        timeoutMs: 60000,
       }),
+      expect.objectContaining({ scopes: ["operator.admin"] }),
     );
-    expect(mocks.runBrowserResizeWithOutput).not.toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: expect.any(Number) }),
-    );
+    expect(capture.runtimeLogs).toContain("resized to 1024x768");
   });
 
-  it("rejects non-decimal resize dimensions before dispatch", async () => {
-    const program = createNavigationProgram();
-
-    await expect(
-      program.parseAsync(["browser", "resize", "1e3", "768"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
-
-    const capture = getBrowserCliRuntimeCapture();
-    expect(capture.runtimeErrors.join("\n")).toContain("Invalid width: must be a positive integer");
-    expect(mocks.runBrowserResizeWithOutput).not.toHaveBeenCalled();
-  });
-
-  it("rejects excessive resize dimensions before dispatch", async () => {
-    const program = createNavigationProgram();
-
-    await expect(
-      program.parseAsync(["browser", "resize", "8193", "768"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
-
-    const capture = getBrowserCliRuntimeCapture();
-    expect(capture.runtimeErrors.join("\n")).toContain("Invalid width: maximum is 8192");
-    expect(mocks.runBrowserResizeWithOutput).not.toHaveBeenCalled();
-  });
-
-  it("navigate and resize commands are registered after removing dead import (#83878)", async () => {
-    const program = createNavigationProgram();
-    const browserCmd = program.commands.find((c) => c.name() === "browser");
-    expect(browserCmd).toBeDefined();
-
-    const cmds = browserCmd!.commands.map((c) => c.name());
-    expect(cmds).toContain("resize");
-    expect(cmds).toContain("navigate");
-
-    // Verify the shared module still exports requireRef (used by other modules)
-    const shared = await import("./shared.js");
-    expect(typeof shared.requireRef).toBe("function");
+  it.each([
+    ["1e3", "must be a positive integer"],
+    ["8193", "maximum is 8192"],
+  ])("rejects invalid resize width %s before dispatch", async (width, error) => {
+    await expect(run("resize", width, "768")).rejects.toThrow(`Invalid width: ${error}`);
+    expect(capture.runtimeErrors).toEqual([]);
+    expect(gatewayMock).not.toHaveBeenCalled();
   });
 });

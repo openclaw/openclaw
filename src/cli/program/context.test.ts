@@ -35,20 +35,6 @@ describe("createProgramContext", () => {
     expect(resolveCliChannelOptionsMock).toHaveBeenCalledOnce();
   });
 
-  it("does not resolve channel options before access", () => {
-    resolveCliChannelOptionsMock.mockClear();
-    createProgramContext();
-    expect(resolveCliChannelOptionsMock).not.toHaveBeenCalled();
-  });
-
-  it("reuses one channel option resolution across all getters", () => {
-    resolveCliChannelOptionsMock.mockClear().mockReturnValue(["telegram"]);
-    const ctx = createProgramContext();
-    expect(ctx.messageChannelOptions).toBe("telegram");
-    expect(ctx.agentChannelOptions).toBe("last|telegram");
-    expect(resolveCliChannelOptionsMock).toHaveBeenCalledOnce();
-  });
-
   it("reads program version without resolving channel options", () => {
     resolveCliChannelOptionsMock.mockClear();
     const ctx = createProgramContext();

@@ -1,25 +1,33 @@
 import { describe, expect, it, vi } from "vitest";
-import { FaceTimeCallInstance, FaceTimeCallRegistry } from "../src/call-lifecycle.js";
+import { ActiveFaceTimeCall, FaceTimeCallRegistry } from "../src/runtime-state.js";
+
+function activeCall(callUUID: string) {
+  return new ActiveFaceTimeCall({
+    callUUID,
+    phase: "active",
+    owner: { senderId: "owner@example.com", senderIsOwner: true },
+  });
+}
 
 describe("FaceTime call lifecycle", () => {
   it("resolves every retained UUID alias to exactly the current generation", () => {
-    const registry = new FaceTimeCallRegistry<FaceTimeCallInstance>();
-    const current = new FaceTimeCallInstance("stable-uuid", "active");
+    const registry = new FaceTimeCallRegistry();
+    const current = activeCall("stable-uuid");
     registry.create(current);
     registry.retainAlias(current, "provisional-uuid");
 
-    expect(registry.resolve("PROVISIONAL-UUID")).toBe(current);
+    expect(registry.get("PROVISIONAL-UUID")).toBe(current);
     registry.close(current);
-    expect(registry.resolve("provisional-uuid")).toBeUndefined();
+    expect(registry.get("provisional-uuid")).toBeUndefined();
 
-    const successor = new FaceTimeCallInstance("successor-uuid", "active");
+    const successor = activeCall("successor-uuid");
     registry.create(successor);
-    expect(registry.resolve("provisional-uuid")).toBeUndefined();
-    expect(registry.resolve("successor-uuid")).toBe(successor);
+    expect(registry.get("provisional-uuid")).toBeUndefined();
+    expect(registry.get("successor-uuid")).toBe(successor);
   });
 
   it("rejects a carrier command that settles after closing advances generation", async () => {
-    const call = new FaceTimeCallInstance("call-1", "active");
+    const call = activeCall("call-1");
     let settle = (_value: string) => {};
     const nativeAction = vi.fn(
       async () =>
@@ -27,7 +35,7 @@ describe("FaceTime call lifecycle", () => {
           settle = resolve;
         }),
     );
-    const generation = call.captureGeneration();
+    const generation = call.generation;
     const command = call.runCarrierCommand({ generation, action: nativeAction });
     await vi.waitFor(() => expect(nativeAction).toHaveBeenCalledOnce());
     call.beginClosing();

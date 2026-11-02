@@ -1,0 +1,283 @@
+import assert from "node:assert/strict";
+import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { Value } from "typebox/value";
+import { afterAll, expect, it, vi, type Mock } from "vitest";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
+import { createAgentsWaitTool } from "./agents-wait-tool.js";
+import type { InProcessGatewayCaller } from "./in-process-gateway.js";
+import { registerSessionsSpawnAccessProgramTests } from "./sessions-spawn-tool.access-program.test-support.js";
+import type { createSessionsSpawnTool as SpawnToolFactory } from "./sessions-spawn-tool.js";
+
+const requireRecord = createRequireRecord("record", "expected-label");
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-spawn-guidance-");
+
+export function registerSessionsSpawnInputTests({
+  createTool,
+  registerAcpBackendForTest,
+  mockGateway,
+  mocks: hoisted,
+}: {
+  createTool: typeof SpawnToolFactory;
+  registerAcpBackendForTest: () => void;
+  mockGateway: (response: Record<string, unknown>) => InProcessGatewayCaller;
+  mocks: {
+    spawnSubagentDirectMock: Mock;
+    spawnAcpDirectMock: Mock;
+    inProcessCreationMock: Mock;
+  };
+}) {
+  registerSessionsSpawnAccessProgramTests({
+    createTool,
+    registerAcpBackendForTest,
+    mockGateway,
+    mocks: hoisted,
+  });
+
+  it.each([false, true])(
+    "keeps collector inputs within the declared spawn contract (placement=%s)",
+    (workerPlacement) => {
+      const tool = createTool({ workerPlacement });
+      finalizeAgentToolAvailability([tool, createAgentsWaitTool({})]);
+      expect(Value.Check(tool.parameters, { task: "ordinary child" })).toBe(true);
+      expect(Value.Check(tool.parameters, { task: "collector child", collect: true })).toBe(
+        !workerPlacement,
+      );
+    },
+  );
+
+  it.each([
+    ["private ACP", { completionTarget: "parent", runtime: "acp" }, /completionTarget/],
+    ["private visible", { completionTarget: "parent", visible: true }, /completionTarget/],
+    ["invalid completion target", { completionTarget: "channel" }, /completionTarget/],
+    ["schema without collect", { outputSchema: { type: "object" } }, "requires collect=true"],
+    ["group without collect", { groupId: "swarm:custom" }, "requires collect=true"],
+    [
+      "negative timeout",
+      { runTimeoutSeconds: -1 },
+      "runTimeoutSeconds must be a non-negative integer",
+    ],
+    [
+      "retired timeout alias",
+      { timeout_seconds: 2 },
+      'sessions_spawn does not support "timeout_seconds". Use "runTimeoutSeconds" for a per-run timeout.',
+    ],
+    [
+      "channel delivery",
+      { channel: "example" },
+      'sessions_spawn does not support "channel"; remove channel-delivery parameters.',
+    ],
+    [
+      "ACP light context",
+      { runtime: "acp", lightContext: true },
+      "lightContext is only supported for runtime='subagent'.",
+    ],
+    [
+      "ACP blind child",
+      { runtime: "acp", blind: true },
+      'blind=true requires a hidden runtime="subagent" child.',
+    ],
+    [
+      "visible blind child",
+      { visible: true, blind: true },
+      'blind=true requires a hidden runtime="subagent" child.',
+    ],
+    [
+      "ACP managed worktree",
+      { runtime: "acp", projectId: "example", worktree: true },
+      'Managed worktree parameters are unavailable with runtime="acp"',
+    ],
+    [
+      "unsupported visible parameters",
+      {
+        runtime: "acp",
+        thinking: "high",
+        thread: true,
+        mode: "session",
+        lightContext: true,
+        attachments: [{ name: "note.txt", content: "hello" }],
+        attachAs: { mountPath: "inputs" },
+        visible: true,
+      },
+      'Parameters unavailable with visible=true: runtime: supports runtime="subagent" only; thinking: thinking overrides are not wired to the sessions.create path; thread: visible sessions route to the dashboard, not a channel thread; mode: visible sessions are persistent dashboard sessions; lightContext: bootstrap staging is not wired to the sessions.create path; attachments: attachment staging is not wired to the sessions.create path; attachAs: attachment staging is not wired to the sessions.create path',
+    ],
+    [
+      "hidden cloud placement",
+      { placement: { kind: "profile", profileId: "build" } },
+      "Cloud placement requires visible=true and worktree=true. Corrected call: sessions_spawn(",
+    ],
+  ] as const)("%s is rejected before dispatch", async (_name, input, error) => {
+    registerAcpBackendForTest();
+    const tool = createTool({ config: { tools: { swarm: true } } });
+    await expect(tool.execute("invalid", { task: "inspect", ...input })).rejects.toThrow(error);
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.inProcessCreationMock).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "rejects branch-prefixed worktree names before dispatch (visible=%s)",
+    async (visible) => {
+      const tool = createTool();
+      const input = { task: "inspect", visible, worktree: true };
+      for (const worktreeName of [
+        "codex/qa-telemetry-prompt-cache-20261016",
+        " padded ",
+        "",
+        "a".repeat(65),
+      ]) {
+        const invalid = { ...input, worktreeName };
+        expect(Value.Check(tool.parameters, invalid)).toBe(false);
+        await expect(tool.execute("invalid-worktree-name", invalid)).rejects.toThrow(
+          "worktree name must match [a-z0-9][a-z0-9-]{0,63}",
+        );
+      }
+      expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+      expect(hoisted.inProcessCreationMock).not.toHaveBeenCalled();
+      expect(
+        Value.Check(tool.parameters, {
+          ...input,
+          worktreeName: "qa-telemetry-prompt-cache-20261016",
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("gives an executable visible retry for visible-only parameters on a hidden spawn", async () => {
+    const callGateway = mockGateway({
+      key: "agent:main:dashboard:child",
+      sessionId: "visible-child",
+      runStarted: true,
+      runId: "run-visible",
+    });
+    const tool = createTool({
+      registerRun: vi.fn(),
+      countActiveRuns: () => 0,
+      config: { agents: { entries: { main: {} } }, tools: { swarm: true } },
+      callGateway,
+    });
+    finalizeAgentToolAvailability([tool, createAgentsWaitTool({})]);
+    const visibleArgs = {
+      task: "Review the API change",
+      group: "Reviews",
+      projectGitUrl: "https://github.com/example/project.git",
+      worktreeName: "api-review",
+      worktreeBaseRef: "origin/main",
+    };
+    const error = await tool
+      .execute("hidden-visible-options", {
+        ...visibleArgs,
+        completionTarget: "parent",
+        cleanup: "delete",
+        mode: "run",
+        thread: false,
+        thinking: "high",
+        lightContext: true,
+        attachments: [{ name: "notes.txt", content: "review notes" }],
+        attachAs: { mountPath: "/inputs" },
+        collect: true,
+        outputSchema: { type: "object" },
+        fastMode: "auto",
+        groupId: "review-batch",
+        streamTo: "parent",
+        resumeSessionId: "prior-acp-session",
+      })
+      .catch((reason: unknown) => reason);
+    assert(error instanceof Error, "Expected visible-only parameter rejection");
+    expect(error.message).toContain("Parameters require visible=true: group, projectGitUrl");
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    const match = /Corrected visible call: sessions_spawn\((.*)\)$/.exec(error.message);
+    assert(match?.[1], "Expected an exact corrected sessions_spawn call");
+    const corrected: unknown = JSON.parse(match[1]);
+    expect(corrected).toEqual({
+      ...visibleArgs,
+      worktree: true,
+      runtime: "subagent",
+      visible: true,
+    });
+
+    const result = await tool.execute("corrected-visible", corrected);
+
+    expect(result.details).toMatchObject({ status: "accepted", runId: "run-visible" });
+    expect(callGateway).toHaveBeenCalledOnce();
+  });
+
+  it("registers requester target guidance in the description, not the agentId schema", () => {
+    registerAcpBackendForTest();
+    const config = {
+      acp: { defaultAgent: "codex" },
+      tools: { swarm: { defaultAgentId: "planner" } },
+      agents: {
+        defaults: { subagents: { allowAgents: ["main", "planner"] } },
+        entries: { main: {}, planner: {} },
+      },
+    };
+    const tool = createTool({ config });
+    expect(tool.description).toContain(
+      'With runtime="subagent" (default): Configured agent to target: main, planner.',
+    );
+    expect(tool.description).toContain(
+      'With collect=true, omit to target tools.swarm.defaultAgentId ("planner")',
+    );
+    expect(tool.description).toContain('With runtime="acp": ACP harness id');
+    // Codex strips schema descriptions on large tool schemas; guidance must not ride on them.
+    const schema = requireRecord(tool.parameters, "schema");
+    expect(requireRecord(schema.properties, "properties").agentId).not.toHaveProperty(
+      "description",
+    );
+    const swarmOff = createTool({
+      config: { ...config, tools: { swarm: { enabled: false, defaultAgentId: "planner" } } },
+    });
+    expect(swarmOff.description).not.toContain("collect=true");
+  });
+
+  it("narrows ACP guidance from the prepared requester fact, never a store read", async () => {
+    registerAcpBackendForTest();
+    const dir = sessionDirs.make();
+    const storePath = path.join(dir, "sessions.json");
+    const config = {
+      session: { store: storePath },
+      acp: { defaultAgent: "codex" },
+      agents: {
+        entries: { main: { subagents: { allowAgents: ["codex"], requireAgentId: true } } },
+      },
+    };
+    const narrowed = 'With runtime="acp": ACP harness id from: codex. agentId is required.';
+    const omitDefault = 'Omit to use the configured ACP default ("codex")';
+    const descriptionFor = (agentSessionKey: string, requesterIsSubagent?: boolean) =>
+      createTool({ agentSessionKey, config, requesterIsSubagent }).description;
+    // A stored subagent envelope on a non-subagent key must not narrow guidance.
+    const storedKey = "agent:main:acp:child";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: storedKey, storePath },
+      { sessionId: storedKey, updatedAt: 1, spawnedBy: "agent:main:subagent:parent" },
+    );
+    expect(descriptionFor(storedKey)).toContain(omitDefault);
+    expect(descriptionFor(storedKey, true)).toContain(narrowed);
+    expect(descriptionFor("agent:main:subagent:child")).toContain(narrowed);
+    expect(descriptionFor("agent:main:main")).toContain(omitDefault);
+  });
+
+  it("applies sender restrictions and requester policy to native and ACP guidance", () => {
+    registerAcpBackendForTest();
+    const config = {
+      acp: { defaultAgent: "main", allowedAgents: ["main"] },
+      agents: { entries: { main: { subagents: { requireAgentId: true } }, planner: {} } },
+    };
+    const description = createTool({
+      config,
+      workspaceDir: "/work",
+      inheritedToolPolicySource: "sender",
+    }).description;
+    expect(description).toContain(
+      'With runtime="subagent" (default): Sender policy allows only hidden helpers of the requester agent',
+    );
+    expect(description).toContain(
+      'With runtime="acp": ACP harness id from: main. agentId is required.',
+    );
+    expect(description).not.toContain('`runtime="acp"` ids: codex, claude');
+  });
+}

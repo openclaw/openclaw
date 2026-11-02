@@ -1,9 +1,8 @@
-// Ci Run Timings tests cover ci run timings script behavior.
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   collectRunJobsFromPages,
@@ -11,39 +10,49 @@ import {
   parseRunTimingArgs,
   selectLatestMainPushCiRun,
   summarizeRunTimings,
+  summarizeTrendTimings,
 } from "../../scripts/ci-run-timings.mjs";
 
+const timestamp = (time: string) => `2026-04-22T${time}Z`;
+const completedRun = {
+  conclusion: "success",
+  createdAt: timestamp("10:00:00"),
+  status: "completed",
+  updatedAt: timestamp("10:01:30"),
+};
+const timingJob = (name: string, start: string, end: string, conclusion = "success") => ({
+  name,
+  conclusion,
+  status: "completed",
+  startedAt: timestamp(start),
+  completedAt: timestamp(end),
+});
+const run = (databaseId: number, event: string, headSha: string) => ({
+  databaseId,
+  event,
+  headSha,
+});
+const timingDefaults = {
+  compareHours: 12,
+  detailRuns: 100,
+  explicitRunId: undefined,
+  json: false,
+  limit: 15,
+  outputPath: null,
+  recentLimit: null,
+  trendHours: null,
+  useLatestMain: false,
+};
 describe("scripts/ci-run-timings.mjs", () => {
   it("separates start delay from job duration without mislabeling dependency wait", () => {
     const summary = summarizeRunTimings(
       {
-        conclusion: "success",
-        createdAt: "2026-04-22T10:00:00Z",
+        ...completedRun,
         jobs: [
-          {
-            completedAt: "2026-04-22T10:01:20Z",
-            conclusion: "success",
-            name: "slow",
-            startedAt: "2026-04-22T10:00:20Z",
-            status: "completed",
-          },
-          {
-            completedAt: "2026-04-22T10:01:00Z",
-            conclusion: "success",
-            name: "queued",
-            startedAt: "2026-04-22T10:00:50Z",
-            status: "completed",
-          },
-          {
-            completedAt: "2026-04-22T10:00:01Z",
-            conclusion: "skipped",
-            name: "matrix.check_name",
-            startedAt: "2026-04-22T10:00:01Z",
-            status: "completed",
-          },
+          timingJob("slow", "10:00:20", "10:01:20"),
+          timingJob("queued", "10:00:50", "10:01:00"),
+          timingJob("matrix.check_name", "10:00:01", "10:00:01", "skipped"),
         ],
-        status: "completed",
-        updatedAt: "2026-04-22T10:01:30Z",
       },
       2,
     );
@@ -59,100 +68,89 @@ describe("scripts/ci-run-timings.mjs", () => {
     ]);
   });
 
-  it("rejects empty CI job payloads instead of printing empty timing evidence", () => {
-    expect(() =>
-      summarizeRunTimings({
-        conclusion: "success",
-        createdAt: "2026-04-22T10:00:00Z",
-        jobs: [],
-        status: "completed",
-        updatedAt: "2026-04-22T10:01:30Z",
-      }),
-    ).toThrow("CI run timing summary requires at least one job");
+  it.each([
+    {
+      values: [20, ...Array.from({ length: 19 }, (_, index) => index + 1)],
+      ranks: [10, 18, 19, 20],
+    },
+    { values: [0], ranks: [0, 0, 0, 0] },
+    { values: [], ranks: [null, null, null, null] },
+  ])("summarizes unsorted timing samples without changing inputs: $values", ({ values, ranks }) => {
+    const jobs = values.map((seconds) => ({
+      ...timingJob("checks", "10:00:00", "10:00:00"),
+      completedAt: new Date(Date.parse(timestamp("10:00:00")) + seconds * 1000).toISOString(),
+    }));
+    const runs = [{ ...completedRun, runAttempt: 1, jobs: [...jobs, { name: "no timestamps" }] }];
+    const before = structuredClone(runs);
+    const report = summarizeTrendTimings(runs, {
+      generatedAtMs: Date.parse(timestamp("11:00:00")),
+      compareDurationMs: 60 * 60 * 1000,
+      trendDurationMs: 24 * 60 * 60 * 1000,
+    });
+    expect(report.cohorts.baseline.jobMetrics.executionSeconds).toEqual({
+      count: values.length,
+      p50: ranks[0],
+      p90: ranks[1],
+      p95: ranks[2],
+      max: ranks[3],
+    });
+    expect(report.cohorts.prior.jobMetrics.executionSeconds).toEqual({
+      count: 0,
+      p50: null,
+      p90: null,
+      p95: null,
+      max: null,
+    });
+    expect(runs).toEqual(before);
   });
 
-  it("selects the push CI run for the current main SHA", () => {
-    expect(
-      selectLatestMainPushCiRun(
-        [
-          {
-            databaseId: 3,
-            event: "issue_comment",
-            headSha: "current",
-          },
-          {
-            databaseId: 2,
-            event: "push",
-            headSha: "older",
-          },
-          {
-            databaseId: 1,
-            event: "push",
-            headSha: "current",
-          },
-        ],
-        "current",
-      ),
-    ).toEqual({
-      databaseId: 1,
-      event: "push",
-      headSha: "current",
-    });
+  it("rejects empty CI job payloads instead of printing empty timing evidence", () => {
+    expect(() => summarizeRunTimings({ ...completedRun, jobs: [] })).toThrow(
+      "CI run timing summary requires at least one job",
+    );
+  });
+
+  it.each([
+    [
+      "exact SHA",
+      [run(3, "issue_comment", "current"), run(2, "push", "older"), run(1, "push", "current")],
+      run(1, "push", "current"),
+    ],
+    [
+      "newest push fallback",
+      [run(4, "issue_comment", "current"), run(3, "push", "previous")],
+      run(3, "push", "previous"),
+    ],
+  ])("selects the %s CI run", (_mode, runs, expected) => {
+    expect(selectLatestMainPushCiRun(runs, "current")).toEqual(expected);
   });
 
   it("normalizes paginated GitHub Actions job payloads", () => {
-    expect(
-      collectRunJobsFromPages([
-        {
-          jobs: [
-            {
-              completed_at: "2026-06-01T13:26:16Z",
-              conclusion: "success",
-              id: 101,
-              name: "preflight",
-              started_at: "2026-06-01T13:25:16Z",
-              status: "completed",
-            },
-          ],
-        },
-        {
-          jobs: [
-            {
-              completedAt: "2026-06-01T13:28:00Z",
-              conclusion: "failure",
-              databaseId: 102,
-              name: "ci-timings-summary",
-              startedAt: "2026-06-01T13:27:00Z",
-              status: "completed",
-            },
-          ],
-        },
-      ]),
-    ).toEqual([
+    const defaults = {
+      createdAt: null,
+      labels: [],
+      runnerGroupName: null,
+      runnerName: null,
+    };
+    const restJob = {
+      id: 101,
+      name: "preflight",
+      conclusion: "success",
+      status: "completed",
+      started_at: timestamp("13:25:16"),
+      completed_at: timestamp("13:26:16"),
+    };
+    const graphqlJob = {
+      databaseId: 102,
+      ...timingJob("ci-timings-summary", "13:27:00", "13:28:00", "failure"),
+    };
+    expect(collectRunJobsFromPages([{ jobs: [restJob] }, { jobs: [graphqlJob] }])).toEqual([
       {
-        completedAt: "2026-06-01T13:26:16Z",
-        conclusion: "success",
-        createdAt: null,
+        ...defaults,
         databaseId: 101,
-        labels: [],
-        name: "preflight",
-        runnerGroupName: null,
-        runnerName: null,
-        startedAt: "2026-06-01T13:25:16Z",
-        status: "completed",
+        ...timingJob("preflight", "13:25:16", "13:26:16"),
       },
-      {
-        completedAt: "2026-06-01T13:28:00Z",
-        conclusion: "failure",
-        createdAt: null,
-        databaseId: 102,
-        labels: [],
-        name: "ci-timings-summary",
-        runnerGroupName: null,
-        runnerName: null,
-        startedAt: "2026-06-01T13:27:00Z",
-        status: "completed",
-      },
+      { ...defaults, ...graphqlJob },
     ]);
   });
 
@@ -171,279 +169,103 @@ describe("scripts/ci-run-timings.mjs", () => {
     ).toBe(false);
   });
 
-  it("falls back to the newest push CI run when the exact SHA has not appeared yet", () => {
-    expect(
-      selectLatestMainPushCiRun(
-        [
-          {
-            databaseId: 4,
-            event: "issue_comment",
-            headSha: "current",
-          },
-          {
-            databaseId: 3,
-            event: "push",
-            headSha: "previous",
-          },
-        ],
-        "current",
-      ),
-    ).toEqual({
-      databaseId: 3,
-      event: "push",
-      headSha: "previous",
-    });
+  it.each([
+    ["--latest-main -- --limit 3", { limit: 3, useLatestMain: true }],
+    [
+      "--trend-hours=72 --compare-hours 12 --detail-runs=80 --json --output ci-trend.json",
+      { detailRuns: 80, json: true, outputPath: "ci-trend.json", trendHours: 72 },
+    ],
+  ])("parses monitor options: %s", (args, expected) => {
+    expect(parseRunTimingArgs(args.split(" "))).toEqual({ ...timingDefaults, ...expected });
   });
 
-  it("ignores pnpm passthrough sentinels when parsing monitor args", () => {
-    expect(parseRunTimingArgs(["--latest-main", "--", "--limit", "3"])).toEqual({
-      compareHours: 12,
-      detailRuns: 100,
-      explicitRunId: undefined,
-      json: false,
-      limit: 3,
-      outputPath: null,
-      recentLimit: null,
-      trendHours: null,
-      useLatestMain: true,
-    });
+  it.each([
+    ["--limit 3jobs", "must be a positive integer"],
+    ["--limit=0", "must be a positive integer"],
+    ["--limit", "requires a value"],
+    ["--output=", "requires a value"],
+    ["--run-id 123456", "Unknown CI run timing option: --run-id"],
+    ["123456 789012", "Unexpected CI run id argument: 789012"],
+    ["--recent 3 --latest-main", "--recent cannot be combined"],
+    ["123456 --latest-main", "A run id cannot be combined"],
+    ["--trend-hours 72 --recent 3", "--trend-hours cannot be combined"],
+    ["--trend-hours 23", "must cover at least two"],
+    ["--json", "require --trend-hours"],
+  ])("rejects monitor arguments: %s", (args, message) => {
+    expect(() => parseRunTimingArgs(args.split(" "))).toThrow(message);
   });
 
-  it("parses strict positive integer monitor limits", () => {
-    expect(parseRunTimingArgs(["123456", "--limit=7"])).toEqual({
-      compareHours: 12,
-      detailRuns: 100,
-      explicitRunId: "123456",
-      json: false,
-      limit: 7,
-      outputPath: null,
-      recentLimit: null,
-      trendHours: null,
-      useLatestMain: false,
-    });
-    expect(parseRunTimingArgs(["--recent", "4"]).recentLimit).toBe(4);
-  });
-
-  it("parses bounded trend comparison and JSON report options", () => {
-    expect(
-      parseRunTimingArgs([
-        "--trend-hours=72",
-        "--compare-hours",
-        "12",
-        "--detail-runs=80",
-        "--json",
-        "--output",
-        "ci-trend.json",
-      ]),
-    ).toEqual({
-      compareHours: 12,
-      detailRuns: 80,
-      explicitRunId: undefined,
-      json: true,
-      limit: 15,
-      outputPath: "ci-trend.json",
-      recentLimit: null,
-      trendHours: 72,
-      useLatestMain: false,
-    });
-  });
-
-  it("rejects malformed monitor limits instead of falling back", () => {
-    for (const args of [
-      ["--limit", "3jobs"],
-      ["--limit", "0"],
-      ["--limit=1e3"],
-      ["--recent", "recent"],
-      ["--recent", "0"],
-      ["--trend-hours", "0"],
-      ["--compare-hours", "1.5"],
-      ["--detail-runs", "all"],
-    ]) {
-      expect(() => parseRunTimingArgs(args)).toThrow("must be a positive integer");
-    }
-  });
-
-  it("rejects missing monitor limits instead of treating flags as values", () => {
-    for (const args of [
-      ["--limit"],
-      ["--limit", "--recent", "4"],
-      ["--limit", "-h"],
-      ["--recent"],
-      ["--recent", "-h"],
-      ["--trend-hours"],
-      ["--compare-hours", "--json"],
-      ["--detail-runs"],
-      ["--output="],
-    ]) {
-      expect(() => parseRunTimingArgs(args)).toThrow("requires a value");
-    }
-  });
-
-  it("rejects unknown monitor flags and duplicate run ids", () => {
-    expect(() => parseRunTimingArgs(["--run-id", "123456"])).toThrow(
-      "Unknown CI run timing option: --run-id",
-    );
-    expect(() => parseRunTimingArgs(["123456", "789012"])).toThrow(
-      "Unexpected CI run id argument: 789012",
-    );
-  });
-
-  it("rejects ambiguous monitor modes and incomplete comparison windows", () => {
-    expect(() => parseRunTimingArgs(["--recent", "3", "--latest-main"])).toThrow(
-      "--recent cannot be combined",
-    );
-    expect(() => parseRunTimingArgs(["123456", "--latest-main"])).toThrow(
-      "A run id cannot be combined",
-    );
-    expect(() => parseRunTimingArgs(["--trend-hours", "72", "--recent", "3"])).toThrow(
-      "--trend-hours cannot be combined",
-    );
-    expect(() => parseRunTimingArgs(["--trend-hours", "23"])).toThrow("must cover at least two");
-    expect(() => parseRunTimingArgs(["--json"])).toThrow("require --trend-hours");
-  });
-
-  it("balances trend samples, keeps reruns attempt-specific, and counts API retries", () => {
-    const fixtureDir = mkdtempSync(path.join(tmpdir(), "openclaw-ci-timings-"));
-    const fakeGhPath = path.join(fixtureDir, "gh");
-    const reportPath = path.join(fixtureDir, "reports", "trend.json");
-    const retryMarkerPath = path.join(fixtureDir, "retried");
-    const retryWaitsPath = path.join(fixtureDir, "retry-waits.txt");
-    const retryClockPath = path.join(fixtureDir, "retry-clock.mjs");
-    const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-    const fixtureNowMs = Date.now();
-    writeFileSync(retryWaitsPath, "");
-    // Only this CLI child skips elapsed backoff; the requested delay remains asserted.
-    writeFileSync(
-      retryClockPath,
-      `import { appendFileSync } from "node:fs";
-const wait = Atomics.wait;
-Atomics.wait = (array, index, value, timeout) => {
-  appendFileSync(${JSON.stringify(retryWaitsPath)}, String(timeout) + "\\n");
-  return wait(array, index, value, 0);
-};
-`,
-    );
-    writeFileSync(
-      fakeGhPath,
-      `#!/usr/bin/env node
-const { existsSync, writeFileSync } = require("node:fs");
-const args = process.argv.slice(2);
-const endpoint = args.find((arg) => arg.startsWith("repos/")) ?? "";
-const now = Number(process.env.FIXTURE_NOW_MS);
-const iso = (offsetMs) => new Date(now + offsetMs).toISOString();
-if (endpoint.includes("actions/workflows/ci.yml/runs?")) {
-  console.log(JSON.stringify({ workflow_runs: [
-    { id: 101, status: "completed", conclusion: "success", created_at: iso(-60 * 60_000), updated_at: iso(-50 * 60_000), head_sha: "latest", run_attempt: 1, html_url: "https://example.test/101" },
-    { id: 104, status: "completed", conclusion: "success", created_at: iso(-90 * 60_000), updated_at: iso(-80 * 60_000), head_sha: "latest-unsampled", run_attempt: 1, html_url: "https://example.test/104" },
-    { id: 102, status: "completed", conclusion: "cancelled", created_at: iso(-2 * 60 * 60_000), updated_at: iso(-119 * 60_000), head_sha: "cancelled", run_attempt: 1, html_url: "https://example.test/102" },
-    { id: 106, status: "completed", conclusion: "timed_out", created_at: iso(-3 * 60 * 60_000), updated_at: iso(-2 * 60 * 60_000 - 50 * 60_000), head_sha: "timed-out", run_attempt: 1, html_url: "https://example.test/106" },
-    { id: 103, status: "completed", conclusion: "success", created_at: iso(-13 * 60 * 60_000), updated_at: iso(-12 * 60 * 60_000 - 50 * 60_000), head_sha: "prior-rerun", run_attempt: 2, html_url: "https://example.test/103" }
-  ] }));
-} else if (endpoint.includes("actions/runs/101/attempts/1/jobs?")) {
-  if (!existsSync(process.env.FIXTURE_RETRY_MARKER)) {
-    writeFileSync(process.env.FIXTURE_RETRY_MARKER, "retried\\n");
-    console.error("HTTP 502: fixture transient failure");
-    process.exit(1);
-  }
-  const runStart = now - 60 * 60_000;
-  const at = (seconds) => new Date(runStart + seconds * 1000).toISOString();
-  console.log(JSON.stringify({ total_count: 4, jobs: [
-    { id: 1, name: "preflight", status: "completed", conclusion: "success", created_at: at(10), started_at: at(20), completed_at: at(60), labels: ["blacksmith-4vcpu-ubuntu-2404"], runner_name: "blacksmith-test", runner_group_name: "blacksmith" },
-    { id: 2, name: "checks-node-compact-large-1", status: "completed", conclusion: "success", created_at: at(60), started_at: at(65), completed_at: at(500), labels: ["blacksmith-8vcpu-ubuntu-2404"], runner_name: "blacksmith-test", runner_group_name: "blacksmith" },
-    { id: 3, name: "openclaw/ci-gate", status: "completed", conclusion: "success", created_at: at(500), started_at: at(501), completed_at: at(510), labels: ["ubuntu-24.04"], runner_name: "GitHub Actions", runner_group_name: "GitHub Actions" },
-    { id: 4, name: "matrix.synthetic", status: "completed", conclusion: "success", created_at: at(510), started_at: at(511), completed_at: at(520), labels: ["ubuntu-24.04"], runner_name: "GitHub Actions", runner_group_name: "GitHub Actions" }
-  ] }));
-} else if (endpoint.includes("actions/runs/103/attempts/2/jobs?")) {
-  const runStart = now - 12 * 60 * 60_000 - 55 * 60_000;
-  const at = (seconds) => new Date(runStart + seconds * 1000).toISOString();
-  console.log(JSON.stringify({ total_count: 2, jobs: [
-    { id: 5, name: "preflight", status: "completed", conclusion: "success", created_at: at(10), started_at: at(18), completed_at: at(58), labels: ["blacksmith-4vcpu-ubuntu-2404"], runner_name: "blacksmith-test", runner_group_name: "blacksmith" },
-    { id: 6, name: "checks-node-compact-large-1", status: "completed", conclusion: "success", created_at: at(58), started_at: at(62), completed_at: at(470), labels: ["blacksmith-8vcpu-ubuntu-2404"], runner_name: "blacksmith-test", runner_group_name: "blacksmith" }
-  ] }));
-} else {
-  console.error("unexpected gh invocation", args.join(" "));
-  process.exit(2);
-}
-`,
-    );
-    chmodSync(fakeGhPath, 0o755);
-
-    try {
-      const result = spawnSync(
-        process.execPath,
-        [
-          "--import",
-          pathToFileURL(retryClockPath).href,
-          "scripts/ci-run-timings.mjs",
-          "--trend-hours",
-          "24",
-          "--compare-hours",
-          "12",
-          "--detail-runs",
-          "2",
-          "--json",
-          "--output",
-          reportPath,
-        ],
-        {
-          cwd: repositoryRoot,
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            FIXTURE_NOW_MS: String(fixtureNowMs),
-            FIXTURE_RETRY_MARKER: retryMarkerPath,
-            GH_TOKEN: "fixture-ci-timing-token",
-            OPENCLAW_GH_BIN: fakeGhPath,
-          },
-        },
-      );
-
-      expect(result.status, result.stderr).toBe(0);
-      expect(readFileSync(retryWaitsPath, "utf8")).toBe("1000\n");
-      const report = JSON.parse(result.stdout);
-      expect(JSON.parse(readFileSync(reportPath, "utf8"))).toEqual(report);
-      expect(report.apiRequests).toEqual({ jobs: 3, runList: 1, total: 4 });
-      expect(report.sampling).toEqual({
-        detailedSuccessfulRuns: 2,
-        eligibleSuccessfulRuns: 3,
-      });
-      expect(report.cohorts.comparison.outcomes).toMatchObject({
-        cancelled: 1,
-        cancellationRate: 0.25,
-        nonCancelledPassRate: 2 / 3,
-        success: 2,
-        timedOut: 1,
-        total: 4,
-      });
-      expect(report.cohorts.prior.runMetrics.successfulWallSeconds.p50).toBeNull();
-      expect(report.cohorts.prior.runMetrics.workflowAdmissionSeconds.p50).toBeNull();
-      expect(report.cohorts.prior.samples.detailedSuccessfulRuns).toBe(1);
-      expect(report.cohorts.prior.jobMetrics.executionSeconds.count).toBe(2);
-      expect(report.cohorts.comparison.jobMetrics.runnerQueueSeconds).toMatchObject({
-        count: 2,
-        max: 10,
-        p95: 10,
-      });
-      expect(report.cohorts.comparison.jobMetrics.dependencyGatedSeconds.p95).toBe(50);
-      expect(report.cohorts.comparison.runMetrics.workflowAdmissionSeconds.p95).toBe(10);
-      expect(report.cohorts.comparison.criticalOwners).toEqual([
-        { name: "checks-node-compact-large-1", runs: 1 },
-      ]);
-      expect(
-        report.jobs.find((job: { name: string }) => job.name === "checks-node-compact-large-1"),
-      ).toMatchObject({
-        comparison: { executionSeconds: { count: 1 } },
-        prior: { executionSeconds: { count: 1 } },
-      });
-      expect(report.runs[0].jobTimings.map((job: { name: string }) => job.name)).toEqual([
-        "preflight",
-        "checks-node-compact-large-1",
-      ]);
-    } finally {
-      rmSync(fixtureDir, { force: true, recursive: true });
-    }
-  });
-  it("excludes manual, failed, and unfinished runs from recent main timings", () => {
+  const job = {
+    id: 1,
+    name: "checks",
+    status: "completed",
+    conclusion: "success",
+    started_at: "2026-08-31T00:00:10Z",
+    completed_at: "2026-08-31T00:00:40Z",
+  };
+  it.each<{
+    label: string;
+    pages: unknown[];
+    requests: number;
+    jobs: number;
+    error?: string;
+  }>([
+    {
+      label: "total reached",
+      pages: [
+        { total_count: 2, jobs: [job] },
+        { total_count: 2, jobs: [job] },
+      ],
+      requests: 2,
+      jobs: 2,
+    },
+    {
+      label: "short pages before total",
+      pages: Array.from({ length: 3 }, () => ({ total_count: 3, jobs: [job] })),
+      requests: 3,
+      jobs: 3,
+    },
+    {
+      label: "missing and nonnumeric later total",
+      pages: [
+        { total_count: 3, jobs: [job] },
+        { jobs: [job] },
+        { total_count: "unknown", jobs: [job] },
+      ],
+      requests: 3,
+      jobs: 3,
+    },
+    {
+      label: "missing totals until empty page",
+      pages: [{ jobs: [job] }, { jobs: [job] }, { jobs: [] }],
+      requests: 3,
+      jobs: 2,
+    },
+    ...[[], {}].map((empty) => ({
+      label: `terminal jobs ${JSON.stringify(empty)}`,
+      pages: [
+        { total_count: 3, jobs: [job] },
+        { total_count: 3, jobs: empty },
+      ],
+      requests: 2,
+      jobs: 1,
+    })),
+    ...[[], {}].map((empty) => ({
+      label: `initial jobs ${JSON.stringify(empty)}`,
+      pages: [{ jobs: empty }],
+      requests: 1,
+      jobs: 0,
+      error: "CI run timing summary requires at least one job",
+    })),
+    {
+      label: "25-page bound",
+      pages: Array.from({ length: 25 }, () => ({ total_count: 26, jobs: [job] })),
+      requests: 25,
+      jobs: 25,
+    },
+    { label: "invalid JSON", pages: ["{"], requests: 1, jobs: 0, error: "JSON" },
+  ])("keeps recent filtering and normalizes each job once: $label", (fixture) => {
+    const recent = fixture.label === "total reached" ? 2 : 1;
     const fixtureDir = mkdtempSync(path.join(tmpdir(), "openclaw-ci-timings-recent-"));
     const fakeGhPath = path.join(fixtureDir, "gh");
     const callsPath = path.join(fixtureDir, "calls.jsonl");
@@ -458,13 +280,18 @@ if (args[0] === "run" && args[1] === "list") {
     { databaseId: 201, event: "workflow_dispatch", headSha: "manual", status: "completed", conclusion: "success" },
     { databaseId: 202, event: "push", headSha: "failed", status: "completed", conclusion: "failure" },
     { databaseId: 203, event: "push", headSha: "running", status: "in_progress", conclusion: "" },
-    { databaseId: 204, event: "push", headSha: "first", status: "completed", conclusion: "success" },
-    { databaseId: 205, event: "push", headSha: "second", status: "completed", conclusion: "success" }
+    { databaseId: 204, event: "push", headSha: "first", status: "completed", conclusion: "success", createdAt: "2026-08-31T00:00:00Z", updatedAt: "2026-08-31T00:01:00Z", attempt: 3 },
+    { databaseId: 205, event: "push", headSha: "second", status: "completed", conclusion: "success", createdAt: "2026-08-30T23:59:00Z", updatedAt: "2026-08-31T00:01:00Z", attempt: 2 }
   ]));
 } else if (args[0] === "run" && args[1] === "view") {
-  console.log(JSON.stringify({ status: "completed", conclusion: "success", createdAt: "2026-08-31T00:00:00Z", updatedAt: "2026-08-31T00:01:00Z" }));
+  console.error("run metadata must come from the captured list observation");
+  process.exit(18);
 } else if (args[0] === "api" && args.some((arg) => arg.includes("/jobs?"))) {
-  console.log(JSON.stringify({ total_count: 1, jobs: [{ id: 1, name: "checks", status: "completed", conclusion: "success", started_at: "2026-08-31T00:00:10Z", completed_at: "2026-08-31T00:00:40Z" }] }));
+  const endpoint = args.find(arg => arg.includes("/jobs?"));
+  const page = Number(new URL(endpoint, "https://api.github.com").searchParams.get("page"));
+  const payload = ${JSON.stringify(fixture.pages)}[page - 1];
+  if (payload === undefined) process.exit(19);
+  console.log(typeof payload === "string" ? payload : JSON.stringify(payload));
 } else {
   process.exit(2);
 }
@@ -472,18 +299,66 @@ if (args[0] === "run" && args[1] === "list") {
     );
     chmodSync(fakeGhPath, 0o755);
     try {
-      const result = spawnSync(process.execPath, ["scripts/ci-run-timings.mjs", "--recent", "2"], {
-        cwd: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.."),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          GH_TOKEN: "fixture-token",
-          OPENCLAW_GH_BIN: fakeGhPath,
-          FIXTURE_CALLS_PATH: callsPath,
+      // Count reads on decoded API objects, then let the actual CLI consume its
+      // ordinary normalized objects. Cumulative normalization revisits the getters.
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          `
+        const parse = JSON.parse;
+        let normalized = 0;
+        JSON.parse = (...args) => {
+          const payload = parse(...args);
+          if (Array.isArray(payload?.jobs)) {
+            for (const item of payload.jobs) {
+              const name = item.name;
+              Object.defineProperty(item, "name", { get() { normalized++; return name; } });
+            }
+          }
+          return payload;
+        };
+        process.on("exit", () => console.error("normalized-jobs=" + normalized));
+        process.argv = [process.execPath, "scripts/ci-run-timings.mjs", "--recent", "${recent}"];
+        await import("./scripts/ci-run-timings.mjs");
+      `,
+        ],
+        {
+          cwd: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.."),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            GITHUB_REPOSITORY: "openclaw/openclaw",
+            GH_TOKEN: "fixture-token",
+            OPENCLAW_GH_BIN: fakeGhPath,
+            FIXTURE_CALLS_PATH: callsPath,
+          },
         },
-      });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.match(/CI run \d+/gu)).toEqual(["CI run 204", "CI run 205"]);
+      );
+      const runIds = fixture.error || recent === 1 ? [204] : [204, 205];
+      if (fixture.error) {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(fixture.error);
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout.match(/CI run \d+/gu)).toEqual(runIds.map((id) => `CI run ${id}`));
+        for (const id of runIds) {
+          expect(result.stdout).toContain(
+            id === 204
+              ? "CI run 204  first  wall=60s  exec=30s  firstStartDelay=10s"
+              : "CI run 205  second  wall=120s  exec=30s  firstStartDelay=70s",
+          );
+        }
+        expect(
+          result.stdout.match(
+            new RegExp(`jobs=${fixture.jobs} {2}avg=30s {2}p90=30s {2}p95=30s {2}max=30s`, "gu"),
+          ),
+        ).toHaveLength(runIds.length);
+      }
+      expect(result.stderr.split(/\r?\n/u)).toContain(
+        `normalized-jobs=${fixture.jobs * runIds.length}`,
+      );
       const calls: string[][] = readFileSync(callsPath, "utf8")
         .trim()
         .split("\n")
@@ -493,7 +368,19 @@ if (args[0] === "run" && args[1] === "list") {
       );
       expect(
         calls.filter((args) => args[0] === "run" && args[1] === "view").map((args) => args[2]),
-      ).toEqual(["204", "205"]);
+      ).toEqual([]);
+      expect(calls[0]?.[calls[0].indexOf("--json") + 1]?.split(",")).toEqual(
+        expect.arrayContaining(["createdAt", "updatedAt", "attempt"]),
+      );
+      expect(calls.filter((args) => args[0] === "api").map((args) => args[3])).toEqual(
+        runIds.flatMap((id) =>
+          Array.from(
+            { length: fixture.requests },
+            (_, page) =>
+              `repos/openclaw/openclaw/actions/runs/${id}/attempts/${id === 204 ? 3 : 2}/jobs?per_page=100&page=${page + 1}`,
+          ),
+        ),
+      );
     } finally {
       rmSync(fixtureDir, { force: true, recursive: true });
     }

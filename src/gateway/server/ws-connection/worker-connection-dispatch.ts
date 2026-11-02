@@ -1,6 +1,5 @@
 import {
   type RequestFrame,
-  type WorkerConnectParams,
   type WorkerErrorShape,
   type WorkerHeartbeatResult,
   type WorkerLiveEventErrorShape,
@@ -8,18 +7,25 @@ import {
   type WorkerTranscriptCommitErrorShape,
   WORKER_COMPUTER_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
-  WORKER_PORTAL_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_METHODS,
-  WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
   validateWorkerComputerParams,
   validateWorkerHeartbeatParams,
   validateWorkerLiveEventParams,
-  validateWorkerPortalParams,
-  validateWorkerSessionsSendParams,
-  validateWorkerSessionsSpawnParams,
   validateWorkerTranscriptCommitParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXEC_APPROVAL_METHOD,
+  WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
+  validateWorkerExecApprovalParams,
+} from "../../../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
+import {
+  WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
+  WORKER_GATEWAY_TOOL_METHODS,
+  validateWorkerGatewayToolInvokeParams,
+  validateWorkerGatewayToolCancelParams,
+} from "../../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import {
   type WorkerInferenceErrorShape,
   WORKER_INFERENCE_METHODS,
@@ -28,9 +34,11 @@ import {
   validateWorkerInferenceStartParams,
 } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
-  WORKER_SKILL_WORKSHOP_FEATURE,
-  validateWorkerSkillWorkshopParams,
-} from "../../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
+  WORKER_TURN_ADMISSION_METHOD,
+  WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
+  validateWorkerTurnAdmissionParams,
+} from "../../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import type { createWorkerTurnRpc } from "../../worker-environments/worker-turn-rpc.js";
 import {
@@ -41,7 +49,7 @@ import {
 } from "./worker-connection-frames.js";
 
 type WorkerServiceResult<TFailure extends { ok: false }> =
-  | { ok: true; result: unknown }
+  | { ok: true; result: unknown; launch?: () => void }
   | TFailure
   | { ok: false; closeReason: WorkerProtocolCloseReason };
 
@@ -52,41 +60,22 @@ type WorkerServiceFailure<K extends keyof WorkerTurnRpc> = Exclude<
 >;
 export type WorkerConnectionService = Pick<
   WorkerTurnRpc,
-  "commitTranscript" | "pushLiveEvent" | "validateWorkerConnection"
+  "admitWorker" | "commitTranscript" | "pushLiveEvent" | "validateWorkerConnection"
 > &
-  Partial<Pick<WorkerTurnRpc, "executeComputer" | "executeSessionTool">> & {
-    admitWorker: (
-      admission: WorkerConnectParams["admission"],
-    ) => Promise<
-      | { ok: true; identity: WorkerConnectionIdentity }
-      | { ok: false; reason: WorkerProtocolCloseReason }
-    >;
-  };
-
-type WorkerInferenceConnectionService = WorkerConnectionService &
-  Partial<Pick<WorkerTurnRpc, "startInference" | "cancelInference">>;
-
-const SESSION_TOOL_REQUESTS = [
-  [
-    "worker.sessions.spawn",
-    "sessions_spawn",
-    WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
-    validateWorkerSessionsSpawnParams,
-  ],
-  [
-    "worker.sessions.send",
-    "sessions_send",
-    WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
-    validateWorkerSessionsSendParams,
-  ],
-  ["worker.portal", "portal", WORKER_PORTAL_PROTOCOL_FEATURE, validateWorkerPortalParams],
-  [
-    "worker.skill-workshop",
-    "skill_workshop",
-    WORKER_SKILL_WORKSHOP_FEATURE,
-    validateWorkerSkillWorkshopParams,
-  ],
-] as const;
+  Partial<
+    Pick<
+      WorkerTurnRpc,
+      | "executeComputer"
+      | "getToolSurface"
+      | "invokeGatewayTool"
+      | "cancelGatewayTool"
+      | "startInference"
+      | "cancelInference"
+      | "admitTurn"
+      | "refreshGitHubBinding"
+      | "execApproval"
+    >
+  >;
 
 type WorkerRespond = (
   ok: boolean,
@@ -98,51 +87,38 @@ type WorkerRespond = (
     | WorkerTranscriptCommitErrorShape,
 ) => void;
 
-function rejectWorkerRequest(params: {
-  reason: WorkerProtocolCloseReason;
-  respond: WorkerRespond;
-  close(code: number, reason: WorkerProtocolCloseReason): void;
-  warn(message: string): void;
-}): void {
-  params.warn(`worker protocol request rejected reason=${params.reason}`);
-  params.respond(false, undefined, workerProtocolError(params.reason));
-  queueMicrotask(() => params.close(1008, params.reason));
-}
-
 /** Closed worker dispatcher. It never calls the generic gateway method registry. */
 export async function dispatchWorkerRequest(params: {
   request: RequestFrame;
   identity: WorkerConnectionIdentity;
   connectionId: string;
-  service: WorkerInferenceConnectionService | undefined;
+  service: WorkerConnectionService | undefined;
   send(frame: unknown): void;
   respond: WorkerRespond;
   close(code: number, reason: WorkerProtocolCloseReason): void;
   warn(message: string): void;
   signal?: AbortSignal;
 }): Promise<void> {
+  const reject = (reason: WorkerProtocolCloseReason) => {
+    params.warn(`worker protocol request rejected reason=${reason}`);
+    params.respond(false, undefined, workerProtocolError(reason));
+    queueMicrotask(() => params.close(1008, reason));
+  };
   const service = params.service;
   if (!service) {
-    rejectWorkerRequest({ ...params, reason: "environment-unavailable" });
+    reject("environment-unavailable");
     return;
   }
-  const ownershipFailure = service.validateWorkerConnection(params.identity);
+  const toolSurfaceRequest = Object.values(WORKER_GATEWAY_TOOL_METHODS).some(
+    (method) => method === params.request.method,
+  );
+  const ownershipFailure = toolSurfaceRequest
+    ? service.validateWorkerConnection(params.identity, { toolSurface: true })
+    : service.validateWorkerConnection(params.identity);
   if (ownershipFailure) {
-    rejectWorkerRequest({ ...params, reason: ownershipFailure });
+    reject(ownershipFailure);
     return;
   }
-  const respondOutcome = <TFailure extends { ok: false }>(
-    outcome: WorkerServiceResult<TFailure>,
-    errorFor: (failure: TFailure) => Parameters<WorkerRespond>[2],
-  ): void => {
-    if (outcome.ok) {
-      params.respond(true, outcome.result);
-    } else if ("closeReason" in outcome) {
-      rejectWorkerRequest({ ...params, reason: outcome.closeReason });
-    } else {
-      params.respond(false, undefined, errorFor(outcome));
-    }
-  };
   const execute = async <TRequest, TFailure extends { ok: false }>(
     feature: string,
     validate: (value: unknown) => value is TRequest,
@@ -151,61 +127,107 @@ export async function dispatchWorkerRequest(params: {
     errorFor: (failure: TFailure) => Parameters<WorkerRespond>[2],
   ): Promise<void> => {
     if (!params.identity.protocolFeatures.includes(feature) || !operation) {
-      rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
+      reject("method-not-allowed");
     } else if (!validate(params.request.params)) {
       if (typeof invalid === "string") {
-        rejectWorkerRequest({ ...params, reason: invalid });
+        reject(invalid);
       } else {
         params.respond(false, undefined, invalid);
       }
     } else {
-      respondOutcome(await operation(params.request.params), errorFor);
+      const outcome = await operation(params.request.params);
+      if (outcome.ok) {
+        params.respond(true, outcome.result);
+        // Reply before a synchronous provider can emit.
+        outcome.launch?.();
+      } else if ("closeReason" in outcome) {
+        reject(outcome.closeReason);
+      } else {
+        params.respond(false, undefined, errorFor(outcome));
+      }
     }
   };
-  if (params.request.method === WORKER_INFERENCE_METHODS[0]) {
-    if (!params.identity.protocolFeatures.includes(WORKER_INFERENCE_PROTOCOL_FEATURE)) {
-      rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
+  // Inference validates its context before rejecting an unavailable handler.
+  const unavailableInference = async () => ({
+    ok: false as const,
+    closeReason: "method-not-allowed" as const,
+  });
+  if (params.request.method === WORKER_EXEC_APPROVAL_METHOD) {
+    const operation = service.execApproval;
+    try {
+      return await execute(
+        WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
+        validateWorkerExecApprovalParams,
+        operation &&
+          ((request) => operation.call(service, params.identity, request, params.signal)),
+        "invalid-frame",
+        () => workerProtocolError("gateway-unavailable"),
+      );
+    } catch (error) {
+      params.respond(
+        false,
+        undefined,
+        workerProtocolError("gateway-unavailable", {
+          message: `Worker exec approval failed: ${formatErrorMessage(error)}`,
+        }),
+      );
       return;
     }
-    if (!validateWorkerInferenceStartParams(params.request.params)) {
-      params.respond(false, undefined, workerInferenceError("invalid-context"));
-      return;
-    }
-    if (!service.startInference) {
-      rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
-      return;
-    }
-    const outcome = service.startInference(params.identity, params.request.params, {
-      connectionId: params.connectionId,
-      send: (frame) => params.send(frame),
-    });
-    // Reply before a synchronous provider can emit.
-    respondOutcome(outcome, (failure: WorkerServiceFailure<"startInference">) =>
-      workerInferenceError(failure.reason),
+  }
+  if (params.request.method === WORKER_TURN_ADMISSION_METHOD) {
+    const operation = service.admitTurn;
+    return execute(
+      WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
+      validateWorkerTurnAdmissionParams,
+      operation && ((request) => operation.call(service, params.identity, request)),
+      "invalid-frame",
+      () => workerProtocolError("gateway-unavailable"),
     );
-    if (outcome.ok) {
-      outcome.launch();
-    }
-    return;
+  }
+  if (params.request.method === WORKER_GATEWAY_TOOL_METHODS.invoke) {
+    const operation = service.invokeGatewayTool;
+    return execute(
+      WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
+      validateWorkerGatewayToolInvokeParams,
+      operation &&
+        ((request) => operation.call(service, params.identity, request, params, params.signal)),
+      "invalid-frame",
+      () => workerProtocolError("gateway-unavailable"),
+    );
+  }
+  if (params.request.method === WORKER_GATEWAY_TOOL_METHODS.cancel) {
+    const operation = service.cancelGatewayTool;
+    return execute(
+      WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
+      validateWorkerGatewayToolCancelParams,
+      operation && ((request) => operation.call(service, params.identity, request)),
+      "invalid-frame",
+      () => workerProtocolError("gateway-unavailable"),
+    );
+  }
+  if (params.request.method === WORKER_INFERENCE_METHODS[0]) {
+    const operation = service.startInference;
+    return execute(
+      WORKER_INFERENCE_PROTOCOL_FEATURE,
+      validateWorkerInferenceStartParams,
+      operation
+        ? (request) => operation.call(service, params.identity, request, params)
+        : unavailableInference,
+      workerInferenceError("invalid-context"),
+      (failure: WorkerServiceFailure<"startInference">) => workerInferenceError(failure.reason),
+    );
   }
   if (params.request.method === WORKER_INFERENCE_METHODS[1]) {
-    if (!params.identity.protocolFeatures.includes(WORKER_INFERENCE_PROTOCOL_FEATURE)) {
-      rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
-      return;
-    }
-    if (!validateWorkerInferenceCancelParams(params.request.params)) {
-      params.respond(false, undefined, workerInferenceError("invalid-context"));
-      return;
-    }
-    if (!service.cancelInference) {
-      rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
-      return;
-    }
-    const outcome = service.cancelInference(params.identity, params.request.params);
-    respondOutcome(outcome, (failure: WorkerServiceFailure<"cancelInference">) =>
-      workerInferenceError(failure.reason),
+    const operation = service.cancelInference;
+    return execute(
+      WORKER_INFERENCE_PROTOCOL_FEATURE,
+      validateWorkerInferenceCancelParams,
+      operation
+        ? (request) => operation.call(service, params.identity, request)
+        : unavailableInference,
+      workerInferenceError("invalid-context"),
+      (failure: WorkerServiceFailure<"cancelInference">) => workerInferenceError(failure.reason),
     );
-    return;
   }
   if (params.request.method === WORKER_PROTOCOL_METHODS[1]) {
     return execute(
@@ -237,32 +259,46 @@ export async function dispatchWorkerRequest(params: {
         workerProtocolError(failure.reason, { message: failure.message }),
     );
   }
-  const sessionTool = SESSION_TOOL_REQUESTS.find(([method]) => method === params.request.method);
-  if (sessionTool) {
-    const [, toolName, feature, validate] = sessionTool;
-    const operation = service.executeSessionTool;
-    return execute(
-      feature,
-      validate,
-      operation &&
-        ((request: Parameters<WorkerTurnRpc["executeSessionTool"]>[2]) =>
-          operation.call(service, params.identity, toolName, request, params.signal)),
-      workerProtocolError("invalid-frame"),
-      (failure: WorkerServiceFailure<"executeSessionTool">) => workerProtocolError(failure.reason),
-    );
-  }
   if (params.request.method !== WORKER_PROTOCOL_METHODS[0]) {
-    rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
+    reject("method-not-allowed");
     return;
   }
   if (!validateWorkerHeartbeatParams(params.request.params)) {
-    rejectWorkerRequest({ ...params, reason: "invalid-heartbeat" });
+    reject("invalid-heartbeat");
+    return;
+  }
+  let github: WorkerHeartbeatResult["github"];
+  if (
+    params.request.params.githubGeneration !== undefined &&
+    params.identity.protocolFeatures.includes(WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE) &&
+    service.refreshGitHubBinding
+  ) {
+    const refreshed = await service.refreshGitHubBinding(
+      params.identity,
+      params.request.params.githubGeneration,
+    );
+    if (!refreshed.ok) {
+      reject(refreshed.closeReason);
+      return;
+    }
+    const currentFailure = service.validateWorkerConnection(params.identity);
+    if (params.signal?.aborted || currentFailure) {
+      reject(currentFailure ?? "placement-mismatch");
+      return;
+    }
+    if (refreshed.result) {
+      refreshed.assertCurrent();
+    }
+    github = refreshed.result;
+  } else if (params.request.params.githubGeneration !== undefined) {
+    reject("invalid-heartbeat");
     return;
   }
   const result: WorkerHeartbeatResult = {
     receivedAtMs: Date.now(),
     status: "ok",
     ownerEpoch: params.identity.ownerEpoch,
+    ...(github ? { github } : {}),
   };
   params.respond(true, result);
 }

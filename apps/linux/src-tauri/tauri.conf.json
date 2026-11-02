@@ -4,6 +4,15 @@
   "version": "0.1.0",
   "identifier": "ai.openclaw.linux",
   "build": {
+    "beforeBuildCommand": {
+      "script": "node scripts/stage-runtime.mjs",
+      "cwd": ".."
+    },
+    "beforeDevCommand": {
+      "script": "node scripts/stage-runtime.mjs",
+      "cwd": "..",
+      "wait": true
+    },
     "frontendDist": [
       "../ui",
       "../../../ui/public/fonts/instrument-sans-latin.woff2",
@@ -122,7 +131,8 @@
       "icons/icon.png"
     ],
     "resources": {
-      "../../../scripts/install-cli.sh": "install-cli.sh"
+      "target/installers/install-cli.sh": "install-cli.sh",
+      "target/desktop-runtime/": "desktop-runtime/"
     },
     "linux": {
       "appimage": {

@@ -4,7 +4,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { requireDirectorySync, syncDirectorySync } from "../infra/directory-durability.js";
-import { hashFileDescriptorSync } from "../infra/file-descriptor.js";
+import {
+  flushAndHashFileSync as syncAndHash,
+  hashFileDescriptorSync,
+} from "../infra/file-descriptor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   assertSqliteIntegrity,
@@ -12,6 +15,7 @@ import {
 } from "../infra/sqlite-integrity.js";
 import { createPrivateSqliteTempDirectorySync } from "../infra/sqlite-private-directory.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
+import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 const ORPHAN_PREDICATE =
@@ -108,16 +112,6 @@ function assertKnownOrphanIntegrity(database: DatabaseSync): number {
   }
 }
 
-function syncAndHash(filePath: string) {
-  const descriptor = fs.openSync(filePath, "r+");
-  try {
-    fs.fsyncSync(descriptor);
-    return hashFileDescriptorSync(descriptor);
-  } finally {
-    fs.closeSync(descriptor);
-  }
-}
-
 /**
  * Caller holds Doctor's ownership/schema fences and its immediate write transaction.
  * Foreign-key actions stay disabled: inbound dependents must fail the post-check,
@@ -131,6 +125,7 @@ export function recoverOrphanTaskDeliveryRows(database: DatabaseSync, pathname: 
   ) {
     return [];
   }
+  assertOpenClawStateDatabaseOwner(database, { pathname });
   assertRecoveryShape(database);
   const count = assertKnownOrphanIntegrity(database);
   if (!database.isTransaction) {

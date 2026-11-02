@@ -33,7 +33,6 @@ public actor OpenClawChatSourceResources {
     private let request: Request
     private let loadConfig: ConfigLoader
     private let isCurrent: IsCurrent
-    private var revision: UInt64 = 0
     private struct ContextSnapshot: Sendable {
         let context: OpenClawChatSourceContext
         let resourceBaseURL: URL
@@ -59,7 +58,6 @@ public actor OpenClawChatSourceResources {
     }
 
     public func invalidate() {
-        self.revision &+= 1
         self.contextTask?.cancel()
         self.contextTask = nil
         for task in self.faviconTasks.values {
@@ -75,7 +73,6 @@ public actor OpenClawChatSourceResources {
 
     private func loadContextSnapshot() async -> ContextSnapshot? {
         guard await self.isCurrent(), !Task.isCancelled else { return nil }
-        let revision = self.revision
         let task: Task<ContextSnapshot?, Never>
         if let existing = contextTask {
             task = existing
@@ -84,15 +81,14 @@ public actor OpenClawChatSourceResources {
             self.contextTask = task
         }
         let context = await task.value
-        guard await self.isCurrent(), self.revision == revision, !Task.isCancelled else { return nil }
+        guard await self.isCurrent(), !task.isCancelled, !Task.isCancelled else { return nil }
         return context
     }
 
     public func loadFavicon(host: String) async -> Data? {
-        let revision = self.revision
         guard let snapshot = await loadContextSnapshot(), snapshot.context.automaticallyFetchFavicons,
               let url = Self.faviconURL(host: host, baseURL: snapshot.resourceBaseURL),
-              await isCurrent(), self.revision == revision, !Task.isCancelled
+              await isCurrent(), !Task.isCancelled
         else { return nil }
         let task: Task<Data?, Never>
         if let cached = self.faviconTasks[url] {
@@ -102,19 +98,19 @@ public actor OpenClawChatSourceResources {
                 let oldest = self.faviconOrder.removeFirst()
                 self.faviconTasks.removeValue(forKey: oldest)?.cancel()
             }
-            task = Task { await self.downloadFavicon(url: url, revision: revision) }
+            task = Task { await self.downloadFavicon(url: url) }
             self.faviconTasks[url] = task
             self.faviconOrder.append(url)
         }
         let data = await task.value
-        guard await self.isCurrent(), self.revision == revision, !Task.isCancelled else { return nil }
+        guard await self.isCurrent(), !task.isCancelled, !Task.isCancelled else { return nil }
         return data
     }
 
-    private func downloadFavicon(url: URL, revision: UInt64) async -> Data? {
-        guard await self.isCurrent(), self.revision == revision, !Task.isCancelled,
+    private func downloadFavicon(url: URL) async -> Data? {
+        guard await self.isCurrent(), !Task.isCancelled,
               let (data, response) = try? await self.request(url, Self.maximumFaviconBytes),
-              await self.isCurrent(), self.revision == revision, !Task.isCancelled,
+              await self.isCurrent(), !Task.isCancelled,
               let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode),
               http.mimeType?.lowercased().hasPrefix("image/") == true,
@@ -189,16 +185,11 @@ public actor OpenClawChatSourceResources {
         automaticallyFetchFavicons: Bool) -> ContextSnapshot?
     {
         guard let basePath = Self.normalizedBasePath(basePath) else { return nil }
-        let resourceBaseURL: URL? = if basePath.isEmpty,
-                                       let controlPageURL = self.controlPageURL(gatewayURL: gatewayURL)
-        {
-            controlPageURL
-        } else {
-            Self.resourceURL(gatewayURL: gatewayURL, basePath: basePath, path: "")
-        }
-        guard let resourceBaseURL,
-              let components = URLComponents(url: resourceBaseURL, resolvingAgainstBaseURL: false)
+        let controlPageURL = basePath.isEmpty ? self.controlPageURL(gatewayURL: gatewayURL) : nil
+        guard var components = URLComponents(url: controlPageURL ?? gatewayURL, resolvingAgainstBaseURL: false)
         else { return nil }
+        if controlPageURL == nil { components.path = basePath }
+        guard let resourceBaseURL = components.url else { return nil }
         let mount = components.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         return ContextSnapshot(
             context: OpenClawChatSourceContext(
@@ -249,15 +240,6 @@ public actor OpenClawChatSourceResources {
             components.percentEncodedPath.removeLast()
         }
         components.percentEncodedPath += path
-        return components.url
-    }
-
-    private static func resourceURL(gatewayURL: URL, basePath: String, path: String) -> URL? {
-        guard let basePath = normalizedBasePath(basePath),
-              let url = httpURL(gatewayURL),
-              var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        else { return nil }
-        components.path = basePath + path
         return components.url
     }
 

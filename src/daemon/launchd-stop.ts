@@ -1,4 +1,3 @@
-/** LaunchAgent stop semantics and in-service maintenance parking. */
 import { isDeepStrictEqual } from "node:util";
 import { readLockPayloadSync, resolveGatewayLockPaths } from "../infra/gateway-lock.js";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
@@ -79,11 +78,13 @@ function verifyLaunchAgentStopProbe(
 
 async function waitForLaunchAgentUnloaded(
   serviceTarget: string,
-  initialPid: number | undefined,
+  initialPids: readonly number[],
   assertCurrent?: () => void,
+  onWait?: (pids: readonly number[]) => void,
 ): Promise<void> {
-  const pids = new Set<number>(initialPid === undefined ? [] : [initialPid]);
-  const deadline = Date.now() + LAUNCH_AGENT_STOP_TIMEOUT_MS;
+  const pids = new Set(initialPids);
+  const deadline = performance.now() + LAUNCH_AGENT_STOP_TIMEOUT_MS;
+  let warned = false;
   for (;;) {
     const probe = await probeLaunchAgentState(serviceTarget, 5_000);
     assertCurrent?.();
@@ -95,13 +96,17 @@ async function waitForLaunchAgentUnloaded(
     if (probe.state === "not-loaded" && alivePids.length === 0) {
       return;
     }
-    if (Date.now() >= deadline) {
+    if (probe.state === "not-loaded" && !warned) {
+      warned = true;
+      onWait?.(alivePids);
+    }
+    if (performance.now() >= deadline) {
       throw launchAgentStopError(
         serviceTarget,
         `LaunchAgent stop did not complete: ${serviceTarget} is ${probe.state === "not-loaded" ? "unloaded" : "still loaded"}${alivePids.length ? `; PID ${alivePids.join(", ")} is still alive` : ""}`,
       );
     }
-    await sleep(Math.min(100, Math.max(0, deadline - Date.now())));
+    await sleep(Math.min(100, Math.max(0, deadline - performance.now())));
   }
 }
 
@@ -109,9 +114,9 @@ async function waitForGatewayPortRelease(
   port: number,
   probeHosts: readonly string[],
 ): Promise<boolean> {
-  const deadline = Date.now() + LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    await sleep(Math.min(LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS, deadline - Date.now()));
+  const deadline = performance.now() + LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS;
+  while (performance.now() < deadline) {
+    await sleep(Math.min(LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS, deadline - performance.now()));
     const status = await probePortUsage(port, probeHosts);
     if (status === "free") {
       return true;
@@ -171,7 +176,7 @@ export async function stopLaunchAgent({
     assertCurrent?.();
     assertGatewayServiceUpdateCurrent();
   };
-  const insideService = await isCurrentProcessInsideLaunchdService(label, process.env);
+  const insideService = await isCurrentProcessInsideLaunchdService(label);
   const assertStopCurrent = async () => {
     assertNativeCurrent();
     // Classify from the live lease too: losing an inherited marker cannot turn a
@@ -196,7 +201,7 @@ export async function stopLaunchAgent({
         updateOwned &&
         updateHandoff &&
         (await (
-          await import("../infra/update-managed-service-handoff.js")
+          await import("../infra/update-managed-service-handoff-current.js")
         ).isCurrentManagedServiceUpdateHandoffProcess({ ...updateHandoff, env: intentEnv }));
       if (!authorized) {
         throw launchAgentStopError(
@@ -212,6 +217,7 @@ export async function stopLaunchAgent({
     serviceTarget,
     await probeLaunchAgentState(serviceTarget, 5_000),
   );
+  const stoppingPids = new Set(initialPid === undefined ? [] : [initialPid]);
   let clearIntent: (() => void) | undefined;
   let assertServingCurrent = assertNativeCurrent;
   let warning: string | undefined;
@@ -280,6 +286,12 @@ export async function stopLaunchAgent({
           clearIntent = clear;
         },
       });
+      // Intent admission verifies the serving child's membership in this job.
+      // Its listener and launchd wrapper can disappear before database cleanup.
+      const servingPid = owner?.pid ?? legacyLock?.pid;
+      if (servingPid !== undefined) {
+        stoppingPids.add(servingPid);
+      }
     }
     if (persistDisable) {
       await assertStopCurrent();
@@ -309,7 +321,11 @@ export async function stopLaunchAgent({
     throw error;
   }
   reportMutation(persistDisable ? "disable-bootout" : "bootout");
-  await waitForLaunchAgentUnloaded(serviceTarget, initialPid, assertCurrent);
+  await waitForLaunchAgentUnloaded(serviceTarget, [...stoppingPids], assertCurrent, (pids) => {
+    stdout.write(
+      `${formatLine("Warning", `Waiting for Gateway PID ${pids.join(", ")} to exit and release its databases before continuing.`)}\n`,
+    );
+  });
   if (warning) {
     stdout.write(`${formatLine("Warning", warning)}\n`);
   }
@@ -320,15 +336,11 @@ export async function stopLaunchAgent({
   );
 }
 
-export async function parkCurrentLaunchAgentForMaintenance(
-  params: {
-    env?: GatewayServiceEnv;
-  } = {},
-): Promise<boolean> {
-  const serviceEnv = params.env ?? (process.env as GatewayServiceEnv);
+export async function parkCurrentLaunchAgentForMaintenance(): Promise<boolean> {
+  const serviceEnv = process.env as GatewayServiceEnv;
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(serviceEnv);
-  if (!(await isCurrentProcessInsideLaunchdService(label, process.env))) {
+  if (!(await isCurrentProcessInsideLaunchdService(label))) {
     return false;
   }
   const serviceTarget = `${domain}/${label}`;

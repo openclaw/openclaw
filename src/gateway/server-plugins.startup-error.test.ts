@@ -3,23 +3,25 @@ import { linkSync, unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
-  clearInstanceBindingProbeCoordinators,
   installInstanceBindingProbeCoordinator,
   INSTANCE_BINDING_PROBE_METHOD,
   writeInstanceBindingProbePlugin,
 } from "./server-plugins.lifecycle.test-fixtures.js";
-import { installInstanceBindingConfigIo } from "./server-plugins.lifecycle.test-support.js";
 import {
-  connectWebchatClient,
-  installGatewayTestHooks,
-  rpcReq,
-  startTestGatewayServer,
-} from "./test-helpers.server.js";
+  closePluginGateway,
+  configurePluginGateway,
+  installInstanceBindingConfigIo,
+  startPluginGateway,
+  reloadPlugin,
+  writeJson,
+  type PluginSocket,
+} from "./server-plugins.lifecycle.test-support.js";
+import { connectWebchatClient, installGatewayTestHooks, rpcReq } from "./test-helpers.server.js";
 
 // Keep hosted catalog transport outside this loader lifecycle proof.
 vi.mock("../plugins/official-external-plugin-catalog.js", async (importOriginal) => ({
@@ -30,10 +32,17 @@ vi.mock("../plugins/official-external-plugin-catalog.js", async (importOriginal)
   }),
 }));
 
+vi.mock("./server-runtime-services.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-runtime-services.js")>()),
+  scheduleGatewayPostReadyMaintenance: () => {},
+}));
+
 vi.doUnmock("../plugins/loader.js");
 installGatewayTestHooks({ scope: "suite" });
 installInstanceBindingConfigIo();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const probeId = "instance-binding-probe";
+const brokenId = "startup-broken";
 
 it.each(["module-load", "entry-open"] as const)(
   "keeps %s startup errors diagnostic while healthy plugins reload and disable",
@@ -41,36 +50,24 @@ it.each(["module-load", "entry-open"] as const)(
   async (failureKind) => {
     const coordinator = installInstanceBindingProbeCoordinator({ reportReloadSettlement: true });
     const bundledRoot = tempDirs.make("openclaw-startup-error-");
-    // External code has captured source generations; bundled JS intentionally
-    // keeps process module identity and cannot model a changed candidate file.
+    // External source generations can change; bundled JS keeps process module identity.
     const healthyRoot = tempDirs.make("openclaw-startup-healthy-");
     await writeInstanceBindingProbePlugin(healthyRoot, coordinator.channelName);
-    const healthyPlugin = path.join(healthyRoot, "instance-binding-probe");
-    const brokenDir = path.join(
-      failureKind === "entry-open" ? healthyRoot : bundledRoot,
-      "startup-broken",
-    );
+    const healthyPlugin = path.join(healthyRoot, probeId);
+    const brokenDir = path.join(failureKind === "entry-open" ? healthyRoot : bundledRoot, brokenId);
+    const brokenEntry = path.join(brokenDir, "index.js");
     await fs.mkdir(brokenDir);
-    await fs.writeFile(
-      path.join(brokenDir, "package.json"),
-      JSON.stringify({
-        name: "startup-broken",
-        type: "commonjs",
-        openclaw: { extensions: ["./index.js"] },
-      }),
-    );
-    await fs.writeFile(
-      path.join(brokenDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "startup-broken",
-        activation: { onStartup: true },
-        configSchema: { type: "object" },
-      }),
-    );
-    await fs.writeFile(
-      path.join(brokenDir, "index.js"),
-      'throw new Error("startup failure remains diagnostic");',
-    );
+    await writeJson(path.join(brokenDir, "package.json"), {
+      name: brokenId,
+      type: "commonjs",
+      openclaw: { extensions: ["./index.js"] },
+    });
+    await writeJson(path.join(brokenDir, "openclaw.plugin.json"), {
+      id: brokenId,
+      activation: { onStartup: true },
+      configSchema: { type: "object" },
+    });
+    await fs.writeFile(brokenEntry, 'throw new Error("startup failure remains diagnostic");');
     if (failureKind === "entry-open") {
       const boundary = await import("../infra/boundary-file-read.js");
       const open = boundary.openRootFileSync;
@@ -78,11 +75,10 @@ it.each(["module-load", "entry-open"] as const)(
       const entryOpen = vi.spyOn(boundary, "openRootFileSync").mockImplementation((options) => {
         if (
           !injected &&
-          options.absolutePath === path.join(brokenDir, "index.js") &&
+          options.absolutePath === brokenEntry &&
           options.boundaryLabel === "plugin root"
         ) {
-          // Discovery has admitted metadata. Change the real inode only during
-          // the import boundary check, then leave later metadata reads valid.
+          // Change the inode only at the import boundary, after metadata admission.
           injected = true;
           const alias = path.join(healthyRoot, "entry-alias.js");
           linkSync(options.absolutePath, alias);
@@ -96,49 +92,46 @@ it.each(["module-load", "entry-open"] as const)(
       });
       onTestFinished(() => entryOpen.mockRestore());
     }
-    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
-    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
-    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
-    process.env.OPENCLAW_SKIP_CHANNELS = "1";
-    process.env.OPENCLAW_SKIP_CRON = "1";
-    const configPath = process.env.OPENCLAW_CONFIG_PATH;
-    assert(configPath);
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        plugins: {
-          allow: ["startup-broken", "instance-binding-probe"],
-          load: { paths: [healthyPlugin, ...(failureKind === "entry-open" ? [brokenDir] : [])] },
-          entries: {
-            "startup-broken": { enabled: true },
-            "instance-binding-probe": { enabled: true },
-          },
+    await writeJson(configurePluginGateway(bundledRoot), {
+      plugins: {
+        allow: [brokenId, probeId],
+        load: { paths: [healthyPlugin, ...(failureKind === "entry-open" ? [brokenDir] : [])] },
+        entries: {
+          [brokenId]: { enabled: true },
+          [probeId]: { enabled: true },
         },
-      }),
-    );
-    const recovery = vi.fn(() => ({ status: "emitted" as const }));
-    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-    const port = portClaim.port;
-    const server = await startTestGatewayServer(portClaim, {
-      auth: { mode: "none" },
-      controlUiEnabled: false,
-      sidecarStartup: "start",
-      hotReloadRecovery: recovery,
+      },
     });
-    let socket: Awaited<ReturnType<typeof connectWebchatClient>> | undefined;
+    const recovery = vi.fn(() => ({ status: "emitted" as const }));
+    const { server, port } = await startPluginGateway({ hotReloadRecovery: recovery });
+    let socket: PluginSocket | undefined;
     try {
       await server.startupSettled;
+      await waitForGatewayStartup(port);
       const connected = await connectWebchatClient({ port, scopes: ["operator.admin"] });
       socket = connected;
-      await expect
-        .poll(async () => (await rpcReq(connected, INSTANCE_BINDING_PROBE_METHOD, {})).payload, {
-          timeout: 30_000,
-        })
-        .toMatchObject({ reloadSettled: true });
+      const probe = async () => {
+        const result = await rpcReq(connected, INSTANCE_BINDING_PROBE_METHOD, {});
+        expect(result.ok, result.error?.message).toBe(true);
+        return result.payload;
+      };
+      const rejectReload = async (pluginId: string, error: string) => {
+        const result = await reloadPlugin(connected, pluginId);
+        expect(result).toMatchObject({
+          ok: false,
+          error: { details: { runtime: { committed: false, phase: "activate" } } },
+        });
+        expect(result.error?.message).toContain(error);
+        return result;
+      };
+      const expectHandler = (method: string, handler: unknown) =>
+        expect(getActivePluginRegistry()?.gatewayHandlers[method]).toBe(handler);
+      const waitForReloadSettlement = () =>
+        expect.poll(probe, { timeout: 30_000 }).toMatchObject({ reloadSettled: true });
+      await waitForReloadSettlement();
       const initial = getActivePluginRegistry();
       assert(initial);
-      const broken = initial.plugins.find((record) => record.id === "startup-broken");
+      const broken = initial.plugins.find((record) => record.id === brokenId);
       expect(broken).toMatchObject({
         status: "error",
         error: expect.stringContaining(
@@ -149,62 +142,54 @@ it.each(["module-load", "entry-open"] as const)(
       if (failureKind === "entry-open") {
         expect(getPluginInstance(broken)).toBeUndefined();
       }
-      const diagnostics = initial.diagnostics.filter(
-        (entry) => entry.pluginId === "startup-broken",
-      );
+      const diagnostics = initial.diagnostics.filter((entry) => entry.pluginId === brokenId);
       expect(diagnostics.length).toBeGreaterThan(0);
-      const before = await rpcReq(socket, INSTANCE_BINDING_PROBE_METHOD, {});
-      expect(before.ok, before.error?.message).toBe(true);
-      const reload = await rpcReq(socket, "plugins.reload", {
-        plugins: [{ pluginId: "instance-binding-probe" }],
-      });
+      const expectBrokenRetained = (previous?: typeof initial) => {
+        const registry = getActivePluginRegistry();
+        assert(registry);
+        if (previous) {
+          expect(registry).not.toBe(previous);
+        }
+        expect(registry.plugins.find((record) => record.id === brokenId)).toBe(broken);
+        expect(registry.diagnostics.filter((entry) => entry.pluginId === brokenId)).toEqual(
+          diagnostics,
+        );
+        return registry;
+      };
+      const before = await probe();
+      const reload = await reloadPlugin(socket);
       expect(reload, reload.error?.message).toMatchObject({
         ok: true,
-        payload: { restartRequired: false, runtime: { pluginIds: ["instance-binding-probe"] } },
+        payload: { restartRequired: false, runtime: { pluginIds: [probeId] } },
       });
-      const current = getActivePluginRegistry();
-      assert(current);
-      expect(current).not.toBe(initial);
-      expect(current.plugins.find((record) => record.id === "startup-broken")).toBe(broken);
-      expect(current.diagnostics.filter((entry) => entry.pluginId === "startup-broken")).toEqual(
-        diagnostics,
-      );
-      const after = await rpcReq(socket, INSTANCE_BINDING_PROBE_METHOD, {});
-      expect(after.ok, after.error?.message).toBe(true);
-      expect(after.payload?.registryId).not.toBe(before.payload?.registryId);
+      const current = expectBrokenRetained(initial);
+      const after = await probe();
+      expect(after?.registryId).not.toBe(before?.registryId);
+
+      await waitForReloadSettlement();
 
       // Break only B's code; recovery must register captured A code under a fresh owner.
       await fs.writeFile(
         path.join(healthyPlugin, "index.js"),
         'throw new Error("new candidate failure");',
       );
-      const rejected = await rpcReq(socket, "plugins.reload", {
-        plugins: [{ pluginId: "instance-binding-probe" }],
+      const rejected = await rejectReload(probeId, "new candidate failure");
+      expect(rejected.error?.message).not.toContain(brokenId);
+      const recovered = expectBrokenRetained(current);
+      const retained = await probe();
+      expect(retained?.registryId).not.toBe(after?.registryId);
+      expect(retained).toMatchObject({
+        sessionsId: after?.sessionsId,
+        placementId: after?.placementId,
       });
-      expect(rejected).toMatchObject({
-        ok: false,
-        error: { details: { runtime: { committed: false, phase: "activate" } } },
-      });
-      expect(rejected.error?.message).toContain("new candidate failure");
-      expect(rejected.error?.message).not.toContain("startup-broken");
-      const recovered = getActivePluginRegistry();
-      expect(recovered).not.toBe(current);
-      expect(recovered?.plugins.find((record) => record.id === "startup-broken")).toBe(broken);
-      const retained = await rpcReq(socket, INSTANCE_BINDING_PROBE_METHOD, {});
-      expect(retained.ok, retained.error?.message).toBe(true);
-      expect(retained.payload?.registryId).not.toBe(after.payload?.registryId);
-      expect(retained.payload).toMatchObject({
-        sessionsId: after.payload?.sessionsId,
-        placementId: after.payload?.placementId,
-      });
+      await waitForReloadSettlement();
 
       const registrationsBeforeRepair = coordinator.runtimes.length;
       if (failureKind === "entry-open") {
-        // Repair the entry, then fail B activation. Reexecuting these current files
-        // as C would succeed, concealing that no old runnable source was captured.
-        await fs.unlink(path.join(brokenDir, "index.js"));
+        // A repaired C would succeed, concealing the absence of captured A source.
+        await fs.unlink(brokenEntry);
         await fs.writeFile(
-          path.join(brokenDir, "index.js"),
+          brokenEntry,
           `module.exports = { id: "startup-broken", register(api) {
             const request = {};
             require("node:diagnostics_channel").channel(${JSON.stringify(coordinator.channelName)}).publish(request);
@@ -218,67 +203,35 @@ it.each(["module-load", "entry-open"] as const)(
           } };`,
         );
       }
-      const retryBroken = await rpcReq(socket, "plugins.reload", {
-        plugins: [{ pluginId: "startup-broken" }],
-      });
-      expect(retryBroken).toMatchObject({
-        ok: false,
-        error: { details: { runtime: { committed: false, phase: "activate" } } },
-      });
-      if (failureKind === "module-load") {
-        expect(retryBroken.error?.message).toContain("startup-broken");
-      }
+      await rejectReload(
+        brokenId,
+        failureKind === "module-load" ? brokenId : "repaired candidate activation failed",
+      );
       if (failureKind === "entry-open") {
-        expect(retryBroken.error?.message).toContain("repaired candidate activation failed");
         expect(coordinator.runtimes).toHaveLength(registrationsBeforeRepair + 1);
         expect(coordinator.serviceStarts).toBe(1);
-        expect(
-          getActivePluginRegistry()?.gatewayHandlers["startupBroken.repaired"],
-        ).toBeUndefined();
+        expectHandler("startupBroken.repaired", undefined);
       }
-      expect(getActivePluginRegistry()?.gatewayHandlers[INSTANCE_BINDING_PROBE_METHOD]).toBe(
+      expectHandler(
+        INSTANCE_BINDING_PROBE_METHOD,
         recovered?.gatewayHandlers[INSTANCE_BINDING_PROBE_METHOD],
       );
-      expect(
-        getActivePluginRegistry()?.plugins.find((record) => record.id === "startup-broken"),
-      ).toBe(broken);
-      expect(
-        getActivePluginRegistry()?.diagnostics.filter(
-          (entry) => entry.pluginId === "startup-broken",
-        ),
-      ).toEqual(diagnostics);
+      expectBrokenRetained();
 
+      await waitForReloadSettlement();
       const disabled = await rpcReq(socket, "plugins.setEnabled", {
-        pluginId: "instance-binding-probe",
+        pluginId: probeId,
         enabled: false,
       });
       expect(disabled, disabled.error?.message).toMatchObject({
         ok: true,
         payload: { restartRequired: false },
       });
-      expect(
-        getActivePluginRegistry()?.gatewayHandlers[INSTANCE_BINDING_PROBE_METHOD],
-      ).toBeUndefined();
-      expect(
-        getActivePluginRegistry()?.plugins.find((record) => record.id === "startup-broken"),
-      ).toBe(broken);
+      expectHandler(INSTANCE_BINDING_PROBE_METHOD, undefined);
+      expectBrokenRetained();
       expect(recovery).not.toHaveBeenCalled();
     } finally {
-      const closing = socket;
-      const closed =
-        !closing || closing.readyState === closing.CLOSED
-          ? Promise.resolve()
-          : new Promise<void>((resolve) => {
-              closing.once("close", () => resolve());
-            });
-      closing?.close();
-      try {
-        await server.close({ reason: "startup-error lifecycle cleanup" });
-        await closed;
-      } finally {
-        clearInstanceBindingProbeCoordinators();
-        delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-      }
+      await closePluginGateway(server, socket);
     }
   },
 );

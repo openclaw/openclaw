@@ -1,12 +1,23 @@
+import { spawn } from "node:child_process";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
+import type {
+  SessionsProcessesListResult,
+  SessionsProcessesStopResult,
+} from "../../packages/gateway-protocol/src/schema/session-processes.js";
 import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { boundedWorkerErrorWithCode } from "../gateway/worker-environments/worker-error.js";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
+import {
+  boundedWorkerError,
+  boundedWorkerErrorWithCode,
+} from "../gateway/worker-environments/worker-error.js";
 import {
   NODE_WORKER_BUNDLE_INSTALL_COMMAND,
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
   NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
   NODE_WORKER_DESKTOP_STREAM_COMMAND,
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+  NODE_WORKER_PROCESSES_COMMAND,
   NODE_WORKER_PORTAL_STREAM_COMMAND,
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
@@ -15,12 +26,23 @@ import {
   NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
   NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
 } from "../infra/node-commands.js";
+import { logWarn } from "../logger.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { NODE_PORTAL_ATTACH_PATH } from "../shared/node-desktop-stream.js";
 import {
   NODE_WORKER_BUNDLE_INSTALL_ERROR_CODE,
   NodeWorkerBundleInstallError,
   parseNodeWorkerBundleInstallInput,
   type NodeWorkerBundleInstallResult,
 } from "../worker/node-bundle-install-protocol.js";
+import { parseNodeWorkerDesktopLaunchInput } from "../worker/node-desktop-protocol.js";
+import {
+  parseNodeWorkerCancelInput,
+  parseNodeWorkerEnvironmentStopInput,
+  parseNodeWorkerLaunchInput,
+  parseNodeWorkerLookupInput,
+  type NodeWorkerSupervisorReceipt,
+} from "../worker/node-supervisor-protocol.js";
 import {
   parseNodeWorkerPreparedWorkspaceInput,
   type NodeWorkerPreparedWorkspaceResult,
@@ -37,29 +59,29 @@ import {
   NODE_WORKSPACE_TRANSFER_ERROR_CODE,
   NodeWorkerWorkspaceTransferError,
 } from "../worker/node-workspace-transfer-protocol.js";
+import { decodeWorkerRequest } from "../worker/protocol-record.js";
 import {
   parseWorkerConnectionEndpoint,
   type WorkerConnectionEndpoint,
 } from "../worker/worker-connection-endpoint.js";
-import { invokeNodeWorkerDesktopLaunch } from "./desktop-launch-command.js";
+import { parseNodeWorkerProcessInput } from "../worker/worker-process-observation.js";
 import { invokeNodeWorkerDesktopStream } from "./desktop-stream-command.js";
+import { runNodeStreamTransport } from "./node-stream-transport.js";
 import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
 import { NodeWorkerCapacityExhaustedError } from "./node-worker-capacity.js";
 import {
-  parseNodeWorkerCancelInput,
-  parseNodeWorkerEnvironmentStopInput,
-  parseNodeWorkerLaunchInput,
-  parseNodeWorkerLookupInput,
   projectNodeWorkerSupervisorReceipt,
   type NodeWorkerSupervisorControl,
-  type NodeWorkerSupervisorReceipt,
 } from "./node-worker-supervisor-contract.js";
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
-import { invokeNodeWorkerPortalStream } from "./portal-stream-command.js";
 
 const WORKSPACE_TRANSFER_DIAGNOSTIC_MAX_CHARS = 1_024;
+const WORKSPACE_DIAGNOSTIC_MAX_CHARS = 500;
+const DESKTOP_LAUNCH_TIMEOUT_MS = 30_000;
 
 type NodeWorkerSupervisorCommandPayload =
+  | SessionsProcessesListResult
+  | SessionsProcessesStopResult
   | NodeWorkerBundleInstallResult
   | NodeWorkerSupervisorReceipt
   | NodeWorkerWorkspaceExecResult
@@ -68,24 +90,72 @@ type NodeWorkerSupervisorCommandPayload =
   | { status: "ready" }
   | null;
 
-type NodeWorkerSupervisorCommandResult =
-  | { handled: false }
-  | {
-      handled: true;
-      ok: true;
-      payload: NodeWorkerSupervisorCommandPayload;
+function signalError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new Error("node worker desktop launch aborted");
+}
+
+/** Directly runs one provider-attested launcher without replay. */
+async function invokeNodeWorkerDesktopLaunch(params: {
+  paramsJSON?: string | null;
+  signal?: AbortSignal;
+}): Promise<{ status: "ready" }> {
+  const app = parseNodeWorkerDesktopLaunchInput(params.paramsJSON);
+  const signal = params.signal;
+  signal?.throwIfAborted();
+  const child = spawn(app.executablePath, app.args ?? [], {
+    shell: false,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  const exited = createDeferredCore();
+  let settled = false;
+  const stop = (error: Error): void => {
+    if (settled) {
+      return;
     }
-  | {
-      handled: true;
-      ok: false;
-      code:
-        | "INVALID_REQUEST"
-        | "UNAVAILABLE"
-        | typeof NODE_WORKER_BUNDLE_INSTALL_ERROR_CODE
-        | typeof NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE
-        | typeof NODE_WORKSPACE_TRANSFER_ERROR_CODE;
-      message: string;
-    };
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // The terminal error still owns this one-shot launch result.
+    }
+    settled = true;
+    throw error;
+  };
+  const onError = (error: Error) => {
+    settled = true;
+    exited.reject(error);
+  };
+  const onExit = (code: number | null, terminationSignal: NodeJS.Signals | null) => {
+    settled = true;
+    if (code === 0) {
+      exited.resolve();
+    } else {
+      exited.reject(
+        new Error(
+          terminationSignal
+            ? `node worker desktop launcher terminated by ${terminationSignal}`
+            : `node worker desktop launcher exited with code ${code ?? "unknown"}`,
+        ),
+      );
+    }
+  };
+  child.once("error", onError);
+  child.once("exit", onExit);
+  try {
+    await raceWithTimeout(
+      exited.promise,
+      DESKTOP_LAUNCH_TIMEOUT_MS,
+      () => stop(new Error("node worker desktop launcher timed out")),
+      { ref: false, signal, onAbort: (aborted) => stop(signalError(aborted)) },
+    );
+  } finally {
+    child.off("error", onError);
+    child.off("exit", onExit);
+  }
+  return { status: "ready" };
+}
 
 function workspaceTransferDiagnostic(error: NodeWorkerWorkspaceTransferError): string {
   if (!error.operation || !error.stage) {
@@ -139,50 +209,25 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
   gatewayTlsFingerprint?: string;
   gatewayCloudflareAccess?: CloudflareAccessCredentials;
   signal?: AbortSignal;
-}): Promise<NodeWorkerSupervisorCommandResult> {
-  const recognized =
-    params.command === NODE_WORKER_BUNDLE_INSTALL_COMMAND ||
-    params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND ||
-    params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND ||
-    params.command === NODE_WORKER_SUPERVISOR_CANCEL_COMMAND ||
-    params.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND ||
-    params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND ||
-    params.command === NODE_WORKER_WORKSPACE_PREPARE_COMMAND ||
-    params.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND ||
-    params.command === NODE_WORKER_DESKTOP_STREAM_COMMAND ||
-    params.command === NODE_WORKER_DESKTOP_LAUNCH_COMMAND ||
-    params.command === NODE_WORKER_PORTAL_STREAM_COMMAND;
-  if (!recognized) {
-    return { handled: false };
-  }
-  const runtime =
-    params.command === NODE_WORKER_BUNDLE_INSTALL_COMMAND
-      ? params.bundleInstaller
-      : params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND ||
-          params.command === NODE_WORKER_WORKSPACE_PREPARE_COMMAND
-        ? params.workspace
-        : params.supervisor;
-  if (!runtime) {
-    return {
-      handled: true,
-      ok: false,
-      code: "UNAVAILABLE",
-      message: "node worker runtime unavailable",
-    };
-  }
-  try {
-    let payload: NodeWorkerSupervisorCommandPayload;
-    if (params.command === NODE_WORKER_WORKSPACE_PREPARE_COMMAND) {
-      payload = await params.workspace!.prepare(
-        parseNodeWorkerPreparedWorkspaceInput(params.paramsJSON),
-        params.signal,
-      );
-    } else if (params.command === NODE_WORKER_BUNDLE_INSTALL_COMMAND) {
+}) {
+  const { supervisor, bundleInstaller, workspace, paramsJSON, signal } = params;
+  const receipt = (value: Awaited<ReturnType<NodeWorkerSupervisorControl["status"]>>) =>
+    value ? projectNodeWorkerSupervisorReceipt(value) : null;
+  const commands: Record<
+    string,
+    () => Promise<NodeWorkerSupervisorCommandPayload | undefined> | undefined
+  > = {
+    [NODE_WORKER_WORKSPACE_PREPARE_COMMAND]: () =>
+      workspace?.prepare(parseNodeWorkerPreparedWorkspaceInput(paramsJSON), signal),
+    [NODE_WORKER_BUNDLE_INSTALL_COMMAND]: () => {
+      if (!bundleInstaller) {
+        return undefined;
+      }
       if (!params.gatewayUrl) {
         throw new Error("node worker gateway connection unavailable");
       }
-      payload = await params.bundleInstaller!.ensure({
-        input: parseNodeWorkerBundleInstallInput(params.paramsJSON),
+      return bundleInstaller.ensure({
+        input: parseNodeWorkerBundleInstallInput(paramsJSON),
         gatewayUrl: params.gatewayUrl,
         ...(params.gatewayTlsFingerprint
           ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
@@ -190,12 +235,13 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
         ...(params.gatewayCloudflareAccess
           ? { gatewayCloudflareAccess: params.gatewayCloudflareAccess }
           : {}),
-        signal: params.signal,
+        signal,
       });
-    } else if (params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND) {
-      payload = await params.workspace!.exec(
-        parseNodeWorkerWorkspaceExecInput(params.paramsJSON),
-        params.signal,
+    },
+    [NODE_WORKER_WORKSPACE_EXEC_COMMAND]: () =>
+      workspace?.exec(
+        parseNodeWorkerWorkspaceExecInput(paramsJSON),
+        signal,
         params.gatewayUrl
           ? {
               url: params.gatewayUrl,
@@ -207,107 +253,171 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
                 : {}),
             }
           : undefined,
-      );
-    } else if (params.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND) {
-      const input = parseNodeWorkerWorkspaceRetainInput(params.paramsJSON);
-      const workspace = await params.supervisor!.retainWorkspaces(input, params.signal);
+      ),
+    [NODE_WORKER_WORKSPACE_RETAIN_COMMAND]: async () => {
+      if (!supervisor) {
+        return undefined;
+      }
+      const input = parseNodeWorkerWorkspaceRetainInput(paramsJSON);
+      const retained = await supervisor.retainWorkspaces(input, signal);
       let bundles: { deleted: number; hasMore: boolean; generation: number } | undefined;
-      if (workspace.applied && input.bundleHashes) {
-        if (!params.bundleInstaller?.retain) {
+      if (retained.applied && input.bundleHashes) {
+        if (!bundleInstaller?.retain) {
           throw new Error("node worker bundle retention unavailable");
         }
-        bundles = await params.bundleInstaller.retain({
+        bundles = await bundleInstaller.retain({
           gatewayNamespace: input.gatewayNamespace,
           bundleHashes: input.bundleHashes,
-          ...(input.acknowledgedBundleGeneration !== undefined
-            ? { acknowledgedGeneration: input.acknowledgedBundleGeneration }
-            : {}),
         });
       }
-      const hasMore = workspace.hasMore || bundles?.hasMore === true;
-      const inspectBundle = params.bundleInstaller?.inspect?.bind(params.bundleInstaller);
-      if (workspace.applied && input.bundleStatusHash && !hasMore && !inspectBundle) {
+      const hasMore = retained.hasMore || bundles?.hasMore === true;
+      const inspectBundle = bundleInstaller?.inspect?.bind(bundleInstaller);
+      if (retained.applied && input.bundleStatusHash && !hasMore && !inspectBundle) {
         throw new Error("node worker bundle status unavailable");
       }
       const bundleStatus =
-        workspace.applied && input.bundleStatusHash && !hasMore && inspectBundle
+        retained.applied && input.bundleStatusHash && !hasMore && inspectBundle
           ? await inspectBundle({
               gatewayNamespace: input.gatewayNamespace,
               bundleHash: input.bundleStatusHash,
             })
           : undefined;
-      payload =
-        bundles || bundleStatus
-          ? {
-              ...workspace,
-              ...(bundles
-                ? {
-                    bundleDeleted: bundles.deleted,
-                    bundleGeneration: bundles.generation,
-                    hasMore,
-                  }
-                : {}),
-              ...(bundleStatus ? { bundleStatus } : {}),
-            }
-          : workspace;
-    } else if (
-      params.command === NODE_WORKER_DESKTOP_STREAM_COMMAND ||
-      params.command === NODE_WORKER_PORTAL_STREAM_COMMAND
-    ) {
-      const stream =
-        params.command === NODE_WORKER_DESKTOP_STREAM_COMMAND
-          ? invokeNodeWorkerDesktopStream
-          : invokeNodeWorkerPortalStream;
-      await stream(params);
-      payload = null;
-    } else if (params.command === NODE_WORKER_DESKTOP_LAUNCH_COMMAND) {
-      payload = await invokeNodeWorkerDesktopLaunch({
-        paramsJSON: params.paramsJSON,
-        signal: params.signal,
-      });
-    } else if (params.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND) {
-      await params.supervisor!.stopEnvironment(
-        parseNodeWorkerEnvironmentStopInput(params.paramsJSON),
+      return bundles || bundleStatus
+        ? {
+            ...retained,
+            ...(bundles
+              ? { bundleDeleted: bundles.deleted, bundleGeneration: bundles.generation, hasMore }
+              : {}),
+            ...(bundleStatus ? { bundleStatus } : {}),
+          }
+        : retained;
+    },
+    [NODE_WORKER_DESKTOP_STREAM_COMMAND]: () =>
+      supervisor && invokeNodeWorkerDesktopStream(params).then(() => null),
+    [NODE_WORKER_PORTAL_STREAM_COMMAND]: () =>
+      supervisor && invokeNodeWorkerPortalStream(params).then(() => null),
+    [NODE_WORKER_DESKTOP_LAUNCH_COMMAND]: () =>
+      supervisor && invokeNodeWorkerDesktopLaunch({ paramsJSON, signal }),
+    [NODE_WORKER_PROCESSES_COMMAND]: () =>
+      supervisor?.observeProcesses(parseNodeWorkerProcessInput(paramsJSON), signal),
+    [NODE_WORKER_ENVIRONMENT_STOP_COMMAND]: () =>
+      supervisor?.stopEnvironment(parseNodeWorkerEnvironmentStopInput(paramsJSON)).then(() => null),
+    [NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND]: () =>
+      supervisor
+        ?.launch(
+          parseNodeWorkerLaunchInput(paramsJSON),
+          resolveWorkerConnectionEndpoint(params),
+          signal,
+        )
+        .then(receipt),
+    [NODE_WORKER_SUPERVISOR_STATUS_COMMAND]: () => {
+      if (!supervisor) {
+        return undefined;
+      }
+      const input = parseNodeWorkerLookupInput(paramsJSON);
+      return supervisor
+        .status(
+          input.launchId,
+          ...(input.waitMs === undefined ? [] : [{ waitMs: input.waitMs, signal }]),
+        )
+        .then(receipt);
+    },
+    [NODE_WORKER_SUPERVISOR_CANCEL_COMMAND]: () =>
+      supervisor?.cancel(parseNodeWorkerCancelInput(paramsJSON)).then(receipt),
+  };
+  const invoke = Object.hasOwn(commands, params.command) ? commands[params.command] : undefined;
+  if (!invoke) {
+    return { handled: false as const };
+  }
+  const workspaceCommand =
+    params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND ||
+    params.command === NODE_WORKER_WORKSPACE_PREPARE_COMMAND ||
+    params.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND;
+  try {
+    const payload = await invoke();
+    if (payload === undefined && workspaceCommand) {
+      logWarn(
+        `node workspace command failed (${params.command}, UNAVAILABLE): node worker runtime unavailable`,
       );
-      payload = null;
-    } else {
-      const receipt =
-        params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND
-          ? await params.supervisor!.launch(
-              parseNodeWorkerLaunchInput(params.paramsJSON),
-              resolveWorkerConnectionEndpoint(params),
-              params.signal,
-            )
-          : params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND
-            ? await params.supervisor!.status(
-                parseNodeWorkerLookupInput(params.paramsJSON).launchId,
-              )
-            : await params.supervisor!.cancel(parseNodeWorkerCancelInput(params.paramsJSON));
-      payload = receipt ? projectNodeWorkerSupervisorReceipt(receipt) : null;
     }
-    return { handled: true, ok: true, payload };
+    return payload === undefined
+      ? {
+          handled: true as const,
+          ok: false as const,
+          code: "UNAVAILABLE" as const,
+          message: "node worker runtime unavailable",
+        }
+      : { handled: true as const, ok: true as const, payload };
   } catch (error) {
     const invalid = error instanceof Error && error.message.startsWith("INVALID_REQUEST:");
     const bundleInstallFailure = error instanceof NodeWorkerBundleInstallError;
     const capacityFailure = error instanceof NodeWorkerCapacityExhaustedError;
     const transferFailure = error instanceof NodeWorkerWorkspaceTransferError;
-    return {
-      handled: true,
-      ok: false,
-      code: invalid
-        ? "INVALID_REQUEST"
-        : bundleInstallFailure
-          ? NODE_WORKER_BUNDLE_INSTALL_ERROR_CODE
-          : capacityFailure
-            ? NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE
-            : transferFailure
-              ? NODE_WORKSPACE_TRANSFER_ERROR_CODE
-              : "UNAVAILABLE",
-      message: transferFailure
-        ? workspaceTransferDiagnostic(error)
+    const code = invalid
+      ? ("INVALID_REQUEST" as const)
+      : bundleInstallFailure
+        ? NODE_WORKER_BUNDLE_INSTALL_ERROR_CODE
+        : capacityFailure
+          ? NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE
+          : transferFailure
+            ? NODE_WORKSPACE_TRANSFER_ERROR_CODE
+            : ("UNAVAILABLE" as const);
+    const message = transferFailure
+      ? workspaceTransferDiagnostic(error)
+      : workspaceCommand
+        ? boundedWorkerErrorWithCode(error, WORKSPACE_DIAGNOSTIC_MAX_CHARS)
         : invalid || bundleInstallFailure || capacityFailure
           ? error.message
-          : "node worker supervisor command failed",
-    };
+          : "node worker supervisor command failed";
+    // Supervisor replies stay generic so node-local details never reach the Gateway; the
+    // node log keeps the redacted, bounded cause for every command.
+    logWarn(
+      workspaceCommand
+        ? `node workspace command failed (${params.command}, ${code}): ${boundedWorkerError(message, WORKSPACE_DIAGNOSTIC_MAX_CHARS)}`
+        : `node worker supervisor command failed (${params.command}, ${code}): ${boundedWorkerError(error, WORKSPACE_DIAGNOSTIC_MAX_CHARS)}`,
+    );
+    return { handled: true as const, ok: false as const, code, message };
   }
+}
+
+const REQUEST_MAX_BYTES = 16 * 1024;
+const TICKET_PATTERN = /^[a-f0-9]{48}$/u;
+
+function parseNodeWorkerPortalStreamInput(raw?: string | null) {
+  const value = decodeWorkerRequest(raw, REQUEST_MAX_BYTES, "node worker portal stream");
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 3 ||
+    typeof value.ticket !== "string" ||
+    !TICKET_PATTERN.test(value.ticket) ||
+    value.attachPath !== `${NODE_PORTAL_ATTACH_PATH}?ticket=${value.ticket}` ||
+    typeof value.port !== "number" ||
+    !Number.isSafeInteger(value.port) ||
+    value.port < 1 ||
+    value.port > 65_535
+  ) {
+    throw new Error("INVALID_REQUEST: invalid node worker portal stream request");
+  }
+  return { ticket: value.ticket, attachPath: value.attachPath, port: value.port };
+}
+
+/** Runs a private worker portal stream against its exact enrolled Gateway owner. */
+async function invokeNodeWorkerPortalStream(
+  params: Parameters<typeof invokeNodeWorkerDesktopStream>[0],
+): Promise<void> {
+  if (!params.gatewayUrl || !params.signal) {
+    throw new Error("node worker portal gateway connection is unavailable");
+  }
+  const command = parseNodeWorkerPortalStreamInput(params.paramsJSON);
+  await runNodeStreamTransport({
+    gatewayUrl: params.gatewayUrl,
+    gatewayTlsFingerprint: params.gatewayTlsFingerprint,
+    gatewayCloudflareAccess: params.gatewayCloudflareAccess,
+    attachPath: command.attachPath,
+    expectedAttachPath: NODE_PORTAL_ATTACH_PATH,
+    target: { port: command.port },
+    metadata: { ok: true },
+    streamName: "portal",
+    signal: params.signal,
+  });
 }

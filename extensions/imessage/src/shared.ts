@@ -25,12 +25,8 @@ import { createIMessageSetupWizardProxy } from "./setup-core.js";
 
 const IMESSAGE_CHANNEL = "imessage" as const;
 
-async function loadIMessageChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
-
 export const imessageSetupWizard = createIMessageSetupWizardProxy(
-  async () => (await loadIMessageChannelRuntime()).imessageSetupWizard,
+  async () => (await import("./setup-surface.js")).imessageSetupWizard,
 );
 
 const imessageConfigAdapter = createScopedChannelConfigAdapter<ResolvedIMessageAccount>({
@@ -40,7 +36,7 @@ const imessageConfigAdapter = createScopedChannelConfigAdapter<ResolvedIMessageA
   defaultAccountId: resolveDefaultIMessageAccountId,
   clearBaseFields: ["cliPath", "dbPath", "service", "region", "name"],
   resolveAllowFrom: (account: ResolvedIMessageAccount) => account.config.allowFrom,
-  formatAllowFrom: (allowFrom) => formatTrimmedAllowFromEntries(allowFrom),
+  formatAllowFrom: formatTrimmedAllowFromEntries,
   resolveDefaultTo: (account: ResolvedIMessageAccount) => account.config.defaultTo,
 });
 
@@ -75,7 +71,7 @@ export function createIMessagePluginBase(params: {
   | "setupContract"
   | "messaging"
 > {
-  const base = createChannelPluginBase({
+  const base = createChannelPluginBase<ResolvedIMessageAccount>({
     id: IMESSAGE_CHANNEL,
     meta: {
       ...getChatChannelMeta(IMESSAGE_CHANNEL),
@@ -83,6 +79,13 @@ export function createIMessagePluginBase(params: {
       exposure: { configured: false },
     },
     setupWizard: params.setupWizard,
+    reload: { configPrefixes: ["channels.imessage"], noopPrefixes: ["messages.inbound"] },
+    configSchema: IMessageChannelConfigSchema,
+    security: imessageSecurityAdapter,
+    setupContract: params.setupContract,
+  });
+  return {
+    ...base,
     capabilities: {
       chatTypes: ["direct", "group"],
       media: true,
@@ -100,8 +103,6 @@ export function createIMessagePluginBase(params: {
       effects: true,
       groupManagement: true,
     },
-    reload: { configPrefixes: ["channels.imessage"], noopPrefixes: ["messages.inbound"] },
-    configSchema: IMessageChannelConfigSchema,
     config: {
       ...imessageConfigAdapter,
       isConfigured: (account) => account.configured,
@@ -111,31 +112,9 @@ export function createIMessagePluginBase(params: {
           configured: account.configured,
         }),
     },
-    security: imessageSecurityAdapter,
-    setupContract: params.setupContract,
-  });
-  return {
-    ...base,
     messaging: {
-      resolveInboundAttachmentRoots: (paramsValue) =>
-        resolveIMessageAttachmentRoots({ accountId: paramsValue.accountId, cfg: paramsValue.cfg }),
-      resolveRemoteInboundAttachmentRoots: (paramsLocal) =>
-        resolveIMessageRemoteAttachmentRoots({
-          accountId: paramsLocal.accountId,
-          cfg: paramsLocal.cfg,
-        }),
+      resolveInboundAttachmentRoots: resolveIMessageAttachmentRoots,
+      resolveRemoteInboundAttachmentRoots: resolveIMessageRemoteAttachmentRoots,
     },
-  } as Pick<
-    ChannelPlugin<ResolvedIMessageAccount>,
-    | "id"
-    | "meta"
-    | "setupWizard"
-    | "capabilities"
-    | "reload"
-    | "configSchema"
-    | "config"
-    | "security"
-    | "setupContract"
-    | "messaging"
-  >;
+  };
 }

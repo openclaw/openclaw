@@ -1,0 +1,78 @@
+import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import { listAgentIds, resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { resolveEffectiveAgentRuntime } from "openclaw/plugin-sdk/command-auth-native";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/health";
+import { readCodexPluginConfig } from "./app-server/config-parsing.js";
+import {
+  resolveCodexAppServerRuntimeOptions,
+  resolveCodexAppServerStartOptionsForAgent,
+  type CodexAppServerStartOptions,
+} from "./app-server/config.js";
+import {
+  isManagedCodexDesktopCommand,
+  resolveManagedCodexAppServerStartOptions,
+} from "./app-server/managed-binary.js";
+
+/** Selects the same local agent or passive-catalog command for both Doctor probes. */
+export async function resolveCodexDoctorStartOptions(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  pluginRoot: string;
+  managedOnly?: boolean;
+}): Promise<
+  { status: "selected"; start: CodexAppServerStartOptions } | { status: "skipped"; reason: string }
+> {
+  const pluginConfig = readCodexPluginConfig(params.cfg.plugins?.entries?.codex?.config);
+  const start = resolveCodexAppServerRuntimeOptions({ pluginConfig, env: params.env }).start;
+  if (start.transport !== "stdio") {
+    return { status: "skipped", reason: "Codex uses a remote app-server transport." };
+  }
+  if (params.managedOnly && start.commandSource !== "managed") {
+    return { status: "skipped", reason: "Codex uses a custom app-server command." };
+  }
+  const candidates: CodexAppServerStartOptions[] = [];
+  for (const agentId of listAgentIds(params.cfg)) {
+    const model = resolveDefaultModelForAgent({ cfg: params.cfg, agentId });
+    if (
+      resolveEffectiveAgentRuntime({
+        cfg: params.cfg,
+        provider: model.provider,
+        modelId: model.model,
+        agentId,
+      }) !== "codex"
+    ) {
+      continue;
+    }
+    candidates.push(
+      resolveCodexAppServerStartOptionsForAgent({
+        startOptions: start,
+        agentDir: resolveAgentDir(params.cfg, agentId, params.env),
+        env: params.env,
+      }),
+    );
+  }
+  if (
+    params.cfg.plugins?.entries?.codex?.enabled === true &&
+    pluginConfig.sessionCatalog?.enabled !== false
+  ) {
+    // Passive catalogs use the package even when no agent routes turns through Codex.
+    candidates.push({ ...start, managedCommandOrder: "package-only" });
+  }
+  for (const candidate of candidates) {
+    // Doctor verifies the shipped package every install falls back to, never a
+    // user-installed Codex, so update checks stay independent of PATH.
+    const resolved = await resolveManagedCodexAppServerStartOptions(candidate, {
+      pluginRoot: params.pluginRoot,
+      preferInstalled: false,
+    });
+    if (!isManagedCodexDesktopCommand(resolved.command)) {
+      return { status: "selected", start: resolved };
+    }
+  }
+  return {
+    status: "skipped",
+    reason: candidates.length
+      ? "Only desktop-owned Codex commands are configured."
+      : "No local Codex runtime is configured.",
+  };
+}

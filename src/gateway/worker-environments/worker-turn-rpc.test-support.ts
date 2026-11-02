@@ -1,13 +1,17 @@
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import * as support from "./service.test-support.js";
 
-export function claimWorkerPlacement(params: {
+export async function claimWorkerPlacement(params: {
   environmentId: string;
   ownerEpoch: number;
   runId?: string;
   sessionId: string;
-}): { claim: WorkerSessionTurnClaim; store: ReturnType<typeof createWorkerSessionPlacementStore> } {
+}): Promise<{
+  claim: WorkerSessionTurnClaim;
+  store: ReturnType<typeof createWorkerSessionPlacementStore>;
+}> {
   const store = createWorkerSessionPlacementStore({
     database: support.testState.stateDb,
     now: () => support.testState.nowMs,
@@ -17,39 +21,15 @@ export function claimWorkerPlacement(params: {
     agentId: "main",
     sessionKey: `agent:main:${params.sessionId}`,
   };
-  let placement = store.startDispatch(identity);
-  placement = store.transition({
-    sessionId: params.sessionId,
-    from: "requested",
-    to: "provisioning",
-    expectedGeneration: placement.generation,
-    patch: { environmentId: params.environmentId },
+  await advancePlacementFixtureToActive(store, support.testState.stateDb, identity, {
+    environmentId: params.environmentId,
+    ownerEpoch: params.ownerEpoch,
+    workerBundleHash: support.BUNDLE_HASH,
+    workspaceBaseManifestRef: `manifest-${params.sessionId}`,
+    remoteWorkspaceDir: `/workspace/${params.sessionId}`,
+    seedEnvironment: false,
   });
-  placement = store.transition({
-    sessionId: params.sessionId,
-    from: "provisioning",
-    to: "syncing",
-    expectedGeneration: placement.generation,
-    patch: { workerBundleHash: support.BUNDLE_HASH },
-  });
-  placement = store.transition({
-    sessionId: params.sessionId,
-    from: "syncing",
-    to: "starting",
-    expectedGeneration: placement.generation,
-    patch: {
-      workspaceBaseManifestRef: `manifest-${params.sessionId}`,
-      remoteWorkspaceDir: `/workspace/${params.sessionId}`,
-    },
-  });
-  store.transition({
-    sessionId: params.sessionId,
-    from: "starting",
-    to: "active",
-    expectedGeneration: placement.generation,
-    patch: { activeOwnerEpoch: params.ownerEpoch },
-  });
-  const claim = store.claimTurn({
+  const claim = await store.claimTurn({
     ...identity,
     claimId: `claim-${params.sessionId}`,
     runId: params.runId ?? "run-1",

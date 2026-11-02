@@ -33,10 +33,8 @@ function readProxyUrlFromOptions(options: object | undefined): string | undefine
   return undefined;
 }
 
-type ManagedProxyTlsEnv = NodeJS.ProcessEnv;
-
 type AddActiveManagedProxyTlsOptionsParams = {
-  env?: ManagedProxyTlsEnv;
+  env?: NodeJS.ProcessEnv;
 };
 
 /** Adds active managed proxy TLS options to env proxy agent options. */

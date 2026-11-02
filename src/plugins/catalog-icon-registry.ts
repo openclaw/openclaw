@@ -1,20 +1,18 @@
+import { LruCache } from "../infra/lru-cache.js";
+
 // Exact icon URLs learned from authenticated ClawHub catalog responses.
 const MAX_CATALOG_ICON_URLS = 1_024;
 
-const catalogIconUrls = new Set<string>();
+const catalogIconUrls = new LruCache<string>(MAX_CATALOG_ICON_URLS);
 
-function normalizeCatalogIconUrl(value: string): string | undefined {
+export function normalizeCatalogIconUrl(value: string): string | undefined {
   if (!value || value.length > 2_048) {
     return undefined;
   }
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && url.hostname && !url.username && !url.password && !url.hash
-      ? url.href
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const url = URL.parse(value);
+  return url?.protocol === "https:" && url.hostname && !url.username && !url.password && !url.hash
+    ? url.href
+    : undefined;
 }
 
 export function registerClawHubCatalogIconUrls(values: Iterable<string | undefined>): void {
@@ -26,18 +24,11 @@ export function registerClawHubCatalogIconUrls(values: Iterable<string | undefin
     if (!normalized) {
       continue;
     }
-    catalogIconUrls.delete(normalized);
-    catalogIconUrls.add(normalized);
-    if (catalogIconUrls.size > MAX_CATALOG_ICON_URLS) {
-      const oldest = catalogIconUrls.values().next().value;
-      if (oldest) {
-        catalogIconUrls.delete(oldest);
-      }
-    }
+    catalogIconUrls.set(normalized, normalized);
   }
 }
 
 export function resolveClawHubCatalogIconUrl(value: string): string | undefined {
   const normalized = normalizeCatalogIconUrl(value);
-  return normalized && catalogIconUrls.has(normalized) ? normalized : undefined;
+  return normalized ? catalogIconUrls.peek(normalized) : undefined;
 }

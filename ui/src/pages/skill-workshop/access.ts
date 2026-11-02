@@ -1,32 +1,25 @@
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import type { WorkshopMutation } from "./api.ts";
 
-export type SkillWorkshopAccess = {
-  canEvaluate: boolean;
-  canApply: boolean;
-  canRevise: boolean;
-  canReject: boolean;
-};
-
-type SkillWorkshopAdminMethod =
-  | "config.patch"
-  | "skills.proposals.apply"
-  | "skills.proposals.evaluate"
-  | "skills.proposals.reject"
-  | "skills.proposals.requestRevision";
-
-export function canCallWorkshopAdminMethod(
-  snapshot: ApplicationGatewaySnapshot | null | undefined,
-  method: SkillWorkshopAdminMethod,
-): boolean {
-  return canCallGatewayMethod(snapshot, method, "operator.admin");
+export function resolveWorkshopAccess(snapshot: ApplicationGatewaySnapshot | null | undefined) {
+  return {
+    canArchive: canCallGatewayMethod(snapshot, "skills.workshop.archive", "operator.admin"),
+    canRestore: canCallGatewayMethod(snapshot, "skills.workshop.restore", "operator.admin"),
+    // Apply and Discard ship together and share their scope.
+    canReviewDrafts: canCallGatewayMethod(snapshot, "skills.workshop.applyDraft", "operator.admin"),
+    canSetMode: canCallGatewayMethod(snapshot, "config.patch", "operator.admin"),
+  };
 }
 
-export function resolveWorkshopAccess(snapshot: ApplicationGatewaySnapshot): SkillWorkshopAccess {
+export function canRunWorkshopMutation(
+  access: ReturnType<typeof resolveWorkshopAccess>,
+  method: WorkshopMutation["method"],
+): boolean {
   return {
-    canEvaluate: canCallWorkshopAdminMethod(snapshot, "skills.proposals.evaluate"),
-    canApply: canCallWorkshopAdminMethod(snapshot, "skills.proposals.apply"),
-    canRevise: canCallWorkshopAdminMethod(snapshot, "skills.proposals.requestRevision"),
-    canReject: canCallWorkshopAdminMethod(snapshot, "skills.proposals.reject"),
-  };
+    "skills.workshop.archive": access.canArchive,
+    "skills.workshop.restore": access.canRestore,
+    "skills.workshop.applyDraft": access.canReviewDrafts,
+    "skills.workshop.discardDraft": access.canReviewDrafts,
+  }[method];
 }

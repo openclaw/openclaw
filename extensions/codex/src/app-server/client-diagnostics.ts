@@ -1,24 +1,17 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { redactCodexAppServerLinePreview } from "./client-line-preview.js";
+import type { CodexAppServerParseFailure } from "./client-message-decoder.js";
 import type { CodexAppServerTransport } from "./transport.js";
 
 export function observeCodexAppServerStderr(
   stderr: CodexAppServerTransport["stderr"],
-  consume: (chunk: string) => string,
+  consume: (chunk: string) => void,
 ): void {
   stderr.setEncoding("utf8");
-  stderr.on("data", (chunk: string) => {
-    const text = consume(chunk).trim();
-    if (text) {
-      embeddedAgentLog.debug(`codex app-server stderr: ${text}`);
-    }
-  });
+  stderr.on("data", consume);
   // Diagnostic stream failure does not invalidate the JSON-RPC stdout connection.
-  stderr.on("error", (error) =>
-    embeddedAgentLog.warn("codex app-server stderr stream failed", { error }),
-  );
+  stderr.on("error", () => embeddedAgentLog.warn("codex app-server stderr stream failed"));
 }
 
 export function appendBoundedTail(current: string, next: string, maxLength: number): string {
@@ -40,22 +33,21 @@ export function buildCodexAppServerExitError(
   );
 }
 
-export function logCodexAppServerParseFailure(
-  value: string,
-  error: unknown,
-  fragmentCount: number,
-): void {
-  const linePreview = redactCodexAppServerLinePreview(value);
-  const suffix = fragmentCount > 1 ? ` fragments=${fragmentCount}` : "";
-  embeddedAgentLog.warn("failed to parse codex app-server message", {
-    error,
-    errorMessage: coerceErrorMessage(error),
-    fragmentCount,
-    linePreview,
-    consoleMessage: `failed to parse codex app-server message${suffix}: preview=${JSON.stringify(
-      linePreview,
-    )}`,
-  });
+export function logCodexAppServerParseFailure(failure: CodexAppServerParseFailure): void {
+  embeddedAgentLog.warn("failed to parse codex app-server message", failure);
+}
+
+export function isCodexAppServerBrokenPipeError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current = error;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    if ("code" in current && current.code === "EPIPE") {
+      return true;
+    }
+    current = "cause" in current ? current.cause : undefined;
+  }
+  return false;
 }
 
 function formatExitValue(value: unknown): string {

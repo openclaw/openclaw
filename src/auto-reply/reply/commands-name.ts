@@ -1,61 +1,33 @@
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
-import {
-  applySessionPatchProjection,
-  loadSessionEntryReadOnly,
-} from "../../config/sessions/session-accessor.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { applySessionPatchProjection } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
 import { parseSessionLabel } from "../../sessions/session-label.js";
 import { commandReply as nameReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
-import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
+import { matchSlashCommandToken } from "./commands-slash-parse.js";
+import type { CommandHandler } from "./commands-types.js";
 
 const NAME_COMMAND_PREFIX = "/name";
 
-function parseNameCommand(raw: string): { title: string } | null {
-  const trimmed = raw.trim();
-  const commandEnd = trimmed.search(/\s/);
-  const commandToken = commandEnd === -1 ? trimmed : trimmed.slice(0, commandEnd);
-  if (normalizeOptionalLowercaseString(commandToken) !== NAME_COMMAND_PREFIX) {
-    return null;
-  }
-  const argText = commandEnd === -1 ? "" : trimmed.slice(commandEnd).trim();
-  return { title: argText };
-}
-
-function syncNameSessionEntry(params: HandleCommandsParams): void {
-  if (!params.sessionStore || !params.sessionKey || !params.storePath) {
-    return;
-  }
-  const entry = loadSessionEntryReadOnly({
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-  });
-  if (!entry) {
-    return;
-  }
-  params.sessionStore[params.sessionKey] = entry;
-  params.sessionEntry = entry;
-}
-
 export const handleNameCommand: CommandHandler = defineAuthorizedTextCommand(
-  { label: "/name", match: parseNameCommand },
-  async (params, parsed) => {
+  { label: "/name", match: (body) => matchSlashCommandToken(body, NAME_COMMAND_PREFIX) },
+  async (params, rawTitle) => {
     if (!params.storePath || !params.sessionKey) {
       return nameReply("Naming is not available for this session.");
     }
 
-    const title = normalizeOptionalString(parsed.title);
+    const title = normalizeOptionalString(rawTitle);
 
     // No argument: surface the current name plus a deterministic suggestion
     // derived locally (no LLM, no mutation). Apply it with `/name <title>`.
     if (!title) {
       const entry =
-        loadSessionEntryReadOnly({ sessionKey: params.sessionKey, storePath: params.storePath }) ??
-        params.sessionEntry;
+        (await readSessionEntryReadOnlyInWorker({
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+        })) ?? params.sessionEntry;
       const current = normalizeOptionalString(entry?.label);
       const suggestionEntry = entry ? { ...entry, label: undefined } : undefined;
       const suggestion = deriveSessionTitle(suggestionEntry);
@@ -105,7 +77,10 @@ export const handleNameCommand: CommandHandler = defineAuthorizedTextCommand(
     if (!result.ok) {
       return nameReply(`Couldn't rename the session: ${result.error}`);
     }
-    syncNameSessionEntry(params);
+    if (params.sessionStore && params.sessionKey && params.storePath) {
+      params.sessionStore[params.sessionKey] = result.entry;
+      params.sessionEntry = result.entry;
+    }
     markCommandSessionMetadataChanged(params);
     return nameReply(`✅ Session renamed to “${result.entry.label}”.`);
   },

@@ -5,12 +5,15 @@ import {
   WORKBOARD_ALL_BOARDS_FILTER,
 } from "../../lib/workboard/board-filter.ts";
 import { workboardBoardLabel } from "../../lib/workboard/board-presentation.ts";
-import type { WorkboardBoardSummary, WorkboardCard } from "../../lib/workboard/index.ts";
+import type { WorkboardBoardSummary, WorkboardCard } from "../../lib/workboard/types.ts";
 import type { WorkboardSelectOption } from "./workboard-select.ts";
 
 export { matchesBoardFilter, WORKBOARD_ALL_BOARDS_FILTER };
 
 function boardDescription(board: WorkboardBoardSummary): string {
+  if (board.kind === "sessions") {
+    return t("workboard.sessionsBoard.kind");
+  }
   const params = { active: String(board.active), total: String(board.total) };
   return board.archivedAt
     ? t("workboard.boardFilterArchivedSummary", params)
@@ -20,6 +23,7 @@ function boardDescription(board: WorkboardBoardSummary): string {
 export function buildBoardFilterOptions(
   boards: readonly WorkboardBoardSummary[],
   cards: readonly WorkboardCard[],
+  cardsComplete = true,
 ): WorkboardSelectOption[] {
   const uniqueBoards = new Map<string, WorkboardBoardSummary>();
   for (const board of boards) {
@@ -28,15 +32,20 @@ export function buildBoardFilterOptions(
       uniqueBoards.set(id, {
         ...board,
         id,
-        total: 0,
-        active: 0,
-        archived: 0,
-        byStatus: {},
+        total: cardsComplete ? 0 : board.total,
+        active: cardsComplete ? 0 : board.active,
+        archived: cardsComplete ? 0 : board.archived,
+        byStatus: cardsComplete ? {} : board.byStatus,
       });
     }
   }
+  const summarizedBoardIds = new Set(uniqueBoards.keys());
   for (const card of cards) {
     const id = workboardCardBoardId(card);
+    // A page cannot replace or be added to the full-store summary.
+    if (!cardsComplete && summarizedBoardIds.has(id)) {
+      continue;
+    }
     const board: WorkboardBoardSummary = uniqueBoards.get(id) ?? {
       id,
       total: 0,

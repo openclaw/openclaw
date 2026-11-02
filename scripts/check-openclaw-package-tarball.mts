@@ -7,10 +7,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { gte as semverGte, valid as validSemver } from "semver";
+import { inspectTarArchive } from "@openclaw/fs-safe/archive";
+import { root as openRoot } from "@openclaw/fs-safe/root";
 import { extract as extractTar, list as listTar, type ReadEntry } from "tar";
 import { coerceErrorMessage } from "./lib/error-format.mts";
-import { LOCAL_BUILD_METADATA_DIST_PATHS } from "./lib/local-build-metadata-paths.mts";
 import { collectNpmPackInventory, compareNpmPackInventory } from "./lib/npm-pack-inventory.mts";
 import { assertNpmShrinkwrapDependencies } from "./lib/npm-shrinkwrap-dependencies.mjs";
 import { collectBundledDependencyErrors } from "./lib/package-bundled-dependencies.mts";
@@ -64,12 +64,31 @@ function fail(message: string): never {
 
 function parseArgs(argv: string[]) {
   const args = argv[0] === "--" ? argv.slice(1) : argv;
+  if (args[0] === "--extract-only") {
+    const [, workspace, sha256, bytes, tarball, ...extra] = args;
+    if (
+      !workspace ||
+      !tarball ||
+      !/^[a-f0-9]{64}$/u.test(sha256 ?? "") ||
+      !/^[1-9][0-9]*$/u.test(bytes ?? "") ||
+      !Number.isSafeInteger(Number(bytes)) ||
+      extra.length
+    ) {
+      throw new Error("Invalid package extraction arguments");
+    }
+    return {
+      help: false,
+      requireBundledWorkspaceDeps: false,
+      tarball,
+      extraction: { workspace, sha256, bytes: Number(bytes) },
+    };
+  }
   let requireBundledWorkspaceDeps = false;
   let tarball = "";
   for (const rawArg of args) {
     const arg = rawArg?.trim() ?? "";
     if (arg === "--help" || arg === "-h") {
-      return { help: true, requireBundledWorkspaceDeps: false, tarball: "" };
+      return { help: true, requireBundledWorkspaceDeps: false, tarball: "", extraction: undefined };
     }
     if (arg === "--require-bundled-workspace-deps") {
       requireBundledWorkspaceDeps = true;
@@ -86,7 +105,7 @@ function parseArgs(argv: string[]) {
   if (!tarball) {
     throw new Error(usage());
   }
-  return { help: false, requireBundledWorkspaceDeps, tarball };
+  return { help: false, requireBundledWorkspaceDeps, tarball, extraction: undefined };
 }
 
 let cliArgs: ReturnType<typeof parseArgs>;
@@ -393,7 +412,10 @@ function scanTarball(archivePath: string): {
   };
 }
 
-const archiveRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-tarball-"));
+// Extract-only workspaces belong to the supervising caller, including failure cleanup.
+const archiveRoot =
+  cliArgs.extraction?.workspace ??
+  fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-tarball-"));
 const archiveSnapshot = path.join(archiveRoot, "candidate.tgz");
 const extractDir = path.join(archiveRoot, "extract");
 let normalized: string[];
@@ -401,9 +423,35 @@ let tarFileEntries: string[];
 try {
   // Both passes consume one private byte snapshot, so path replacement cannot
   // make preflight approve different bytes than extraction materializes.
-  fs.chmodSync(archiveRoot, 0o700);
-  fs.copyFileSync(tarball, archiveSnapshot, fs.constants.COPYFILE_EXCL);
-  fs.chmodSync(archiveSnapshot, 0o400);
+  if (cliArgs.extraction) {
+    await (
+      await openRoot(archiveRoot)
+    ).copyIn("candidate.tgz", path.resolve(tarball), {
+      overwrite: false,
+      durable: false,
+      mode: 0o400,
+      maxBytes: 1024 ** 3,
+    });
+    const hash = createHash("sha256");
+    for await (const chunk of fs.createReadStream(archiveSnapshot)) {
+      hash.update(chunk);
+    }
+    if (
+      fs.statSync(archiveSnapshot).size !== cliArgs.extraction.bytes ||
+      hash.digest("hex") !== cliArgs.extraction.sha256
+    ) {
+      throw new Error("Portable package snapshot digest/size mismatch");
+    }
+    await inspectTarArchive({
+      archivePath: archiveSnapshot,
+      timeoutMs: 120_000,
+      limits: { maxEntries: 150_000, maxExtractedBytes: 2 * 1024 ** 3, maxArchiveBytes: 1024 ** 3 },
+    });
+  } else {
+    fs.chmodSync(archiveRoot, 0o700);
+    fs.copyFileSync(tarball, archiveSnapshot, fs.constants.COPYFILE_EXCL);
+    fs.chmodSync(archiveSnapshot, 0o400);
+  }
   ({ entries: normalized, files: tarFileEntries } = scanTarball(archiveSnapshot));
   fs.mkdirSync(extractDir);
   runPhase("tar extract", () =>
@@ -413,54 +461,33 @@ try {
       preserveOwner: false,
       strict: true,
       sync: true,
+      ...(cliArgs.extraction ? { noChmod: false, umask: 0, dmode: 0o755 } : {}),
+      onReadEntry(entry) {
+        if (cliArgs.extraction) {
+          entry.mode =
+            entry.type === "Directory" || ((entry.mode ?? 0) & 0o100) !== 0 ? 0o755 : 0o644;
+        }
+      },
     }),
   );
 } catch (error) {
-  fs.rmSync(archiveRoot, { recursive: true, force: true });
+  if (!cliArgs.extraction) {
+    fs.rmSync(archiveRoot, { recursive: true, force: true });
+  }
   fail(`OpenClaw package tarball preflight failed:\n${coerceErrorMessage(error)}`);
+}
+if (cliArgs.extraction) {
+  process.exit(0);
 }
 const entrySet = new Set(normalized);
 const errors: string[] = [];
 const warnings: string[] = [];
 const LEGACY_CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
 const CODE_MODE_WORKER_PATH = "dist/agents/code-mode-node.worker.js";
-const FIRST_CODE_MODE_WORKER_VERSION = "2026.5.14-beta.2";
 const REQUIRED_TARBALL_ENTRIES = ["dist/control-ui/index.html", ...WORKSPACE_TEMPLATE_PACK_PATHS];
 const REQUIRED_TARBALL_ENTRY_PREFIXES = ["dist/control-ui/assets/"];
-const LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX = { year: 2026, month: 4, day: 25 };
-const LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX = { year: 2026, month: 4, day: 26 };
 // 2026.8.1 shipped the old dist guard. Historical inspection must still accept it.
 const LEGACY_LIFECYCLE_MARKER_COMPAT_MAX = { year: 2026, month: 8, day: 1 };
-const FORBIDDEN_LOCAL_BUILD_METADATA_FILES = new Set<string>(LOCAL_BUILD_METADATA_DIST_PATHS);
-
-const LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES = [
-  "dist/extensions/qa-channel/",
-  "dist/extensions/qa-lab/",
-  "dist/extensions/qa-matrix/",
-  "dist/plugin-sdk/extensions/qa-channel/",
-  "dist/plugin-sdk/extensions/qa-lab/",
-];
-const LEGACY_OMITTED_PRIVATE_QA_INVENTORY_FILES = new Set([
-  "dist/plugin-sdk/qa-channel.d.ts",
-  "dist/plugin-sdk/qa-channel.js",
-  "dist/plugin-sdk/qa-channel-protocol.d.ts",
-  "dist/plugin-sdk/qa-channel-protocol.js",
-  "dist/plugin-sdk/qa-lab.d.ts",
-  "dist/plugin-sdk/qa-lab.js",
-  "dist/plugin-sdk/qa-runtime.d.ts",
-  "dist/plugin-sdk/qa-runtime.js",
-  "dist/plugin-sdk/src/plugin-sdk/qa-channel.d.ts",
-  "dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts",
-  "dist/plugin-sdk/src/plugin-sdk/qa-lab.d.ts",
-  "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
-]);
-
-function isLegacyOmittedPrivateQaInventoryEntry(relativePath: string): boolean {
-  return (
-    LEGACY_OMITTED_PRIVATE_QA_INVENTORY_FILES.has(relativePath) ||
-    LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES.some((prefix) => relativePath.startsWith(prefix))
-  );
-}
 
 function parseCalver(version: string): Calver | null {
   const match = /^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:[-+].*)?$/u.exec(version);
@@ -483,43 +510,18 @@ function compareCalver(left: Calver, right: Calver): number {
   return 0;
 }
 
-function isLegacyPackageAcceptanceCompatVersion(version: string): boolean {
-  const parsed = parseCalver(version);
-  return parsed ? compareCalver(parsed, LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX) <= 0 : false;
-}
-
-function isLegacyLocalBuildMetadataCompatVersion(version: string): boolean {
-  const parsed = parseCalver(version);
-  return parsed ? compareCalver(parsed, LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX) <= 0 : false;
-}
-
 function isLegacyLifecycleMarkerCompatVersion(version: string): boolean {
   const parsed = parseCalver(version);
   return parsed ? compareCalver(parsed, LEGACY_LIFECYCLE_MARKER_COMPAT_MAX) <= 0 : false;
 }
 
 function readTarEntry(entryPath: string): string {
-  const candidates = [
-    path.join(extractDir, entryPath),
-    path.join(extractDir, "package", entryPath),
-  ];
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return fs.readFileSync(candidate, "utf8");
-    }
-  }
-  return "";
+  const filePath = path.join(extractDir, "package", entryPath);
+  return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
 }
 
-const extractedPackageRoot = fs.realpathSync(
-  fs.existsSync(path.join(extractDir, "package", "package.json"))
-    ? path.join(extractDir, "package")
-    : extractDir,
-);
+const extractedPackageRoot = fs.realpathSync(path.join(extractDir, "package"));
 
-if (!entrySet.has("package.json")) {
-  errors.push("missing package.json");
-}
 if (!normalized.some((entry) => entry.startsWith("dist/"))) {
   errors.push("missing dist/ entries");
 }
@@ -533,26 +535,24 @@ for (const requiredPrefix of REQUIRED_TARBALL_ENTRY_PREFIXES) {
     errors.push(`missing required tar entries under ${requiredPrefix}`);
   }
 }
-let packageVersion = "";
+let packageVersion: string;
 let packageJson: PackageManifest | null = null;
-if (entrySet.has("package.json")) {
-  try {
-    packageJson = JSON.parse(readTarEntry("package.json")) as PackageManifest;
-    packageVersion = typeof packageJson.version === "string" ? packageJson.version : "";
-    errors.push(...collectWorkspaceProtocolDependencyErrors(packageJson, "package.json"));
-    errors.push(
-      ...collectBundledDependencyErrors({
-        packageJson,
-        entries: entrySet,
-        files: normalized,
-        packageRoot: extractedPackageRoot,
-        readText: readTarEntry,
-        requireBundledWorkspaceDeps: cliArgs.requireBundledWorkspaceDeps,
-      }),
-    );
-  } catch {
-    packageVersion = "";
-  }
+try {
+  packageJson = JSON.parse(readTarEntry("package.json")) as PackageManifest;
+  packageVersion = typeof packageJson.version === "string" ? packageJson.version : "";
+  errors.push(...collectWorkspaceProtocolDependencyErrors(packageJson, "package.json"));
+  errors.push(
+    ...collectBundledDependencyErrors({
+      packageJson,
+      entries: entrySet,
+      files: normalized,
+      packageRoot: extractedPackageRoot,
+      readText: readTarEntry,
+      requireBundledWorkspaceDeps: cliArgs.requireBundledWorkspaceDeps,
+    }),
+  );
+} catch {
+  packageVersion = "";
 }
 if (packageJson) {
   errors.push(...collectMissingDeclaredPackageFileErrors(packageJson, new Set(tarFileEntries)));
@@ -569,24 +569,14 @@ if (packageJson) {
     errors.push(`unreadable packaged extension asset metadata: ${coerceErrorMessage(error)}`);
   }
 }
-const allowsLegacyLocalBuildMetadata = isLegacyLocalBuildMetadataCompatVersion(packageVersion);
-errors.push(
-  ...collectForbiddenPackedPathErrors(
-    allowsLegacyLocalBuildMetadata
-      ? normalized.filter((entry) => !FORBIDDEN_LOCAL_BUILD_METADATA_FILES.has(entry))
-      : normalized,
-  ),
-);
-const validPackageVersion = validSemver(packageVersion);
-const requiresCodeModeWorker =
-  validPackageVersion !== null && semverGte(validPackageVersion, FIRST_CODE_MODE_WORKER_VERSION);
+errors.push(...collectForbiddenPackedPathErrors(normalized));
 // Published packages before executor plugins retain the original QuickJS worker.
 const codeModeWorkerPath =
   isRecord(packageJson?.exports) &&
   Object.hasOwn(packageJson.exports, "./plugin-sdk/code-mode-executor-runtime")
     ? CODE_MODE_WORKER_PATH
     : LEGACY_CODE_MODE_WORKER_PATH;
-if (requiresCodeModeWorker && !entrySet.has(codeModeWorkerPath)) {
+if (!entrySet.has(codeModeWorkerPath)) {
   errors.push(`missing required tar entry ${codeModeWorkerPath}`);
 }
 const hasShrinkwrap = entrySet.has("npm-shrinkwrap.json");
@@ -685,20 +675,11 @@ if (
 ) {
   errors.push(`forbidden legacy tar entry ${LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`);
 }
-if (allowsLegacyLocalBuildMetadata) {
-  for (const forbiddenEntry of FORBIDDEN_LOCAL_BUILD_METADATA_FILES) {
-    if (entrySet.has(forbiddenEntry)) {
-      warnings.push(`legacy package includes local build metadata tar entry ${forbiddenEntry}`);
-    }
-  }
-}
 if (!entrySet.has(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)) {
   errors.push(`missing ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`);
 }
 if (entrySet.has(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)) {
   try {
-    const allowLegacyPrivateQaInventoryOmissions =
-      isLegacyPackageAcceptanceCompatVersion(packageVersion);
     const inventory = JSON.parse(readTarEntry(PACKAGE_DIST_INVENTORY_RELATIVE_PATH));
     if (!Array.isArray(inventory) || inventory.some((entry) => typeof entry !== "string")) {
       errors.push(`invalid ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`);
@@ -720,18 +701,14 @@ if (entrySet.has(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)) {
               path: entry,
               sha256: createHash("sha256").update(bytes).digest("hex"),
               size: bytes.length,
-              mode: fs.statSync(file).mode & 0o777,
+              mode: fs.statSync(file).mode & 0o7777,
             };
           });
-        errors.push(...comparePackageDistContentInventory(expected, actual));
+        errors.push(...comparePackageDistContentInventory(expected, actual, warnings));
       }
 
       const parity = comparePackageDistInventory({
-        files: normalized.filter(
-          (entry) =>
-            entry.startsWith("dist/") &&
-            fs.statSync(path.join(extractedPackageRoot, entry)).isFile(),
-        ),
+        files: tarFileEntries.filter((entry) => entry.startsWith("dist/")),
         inventory: inventoryEntries,
       });
       if (typeof packageJson?.scripts?.postinstall === "string") {
@@ -740,13 +717,6 @@ if (entrySet.has(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)) {
         }
       }
       for (const missingEntry of parity.inventoryEntriesMissingFromPackage) {
-        if (
-          allowLegacyPrivateQaInventoryOmissions &&
-          isLegacyOmittedPrivateQaInventoryEntry(missingEntry)
-        ) {
-          warnings.push(`legacy inventory references omitted private QA tar entry ${missingEntry}`);
-          continue;
-        }
         errors.push(`inventory references missing tar entry ${missingEntry}`);
       }
     }

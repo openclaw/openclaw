@@ -11,9 +11,10 @@ import {
 
 it.skipIf(process.platform !== "win32")(
   "settles original member handles before the Git owner returns",
-  async () => {
+  async ({ signal }) => {
     await withCiCheckoutFixture(
       "harness-timeout",
+      signal,
       (root) => {
         const source = readFileSync(".github/actions/git-owner/owner.py", "utf8");
         const probe = path.join(root, "settlement-probe.py");

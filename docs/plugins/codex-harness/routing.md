@@ -2,7 +2,7 @@
 summary: "Choose which OpenAI routes select Codex and shape the deployment around them"
 read_when:
   - You need to know which model refs select the Codex runtime
-  - You want a fail-closed Codex requirement
+  - You want to require Codex for execution
   - You are configuring a mixed-provider fleet
 title: "Codex routing and deployment"
 sidebarTitle: "Routing and deployment"
@@ -22,7 +22,7 @@ attached with native settings preserved retain their native effort.
 
 Keep provider refs and runtime policy separate:
 
-- Use `openai/gpt-*` for canonical OpenAI model selection. The prefix alone
+- Use `openai/gpt-*` for standard OpenAI model selection. The prefix alone
   never selects Codex.
 - With runtime unset or `auto`, only an exact official HTTPS Platform Responses
   or ChatGPT Responses route with no authored provider request override may
@@ -30,7 +30,7 @@ Keep provider refs and runtime policy separate:
   not count as authored request params.
 - Do not use legacy Codex GPT refs in config; run `openclaw doctor --fix` to
   repair legacy refs and stale session route pins.
-- `agentRuntime.id: "codex"` makes Codex a fail-closed requirement for a
+- `agentRuntime.id: "codex"` makes Codex a required runtime for a
   compatible route. It does not make an incompatible effective route compatible.
 - `agentRuntime.id: "openclaw"` opts a provider or model into the embedded
   OpenClaw runtime when that is intentional.
@@ -60,7 +60,7 @@ Keep provider refs and runtime policy separate:
 | Use case                                        | Configure                                                                                                            | Verify                                  | Notes                                                      |
 | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ---------------------------------------------------------- |
 | Eligible OpenAI route with native Codex runtime | Exact official HTTPS Responses/ChatGPT route with no authored provider request override, plus enabled `codex` plugin | `/status` shows `Runtime: OpenAI Codex` | Valid Fast runtime controls do not disqualify this path    |
-| Fail closed if Codex is unavailable             | Provider or model `agentRuntime.id: "codex"`                                                                         | Missing harness fails the turn          | Authored request overrides may still use declared fallback |
+| Stop execution if Codex is unavailable          | Provider or model `agentRuntime.id: "codex"`                                                                         | Missing harness fails the turn          | Authored request overrides may still use declared fallback |
 | Direct OpenAI API-key traffic through OpenClaw  | Provider or model `agentRuntime.id: "openclaw"` and normal OpenAI auth                                               | `/status` shows OpenClaw runtime        | Use only when OpenClaw is intentional                      |
 | Legacy config                                   | legacy Codex GPT refs                                                                                                | `openclaw doctor --fix` rewrites it     | Do not write new config this way                           |
 | ACP/acpx Codex adapter                          | ACP `sessions_spawn({ runtime: "acp" })`                                                                             | ACP task/session status                 | Separate from native Codex harness                         |
@@ -69,6 +69,55 @@ Keep provider refs and runtime policy separate:
 for the normal OpenAI route and `codex/gpt-*` only when image understanding
 should run through a bounded Codex app-server turn. Doctor rewrites legacy
 Codex GPT refs to `openai/gpt-*`.
+
+### Operator role model permissions
+
+A role's [model policy](/gateway/operator-scopes#named-operator-roles) applies to
+each native inference request, including retries, child turns, ordinary reviews,
+native image and search requests, and compaction. OpenClaw checks the actual model against both the work's original
+permissions and current policy before forwarding it. Verified catalog-to-native
+model mappings remain valid. Removing a model cancels affected inference while
+permitted work continues.
+
+Reusing a native child does not attach its creator's permissions permanently.
+A later turn with unambiguous source attribution uses its submitting operator's
+authority after the earlier turn settles. With the native hook integration active,
+sending input to an active turn requires the same original authority,
+including follow-up requests that native execution can consume in that turn. Native
+Guardian reviews and configured memory processing keep their existing service
+authority, verified from native request provenance and their owning execution or
+configured service.
+
+Restricted runs require an OpenClaw-owned native inference route. Managed stdio
+connections can retain HTTP or WebSocket Responses providers over public HTTPS;
+already-owned native bindings can reuse that route.
+Provider projection shares the connection's eight-route limit; excess providers
+remain unavailable to restricted native restores, and selecting a new route after
+capacity is reached requires a fresh managed native connection.
+Custom providers need an explicit native `base_url`; query fields use the native
+`query_params` table. Unowned attachments, native local-model providers,
+AWS-signed requests, system-proxy profiles, custom native
+certificate files, and proxy settings that cannot preserve both upstream routing
+and private loopback access cannot establish this guarantee. OpenClaw rejects a
+restricted run on those paths before starting it. Roles without a model policy
+keep their existing native connection and optional-hook behavior. Introducing a
+model policy while an unqualified operator execution is active cancels directly owned and otherwise
+unambiguously bound work, including its unqualified children.
+
+When staff run without a model policy and qualified native hooks are disabled or
+unavailable, native execution can mix accepted input into an existing turn or
+combine queued input from several senders into a new turn without preserving
+unique sender attribution. Previously accepted unrestricted input that can no
+longer be attributed uniquely may continue under the receiving execution's valid
+authority after a contributing sender's authorization ends or becomes restricted.
+A matching native root alone does not prove unique attribution. OpenClaw does not
+interrupt independently authorized receiver work to guess which input it consumed.
+
+This limitation does not exempt newly restricted work or revocation of a directly
+or otherwise unambiguously bound source. Exact attribution requires the qualified
+native hook integration. Visitor Access requires an explicit model policy; its
+Codex runs require the qualified integration, so its normal restricted flow cannot
+enter this optional staff configuration.
 
 ## Deployment patterns
 
@@ -125,13 +174,15 @@ Configure a Claude `main` agent and add a named Codex agent:
 }
 ```
 
-This explicit fleet has no default agent; target `main` or `codex` with a session, `--agent`, or binding. The `main` agent uses its normal provider path. The `codex` agent uses Codex app-server when its effective OpenAI route remains compatible; add explicit model-scoped `agentRuntime.id: "codex"` when that should be a fail-closed requirement.
+This explicit fleet has no default agent; target `main` or `codex` with a session, `--agent`, or binding. The `main` agent uses its normal provider path. The `codex` agent uses Codex app-server when its effective OpenAI route remains compatible; add explicit model-scoped `agentRuntime.id: "codex"` when Codex should be required.
 
-### Fail-closed Codex deployment
+<a id="fail-closed-codex-deployment" />
+
+### Require Codex for deployment
 
 An eligible exact official HTTPS OpenAI route can resolve to Codex when the
-bundled plugin is available. Add explicit runtime policy for a written
-fail-closed rule:
+bundled plugin is available. Add explicit runtime policy for a configured
+requirement to use Codex:
 
 ```json5
 {

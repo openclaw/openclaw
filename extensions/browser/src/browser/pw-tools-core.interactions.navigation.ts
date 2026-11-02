@@ -1,5 +1,7 @@
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { Frame, Page } from "playwright-core";
-import { toErrorObject } from "../infra/errors.js";
 import { BROWSER_ACTION_NAVIGATION_GRACE_MS } from "./act-policy.js";
 import {
   assertBrowserNavigationResultAllowed,
@@ -8,7 +10,6 @@ import {
 } from "./navigation-guard.js";
 import {
   assertPageNavigationCompletedSafely,
-  ensurePageState,
   getPageForTargetId,
   isBrowserObservedDialogBlockedError,
   isPolicyDenyNavigationError,
@@ -23,8 +24,16 @@ import { toAIFriendlyError } from "./pw-tools-core.shared.js";
 export type InteractionTargetOptions = {
   cdpUrl: string;
   browserFilesystemLocal?: boolean;
+  /**
+   * Extension-backed uploads take the byte-payload branch because Store-installed
+   * extensions cannot read gateway-local paths, but the user's browser still runs
+   * on this machine. At or above the relay-safe payload bound (files whose base64
+   * form would not fit a single extension-relay WebSocket message), keep the local
+   * path handoff that file-access extensions accept instead of rejecting the upload.
+   */
+  uploadPathsFallbackOnPayloadLimit?: boolean;
   targetId?: string;
-  assertCurrent?: () => Promise<void>;
+  assertCurrent?: () => void | Promise<void>;
 };
 
 export type NavigationTargetOptions = InteractionTargetOptions & BrowserNavigationPolicyOptions;
@@ -43,14 +52,19 @@ export class BrowserInteractionAuthorityError extends Error {
   }
 }
 
-export async function assertInteractionCurrent(
+export function assertInteractionCurrent(
   opts: Pick<InteractionTargetOptions, "assertCurrent">,
-): Promise<void> {
-  try {
-    await opts.assertCurrent?.();
-  } catch (error) {
+): void | Promise<void> {
+  const reject = (error: unknown): never => {
     // Authority loss is fatal even inside a batch configured to continue on errors.
     throw new BrowserInteractionAuthorityError(error);
+  };
+  try {
+    // Preserve a resident assertion's synchronous fence through native action dispatch.
+    const assertion = opts.assertCurrent?.();
+    return assertion ? assertion.catch(reject) : undefined;
+  } catch (error) {
+    reject(error);
   }
 }
 
@@ -59,6 +73,7 @@ export function interactionNavigationPolicy(
 ): BrowserNavigationPolicyOptions {
   return withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
+    assertNavigationCurrent: opts.assertNavigationCurrent,
   });
 }
 
@@ -66,32 +81,12 @@ export function hasInteractionNavigationPolicy(policy: BrowserNavigationPolicyOp
   return Boolean(policy.ssrfPolicy || policy.browserProxyMode);
 }
 
-type NavigationObservablePage = Pick<Page, "url"> & {
-  mainFrame?: () => Frame;
-  on?: (event: "framenavigated", listener: (frame: Frame) => void) => unknown;
-  off?: (event: "framenavigated", listener: (frame: Frame) => void) => unknown;
-};
+type NavigationObservablePage = Pick<Page, "url" | "mainFrame" | "on" | "off">;
 
 const pendingInteractionNavigationGuardCleanup = new WeakMap<Page, () => void>();
 
-export function resolveBoundedDelayMs(
-  value: number | undefined,
-  label: string,
-  maxMs: number,
-): number {
-  const normalized = Math.floor(value ?? 0);
-  if (!Number.isFinite(normalized) || normalized < 0) {
-    throw new Error(`${label} must be >= 0`);
-  }
-  if (normalized > maxMs) {
-    throw new Error(`${label} exceeds maximum of ${maxMs}ms`);
-  }
-  return normalized;
-}
-
 export async function getRestoredPageForTarget(opts: InteractionTargetOptions) {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   return page;
 }
@@ -114,6 +109,51 @@ export function throwIfInteractionAborted(signal?: AbortSignal): void {
   }
 }
 
+function createPolicyAbortSignal(signal?: AbortSignal): {
+  signal?: AbortSignal;
+  cleanup: () => void;
+} {
+  if (!signal) {
+    return { cleanup: () => {} };
+  }
+  const controller = new AbortController();
+  const onAbort = () => {
+    if (!isBrowserObservedDialogBlockedError(signal.reason)) {
+      controller.abort(signal.reason);
+    }
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  if (signal.aborted) {
+    onAbort();
+  }
+  return {
+    signal: controller.signal,
+    cleanup: () => signal.removeEventListener("abort", onAbort),
+  };
+}
+
+export async function runGuardedPageInteraction<T>(
+  page: Page,
+  opts: GuardedInteractionOptions,
+  action: () => Promise<T>,
+): Promise<T> {
+  // Keep the navigation guard alive after foreground interruption until the
+  // underlying native operation settles.
+  return await awaitNavigationGuardedInteraction(
+    {
+      action,
+      cdpUrl: opts.cdpUrl,
+      page,
+      ...interactionNavigationPolicy(opts),
+      targetId: opts.targetId,
+      assertCurrent: opts.assertCurrent,
+    },
+    opts.signal,
+    opts.signal,
+    () => reconcileRemoteDialogAfterActionSettled(page, opts.signal),
+  );
+}
+
 export async function runCancellablePageInteraction<T>(
   page: Page,
   opts: GuardedInteractionOptions,
@@ -134,7 +174,6 @@ export async function runCancellablePageInteraction<T>(
   if (opts.signal?.aborted) {
     onAbort();
   }
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(interruption.signal);
   try {
     const result = await awaitNavigationGuardedInteraction(
       {
@@ -145,7 +184,7 @@ export async function runCancellablePageInteraction<T>(
         targetId: opts.targetId,
         assertCurrent: opts.assertCurrent,
       },
-      abortPromise,
+      interruption.signal,
       opts.signal,
       () => reconcileRemoteDialogAfterActionSettled(page, opts.signal),
     );
@@ -162,7 +201,6 @@ export async function runCancellablePageInteraction<T>(
     throw errorLabel === undefined ? error : toFriendlyInteractionError(error, errorLabel);
   } finally {
     opts.signal?.removeEventListener("abort", onAbort);
-    cleanup();
   }
 }
 
@@ -172,24 +210,7 @@ export async function runCancellablePageInteraction<T>(
 // fragment — do not cause a network request and must not trigger SSRF checks.
 function didCrossDocumentUrlChange(page: { url(): string }, previousUrl: string): boolean {
   const currentUrl = page.url();
-  if (currentUrl === previousUrl) {
-    return false;
-  }
-  try {
-    const prev = new URL(previousUrl);
-    const curr = new URL(currentUrl);
-    if (
-      prev.origin === curr.origin &&
-      prev.pathname === curr.pathname &&
-      prev.search === curr.search
-    ) {
-      // Only the fragment changed — same-document navigation, no fetch.
-      return false;
-    }
-  } catch {
-    // Non-parseable URL; fall through to string comparison.
-  }
-  return true;
+  return currentUrl !== previousUrl && !isHashOnlyNavigation(currentUrl, previousUrl);
 }
 
 // Returns true when a framenavigated event represents only a hash-only
@@ -203,41 +224,15 @@ function isHashOnlyNavigation(currentUrl: string, previousUrl: string): boolean 
     // fragment hop. Must run SSRF checks.
     return false;
   }
-  try {
-    const prev = new URL(previousUrl);
-    const curr = new URL(currentUrl);
-    return (
-      prev.origin === curr.origin && prev.pathname === curr.pathname && prev.search === curr.search
-    );
-  } catch {
-    return false;
-  }
-}
-
-function isMainFrameNavigation(page: NavigationObservablePage, frame: Frame): boolean {
-  if (typeof page.mainFrame !== "function") {
-    return true;
-  }
-  return frame === page.mainFrame();
-}
-
-async function assertSubframeNavigationAllowed(
-  frameUrl: string,
-  navigationPolicy: BrowserNavigationPolicyOptions,
-): Promise<void> {
-  if (
-    (!navigationPolicy.ssrfPolicy && !navigationPolicy.browserProxyMode) ||
-    (!frameUrl.startsWith("http://") && !frameUrl.startsWith("https://"))
-  ) {
-    // Non-network frame URLs like about:blank and about:srcdoc do not cross the
-    // browser SSRF boundary, so they should not trigger the navigation policy.
-    return;
-  }
-
-  await assertBrowserNavigationResultAllowed({
-    url: frameUrl,
-    ...navigationPolicy,
-  });
+  const prev = URL.parse(previousUrl);
+  const curr = URL.parse(currentUrl);
+  return Boolean(
+    prev &&
+    curr &&
+    prev.origin === curr.origin &&
+    prev.pathname === curr.pathname &&
+    prev.search === curr.search,
+  );
 }
 
 type ObservedDelayedNavigations = {
@@ -245,28 +240,44 @@ type ObservedDelayedNavigations = {
   subframes: string[];
 };
 
-function snapshotNetworkFrameUrl(frame: Frame): string | null {
-  try {
-    const frameUrl = frame.url();
-    return frameUrl.startsWith("http://") || frameUrl.startsWith("https://") ? frameUrl : null;
-  } catch {
-    return null;
-  }
+function createInteractionFrameListener(
+  page: NavigationObservablePage,
+  previousUrl: string,
+  subframes: string[],
+  onMainFrameNavigation: () => void,
+): (frame: Frame) => void {
+  return (frame) => {
+    if (frame !== page.mainFrame()) {
+      const frameUrl = frame.url();
+      if (frameUrl.startsWith("http://") || frameUrl.startsWith("https://")) {
+        subframes.push(frameUrl);
+      }
+    } else if (!isHashOnlyNavigation(page.url(), previousUrl)) {
+      // The event itself proves navigation, including same-URL reloads.
+      onMainFrameNavigation();
+    }
+  };
 }
 
-async function assertObservedDelayedNavigations(
+async function assertObservedInteractionNavigations(
   opts: {
     cdpUrl: string;
     page: Page;
     targetId?: string;
     observed: ObservedDelayedNavigations;
+    signal?: AbortSignal;
   } & BrowserNavigationPolicyOptions,
+  onNoMainFrameNavigation?: () => Promise<void>,
 ): Promise<void> {
   const navigationPolicy = interactionNavigationPolicy(opts);
   let subframeError: unknown;
   try {
     for (const frameUrl of opts.observed.subframes) {
-      await assertSubframeNavigationAllowed(frameUrl, navigationPolicy);
+      await assertBrowserNavigationResultAllowed({
+        url: frameUrl,
+        ...navigationPolicy,
+        ...(opts.signal ? { signal: opts.signal } : {}),
+      });
     }
   } catch (err) {
     subframeError = err;
@@ -278,7 +289,10 @@ async function assertObservedDelayedNavigations(
       response: null,
       ...navigationPolicy,
       targetId: opts.targetId,
+      ...(opts.signal ? { signal: opts.signal } : {}),
     });
+  } else if (onNoMainFrameNavigation) {
+    await onNoMainFrameNavigation();
   }
   if (subframeError) {
     throw toErrorObject(subframeError, "Non-Error thrown");
@@ -286,139 +300,45 @@ async function assertObservedDelayedNavigations(
 }
 
 function observeDelayedInteractionNavigation(
-  page: NavigationObservablePage,
+  page: Page,
   previousUrl: string,
-): Promise<ObservedDelayedNavigations> {
+  replacePending = false,
+): Promise<ObservedDelayedNavigations | undefined> {
   if (didCrossDocumentUrlChange(page, previousUrl)) {
     return Promise.resolve({ mainFrameNavigated: true, subframes: [] });
   }
-  if (typeof page.on !== "function" || typeof page.off !== "function") {
-    return Promise.resolve({ mainFrameNavigated: false, subframes: [] });
+  if (replacePending) {
+    pendingInteractionNavigationGuardCleanup.get(page)?.();
   }
 
-  return new Promise<ObservedDelayedNavigations>((resolve) => {
+  return new Promise((resolve) => {
     const subframes: string[] = [];
-    const onFrameNavigated = (frame: Frame) => {
-      if (!isMainFrameNavigation(page, frame)) {
-        const frameUrl = snapshotNetworkFrameUrl(frame);
-        if (frameUrl) {
-          subframes.push(frameUrl);
-        }
-        return;
-      }
-      // Use isHashOnlyNavigation rather than !didCrossDocumentUrlChange: the
-      // event firing is itself the navigation signal, so a same-URL reload must
-      // not be treated as "no navigation" the way URL polling would.
-      if (isHashOnlyNavigation(page.url(), previousUrl)) {
-        return;
-      }
+    const settle = (mainFrameNavigated: boolean) => {
       cleanup();
-      resolve({ mainFrameNavigated: true, subframes });
+      resolve({ mainFrameNavigated, subframes });
     };
-    const timeout = setTimeout(() => {
+    const cancel = () => {
       cleanup();
-      resolve({
-        mainFrameNavigated: didCrossDocumentUrlChange(page, previousUrl),
-        subframes,
-      });
-    }, BROWSER_ACTION_NAVIGATION_GRACE_MS);
+      resolve(undefined);
+    };
+    const onFrameNavigated = createInteractionFrameListener(page, previousUrl, subframes, () =>
+      settle(true),
+    );
+    const timeout = setTimeout(
+      () => settle(didCrossDocumentUrlChange(page, previousUrl)),
+      BROWSER_ACTION_NAVIGATION_GRACE_MS,
+    );
     const cleanup = () => {
       clearTimeout(timeout);
-      // Call off directly on page (not via a cached reference) to preserve
-      // Playwright's EventEmitter `this` binding.
-      page.off!("framenavigated", onFrameNavigated);
-    };
-
-    // Call on directly on page (not via a cached reference) to preserve
-    // Playwright's EventEmitter `this` binding.
-    page.on!("framenavigated", onFrameNavigated);
-  });
-}
-
-function scheduleDelayedInteractionNavigationGuard(
-  opts: {
-    cdpUrl: string;
-    page: Page;
-    previousUrl: string;
-    targetId?: string;
-  } & BrowserNavigationPolicyOptions,
-): Promise<void> {
-  const navigationPolicy = interactionNavigationPolicy(opts);
-  if (!hasInteractionNavigationPolicy(navigationPolicy)) {
-    return Promise.resolve();
-  }
-  const page = opts.page as unknown as NavigationObservablePage;
-  if (didCrossDocumentUrlChange(page, opts.previousUrl)) {
-    return assertPageNavigationCompletedSafely({
-      cdpUrl: opts.cdpUrl,
-      page: opts.page,
-      response: null,
-      ...navigationPolicy,
-      targetId: opts.targetId,
-    });
-  }
-  if (typeof page.on !== "function" || typeof page.off !== "function") {
-    return Promise.resolve();
-  }
-
-  pendingInteractionNavigationGuardCleanup.get(opts.page)?.();
-
-  return new Promise<void>((resolve, reject) => {
-    const settle = (err?: unknown) => {
-      cleanup();
-      if (err) {
-        reject(toErrorObject(err, "Non-Error rejection"));
-        return;
-      }
-      resolve();
-    };
-    const subframes: string[] = [];
-    const onFrameNavigated = (frame: Frame) => {
-      if (!isMainFrameNavigation(page, frame)) {
-        const frameUrl = snapshotNetworkFrameUrl(frame);
-        if (frameUrl) {
-          subframes.push(frameUrl);
-        }
-        return;
-      }
-      // Use isHashOnlyNavigation rather than !didCrossDocumentUrlChange: the
-      // event firing is itself the navigation signal, so a same-URL reload must
-      // not be treated as "no navigation" the way URL polling would.
-      if (isHashOnlyNavigation(page.url(), opts.previousUrl)) {
-        return;
-      }
-      cleanup();
-      void assertObservedDelayedNavigations({
-        cdpUrl: opts.cdpUrl,
-        page: opts.page,
-        ...navigationPolicy,
-        targetId: opts.targetId,
-        observed: { mainFrameNavigated: true, subframes },
-      }).then(() => settle(), settle);
-    };
-    const timeout = setTimeout(() => {
-      cleanup();
-      void assertObservedDelayedNavigations({
-        cdpUrl: opts.cdpUrl,
-        page: opts.page,
-        ...navigationPolicy,
-        targetId: opts.targetId,
-        observed: {
-          mainFrameNavigated: didCrossDocumentUrlChange(page, opts.previousUrl),
-          subframes,
-        },
-      }).then(() => settle(), settle);
-    }, BROWSER_ACTION_NAVIGATION_GRACE_MS);
-    const cleanup = () => {
-      clearTimeout(timeout);
-      page.off!("framenavigated", onFrameNavigated);
-      if (pendingInteractionNavigationGuardCleanup.get(opts.page) === settle) {
-        pendingInteractionNavigationGuardCleanup.delete(opts.page);
+      page.off("framenavigated", onFrameNavigated);
+      if (pendingInteractionNavigationGuardCleanup.get(page) === cancel) {
+        pendingInteractionNavigationGuardCleanup.delete(page);
       }
     };
-
-    pendingInteractionNavigationGuardCleanup.set(opts.page, settle);
-    page.on!("framenavigated", onFrameNavigated);
+    if (replacePending) {
+      pendingInteractionNavigationGuardCleanup.set(page, cancel);
+    }
+    page.on("framenavigated", onFrameNavigated);
   });
 }
 
@@ -429,6 +349,7 @@ async function assertInteractionNavigationCompletedSafely<T>(
     page: Page;
     previousUrl: string;
     targetId?: string;
+    signal?: AbortSignal;
   } & BrowserNavigationPolicyOptions,
 ): Promise<T> {
   const navigationPolicy = interactionNavigationPolicy(opts);
@@ -439,27 +360,17 @@ async function assertInteractionNavigationCompletedSafely<T>(
   // action so navigations triggered mid-click or mid-evaluate are not missed.
   // Using a fixed pre-action timer would expire before the action finishes for
   // slow interactions, silently bypassing the SSRF guard.
-  const navPage = opts.page as unknown as NavigationObservablePage;
   let navigatedDuringAction = false;
   const subframeNavigationsDuringAction: string[] = [];
-  const onFrameNavigated = (frame: Frame) => {
-    if (!isMainFrameNavigation(navPage, frame)) {
-      const frameUrl = snapshotNetworkFrameUrl(frame);
-      if (frameUrl) {
-        subframeNavigationsDuringAction.push(frameUrl);
-      }
-      return;
-    }
-    // Use isHashOnlyNavigation rather than didCrossDocumentUrlChange: the event
-    // firing is the navigation signal, so a same-URL reload must not be skipped
-    // the way it would be by URL-equality polling.
-    if (!isHashOnlyNavigation(opts.page.url(), opts.previousUrl)) {
+  const onFrameNavigated = createInteractionFrameListener(
+    opts.page,
+    opts.previousUrl,
+    subframeNavigationsDuringAction,
+    () => {
       navigatedDuringAction = true;
-    }
-  };
-  if (typeof navPage.on === "function") {
-    navPage.on("framenavigated", onFrameNavigated);
-  }
+    },
+  );
+  opts.page.on("framenavigated", onFrameNavigated);
 
   let result: T | undefined;
   let actionError: unknown = null;
@@ -468,61 +379,35 @@ async function assertInteractionNavigationCompletedSafely<T>(
   } catch (err) {
     actionError = err;
   } finally {
-    if (typeof navPage.off === "function") {
-      navPage.off("framenavigated", onFrameNavigated);
-    }
+    opts.page.off("framenavigated", onFrameNavigated);
   }
 
-  const navigationObserved =
-    navigatedDuringAction || didCrossDocumentUrlChange(opts.page, opts.previousUrl);
-
-  let subframeError: unknown;
-  try {
-    for (const frameUrl of subframeNavigationsDuringAction) {
-      await assertSubframeNavigationAllowed(frameUrl, navigationPolicy);
-    }
-  } catch (err) {
-    subframeError = err;
-  }
-
-  if (navigationObserved) {
-    await assertPageNavigationCompletedSafely({
-      cdpUrl: opts.cdpUrl,
-      page: opts.page,
-      response: null,
-      ...navigationPolicy,
-      targetId: opts.targetId,
-    });
-  } else if (actionError) {
-    // Preserve the action-error path semantics: if a rejected click/evaluate still
-    // triggers a delayed navigation, the SSRF block must win over the original
-    // action error instead of surfacing a stale interaction failure.
-    const observed = await observeDelayedInteractionNavigation(opts.page, opts.previousUrl);
-    if (observed.mainFrameNavigated || observed.subframes.length > 0) {
-      await assertObservedDelayedNavigations({
-        cdpUrl: opts.cdpUrl,
-        page: opts.page,
-        ...navigationPolicy,
-        targetId: opts.targetId,
-        observed,
-      });
-    }
-  } else {
-    // Successful interactions still need a short grace window: a click can resolve
-    // before the navigation event fires, and a blocked late hop must be observable
-    // to the current caller instead of only quarantining the page in the background.
-    await scheduleDelayedInteractionNavigationGuard({
-      cdpUrl: opts.cdpUrl,
-      page: opts.page,
-      previousUrl: opts.previousUrl,
-      ...navigationPolicy,
-      targetId: opts.targetId,
-    });
-  }
-
-  if (subframeError) {
-    throw toErrorObject(subframeError, "Non-Error thrown");
-  }
+  await assertObservedInteractionNavigations(
+    {
+      ...opts,
+      observed: {
+        mainFrameNavigated:
+          navigatedDuringAction || didCrossDocumentUrlChange(opts.page, opts.previousUrl),
+        subframes: subframeNavigationsDuringAction,
+      },
+    },
+    async () => {
+      // A delayed policy denial wins over the action error. Successful calls
+      // replace the previous page guard; failed actions keep their own observer.
+      const observed = await observeDelayedInteractionNavigation(
+        opts.page,
+        opts.previousUrl,
+        !actionError,
+      );
+      if (observed) {
+        try {
+          await assertObservedInteractionNavigations({ ...opts, observed });
+        } catch (error) {
+          throw actionError ? error : toErrorObject(error, "Non-Error rejection");
+        }
+      }
+    },
+  );
 
   if (actionError) {
     throw toErrorObject(actionError, "Non-Error thrown");
@@ -532,14 +417,16 @@ async function assertInteractionNavigationCompletedSafely<T>(
 
 export async function awaitActionWithAbort<T>(
   actionPromise: Promise<T>,
-  abortPromise?: Promise<never>,
+  signal?: AbortSignal,
   onActionResolvedAfterAbort?: () => void,
 ): Promise<T> {
-  if (!abortPromise) {
+  if (!signal) {
     return await actionPromise;
   }
   try {
-    return await Promise.race([actionPromise, abortPromise]);
+    return await racePromiseWithAbortSignal(actionPromise, signal, ({ reason }) =>
+      toErrorObject(reason ?? new Error("aborted"), "Non-Error rejection"),
+    );
   } catch (err) {
     // If abort wins the race, the action may reject later; avoid unhandled rejections.
     void actionPromise.then(
@@ -550,7 +437,7 @@ export async function awaitActionWithAbort<T>(
   }
 }
 
-export async function awaitNavigationGuardedInteraction<T>(
+async function awaitNavigationGuardedInteraction<T>(
   opts: {
     action: () => Promise<T>;
     cdpUrl: string;
@@ -558,13 +445,14 @@ export async function awaitNavigationGuardedInteraction<T>(
     targetId?: string;
     assertCurrent?: InteractionTargetOptions["assertCurrent"];
   } & BrowserNavigationPolicyOptions,
-  abortPromise?: Promise<never>,
+  interruptionSignal?: AbortSignal,
   signal?: AbortSignal,
   onActionResolvedAfterAbort?: () => void,
 ): Promise<T> {
   type PolicyCheckOutcome = { state: "allowed" } | { state: "failed"; error: unknown };
   const navigationPolicy = interactionNavigationPolicy(opts);
   const hasNavigationPolicy = hasInteractionNavigationPolicy(navigationPolicy);
+  const { signal: policySignal, cleanup: cleanupPolicySignal } = createPolicyAbortSignal(signal);
   let observedPolicyError: unknown;
   const activePolicyChecks = new Set<Promise<PolicyCheckOutcome>>();
   let unsafeSourceQuarantine: Promise<void> | undefined;
@@ -577,6 +465,7 @@ export async function awaitNavigationGuardedInteraction<T>(
   const guardedAction = withPageNavigationRequestGuard({
     page: opts.page,
     ...navigationPolicy,
+    ...(policySignal ? { signal: policySignal } : {}),
     onPolicyCheckStarted: (check) => {
       const tracked = check.then<PolicyCheckOutcome, PolicyCheckOutcome>(
         () => ({ state: "allowed" }),
@@ -602,13 +491,16 @@ export async function awaitNavigationGuardedInteraction<T>(
       try {
         return await assertInteractionNavigationCompletedSafely({
           ...opts,
+          signal: policySignal,
           action: async () => {
             try {
               // Preserve native dispatch ordering for callers without an authority check.
-              if (opts.assertCurrent) {
-                await assertInteractionCurrent(opts);
+              const assertion = assertInteractionCurrent(opts);
+              if (assertion) {
+                await assertion;
               }
               throwIfInteractionAborted(signal);
+              navigationPolicy.assertNavigationCurrent?.();
               return await opts.action();
             } finally {
               actionSettledAtMs = Date.now();
@@ -623,9 +515,7 @@ export async function awaitNavigationGuardedInteraction<T>(
           const elapsedMs = Math.max(0, Date.now() - actionSettledAtMs);
           const remainingMs = Math.max(0, BROWSER_ACTION_NAVIGATION_GRACE_MS - elapsedMs);
           if (remainingMs > 0) {
-            await new Promise<void>((resolve) => {
-              setTimeout(resolve, remainingMs);
-            });
+            await sleepWithAbort(remainingMs);
           }
           // The canonical observer can settle on an earlier safe navigation.
           // Recheck the final committed URL before releasing request routing.
@@ -635,6 +525,7 @@ export async function awaitNavigationGuardedInteraction<T>(
             response: null,
             ...navigationPolicy,
             targetId: opts.targetId,
+            ...(policySignal ? { signal: policySignal } : {}),
           });
         }
       }
@@ -649,7 +540,11 @@ export async function awaitNavigationGuardedInteraction<T>(
     throw err;
   });
   try {
-    return await awaitActionWithAbort(guardedAction, abortPromise, onActionResolvedAfterAbort);
+    return await awaitActionWithAbort(
+      guardedAction,
+      interruptionSignal,
+      onActionResolvedAfterAbort,
+    );
   } catch (err) {
     if (observedPolicyError === undefined && activePolicyChecks.size > 0) {
       const outcomes = await Promise.all(activePolicyChecks);
@@ -666,42 +561,7 @@ export async function awaitNavigationGuardedInteraction<T>(
       throw toErrorObject(observedPolicyError, "Non-Error thrown");
     }
     throw err;
+  } finally {
+    cleanupPolicySignal();
   }
-}
-
-export function createAbortPromiseWithListener(
-  signal?: AbortSignal,
-  onAbort?: (reason: unknown) => void,
-): {
-  abortPromise?: Promise<never>;
-  cleanup: () => void;
-} {
-  if (!signal) {
-    return { cleanup: () => {} };
-  }
-  let abortListener: (() => void) | undefined;
-  const abortPromise: Promise<never> = signal.aborted
-    ? (() => {
-        onAbort?.(signal.reason);
-        return Promise.reject(
-          toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"),
-        );
-      })()
-    : new Promise((_, reject) => {
-        abortListener = () => {
-          onAbort?.(signal.reason);
-          reject(toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
-        };
-        signal.addEventListener("abort", abortListener, { once: true });
-      });
-  // Avoid unhandled rejections on early returns.
-  void abortPromise.catch(() => {});
-  return {
-    abortPromise,
-    cleanup: () => {
-      if (abortListener) {
-        signal.removeEventListener("abort", abortListener);
-      }
-    },
-  };
 }

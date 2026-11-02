@@ -1,4 +1,3 @@
-// Openrouter plugin module implements video http behavior.
 import { fetchWithTimeoutGuarded } from "openclaw/plugin-sdk/provider-http";
 
 type GuardedFetchResult = Awaited<ReturnType<typeof fetchWithTimeoutGuarded>>;
@@ -6,11 +5,8 @@ type FetchGuardOptions = NonNullable<Parameters<typeof fetchWithTimeoutGuarded>[
 export type OpenRouterVideoDispatcherPolicy = FetchGuardOptions["dispatcherPolicy"];
 
 function headersForOpenRouterGet(url: string, baseUrl: string, requestHeaders: Headers): Headers {
-  try {
-    if (new URL(url).origin !== new URL(baseUrl).origin) {
-      return new Headers();
-    }
-  } catch {
+  const origin = URL.parse(url)?.origin;
+  if (origin === undefined || origin !== URL.parse(baseUrl)?.origin) {
     return new Headers();
   }
   const headers = new Headers(requestHeaders);

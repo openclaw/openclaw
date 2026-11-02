@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 const PortalSummaryIdentityFields = {
   id: NonEmptyString,
@@ -11,6 +12,12 @@ const PortalSummaryIdentityFields = {
 
 const PortalSummaryMetadataFields = {
   publicUrl: NonEmptyString,
+  exposure: Type.Optional(
+    closedObject({
+      kind: stringLiteralUnion(["loopback-only", "non-loopback"]),
+      browserReachability: Type.Literal("unverified"),
+    }),
+  ),
   path: Type.Optional(Type.String({ pattern: "^/" })),
   description: Type.Optional(Type.String()),
   origin: Type.Optional(Type.String()),
@@ -50,6 +57,22 @@ export const PortalCloseParamsSchema = closedObject({
   ...PortalEnvironmentFields,
 });
 export const PortalCloseResultSchema = closedObject({ closed: Type.Boolean() });
+
+const SessionPortalFields = {
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  environmentId: NonEmptyString,
+};
+
+export const SessionPortalListParamsSchema = closedObject(SessionPortalFields);
+export const SessionPortalOpenParamsSchema = closedObject({
+  ...PortalOpenParamsSchema.properties,
+  ...SessionPortalFields,
+});
+export const SessionPortalCloseParamsSchema = closedObject({
+  ...PortalCloseParamsSchema.properties,
+  ...SessionPortalFields,
+});
 
 export const PortalChangedEventSchema = closedObject({
   portals: Type.Array(PortalSummarySchema),

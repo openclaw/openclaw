@@ -3,6 +3,7 @@ import Foundation
 import Synchronization
 import Testing
 
+@Suite(.testWaitLimit)
 @MainActor
 struct DashboardHTTPFixtureTests {
     @Test func `fixtures own distinct loopback endpoints serving inert HTML`() async throws {
@@ -96,9 +97,8 @@ struct DashboardHTTPFixtureTests {
         }
         try #require(connected == 0 || errno == EINPROGRESS)
         var writable = pollfd(fd: descriptor, events: Int16(POLLOUT), revents: 0)
-        let connectDeadline = ContinuousClock.now + .seconds(2)
-        while poll(&writable, 1, 0) == 0, ContinuousClock.now < connectDeadline {
-            try await Task.sleep(for: .milliseconds(10))
+        try await TestWait.state("writable fixture socket") {
+            poll(&writable, 1, 0) != 0
         }
         try #require(writable.revents & Int16(POLLOUT) != 0)
         let partialHeader = Array("GET /pending HTTP/1.1\r\n".utf8)
@@ -107,17 +107,16 @@ struct DashboardHTTPFixtureTests {
 
         fixture.stop()
         fixture.stop()
-        let deadline = ContinuousClock.now + .seconds(2)
         var byte: UInt8 = 0
         var closed = false
-        while ContinuousClock.now < deadline {
+        try await TestWait.state("closed fixture client") {
             let received = Darwin.recv(descriptor, &byte, 1, 0)
             if received == 0 || (received == -1 && errno == ECONNRESET) {
                 closed = true
-                break
+                return true
             }
             try #require(received == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))
-            try await Task.sleep(for: .milliseconds(10))
+            return false
         }
         #expect(closed)
 
@@ -134,8 +133,8 @@ struct DashboardHTTPFixtureTests {
         if errno == ECONNREFUSED { return }
         try #require(errno == EINPROGRESS)
         var probeEvents = pollfd(fd: probe, events: Int16(POLLOUT), revents: 0)
-        while poll(&probeEvents, 1, 0) == 0, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
+        try await TestWait.state("refused fixture reconnection") {
+            poll(&probeEvents, 1, 0) != 0
         }
         try #require(probeEvents.revents != 0)
         var socketError: Int32 = 0

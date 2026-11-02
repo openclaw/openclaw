@@ -183,7 +183,7 @@ export function assertReplacementWriterPreserved(
 ) {
   // Lifecycle ownership is independent of the transcript writer. Its exact run
   // may still publish terminal status, but cannot change compaction or accounting.
-  assert.equal(before.status, "running");
+  assert.equal(before.status, undefined);
   assert.equal(before.lifecycleRunId, runId);
   assert.equal(terminal.runId, runId);
   assert.equal(terminal.status, "error");

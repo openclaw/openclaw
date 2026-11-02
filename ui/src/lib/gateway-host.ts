@@ -7,10 +7,5 @@ export function formatGatewayHost(gatewayUrl: string | undefined): string {
   if (!raw) {
     return t("common.unknown");
   }
-  try {
-    const url = new URL(raw);
-    return url.host || raw;
-  } catch {
-    return raw;
-  }
+  return URL.parse(raw)?.host || raw;
 }

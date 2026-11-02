@@ -1,4 +1,3 @@
-/** Shared path candidates for Codex's macOS desktop app bundle. */
 import { existsSync } from "node:fs";
 import path from "node:path";
 
@@ -10,28 +9,40 @@ export type MacOSDesktopCodexAppPathCandidate = {
   computerUseServiceAppPaths: readonly string[];
 };
 
-const MACOS_DESKTOP_CODEX_APP_PATH_CANDIDATES: readonly MacOSDesktopCodexAppPathCandidate[] = [
-  {
-    appName: "ChatGPT.app",
-    appBundlePath: "/Applications/ChatGPT.app",
-    appServerCommandPath: "/Applications/ChatGPT.app/Contents/Resources/codex",
-    bundledMarketplacePath: "/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled",
-    computerUseServiceAppPaths: [
-      "/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/@oai/sky/Codex Computer Use.app",
-      "/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled/plugins/computer-use/Codex Computer Use.app",
-    ],
-  },
-  {
-    appName: "Codex.app",
-    appBundlePath: "/Applications/Codex.app",
-    appServerCommandPath: "/Applications/Codex.app/Contents/Resources/codex",
-    bundledMarketplacePath: "/Applications/Codex.app/Contents/Resources/plugins/openai-bundled",
-    computerUseServiceAppPaths: [
-      "/Applications/Codex.app/Contents/Resources/plugins/openai-bundled/plugins/computer-use/Codex Computer Use.app",
-      "/Applications/Codex.app/Contents/Resources/cua_node/lib/node_modules/@oai/sky/Codex Computer Use.app",
-    ],
-  },
-] as const;
+const MACOS_DESKTOP_CODEX_APP_PATH_CANDIDATES: readonly MacOSDesktopCodexAppPathCandidate[] = (
+  ["ChatGPT.app", "Codex.app"] as const
+).flatMap((appName) => {
+  const appBundlePath = `/Applications/${appName}`;
+  const resources = `${appBundlePath}/Contents/Resources`;
+  const computerUseServiceAppPaths = [
+    `${resources}/cua_node/lib/node_modules/@oai/sky/Codex Computer Use.app`,
+    `${resources}/plugins/openai-bundled/plugins/computer-use/Codex Computer Use.app`,
+  ];
+  if (appName === "Codex.app") {
+    computerUseServiceAppPaths.reverse();
+  }
+  const candidate: MacOSDesktopCodexAppPathCandidate = {
+    appName,
+    appBundlePath,
+    appServerCommandPath: `${resources}/codex`,
+    bundledMarketplacePath: `${resources}/plugins/openai-bundled`,
+    computerUseServiceAppPaths,
+  };
+  return [
+    {
+      ...candidate,
+      appServerCommandPath: path.join(
+        resources,
+        "codex-cli",
+        "CodexCLI.app",
+        "Contents",
+        "MacOS",
+        "codex",
+      ),
+    },
+    candidate,
+  ];
+});
 
 export function resolveMacOSDesktopCodexAppPathCandidates(
   platform: NodeJS.Platform = process.platform,
@@ -50,9 +61,13 @@ export function resolveMacOSDesktopCodexAppServerCommandCandidates(
 export function resolveMacOSDesktopCodexBundledMarketplaceCandidates(
   platform: NodeJS.Platform = process.platform,
 ): string[] {
-  return resolveMacOSDesktopCodexAppPathCandidates(platform).map(
-    (candidate) => candidate.bundledMarketplacePath,
-  );
+  return [
+    ...new Set(
+      resolveMacOSDesktopCodexAppPathCandidates(platform).map(
+        (candidate) => candidate.bundledMarketplacePath,
+      ),
+    ),
+  ];
 }
 
 export function resolveMacOSDesktopCodexComputerUseServiceAppCandidates(
@@ -69,23 +84,19 @@ export function resolveMacOSDesktopCodexComputerUseServiceAppCandidates(
           path.resolve(candidate.appServerCommandPath) === path.resolve(appServerCommand),
       )
     : undefined;
-  const orderedCandidates = matchingCandidate
-    ? [matchingCandidate, ...candidates.filter((candidate) => candidate !== matchingCandidate)]
-    : candidates;
   return [
-    ...new Set(orderedCandidates.flatMap((candidate) => candidate.computerUseServiceAppPaths)),
+    ...new Set([
+      ...(matchingCandidate?.computerUseServiceAppPaths ?? []),
+      ...candidates.flatMap((candidate) => candidate.computerUseServiceAppPaths),
+    ]),
   ];
 }
 
 export function resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath(
   params: {
-    platform?: NodeJS.Platform;
     candidates?: readonly string[];
-    pathExists?: (filePath: string) => boolean;
   } = {},
 ): string | undefined {
-  const candidates =
-    params.candidates ?? resolveMacOSDesktopCodexBundledMarketplaceCandidates(params.platform);
-  const pathExists = params.pathExists ?? existsSync;
-  return candidates.find((candidate) => pathExists(candidate));
+  const candidates = params.candidates ?? resolveMacOSDesktopCodexBundledMarketplaceCandidates();
+  return candidates.find((candidate) => existsSync(candidate));
 }

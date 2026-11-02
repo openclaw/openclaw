@@ -160,9 +160,6 @@ async function readMountedDisk(
   signal.throwIfAborted();
   const stats = await fs.statfs(mount.path, { bigint: true });
   signal.throwIfAborted();
-  if (device !== undefined && (await fs.stat(mount.path, { bigint: true })).dev !== device) {
-    return undefined;
-  }
   // df -kP rounds fractional KiB up; bavail excludes blocks reserved for root.
   const totalBytes = Number(((stats.blocks * stats.frsize + 1023n) / 1024n) * 1024n);
   // libuv exposes f_bavail as uint64 even when the filesystem reports a deficit.
@@ -215,6 +212,8 @@ async function collectSystemDisks(
   if (platform !== "linux" && platform !== "darwin") {
     return undefined;
   }
+  // A mount change during sampling may briefly report its parent filesystem;
+  // the next cached snapshot refreshes membership.
   const paths = await readMountedDiskPaths(platform);
   if (!paths?.length) {
     return paths ? [] : undefined;
@@ -227,16 +226,7 @@ async function collectSystemDisks(
     try {
       const disk = await readMountedDisk(mount, platform, signal);
       signal.throwIfAborted();
-      // A removed mount's directory can resolve to its parent filesystem. Mount
-      // IDs stay valid for Btrfs subvolumes whose stat device differs from mountinfo.
-      const currentPaths = platform === "linux" ? await readMountedDiskPaths(platform) : paths;
-      signal.throwIfAborted();
-      if (
-        disk &&
-        currentPaths?.some(
-          (current) => current.path === mount.path && current.identity === mount.identity,
-        )
-      ) {
+      if (disk) {
         disks.push(disk);
       }
     } catch {
@@ -278,7 +268,7 @@ export function readSystemDisks(): Promise<SystemDisk[] | undefined> {
         .then((disks) => disks?.toSorted((left, right) => left.path.localeCompare(right.path)))
         .catch(() => undefined)
         .finally(() => {
-          next.expiresAt = Date.now() + 10_000;
+          next.expiresAt = Date.now() + 30_000;
         }),
     };
     snapshot = next;

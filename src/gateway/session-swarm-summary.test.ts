@@ -1,11 +1,16 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../agents/tools/sessions-resolution.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -40,9 +45,14 @@ function collector(index: number, overrides: Partial<SubagentRunRecord> = {}): S
   };
 }
 
-async function withCollectors(runs: SubagentRunRecord[], run: () => Promise<void>) {
+async function withCollectors(
+  runs: SubagentRunRecord[],
+  run: () => Promise<void>,
+  config: OpenClawConfig = cfg,
+) {
   await withStateDirEnv("session-swarm-summary-", async () => {
     await withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
+      setRuntimeConfigSnapshot(config);
       saveSubagentRegistryToSqlite(new Map(runs.map((entry) => [entry.runId, entry])));
       await run();
     });
@@ -52,6 +62,7 @@ async function withCollectors(runs: SubagentRunRecord[], run: () => Promise<void
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   clearSubagentRunsReadCacheForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("parent Swarm outcome projection", () => {
@@ -150,7 +161,7 @@ describe("parent Swarm outcome projection", () => {
     ]);
   });
 
-  it.each(["main", "workspace", "global"])(
+  it.each(["workspace", "global"])(
     "joins admitted global-scope %s collectors to their owner row",
     async (suffix) => {
       const globalConfig = { ...cfg, session: { scope: "global" as const, mainKey: "workspace" } };
@@ -158,12 +169,8 @@ describe("parent Swarm outcome projection", () => {
         cfg: globalConfig,
         sessionKey: `agent:other:${suffix}`,
       });
-      const { alias, mainKey } = resolveMainSessionAlias(globalConfig);
-      const requesterKey = resolveInternalSessionKey({
-        key: admitted.canonicalKey,
-        alias,
-        mainKey,
-      });
+      const { alias } = resolveMainSessionAlias(globalConfig);
+      const requesterKey = resolveInternalSessionKey({ key: admitted.canonicalKey, alias });
       expect(requesterKey).toBe(suffix === "global" ? "agent:other:global" : "global");
       await withCollectors(
         [
@@ -184,6 +191,7 @@ describe("parent Swarm outcome projection", () => {
             { key: requesterKey, agentId: "other", swarm: { groups: [{ done: 1 }] } },
           ]);
         },
+        globalConfig,
       );
     },
   );
@@ -197,7 +205,17 @@ describe("parent Swarm outcome projection", () => {
           : {}),
       }),
     );
-    const summary = buildSessionSwarmSummary(runs, parent, "main");
+    Object.freeze(runs);
+    const copyingSort = vi.spyOn(Array.prototype, "toSorted");
+    let summary: ReturnType<typeof buildSessionSwarmSummary>;
+    let copies: number;
+    try {
+      summary = buildSessionSwarmSummary(runs, parent, "main", { includeChildren: true });
+      copies = copyingSort.mock.calls.length;
+    } finally {
+      copyingSort.mockRestore();
+    }
+    expect(copies).toBe(0);
     expect(summary?.groups.map((group) => group.groupId)).toEqual([
       "group-5",
       "group-4",
@@ -206,6 +224,19 @@ describe("parent Swarm outcome projection", () => {
       "group-7",
     ]);
     expect(summary?.otherActiveGroups).toBe(2);
+    expect(summary?.groups[0]?.children).toEqual([
+      { sessionKey: "agent:main:subagent:5", status: "queued" },
+    ]);
+    expect(runs.map((run) => run.groupId)).toEqual([
+      "group-0",
+      "group-1",
+      "group-2",
+      "group-3",
+      "group-4",
+      "group-5",
+      "group-6",
+      "group-7",
+    ]);
   });
   it("does not infer missing collector ownership from completion routing", () => {
     expect(
@@ -249,7 +280,6 @@ describe("parent Swarm outcome projection", () => {
       ).not.toHaveProperty("swarm");
       const snapshot = buildGatewaySessionSnapshot({
         sessionRow: { key, kind: "global", updatedAt: 0, swarm },
-        includeSession: true,
       });
       expect(snapshot).not.toHaveProperty("swarm");
       expect(snapshot.session).not.toHaveProperty("swarm");

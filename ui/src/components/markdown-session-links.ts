@@ -6,11 +6,16 @@ import { resolveGatewayPublicOrigin } from "../../../src/config/gateway-public-o
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { resolveControlUiPaths } from "../app/browser.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { currentDisplayRuntimeConfig } from "../lib/config/config-state-model.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
+import {
+  markdownInlineChildren,
+  replaceMarkdownTextMatches,
+} from "./markdown-text-replacements.ts";
 
-export const SESSION_LINK_SCAN_RE = /agent:[^\s<>"'`]*[^\s<>"'`.,;:!?)}\]]/g;
+const SESSION_LINK_SCAN_RE = /agent:[^\s<>"'`]*[^\s<>"'`.,;:!?)}\]]/g;
 
 type SessionKeyTarget = {
   sessionKey: string;
@@ -65,7 +70,7 @@ export function parseLocalMarkdownSessionUrl(
     : null;
 }
 
-export function installMarkdownSessionLinks(markdownParser: MarkdownIt, scanPattern: RegExp): void {
+export function installMarkdownSessionLinks(markdownParser: MarkdownIt): void {
   // Capture cleaned hrefs before file decoration can claim session-shaped paths.
   markdownParser.core.ruler.before("file-links", "session-links", (state) => {
     if (state.env?.sessionLinks !== true) {
@@ -92,11 +97,7 @@ export function installMarkdownSessionLinks(markdownParser: MarkdownIt, scanPatt
       token.attrSet("tabindex", "0");
       return true;
     };
-    for (const blockToken of state.tokens) {
-      const children = blockToken.children;
-      if (blockToken.type !== "inline" || !children) {
-        continue;
-      }
+    for (const children of markdownInlineChildren(state.tokens)) {
       let linkDepth = 0;
       for (let index = 0; index < children.length; index++) {
         const token = children[index];
@@ -117,33 +118,25 @@ export function installMarkdownSessionLinks(markdownParser: MarkdownIt, scanPatt
             token.attrSet("data-session-href", token.content);
           }
         } else if (linkDepth === 0 && token.type === "text") {
-          const replacements: Token[] = [];
-          let cursor = 0;
-          const text = (content: string) => {
-            const label = new state.Token("text", "", 0);
-            label.content = content;
-            replacements.push(label);
-          };
-          for (const match of token.content.matchAll(scanPattern)) {
-            const end = match.index + match[0].length;
-            const open = new state.Token("link_open", "a", 1);
-            if (
-              !hasMarkdownLinkBoundaries(token.content, match.index, end) ||
-              !decorate(open, match[0])
-            ) {
-              continue;
-            }
-            text(token.content.slice(cursor, match.index));
-            replacements.push(open);
-            text(match[0]);
-            replacements.push(new state.Token("link_close", "a", -1));
-            cursor = end;
-          }
-          if (cursor) {
-            text(token.content.slice(cursor));
-            children.splice(index, 1, ...replacements);
-            index += replacements.length - 1;
-          }
+          index = replaceMarkdownTextMatches(
+            state,
+            children,
+            index,
+            SESSION_LINK_SCAN_RE,
+            (match) => {
+              const end = match.index + match[0].length;
+              const open = new state.Token("link_open", "a", 1);
+              if (
+                !hasMarkdownLinkBoundaries(token.content, match.index, end) ||
+                !decorate(open, match[0])
+              ) {
+                return null;
+              }
+              const label = new state.Token("text", "", 0);
+              label.content = match[0];
+              return [open, label, new state.Token("link_close", "a", -1)];
+            },
+          );
         }
       }
     }
@@ -153,7 +146,9 @@ export function installMarkdownSessionLinks(markdownParser: MarkdownIt, scanPatt
 export function markdownSessionPublicOrigin(
   context?: ApplicationContext | null,
 ): string | undefined {
-  const config = context?.runtimeConfig?.state.configSnapshot?.runtimeConfig;
+  const config = context?.runtimeConfig
+    ? currentDisplayRuntimeConfig(context.runtimeConfig.state)
+    : null;
   return resolveGatewayPublicOrigin({
     gateway: { publicOrigin: readNonBlankString(asOptionalRecord(config?.gateway)?.publicOrigin) },
   });

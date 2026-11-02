@@ -1,10 +1,6 @@
-// Qa Lab tests cover suite runtime agent tools plugin behavior.
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const requireFromHere = createRequire(import.meta.url);
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const connectMock = vi.hoisted(() => vi.fn(async () => undefined));
 const listToolsMock = vi.hoisted(() => vi.fn(async () => ({ tools: [] })));
@@ -13,34 +9,25 @@ const closeMock = vi.hoisted(() => vi.fn(async () => undefined));
 const resolveQaNodeExecPathMock = vi.hoisted(() => vi.fn(async () => "/usr/bin/node"));
 const stderrOnMock = vi.hoisted(() => vi.fn());
 const stdioTransportMock = vi.hoisted(() =>
-  vi.fn().mockImplementation(function StdioClientTransport(
-    this: { params?: unknown; stderr?: { on: typeof stderrOnMock } },
-    params: unknown,
-  ) {
-    this.params = params;
-    this.stderr = { on: stderrOnMock };
-  }),
+  vi.fn(
+    class StdioClientTransport {
+      stderr = { on: stderrOnMock };
+    },
+  ),
 );
 
-vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
-  Client: vi
-    .fn()
-    .mockImplementation(
-      function Client(this: {
-        connect?: typeof connectMock;
-        listTools?: typeof listToolsMock;
-        callTool?: typeof callToolMock;
-        close?: typeof closeMock;
-      }) {
-        this.connect = connectMock;
-        this.listTools = listToolsMock;
-        this.callTool = callToolMock;
-        this.close = closeMock;
-      },
-    ),
+vi.mock("@modelcontextprotocol/client", () => ({
+  Client: vi.fn(
+    class Client {
+      connect = connectMock;
+      request = listToolsMock;
+      callTool = callToolMock;
+      close = closeMock;
+    },
+  ),
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+vi.mock("@modelcontextprotocol/client/stdio", () => ({
   StdioClientTransport: stdioTransportMock,
 }));
 
@@ -57,251 +44,161 @@ import {
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const { cleanup, makeTempDir } = createTempDirHarness();
-const repoRoot = "/repo/openclaw";
-const gatewayTempRoot = "/tmp/openclaw-qa-runtime";
+
+function callMcp(toolName = "plugin.echo", args = {}, root = "/repo/openclaw") {
+  return callPluginToolsMcp({
+    env: {
+      gateway: { tempRoot: "/tmp/openclaw-qa-runtime", runtimeEnv: { PATH: "/usr/bin" } },
+      repoRoot: root,
+    } as never,
+    toolName,
+    args,
+  });
+}
+
+function emitStderr(text: string) {
+  const listener = stderrOnMock.mock.calls[0]?.[1] as ((chunk: unknown) => void) | undefined;
+  listener?.(Buffer.from(text));
+}
 
 afterEach(cleanup);
 
-describe("qa suite runtime agent tools helpers", () => {
-  beforeEach(() => {
-    connectMock.mockClear();
-    listToolsMock.mockReset();
-    callToolMock.mockReset();
-    closeMock.mockClear();
-    resolveQaNodeExecPathMock.mockClear();
-    stderrOnMock.mockClear();
-    stdioTransportMock.mockClear();
+beforeEach(() => {
+  vi.clearAllMocks();
+  listToolsMock.mockReset();
+  callToolMock.mockReset();
+});
+
+it("finds a skill by exact name", () => {
+  expect(findSkill([{ name: "alpha" }, { name: "beta" }], "beta")).toEqual({ name: "beta" });
+  expect(findSkill([{ name: "alpha" }], "beta")).toBeUndefined();
+});
+
+it("writes a workspace skill under the gateway workspace", async () => {
+  const workspaceDir = await makeTempDir("qa-workspace-");
+
+  const skillPath = await writeWorkspaceSkill({
+    env: { gateway: { workspaceDir } } as never,
+    name: "my-skill",
+    body: "hello world",
   });
 
-  it("finds a skill by exact name", () => {
-    expect(findSkill([{ name: "alpha" }, { name: "beta" }], "beta")).toEqual({ name: "beta" });
-    expect(findSkill([{ name: "alpha" }], "beta")).toBeUndefined();
-  });
+  await expect(fs.readFile(skillPath, "utf8")).resolves.toBe("hello world\n");
+  expect(skillPath).toBe(path.join(workspaceDir, "skills", "my-skill", "SKILL.md"));
+});
 
-  it("writes a workspace skill under the gateway workspace", async () => {
-    const workspaceDir = await makeTempDir("qa-workspace-");
+it("rejects workspace skill names that escape the skills directory", async () => {
+  const workspaceDir = await makeTempDir("qa-workspace-");
 
-    const skillPath = await writeWorkspaceSkill({
-      env: { gateway: { workspaceDir } } as never,
-      name: "my-skill",
-      body: "hello world",
-    });
-
-    await expect(fs.readFile(skillPath, "utf8")).resolves.toBe("hello world\n");
-    expect(skillPath).toBe(path.join(workspaceDir, "skills", "my-skill", "SKILL.md"));
-  });
-
-  it("rejects workspace skill names that escape the skills directory", async () => {
-    const workspaceDir = await makeTempDir("qa-workspace-");
-
-    for (const name of ["", " spaced", "spaced ", ".", "..", "../escape", "..\\escape", "a/b"]) {
-      await expect(
-        writeWorkspaceSkill({
-          env: { gateway: { workspaceDir } } as never,
-          name,
-          body: "escape",
-        }),
-      ).rejects.toThrow(`invalid QA workspace skill name: ${JSON.stringify(name)}`);
-    }
-
-    await expect(fs.readdir(path.join(workspaceDir, "skills"))).rejects.toThrow();
-  });
-
-  it("routes generic transport actions through the payload extractor", async () => {
-    const handleAction = vi.fn(async () => ({
-      content: [{ type: "text", text: "done" }],
-    }));
-
+  for (const name of ["", " spaced", "spaced ", ".", "..", "../escape", "..\\escape", "a/b"]) {
     await expect(
-      handleQaAction({
-        env: {
-          cfg: {} as never,
-          transport: { handleAction },
-        } as never,
-        action: "react",
-        args: { messageId: "1", emoji: ":+1:" },
+      writeWorkspaceSkill({
+        env: { gateway: { workspaceDir } } as never,
+        name,
+        body: "escape",
       }),
-    ).resolves.toEqual("done");
+    ).rejects.toThrow(`invalid QA workspace skill name: ${JSON.stringify(name)}`);
+  }
+
+  await expect(fs.readdir(path.join(workspaceDir, "skills"))).rejects.toThrow();
+});
+
+it("routes generic transport actions through the payload extractor", async () => {
+  const handleAction = vi.fn(async () => ({
+    content: [{ type: "text", text: "done" }],
+  }));
+
+  const env = { cfg: {}, transport: { handleAction } } as never;
+  await expect(handleQaAction({ env, action: "react", args: {} })).resolves.toEqual("done");
+});
+
+it("prefers the built plugin-tools MCP entry", async () => {
+  const builtRepoRoot = await makeTempDir("qa-built-repo-");
+  const distEntry = path.join(builtRepoRoot, "dist", "mcp", "plugin-tools-serve.js");
+  await fs.mkdir(path.dirname(distEntry), { recursive: true });
+  await fs.writeFile(distEntry, "// built MCP entry\n", "utf8");
+  listToolsMock.mockResolvedValueOnce({
+    tools: [{ name: "plugin.echo" }] as never[],
   });
 
-  it("falls back to the source plugin-tools MCP entry", async () => {
-    listToolsMock.mockResolvedValueOnce({
-      tools: [{ name: "plugin.echo" }] as never[],
-    });
-    callToolMock.mockResolvedValueOnce({
-      content: [{ type: "text", text: "echoed" }] as never[],
-    });
+  await callMcp("plugin.echo", {}, builtRepoRoot);
 
-    await expect(
-      callPluginToolsMcp({
-        env: {
-          gateway: {
-            tempRoot: gatewayTempRoot,
-            runtimeEnv: {
-              PATH: "/usr/bin",
-              OPENCLAW_KEY: "1",
-              EMPTY: undefined,
-            },
-          },
-          repoRoot,
-        } as never,
-        toolName: "plugin.echo",
-        args: { text: "hello" },
-      }),
-    ).resolves.toEqual({
-      content: [{ type: "text", text: "echoed" }],
-    });
-
-    expect(stdioTransportMock).toHaveBeenCalledWith({
+  expect(stdioTransportMock).toHaveBeenCalledWith(
+    expect.objectContaining({
       command: "/usr/bin/node",
-      args: [
-        "--import",
-        requireFromHere.resolve("tsx"),
-        path.join(repoRoot, "src", "mcp", "plugin-tools-serve.ts"),
-      ],
-      stderr: "pipe",
-      cwd: repoRoot,
-      env: {
-        PATH: "/usr/bin",
-        OPENCLAW_KEY: "1",
-      },
-    });
-    expect(stderrOnMock).toHaveBeenCalledWith("data", expect.any(Function));
-    expect(connectMock).toHaveBeenCalledWith(expect.anything(), { timeout: 180_000 });
-    expect(listToolsMock).toHaveBeenCalledWith({}, { timeout: 180_000 });
-    expect(callToolMock).toHaveBeenCalledWith(
-      {
-        name: "plugin.echo",
-        arguments: { text: "hello" },
-      },
-      undefined,
-      { timeout: 180_000 },
-    );
-    expect(closeMock).toHaveBeenCalled();
+      args: [distEntry],
+      cwd: builtRepoRoot,
+    }),
+  );
+  expect(connectMock).toHaveBeenCalledWith(expect.anything(), { timeout: 180_000 });
+  expect(listToolsMock).toHaveBeenCalledWith(
+    { method: "tools/list", params: {} },
+    { timeout: 180_000 },
+  );
+  expect(callToolMock).toHaveBeenCalledWith(
+    { name: "plugin.echo", arguments: {} },
+    {
+      timeout: 180_000,
+      toolDefinition: { name: "plugin.echo" },
+    },
+  );
+});
+
+it("reports available plugin-tools MCP names when the requested tool is missing", async () => {
+  listToolsMock.mockResolvedValueOnce({
+    tools: [{ name: "plugin.beta" }, { name: "plugin.alpha" }] as never[],
   });
 
-  it("prefers the built plugin-tools MCP entry", async () => {
-    const builtRepoRoot = await makeTempDir("qa-built-repo-");
-    const distEntry = path.join(builtRepoRoot, "dist", "mcp", "plugin-tools-serve.js");
-    await fs.mkdir(path.dirname(distEntry), { recursive: true });
-    await fs.writeFile(distEntry, "// built MCP entry\n", "utf8");
-    listToolsMock.mockResolvedValueOnce({
-      tools: [{ name: "plugin.echo" }] as never[],
-    });
+  await expect(callMcp("plugin.missing")).rejects.toThrow(
+    "MCP tool missing: plugin.missing; available tools: plugin.alpha, plugin.beta",
+  );
 
-    await callPluginToolsMcp({
-      env: {
-        gateway: {
-          tempRoot: gatewayTempRoot,
-          runtimeEnv: { PATH: "/usr/bin" },
-        },
-        repoRoot: builtRepoRoot,
-      } as never,
-      toolName: "plugin.echo",
-      args: {},
-    });
+  expect(callToolMock).not.toHaveBeenCalled();
+  expect(closeMock).toHaveBeenCalled();
+});
 
-    expect(stdioTransportMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "/usr/bin/node",
-        args: [distEntry],
-      }),
+it.each([
+  [
+    "call",
+    `old stderr${"x".repeat(12_000)}\nrecent MCP stderr tail`,
+    "tool call failed",
+    ["MCP stderr truncated to last", "recent MCP stderr tail"],
+  ],
+  [
+    "startup",
+    "Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@openclaw/example'\n",
+    "MCP error -32000: Connection closed",
+    ["Cannot find package '@openclaw/example'"],
+  ],
+] as const)(
+  "preserves bounded MCP stderr on %s failures",
+  async (phase, stderr, error, expected) => {
+    listToolsMock.mockResolvedValueOnce({ tools: [{ name: "plugin.echo" }] as never[] });
+    const fail = async () => {
+      emitStderr(stderr);
+      throw new Error(error);
+    };
+    (phase === "call" ? callToolMock : connectMock).mockImplementationOnce(fail);
+    const failure = await callMcp("plugin.echo", { text: "hello" }).catch(
+      (value: unknown) => value,
     );
-  });
-
-  it("reports available plugin-tools MCP names when the requested tool is missing", async () => {
-    listToolsMock.mockResolvedValueOnce({
-      tools: [{ name: "plugin.beta" }, { name: "plugin.alpha" }] as never[],
-    });
-
-    await expect(
-      callPluginToolsMcp({
-        env: {
-          gateway: {
-            tempRoot: gatewayTempRoot,
-            runtimeEnv: {
-              PATH: "/usr/bin",
-            },
-          },
-          repoRoot,
-        } as never,
-        toolName: "plugin.missing",
-        args: {},
-      }),
-    ).rejects.toThrow(
-      "MCP tool missing: plugin.missing; available tools: plugin.alpha, plugin.beta",
-    );
-
-    expect(callToolMock).not.toHaveBeenCalled();
-    expect(closeMock).toHaveBeenCalled();
-  });
-
-  it("keeps only a byte-bounded plugin-tools MCP stderr tail on call failures", async () => {
-    listToolsMock.mockResolvedValueOnce({
-      tools: [{ name: "plugin.echo" }] as never[],
-    });
-    callToolMock.mockImplementationOnce(async () => {
-      const stderrListener = stderrOnMock.mock.calls[0]?.[1] as
-        | ((chunk: unknown) => void)
-        | undefined;
-      stderrListener?.(Buffer.from(`old stderr${"x".repeat(12_000)}\nrecent MCP stderr tail`));
-      throw new Error("tool call failed");
-    });
-
-    const error = await callPluginToolsMcp({
-      env: {
-        gateway: {
-          tempRoot: gatewayTempRoot,
-          runtimeEnv: {
-            PATH: "/usr/bin",
-          },
-        },
-        repoRoot,
-      } as never,
-      toolName: "plugin.echo",
-      args: { text: "hello" },
-    }).catch((value: unknown) => value);
-
-    expect(error).toBeInstanceOf(Error);
-    const message = error instanceof Error ? error.message : String(error);
-    expect(message).toContain("tool call failed");
-    expect(message).toContain("MCP stderr tail:");
-    expect(message).toContain("MCP stderr truncated to last");
-    expect(message).toContain("recent MCP stderr tail");
+    expect(failure).toBeInstanceOf(Error);
+    const message = failure instanceof Error ? failure.message : String(failure);
+    for (const text of [error, "MCP stderr tail:", ...expected]) {
+      expect(message).toContain(text);
+    }
     expect(message).not.toContain("old stderr");
     expect(closeMock).toHaveBeenCalled();
-  });
-
-  it("keeps plugin-tools MCP stderr on startup failures", async () => {
-    connectMock.mockImplementationOnce(async () => {
-      const stderrListener = stderrOnMock.mock.calls[0]?.[1] as
-        | ((chunk: unknown) => void)
-        | undefined;
-      stderrListener?.(
-        Buffer.from("Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@openclaw/example'\n"),
+    expect(connectMock).toHaveBeenCalledWith(expect.anything(), { timeout: 180_000 });
+    if (phase === "call") {
+      expect(listToolsMock).toHaveBeenCalledWith(
+        { method: "tools/list", params: {} },
+        { timeout: 180_000 },
       );
-      throw new Error("MCP error -32000: Connection closed");
-    });
-
-    const error = await callPluginToolsMcp({
-      env: {
-        gateway: {
-          tempRoot: gatewayTempRoot,
-          runtimeEnv: {
-            PATH: "/usr/bin",
-          },
-        },
-        repoRoot,
-      } as never,
-      toolName: "plugin.echo",
-      args: { text: "hello" },
-    }).catch((value: unknown) => value);
-
-    expect(error).toBeInstanceOf(Error);
-    const message = error instanceof Error ? error.message : String(error);
-    expect(message).toContain("MCP error -32000: Connection closed");
-    expect(message).toContain("MCP stderr tail:");
-    expect(message).toContain("Cannot find package '@openclaw/example'");
-    expect(closeMock).toHaveBeenCalled();
-  });
-});
+      expect(callToolMock).toHaveBeenCalledWith(
+        { name: "plugin.echo", arguments: { text: "hello" } },
+        { timeout: 180_000, toolDefinition: { name: "plugin.echo" } },
+      );
+    }
+  },
+);

@@ -1,26 +1,40 @@
-// Ollama plugin module implements model id behavior.
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-metadata";
+import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const OLLAMA_PROVIDER_ID = "ollama";
-
-function uniqueModelPrefixCandidates(providerId?: string): string[] {
-  const candidates = [providerId, normalizeProviderId(providerId ?? ""), OLLAMA_PROVIDER_ID]
-    .map((candidate) => candidate?.trim())
-    .filter((candidate): candidate is string => Boolean(candidate));
-  return uniqueStrings(candidates);
-}
 
 export function normalizeOllamaWireModelId(modelId: string, providerId?: string): string {
   const trimmed = modelId.trim();
   if (!trimmed) {
     return trimmed;
   }
-  for (const candidate of uniqueModelPrefixCandidates(providerId)) {
+  for (const candidate of normalizeUniqueTrimmedStringList([
+    providerId,
+    normalizeProviderId(providerId ?? ""),
+    OLLAMA_PROVIDER_ID,
+  ])) {
     const prefix = `${candidate}/`;
     if (trimmed.startsWith(prefix)) {
       return trimmed.slice(prefix.length);
     }
   }
   return trimmed;
+}
+
+export function getOllamaLatestDedupeKey(name: string): string {
+  const normalized = name.trim().toLowerCase();
+  return normalized.endsWith(":latest") ? normalized.slice(0, -":latest".length) : normalized;
+}
+
+export function findAvailableOllamaModelName(
+  modelName: string,
+  availableModelNames: Iterable<string>,
+): string | undefined {
+  const wantedKey = getOllamaLatestDedupeKey(modelName);
+  for (const available of availableModelNames) {
+    if (getOllamaLatestDedupeKey(available) === wantedKey) {
+      return available;
+    }
+  }
+  return undefined;
 }

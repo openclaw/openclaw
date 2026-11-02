@@ -5,7 +5,7 @@ sidebarTitle: "Skills and model providers"
 read_when:
   - A skill symlink is skipped as a path escape
   - Model calls fail with 429 extra-usage or upstream 403 responses
-  - A local OpenAI-compatible backend passes direct probes but agent runs still fail
+  - A local OpenAI-compatible backend passes direct checks but agent runs still fail
 ---
 
 ## Skill symlink skipped as path escape
@@ -105,7 +105,7 @@ Look for:
 - Multiple models under the same provider failing the same way.
 - HTML or generic security text instead of a normal provider API error.
 - Provider-side security events for the same request time.
-- A tiny direct `curl` probe succeeding while normal SDK-shaped requests fail.
+- A tiny direct `curl` check succeeding while normal SDK-shaped requests fail.
 
 Fix the provider-side filtering first when evidence points to a WAF/CDN block. Prefer a narrowly scoped allow or skip rule for the API path OpenClaw uses, and avoid disabling protection for the whole site.
 
@@ -119,7 +119,9 @@ Related:
 - [Provider configuration](/providers)
 - [Logs](/logging)
 
-## Local OpenAI-compatible backend passes direct probes but agent runs fail
+<a id="local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail" />
+
+## Local OpenAI-compatible backend passes direct checks but agent runs fail
 
 Use when:
 

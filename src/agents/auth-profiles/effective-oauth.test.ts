@@ -42,7 +42,6 @@ describe("resolveEffectiveOAuthCredential", () => {
 
     expect(
       resolveEffectiveOAuthCredential({
-        store: { version: 1, profiles: {} },
         profileId: "openai:default",
         credential: makeCredential(),
       }),
@@ -64,7 +63,6 @@ describe("resolveEffectiveOAuthCredential", () => {
 
     expect(
       resolveEffectiveOAuthCredential({
-        store: { version: 1, profiles: {} },
         profileId: "openai:default",
         credential: local,
       }),
@@ -82,7 +80,6 @@ describe("resolveEffectiveOAuthCredential", () => {
 
     expect(
       resolveEffectiveOAuthCredential({
-        store: { version: 1, profiles: {} },
         profileId: "openai:default",
         credential: local,
       }),

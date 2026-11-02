@@ -6,7 +6,7 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
-const RUNTIME_IDS = ["openclaw", "codex"];
+const RUNTIME_IDS = ["openclaw", "codex"] as const;
 const HARD_RUNTIME_ERROR_CLASSES = new Set([
   "missing-api-key",
   "failover",
@@ -362,11 +362,11 @@ export function validateQaRuntimePairReport(
         scenario.status !== expectedStatus ||
         scenario.drift !== source.runtimeParity.drift ||
         scenario.driftDetails !== source.runtimeParity.driftDetails ||
-        ![...acceptedReportCellStatuses(source.runtimeParity.cells.openclaw)].some(
-          (status) => status === scenario.openclawStatus,
-        ) ||
-        ![...acceptedReportCellStatuses(source.runtimeParity.cells.codex)].some(
-          (status) => status === scenario.codexStatus,
+        RUNTIME_IDS.some(
+          (runtime) =>
+            ![...acceptedReportCellStatuses(source.runtimeParity.cells[runtime])].some(
+              (status) => status === scenario[`${runtime}Status`],
+            ),
         )
       );
     })
@@ -406,15 +406,13 @@ export function validateQaRuntimePairReport(
         !sectionLines.has(
           `- drift: ${formatRuntimePairReportValue(scenario.runtimeParity.drift)}`,
         ) ||
-        ![...sectionLines].some((line) =>
-          [...acceptedReportCellStatuses(scenario.runtimeParity.cells.openclaw)].some((status) =>
-            line.startsWith(`- openclaw: ${status} `),
-          ),
-        ) ||
-        ![...sectionLines].some((line) =>
-          [...acceptedReportCellStatuses(scenario.runtimeParity.cells.codex)].some((status) =>
-            line.startsWith(`- codex: ${status} `),
-          ),
+        RUNTIME_IDS.some(
+          (runtime) =>
+            ![...sectionLines].some((line) =>
+              [...acceptedReportCellStatuses(scenario.runtimeParity.cells[runtime])].some(
+                (status) => line.startsWith(`- ${runtime}: ${status} `),
+              ),
+            ),
         )
       );
     })
@@ -425,51 +423,28 @@ export function validateQaRuntimePairReport(
 }
 
 export function parseArgs(argv: string[]) {
-  let summaryPath;
-  let reportSummaryPath;
-  let reportMarkdownPath;
+  const values = new Map<string, string>();
+  const valueFlags = new Map([
+    ["--summary", "path"],
+    ["--report-summary", "path"],
+    ["--report-markdown", "path"],
+    ["--candidate-suite-outcome", "value"],
+    ["--target-sha", "value"],
+    ["--lane", "value"],
+  ]);
   let requireExplicitGap = false;
-  let candidateSuiteOutcome;
-  let targetSha;
-  let lane;
   for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--summary") {
-      summaryPath = argv[index + 1];
-      if (!summaryPath || summaryPath.startsWith("-")) {
-        throw new Error("--summary requires a path");
-      }
-      index += 1;
-    } else if (arg === "--report-summary" || arg === "--report-markdown") {
+    const arg = argv[index]!;
+    const flag = valueFlags.get(arg);
+    if (flag) {
       const value = argv[index + 1];
       if (!value || value.startsWith("-")) {
-        throw new Error(`${arg} requires a path`);
+        throw new Error(`${arg} requires a ${flag}`);
       }
-      if (arg === "--report-summary") {
-        reportSummaryPath = value;
-      } else {
-        reportMarkdownPath = value;
-      }
+      values.set(arg, value);
       index += 1;
     } else if (arg === "--require-explicit-gap") {
       requireExplicitGap = true;
-    } else if (arg === "--candidate-suite-outcome") {
-      candidateSuiteOutcome = argv[index + 1];
-      if (!candidateSuiteOutcome || candidateSuiteOutcome.startsWith("-")) {
-        throw new Error("--candidate-suite-outcome requires a value");
-      }
-      index += 1;
-    } else if (arg === "--target-sha" || arg === "--lane") {
-      const value = argv[index + 1];
-      if (!value || value.startsWith("-")) {
-        throw new Error(`${arg} requires a value`);
-      }
-      if (arg === "--target-sha") {
-        targetSha = value;
-      } else {
-        lane = value;
-      }
-      index += 1;
     } else if (arg === "--help" || arg === "-h") {
       process.stdout.write(
         "Usage: node --import tsx scripts/validate-qa-runtime-pair-summary.mts --summary <qa-suite-summary.json> [--candidate-suite-outcome <outcome>] [--require-explicit-gap] [--report-summary <json> --report-markdown <md>]\n",
@@ -479,6 +454,11 @@ export function parseArgs(argv: string[]) {
       throw new Error(`Unknown argument: ${arg}`);
     }
   }
+  const summaryPath = values.get("--summary");
+  const reportSummaryPath = values.get("--report-summary");
+  const reportMarkdownPath = values.get("--report-markdown");
+  const targetSha = values.get("--target-sha");
+  const lane = values.get("--lane");
   if (!summaryPath) {
     throw new Error("--summary is required");
   }
@@ -492,7 +472,7 @@ export function parseArgs(argv: string[]) {
     summaryPath,
     reportSummaryPath,
     reportMarkdownPath,
-    candidateSuiteOutcome,
+    candidateSuiteOutcome: values.get("--candidate-suite-outcome"),
     requireExplicitGap,
     targetSha,
     lane,

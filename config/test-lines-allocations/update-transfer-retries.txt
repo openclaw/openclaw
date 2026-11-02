@@ -1,0 +1,2 @@
+# Native Git HTTP recovery plus bounded retries, cleanup, cancellation, authority, and permanent-error regressions.
+245

@@ -1,4 +1,3 @@
-// QA Lab Matrix scenarios share room keys and execution contracts with the live adapter.
 import {
   findMatrixQaProvisionedRoom,
   type MatrixQaProvisionedTopology,
@@ -24,7 +23,7 @@ export function buildMatrixQaE2eeScenarioRoomKey(scenarioId: MatrixQaE2eeScenari
 }
 
 export function resolveMatrixQaScenarioRoomId(
-  context: Pick<{ roomId: string; topology: MatrixQaProvisionedTopology }, "roomId" | "topology">,
+  context: { roomId: string; topology: MatrixQaProvisionedTopology },
   roomKey?: string,
 ) {
   return roomKey ? findMatrixQaProvisionedRoom(context.topology, roomKey).roomId : context.roomId;

@@ -4,8 +4,12 @@
  * before routing them to any tool execution surface.
  */
 import type { AgentMessage } from "@openclaw/agent-core";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { collectCompletedToolCallBlocks } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  type classifyToolUseResultPairing,
+  collectCompletedToolCallBlocks,
+} from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { normalizeLowercaseStringSet } from "../shared/normalized-string-set.js";
 
 const TOOL_CALL_NAME_MAX_CHARS = 64;
 const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
@@ -15,17 +19,7 @@ export function normalizeAllowedToolNames(allowedToolNames?: Iterable<string>): 
   if (!allowedToolNames) {
     return null;
   }
-  const normalized = new Set<string>();
-  for (const name of allowedToolNames) {
-    if (typeof name !== "string") {
-      continue;
-    }
-    const trimmed = name.trim();
-    if (!trimmed) {
-      continue;
-    }
-    normalized.add(normalizeLowercaseStringOrEmpty(trimmed));
-  }
+  const normalized = normalizeLowercaseStringSet(allowedToolNames);
   return normalized.size > 0 ? normalized : null;
 }
 
@@ -34,10 +28,7 @@ export function isAllowedToolCallName(
   name: unknown,
   allowedToolNames: Set<string> | null,
 ): boolean {
-  if (typeof name !== "string") {
-    return false;
-  }
-  const trimmed = name.trim();
+  const trimmed = normalizeOptionalString(name);
   if (!trimmed) {
     return false;
   }
@@ -47,12 +38,15 @@ export function isAllowedToolCallName(
   if (!allowedToolNames) {
     return true;
   }
-  return allowedToolNames.has(normalizeLowercaseStringOrEmpty(trimmed));
+  return allowedToolNames.has(trimmed.toLowerCase());
 }
 
 /** Completed replay facts survive capability removal without granting live tool authority. */
-export function createCompletedToolCallPredicate(messages: readonly AgentMessage[]) {
-  const completed = collectCompletedToolCallBlocks(messages);
+export function createCompletedToolCallPredicate(
+  messages: readonly AgentMessage[],
+  pairing?: ReturnType<typeof classifyToolUseResultPairing>,
+) {
+  const completed = collectCompletedToolCallBlocks(messages, pairing);
   return (block: { name?: unknown }): boolean =>
     completed.has(block) && isAllowedToolCallName(block.name, null);
 }

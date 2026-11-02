@@ -56,22 +56,20 @@ export async function prepareActiveSqliteTranscriptSettlement(params: {
         throw new Error("Legacy transcript has no matching primary session identity");
       }
       const sources = [{ path: source.transcriptPath, sessionId: source.sessionId }];
-      const verify = () =>
-        verifyCanonicalSessionTranscriptSources({ target, sources, env: params.env });
-      let verified = verify();
+      const verify = (mode: "contained" | "appendable" = "contained") =>
+        verifyCanonicalSessionTranscriptSources({
+          target,
+          sources,
+          env: params.env,
+          mode,
+        });
+      let verified = verify("appendable");
       if (!verified) {
-        if (
-          !verifyCanonicalSessionTranscriptSources({
-            target,
-            sources,
-            env: params.env,
-            allowMissingSuffix: true,
-          })
-        ) {
-          throw new Error(
-            "Missing history is not an appendable suffix or conflicts with an existing event identity",
-          );
-        }
+        throw new Error(
+          "Missing history requires legacy format or branch repair before it can be appended",
+        );
+      }
+      if (verified.missingEvents > 0) {
         const [imported] = await importSqliteSessionRowsBatch([
           {
             agentId: target.agentId,
@@ -106,13 +104,18 @@ export async function prepareActiveSqliteTranscriptSettlement(params: {
         transcriptPath: source.transcriptPath,
         transcriptDependencies: [source.transcriptPath],
         sourceFingerprint: fingerprint,
-        recovery: { complete: true, repaired: false, events: verified.events },
+        recovery: {
+          complete: true,
+          repaired: false,
+          events: verified.events,
+          sqliteEvents: verified.sqliteEvents,
+        },
       });
     } catch (error) {
       params.report.issues.push({
         code: "active_sqlite_transcript_verification_failed",
         sessionKey: source.sessionKey,
-        message: `${source.transcriptPath}: ${formatErrorMessage(error)}. Original retained; inspect the named transcript before retrying Doctor.`,
+        message: `${source.transcriptPath}: ${formatErrorMessage(error)}. Original retained. Compare the named events with a verified backup, restore a corrected JSONL at this path, then rerun openclaw doctor --session-sqlite recover.`,
       });
     }
   }

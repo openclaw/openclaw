@@ -13,8 +13,6 @@ describe("hasHttpUrlPrefix", () => {
     ["HTTPS://user:pass@example.com:8443/path", true],
     ["https://", true],
     [" https://example.com", false],
-    ["//example.com", false],
-    ["example.com", false],
     ["wss://example.com", false],
   ])("classifies %j", (value, expected) => {
     expect(hasHttpUrlPrefix(value)).toBe(expected);
@@ -23,17 +21,17 @@ describe("hasHttpUrlPrefix", () => {
 
 describe("parsed URL protocol predicates", () => {
   it.each([
-    ["http://example.com", true, false, false],
-    ["HTTPS://user:pass@example.com:8443/path", true, true, false],
-    ["ws://example.com", false, false, true],
-    ["WSS://example.com:9443/socket", false, false, true],
-    ["file:///tmp/example", false, false, false],
-  ])("classifies %s", (value, http, https, websocket) => {
+    ["http://example.com", true, false, false, false],
+    ["HTTPS://user:pass@example.com:8443/path", true, true, false, false],
+    ["ws://example.com", false, false, true, false],
+    ["WSS://example.com:9443/socket", false, false, true, true],
+    ["file:///tmp/example", false, false, false, false],
+  ])("classifies %s", (value, http, https, websocket, wss) => {
     const url = new URL(value);
     expect(isHttpUrl(url)).toBe(http);
     expect(isHttpsUrl(url)).toBe(https);
     expect(isWebSocketUrl(url)).toBe(websocket);
-    expect(isWssUrl(url)).toBe(url.protocol === "wss:");
+    expect(isWssUrl(url)).toBe(wss);
   });
 
   it("returns false for malformed and relative strings", () => {

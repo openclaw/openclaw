@@ -13,7 +13,7 @@ const ALLOWED_GATEWAY_CLIENT_CALLSITES = new Set([
   "extensions/qa-lab/src/gateway-rpc-client.ts",
   "src/acp/server.ts",
   // Account wizards retain one socket so each RPC shares the same admission lifetime.
-  "src/commands/models/accounts-gateway.ts",
+  "src/commands/models/accounts.ts",
   "src/gateway/call.ts",
   "src/gateway/gateway-cli-backend.live-helpers.ts",
   "src/gateway/operator-approvals-client.ts",
@@ -39,6 +39,7 @@ async function collectSourceFiles(dir: string): Promise<string[]> {
     }
     if (
       entry.name.endsWith(".test.ts") ||
+      entry.name.endsWith(".test-support.ts") ||
       entry.name.endsWith(".e2e.ts") ||
       entry.name.endsWith(".e2e.test.ts") ||
       entry.name.endsWith(".live.test.ts")

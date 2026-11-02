@@ -36,7 +36,10 @@ final class ChatSessionSidebarPreviews {
             let agentID = viewModel.selectedAgentID
             self.agentID = agentID
             var seen = Set<Target>()
-            self.targets = Array(sessions.compactMap {
+            self.targets = Array(sessions.filter {
+                !viewModel.usesWebConversation || !viewModel.matchesCurrentSessionKey(
+                    incoming: $0.key, agentId: $0.agentId, current: viewModel.sessionKey)
+            }.compactMap {
                 Target(session: $0, fallbackAgentID: agentID)
             }.filter { seen.insert($0).inserted }.prefix(32))
         }
@@ -44,11 +47,8 @@ final class ChatSessionSidebarPreviews {
 
     private var request: Request?
     private var previews: [Target: String] = [:]
-    @ObservationIgnored private var generation: UInt64 = 0
 
     func refresh(_ request: Request, cache: (any OpenClawChatTranscriptCache)?) async {
-        self.generation &+= 1
-        let generation = self.generation
         let sameOwner = self.request?.modelID == request.modelID && self.request?.agentID == request.agentID
         self.previews = sameOwner ? self.previews.filter { request.targets.contains($0.key) } : [:]
         self.request = request
@@ -57,9 +57,9 @@ final class ChatSessionSidebarPreviews {
             return
         }
         for target in request.targets {
-            guard !Task.isCancelled, self.generation == generation else { return }
+            guard !Task.isCancelled, self.request == request else { return }
             let messages = await cache.loadTranscript(sessionKey: target.key, agentID: target.agentID)
-            guard !Task.isCancelled, self.generation == generation else { return }
+            guard !Task.isCancelled, self.request == request else { return }
             self.previews[target] = ChatSessionSidebarModel.messagePreview(from: messages)
         }
     }

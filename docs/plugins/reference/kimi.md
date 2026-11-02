@@ -15,7 +15,7 @@ Adds Kimi, Kimi Code, Kimi Coding model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/kimi-provider`
-- Install route: npm or ClawHub: `clawhub:@openclaw/kimi-provider`
+- Install route: npm or ClawHub: `@openclaw/kimi-provider`
 
 ## Surface
 

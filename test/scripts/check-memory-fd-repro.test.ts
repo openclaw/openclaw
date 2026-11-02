@@ -1,8 +1,6 @@
-// Check Memory Fd Repro tests cover check memory fd repro script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createServer, type Server } from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it } from "vitest";
@@ -35,6 +33,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type OwnershipScenario =
   | "owned-success"
   | "owned-success-inherited-root"
+  | "inherited-paths"
   | "stdout-error"
   | "stderr-error"
   | "sample-sigterm"
@@ -60,234 +59,267 @@ type GatewaySummary = {
   peakUniqueWorkspaceMarkdownRegFds: number;
 };
 
-function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
+function runGatewayOwnershipFixture(scenario: OwnershipScenario, expectedStatus = 1) {
   const root = tempDirs.make("openclaw-fd-owner-");
   const preloadPath = path.join(root, "runtime.mjs");
   const journalPath = path.join(root, "journal.json");
   const outputDir = path.join(root, "output");
-  try {
-    // Synthetic unjoined Gateway lifetimes belong to this fixture, not the compiler generation.
-    const owner = createVitestResourceOwner(root);
-    fs.writeFileSync(path.join(root, "openclaw.mjs"), "export {};\n");
-    fs.writeFileSync(
+  // Synthetic unjoined Gateway lifetimes belong to this fixture, not the compiler generation.
+  const owner = createVitestResourceOwner(root);
+  fs.writeFileSync(path.join(root, "openclaw.mjs"), "export {};\n");
+  fs.writeFileSync(
+    preloadPath,
+    [
+      "import assert from 'node:assert/strict';",
+      "import cp from 'node:child_process';",
+      "import { EventEmitter } from 'node:events';",
+      "import fs from 'node:fs';",
+      "import { syncBuiltinESMExports } from 'node:module';",
+      "import net from 'node:net';",
+      "import path from 'node:path';",
+      "import { PassThrough } from 'node:stream';",
+      `const scenario = ${JSON.stringify(scenario)};`,
+      `const ownedPid = ${OWNED_PID}, foreignPid = ${FOREIGN_PID};`,
+      "const cancellation = /^(sample|settle)-(sigterm|pipe)$/.exec(scenario);",
+      "const samples = [], signals = [], events = [];",
+      "let child, syntheticRoot, configHome, launch, attemptedSummary, closed = false, replaced = false;",
+      "let wait, requestSettled = false, guardFired = false;",
+      "const write = fs.writeFileSync, remove = fs.rmSync;",
+      "const nativeKill = process.kill.bind(process);",
+      "const record = () => write(" + JSON.stringify(journalPath) + ", JSON.stringify({",
+      "  samples, signals, events, launch, attemptedSummary, closed, alive: Boolean(alive()),",
+      "  rootExists: Boolean(syntheticRoot && fs.existsSync(syntheticRoot)),",
+      "  wait, requestSettled, guardFired,",
+      "}));",
+      "const enterWait = (phase) => {",
+      "  if (cancellation?.[1] !== phase) return;",
+      // The next turn follows the invoke/log boundary and reaches the wait
+      // without observing or replacing either timer implementation.
+      "  setImmediate(() => {",
+      "    wait = { phase, samples: samples.length, requestSettled };",
+      "    if (cancellation[2] === 'sigterm') {",
+      "      events.push('parent:SIGTERM'); nativeKill(process.pid, 'SIGTERM');",
+      "    } else {",
+      "      const channel = phase === 'sample' ? 'stdout' : 'stderr';",
+      "      child[channel].destroy(Object.assign(",
+      "        new Error('injected Gateway ' + channel + ' read EIO'), { code: 'EIO' }));",
+      "    }",
+      "  });",
+      "};",
+      "fs.writeFileSync = (target, ...args) => {",
+      "  if (String(target).endsWith(path.join('.openclaw', 'openclaw.json')))",
+      "    configHome = path.dirname(path.dirname(String(target)));",
+      "  if (String(target).endsWith('/summary.json')) {",
+      "    events.push('summary'); attemptedSummary = JSON.parse(String(args[0]));",
+      "    if (scenario === 'completed-threshold-cleanup-report-error')",
+      "      throw Object.assign(new Error('summary write failed EACCES'), { code: 'EACCES' });",
+      "  }",
+      "  return write(target, ...args);",
+      "};",
+      "const assertIsolatedEnv = (env, boundary) => {",
+      "  if (scenario !== 'inherited-paths') return;",
+      "  for (const [key, relative] of Object.entries({",
+      "    HOME: '', USERPROFILE: '', OPENCLAW_HOME: '', OPENCLAW_STATE_DIR: '.openclaw',",
+      "    OPENCLAW_CONFIG_PATH: '.openclaw/openclaw.json', XDG_CONFIG_HOME: '.config',",
+      "    XDG_CACHE_HOME: '.cache', XDG_DATA_HOME: '.local/share',",
+      "    XDG_STATE_HOME: '.local/state', XDG_RUNTIME_DIR: '.run',",
+      "  })) assert.equal(env[key], path.join(configHome, relative));",
+      "  events.push('isolated:' + boundary);",
+      "};",
+      "fs.rmSync = (target, options) => {",
+      "  if (target === syntheticRoot) {",
+      "    events.push('cleanup');",
+      "    if (scenario.startsWith('primary-') || scenario.startsWith('completed-')) {",
+      "      const code = scenario.startsWith('primary-') ? scenario.split('-')[3] : 'EIO';",
+      "      throw Object.assign(new Error('workspace removal failed ' + code), { code });",
+      "    }",
+      "  }",
+      "  return remove(target, options);",
+      "};",
+      "net.createServer = () => Object.assign(new EventEmitter(), {",
+      "  unref() {},",
+      "  listen(_port, _host, callback) { queueMicrotask(callback); },",
+      "  address: () => ({ port: 43791 }),",
+      "  close(callback) { queueMicrotask(callback); },",
+      "});",
+      "const alive = () => child && child.exitCode === null && child.signalCode === null;",
+      "const finish = (code, signal = null) => {",
+      "  if (!alive()) return;",
+      "  child.exitCode = code; child.signalCode = signal;",
+      "  child.emit('exit', code, signal);",
+      "  setImmediate(() => {",
+      "    child.stdout.destroy(); child.stderr.destroy();",
+      "    closed = true; events.push('close'); child.emit('close', code, signal);",
+      "    if (cancellation) setTimeout(() => {",
+      "      guardFired = true; record();",
+      "      fs.writeSync(2, 'measurement wait outlived owned close: ' + JSON.stringify({",
+      "        wait, requestSettled, closed, alive: Boolean(alive()),",
+      "        rootExists: fs.existsSync(syntheticRoot), events,",
+      "      }) + '\\n');",
+      "      nativeKill(process.pid, 'SIGKILL');",
+      "    }, 2_000).unref();",
+      "  });",
+      "};",
+      // Live groups have live leaders; terminal groups return ESRCH. These
+      // cases do not model the Linux exited-leader/live-group ps branch.
+      "process.kill = (pid, signal) => {",
+      "  if (pid !== ownedPid && pid !== -ownedPid && pid !== foreignPid && pid !== -foreignPid)",
+      "    throw new Error('fixture refused unexpected signal target');",
+      "  if (signal === 0) {",
+      "    if (alive()) return true;",
+      "    throw Object.assign(new Error('owned process gone'), { code: 'ESRCH' });",
+      "  }",
+      "  signals.push([pid, signal]);",
+      "  if (Math.abs(pid) === ownedPid && scenario !== 'ignored-stop') finish(null, signal);",
+      "  return true;",
+      "};",
+      "cp.spawn = (_bin, args, options) => {",
+      "  assertIsolatedEnv(options.env, 'gateway');",
+      "  if (child) throw new Error('fixture permits exactly one Gateway launch');",
+      "  syntheticRoot = path.dirname(options.env.HOME);",
+      "  launch = { entry: args[0], noCompileCache: options.env.NODE_DISABLE_COMPILE_CACHE,",
+      "    devSourceRoot: options.env.OPENCLAW_DEV_SOURCE_ROOT };",
+      "  child = Object.assign(new EventEmitter(), {",
+      "    pid: ownedPid, exitCode: null, signalCode: null,",
+      "    stdout: new PassThrough(), stderr: new PassThrough(),",
+      "    kill: (signal) => process.kill(ownedPid, signal),",
+      "  });",
+      "  Object.defineProperty(child, 'stdio', {",
+      "    get: () => [null, child.stdout, child.stderr, null],",
+      "  });",
+      "  queueMicrotask(() => {",
+      "    child.stdout.write('[gateway] ready\\n');",
+      "    if (scenario === 'exited-ready') finish(0);",
+      "  });",
+      "  return child;",
+      "};",
+      "const success = (stdout = '') => ({ status: 0, signal: null, stdout, stderr: '' });",
+      "cp.spawnSync = (bin, args, options) => {",
+      "  if (bin === process.execPath && args.includes('index')) {",
+      "    assertIsolatedEnv(options.env, 'index'); return success();",
+      "  }",
+      "  if (bin !== 'lsof') throw new Error('fixture refused unexpected command ' + bin);",
+      "  if (args.includes('-v')) return success();",
+      "  if (args.some(arg => arg.startsWith('-iTCP:'))) {",
+      "    const pid = scenario === 'foreign-ready' || scenario === 'exited-ready' || replaced",
+      "      ? foreignPid : alive() ? ownedPid : null;",
+      "    return { ...success(pid ? String(pid) + '\\n' : ''), status: pid ? 0 : 1 };",
+      "  }",
+      "  const pid = Number(args[args.indexOf('-p') + 1]);",
+      "  samples.push({ pid, alive: Boolean(alive()) });",
+      "  if (cancellation?.[1] === 'settle' && samples.length === 2) enterWait('settle');",
+      "  if (scenario.startsWith('primary-')) {",
+      "    const code = scenario.split('-')[1];",
+      "    return { ...success(), status: 1, stderr: 'measurement denied ' + code };",
+      "  }",
+      "  return success('COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME\\n');",
+      "};",
+      "globalThis.fetch = async (_url, options) => {",
+      "  if (cancellation?.[1] === 'sample') {",
+      "    enterWait('sample');",
+      "    return await new Promise((_resolve, reject) => {",
+      "      options.signal.addEventListener('abort', () => {",
+      "        requestSettled = true; reject(options.signal.reason);",
+      "      }, { once: true });",
+      "    });",
+      "  }",
+      "  if (scenario === 'replaced-during') { replaced = true; finish(23); }",
+      "  if (scenario === 'stdout-error' || scenario === 'stderr-error') {",
+      "    const channel = scenario === 'stdout-error' ? 'stdout' : 'stderr';",
+      "    child[channel].destroy(Object.assign(",
+      "      new Error('injected Gateway ' + channel + ' read EIO'), { code: 'EIO' }));",
+      "  }",
+      "  requestSettled = true;",
+      "  return new Response(JSON.stringify({ ok: true, result: { results: [] } }), { status: 200 });",
+      "};",
+      "process.on('exit', record);",
+      "syncBuiltinESMExports();",
+    ].join("\n"),
+  );
+  const result = spawnSync(
+    testNodeExecPath,
+    [
+      ...resolveRuntimeWorkerArgv(scriptUrl, testNodeExecPath).slice(0, -1),
+      "--import",
       preloadPath,
-      [
-        "import cp from 'node:child_process';",
-        "import { EventEmitter } from 'node:events';",
-        "import fs from 'node:fs';",
-        "import { syncBuiltinESMExports } from 'node:module';",
-        "import net from 'node:net';",
-        "import path from 'node:path';",
-        "import { PassThrough } from 'node:stream';",
-        `const scenario = ${JSON.stringify(scenario)};`,
-        `const ownedPid = ${OWNED_PID}, foreignPid = ${FOREIGN_PID};`,
-        "const cancellation = /^(sample|settle)-(sigterm|pipe)$/.exec(scenario);",
-        "const samples = [], signals = [], events = [];",
-        "let child, syntheticRoot, launch, attemptedSummary, closed = false, replaced = false;",
-        "let wait, requestSettled = false, guardFired = false;",
-        "const write = fs.writeFileSync, remove = fs.rmSync;",
-        "const nativeKill = process.kill.bind(process);",
-        "const record = () => write(" + JSON.stringify(journalPath) + ", JSON.stringify({",
-        "  samples, signals, events, launch, attemptedSummary, closed, alive: Boolean(alive()),",
-        "  rootExists: Boolean(syntheticRoot && fs.existsSync(syntheticRoot)),",
-        "  wait, requestSettled, guardFired,",
-        "}));",
-        "const enterWait = (phase) => {",
-        "  if (cancellation?.[1] !== phase) return;",
-        // The next turn follows the invoke/log boundary and reaches the wait
-        // without observing or replacing either timer implementation.
-        "  setImmediate(() => {",
-        "    wait = { phase, samples: samples.length, requestSettled };",
-        "    if (cancellation[2] === 'sigterm') {",
-        "      events.push('parent:SIGTERM'); nativeKill(process.pid, 'SIGTERM');",
-        "    } else {",
-        "      const channel = phase === 'sample' ? 'stdout' : 'stderr';",
-        "      child[channel].destroy(Object.assign(",
-        "        new Error('injected Gateway ' + channel + ' read EIO'), { code: 'EIO' }));",
-        "    }",
-        "  });",
-        "};",
-        "fs.writeFileSync = (target, ...args) => {",
-        "  if (String(target).endsWith('/summary.json')) {",
-        "    events.push('summary'); attemptedSummary = JSON.parse(String(args[0]));",
-        "    if (scenario === 'completed-threshold-cleanup-report-error')",
-        "      throw Object.assign(new Error('summary write failed EACCES'), { code: 'EACCES' });",
-        "  }",
-        "  return write(target, ...args);",
-        "};",
-        "fs.rmSync = (target, options) => {",
-        "  if (target === syntheticRoot) {",
-        "    events.push('cleanup');",
-        "    if (scenario.startsWith('primary-') || scenario.startsWith('completed-')) {",
-        "      const code = scenario.startsWith('primary-') ? scenario.split('-')[3] : 'EIO';",
-        "      throw Object.assign(new Error('workspace removal failed ' + code), { code });",
-        "    }",
-        "  }",
-        "  return remove(target, options);",
-        "};",
-        "net.createServer = () => Object.assign(new EventEmitter(), {",
-        "  unref() {},",
-        "  listen(_port, _host, callback) { queueMicrotask(callback); },",
-        "  address: () => ({ port: 43791 }),",
-        "  close(callback) { queueMicrotask(callback); },",
-        "});",
-        "const alive = () => child && child.exitCode === null && child.signalCode === null;",
-        "const finish = (code, signal = null) => {",
-        "  if (!alive()) return;",
-        "  child.exitCode = code; child.signalCode = signal;",
-        "  child.emit('exit', code, signal);",
-        "  setImmediate(() => {",
-        "    child.stdout.destroy(); child.stderr.destroy();",
-        "    closed = true; events.push('close'); child.emit('close', code, signal);",
-        "    if (cancellation) setTimeout(() => {",
-        "      guardFired = true; record();",
-        "      fs.writeSync(2, 'measurement wait outlived owned close: ' + JSON.stringify({",
-        "        wait, requestSettled, closed, alive: Boolean(alive()),",
-        "        rootExists: fs.existsSync(syntheticRoot), events,",
-        "      }) + '\\n');",
-        "      nativeKill(process.pid, 'SIGKILL');",
-        "    }, 2_000).unref();",
-        "  });",
-        "};",
-        // Live groups have live leaders; terminal groups return ESRCH. These
-        // cases do not model the Linux exited-leader/live-group ps branch.
-        "process.kill = (pid, signal) => {",
-        "  if (pid !== ownedPid && pid !== -ownedPid && pid !== foreignPid && pid !== -foreignPid)",
-        "    throw new Error('fixture refused unexpected signal target');",
-        "  if (signal === 0) {",
-        "    if (alive()) return true;",
-        "    throw Object.assign(new Error('owned process gone'), { code: 'ESRCH' });",
-        "  }",
-        "  signals.push([pid, signal]);",
-        "  if (Math.abs(pid) === ownedPid && scenario !== 'ignored-stop') finish(null, signal);",
-        "  return true;",
-        "};",
-        "cp.spawn = (_bin, args, options) => {",
-        "  if (child) throw new Error('fixture permits exactly one Gateway launch');",
-        "  syntheticRoot = path.dirname(options.env.HOME);",
-        "  launch = { entry: args[0], noCompileCache: options.env.NODE_DISABLE_COMPILE_CACHE,",
-        "    devSourceRoot: options.env.OPENCLAW_DEV_SOURCE_ROOT };",
-        "  child = Object.assign(new EventEmitter(), {",
-        "    pid: ownedPid, exitCode: null, signalCode: null,",
-        "    stdout: new PassThrough(), stderr: new PassThrough(),",
-        "    kill: (signal) => process.kill(ownedPid, signal),",
-        "  });",
-        "  queueMicrotask(() => {",
-        "    child.stdout.write('[gateway] ready\\n');",
-        "    if (scenario === 'exited-ready') finish(0);",
-        "  });",
-        "  return child;",
-        "};",
-        "const success = (stdout = '') => ({ status: 0, signal: null, stdout, stderr: '' });",
-        "cp.spawnSync = (bin, args) => {",
-        "  if (bin === process.execPath && args.includes('index')) return success();",
-        "  if (bin !== 'lsof') throw new Error('fixture refused unexpected command ' + bin);",
-        "  if (args.includes('-v')) return success();",
-        "  if (args.some(arg => arg.startsWith('-iTCP:'))) {",
-        "    const pid = scenario === 'foreign-ready' || scenario === 'exited-ready' || replaced",
-        "      ? foreignPid : alive() ? ownedPid : null;",
-        "    return { ...success(pid ? String(pid) + '\\n' : ''), status: pid ? 0 : 1 };",
-        "  }",
-        "  const pid = Number(args[args.indexOf('-p') + 1]);",
-        "  samples.push({ pid, alive: Boolean(alive()) });",
-        "  if (cancellation?.[1] === 'settle' && samples.length === 2) enterWait('settle');",
-        "  if (scenario.startsWith('primary-')) {",
-        "    const code = scenario.split('-')[1];",
-        "    return { ...success(), status: 1, stderr: 'measurement denied ' + code };",
-        "  }",
-        "  return success('COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME\\n');",
-        "};",
-        "globalThis.fetch = async (_url, options) => {",
-        "  if (cancellation?.[1] === 'sample') {",
-        "    enterWait('sample');",
-        "    return await new Promise((_resolve, reject) => {",
-        "      options.signal.addEventListener('abort', () => {",
-        "        requestSettled = true; reject(options.signal.reason);",
-        "      }, { once: true });",
-        "    });",
-        "  }",
-        "  if (scenario === 'replaced-during') { replaced = true; finish(23); }",
-        "  if (scenario === 'stdout-error' || scenario === 'stderr-error') {",
-        "    const channel = scenario === 'stdout-error' ? 'stdout' : 'stderr';",
-        "    child[channel].destroy(Object.assign(",
-        "      new Error('injected Gateway ' + channel + ' read EIO'), { code: 'EIO' }));",
-        "  }",
-        "  requestSettled = true;",
-        "  return new Response(JSON.stringify({ ok: true, result: { results: [] } }), { status: 200 });",
-        "};",
-        "process.on('exit', record);",
-        "syncBuiltinESMExports();",
-      ].join("\n"),
-    );
-    const result = spawnSync(
-      testNodeExecPath,
-      [
-        ...resolveRuntimeWorkerArgv(scriptUrl, testNodeExecPath).slice(0, -1),
-        "--import",
-        preloadPath,
-        ...resolveRuntimeWorkerArgv(scriptUrl, testNodeExecPath).slice(-1),
-        "--allow-non-darwin",
-        ...(scenario.startsWith("completed-threshold")
-          ? ["--mode", "leak", "--min-leaked-fds", "1"]
-          : ["--report-only"]),
-        "--files",
-        "1",
-        "--sample-delay-ms",
-        scenario.startsWith("sample-") ? "31003" : scenario === "delayed-success" ? "25" : "0",
-        "--settle-delay-ms",
-        scenario.startsWith("settle-") ? "32009" : scenario === "delayed-success" ? "40" : "0",
-        "--output-dir",
-        outputDir,
-      ],
-      {
-        cwd: root,
-        env: {
-          ...process.env,
-          TMPDIR: root,
-          TMP: root,
-          TEMP: root,
-          TSX_TSCONFIG_PATH: SOURCE_TSCONFIG_PATH,
-          OPENCLAW_MEMORY_FD_REPRO_KEEP: "0",
-          OPENCLAW_DEV_SOURCE_ROOT:
-            scenario === "owned-success-inherited-root"
-              ? path.join(root, "inherited-source")
-              : undefined,
-        },
-        encoding: "utf8",
-        timeout: 20_000,
-        killSignal: "SIGKILL",
-        maxBuffer: 1024 * 1024,
+      ...resolveRuntimeWorkerArgv(scriptUrl, testNodeExecPath).slice(-1),
+      "--allow-non-darwin",
+      ...(scenario.startsWith("completed-threshold")
+        ? ["--mode", "leak", "--min-leaked-fds", "1"]
+        : ["--report-only"]),
+      "--files",
+      "1",
+      "--sample-delay-ms",
+      scenario.startsWith("sample-") ? "31003" : scenario === "delayed-success" ? "25" : "0",
+      "--settle-delay-ms",
+      scenario.startsWith("settle-") ? "32009" : scenario === "delayed-success" ? "40" : "0",
+      "--output-dir",
+      outputDir,
+    ],
+    {
+      cwd: root,
+      env: {
+        ...process.env,
+        ...(scenario === "inherited-paths"
+          ? {
+              HOME: path.join(root, "inherited-home"),
+              USERPROFILE: path.join(root, "inherited-userprofile"),
+              OPENCLAW_HOME: path.join(root, "inherited-openclaw-home"),
+              OPENCLAW_STATE_DIR: path.join(root, "inherited-state"),
+              OPENCLAW_CONFIG_PATH: path.join(root, "inherited-config.json"),
+              XDG_CONFIG_HOME: path.join(root, "inherited-xdg-config"),
+              XDG_CACHE_HOME: path.join(root, "inherited-xdg-cache"),
+              XDG_DATA_HOME: path.join(root, "inherited-xdg-data"),
+              XDG_STATE_HOME: path.join(root, "inherited-xdg-state"),
+              XDG_RUNTIME_DIR: path.join(root, "inherited-xdg-runtime"),
+            }
+          : {}),
+        TMPDIR: root,
+        TMP: root,
+        TEMP: root,
+        TSX_TSCONFIG_PATH: SOURCE_TSCONFIG_PATH,
+        OPENCLAW_MEMORY_FD_REPRO_KEEP: "0",
+        OPENCLAW_DEV_SOURCE_ROOT:
+          scenario === "owned-success-inherited-root"
+            ? path.join(root, "inherited-source")
+            : undefined,
       },
-    );
-    expect(fs.readdirSync(path.join(root, ".vitest-resource-owner", "claims"))).toHaveLength(1);
-    if (scenario === "ignored-stop") {
-      expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
-    } else {
-      expect(() => owner.assertReleased(), result.stderr).not.toThrow();
-    }
-    expect(result.error, result.stderr).toBeUndefined();
-    expect(result.signal, result.stderr).toBeNull();
-    const journal = JSON.parse(fs.readFileSync(journalPath, "utf8")) as {
-      samples: { pid: number; alive: boolean }[];
-      signals: [number, string][];
-      events: string[];
-      launch: { entry: string; noCompileCache?: string; devSourceRoot?: string };
-      closed: boolean;
-      alive: boolean;
-      rootExists: boolean;
-      wait?: { phase: string; samples: number; requestSettled: boolean };
-      requestSettled: boolean;
-      guardFired: boolean;
-      attemptedSummary?: GatewaySummary;
-    };
-    const summaryPath = path.join(outputDir, "summary.json");
-    const summary = fs.existsSync(summaryPath)
-      ? (JSON.parse(fs.readFileSync(summaryPath, "utf8")) as GatewaySummary)
-      : undefined;
-    return { result, journal, summary, fixtureRoot: root };
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+      encoding: "utf8",
+      timeout: 20_000,
+      killSignal: "SIGKILL",
+      maxBuffer: 1024 * 1024,
+    },
+  );
+  expect(
+    fs.readdirSync(path.join(root, ".vitest-resource-owner", "claims")),
+    result.stderr,
+  ).toHaveLength(1);
+  if (scenario === "ignored-stop") {
+    expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+  } else {
+    expect(() => owner.assertReleased(), result.stderr).not.toThrow();
   }
+  expect(result.error, result.stderr).toBeUndefined();
+  expect(result.signal, result.stderr).toBeNull();
+  expect(result.status, result.stderr).toBe(expectedStatus);
+  const journal = JSON.parse(fs.readFileSync(journalPath, "utf8")) as {
+    samples: { pid: number; alive: boolean }[];
+    signals: [number, string][];
+    events: string[];
+    launch: { entry: string; noCompileCache?: string; devSourceRoot?: string };
+    closed: boolean;
+    alive: boolean;
+    rootExists: boolean;
+    wait?: { phase: string; samples: number; requestSettled: boolean };
+    requestSettled: boolean;
+    guardFired: boolean;
+    attemptedSummary?: GatewaySummary;
+  };
+  const summaryPath = path.join(outputDir, "summary.json");
+  const summary = fs.existsSync(summaryPath)
+    ? (JSON.parse(fs.readFileSync(summaryPath, "utf8")) as GatewaySummary)
+    : undefined;
+  return { result, journal, summary, fixtureRoot: root };
 }
 
 async function listen(server: Server): Promise<number> {
@@ -305,19 +337,62 @@ async function listen(server: Server): Promise<number> {
   return address.port;
 }
 
+function classifyResult(result: unknown) {
+  return classifyMemorySearchInvokeResponse({
+    httpOk: true,
+    status: 200,
+    bodyText: JSON.stringify({ ok: true, result }),
+  });
+}
+
+function ready(tail: string, chunk: string, limit = 64, readySeen = false) {
+  return updateGatewayReadyOutputState({ tail, readySeen }, chunk, limit);
+}
+
+function expectJoined(journal: ReturnType<typeof runGatewayOwnershipFixture>["journal"]) {
+  expect(journal).toMatchObject({ closed: true, alive: false });
+}
+
+function expectAborted(
+  { result, journal, summary }: ReturnType<typeof runGatewayOwnershipFixture>,
+  count: number,
+  diagnostic: string,
+) {
+  expect(result.stderr).toContain(diagnostic);
+  expect(result.stderr).not.toContain("Unhandled 'error' event");
+  expect(journal).toMatchObject({ closed: true, alive: false, rootExists: false });
+  expect(journal.samples).toEqual(ownedSamples(count));
+  expect(journal.signals).toEqual([[-OWNED_PID, "SIGTERM"]]);
+  expect(summary).toBeUndefined();
+}
+
+function expectFinalized(journal: ReturnType<typeof runGatewayOwnershipFixture>["journal"]) {
+  expectJoined(journal);
+  expect(journal.samples).toHaveLength(3);
+  expect(journal.events).toEqual(["close", "cleanup", "summary"]);
+}
+
+function parseEnv(env: Record<string, string>, args: string[] = []) {
+  return withEnv(
+    Object.fromEntries(
+      Object.entries(env).map(([key, value]) => [`OPENCLAW_MEMORY_FD_REPRO_${key}`, value]),
+    ),
+    () => parseArgs(args),
+  );
+}
+const ownedSamples = (length: number) =>
+  Array.from({ length }, () => ({ pid: OWNED_PID, alive: true }));
+
 describe("check-memory-fd-repro", () => {
   it("rejects loose numeric environment limits before generating files", () => {
     expect(
-      withEnv(
-        {
-          OPENCLAW_MEMORY_FD_REPRO_FILES: "17",
-          OPENCLAW_MEMORY_FD_REPRO_MAX_WORKSPACE_REG_FDS: "0",
-          OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS: "0",
-          OPENCLAW_MEMORY_FD_REPRO_SETTLE_DELAY_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
-          OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
-        },
-        () => parseArgs([]),
-      ),
+      parseEnv({
+        FILES: "17",
+        MAX_WORKSPACE_REG_FDS: "0",
+        SAMPLE_DELAY_MS: "0",
+        SETTLE_DELAY_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
+        TIMEOUT_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
+      }),
     ).toMatchObject({
       fileCount: 17,
       invokeTimeoutMs: MAX_TIMER_TIMEOUT_MS,
@@ -326,37 +401,31 @@ describe("check-memory-fd-repro", () => {
       settleDelayMs: MAX_TIMER_TIMEOUT_MS,
     });
 
-    expect(() =>
-      withEnv({ OPENCLAW_MEMORY_FD_REPRO_FILES: "17files" }, () => parseArgs([])),
-    ).toThrow("OPENCLAW_MEMORY_FD_REPRO_FILES must be a non-negative integer");
-    expect(() =>
-      withEnv({ OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS: "1e3" }, () => parseArgs([])),
-    ).toThrow("OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS must be a non-negative integer");
+    expect(() => parseEnv({ FILES: "17files" })).toThrow(
+      "OPENCLAW_MEMORY_FD_REPRO_FILES must be a non-negative integer",
+    );
+    expect(() => parseEnv({ TIMEOUT_MS: "1e3" })).toThrow(
+      "OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS must be a non-negative integer",
+    );
   });
 
   it("lets explicit CLI numeric flags override malformed inherited env defaults", () => {
     expect(
-      withEnv(
+      parseEnv(
         {
-          OPENCLAW_MEMORY_FD_REPRO_FILES: "17files",
-          OPENCLAW_MEMORY_FD_REPRO_MAX_WORKSPACE_REG_FDS: "4fds",
-          OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS: "1e3",
-          OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS: "soon",
-          OPENCLAW_MEMORY_FD_REPRO_SETTLE_DELAY_MS: "later",
+          FILES: "17files",
+          MAX_WORKSPACE_REG_FDS: "4fds",
+          TIMEOUT_MS: "1e3",
+          SAMPLE_DELAY_MS: "soon",
+          SETTLE_DELAY_MS: "later",
         },
-        () =>
-          parseArgs([
-            "--files",
-            "20",
-            "--max-workspace-reg-fds",
-            "4",
-            "--invoke-timeout-ms",
-            "1000",
-            "--sample-delay-ms",
-            "0",
-            "--settle-delay-ms",
-            "0",
-          ]),
+        Object.entries({
+          "--files": 20,
+          "--max-workspace-reg-fds": 4,
+          "--invoke-timeout-ms": 1000,
+          "--sample-delay-ms": 0,
+          "--settle-delay-ms": 0,
+        }).flatMap(([flag, value]) => [flag, String(value)]),
       ),
     ).toMatchObject({
       fileCount: 20,
@@ -384,23 +453,15 @@ describe("check-memory-fd-repro", () => {
     }
   });
 
-  it("stops parsing options after the argument terminator", () => {
-    expect(parseArgs(["--files", "20", "--", "--files", "99"])).toMatchObject({
-      fileCount: 20,
-    });
-
-    expect(
-      withEnv({ OPENCLAW_MEMORY_FD_REPRO_FILES: "17" }, () => parseArgs(["--", "--unknown"])),
-    ).toMatchObject({
-      fileCount: 17,
-    });
-  });
-
-  it("accepts the leading package-manager argument separator", () => {
-    expect(parseArgs(["--", "--files", "20", "--allow-non-darwin"])).toMatchObject({
-      allowNonDarwin: true,
-      fileCount: 20,
-    });
+  it.each([
+    { args: ["--files", "20", "--", "--files", "99"], expected: { fileCount: 20 } },
+    { args: ["--", "--unknown"], env: { FILES: "17" }, expected: { fileCount: 17 } },
+    {
+      args: ["--", "--files", "20", "--allow-non-darwin"],
+      expected: { allowNonDarwin: true, fileCount: 20 },
+    },
+  ])("handles separators in $args", ({ args, env, expected }) => {
+    expect(parseEnv(env ?? {}, args)).toMatchObject(expected);
   });
 
   it("clamps oversized timers and sends the matching memory probe", async () => {
@@ -446,78 +507,43 @@ describe("check-memory-fd-repro", () => {
       });
     } finally {
       await new Promise<void>((resolve) => {
-        server.close(() => {
-          resolve();
-        });
+        server.close(() => resolve());
       });
     }
   });
 
   it("writes an offline FTS-only memory search config for repro indexing", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-fd-config-"));
-    try {
-      const homeDir = path.join(root, "home");
-      const workspaceDir = path.join(root, "workspace");
-      const configPath = writeConfig({
-        homeDir,
-        workspaceDir,
-        port: 12345,
-        token: "test-token",
-      });
-      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      const memorySearch = config.memory.search;
-
-      expect(validateConfigObject(config)).toMatchObject({ ok: true });
-      expect(memorySearch.store).toEqual({ vector: { enabled: false } });
-      expect(memorySearch).toMatchObject({
-        provider: "none",
-        model: "",
-      });
-      expect(memorySearch).not.toHaveProperty("sync");
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("accepts an available memory_search tool payload", () => {
-    const result = classifyMemorySearchInvokeResponse({
-      httpOk: true,
-      status: 200,
-      bodyText: JSON.stringify({
-        ok: true,
-        result: {
-          content: [{ type: "text", text: JSON.stringify({ results: [] }) }],
-        },
-      }),
+    const root = tempDirs.make("openclaw-memory-fd-config-");
+    const homeDir = path.join(root, "home");
+    const workspaceDir = path.join(root, "workspace");
+    const configPath = writeConfig({
+      homeDir,
+      workspaceDir,
+      port: 12345,
+      token: "test-token",
     });
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    const memorySearch = config.memory.search;
 
-    expect(result).toMatchObject({
-      ok: true,
-      gatewayOk: true,
-      resultCount: 0,
-    });
+    expect(validateConfigObject(config)).toMatchObject({ ok: true });
+    expect(memorySearch).toMatchObject({ provider: "none", model: "" });
+    expect(memorySearch.store).toEqual({ vector: { enabled: false } });
+    expect(memorySearch).not.toHaveProperty("sync");
   });
 
   it("rejects disabled memory_search tool payloads", () => {
-    const result = classifyMemorySearchInvokeResponse({
-      httpOk: true,
-      status: 200,
-      bodyText: JSON.stringify({
-        ok: true,
-        result: {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                results: [],
-                disabled: true,
-                unavailable: true,
-                error: 'No API key found for provider "openai".',
-              }),
-            },
-          ],
+    const result = classifyResult({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            results: [],
+            disabled: true,
+            unavailable: true,
+            error: 'No API key found for provider "openai".',
+          }),
         },
-      }),
+      ],
     });
 
     expect(result).toMatchObject({
@@ -530,13 +556,7 @@ describe("check-memory-fd-repro", () => {
   });
 
   it("rejects gateway success envelopes without memory_search details", () => {
-    const result = classifyMemorySearchInvokeResponse({
-      httpOk: true,
-      status: 200,
-      bodyText: JSON.stringify({ ok: true, result: { content: [] } }),
-    });
-
-    expect(result).toMatchObject({
+    expect(classifyResult({ content: [] })).toMatchObject({
       ok: false,
       error: "memory_search result payload missing or invalid",
     });
@@ -546,12 +566,8 @@ describe("check-memory-fd-repro", () => {
     { exitCode: null, signalCode: "SIGTERM" },
     { exitCode: 0, signalCode: null },
   ])("rejects readiness for an exited child (%j)", async (exitState) => {
-    const child = {
-      ...exitState,
-    };
-
     await expect(
-      waitForGatewayReady({ child, port: 9, logPath: "gateway.log", timeoutMs: 10_000 }),
+      waitForGatewayReady({ child: exitState, port: 9, logPath: "gateway.log", timeoutMs: 10_000 }),
     ).rejects.toThrow("gateway exited before ready");
   });
 
@@ -559,8 +575,7 @@ describe("check-memory-fd-repro", () => {
     it.each(["foreign-ready", "exited-ready"] as const)(
       "never samples or signals an unrelated listener (%s)",
       (scenario) => {
-        const { result, journal, summary } = runGatewayOwnershipFixture(scenario);
-        expect(result.status, result.stderr).toBe(1);
+        const { journal, summary } = runGatewayOwnershipFixture(scenario);
         expect(journal.samples).toEqual([]);
         expect(journal.signals.some(([pid]) => Math.abs(pid) === FOREIGN_PID)).toBe(false);
         expect(summary?.passed).not.toBe(true);
@@ -570,7 +585,6 @@ describe("check-memory-fd-repro", () => {
 
     it("stops sampling when the launched process exits during measurement", () => {
       const { result, journal, summary } = runGatewayOwnershipFixture("replaced-during");
-      expect(result.status, result.stderr).toBe(1);
       expect(journal.samples).toEqual([{ pid: OWNED_PID, alive: true }]);
       expect(journal.signals.some(([pid]) => Math.abs(pid) === FOREIGN_PID)).toBe(false);
       expect(summary?.passed).not.toBe(true);
@@ -581,18 +595,10 @@ describe("check-memory-fd-repro", () => {
     it.each(["stdout-error", "stderr-error"] as const)(
       "diagnoses pipe failure after joining the owned process (%s)",
       (scenario) => {
-        const { result, journal, summary } = runGatewayOwnershipFixture(scenario);
+        const run = runGatewayOwnershipFixture(scenario);
         const channel = scenario === "stdout-error" ? "stdout" : "stderr";
-        expect(result.status, result.stderr).toBe(1);
-        expect(result.stderr).toContain(`injected Gateway ${channel} read EIO`);
-        expect(result.stderr).not.toContain("Unhandled 'error' event");
-        expect(journal.samples).toEqual([{ pid: OWNED_PID, alive: true }]);
-        expect(journal.signals).toEqual([[-OWNED_PID, "SIGTERM"]]);
-        expect(journal.closed).toBe(true);
-        expect(journal.alive).toBe(false);
-        expect(journal.events).toEqual(["close", "cleanup"]);
-        expect(journal.rootExists).toBe(false);
-        expect(summary).toBeUndefined();
+        expectAborted(run, 1, `injected Gateway ${channel} read EIO`);
+        expect(run.journal.events).toEqual(["close", "cleanup"]);
       },
     );
 
@@ -604,55 +610,44 @@ describe("check-memory-fd-repro", () => {
     ] as const)(
       "cancels measurement waits and joins the owner ($scenario)",
       ({ scenario, phase, count, diagnostic }) => {
-        const { result, journal, summary } = runGatewayOwnershipFixture(scenario);
-        expect(journal.wait).toEqual({
-          phase,
-          samples: count,
-          requestSettled: phase === "settle",
-        });
-        expect(journal.guardFired).toBe(false);
-        expect(journal.requestSettled).toBe(true);
-        expect(result.status, result.stderr).toBe(1);
-        expect(result.stderr).toContain(diagnostic);
-        expect(result.stderr).not.toContain("Unhandled 'error' event");
-        expect(journal.samples).toEqual(
-          Array.from({ length: count }, () => ({ pid: OWNED_PID, alive: true })),
-        );
-        expect(journal.signals).toEqual([[-OWNED_PID, "SIGTERM"]]);
-        expect(journal.closed).toBe(true);
-        expect(journal.alive).toBe(false);
-        expect(journal.rootExists).toBe(false);
+        const run = runGatewayOwnershipFixture(scenario);
+        const { journal } = run;
+        expectAborted(run, count, diagnostic);
+        expect(journal.wait).toEqual({ phase, samples: count, requestSettled: phase === "settle" });
+        expect(journal).toMatchObject({ guardFired: false, requestSettled: true });
         expect(journal.events.indexOf("close")).toBeLessThan(journal.events.indexOf("cleanup"));
-        expect(summary).toBeUndefined();
       },
     );
 
-    it.each(["owned-success", "owned-success-inherited-root", "delayed-success"] as const)(
-      "joins the launched process before publishing success (%s)",
-      (scenario) => {
-        const { result, journal, summary, fixtureRoot } = runGatewayOwnershipFixture(scenario);
-        expect(result.status, result.stderr).toBe(0);
-        expect(journal.launch).toEqual({
-          entry: path.join(fixtureRoot, "openclaw.mjs"),
-          noCompileCache: "1",
-          devSourceRoot:
-            scenario === "owned-success-inherited-root"
-              ? path.join(fixtureRoot, "inherited-source")
-              : fixtureRoot,
-        });
-        expect(journal.samples).toEqual(
-          Array.from({ length: 3 }, () => ({ pid: OWNED_PID, alive: true })),
+    it.each([
+      "owned-success",
+      "owned-success-inherited-root",
+      "inherited-paths",
+      "delayed-success",
+    ] as const)("joins the launched process before publishing success (%s)", (scenario) => {
+      const { journal, summary, fixtureRoot } = runGatewayOwnershipFixture(scenario, 0);
+      if (scenario === "inherited-paths") {
+        expect(journal.events).toEqual(
+          expect.arrayContaining(["isolated:index", "isolated:gateway"]),
         );
-        expect(journal.closed).toBe(true);
-        expect(journal.events.indexOf("close")).toBeLessThan(journal.events.indexOf("summary"));
-        expect(journal.rootExists).toBe(false);
-        expect(summary?.passed).toBe(true);
-      },
-    );
+      }
+      expect(journal.launch).toEqual({
+        entry: path.join(fixtureRoot, "openclaw.mjs"),
+        noCompileCache: "1",
+        devSourceRoot:
+          scenario === "owned-success-inherited-root"
+            ? path.join(fixtureRoot, "inherited-source")
+            : fixtureRoot,
+      });
+      expect(journal.samples).toEqual(ownedSamples(3));
+      expect(journal.closed).toBe(true);
+      expect(journal.events.indexOf("close")).toBeLessThan(journal.events.indexOf("summary"));
+      expect(journal.rootExists).toBe(false);
+      expect(summary?.passed).toBe(true);
+    });
 
     it("fails report-only and retains inputs when the owned process cannot be joined", () => {
-      const { result, journal, summary } = runGatewayOwnershipFixture("ignored-stop");
-      expect(result.status, result.stderr).toBe(1);
+      const { journal, summary } = runGatewayOwnershipFixture("ignored-stop");
       expect(journal.alive).toBe(true);
       expect(journal.rootExists).toBe(true);
       expect(summary?.passed).not.toBe(true);
@@ -665,7 +660,6 @@ describe("check-memory-fd-repro", () => {
       "prints primary $primary and cleanup $cleanup failures",
       ({ primary, cleanup, scenario }) => {
         const { result, journal, summary } = runGatewayOwnershipFixture(scenario);
-        expect(result.status, result.stderr).toBe(1);
         expect(result.stderr).toContain(`measurement denied ${primary}`);
         expect(result.stderr).toContain(`workspace removal failed ${cleanup}`);
         expect(journal.closed).toBe(true);
@@ -675,12 +669,11 @@ describe("check-memory-fd-repro", () => {
   });
 
   it("bounds gateway readiness output while keeping newest logs", () => {
-    const first = updateGatewayReadyOutputState({ tail: "abc", readySeen: false }, "def", 8);
+    const first = ready("abc", "def", 8);
     expect(first).toEqual({ tail: "abcdef", readySeen: false });
 
     const second = updateGatewayReadyOutputState(first, "ghijkl", 8);
     expect(second).toEqual({ tail: "efghijkl", readySeen: false });
-    expect(second.tail).toHaveLength(8);
 
     const defaultBound = updateGatewayReadyOutputState(
       { tail: "", readySeen: false },
@@ -691,33 +684,18 @@ describe("check-memory-fd-repro", () => {
   });
 
   it("keeps readiness after a coalesced noisy chunk truncates the marker", () => {
-    const state = updateGatewayReadyOutputState(
-      { tail: "", readySeen: false },
-      `[gateway] ready\n${"x".repeat(10_000)}`,
-      64,
-    );
-
-    expect(state.readySeen).toBe(true);
-    expect(state.tail).toHaveLength(64);
-    expect(state.tail).not.toContain("[gateway] ready");
+    expect(ready("", `[gateway] ready\n${"x".repeat(10_000)}`)).toEqual({
+      readySeen: true,
+      tail: "x".repeat(64),
+    });
   });
 
   it("recognizes readiness split across the existing tail and new chunk", () => {
-    const state = updateGatewayReadyOutputState(
-      { tail: "[gateway] rea", readySeen: false },
-      "dy\n",
-      64,
-    );
-
-    expect(state.readySeen).toBe(true);
-    expect(state.tail).toBe("[gateway] ready\n");
+    expect(ready("[gateway] rea", "dy\n")).toEqual({ readySeen: true, tail: "[gateway] ready\n" });
   });
 
   it("preserves previous readiness once seen", () => {
-    const state = updateGatewayReadyOutputState({ tail: "old", readySeen: true }, "new output", 8);
-
-    expect(state.readySeen).toBe(true);
-    expect(state.tail).toBe("w output");
+    expect(ready("old", "new output", 8, true)).toEqual({ readySeen: true, tail: "w output" });
   });
 
   describe.skipIf(process.platform === "win32")("completed measurement finalization", () => {
@@ -725,11 +703,7 @@ describe("check-memory-fd-repro", () => {
       "retains a failed summary after owned cleanup fails (%s)",
       (scenario) => {
         const { result, journal, summary } = runGatewayOwnershipFixture(scenario);
-        expect(result.status, result.stderr).toBe(1);
-        expect(journal.closed).toBe(true);
-        expect(journal.alive).toBe(false);
-        expect(journal.samples).toHaveLength(3);
-        expect(journal.events).toEqual(["close", "cleanup", "summary"]);
+        expectFinalized(journal);
         expect(summary).toMatchObject({
           passed: false,
           invoke: { ok: true },
@@ -749,11 +723,7 @@ describe("check-memory-fd-repro", () => {
       const { result, journal, summary } = runGatewayOwnershipFixture(
         "completed-threshold-cleanup-report-error",
       );
-      expect(result.status, result.stderr).toBe(1);
-      expect(journal.closed).toBe(true);
-      expect(journal.alive).toBe(false);
-      expect(journal.samples).toHaveLength(3);
-      expect(journal.events).toEqual(["close", "cleanup", "summary"]);
+      expectFinalized(journal);
       expect(journal.attemptedSummary?.passed).toBe(false);
       expect(summary).toBeUndefined();
       expect(result.stderr).toContain("below leak threshold 1");

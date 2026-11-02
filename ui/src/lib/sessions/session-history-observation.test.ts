@@ -25,42 +25,38 @@ it.each(["unloaded", "absent", "present"] as const)(
         : { subscribed: true },
     );
     const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
-    try {
-      if (primary === "unloaded") {
-        expect(sessions.state.result).toBeNull();
-      } else {
-        await sessions.refresh({ agentId: "main", force: true });
-        expect(sessions.state.result?.sessions.some((row) => row.key === settled.key)).toBe(
-          primary === "present",
-        );
-      }
-      const observation = sessions.observeRow({ key: settled.key, agentId: "main" }, () => {});
-      expect(observation.captureReconcile()(settled)).toMatchObject({ status: "current" });
-      expect(observation.row).toMatchObject(settled);
-
-      const olderHistory = {
-        ...settled,
-        updatedAt: 2,
-        status: "running" as const,
-        hasActiveRun: true,
-      };
-      const pendingRead = observation.captureReconcile();
-      const reconcileHistory = sessions.captureReconcile();
-      expect(reconcileHistory(olderHistory, undefined, { resultAgentId: "main" })).toBe(true);
-      expect(observation.row).toMatchObject(settled);
-
-      // Ignoring stale metadata must not retire an already pending descriptor read.
-      const next = { ...settled, updatedAt: 4, label: "Fresh descriptor" };
-      expect(pendingRead(next)).toMatchObject({ status: "current" });
-      expect(observation.row).toMatchObject(next);
-
-      const newerHistory = { ...olderHistory, updatedAt: 5 };
-      expect(sessions.captureReconcile()(newerHistory, undefined, { resultAgentId: "main" })).toBe(
-        true,
+    if (primary === "unloaded") {
+      expect(sessions.state.result).toBeNull();
+    } else {
+      await sessions.refresh({ agentId: "main", force: true });
+      expect(sessions.state.result?.sessions.some((row) => row.key === settled.key)).toBe(
+        primary === "present",
       );
-      expect(observation.row).toMatchObject(newerHistory);
-    } finally {
-      sessions.dispose();
     }
+    const observation = sessions.observeRow({ key: settled.key, agentId: "main" }, () => {});
+    expect(observation.captureReconcile()(settled)).toMatchObject({ status: "current" });
+    expect(observation.row).toMatchObject(settled);
+
+    const olderHistory = {
+      ...settled,
+      updatedAt: 2,
+      status: "running" as const,
+      hasActiveRun: true,
+    };
+    const pendingRead = observation.captureReconcile();
+    const reconcileHistory = sessions.captureReconcile();
+    expect(reconcileHistory(olderHistory, undefined, { resultAgentId: "main" })).toBe(true);
+    expect(observation.row).toMatchObject(settled);
+
+    // Ignoring stale metadata must not retire an already pending descriptor read.
+    const next = { ...settled, updatedAt: 4, label: "Fresh descriptor" };
+    expect(pendingRead(next)).toMatchObject({ status: "current" });
+    expect(observation.row).toMatchObject(next);
+
+    const newerHistory = { ...olderHistory, updatedAt: 5 };
+    expect(sessions.captureReconcile()(newerHistory, undefined, { resultAgentId: "main" })).toBe(
+      true,
+    );
+    expect(observation.row).toMatchObject(newerHistory);
   },
 );

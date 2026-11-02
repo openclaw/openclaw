@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   createMinimalRunAgentTurnParams,
+  getRawExecuteAgentTurnForTest,
   createMockReplyOperation,
   setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
-const { executeAgentTurn } = await import("./agent-runner-execution.js");
+const executeAgentTurn = await getRawExecuteAgentTurnForTest();
 
 describe("executeAgentTurn contract", () => {
   it("returns one closed settled result with winner and fallback facts", async () => {

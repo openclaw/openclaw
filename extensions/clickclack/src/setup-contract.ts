@@ -20,13 +20,9 @@ export function requireClickClackSetupApiBaseUrl(value: string, label: string): 
   if (!value || value !== value.trim()) {
     throw new Error(`ClickClack ${label} is invalid`);
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    throw new Error(`ClickClack ${label} is invalid`);
-  }
+  const parsed = URL.parse(value);
   if (
+    !parsed ||
     (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
     !parsed.hostname ||
     parsed.hostname.endsWith(".") ||
@@ -60,7 +56,7 @@ export function requireClickClackSetupApiBaseUrl(value: string, label: string): 
 
   const canonical = parsed.origin + basePath;
   if (value !== canonical) {
-    throw new Error(`ClickClack ${label} is not canonical`);
+    throw new Error(`ClickClack ${label} is not in the expected URL format`);
   }
   return canonical;
 }
@@ -69,13 +65,9 @@ export function requireClickClackSetupClaimUrl(value: string): {
   claimUrl: string;
   apiBaseUrl: string;
 } {
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    throw new Error("ClickClack setup URL has an invalid claim endpoint.");
-  }
+  const parsed = URL.parse(value);
   if (
+    !parsed ||
     parsed.username ||
     parsed.password ||
     parsed.search ||
@@ -91,7 +83,7 @@ export function requireClickClackSetupClaimUrl(value: string): {
   );
   const claimUrl = apiBaseUrl + CLICKCLACK_SETUP_CODE_CLAIM_PATH;
   if (value !== claimUrl) {
-    throw new Error("ClickClack setup URL has a non-canonical claim endpoint.");
+    throw new Error("ClickClack setup URL has a claim endpoint in an unexpected URL format.");
   }
   return { claimUrl, apiBaseUrl };
 }

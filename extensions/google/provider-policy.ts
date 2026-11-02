@@ -1,4 +1,3 @@
-// Google provider module implements model/runtime integration.
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
@@ -100,7 +99,7 @@ function normalizeProviderModels(
   normalizeId: (id: string) => string,
 ): ModelProviderConfig {
   const models = provider.models;
-  if (!Array.isArray(models) || models.length === 0) {
+  if (!models?.length) {
     return provider;
   }
 
@@ -121,27 +120,20 @@ export function normalizeGoogleProviderConfig(
   providerKey: string,
   provider: ModelProviderConfig,
 ): ModelProviderConfig {
-  let nextProvider = provider;
-  const shouldNormalizeModelIds = GOOGLE_MODEL_ID_PROVIDERS.has(providerKey);
-
-  if (shouldNormalizeModelIds) {
-    const modelNormalized = normalizeProviderModels(nextProvider, normalizeGoogleModelId);
-    if (shouldNormalizeGoogleGenerativeAiProviderConfig(providerKey, modelNormalized)) {
-      const normalizedBaseUrl = normalizeGoogleGenerativeAiBaseUrl(modelNormalized.baseUrl);
-      nextProvider =
-        normalizedBaseUrl !== modelNormalized.baseUrl
-          ? { ...modelNormalized, baseUrl: normalizedBaseUrl ?? modelNormalized.baseUrl }
-          : modelNormalized;
-    } else {
-      nextProvider = modelNormalized;
-    }
-  }
-
   if (providerKey === "google-antigravity") {
-    nextProvider = normalizeProviderModels(nextProvider, normalizeAntigravityModelId);
+    return normalizeProviderModels(provider, normalizeAntigravityModelId);
   }
-
-  return nextProvider;
+  if (!GOOGLE_MODEL_ID_PROVIDERS.has(providerKey)) {
+    return provider;
+  }
+  const normalized = normalizeProviderModels(provider, normalizeGoogleModelId);
+  if (!shouldNormalizeGoogleGenerativeAiProviderConfig(providerKey, normalized)) {
+    return normalized;
+  }
+  const baseUrl = normalizeGoogleGenerativeAiBaseUrl(normalized.baseUrl);
+  return baseUrl !== normalized.baseUrl
+    ? { ...normalized, baseUrl: baseUrl ?? normalized.baseUrl }
+    : normalized;
 }
 
 export function resolveGoogleThinkingProfile({

@@ -5,6 +5,7 @@ import { IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { PassThrough } from "node:stream";
 import { vi } from "vitest";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
 
 /**
  * Minimal HTTP response mock used by gateway handler tests.
@@ -56,4 +57,24 @@ export async function readClientResponseBody(
     res.once("end", resolve);
   });
   return { status: res.statusCode ?? 0, body };
+}
+
+export function createAuthRateLimiterSpy() {
+  const check = vi.fn<AuthRateLimiter["check"]>(() => ({
+    allowed: true,
+    remaining: 10,
+    retryAfterMs: 0,
+  }));
+  const recordFailure = vi.fn<AuthRateLimiter["recordFailure"]>(() => {});
+  const recordFailureAndDelay = vi.fn<AuthRateLimiter["recordFailureAndDelay"]>(async () => {});
+  const reset = vi.fn<AuthRateLimiter["reset"]>(() => {});
+  return {
+    check,
+    recordFailure,
+    recordFailureAndDelay,
+    reset,
+    size: () => 0,
+    prune: () => {},
+    dispose: () => {},
+  } satisfies AuthRateLimiter;
 }

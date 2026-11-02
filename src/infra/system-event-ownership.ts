@@ -8,12 +8,14 @@ import { emitHeartbeatEvent } from "./heartbeat-events.js";
 
 const stores = resolveGlobalSingleton<{
   resolve?: (sessionKey: string, agentId?: string) => string;
+  prepare?: (sessionKey: string, agentId?: string) => Promise<string>;
   owners: Map<symbol, () => void>;
 }>(
   Symbol.for("openclaw.systemEventStores"),
   () => ({ owners: new Map() }),
   () => {
     stores.resolve = undefined;
+    stores.prepare = undefined;
   },
   "close-only",
 );
@@ -24,6 +26,26 @@ export function getSystemEventStorePath(sessionKey: string, agentId?: string): s
   } catch {
     return undefined;
   }
+}
+
+/** Prepare the current owner's path without invoking its synchronous discovery fallback. */
+export function prepareSystemEventStorePath(
+  sessionKey: string,
+  agentId?: string,
+): Promise<string> | undefined {
+  const resolve = stores.resolve;
+  if (!resolve) {
+    return undefined;
+  }
+  const preparing = stores.prepare
+    ? stores.prepare(sessionKey, agentId)
+    : Promise.resolve(resolve(sessionKey, agentId));
+  return preparing.then((pathname) => {
+    if (stores.resolve !== resolve) {
+      throw new Error("System-event store owner changed during path preparation");
+    }
+    return pathname;
+  });
 }
 
 export function isSystemEventStoreCurrent(
@@ -39,9 +61,20 @@ export function isSystemEventStoreCurrent(
   );
 }
 
+/** A resumed operation must not discover a replacement owner's store on the host. */
+export function captureSystemEventStoreCurrentCheck(sessionKey: string, agentId?: string) {
+  const resolve = stores.resolve;
+  return (storePath: string | null | undefined) =>
+    stores.resolve === resolve && isSystemEventStoreCurrent(sessionKey, storePath, agentId);
+}
+
 /** The accepted Gateway store selection owns retirement; same-store handoff retains its facts. */
-export function publishSystemEventStoreResolver(resolve: typeof stores.resolve): void {
+export function publishSystemEventStoreResolver(
+  resolve: typeof stores.resolve,
+  prepare?: typeof stores.prepare,
+): void {
   stores.resolve = resolve;
+  stores.prepare = prepare;
   for (const retire of stores.owners.values()) {
     retire();
   }

@@ -2,9 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 export type AgentRunTerminalOutcome = "completed" | "failed";
 
-const AGENT_RUN_TERMINAL_OUTCOME: unique symbol = Symbol.for(
-  "openclaw.agentRunTerminalOutcome",
-) as never;
+const AGENT_RUN_TERMINAL_OUTCOME = Symbol.for("openclaw.agentRunTerminalOutcome");
 // Keep the existing SDK outcome carrier unchanged; diagnostics must stay out of JSON.
 const AGENT_RUN_TERMINAL_ERROR = Symbol.for("openclaw.agentRunTerminalError");
 

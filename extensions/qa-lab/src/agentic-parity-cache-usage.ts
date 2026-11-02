@@ -1,16 +1,8 @@
+import type { RuntimeId } from "./runtime-id.js";
 import type { RuntimeParityCacheMiss } from "./runtime-parity-cache-diagnostics.js";
-import type { RuntimeId, RuntimeParityUsage } from "./runtime-parity.js";
+import type { RuntimeParityUsage } from "./runtime-parity.js";
 
-export type QaRuntimeParityCacheUsage = {
-  totalTokens: number;
-  inputTokens: number;
-  outputTokens: number;
-  grossInputTokens: number | null;
-  uncachedInputTokens: number | null;
-  cachedInputTokens: number | null;
-  cacheWriteTokens: number | null;
-  cacheHitPercent: number | null;
-};
+export type QaRuntimeParityCacheUsage = ReturnType<typeof summarizeRuntimeParityCacheUsage>;
 
 type QaRuntimeParityCacheScenario = {
   openclawUsage: QaRuntimeParityCacheUsage | null;
@@ -22,7 +14,7 @@ export function summarizeRuntimeParityCacheUsage(
     RuntimeParityUsage,
     "inputTokens" | "outputTokens" | "totalTokens" | "cacheRead" | "cacheWrite"
   >,
-): QaRuntimeParityCacheUsage {
+) {
   const cachedInputTokens = usage.cacheRead ?? null;
   const cacheWriteTokens = usage.cacheWrite ?? null;
   const uncachedInputTokens =
@@ -60,21 +52,10 @@ export function aggregateRuntimeParityCacheUsage(
   const measuredCaptures = captures.filter(
     (capture) => capture.cachedInputTokens !== null && capture.cacheWriteTokens !== null,
   );
+  const hasMeasuredCaptures = measuredCaptures.length > 0;
   const inputTokens = captures.reduce((total, capture) => total + capture.inputTokens, 0);
   const outputTokens = captures.reduce((total, capture) => total + capture.outputTokens, 0);
   const totalTokens = captures.reduce((total, capture) => total + capture.totalTokens, 0);
-  if (measuredCaptures.length === 0) {
-    return {
-      inputTokens,
-      outputTokens,
-      totalTokens,
-      grossInputTokens: null,
-      uncachedInputTokens: null,
-      cachedInputTokens: null,
-      cacheWriteTokens: null,
-      cacheHitPercent: null,
-    };
-  }
   const cachedInputTokens = measuredCaptures.reduce(
     (total, capture) => total + (capture.cachedInputTokens ?? 0),
     0,
@@ -92,10 +73,10 @@ export function aggregateRuntimeParityCacheUsage(
     inputTokens,
     outputTokens,
     totalTokens,
-    grossInputTokens,
-    uncachedInputTokens,
-    cachedInputTokens,
-    cacheWriteTokens,
+    grossInputTokens: hasMeasuredCaptures ? grossInputTokens : null,
+    uncachedInputTokens: hasMeasuredCaptures ? uncachedInputTokens : null,
+    cachedInputTokens: hasMeasuredCaptures ? cachedInputTokens : null,
+    cacheWriteTokens: hasMeasuredCaptures ? cacheWriteTokens : null,
     cacheHitPercent: grossInputTokens > 0 ? (cachedInputTokens / grossInputTokens) * 100 : null,
   };
 }

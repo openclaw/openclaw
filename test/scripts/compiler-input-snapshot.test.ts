@@ -1,37 +1,36 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { ARTIFACT_CACHE_VERSION } from "../../scripts/lib/build-artifact-cache.mts";
 import { CompilerInputSnapshot } from "../../scripts/lib/compiler-input-snapshot.mts";
-import { createDeferred, withTestTimeout } from "../helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
+const linkType = process.platform === "win32" ? "junction" : "dir";
 
-function fixture() {
-  const root = roots.make("compiler-input-snapshot-");
-  const write = (file: string, bytes: string) => {
-    const filename = path.join(root, file);
-    fs.mkdirSync(path.dirname(filename), { recursive: true });
-    fs.writeFileSync(filename, bytes);
-  };
-  write("package.json", '{"type":"module"}');
-  write("pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
-  write("base.json", '{"compilerOptions":{"target":"ES2023","types":[]}}');
-  write("tsconfig.json", '{"extends":"./base.json","include":["src/**/*.ts"]}');
-  write("src/index.ts", "export const value = 1;\n");
-  write("tools/compiler.js", "export const compiler = 1;\n");
-  write("scripts/generator.mts", "export const generator = 1;\n");
-  write("packages/local/package.json", '{"name":"fixture-package","type":"module"}');
-  write("packages/local/src/index.ts", "export const dependency = 1;\n");
-  write("packages/local/dist/index.js", "export const built = 1;\n");
-  write(".cache/vitest/ignored.json", "{}");
+function write(root: string, file: string, bytes: string) {
+  const filename = path.join(root, file);
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
+  fs.writeFileSync(filename, bytes);
+}
+
+function fixture(root = roots.make("compiler-input-snapshot-")) {
+  const put = (file: string, bytes: string) => write(root, file, bytes);
+  put("package.json", '{"type":"module"}');
+  put("pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+  put("base.json", '{"compilerOptions":{"target":"ES2023","types":[]}}');
+  put("tsconfig.json", '{"extends":"./base.json","include":["src/**/*.ts"]}');
+  put("src/index.ts", "export const value = 1;\n");
+  put("tools/compiler.js", "export const compiler = 1;\n");
+  put("scripts/generator.mts", "export const generator = 1;\n");
+  put("packages/local/package.json", '{"name":"fixture-package","type":"module"}');
+  put("packages/local/src/index.ts", "export const dependency = 1;\n");
+  put("packages/local/dist/index.js", "export const built = 1;\n");
+  put(".cache/vitest/ignored.json", "{}");
   fs.mkdirSync(path.join(root, "node_modules"));
   const link = (target: string, name: string) =>
-    fs.symlinkSync(
-      path.join(root, target),
-      path.join(root, name),
-      process.platform === "win32" ? "junction" : "dir",
-    );
+    fs.symlinkSync(path.join(root, target), path.join(root, name), linkType);
   // The source alias is visited before the installed alias upgrades this tree.
   link("packages/local", "alias");
   link("packages/local", "node_modules/fixture-package");
@@ -44,118 +43,46 @@ function fixture() {
     });
   const signature = (input: CompilerInputSnapshot, outputRoot?: string) =>
     input.signature("tsconfig.json", ["fixture-compiler"], ["src/index.ts"], outputRoot);
-  return { root, write, snapshot, signature };
+  const record = (input: CompilerInputSnapshot, outputs: string[] = []) => ({
+    version: ARTIFACT_CACHE_VERSION,
+    signature: signature(input),
+    inputs: ["src/index.ts"],
+    outputs: Object.fromEntries(outputs.map((file) => [file, input.hash(file)])),
+  });
+  const matches = (saved: ReturnType<typeof record>, input = snapshot()) =>
+    input.matches(saved, "tsconfig.json", ["fixture-compiler"], Object.keys(saved.outputs));
+  return { root, write: put, snapshot, signature, record, matches };
 }
 
-function sealDiagnostic(before: CompilerInputSnapshot, after: CompilerInputSnapshot) {
-  let message = "";
-  try {
-    after.seal("tsconfig.json", ["fixture-compiler"], ["src/index.ts"], before, Date.now());
-  } catch (error) {
-    // Worker errors cross the process boundary as String(error), without custom fields.
-    message = String(error);
-  }
-  const prefix =
-    "Error: Boundary configuration or resolution topology changed during compilation: ";
-  expect(message.startsWith(prefix)).toBe(true);
-  const suffix = message.slice(prefix.length);
-  expect(Buffer.byteLength(suffix)).toBeLessThanOrEqual(4096);
-  return { suffix, detail: JSON.parse(suffix) };
-}
-
-it.each(["added", "removed"] as const)("identifies a %s namespace entry when sealing", (change) => {
+it.each([
+  ['{"compilerOptions":{"target":"invalid"},"include":["src/**/*.ts"]}', "TS6046"],
+  ['{"extends":"./missing.json","include":["src/**/*.ts"]}', "TS5083"],
+  ['{"compilerOptions": {', "TS1005"],
+])("rejects invalid native compiler configuration %s", (config, diagnostic) => {
   const f = fixture();
-  const filename = ".workflow-shell-fixture.mjs";
-  if (change === "removed") {
-    f.write(filename, "export {};\n");
-  }
-  const before = f.snapshot();
-  f.signature(before);
-  if (change === "added") {
-    f.write(filename, "export {};\n");
-  } else {
-    fs.unlinkSync(path.join(f.root, filename));
-  }
-  // Namespace remains the first rejection even when a later guard also differs.
-  f.write("tools/compiler.js", "export const compiler = 2;\n");
-  const after = f.snapshot();
-  f.signature(after);
-  const reader = vi.spyOn(fs, "readFileSync");
-  try {
-    expect(sealDiagnostic(before, after).detail).toEqual({
-      category: "namespace",
-      changes: [{ change, path: filename }],
-      omitted: 0,
-    });
-    expect(reader).not.toHaveBeenCalled();
-  } finally {
-    reader.mockRestore();
-  }
+  f.write("tsconfig.json", config);
+  expect(() => f.signature(f.snapshot())).toThrow(diagnostic);
 });
 
 it.each([
-  ["toolchain", "tools/compiler.js", "export const compiler = 2;\n"],
-  ["config", "base.json", '{"compilerOptions":{"target":"ES2022","types":[]}}'],
-  ["config-bytes", "base.json", '{ "compilerOptions": {"target":"ES2023","types":[]} }\n'],
-])(
-  "identifies a %s rejection without exposing configuration or tool bytes",
-  (category, file, bytes) => {
-    const f = fixture();
-    const before = f.snapshot();
-    f.signature(before);
-    f.write(file!, bytes!);
-    expect(sealDiagnostic(before, f.snapshot()).detail).toEqual({ category });
+  { file: "tools/compiler.js", bytes: "export const compiler = 2;\n" },
+  {
+    file: "base.json",
+    bytes: '{ "compilerOptions": {"target":"ES2023","types":[]} }\n',
   },
-);
-
-it.each(["ascii", "unicode", "controls"])(
-  "bounds and orders %s namespace diagnostics deterministically",
-  (kind) => {
-    const f = fixture();
-    const before = f.snapshot();
-    f.signature(before);
-    const segment =
-      kind === "ascii"
-        ? "x".repeat(80)
-        : kind === "unicode"
-          ? "😀".repeat(30)
-          : "\u0085\u202e\u2066\u2028".repeat(15);
-    const filenames = Array.from(
-      { length: 20 },
-      (_, index) => `added/${String(index).padStart(2, "0")}/${segment}/${segment}.mjs`,
-    );
-    for (const filename of filenames.toReversed()) {
-      f.write(filename, "export {};\n");
-    }
-    const first = sealDiagnostic(before, f.snapshot());
-    const second = sealDiagnostic(before, f.snapshot());
-    expect(second.suffix).toBe(first.suffix);
-    if (kind === "controls") {
-      expect(first.suffix).not.toMatch(/[\u0085\u202e\u2066\u2028]/u);
-      expect(first.suffix).toContain("\\u0085\\u202e\\u2066\\u2028");
-    }
-    const changes = first.detail.changes as { change: string; path: string }[];
-    expect(changes.length).toBeGreaterThan(0);
-    expect(changes.length).toBeLessThanOrEqual(16);
-    expect(first.detail.omitted).toBe(20 - changes.length);
-    expect(changes).toEqual(
-      filenames.slice(0, changes.length).map((file) => ({
-        change: "added",
-        path: file.length > 160 ? `${file.slice(0, 157)}...` : file,
-      })),
-    );
-    expect(changes.every(({ path: filename }) => filename.length <= 160)).toBe(true);
-  },
-);
-
-it("prepares the same ordered source and installed-alias namespace as synchronous readers", async () => {
+  { file: "packages/local/.tmp/package.json", bytes: '{"type":"commonjs"}' },
+  { file: "packages/local/package.json", bytes: '{"name":"fixture-package","type":"commonjs"}' },
+  { file: "scripts/generator.mts", bytes: "export const generator = 2;\n" },
+])("invalidates changed input $file", async ({ file, bytes }) => {
   const f = fixture();
-  const synchronous = f.snapshot();
-  const prepared = f.snapshot();
-  await prepared.prepare();
-  for (const outputRoot of [undefined, path.join(f.root, "packages/local/dist")]) {
-    expect(f.signature(prepared, outputRoot)).toBe(f.signature(synchronous, outputRoot));
-  }
+  const before = f.snapshot();
+  await before.prepare();
+  const original = f.signature(before);
+  f.write(file, bytes);
+  const after = f.snapshot();
+  await after.prepare();
+  expect(f.signature(after)).not.toBe(original);
+  expect(f.signature(after)).toBe(f.signature(f.snapshot()));
 });
 
 it("ignores checkout scratch packages that disappear during preparation", async () => {
@@ -184,30 +111,19 @@ it("ignores checkout scratch packages that disappear during preparation", async 
 it("preserves signatures across checkout depths with one shared external dependency", async () => {
   const directory = roots.make("compiler-input-snapshot-portability-");
   const dependency = path.join(directory, "shared-dependency");
-  fs.mkdirSync(dependency);
-  fs.writeFileSync(
-    path.join(dependency, "package.json"),
-    '{"name":"shared-dependency","type":"module"}',
-  );
-  fs.writeFileSync(path.join(dependency, "index.js"), "export const value = 1;\n");
+  write(dependency, "package.json", '{"name":"shared-dependency","type":"module"}');
+  write(dependency, "index.js", "export const value = 1;\n");
   const signatures: string[] = [];
   for (const root of [path.join(directory, "shallow"), path.join(directory, "deeper/checkout")]) {
-    fs.mkdirSync(path.join(root, "src"), { recursive: true });
-    fs.mkdirSync(path.join(root, "node_modules"));
-    fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
-    fs.writeFileSync(
-      path.join(root, "tsconfig.json"),
+    write(root, "package.json", '{"type":"module"}');
+    write(
+      root,
+      "tsconfig.json",
       '{"compilerOptions":{"target":"ES2023","types":[]},"include":["src/**/*.ts"]}',
     );
-    fs.writeFileSync(
-      path.join(root, "src/index.ts"),
-      'export { value } from "shared-dependency";\n',
-    );
-    fs.symlinkSync(
-      dependency,
-      path.join(root, "node_modules/shared-dependency"),
-      process.platform === "win32" ? "junction" : "dir",
-    );
+    write(root, "src/index.ts", 'export { value } from "shared-dependency";\n');
+    fs.mkdirSync(path.join(root, "node_modules"));
+    fs.symlinkSync(dependency, path.join(root, "node_modules/shared-dependency"), linkType);
     const snapshot = new CompilerInputSnapshot(root, {
       toolchainFiles: [],
       generatorInputs: ["package.json"],
@@ -221,6 +137,53 @@ it("preserves signatures across checkout depths with one shared external depende
   expect(signatures[1]).toBe(signatures[0]);
 });
 
+it("invalidates warm records when ancestor installs appear or disappear without reading their contents", async () => {
+  const directory = roots.make("compiler-input-snapshot-ancestor-");
+  const f = fixture(path.join(directory, "checkout"));
+  f.write("dist/index.d.ts", "export declare const value = 1;\n");
+  const record = (snapshot: CompilerInputSnapshot) => f.record(snapshot, ["dist/index.d.ts"]);
+  const { matches } = f;
+  const absent = record(f.snapshot());
+  expect(matches(absent)).toBe(true);
+
+  const install = path.join(directory, "node_modules");
+  fs.mkdirSync(install);
+  const after = f.snapshot();
+  await after.prepare();
+  expect(matches(absent, after)).toBe(false);
+  const present = record(after);
+  expect(matches(present)).toBe(true);
+
+  fs.mkdirSync(path.join(install, "external"));
+  fs.writeFileSync(path.join(install, "external/package.json"), '{"version":"1.0.0"}');
+  expect(matches(present)).toBe(true);
+  fs.writeFileSync(path.join(install, "external/package.json"), '{"version":"2.0.0"}');
+  expect(matches(present)).toBe(true);
+
+  fs.rmSync(install, { recursive: true });
+  expect(matches(present)).toBe(false);
+  expect(matches(absent)).toBe(true);
+});
+
+it.each(["dependency", "@scope/dependency"])(
+  "guards empty local package directory %s before acceptance and warm reuse",
+  (name) => {
+    const f = fixture();
+    const directory = path.join(f.root, "node_modules", name);
+    fs.mkdirSync(path.dirname(directory), { recursive: true });
+    const absent = f.record(f.snapshot());
+    fs.mkdirSync(directory);
+    const after = f.snapshot();
+    const present = f.record(after);
+    expect(f.matches(absent, after)).toBe(false);
+
+    fs.rmdirSync(directory);
+    const removed = f.snapshot();
+    expect(f.matches(present, removed)).toBe(false);
+    expect(f.matches(absent, removed)).toBe(true);
+  },
+);
+
 it("invalidates an indirect dependency symlink when its final target changes", async () => {
   const f = fixture();
   const outside = roots.make("compiler-input-snapshot-targets-");
@@ -230,16 +193,11 @@ it("invalidates an indirect dependency symlink when its final target changes", a
     [first, "first"],
     [second, "second"],
   ] as const) {
-    fs.mkdirSync(directory);
-    fs.writeFileSync(
-      path.join(directory, "package.json"),
-      '{"name":"external-fixture","type":"module"}',
-    );
-    fs.writeFileSync(path.join(directory, "source.js"), `export const value = "${value}";\n`);
+    write(directory, "package.json", '{"name":"external-fixture","type":"module"}');
+    write(directory, "source.js", `export const value = "${value}";\n`);
   }
   const indirect = path.join(outside, "indirect");
   const installed = path.join(f.root, "node_modules/external-fixture");
-  const linkType = process.platform === "win32" ? "junction" : "dir";
   fs.symlinkSync(first, indirect, linkType);
   fs.symlinkSync(indirect, installed, linkType);
   const originalLink = fs.readlinkSync(installed);
@@ -257,19 +215,14 @@ it("invalidates an indirect dependency symlink when its final target changes", a
   expect(fs.readFileSync(path.join(installed, "source.js"), "utf8")).toContain('"second"');
   expect(fs.readFileSync(inputs[0]!, "utf8")).toContain('"first"');
   expect(after.signature("tsconfig.json", [], inputs)).not.toBe(original);
-  const diagnostic = sealDiagnostic(before, after);
-  expect(diagnostic.detail).toEqual({
-    category: "namespace",
-    changes: [{ change: "changed", path: "node_modules/external-fixture" }],
-    omitted: 0,
-  });
-  for (const privatePath of [f.root, outside, first, second, indirect, originalLink]) {
-    expect(diagnostic.suffix).not.toContain(privatePath);
-  }
 });
 
-it("preloads sibling subtrees while the ordered visitor waits on a deeper directory", async () => {
-  const f = fixture();
+it("preloads sibling subtrees while the ordered visitor waits on a deeper directory", async ({
+  signal,
+  onTestFinished,
+}) => {
+  const testRoots = useAutoCleanupTempDirTracker(onTestFinished);
+  const f = fixture(testRoots.make("compiler-input-snapshot-preparation-"));
   f.write("fanout/a/deeper/input.ts", "export {};\n");
   f.write("fanout/b/deeper/input.ts", "export {};\n");
   f.write(".artifacts/ignored/input.ts", "export {};\n");
@@ -301,66 +254,36 @@ it("preloads sibling subtrees while the ordered visitor waits on a deeper direct
   });
   const snapshot = f.snapshot();
   const preparation = snapshot.prepare();
+  let cleanup: Promise<void> | undefined;
+  const finishPreparation = () =>
+    (cleanup ??= (async () => {
+      release.resolve();
+      try {
+        await preparation;
+      } finally {
+        reader.mockRestore();
+      }
+    })());
+  // Vitest runs these hooks in reverse order, after afterEach: join before removing inputs.
+  onTestFinished(finishPreparation);
   try {
-    await withTestTimeout(
-      Promise.all([heldStarted.promise, siblingStarted.promise]),
-      5_000,
-      "preparation serialized the independent directory subtrees",
+    await withinTest(
+      awaitGateBeforeSettlement(
+        Promise.all([heldStarted.promise, siblingStarted.promise]),
+        preparation,
+        "preparation serialized the independent directory subtrees",
+      ),
+      signal,
     );
     expect(peak).toBeLessThanOrEqual(16);
   } finally {
-    release.resolve();
-    try {
-      await preparation;
-    } finally {
-      reader.mockRestore();
-    }
+    await finishPreparation();
   }
   expect(active).toBe(0);
   expect(observed.has(path.join(f.root, ".artifacts"))).toBe(false);
   expect(observed.has(path.join(f.root, ".cache/vitest"))).toBe(false);
-  expect(f.signature(snapshot)).toBe(f.signature(f.snapshot()));
-});
-
-it.each([
-  ["source addition", "src/shadow.ts", "export const shadow = 1;\n"],
-  ["package addition", "src/package.json", '{"type":"commonjs"}'],
-  ["nested workspace metadata", "packages/local/.tmp/package.json", '{"type":"commonjs"}'],
-  [
-    "installed package metadata",
-    "packages/local/package.json",
-    '{"name":"fixture-package","type":"commonjs"}',
-  ],
-  ["inherited config", "base.json", '{"compilerOptions":{"target":"ES2022","types":[]}}'],
-  ["generator input", "scripts/generator.mts", "export const generator = 2;\n"],
-  ["compiler input", "tools/compiler.js", "export const compiler = 2;\n"],
-])("retains invalidation after a %s change", async (_label, filename, bytes) => {
-  const f = fixture();
-  const before = f.snapshot();
-  await before.prepare();
-  const original = f.signature(before);
-  f.write(filename!, bytes!);
-  const after = f.snapshot();
-  await after.prepare();
-
-  expect(f.signature(after)).not.toBe(original);
-  expect(f.signature(after)).toBe(f.signature(f.snapshot()));
-});
-
-it("rejects metadata changed during asynchronous preparation", async () => {
-  const f = fixture();
-  const metadata = path.join(f.root, "package.json");
-  const read = fs.promises.readFile.bind(fs.promises);
-  const reader = vi.spyOn(fs.promises, "readFile").mockImplementation(async (...args) => {
-    const bytes = await read(...args);
-    if (args[0] === metadata) {
-      fs.appendFileSync(metadata, "\n");
-    }
-    return bytes;
-  });
-  try {
-    await expect(f.snapshot().prepare()).rejects.toThrow("Boundary input changed while reading");
-  } finally {
-    reader.mockRestore();
+  const synchronous = f.snapshot();
+  for (const outputRoot of [undefined, path.join(f.root, "packages/local/dist")]) {
+    expect(f.signature(snapshot, outputRoot)).toBe(f.signature(synchronous, outputRoot));
   }
 });
