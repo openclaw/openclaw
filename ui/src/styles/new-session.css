@@ -1198,6 +1198,22 @@ span.new-session-page__select {
   .new-session-page .agent-chat__hint {
     display: none;
   }
+
+  /* No room for a hint here, so the status line floats under the name instead
+     of adding a row to the identity. */
+  .new-session-page .agent-chat__welcome-identity-copy {
+    position: relative;
+  }
+
+  .new-session-page--incognito .agent-chat__hint {
+    position: absolute;
+    top: 100%;
+    display: block;
+  }
+
+  .new-session-page--incognito .new-session-page__welcome-hint-text {
+    display: none;
+  }
 }
 
 @media (max-width: 560px) {
@@ -1557,4 +1573,93 @@ span.new-session-page__select {
 
 .new-session-page__fixed-machine span:last-child {
   color: var(--muted);
+}
+
+/* Docked layout only: the hint's slot says Incognito is on and keeps the note a
+   tap away, so turning Incognito on or off moves nothing on the page. */
+.new-session-page__incognito-status {
+  display: none;
+}
+
+.oc-popover.new-session-page__incognito-note {
+  width: min(320px, calc(100vw - 32px));
+  padding: 12px 14px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: start;
+  white-space: normal;
+}
+
+.new-session-page__incognito-note p {
+  margin: 0;
+}
+
+.new-session-page__incognito-note p + p {
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .new-session-page__incognito-toggle--active.shell-chrome-controls__button {
+    width: 40px;
+    padding-inline: 0;
+  }
+
+  .new-session-page__incognito-toggle-label {
+    display: none;
+  }
+
+  /* Still announced as a status; the note itself lives in the popover. */
+  .new-session-page__incognito-notice--visible {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .new-session-page__welcome-hint {
+    display: grid;
+    justify-items: center;
+  }
+
+  .new-session-page__welcome-hint > * {
+    grid-area: 1 / 1;
+  }
+
+  .new-session-page--incognito .new-session-page__welcome-hint-text {
+    visibility: hidden;
+  }
+
+  .new-session-page--incognito .new-session-page__incognito-status {
+    display: inline-flex;
+    align-items: center;
+    align-self: center;
+    gap: 5px;
+    min-height: 32px;
+    margin-block: -8px;
+    padding: 0 6px;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    touch-action: manipulation;
+  }
+
+  .new-session-page__incognito-status svg {
+    width: 14px;
+    height: 14px;
+  }
+}
+
+/* The identity sits in a row here, off-center, so the note keeps its distance from the edge. */
+@container new-session (max-width: 932px) and (max-height: 500px) {
+  .oc-popover.new-session-page__incognito-note {
+    width: min(280px, calc(100vw - 48px));
+  }
 }

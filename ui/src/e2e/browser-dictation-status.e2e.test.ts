@@ -126,7 +126,7 @@ suite.define(() => {
             },
           });
           const microphone = button(page, "Dictation", true);
-          await button(page, "Stop generating", true).waitFor();
+          await button(page, "Stop", true).waitFor();
           await page
             .locator('[data-chat-talk-capability="dictation"]')
             .waitFor({ state: "detached" });

@@ -1,37 +1,42 @@
 import type { AssistantMessage, Context } from "@openclaw/llm-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
-import { configureAiTransportHost, getAiTransportHost } from "../../../packages/ai/src/host.js";
-import { makeProviderModel } from "../../../packages/ai/src/providers/provider-model.test-support.js";
-import { cleanupSessionResources } from "../../../packages/ai/src/session-resources.js";
-import { createOpenAIResponsesTransportStreamFn } from "../../../packages/ai/src/transports/openai-responses-client.js";
+import { buildOpenAIProvider } from "../extensions/openai/api.js";
+import { configureAiTransportHost, getAiTransportHost } from "../packages/ai/src/host.js";
+import { makeProviderModel } from "../packages/ai/src/providers/provider-model.test-support.js";
+import { cleanupSessionResources } from "../packages/ai/src/session-resources.js";
+import { createOpenAIResponsesTransportStreamFn } from "../packages/ai/src/transports/openai-responses-client.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
-} from "../../../packages/ai/src/transports/openai-responses-compaction-replay.js";
-import { readResponsesInputReplayState } from "../../../packages/ai/src/transports/openai-responses-input-replay.js";
-import type { SdkResponse } from "../../../packages/ai/src/transports/openai-responses-sdk.test-support.js";
+} from "../packages/ai/src/transports/openai-responses-compaction-replay.js";
+import { readResponsesInputReplayState } from "../packages/ai/src/transports/openai-responses-input-replay.js";
+import type { SdkResponse } from "../packages/ai/src/transports/openai-responses-sdk.test-support.js";
 import {
   completedResponse,
   userMessage,
   wireMessage,
-} from "../../../packages/ai/src/transports/openai-stream-cases.test-support.js";
-import { AssistantMessageEventStream } from "../../../packages/ai/src/utils/event-stream.js";
+} from "../packages/ai/src/transports/openai-stream-cases.test-support.js";
+import { AssistantMessageEventStream } from "../packages/ai/src/utils/event-stream.js";
+import { resolveModelCyberAccessProgramDefault } from "../src/agents/model-catalog-access-programs.js";
+import { createResourceLoader } from "../src/agents/sessions/agent-session-loop-resource-loader.test-support.js";
+import { AuthStorage } from "../src/agents/sessions/auth-storage.js";
+import type {
+  BeforeProviderRequestEvent,
+  ExtensionAPI,
+} from "../src/agents/sessions/extensions/types.js";
+import { ModelRegistry } from "../src/agents/sessions/model-registry.js";
+import { createAgentSession } from "../src/agents/sessions/sdk.js";
+import { SessionManager } from "../src/agents/sessions/session-manager.js";
+import { text, toolResult } from "../src/agents/sessions/session-message-fixtures.test-support.js";
+import { SettingsManager } from "../src/agents/sessions/settings-manager.js";
+import { createZeroUsageFixture } from "../src/agents/test-helpers/usage-fixtures.js";
 import {
   createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAITextVerbosityWrapper,
-} from "../../llm/providers/stream-wrappers/openai.js";
-import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
-import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
-import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
-import { AuthStorage } from "./auth-storage.js";
-import type { BeforeProviderRequestEvent, ExtensionAPI } from "./extensions/types.js";
-import { ModelRegistry } from "./model-registry.js";
-import { createAgentSession } from "./sdk.js";
-import { SessionManager } from "./session-manager.js";
-import { text, toolResult } from "./session-message-fixtures.test-support.js";
-import { SettingsManager } from "./settings-manager.js";
+} from "../src/llm/providers/stream-wrappers/openai.js";
+import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../src/shared/immutable-data.js";
 
 const sdk = vi.hoisted(() => ({
   outcomes: [] as SdkResponse[],
@@ -39,7 +44,7 @@ const sdk = vi.hoisted(() => ({
 }));
 vi.mock("openai", async () => {
   const { createResponsesSdkMock } =
-    await import("../../../packages/ai/src/transports/openai-responses-sdk.test-support.js");
+    await import("../packages/ai/src/transports/openai-responses-sdk.test-support.js");
   return createResponsesSdkMock(sdk);
 });
 
@@ -73,7 +78,7 @@ async function createSession() {
   const auth = AuthStorage.inMemory();
   auth.setRuntimeApiKey(model.provider, "synthetic-key");
   const registry = ModelRegistry.inMemory(auth);
-  const stream = createOpenAITextVerbosityWrapper(
+  const coreStream = createOpenAITextVerbosityWrapper(
     createOpenAIFastModeWrapper(
       createOpenAIResponsesContextManagementWrapper(createOpenAIResponsesTransportStreamFn(), {
         responsesServerCompaction: false,
@@ -81,10 +86,25 @@ async function createSession() {
     ),
     "low",
   );
+  const cyber = resolveModelCyberAccessProgramDefault({
+    config: {},
+    provider: model.provider,
+    modelId: model.id,
+    runtimeId: "openclaw",
+    route: {
+      api: model.api,
+      baseUrl: model.baseUrl,
+      authRequirement: "api-key",
+      requestTransportOverrides: "none",
+    },
+  });
+  expect(cyber).toBe("standard");
+  const wrapStreamFn = buildOpenAIProvider().wrapStreamFn;
+  assert(wrapStreamFn);
   registry.registerProvider(model.provider, {
     api: model.api,
     streamSimple: (...args) => {
-      const result = stream(...args);
+      const result = coreStream(...args);
       assert(result instanceof AssistantMessageEventStream);
       return result;
     },
@@ -103,6 +123,16 @@ async function createSession() {
       retry: { enabled: false },
     }),
   });
+  const stream = wrapStreamFn({
+    provider: model.provider,
+    modelId: model.id,
+    model,
+    streamFn: session.agent.streamFn,
+    nativeWebSearchAllowedByToolPolicy: false,
+    extraParams: { accessPrograms: { cyber } },
+  });
+  assert(stream);
+  session.agent.streamFn = stream;
   const checkpoint = assistant([]);
   captureOpenAIResponsesCompaction(
     checkpoint,
@@ -161,6 +191,7 @@ it("keeps session prefixes reusable while extension payload handlers change", as
       )?.prefixHash;
       expect(fingerprint).toBeTypeOf("string");
       const input = sdk.requests.at(-1)?.input as Array<{ type: string; output?: string }>;
+      expect(sdk.requests.at(-1)?.access_programs).toEqual({ cyber: "standard" });
       return {
         encodings,
         fingerprint,
