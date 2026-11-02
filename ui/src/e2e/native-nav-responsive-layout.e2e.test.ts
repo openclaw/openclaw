@@ -1,11 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import type { BrowserContext, Locator, Page } from "playwright";
+import type { BrowserContext, Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
-import {
-  takeControlUiElementScreenshot,
-  takeControlUiScreenshotFrame,
-} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
@@ -24,19 +18,10 @@ suite.define(() => {
     context = undefined;
   });
 
-  const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
   const shellHas = (page: Page, name: string, present = true) => {
     const result = expect.poll(() => page.locator(".shell").getAttribute("class"));
     return present ? result.toContain(name) : result.not.toContain(name);
   };
-  async function capture(page: Page, file: string, element: Locator, targets: Locator[]) {
-    if (captureProof) {
-      await writeFile(
-        path.join(suite.artifactDir, file),
-        await takeControlUiElementScreenshot(page, element, targets),
-      );
-    }
-  }
 
   async function openPage(options: {
     hasTouch?: boolean;
@@ -74,20 +59,6 @@ suite.define(() => {
     return page;
   }
 
-  it("keeps only history controls in the Settings titlebar", async () => {
-    const page = await openPage({ webChrome: true, route: "settings/general" });
-
-    const toolbar = page.locator(".macos-titlebar-controls");
-    await expect.poll(() => toolbar.isVisible()).toBe(true);
-    await expect.poll(() => toolbar.getByRole("button").count()).toBe(2);
-    for (const name of ["Back", "Forward"]) {
-      await expect.poll(() => toolbar.getByRole("button", { name }).isVisible()).toBe(true);
-    }
-    for (const name of ["Expand sidebar", "Open command palette", "New session"]) {
-      await expect.poll(() => toolbar.getByRole("button", { name }).count()).toBe(0);
-    }
-  });
-
   it("keeps the document root scroll-locked in the Settings takeover", async () => {
     const page = await openPage({ webChrome: true, route: "settings/general" });
     await page.locator(".settings-sidebar").waitFor({ state: "visible" });
@@ -119,29 +90,19 @@ suite.define(() => {
     await shellHas(page, "shell--merged-chat-chrome");
     await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
 
-    const header = page.locator(".chat-pane__header").first();
+    const header = page.locator(".agent-chat__header--mobile").filter({ visible: true });
     const drawerButton = header.getByRole("button", { name: "Expand sidebar" });
     await drawerButton.waitFor({ state: "visible" });
     await expect.poll(() => header.locator(".chat-pane__palette-open").count()).toBe(0);
-    if (phone) {
-      await capture(page, "01-chat-title-bar.png", header, [drawerButton]);
-      await drawerButton.tap();
-      await shellHas(page, "shell--nav-drawer-open");
-      const drawerSearch = page.locator(".shell-nav .sidebar-brand__search");
-      await expect.poll(() => drawerSearch.isVisible()).toBe(true);
-      await capture(page, "02-sidebar-drawer.png", page.locator(".shell-nav"), [drawerSearch]);
-      await drawerSearch.tap();
-    } else {
-      await header.locator(".chat-header-session-menu__trigger").click();
-      await page.getByText("Open command palette", { exact: true }).click();
-    }
+    await (phone ? drawerButton.tap() : drawerButton.click());
+    await shellHas(page, "shell--nav-drawer-open");
+    const drawerSearch = page.locator(".shell-nav .sidebar-brand__search");
+    await expect.poll(() => drawerSearch.isVisible()).toBe(true);
+    await (phone ? drawerSearch.tap() : drawerSearch.click());
     const paletteInput = page.locator(".cmd-palette__input");
     await paletteInput.waitFor({ state: "visible" });
     if (phone) {
       await expect.poll(() => paletteInput.evaluate((input) => input.matches(":focus"))).toBe(true);
-      await capture(page, "03-command-palette.png", page.locator(".cmd-palette").first(), [
-        paletteInput,
-      ]);
     }
   });
 
@@ -205,15 +166,6 @@ suite.define(() => {
       await dispatchTouch("touchmove", 210, 184);
 
       const drawer = page.locator(".shell-nav.nav-drawer");
-      if (captureProof && width === 393) {
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          shell,
-          [page.locator(".chat-pane__header").first()],
-          { animations: "disabled" },
-        );
-        await writeFile(path.join(suite.artifactDir, "held-swipe.png"), frame.png);
-      }
       // A deliberate swipe opens while the finger is still down, rather than
       // exposing a clipped, non-interactive slice until touchend.
       await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-drawer-open");

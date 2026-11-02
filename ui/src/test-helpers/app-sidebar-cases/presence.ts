@@ -14,18 +14,20 @@ import { settleLitElement } from "../lit-settle.ts";
 import { flush } from "../solid-settle.ts";
 import "../../components/app-sidebar.tsx";
 
-await import("../../components/viewer-facepile.ts");
+await import("../../components/solid/viewer-facepile.tsx");
 
 async function mountOnlineSidebar(...args: Parameters<typeof mountSidebar>) {
   const mounted = await mountSidebar(...args);
   await selectSidebarView(mounted.sidebar, "online");
+  await vi.dynamicImportSettled();
+  await mounted.sidebar.updateComplete;
   return mounted;
 }
 
 describe("AppSidebar viewer presence", () => {
   it.each([
     ["profile-bob", "bob"],
-    ["gateway-owner", "Shared owner"],
+    ["gateway-owner", "bob · Shared owner"],
   ])("shows presence and offline owner %s while excluding self", async (ownerId, ownerName) => {
     const client = { instanceId: "self-instance" } as GatewayBrowserClient;
     const gateway = createGatewayHarness(client);
@@ -262,7 +264,7 @@ describe("AppSidebar viewer presence", () => {
     expect(aliceRow.getAttribute("href")).toBe("/activity/alice");
     expect(aliceRow.closest(".sidebar-online__row")?.querySelectorAll("a")).toHaveLength(1);
     expect(
-      aliceRow.closest(".sidebar-online__row")?.querySelector('button[aria-label="Pin"]'),
+      aliceRow.closest(".sidebar-online__row")?.querySelector('button[aria-haspopup="menu"]'),
     ).not.toBeNull();
     expect(document.querySelector(".person-activity-hovercard")).toBeNull();
 
@@ -450,7 +452,6 @@ describe("AppSidebar viewer presence", () => {
         expect(document.querySelector("openclaw-elapsed-time")?.textContent).toBeTruthy(),
       );
       const elapsed = document.querySelector("openclaw-elapsed-time")!;
-      await elapsed.updateComplete;
       const cardIntervals = scheduleInterval.mock.results
         .filter((result) => result.type === "return")
         .map((result) => result.value);
@@ -480,7 +481,7 @@ describe("AppSidebar viewer presence", () => {
       await vi.waitFor(() =>
         expect(document.querySelector(".person-activity-hovercard")).toBeNull(),
       );
-      // The bridge waits one microtask before disposing a disconnected view.
+      // The hovercard waits one microtask before disposing a disconnected view.
       await Promise.resolve();
       expect(elapsed.isConnected).toBe(false);
       for (const interval of cardIntervals) {
@@ -627,14 +628,14 @@ describe("AppSidebar viewer presence", () => {
       [...(sessionFacepile?.querySelectorAll<HTMLElement>("[data-viewer-id]") ?? [])].map(
         (avatar) => avatar.dataset.viewerId,
       ),
-    ).toEqual(["alice", "bob", "carol"]);
-    expect(sessionFacepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+3");
+    ).toEqual(["alice", "bob"]);
+    expect(sessionFacepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+4");
     expect(sessionFacepile?.querySelector('[data-viewer-id="alice"] img')).not.toBeNull();
     expect(
       [...(sessionFacepile?.querySelectorAll("openclaw-tooltip") ?? [])].map(
         (tooltip) => (tooltip as HTMLElement & { content?: string }).content,
       ),
-    ).toEqual(["Alice", "bob@example.test", "Carol", "Dave\nErin\nFrank"]);
+    ).toEqual(["Alice", "bob@example.test", "Carol\nDave\nErin\nFrank"]);
 
     const identityCard = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
     expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(

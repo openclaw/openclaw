@@ -1,10 +1,5 @@
 import path from "node:path";
-import {
-  createVisibleAssistantResultEventMatcher,
-  matchesTranscriptEvent,
-  type SessionTranscriptEventMatch,
-} from "../../sessions/transcript-visible-record.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import type { SessionTranscriptEventMatch } from "../../sessions/transcript-visible-record.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type {
@@ -12,75 +7,41 @@ import type {
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import {
-  findTranscriptEventInDatabase,
-  readTranscriptEventId,
-} from "./session-accessor.sqlite-read.js";
-import {
   prepareSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
 import { readRestoredSessionTranscriptInWorker } from "./session-cold-storage-read.js";
-import type { SessionTranscriptEventMatchRequest } from "./session-transcript-worker-read.types.js";
+import type { SessionTranscriptMatchCaller } from "./session-history-read.types.js";
+import { isSessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
-
-/** Select one record inside the caller's existing SQLite snapshot. */
-export function findTranscriptEventMatchingInDatabase(
-  database: Pick<OpenClawAgentDatabase, "db" | "path">,
-  request: SessionTranscriptEventMatchRequest,
-): { event: TranscriptEvent } | undefined {
-  const { target, match } = request;
-  const matchesVisibleFinal =
-    match.kind === "visible-final"
-      ? createVisibleAssistantResultEventMatcher(match.runId)
-      : undefined;
-  const matches = (event: TranscriptEvent) => {
-    const entryId = readTranscriptEventId(event);
-    return (
-      (matchesVisibleFinal ? matchesVisibleFinal(event) : matchesTranscriptEvent(event, match)) &&
-      (match.kind !== "active-assistant" ||
-        Boolean(
-          entryId &&
-          target.sessionKey &&
-          readActiveTranscriptEntryAnchorInTransaction({
-            database,
-            resolved: { ...target, sessionKey: target.sessionKey },
-            entryId,
-          }),
-        ))
-    );
-  };
-  return findTranscriptEventInDatabase(
-    database,
-    target.sessionId,
-    matches,
-    match.kind === "latest"
-      ? undefined
-      : (event) => matchesTranscriptEvent(event, match, "navigation"),
-  );
-}
 
 /** Disk reads and matching belong to the existing read-only history worker. */
 export async function findTranscriptEvent(
   scope: SessionTranscriptReadScope,
   match: SessionTranscriptEventMatch,
+  signal?: AbortSignal,
+  caller?: SessionTranscriptMatchCaller,
 ): Promise<{ event: TranscriptEvent } | undefined> {
-  const memory = captureSessionActorTranscriptRead(scope);
+  signal?.throwIfAborted();
+  const selection = { ...match };
+  const memory = captureSessionActorTranscriptRead(scope, signal);
   if (memory) {
-    return memory.missing
+    const result = memory.missing
       ? undefined
-      : (await memory.read("session.history.match", { match })).result;
+      : (await memory.read("session.history.match", { match: selection })).result;
+    memory.assertCurrent();
+    return result;
   }
   const captured = {
     ...scope,
     ...(scope.storePath ? { storePath: path.resolve(scope.storePath) } : {}),
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
-  const selection = { ...match };
   const context = captureOpenClawStateWorkerContext({ env: captured.env });
   const assertStateCurrent = () => {
+    signal?.throwIfAborted();
     context.maintenanceScope?.assertAdmission();
     context.admission.assertCurrent();
   };
@@ -97,8 +58,19 @@ export async function findTranscriptEvent(
     try {
       return await readRestoredSessionTranscriptInWorker(
         { scope: captured, resolved: target, owner, assertCurrent },
-        () => owner.findTranscriptEvent({ target, match: selection }),
+        () => owner.findTranscriptEvent({ target, match: selection, caller }, signal),
       );
+    } catch (error) {
+      if (
+        selection.kind === "canvas-widget" &&
+        isSessionTranscriptProjectionUnavailableError(error)
+      ) {
+        const { startSessionTranscriptIndexReconcile } =
+          await import("./session-transcript-reconcile.js");
+        assertCurrent();
+        startSessionTranscriptIndexReconcile({ ...options, preferredSessionId: target.sessionId });
+      }
+      throw error;
     } finally {
       assertCurrent();
     }

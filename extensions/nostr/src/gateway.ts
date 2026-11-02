@@ -18,7 +18,6 @@ import {
   sanitizeAssistantVisibleText,
   stripMarkdown,
 } from "openclaw/plugin-sdk/text-chunking";
-import type { MetricEvent } from "./metrics.js";
 import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
 import { normalizePubkey } from "./nostr-key-utils.js";
 import { getNostrRuntime } from "./runtime.js";
@@ -258,8 +257,7 @@ export async function startNostrGatewayAccount(
         },
         onConnect: (relay) => {
           connectedRelays.add(normalizeRelayLifecycleKey(relay));
-          // Treat >=1 connected relay as ready. This favors partial availability over quorum
-          // fidelity; circuit-breaker health stays private to nostr-bus, so ready is not all-relays.
+          // One connected relay is enough for partial availability, not an all-relay quorum.
           ctx.setStatus(channelReadyPatch({ accountId: account.accountId }));
           ctx.log?.debug?.(`[${account.accountId}] Connected to relay: ${relay}`);
         },
@@ -277,22 +275,8 @@ export async function startNostrGatewayAccount(
         onEose: (relays) => {
           ctx.log?.debug?.(`[${account.accountId}] EOSE received from relays: ${relays}`);
         },
-        onMetric: (event: MetricEvent) => {
-          if (event.name.startsWith("event.rejected.")) {
-            ctx.log?.debug?.(
-              `[${account.accountId}] Metric: ${event.name} ${JSON.stringify(event.labels)}`,
-            );
-          } else if (event.name === "relay.circuit_breaker.open") {
-            ctx.log?.warn?.(
-              `[${account.accountId}] Circuit breaker opened for relay: ${event.labels?.relay}`,
-            );
-          } else if (event.name === "relay.circuit_breaker.close") {
-            ctx.log?.info?.(
-              `[${account.accountId}] Circuit breaker closed for relay: ${event.labels?.relay}`,
-            );
-          } else if (event.name === "relay.error") {
-            ctx.log?.debug?.(`[${account.accountId}] Relay error: ${event.labels?.relay}`);
-          }
+        onRejected: (reason) => {
+          ctx.log?.debug?.(`[${account.accountId}] Event rejected: ${reason}`);
         },
       });
       activeBuses.set(account.accountId, bus);
@@ -339,10 +323,12 @@ export const nostrPairingTextAdapter = {
     message: string;
     accountId?: string;
   }) => {
-    const bus = activeBuses.get(accountId ?? resolveDefaultNostrAccountId(cfg));
-    if (bus) {
-      await bus.sendDm(id, message);
+    const aid = accountId ?? resolveDefaultNostrAccountId(cfg);
+    const bus = activeBuses.get(aid);
+    if (!bus) {
+      throw new Error(`Nostr bus not running for account ${aid}`);
     }
+    await bus.sendDm(id, message);
   },
 };
 
@@ -394,6 +380,6 @@ export const nostrOutboundAdapter = {
   },
 } satisfies ChannelOutboundAdapter;
 
-export function getActiveNostrBuses(): Map<string, NostrBusHandle> {
-  return new Map(activeBuses);
+export function getActiveNostrBuses(): ReadonlyMap<string, NostrBusHandle> {
+  return activeBuses;
 }

@@ -1,6 +1,4 @@
-import { isDeepStrictEqual } from "node:util";
 import { isRestartEnabled } from "../config/commands.flags.js";
-import { getConfigValueAtPath } from "../config/config-paths.js";
 import { setRuntimeConfigAppliedHash } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart-budget.js";
@@ -9,60 +7,28 @@ import {
   type RestartDeferralHandle,
   setGatewayRestartPolicy,
 } from "../infra/restart.js";
-import { createAppliedConfigHashPublisher } from "./applied-config-hash-publisher.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import type { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
-import {
-  GatewayConfigReloadSupersededError,
-  type AcceptedRestartTarget,
-  type AcceptedRestartTargetOwnership,
-  type GatewayReloadHandlerParams,
-  type GatewayRestartRequestOptions,
-  type GatewayRestartTransactionResult,
-  type GatewayRestartTransactionState,
+import type {
+  GatewayReloadHandlerParams,
+  GatewayRestartRequestOptions,
+  GatewayRestartTransactionResult,
+  GatewayRestartTransactionState,
 } from "./server-reload-contracts.js";
-import { isCurrentGatewayReloadGeneration } from "./server-reload-generation.js";
 
-type RestartRequestDetails = {
-  plan: GatewayReloadPlan;
-  nextConfig: OpenClawConfig;
-  restartOwnedPaths: string[];
-  retainDebtAcrossConfigChanges: boolean;
+type GatewayRestartOperation = {
+  kind: "lifecycle" | "request";
+  state: GatewayRestartTransactionState;
 };
 
-type GatewayRestartOperation =
-  | { kind: "idle" }
-  | {
-      kind: "lifecycle";
-      transaction: { state: GatewayRestartTransactionState };
-    }
-  | {
-      kind: "request";
-      transaction: { state: GatewayRestartTransactionState };
-      details: RestartRequestDetails;
-      emissionSettled: boolean;
-    };
-
-type AcceptedRestartTargetState =
-  | { kind: "empty" }
-  | {
-      kind: "candidate-pending";
-      previousTarget: AcceptedRestartTarget | undefined;
-    }
-  | {
-      kind: "accepted";
-      target: AcceptedRestartTarget;
-    };
-
-type GatewayRestartCoordinatorParams = Pick<
-  GatewayReloadHandlerParams,
-  "scheduler" | "assertRestartReady" | "logReload" | "requestRecoveryRestart"
->;
-
 type GatewayRestartCoordinatorOptions = {
-  params: GatewayRestartCoordinatorParams;
-  myGeneration: number;
+  params: Pick<
+    GatewayReloadHandlerParams,
+    "scheduler" | "assertRestartReady" | "logReload" | "requestRecoveryRestart"
+  >;
+  reloadSignal: AbortSignal;
   restartRecoveryAvailable: boolean;
+  hasAcceptedRestart?: () => boolean;
 } & Pick<
   ReturnType<typeof createGatewayActiveWorkTracker>,
   "getActiveCounts" | "formatActiveDetails" | "formatDeferredWorkStatus"
@@ -71,148 +37,52 @@ type GatewayRestartCoordinatorOptions = {
 class GatewayRestartTransaction {
   private stopped = false;
   private restartDeferral: RestartDeferralHandle | null = null;
-  private requestGeneration = 0;
-  // onReady/onTimeout precede async restart preparation. Keep committed details
-  // debt-eligible until the emitter confirms this generation won.
-  private operation: GatewayRestartOperation = { kind: "idle" };
-  private pausedDebt: RestartRequestDetails | null = null;
-  // Post-commit recovery is satisfied only by an accepted restart emission.
-  // Keep it separate from config-owned debt that later baselines may retire.
-  private conservativeDebt: RestartRequestDetails | null = null;
-  private acceptedTargetState: AcceptedRestartTargetState = { kind: "empty" };
+  private operation: GatewayRestartOperation | undefined;
+  private deferredHash: string | null = null;
 
-  readonly appliedConfigHashPublisher = createAppliedConfigHashPublisher({
-    hasPendingRestart: () =>
-      this.operation.kind === "request" ||
-      this.pausedDebt !== null ||
-      this.conservativeDebt !== null,
-    publish: setRuntimeConfigAppliedHash,
-  });
+  readonly hasOutstandingGatewayRestart = () =>
+    !this.stopped &&
+    (this.operation?.kind === "request" || this.options.hasAcceptedRestart?.() === true);
+
+  readonly publishAppliedConfigHash = (hash: string) => {
+    // Keep the newest hot-only revision private until existing restart debt retires.
+    if (this.hasOutstandingGatewayRestart()) {
+      this.deferredHash = hash;
+      return;
+    }
+    this.deferredHash = null;
+    setRuntimeConfigAppliedHash(hash);
+  };
+
+  readonly publishDeferredAppliedConfigHash = () => {
+    if (this.deferredHash !== null) {
+      this.publishAppliedConfigHash(this.deferredHash);
+    }
+  };
 
   constructor(private readonly options: GatewayRestartCoordinatorOptions) {}
 
   readonly isStopped = () => this.stopped;
-  readonly hasPendingConfigCandidate = () => this.acceptedTargetState.kind === "candidate-pending";
-  readonly hasOperation = () => this.operation.kind !== "idle";
-  readonly getAcceptedTarget = (): AcceptedRestartTarget | null =>
-    this.acceptedTargetState.kind === "accepted" ? this.acceptedTargetState.target : null;
-
-  recordAcceptedTarget(target: AcceptedRestartTarget): AcceptedRestartTargetOwnership {
-    const acceptedTarget: AcceptedRestartTarget = {
-      ...target,
-      prepareRuntimeConfig: async () => {
-        if (this.acceptedTargetState !== acceptedState) {
-          throw new GatewayConfigReloadSupersededError();
-        }
-        const prepared = await target.prepareRuntimeConfig();
-        if (this.acceptedTargetState !== acceptedState) {
-          throw new GatewayConfigReloadSupersededError();
-        }
-        return prepared;
-      },
-    };
-    const acceptedState = { kind: "accepted", target: acceptedTarget } as const;
-    this.acceptedTargetState = acceptedState;
-    return {
-      reject: () => {
-        const state = this.acceptedTargetState;
-        const ownsAcceptedTarget =
-          (state.kind === "accepted" && state.target === acceptedTarget) ||
-          (state.kind === "candidate-pending" && state.previousTarget === acceptedTarget);
-        if (!ownsAcceptedTarget) {
-          return;
-        }
-        this.acceptedTargetState = {
-          kind: "candidate-pending",
-          previousTarget: undefined,
-        };
-      },
-    };
-  }
-
-  publishAcceptedTarget(target: AcceptedRestartTarget) {
-    return {
-      ownership: this.recordAcceptedTarget(target),
-      conservativeDebt: this.takeConservativeDebt(),
-    };
-  }
-
-  restoreConservativeDebt(debt: RestartRequestDetails): void {
-    this.conservativeDebt ??= debt;
-  }
-
-  deferDebt(
-    plan: GatewayReloadPlan,
-    nextConfig: OpenClawConfig,
-    options?: GatewayRestartRequestOptions,
-  ): void {
-    this.preserveDebt(this.createRequestDetails(plan, nextConfig, options));
-  }
-
-  acceptConfig(acceptedConfig?: OpenClawConfig) {
-    if (this.operation.kind === "idle" || this.operation.transaction.state !== "rejected") {
+  acceptConfig() {
+    if (this.operation?.state !== "rejected") {
       return { retireRejectedRestart: false };
     }
-    if (this.operation.kind === "request" && !this.operation.emissionSettled) {
-      this.preserveDebt(this.operation.details);
-    }
     this.supersedeRequest();
-    const configDebt = this.pausedDebt;
-    const retainsConfigDebt =
-      configDebt &&
-      acceptedConfig &&
-      configDebt.restartOwnedPaths.every((path) =>
-        isDeepStrictEqual(
-          getConfigValueAtPath({ ...configDebt.nextConfig }, path.split(".")),
-          getConfigValueAtPath({ ...acceptedConfig }, path.split(".")),
-        ),
-      );
-    if (!retainsConfigDebt) {
-      this.pausedDebt = null;
-    }
-    const debt = (retainsConfigDebt ? configDebt : null) ?? this.conservativeDebt;
-    return debt ? { retireRejectedRestart: false, debt } : { retireRejectedRestart: true };
+    return { retireRejectedRestart: true };
   }
 
   beginLifecycle() {
-    // A newer restart candidate owns the disk config now. Cancel any older
-    // emission before async preflight so it cannot restart into stale secrets.
-    if (
-      this.operation.kind === "request" &&
-      !this.operation.emissionSettled &&
-      this.operation.transaction.state !== "pending"
-    ) {
-      this.preserveDebt(this.operation.details);
-    }
     this.supersedeRequest();
-    const transaction = { state: "pending" as GatewayRestartTransactionState };
-    this.operation = { kind: "lifecycle", transaction };
+    const transaction: GatewayRestartOperation = { kind: "lifecycle", state: "pending" };
+    this.operation = transaction;
     return {
       settle: (state: Exclude<GatewayRestartTransactionState, "pending">) => {
-        if (transaction.state === "pending") {
-          transaction.state = state;
-          if (state === "committed") {
-            this.pausedDebt = null;
-          }
-        }
+        transaction.state = state;
       },
     };
   }
 
   pauseForConfigCandidate(): void {
-    const state = this.acceptedTargetState;
-    const previousTarget =
-      state.kind === "accepted"
-        ? state.target
-        : state.kind === "candidate-pending"
-          ? state.previousTarget
-          : undefined;
-    this.acceptedTargetState = {
-      kind: "candidate-pending",
-      previousTarget,
-    };
-    // Candidate acceptance owns debt rearm. Until then, invalid/failed config
-    // must leave the prior committed restart paused.
     this.beginLifecycle().settle("rejected");
   }
 
@@ -224,18 +94,10 @@ class GatewayRestartTransaction {
     if (this.isStopped()) {
       return { status: "recovery-pending", settle: () => {} };
     }
-    // Only another restart requirement supersedes accepted restart work. A
-    // duplicate, hot-only, or failed config transaction must preserve it.
     this.supersedeRequest();
-    const transaction = { state: "pending" as GatewayRestartTransactionState };
-    this.operation = {
-      kind: "request",
-      transaction,
-      details: this.createRequestDetails(plan, nextConfig, options),
-      emissionSettled: false,
-    };
-    const requestGeneration = this.requestGeneration;
-    const accepted = this.requestForGeneration(plan, nextConfig, requestGeneration, options);
+    const transaction: GatewayRestartOperation = { kind: "request", state: "pending" };
+    this.operation = transaction;
+    const accepted = this.requestForOperation(plan, nextConfig, transaction, options);
     return {
       status: accepted ? "accepted" : "recovery-pending",
       settle: (state) => {
@@ -248,69 +110,28 @@ class GatewayRestartTransaction {
 
   stop(): void {
     this.stopped = true;
-    this.pausedDebt = null;
-    this.conservativeDebt = null;
     this.supersedeRequest();
   }
 
-  private createRequestDetails(
-    plan: GatewayReloadPlan,
-    nextConfig: OpenClawConfig,
-    options?: GatewayRestartRequestOptions,
-  ): RestartRequestDetails {
-    const explicitRestartPaths = plan.restartReasons.filter((path) =>
-      plan.changedPaths.includes(path),
-    );
-    return {
-      plan,
-      nextConfig: options?.debtConfig ?? nextConfig,
-      restartOwnedPaths:
-        explicitRestartPaths.length > 0 ? explicitRestartPaths : [...plan.changedPaths],
-      retainDebtAcrossConfigChanges: options?.retainDebtAcrossConfigChanges === true,
-    };
-  }
-
-  private preserveDebt(details: RestartRequestDetails): void {
-    if (details.retainDebtAcrossConfigChanges) {
-      this.conservativeDebt = details;
-    } else {
-      this.pausedDebt = details;
-    }
-  }
-
-  private takeConservativeDebt(): RestartRequestDetails | null {
-    const debt = this.conservativeDebt;
-    this.conservativeDebt = null;
-    return debt;
-  }
-
-  private markEmissionSettled(): void {
-    if (this.operation.kind === "request") {
-      this.operation.emissionSettled = true;
-    }
-    this.conservativeDebt = null;
-  }
-
-  private isCurrentRequest(requestGeneration: number): boolean {
+  private isCurrentRequest(operation: GatewayRestartOperation): boolean {
     return (
       !this.isStopped() &&
       !this.options.params.scheduler.signal.aborted &&
-      requestGeneration === this.requestGeneration &&
-      isCurrentGatewayReloadGeneration(this.options.myGeneration)
+      operation === this.operation &&
+      !this.options.reloadSignal.aborted
     );
   }
 
   private supersedeRequest(): void {
-    this.requestGeneration += 1;
     this.restartDeferral?.cancel();
     this.restartDeferral = null;
-    this.operation = { kind: "idle" };
+    this.operation = undefined;
   }
 
-  private requestForGeneration(
+  private requestForOperation(
     plan: GatewayReloadPlan,
     nextConfig: OpenClawConfig,
-    requestGeneration: number,
+    operation: GatewayRestartOperation,
     options?: GatewayRestartRequestOptions,
   ): boolean {
     const { params } = this.options;
@@ -335,18 +156,15 @@ class GatewayRestartTransaction {
     const prepareForEmit = async () => {
       try {
         await params.assertRestartReady?.(nextConfig);
-        if (!this.isCurrentRequest(requestGeneration)) {
-          return false;
-        }
         const preparedConfig = options?.prepareRuntimeConfig
           ? await options.prepareRuntimeConfig()
           : nextConfig;
-        if (!this.isCurrentRequest(requestGeneration)) {
+        if (!this.isCurrentRequest(operation)) {
           return false;
         }
         emissionPrepared = true;
         setGatewayRestartPolicy({ allowExternal: isRestartEnabled(preparedConfig) });
-        return this.isCurrentRequest(requestGeneration);
+        return true;
       } catch (err) {
         emissionPrepared = false;
         params.logReload.warn(`gateway restart preflight failed: ${String(err)}`);
@@ -384,23 +202,25 @@ class GatewayRestartTransaction {
         },
         emitHooks: {
           emitRestart: (reason, intent) => {
-            if (!this.isCurrentRequest(requestGeneration)) {
+            if (!this.isCurrentRequest(operation)) {
               return { status: "coalesced" };
             }
             const resolvedReason = reason ?? restartReason;
             if (!emissionPrepared) {
+              operation.state = "rejected";
               params.logReload.warn(
                 "gateway restart preparation failed; reapply the config or restart the Gateway manually",
               );
               return { status: "failed" };
             }
             const emitResult = requestRecoveryRestart(resolvedReason, intent);
-            if (emitResult.status !== "failed") {
-              this.markEmissionSettled();
-            } else {
+            if (emitResult.status === "failed") {
+              operation.state = "rejected";
               params.logReload.warn(
                 "gateway restart recovery emission failed; reapply the config or restart the Gateway manually",
               );
+            } else {
+              params.logReload.info("all operations and replies completed; restarting gateway now");
             }
             return emitResult;
           },
@@ -408,9 +228,6 @@ class GatewayRestartTransaction {
         hooks: {
           onReady: () => {
             this.restartDeferral = null;
-            if (this.operation.kind === "request" && this.operation.emissionSettled) {
-              params.logReload.info("all operations and replies completed; restarting gateway now");
-            }
           },
           onStillPending: (_pending, elapsedMs) => {
             params.logReload.warn(
@@ -438,9 +255,6 @@ class GatewayRestartTransaction {
     // returns. Extend that fence across signal delivery until the run loop
     // atomically promotes it to one-way restart drain.
     const emitResult = requestRecoveryRestart(restartReason);
-    if (emitResult.status !== "failed") {
-      this.markEmissionSettled();
-    }
     if (emitResult.status === "failed") {
       params.logReload.warn(
         "gateway restart recovery emission failed; reapply the config or restart the Gateway manually",
@@ -459,18 +273,13 @@ export function createGatewayRestartCoordinator(options: GatewayRestartCoordinat
   const transaction = new GatewayRestartTransaction(options);
   return {
     acceptRestartConfig: transaction.acceptConfig.bind(transaction),
-    ...transaction.appliedConfigHashPublisher,
+    hasOutstandingGatewayRestart: transaction.hasOutstandingGatewayRestart,
+    publishAppliedConfigHash: transaction.publishAppliedConfigHash,
+    publishDeferredAppliedConfigHash: transaction.publishDeferredAppliedConfigHash,
     beginGatewayRestartLifecycle: transaction.beginLifecycle.bind(transaction),
     pauseGatewayRestartForConfigCandidate: transaction.pauseForConfigCandidate.bind(transaction),
-    publishAcceptedRestartTarget: transaction.publishAcceptedTarget.bind(transaction),
-    recordAcceptedRestartTarget: transaction.recordAcceptedTarget.bind(transaction),
     requestGatewayRestart: transaction.request.bind(transaction),
-    restoreConservativeRestartDebt: transaction.restoreConservativeDebt.bind(transaction),
     stopRestartRetries: transaction.stop.bind(transaction),
-    deferGatewayRestartDebt: transaction.deferDebt.bind(transaction),
-    getLatestAcceptedRestartTarget: transaction.getAcceptedTarget,
-    hasConfigCandidatePending: transaction.hasPendingConfigCandidate,
-    hasRestartRequestTransaction: transaction.hasOperation,
     isRestartRetryStopped: transaction.isStopped,
   };
 }

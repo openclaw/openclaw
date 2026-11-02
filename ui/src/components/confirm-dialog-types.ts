@@ -4,6 +4,7 @@
  * confirms stay unskippable by simply not offering one.
  */
 export type ConfirmDialogSkipPreference = {
+  label?: string;
   /** True when the operator already chose to stop being asked. */
   skipped: boolean;
   /** Persists that choice; runs only when they confirm with the box ticked. */
@@ -20,7 +21,12 @@ export type ConfirmDialogOptions = {
   signal?: AbortSignal;
   skipPreference?: ConfirmDialogSkipPreference;
   requiredAcknowledgement?: string;
+  canConfirm?: () => boolean;
 };
 
-export type ConfirmDialogChoiceOptions = ConfirmDialogOptions & { alternativeLabel: string };
+export type ConfirmDialogChoiceOptions = ConfirmDialogOptions & {
+  alternativeLabel: string;
+  /** Keep related choices together, with Cancel below them on compact screens. */
+  groupChoicesOnMobile?: boolean;
+};
 export type ConfirmDialogChoice = "confirm" | "alternative" | null;

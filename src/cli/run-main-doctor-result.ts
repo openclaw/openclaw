@@ -59,7 +59,9 @@ export async function tryRunDoctorResultBridge(argv: string[]): Promise<boolean>
         maxOutputBytes: 4 * 1024 * 1024,
         terminateOnOutputLimit: true,
         terminateOnOutputError: true,
-        onOutputChunk: (chunk, stream) => process[stream].write(chunk),
+        onOutputChunk: (chunk, stream) => {
+          process[stream].write(chunk);
+        },
       },
     );
     try {

@@ -190,9 +190,11 @@ describe("Codex fresh bootstrap delivery", () => {
           contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-1" },
         })),
       });
-      const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
-      try {
-        for (let turn = 0; turn < 3; turn++) {
+      for (let turn = 0; turn < 3; turn++) {
+        // Each follow-up is a separate run; its admitted host ends with that run.
+        const turnParams = { ...params, runId: `image-bootstrap-${turn}` };
+        const closeHost = await bindProductionHarnessHostCapabilitiesForTest(turnParams);
+        try {
           const binding = await readCodexAppServerBinding(params.sessionFile);
           const harness = createStartedThreadHarness(
             async (method) => {
@@ -210,7 +212,7 @@ describe("Codex fresh bootstrap delivery", () => {
             const prompt = `Follow-up request ${turn}`;
             const result = await completeAcceptedRun(
               harness,
-              runCodexAppServerAttempt({ ...params, runId: `image-bootstrap-${turn}`, prompt }),
+              runCodexAppServerAttempt({ ...turnParams, prompt }),
             );
             expect(attemptTerminal.project(result.terminal).promptError).toBeNull();
             const request = harness.requests.find(({ method }) => method === "turn/start");
@@ -249,9 +251,9 @@ describe("Codex fresh bootstrap delivery", () => {
           } finally {
             await harness.client.closeAndWait();
           }
+        } finally {
+          closeHost();
         }
-      } finally {
-        closeHost();
       }
     },
   );

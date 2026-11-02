@@ -5,28 +5,17 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 
 const packageManager = process.argv[2];
-const imageVersion = "12.3.4";
-const imageWrapperHash =
-  "961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457";
-const imageNativeHashes = {
-  x64: "d99a8e9523e47f05f5879711f853e259ff3e17eda1653ff74ef8542b9b22807ab06900888aaf11ec21b186774ab3adc9b5c2e2d9ad50a68fb05ff128c9f8f225",
+// Authenticate the wrapper and native executable selected by the repository pin.
+const version = "12.15.0";
+const wrapperHash =
+  "b3951d6d6ff4a9f13dc7cf56cd28d2b8eb37dbcc9c68e52e1e1191873ea9f82a017287ab50baadc5ccc494f036c67c0e47eb13608c2fa36f47711b61ea128e61";
+const nativeHashes = {
+  x64: "c9cf9095947ef7e9ebdbd2787d1ce13286a98314c10e776affea5eca8ab55d4b9f9d01677db5d4305b9d0c82b31e2e78e658a71aa98e9977e7d0da2e7cd81c3a",
   arm64:
-    "b7bd40540ecb46a88a4f2679c4c61a65cda7e437dda4c6dfa2466e8883971c138cd371029c5d2de226306810ea26056394a6143b0685fdb4506a318d038709e3",
+    "a8c2fff1a097b2587cb5dff0e14f8724da94719dbe9ba11f4db592708cd9466c8fb1114dfb10782cfd54fe1ca6c5cd6248988ab46e7a1c9c767ef504ad61481b",
 };
-// The repository already selects 12.10.1. Authenticate both stages of its
-// bootstrap without changing that pin or routing downloads through Node fetch.
-const currentVersion = "12.10.1";
-const currentWrapperHash =
-  "ba40a37eb1a370d60fea8c4cf1d364c13bcccef518e98ad2bcee954f539d38da37458e58261a3fa55e06523450ea0ffff9f497b135be41f2c15c1642bacace6c";
-const currentNativeHashes = {
-  x64: "641c95d034605b319a0d28d3e5d75104049dc33fabfea3cc621ee8e911a63d08ed4463456d297de316360dc00cf26a82399254503b405d0fb0a415dc7692a592",
-  arm64:
-    "a0174ca7af52702f549e7886e2a640415af67c10d25e39b8ca4ffbdaf904572ae5c12db7c8cc5c45097b41da37b205cf032818e935a73d12a6e2b5f38e8c96ef",
-};
-const current = packageManager === `pnpm@${currentVersion}+sha512.${currentWrapperHash}`;
-const version = current ? currentVersion : imageVersion;
-const wrapperHash = current ? currentWrapperHash : imageWrapperHash;
-const nativeHash = (current ? currentNativeHashes : imageNativeHashes)[process.arch];
+const current = packageManager === `pnpm@${version}+sha512.${wrapperHash}`;
+const nativeHash = nativeHashes[process.arch];
 const archiveRoot = "/opt/crabbox/toolchain-archives";
 const cachedArchives = process.env.PNPM_CONFIG_STORE_DIR
   ? join(process.env.PNPM_CONFIG_STORE_DIR, "toolchain")
@@ -38,7 +27,7 @@ const registryConfigured = (process.env.COREPACK_NPM_REGISTRY || registry).repla
 const retryableCurlStatuses = new Set([5, 6, 7, 18, 35, 52, 55, 56, 92]);
 // These native archives are glibc builds. Windows seeds only the authenticated
 // wrapper; pnpm owns its native binary selection and signature verification.
-let supportedCurrentHost = !current;
+let supportedCurrentHost = false;
 if (current && process.platform === "linux") {
   try {
     supportedCurrentHost = Boolean(process.report?.getReport().header.glibcVersionRuntime);

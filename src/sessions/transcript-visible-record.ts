@@ -8,6 +8,7 @@ import {
   readTerminalSourceReplyDeliveryMirror,
 } from "../shared/chat-message-content.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
+import { readNestedToolActivity } from "./nested-tool-activity.js";
 import {
   readSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
@@ -80,6 +81,24 @@ export function createVisibleAssistantResultEventMatcher(
 
 export type { SessionTranscriptEventMatch } from "../config/sessions/session-history-read.types.js";
 
+/** Reads a successful inline widget result from either transcript tool representation. */
+export function readInlineWidgetReceipt(message: unknown): Record<string, unknown> | undefined {
+  const record = asOptionalRecord(message);
+  if (!record) {
+    return undefined;
+  }
+  const activity = readNestedToolActivity(record);
+  const tool = activity?.details ?? (record.role === "toolResult" ? record : undefined);
+  const details = asOptionalRecord(activity ? activity.details.result.details : record.details);
+  return tool?.toolName === "show_widget" &&
+    tool.isError !== true &&
+    details?.kind === "canvas" &&
+    typeof asOptionalRecord(details.view)?.id === "string" &&
+    asOptionalRecord(details.presentation)?.target === "assistant_message"
+    ? details
+    : undefined;
+}
+
 /** Navigation only filters candidates; canonical content and active identity remain authoritative. */
 export function matchesTranscriptEvent(
   event: unknown,
@@ -93,6 +112,16 @@ export function matchesTranscriptEvent(
     return isVisibleAssistantResultEventForRun(event, match.runId);
   }
   const message = asOptionalRecord(asOptionalRecord(event)?.message);
+  if (match.kind === "canvas-widget") {
+    if (asOptionalRecord(event)?.type !== "message" || !message) {
+      return false;
+    }
+    if (projection === "navigation") {
+      return message.role === "toolResult" || message.role === "custom";
+    }
+    const receipt = readInlineWidgetReceipt(message);
+    return Boolean(receipt && asOptionalRecord(receipt.view)?.id === match.docId);
+  }
   if (match.kind === "idempotency") {
     return (
       message?.idempotencyKey === match.key &&

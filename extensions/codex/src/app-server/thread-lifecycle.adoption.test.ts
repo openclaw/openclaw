@@ -93,7 +93,7 @@ describe("Codex app-server adopted thread lifecycle", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["native-tools", "delegation"] as const)(
+  it.each(["native-tools", "delegation", "host-only-delegation"] as const)(
     "preserves expected native ownership instead of starting a fresh %s-restricted thread",
     async (restriction) => {
       const workspaceDir = path.join(tempDir, "workspace");
@@ -111,8 +111,8 @@ describe("Codex app-server adopted thread lifecycle", () => {
         auth: "host",
         modelRef: { model: nativeModel.model, provider: nativeModel.modelProvider },
       };
-      if (restriction === "delegation") {
-        params.delegationCapability = "report_only";
+      if (restriction !== "native-tools") {
+        params.delegationCapability = restriction === "delegation" ? "report_only" : "host_only";
       } else {
         params.disableTools = true;
       }

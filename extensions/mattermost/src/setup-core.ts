@@ -5,14 +5,12 @@ import {
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
   prepareScopedSetupConfig,
 } from "openclaw/plugin-sdk/setup";
 import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup-runtime";
-import type { ResolvedMattermostAccount } from "./mattermost/accounts.js";
 import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
 
 const channel = "mattermost" as const;
@@ -21,12 +19,6 @@ type MattermostSetupInput = ChannelSetupInput & {
   botToken?: string;
   httpUrl?: string;
 };
-
-export function isMattermostConfigured(account: ResolvedMattermostAccount): boolean {
-  const tokenConfigured =
-    Boolean(account.botToken?.trim()) || hasConfiguredSecretInput(account.config.botToken);
-  return tokenConfigured && Boolean(account.baseUrl);
-}
 
 export function applyMattermostSetupConfigPatch(params: {
   cfg: OpenClawConfig;

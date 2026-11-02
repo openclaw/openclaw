@@ -8,12 +8,8 @@ import {
   withBrowserControlStart,
 } from "./browser-control-state.js";
 import { loadBrowserConfigForRuntimeRefresh } from "./browser/config-refresh-source.js";
-import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
-import { ensureBrowserControlAuth } from "./browser/control-auth.js";
-import {
-  getExtensionRelayModule,
-  getGatewayExtensionRelayModule,
-} from "./browser/extension-relay.runtime.js";
+import { resolveBrowserConfig } from "./browser/config.js";
+import { getGatewayExtensionRelayModule } from "./browser/extension-relay.runtime.js";
 import { stopBrowserScreencasts } from "./browser/screencast/session.js";
 import type { BrowserServerState } from "./browser/server-context.js";
 import { resolveBrowserPluginEnableState } from "./plugin-enabled.js";
@@ -36,41 +32,13 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
   if (!resolved.enabled) {
     return null;
   }
-  try {
-    const ensured = await ensureBrowserControlAuth({ cfg });
-    if (ensured.generatedToken) {
-      logService.info("No browser auth configured; generated gateway.auth.token automatically.");
-    }
-  } catch (err) {
-    logService.warn(`failed to auto-configure browser auth: ${String(err)}`);
-  }
-
-  // Ensure the host-local HMAC key exists before relay startup. Gateway hosts
-  // and browser node hosts each own an independent key.
-  const hasExtensionProfiles = Object.values(resolved.profiles).some(
-    (profile) => profile.driver === "extension",
-  );
-  if (hasExtensionProfiles) {
-    const { ensureExtensionRelayToken } = await import("./browser/extension-relay/relay-auth.js");
-    await ensureExtensionRelayToken();
-  }
-
+  // This in-process service has no HTTP listener, so it needs no browser credential. Listeners
+  // (the HTTP server and sandbox bridges) own theirs; a lazy start must never write auth config.
   const state = await ensureBrowserControlRuntime({
     server: null,
     port: resolved.controlPort,
     resolved,
   });
-
-  // Extension relays listen from service start so the Chrome extension can
-  // (re)connect before the first agent browser request arrives.
-  if (hasExtensionProfiles) {
-    const { startConfiguredExtensionRelays } = await getExtensionRelayModule();
-    await startConfiguredExtensionRelays(
-      state,
-      (name) => resolveProfile(resolved, name),
-      (message) => logService.warn(message),
-    );
-  }
 
   logService.info(
     `Browser control service ready (profiles=${Object.keys(resolved.profiles).length})`,

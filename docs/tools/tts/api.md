@@ -23,6 +23,9 @@ per-call provider request timeout in milliseconds. Per-call values override
 `tts.timeoutMs`; configured TTS timeouts override any plugin-authored
 provider default.
 
+A conversion keeps its prepared provider selection while trying fallbacks.
+Configuration changes are picked up when the next conversion is prepared.
+
 ### Tool profiles
 
 `tts` is not part of the `minimal`, `coding`, or `messaging`

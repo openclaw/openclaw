@@ -207,6 +207,24 @@ describe("WorkboardView", () => {
     expect(state.collapsedStatuses).toContain("todo");
   });
 
+  it("toggles the same list disclosure after its collapsed state changes", () => {
+    const { state, container, renderView } = createWorkboardView();
+    state.viewMode = "list";
+    state.cards = [createWorkboardCard({ status: "todo" })];
+    renderView();
+    const toggle = expectDefined(
+      container.querySelector<HTMLButtonElement>('section[aria-label="Todo, 1"] h2 button'),
+      "list disclosure",
+    );
+    toggle.click();
+    renderView();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    toggle.click();
+    renderView();
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(state.collapsedStatuses.has("todo")).toBe(false);
+  });
+
   it("supports showing, collapsing, and hiding empty columns", () => {
     const { state, container, renderView } = createWorkboardView({
       onRequestUpdate: () => undefined,

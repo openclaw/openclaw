@@ -153,6 +153,13 @@ not reveal whether the job is waiting on dependencies or has no eligible
 runner. Compare `created_at`, `started_at`, `labels`, and `runner_name`. Recheck
 stale queued runs live before canceling them; cancel only runs proven obsolete.
 
+Testbox `warmup` confirms lease creation, not runner readiness. An initial
+`queued` snapshot without `providerMetadata.runURL` does not establish a capacity
+shortage. Use that URL to inspect the exact workflow once associated. An assigned
+`check` runner performing setup is hydration; a confirmed admission or capacity
+queue follows the existing stop-owned-allocation policy. Do not infer association
+from the newest workflow run or wait on a confirmed capacity queue.
+
 `scripts/ci-run-timings.mjs` start delay can include workflow dependency wait
 plus runner queue time. It is trend evidence, not runner-pressure proof alone.
 
@@ -272,6 +279,13 @@ Do not:
 
 These are intentionally guarded by the `ci-workflow-guards`,
 `ci-workflow-planning`, and `ci-workflow-evidence` tests under `test/scripts/`:
+
+- Current-target Control UI locale checks share an already-selected public
+  artifact producer on real PR/push/schedule events. Keep verification before
+  generators, settle the existing strict/advisory outcomes after build diagnostics,
+  and route the logical locale gate to that explicit result. Dispatches, frozen
+  and compatibility targets, and standalone locale selections retain their job.
+  Hosted row accounting omits only the shared locale row; no build is newly selected.
 
 - `CI` concurrency key version, PR cancellation, and canonical `main`'s two
   non-canceling parity slots, each with one coalesced pending tip.
@@ -623,11 +637,25 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Apply capacity after packing; preserve inventories, runtime selection, timing
   identities, and process boundaries. Full families retain their planned capacity.
   RunsOn inherits the hybrid choice for these retained Blacksmith jobs.
+  The exact singleton `gateway-core` selection of
+  `src/gateway/mcp-app-extension-runtime.test.ts` and `agents-core` selection of
+  `src/agents/cli-runner.helpers.test.ts` also qualify under these guards.
+  Their five-file serial replay at `137e7b2abc87` passed 56 tests on each of Bun
+  and Node, using four CPUs and 15.42 GiB RAM. Whole-machine peaks were 5.00 and
+  5.22 GiB, with zero OOM kills and at most 268 KiB swap use. Other files in those
+  configs and unbounded or parallel infra selections retain planned capacity.
+  Native billed savings remain unverified.
   The isolated LLM-boundary cache-stability file also qualifies when it is the
   group's only file, under the same serial, worker, and preparation guards.
   Its complete current-source replay passed all 19 tests with four CPUs,
   12 GiB RAM, no swap, 4.23 GiB peak, and zero OOMs. Other isolated files,
   including siblings in the same job, retain their planned capacity.
+  The singleton `src/gateway/board-store.test.ts` selection also qualifies as the
+  job's only group, with an explicit two-worker pin, two-worker fallback, and
+  unchanged 28-GiB worker-admission threshold. Its five-test replay passed through
+  the CI shard executor in 40.78 seconds on four CPUs and 15.42 GiB RAM. Maximum
+  process RSS was 3.17 GiB, not an aggregate VM peak. Keep all other database-worker
+  selections and mixed jobs at planned capacity; native billed savings are unverified.
 - Source-only serial Blacksmith tooling bins use the 16-class after packing,
   retaining logical classes, names, file inventories, and two-worker pins.
   Keep the 32-class for compiler/artifact capacity files, explicit runner or
@@ -668,11 +696,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   manual runs, unknown paths and older planners retain coverage. Preserve the
   target's existing performance-script capability checks.
 - Eligible Control UI E2E rows request the 16-vCPU class with unchanged live
-  backend/event routing and project worker limits. Current canonical ordinary
-  plans with known changed paths, including fork PRs targeting OpenClaw, use
-  eight Control UI shards plus one browser-extension row. Hourly main also uses
-  eight without a changed-path inventory. Non-main full manual, noncanonical,
-  compatibility, and other unknown-path inventories retain twelve Control UI
+  backend/event routing. Compact plans use six mocked Control UI shards with four
+  workers each, matching four observed CPUs per runner and retaining 24 aggregate
+  worker slots. Private source-server projects remain serial. The conditional
+  browser-extension row keeps its existing reuse and routing rules. Hourly main
+  uses the same compact plan without a changed-path inventory. Non-main full
+  manual, noncanonical, compatibility, and other unknown-path inventories retain twelve Control UI
   shards plus one browser-extension row. Historical targets without the named-project contract retain four total rows on
   Blacksmith or fourteen on GitHub/hybrid. Failed-job-only retries retain their
   previously emitted matrix, including older six-shard Control UI plans; PR and
@@ -760,6 +789,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   immutable Actions caches; the main-push/daily/dispatch warmer is their sole
   writer. Build, QA and test orchestration consume its shared Node compile seed.
   PRs create no runtime-cache archives.
+- Full compiled-worker seeds retain separate prebuild and postbuild archives.
+  The existing protected warmer publishes its already-prepared postbuild full
+  generation; only selected artifact-producer source verifiers restore it.
+  Runtime workers use separate live/cache slots so they cannot replace that
+  full seed. Keep byte, topology, runtime and exact output-path validation, the
+  uncached path when no archive arrives, and existing job/worker limits.
 
 When changing one knob, update `docs/ci.md` and the guard test in the same PR.
 

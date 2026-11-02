@@ -1,7 +1,6 @@
+import { listen } from "../lib/reactive/listener.ts";
 import { bindOverlayAnchor } from "./overlay-anchor.ts";
 import type { Overlay } from "./overlay-lifecycle.ts";
-
-type PopupBinding = { activate(): void; dispose(): void };
 
 const TEXT_LAYOUT_PROPERTIES = [
   "direction",
@@ -32,173 +31,121 @@ const TEXT_LAYOUT_PROPERTIES = [
 ] as const;
 
 /** Measures only an open token menu; popup owns collision handling and the top layer. */
-export class TextareaTokenAnchor {
-  private popup: HTMLElement | null = null;
-  private popupBinding: PopupBinding | null = null;
-  private textarea: HTMLTextAreaElement | null = null;
-  private start = 0;
-  private value = "";
-  private range: Range | null = null;
-  private mirror: HTMLDivElement | null = null;
-  private prefix: Text | null = null;
-  private suffix: HTMLSpanElement | null = null;
-  private anchor: HTMLSpanElement | null = null;
-  private resizeObserver: ResizeObserver | null = null;
-  private frame: number | null = null;
-  private stylesDirty = true;
-  private lineHeight = 0;
-  constructor(private readonly onOutOfView: () => void) {}
-
-  /** Native menus share the same measured caret and CSS placement owner. */
-  updateNative(overlay: Overlay, textarea: HTMLTextAreaElement, tokenStart: number): void {
-    const root = overlay.surface.getRootNode();
-    this.updateSurface(
-      overlay.surface,
-      textarea,
-      tokenStart,
-      (anchor) => {
-        overlay.bindTrigger(textarea);
-        overlay.setReturnTarget(textarea);
-        const unbind = bindOverlayAnchor(overlay.surface, anchor, "top-start");
-        return {
-          activate: () => {
-            overlay.request(true);
-          },
-          dispose: () => {
-            overlay.retire();
-            unbind();
-          },
-        };
-      },
-      root instanceof ShadowRoot ? root : textarea.ownerDocument.body,
-    );
-  }
-
-  private updateSurface(
-    popup: HTMLElement,
-    textarea: HTMLTextAreaElement,
-    tokenStart: number,
-    bind: (anchor: HTMLElement) => PopupBinding,
-    anchorParent: ParentNode = textarea.ownerDocument.body,
-  ): void {
-    if (
-      this.popup !== popup ||
-      this.textarea !== textarea ||
-      this.anchor?.parentNode !== anchorParent
-    ) {
-      this.close();
-      this.popup = popup;
-      this.textarea = textarea;
-      const document = textarea.ownerDocument;
-      this.mirror = document.createElement("div");
-      this.mirror.setAttribute("aria-hidden", "true");
-      this.mirror.style.cssText =
-        "position:fixed;left:0;top:0;visibility:hidden;pointer-events:none;box-sizing:border-box;border:0;margin:0;height:auto;min-height:0;overflow:hidden;contain:layout style paint;";
-      this.prefix = document.createTextNode("");
-      this.suffix = document.createElement("span");
-      this.range = document.createRange();
-      this.mirror.append(this.prefix, this.suffix);
-      this.anchor = document.createElement("span");
-      this.anchor.setAttribute("aria-hidden", "true");
-      this.anchor.style.cssText =
-        "position:fixed;left:0;top:0;width:0;opacity:0;pointer-events:none;";
-      document.body.append(this.mirror);
-      // Named CSS anchors must share the native popup's tree scope.
-      anchorParent.append(this.anchor);
-      this.popupBinding = bind(this.anchor);
-      this.resizeObserver = new ResizeObserver(this.invalidateStyles);
-      this.resizeObserver.observe(textarea);
-      document.addEventListener("scroll", this.schedule, true);
-      document.defaultView?.addEventListener("resize", this.invalidateStyles);
-      document.defaultView?.visualViewport?.addEventListener("resize", this.invalidateStyles);
-      document.defaultView?.visualViewport?.addEventListener("scroll", this.schedule);
-    }
-    const value = textarea.value;
-    if (this.value === value && this.start === tokenStart && !this.stylesDirty) {
-      return;
-    }
-    this.value = value;
-    this.start = tokenStart;
-    this.schedule();
-  }
+export function createTextareaTokenAnchor(onOutOfView: () => void) {
+  let active: ReturnType<typeof bindTextarea> | undefined;
 
   /** Close on dismissal, missing ref, and composer disconnect. Safe to reuse afterward. */
-  close(): void {
-    const document = this.textarea?.ownerDocument;
-    const window = document?.defaultView;
-    if (this.frame !== null) {
-      window?.cancelAnimationFrame(this.frame);
-      this.frame = null;
-    }
-    this.resizeObserver?.disconnect();
-    this.resizeObserver = null;
-    document?.removeEventListener("scroll", this.schedule, true);
-    window?.removeEventListener("resize", this.invalidateStyles);
-    window?.visualViewport?.removeEventListener("resize", this.invalidateStyles);
-    window?.visualViewport?.removeEventListener("scroll", this.schedule);
-    this.popupBinding?.dispose();
-    this.popupBinding = null;
-    this.mirror?.remove();
-    this.anchor?.remove();
-    this.popup = null;
-    this.textarea = null;
-    this.mirror = null;
-    this.prefix = null;
-    this.suffix = null;
-    this.anchor = null;
-    this.value = "";
-    this.range = null;
-    this.stylesDirty = true;
+  function close(): void {
+    const previous = active;
+    active = undefined;
+    previous?.dispose();
   }
 
-  private readonly invalidateStyles = () => {
-    this.stylesDirty = true;
-    this.schedule();
+  return {
+    close,
+    updateNative(overlay: Overlay, textarea: HTMLTextAreaElement, tokenStart: number): void {
+      const root = overlay.surface.getRootNode();
+      const parent = root instanceof ShadowRoot ? root : textarea.ownerDocument.body;
+      if (
+        active?.popup !== overlay.surface ||
+        active.textarea !== textarea ||
+        active.anchor.parentNode !== parent
+      ) {
+        close();
+        active = bindTextarea(overlay, textarea, parent, onOutOfView, close);
+      }
+      active.update(tokenStart);
+    },
   };
+}
 
-  private readonly schedule = () => {
-    const window = this.textarea?.ownerDocument.defaultView;
-    if (window && this.frame === null) {
-      this.frame = window.requestAnimationFrame(this.measure);
+function bindTextarea(
+  overlay: Overlay,
+  textarea: HTMLTextAreaElement,
+  anchorParent: ParentNode,
+  onOutOfView: () => void,
+  close: () => void,
+) {
+  const popup = overlay.surface;
+  const document = textarea.ownerDocument;
+  const window = document.defaultView;
+  const mirror = document.createElement("div");
+  mirror.setAttribute("aria-hidden", "true");
+  mirror.style.cssText =
+    "position:fixed;left:0;top:0;visibility:hidden;pointer-events:none;box-sizing:border-box;border:0;margin:0;height:auto;min-height:0;overflow:hidden;contain:layout style paint;";
+  const prefix = document.createTextNode("");
+  const suffix = document.createElement("span");
+  const range = document.createRange();
+  mirror.append(prefix, suffix);
+  const anchor = document.createElement("span");
+  anchor.setAttribute("aria-hidden", "true");
+  anchor.style.cssText = "position:fixed;left:0;top:0;width:0;opacity:0;pointer-events:none;";
+  document.body.append(mirror);
+  // Named CSS anchors must share the native popup's tree scope.
+  anchorParent.append(anchor);
+  overlay.bindTrigger(textarea);
+  overlay.setReturnTarget(textarea);
+  const unbind = bindOverlayAnchor(popup, anchor, "top-start");
+  let frame: number | null = null;
+  let start = 0;
+  let value = "";
+  let stylesDirty = true;
+  let lineHeight = 0;
+
+  function schedule() {
+    if (window && frame === null) {
+      frame = window.requestAnimationFrame(measure);
     }
-  };
+  }
 
-  private readonly measure = () => {
-    this.frame = null;
-    const { textarea, popup, mirror, prefix, suffix, anchor } = this;
-    if (!textarea?.isConnected || !popup?.isConnected || !mirror || !prefix || !suffix || !anchor) {
-      this.close();
+  function invalidateStyles() {
+    stylesDirty = true;
+    schedule();
+  }
+
+  const resizeObserver = new ResizeObserver(invalidateStyles);
+  resizeObserver.observe(textarea);
+  const listeners = [
+    listen(document, "scroll", schedule, true),
+    window && listen(window, "resize", invalidateStyles),
+    window?.visualViewport && listen(window.visualViewport, "resize", invalidateStyles),
+    window?.visualViewport && listen(window.visualViewport, "scroll", schedule),
+  ];
+
+  function measure() {
+    frame = null;
+    if (!textarea.isConnected || !popup.isConnected) {
+      close();
       return;
     }
-    if (this.stylesDirty) {
-      const style = textarea.ownerDocument.defaultView!.getComputedStyle(textarea);
+    if (stylesDirty) {
+      const style = window!.getComputedStyle(textarea);
       for (const property of TEXT_LAYOUT_PROPERTIES) {
         mirror.style.setProperty(property, style.getPropertyValue(property));
       }
       mirror.style.whiteSpace = textarea.wrap === "off" ? "pre" : "pre-wrap";
-      this.lineHeight =
-        Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.2;
-      this.stylesDirty = false;
+      lineHeight = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.2;
+      stylesDirty = false;
     }
     // clientWidth excludes the native scrollbar, unlike the computed CSS width.
     mirror.style.width = `${textarea.clientWidth}px`;
-    const start = Math.max(0, Math.min(this.start, textarea.value.length));
-    const before = textarea.value.slice(0, start);
-    const lineEnd = textarea.value.indexOf("\n", start);
+    const position = Math.max(0, Math.min(start, textarea.value.length));
+    const before = textarea.value.slice(0, position);
+    const lineEnd = textarea.value.indexOf("\n", position);
     // Keep the rest of this paragraph: it can move the token to the next wrapped line.
-    const after = textarea.value.slice(start, lineEnd < 0 ? undefined : lineEnd) || "\u200b";
+    const after = textarea.value.slice(position, lineEnd < 0 ? undefined : lineEnd) || "\u200b";
     if (prefix.data !== before) {
       prefix.data = before;
     }
     if (suffix.textContent !== after) {
       suffix.textContent = after;
     }
-    if (!suffix.firstChild || !this.range) {
+    if (!suffix.firstChild) {
       return;
     }
-    this.range.setStart(suffix.firstChild, 0);
-    this.range.collapse(true);
-    const token = this.range.getClientRects()[0];
+    range.setStart(suffix.firstChild, 0);
+    range.collapse(true);
+    const token = range.getClientRects()[0];
     if (!token) {
       return;
     }
@@ -214,7 +161,7 @@ export class TextareaTokenAnchor {
       (textarea.clientTop +
         token.top -
         mirrorBounds.top -
-        (this.lineHeight - token.height) / 2 -
+        (lineHeight - token.height) / 2 -
         textarea.scrollTop) *
         scaleY;
     const left = bounds.left + textarea.clientLeft * scaleX;
@@ -222,15 +169,42 @@ export class TextareaTokenAnchor {
     if (
       x < left ||
       x > left + textarea.clientWidth * scaleX ||
-      y + this.lineHeight * scaleY <= top ||
+      y + lineHeight * scaleY <= top ||
       y >= top + textarea.clientHeight * scaleY
     ) {
-      this.onOutOfView();
+      onOutOfView();
       return;
     }
     anchor.style.left = `${x}px`;
     anchor.style.top = `${y}px`;
-    anchor.style.height = `${this.lineHeight * scaleY}px`;
-    this.popupBinding?.activate();
+    anchor.style.height = `${lineHeight * scaleY}px`;
+    overlay.request(true);
+  }
+
+  return {
+    popup,
+    textarea,
+    anchor,
+    update(tokenStart: number) {
+      if (value === textarea.value && start === tokenStart && !stylesDirty) {
+        return;
+      }
+      value = textarea.value;
+      start = tokenStart;
+      schedule();
+    },
+    dispose() {
+      if (frame !== null) {
+        window?.cancelAnimationFrame(frame);
+      }
+      resizeObserver.disconnect();
+      for (const stop of listeners) {
+        stop?.();
+      }
+      overlay.retire();
+      unbind();
+      mirror.remove();
+      anchor.remove();
+    },
   };
 }

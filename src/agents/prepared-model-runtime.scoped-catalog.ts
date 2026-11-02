@@ -67,7 +67,10 @@ export async function prepareScopedReadOnlyModelCatalog(
 
 export async function prepareAgentCatalogSource(
   agentFacts: Pick<PreparedModelRuntimeAgentFacts, "input" | "env" | "providerIds">,
-  pluginGeneration: PreparedModelRuntimePluginGeneration,
+  pluginGeneration: Pick<
+    PreparedModelRuntimePluginGeneration,
+    "pluginMetadataSnapshot" | "pluginRegistry" | "preparedStaticProviderCatalog"
+  >,
   catalogMode: PreparedModelRuntimeCatalogMode,
   persist = true,
   sourceOptions: {
@@ -126,12 +129,17 @@ export async function prepareAgentCatalogSource(
         providerOutcomes: resultOutcomes(),
       };
     }
-    const { captureModelsJsonContents } = await import("./prepared-model-runtime.facts.js");
     if (!input.readOnly) {
-      await ensureOpenClawModelsJson(input.config, input.agentDir, options);
+      const { publishedSource } = await ensureOpenClawModelsJson(
+        input.config,
+        input.agentDir,
+        options,
+      );
+      if (publishedSource) {
+        return { ...publishedSource, providerOutcomes: resultOutcomes() };
+      }
     }
-    // Capture immediately after the serialized write. Another owner may share this directory and
-    // publish a different workspace generation before full-catalog parsing begins.
+    const { captureModelsJsonContents } = await import("./prepared-model-runtime.facts.js");
     return {
       modelsJsonContents: captureModelsJsonContents(input.agentDir),
       pluginCatalogs: await loadPersistedPluginModelCatalogs(input.agentDir, undefined, env),

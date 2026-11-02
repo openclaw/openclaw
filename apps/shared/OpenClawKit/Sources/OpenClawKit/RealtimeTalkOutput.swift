@@ -34,8 +34,6 @@ final class RealtimeTalkOutput: @unchecked Sendable {
     var terminalOutputCancellationReason: String?
     var cancellationInFlight = false
     var outputStartedAtMs: Double?
-    var outputAudioChunkCount = 0
-    var outputAudioByteCount = 0
     var envelope = OutputEnvelope()
 
     enum Effect: Sendable {
@@ -157,15 +155,6 @@ final class RealtimeTalkOutput: @unchecked Sendable {
         self.acknowledgePlaybackMarks(marks)
     }
 
-    func recordOutputAudioChunk(byteCount: Int) {
-        self.outputAudioChunkCount += 1
-        self.outputAudioByteCount += byteCount
-        guard self.outputAudioChunkCount == 1 || self.outputAudioChunkCount % 20 == 0 else { return }
-        let chunks = self.outputAudioChunkCount
-        let bytes = self.outputAudioByteCount
-        self.logger.debug("talk realtime audio: chunks=\(chunks) bytes=\(bytes)")
-    }
-
     func markOutputAudioStarted(nowMs: Double) {
         if !self.isOutputPlaying {
             self.outputStartedAtMs = nowMs
@@ -278,7 +267,6 @@ final class RealtimeTalkOutput: @unchecked Sendable {
             self.stopOutputPlayback()
         }
         self.outputIdentity = incomingIdentity
-        self.recordOutputAudioChunk(byteCount: data.count)
         self.markOutputAudioStarted(nowMs: ProcessInfo.processInfo.systemUptime * 1000)
         self.reportSpeaking(true)
         self.ensureOutputPlaybackStarted()

@@ -8,12 +8,12 @@ import {
   type WatchEntry,
   type WatchScope,
 } from "openclaw/plugin-sdk/file-access-runtime";
-import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
+  classifyMemoryMultimodalPath,
   matchesExtraMemoryPathEntry,
   normalizeExtraMemoryPathEntries,
-  type MemoryWorkspaceWatchRequest,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+} from "openclaw/plugin-sdk/memory-core-host-engine-fs";
+import type { MemoryWorkspaceWatchRequest } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { MemoryWatchFile } from "./watch-settle.js";
 
 type Settings = MemoryWorkspaceWatchRequest["settings"];
@@ -149,6 +149,16 @@ export class MemoryWatchPolicy {
     return [
       ...new Map(group.selections.map(({ scope }) => [JSON.stringify(scope), scope])).values(),
     ];
+  }
+
+  selectionKeys(group: MemoryObservation): string[] {
+    // Exclusion depends on selections and enabled file kinds, not indexing limits or globs.
+    const modalities = this.settings.multimodal.enabled ? this.settings.multimodal.modalities : [];
+    return group.selections.flatMap(({ scope, resolved, lexical, alias }) =>
+      ["text", ...modalities].map((modality) =>
+        JSON.stringify([scope, resolved, lexical, alias, modality]),
+      ),
+    );
   }
 
   private ignored(relative: string, file: string, kind: WatchEntry["kind"]): boolean {

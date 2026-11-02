@@ -104,6 +104,7 @@ describe("browser default executable detection", () => {
     vi.mocked(fs.readFileSync).mockReset();
     vi.mocked(os.homedir).mockReset();
     vi.mocked(os.homedir).mockReturnValue("/Users/test");
+    vi.spyOn(actualFs, "accessSync").mockImplementation(fs.accessSync);
     vi.spyOn(actualFs, "statSync").mockImplementation(fs.statSync);
   });
 

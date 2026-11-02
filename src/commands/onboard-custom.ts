@@ -2,6 +2,7 @@ import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { isLocalProviderBaseUrl } from "../agents/model-provider-local.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -15,6 +16,7 @@ import {
   buildAnthropicVerificationProbeRequest,
   buildEndpointIdFromUrl,
   buildOpenAiVerificationProbeRequest,
+  discoverCustomApiModelIds,
   normalizeEndpointId,
   normalizeOptionalProviderApiKey,
   resolveCustomModelAliasError,
@@ -55,23 +57,6 @@ const COMPATIBILITY_OPTIONS: Array<{
     hintKey: "wizard.customProvider.compatibilityUnknownHint",
   },
 ];
-
-function formatVerificationError(error: unknown): string {
-  if (!error) {
-    return "unknown error";
-  }
-  if (error instanceof Error) {
-    return error.message;
-  }
-  if (typeof error === "string") {
-    return error;
-  }
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return "unknown error";
-  }
-}
 
 type VerificationResult = {
   ok: boolean;
@@ -184,16 +169,6 @@ async function promptBaseUrlAndKey(params: {
   }
 }
 
-async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string> {
-  return (
-    await prompter.text({
-      message: t("wizard.customProvider.modelId"),
-      placeholder: t("wizard.customProvider.modelIdPlaceholder"),
-      validate: (val) => (val.trim() ? undefined : t("wizard.customProvider.modelIdRequired")),
-    })
-  ).trim();
-}
-
 /** Prompts for a custom API provider and prepares its endpoint config without writing it. */
 export async function promptCustomApiConfig(params: {
   prompter: WizardPrompter;
@@ -229,7 +204,36 @@ export async function promptCustomApiConfig(params: {
     })),
   });
 
-  let modelId = await promptCustomApiModelId(prompter);
+  const selectModel = async (): Promise<string> => {
+    if (compatibilityChoice !== "anthropic") {
+      const modelIds = await discoverCustomApiModelIds({ baseUrl, apiKey: resolvedApiKey });
+      if (modelIds.length > 0) {
+        const selected = await prompter.select({
+          message: t("wizard.customProvider.modelId"),
+          options: [
+            ...modelIds.map((id) => ({ value: id, label: id })),
+            { value: "", label: t("wizard.customProvider.modelIdManual") },
+          ],
+        });
+        if (selected) {
+          return selected;
+        }
+      } else {
+        await prompter.note(
+          t("wizard.customProvider.modelDiscoveryUnavailable"),
+          t("wizard.customProvider.modelId"),
+        );
+      }
+    }
+    return (
+      await prompter.text({
+        message: t("wizard.customProvider.modelId"),
+        placeholder: t("wizard.customProvider.modelIdPlaceholder"),
+        validate: (val) => (val.trim() ? undefined : t("wizard.customProvider.modelIdRequired")),
+      })
+    ).trim();
+  };
+  let modelId = await selectModel();
 
   let compatibility: CustomApiCompatibility | null =
     compatibilityChoice === "unknown" ? null : compatibilityChoice;
@@ -285,7 +289,7 @@ export async function promptCustomApiConfig(params: {
       if (result.error !== undefined) {
         verifySpinner.stop(
           t("wizard.customProvider.verificationFailedError", {
-            error: formatVerificationError(result.error),
+            error: formatErrorMessage(result.error),
           }),
         );
       } else {
@@ -311,7 +315,7 @@ export async function promptCustomApiConfig(params: {
       }));
     }
     if (retryChoice === "model" || retryChoice === "both") {
-      modelId = await promptCustomApiModelId(prompter);
+      modelId = await selectModel();
     }
     if (compatibilityChoice === "unknown") {
       compatibility = null;

@@ -13,10 +13,7 @@ import {
 } from "../../process/command-queue.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  createSessionMaintenanceOwner,
-  waitForSessionMaintenance,
-} from "../session-maintenance/coordinator.js";
+import { createSessionMaintenanceOwner } from "../session-maintenance/coordinator.js";
 import { executeContextEngineMaintenance } from "./context-engine-maintenance-execution.js";
 import {
   disposeDeferredMaintenanceContextEngine,
@@ -90,24 +87,6 @@ function createDeferredTurnMaintenanceAbortSignal() {
       }
     },
   };
-}
-
-function resetDeferredTurnMaintenanceStateForTest(): void {
-  activeDeferredTurnMaintenanceRuns.clear();
-  maintenanceAbortControllers.clear();
-  unregisterDeferredTurnMaintenanceAbortSignalHandlers();
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.contextEngineMaintenanceTestApi")
-  ] = {
-    resetDeferredTurnMaintenanceStateForTest,
-  };
-}
-
-export async function waitForDeferredTurnMaintenanceForSession(sessionKey?: string): Promise<void> {
-  await waitForSessionMaintenance(sessionKey);
 }
 
 function scheduleDeferredTurnMaintenance(

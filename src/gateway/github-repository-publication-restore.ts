@@ -1,3 +1,4 @@
+import { gitMaintenanceEnvironment } from "../infra/git-maintenance-env.js";
 import { NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES } from "../worker/node-workspace-protocol.js";
 import { GITHUB_PUBLICATION_CONFIG_GUARD } from "./github-publication-base.js";
 import {
@@ -7,7 +8,7 @@ import {
 import { readGitHubRepositoryPublicationMetadata } from "./github-repository-publication-snapshot.js";
 import type { WorkerWorkspaceManifest } from "./worker-environments/workspace-manifest.js";
 
-const RESTORE_PUBLICATION_INDEX_JS = String.raw`
+export const RESTORE_PUBLICATION_INDEX_JS = String.raw`
 const fs = require("node:fs");
 const gitNullPath = process.platform === "win32" ? "NUL" : "/dev/null";
 const { spawnSync } = require("node:child_process");
@@ -16,10 +17,10 @@ const cwd = process.cwd();
 const env = { ...process.env };
 for (const key of Object.keys(env)) if (/^GIT_/i.test(key)) delete env[key];
 Object.assign(env, { GIT_CONFIG_GLOBAL: gitNullPath, GIT_CONFIG_SYSTEM: gitNullPath,
-  GIT_CONFIG_COUNT: "0", GIT_ATTR_NOSYSTEM: "1", GIT_NO_REPLACE_OBJECTS: "1" });
+  ${JSON.stringify(gitMaintenanceEnvironment()).slice(1, -1)}, GIT_ATTR_NOSYSTEM: "1", GIT_NO_REPLACE_OBJECTS: "1" });
 ${GITHUB_PUBLICATION_CONFIG_GUARD.script}
 const action = process.argv[1];
-if (action !== "add" && action !== "remove") throw Error("Invalid publication restore operation");
+if (action !== "add" && action !== "remove") throw new Error("Invalid publication restore operation");
 const operation = action === "remove" ? ["update-index", "--force-remove", "-z", "--stdin"] :
   ["add", "--intent-to-add", "--force", "--pathspec-from-file=-", "--pathspec-file-nul"];
 const result = spawnSync("git", ["--literal-pathspecs", "-c", "core.hooksPath=" + gitNullPath,
@@ -29,7 +30,7 @@ const result = spawnSync("git", ["--literal-pathspecs", "-c", "core.hooksPath=" 
   input: paths.join("\0") + "\0", timeout: 60000, maxBuffer: 128 * 1024,
 });
 if (result.error || result.status !== 0) {
-  throw Error("Repository publication paths could not be restored; retry workspace preparation");
+  throw new Error("Repository publication paths could not be restored; retry workspace preparation");
 }
 `;
 
@@ -39,7 +40,7 @@ export async function prepareRepositoryPublicationRestore(params: {
   publicationStagingRoot?: string;
   publicationDigest?: string;
   indexBase?: { root: string; commit: string; assertCurrent: () => void };
-}): Promise<Array<{ argv: string[]; input: string }>> {
+}): Promise<Array<{ action: "add" | "remove"; input: string }>> {
   if (!params.publicationStagingRoot || !params.publicationDigest) {
     return [];
   }
@@ -109,7 +110,7 @@ export async function prepareRepositoryPublicationRestore(params: {
       ? [entry.path]
       : [];
   });
-  const commands: Array<{ argv: string[]; input: string }> = [];
+  const batches: Array<{ action: "add" | "remove"; input: string }> = [];
   // Deletions remove only index entries; raw recovery bytes stay available.
   // Added contents remain unstaged through intent-to-add. Never enroll raw-only paths.
   for (const [action, paths] of [
@@ -120,8 +121,8 @@ export async function prepareRepositoryPublicationRestore(params: {
     let bytes = 2;
     const flush = () => {
       if (batch.length) {
-        commands.push({
-          argv: ["node", "-e", RESTORE_PUBLICATION_INDEX_JS, action],
+        batches.push({
+          action,
           input: JSON.stringify(batch),
         });
         batch = [];
@@ -143,5 +144,5 @@ export async function prepareRepositoryPublicationRestore(params: {
     }
     flush();
   }
-  return commands;
+  return batches;
 }

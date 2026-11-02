@@ -1,6 +1,6 @@
+import { readSqliteSchemaCatalog } from "../../scripts/lib/sqlite-schema-catalog.mts";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import type { SqliteSchemaCatalog, SqliteSchemaSource } from "./sqlite-schema-catalog-types.js";
-import { readSqliteSchemaCatalog } from "./sqlite-schema-catalog.js";
 import {
   assertSqliteSchemaContains as assertContains,
   assertSqliteSchemaTablesPresent as assertTablesPresent,

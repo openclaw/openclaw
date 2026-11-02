@@ -79,11 +79,7 @@ export async function writeLegacyUsageCostRollupForTest(sessionFile: string): Pr
   }
 }
 
-export function readSessionCostUsageRollupEntry(
-  row: SessionCostUsageRollupRow,
-  agentId?: string,
-  databasePath?: string,
-) {
+export function readSessionCostUsageRollupEntry(row: SessionCostUsageRollupRow, agentId?: string) {
   const envelope = decodeUsageCostRollupEnvelope(row.valueJson);
   if (!envelope) {
     return undefined;
@@ -95,7 +91,7 @@ export function readSessionCostUsageRollupEntry(
         ? decodeUsageCostRollup(row.valueJson, envelope.pricingFingerprint, body.blob)
         : undefined;
     },
-    { agentId: normalizeAgentId(agentId), ...(databasePath ? { path: databasePath } : {}) },
+    { agentId: normalizeAgentId(agentId) },
   );
   return result.found ? result.value : undefined;
 }

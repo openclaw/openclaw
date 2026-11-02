@@ -655,7 +655,7 @@ struct PortGuardianRecordStoreTests {
     }
 
     private static func fixture() throws -> Fixture {
-        let root = FileManager.default.temporaryDirectory
+        let root = temporaryDirectoryForTests()
             .appendingPathComponent("port-guardian-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return Fixture(

@@ -25,35 +25,20 @@ function closingOwner(): GatewayFixtureOwner | undefined {
   return [...registry.active].find((owner) => owner.state.phase !== "open");
 }
 
-function ownershipError(owner: GatewayFixtureOwner): Error {
-  return new Error(
-    `Gateway test fixture is ${owner.state.phase}; its close must complete before replacing or releasing test state`,
-    { cause: owner.state.phase === "retained" ? owner.state.error : undefined },
-  );
+function assertNoOwner(owner: GatewayFixtureOwner | undefined): void {
+  if (owner) {
+    throw new Error(
+      `Gateway test fixture is ${owner.state.phase}; its close must complete before replacing or releasing test state`,
+      { cause: owner.state.phase === "retained" ? owner.state.error : undefined },
+    );
+  }
 }
 
 export const gatewayFixtureLifetime = {
-  canAdmit(): boolean {
-    return !closingOwner();
-  },
-
-  assertAdmission(): void {
-    const owner = closingOwner();
-    if (owner) {
-      throw ownershipError(owner);
-    }
-  },
-
-  assertReleased(): void {
-    const owner = registry.active.values().next().value;
-    if (owner) {
-      throw ownershipError(owner);
-    }
-  },
-
-  hasActiveServers(): boolean {
-    return registry.active.size > 0;
-  },
+  canAdmit: (): boolean => !closingOwner(),
+  assertAdmission: (): void => assertNoOwner(closingOwner()),
+  assertReleased: (): void => assertNoOwner(registry.active.values().next().value),
+  hasActiveServers: (): boolean => registry.active.size > 0,
 
   canReleaseState(server: GatewayServer): boolean {
     // Selectors remain shared even when this exact server has already closed.
@@ -117,14 +102,12 @@ export const gatewayFixtureLifetime = {
     }
     const originalClose = server.close.bind(server);
     registry.owners.set(server, owner);
-    let closePromise: Promise<void> | undefined;
     server.close = (...args: Parameters<GatewayServer["close"]>) => {
-      if (closePromise) {
-        return closePromise;
+      if (owner.closing) {
+        return owner.closing;
       }
       const result = createDeferredCore();
-      closePromise = result.promise;
-      owner.closing = closePromise;
+      owner.closing = result.promise;
       owner.state = { phase: "closing" };
       // Invoke the native close synchronously, after publishing the shared promise.
       const closing = (async () => {
@@ -150,7 +133,7 @@ export const gatewayFixtureLifetime = {
           result.reject(error);
         },
       );
-      return closePromise;
+      return owner.closing;
     };
     owner.close = server.close;
     acquired.resolve();

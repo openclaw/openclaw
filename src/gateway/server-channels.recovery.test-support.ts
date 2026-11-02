@@ -1,13 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelGatewayContext } from "../channels/plugins/types.adapters.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { startChannelHealthMonitor } from "./channel-health-monitor.js";
+import { channelReadyPatch } from "./channel-status-patches.js";
+import * as accountLifetime from "./server-channel-account-lifetime.js";
 import {
   createTestPlugin,
   flushMicrotasks,
+  waitForAbort,
+  waitForMicrotaskCondition,
   type createTestChannelManager,
   type createTestChannelRegistry,
   type TestAccount,
@@ -22,6 +30,191 @@ export function registerChannelAutostartRecoveryTests({
   installTestRegistry: typeof createTestChannelRegistry;
   stayRunning: (context: ChannelGatewayContext<TestAccount>) => Promise<void>;
 }): void {
+  const snapshot = (manager: ReturnType<typeof createManager>) =>
+    manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+  function install(
+    startAccount: typeof stayRunning,
+    options?: Parameters<typeof createManager>[0],
+  ) {
+    const start = vi.fn(startAccount);
+    installTestRegistry(createTestPlugin({ startAccount: start }));
+    return { manager: createManager(options), startAccount: start };
+  }
+  function suppressedManager(
+    options: Parameters<typeof createManager>[0],
+    start: typeof stayRunning = async () => {},
+  ) {
+    const { manager, startAccount } = install(start, options);
+    const suppression = { reason: "crash-loop-breaker" as const, message: "safe mode" };
+    manager.setAutostartSuppression(suppression);
+    return { manager, startAccount, suppression };
+  }
+  it.each(["exited-run abort", "manual stop", "recovery stop"] as const)(
+    "settles restart backoff after %s",
+    async (cause) => {
+      const createLifetime = accountLifetime.createChannelAccountLifetime;
+      const controllers: AbortController[] = [];
+      const captureLifetime = vi
+        .spyOn(accountLifetime, "createChannelAccountLifetime")
+        .mockImplementation((...args) => {
+          const lifetime = createLifetime(...args);
+          controllers.push(lifetime.abort);
+          return lifetime;
+        });
+      const { manager, startAccount } = install(async (context) => {
+        if (controllers.length === 1) {
+          return;
+        }
+        context.setStatus(channelReadyPatch({ accountId: context.accountId }));
+        await stayRunning(context);
+      });
+
+      try {
+        await manager.startChannels();
+        await waitForMicrotaskCondition(
+          () => manager.isAutoRestartScheduled("discord", DEFAULT_ACCOUNT_ID),
+          "expected provider exit to schedule restart backoff",
+        );
+        expect(snapshot(manager)?.restartPending).toBe(true);
+        const exitedRun = controllers[0];
+        if (!exitedRun) {
+          throw new Error("expected the exited account's abort controller");
+        }
+        if (cause === "exited-run abort") {
+          exitedRun.abort();
+        } else {
+          await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+            manual: cause === "manual stop",
+          });
+        }
+
+        await vi.advanceTimersByTimeAsync(200);
+        const restarted = cause === "exited-run abort";
+        expect(startAccount).toHaveBeenCalledTimes(restarted ? 2 : 1);
+        expect(exitedRun.signal.aborted).toBe(true);
+        expect(snapshot(manager)).toMatchObject({
+          running: restarted,
+          restartPending: false,
+        });
+        expect(manager.isAutoRestartScheduled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+      } finally {
+        captureLifetime.mockRestore();
+      }
+    },
+  );
+
+  it("records a rejected restart wait and clears pending state", async () => {
+    const { manager, startAccount } = install(async () => {});
+    vi.mocked(sleepWithAbort).mockRejectedValueOnce(new Error("restart wait failed"));
+
+    await manager.startChannels();
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(snapshot(manager)).toMatchObject({
+      running: false,
+      lifecycle: "stopped",
+      restartPending: false,
+      lastError: "restart wait failed",
+    });
+    expect(manager.isAutoRestartScheduled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+  });
+
+  it("monitors a healthy sibling without resolving disabled or blocked credentials", async () => {
+    const resolveAccount = vi.fn((_cfg: OpenClawConfig, accountId?: string | null) => {
+      if (accountId !== "healthy") {
+        throw new Error("unresolved SecretRef");
+      }
+      return { enabled: true, configured: true };
+    });
+    const startAccount = vi.fn(
+      async ({ setStatus, abortSignal }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({
+          accountId: "healthy",
+          running: true,
+          connected: true,
+          lastTransportActivityAt: Date.now(),
+        });
+        await waitForAbort(abortSignal);
+      },
+    );
+    const plugin = createTestPlugin({
+      listAccountIds: () => ["broken", "disabled", "healthy"],
+      resolveAccount,
+      startAccount,
+    });
+    plugin.config.inspectAccount = (_cfg, accountId) => ({
+      enabled: accountId !== "disabled",
+      configured: true,
+    });
+    installTestRegistry(plugin);
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "account",
+        ownerId: "discord:broken",
+        state: "unavailable",
+        paths: ["channels.discord.accounts.broken.token"],
+        refKeys: ["env:default:BROKEN_TOKEN"],
+        reason: "secret reference was not found",
+      },
+    ]);
+    const manager = createManager();
+    await manager.startChannel("discord", "healthy");
+    const restart = vi.spyOn(manager, "startChannel");
+    const monitor = startChannelHealthMonitor({
+      scheduler: createTestGatewayScheduler("fake-timers"),
+      channelManager: manager,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(31 * 60_000);
+      await monitor.waitForIdle();
+      expect(restart).toHaveBeenCalledExactlyOnceWith("discord", "healthy", {
+        reason: "health-monitor",
+        preserveManualStop: true,
+      });
+      expect(startAccount).toHaveBeenCalledTimes(2);
+      expect(resolveAccount.mock.calls.map(([, accountId]) => accountId)).toEqual([
+        "healthy",
+        "healthy",
+      ]);
+      expect(manager.getRuntimeSnapshot().channelAccounts.discord).toMatchObject({
+        broken: { enabled: true, configured: true, lifecycle: "blocked", running: false },
+        disabled: { enabled: false, running: false },
+        healthy: { enabled: true, running: true },
+      });
+    } finally {
+      monitor.shutdown();
+    }
+  });
+
+  it("does not start deferred channel accounts after stop wins the startup handoff", async () => {
+    const releaseAccountStart = createDeferred();
+    const measureMock = vi.fn(async (_name: string, run: () => unknown) => await run());
+    const startupTrace = {
+      measure: async <T>(name: string, run: () => T | Promise<T>) =>
+        (await measureMock(name, run)) as T,
+    };
+    const { manager, startAccount } = install(async () => {}, {
+      startupTrace,
+      deferStartupAccountStartsUntil: releaseAccountStart.promise,
+    });
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    expect(startAccount).not.toHaveBeenCalled();
+
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await manager.startChannels();
+    expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(true);
+    releaseAccountStart.resolve();
+    await flushMicrotasks();
+
+    expect(startAccount).not.toHaveBeenCalled();
+    expect(measureMock.mock.calls.map(([name]) => name)).not.toContain(
+      "channels.discord.start-account-handoff",
+    );
+    expect(snapshot(manager)?.running).not.toBe(true);
+  });
+
   describe("crash-loop channel autostart recovery", () => {
     let originalEnv: ReturnType<typeof captureEnv>;
     beforeEach(() => {
@@ -35,10 +228,10 @@ export function registerChannelAutostartRecoveryTests({
       "preserves %s suppression after breaker recovery while allowing manual starts",
       async (envKey) => {
         setTestEnvValue(envKey, "1");
-        const startAccount = vi.fn(stayRunning);
-        installTestRegistry(createTestPlugin({ startAccount }));
-        const manager = createManager({ tryRecoverAutostartSuppression: async () => undefined });
-        manager.setAutostartSuppression({ reason: "crash-loop-breaker", message: "safe mode" });
+        const { manager, startAccount } = suppressedManager(
+          { tryRecoverAutostartSuppression: async () => undefined },
+          stayRunning,
+        );
 
         await expect(manager.recoverAutostartSuppression()).resolves.toBeUndefined();
         expect(manager.getAutostartSuppression()).toBeNull();
@@ -51,10 +244,7 @@ export function registerChannelAutostartRecoveryTests({
     it("joins autostart recovery after a waiter cancels without undoing manual stops", async () => {
       const startAccount = vi.fn(stayRunning);
       installTestRegistry(
-        createTestPlugin({
-          startAccount,
-          listAccountIds: () => [DEFAULT_ACCOUNT_ID, "work"],
-        }),
+        createTestPlugin({ startAccount, listAccountIds: () => [DEFAULT_ACCOUNT_ID, "work"] }),
       );
       const transition = createDeferred<number | undefined>();
       const tryRecover = vi.fn(() => transition.promise);
@@ -64,10 +254,7 @@ export function registerChannelAutostartRecoveryTests({
           channels: { discord: { healthMonitor: { enabled: false } } },
         }),
       });
-      manager.setAutostartSuppression({
-        reason: "crash-loop-breaker",
-        message: "safe mode",
-      });
+      manager.setAutostartSuppression({ reason: "crash-loop-breaker", message: "safe mode" });
 
       await manager.startChannels();
       await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { manual: true });
@@ -97,12 +284,29 @@ export function registerChannelAutostartRecoveryTests({
       expect(tryRecover).toHaveBeenCalledOnce();
     });
 
-    it("prepares a healthy boot synchronously without reading the breaker owner", () => {
-      const tryRecover = vi.fn(async () => undefined);
-      const manager = createManager({ tryRecoverAutostartSuppression: tryRecover });
+    it("retires the breaker error on accounts that stay unlinked after recovery", async () => {
+      installTestRegistry(
+        createTestPlugin({
+          startAccount: vi.fn(stayRunning),
+          isLinked: () => "not-linked",
+          listAccountIds: () => [DEFAULT_ACCOUNT_ID, "work"],
+        }),
+      );
+      const manager = createManager({ tryRecoverAutostartSuppression: async () => undefined });
+      manager.setAutostartSuppression({ reason: "crash-loop-breaker", message: "safe mode" });
+      await manager.startChannels();
+      manager.markChannelLoggedOut("discord", true, "work");
+      const lastErrors = () =>
+        Object.fromEntries(
+          Object.entries(manager.getRuntimeSnapshot().channelAccounts.discord ?? {}).map(
+            ([id, account]) => [id, account.lastError],
+          ),
+        );
+      expect(lastErrors()).toEqual({ [DEFAULT_ACCOUNT_ID]: "safe mode", work: "logged out" });
 
-      expect(manager.recoverAutostartSuppression()).toBeUndefined();
-      expect(tryRecover).not.toHaveBeenCalled();
+      await manager.recoverAutostartSuppression();
+
+      expect(lastErrors()).toEqual({ [DEFAULT_ACCOUNT_ID]: null, work: "logged out" });
     });
 
     it("aborts an active breaker read at scheduler close prelude without starting another", async () => {
@@ -111,11 +315,10 @@ export function registerChannelAutostartRecoveryTests({
         await waitForAbortSignal(signal);
         return undefined;
       });
-      const startAccount = vi.fn(async () => {});
-      installTestRegistry(createTestPlugin({ startAccount }));
-      const manager = createManager({ scheduler, tryRecoverAutostartSuppression: tryRecover });
-      const suppression = { reason: "crash-loop-breaker" as const, message: "safe mode" };
-      manager.setAutostartSuppression(suppression);
+      const { manager, startAccount, suppression } = suppressedManager({
+        scheduler,
+        tryRecoverAutostartSuppression: tryRecover,
+      });
 
       const recovery = manager.recoverAutostartSuppression();
       const failure = Promise.resolve(recovery).catch((error: unknown) => error);
@@ -131,17 +334,11 @@ export function registerChannelAutostartRecoveryTests({
 
     it("does not start recovered accounts after gateway close begins during handoff", async () => {
       const accountStartReady = createDeferred();
-      const startAccount = vi.fn(async () => {});
       let closing = false;
-      installTestRegistry(createTestPlugin({ startAccount }));
-      const manager = createManager({
+      const { manager, startAccount } = suppressedManager({
         deferStartupAccountStartsUntil: accountStartReady.promise,
         isClosing: () => closing,
         tryRecoverAutostartSuppression: async () => undefined,
-      });
-      manager.setAutostartSuppression({
-        reason: "crash-loop-breaker",
-        message: "safe mode",
       });
 
       const recovery = manager.recoverAutostartSuppression();
@@ -158,11 +355,9 @@ export function registerChannelAutostartRecoveryTests({
     it.each(["paused", "failed"] as const)(
       "keeps suppression when the breaker owner reports %s recovery",
       async (result) => {
-        const startAccount = vi.fn(async () => {});
         const deadline = Date.now() + 10_000;
         const failure = new Error("Crash-loop recovery did not commit");
-        installTestRegistry(createTestPlugin({ startAccount }));
-        const manager = createManager({
+        const { manager, startAccount, suppression } = suppressedManager({
           tryRecoverAutostartSuppression: async () => {
             if (result === "failed") {
               throw failure;
@@ -170,8 +365,6 @@ export function registerChannelAutostartRecoveryTests({
             return deadline;
           },
         });
-        const suppression = { reason: "crash-loop-breaker" as const, message: "safe mode" };
-        manager.setAutostartSuppression(suppression);
 
         const recovery = manager.recoverAutostartSuppression();
         if (result === "paused") {
@@ -189,15 +382,11 @@ export function registerChannelAutostartRecoveryTests({
       "keeps suppression when %s overtakes the persisted recovery transition",
       async (change) => {
         const transition = createDeferred<number | undefined>();
-        const startAccount = vi.fn(async () => {});
         let closing = false;
-        installTestRegistry(createTestPlugin({ startAccount }));
-        const manager = createManager({
+        const { manager, startAccount, suppression } = suppressedManager({
           isClosing: () => closing,
           tryRecoverAutostartSuppression: () => transition.promise,
         });
-        const suppression = { reason: "crash-loop-breaker" as const, message: "safe mode" };
-        manager.setAutostartSuppression(suppression);
 
         const recovery = manager.recoverAutostartSuppression();
         const current = change === "replacement" ? { ...suppression } : suppression;

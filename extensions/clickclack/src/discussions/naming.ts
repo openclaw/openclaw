@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 
 function shortSessionHash(sessionKey: string): string {
-  return createHash("sha256").update(sessionKey).digest("hex").slice(0, 32);
+  return sha256Hex(sessionKey).slice(0, 32);
 }
 
 function slugifyLabel(label: string): string {
@@ -50,27 +50,16 @@ export function slugifyDiscussionLabel(label: string, sessionKey: string): strin
   return slug || fallbackDiscussionLabel(sessionKey);
 }
 
-type DiscussionBindingIdentity = {
-  mainSessionKey: string;
-  sessionId: string;
-  serverBaseUrl: string;
-  channelId: string;
-  externalRef: string;
-};
-
-function discussionSessionPeerId(identity: DiscussionBindingIdentity): string {
-  const digest = createHash("sha256")
-    .update(
-      [
-        identity.mainSessionKey,
-        identity.sessionId,
-        identity.serverBaseUrl,
-        identity.channelId,
-        identity.externalRef,
-      ].join("\0"),
-    )
-    .digest("hex")
-    .slice(0, 32);
+function discussionSessionPeerId(identity: Parameters<typeof discussionSessionKey>[0]): string {
+  const digest = sha256Hex(
+    [
+      identity.mainSessionKey,
+      identity.sessionId,
+      identity.serverBaseUrl,
+      identity.channelId,
+      identity.externalRef,
+    ].join("\0"),
+  ).slice(0, 32);
   return `disc-${digest}`;
 }
 
@@ -90,7 +79,7 @@ export function discussionExternalRef(
 }
 
 export function discussionCredentialFingerprint(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
+  return sha256Hex(token);
 }
 
 export function discussionSessionKey(params: {

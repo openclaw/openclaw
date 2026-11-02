@@ -67,6 +67,20 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     clearMemoryPluginState();
   });
 
+  it("lets explicit skill workflow gates override execution bias while preserving user authority and safety", () => {
+    const prompt = buildConfiguredAgentSystemPrompt({
+      ...basicPromptInputs(),
+      config: {},
+      tools: [createStubTool("read")],
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>publish</name>\n    <location>/skills/publish/SKILL.md</location>\n  </skill>\n</available_skills>",
+    });
+    expect(prompt).toContain("read exact <location>");
+    expect(prompt).toContain(
+      "## Execution Bias\n- Actionable request: act now. Explicit skill workflow gates override this bias; user instructions, prior authorization, safety, and tool policy remain authoritative.",
+    );
+  });
+
   it.each(["available", "source-reply-only", "absent"] as const)(
     "advertises ClawHub from the actual %s message tool schema",
     (surface) => {
@@ -218,13 +232,13 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     } satisfies Parameters<typeof buildConfiguredAgentSystemPrompt>[0];
     const prompt = buildConfiguredAgentSystemPrompt(params);
 
-    expect(prompt).not.toContain("Active exec sessions:");
+    expect(prompt).not.toContain("Active exec sessions");
     expect(prompt).toContain("Before input: process log");
     expect(prompt).toContain("waitingForInput/stdinWritable");
     expect(prompt).toContain("process list");
 
     const restrictedPrompt = buildConfiguredAgentSystemPrompt({ ...params, tools: [] });
-    expect(restrictedPrompt).not.toContain("Active exec sessions:");
+    expect(restrictedPrompt).not.toContain("Active exec sessions");
     expect(restrictedPrompt).not.toContain("process log");
     expect(restrictedPrompt).not.toContain("process list");
   });

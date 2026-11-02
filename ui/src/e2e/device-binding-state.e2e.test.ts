@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect } from "playwright/test";
 import { it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
@@ -7,31 +8,83 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Device binding capability lifecycle" });
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const nodes = [
-  {
-    nodeId: "default-node",
-    displayName: "Default worker",
-    connected: true,
-    commands: ["system.run"],
-  },
-  {
-    nodeId: "agent-node",
-    displayName: "Research worker",
-    connected: true,
-    commands: ["system.run"],
-  },
-];
+  ["default-node", "Default worker"],
+  ["agent-node", "Research worker"],
+].map(([nodeId, displayName]) => ({
+  nodeId,
+  displayName,
+  connected: true,
+  commands: ["system.run"],
+}));
+const availableLabels = ["Default worker · default-node", "Research worker · agent-node"];
 const makeConfig = (defaultBinding: string, agentBinding: string) => ({
-  tools: { exec: { node: defaultBinding } },
+  tools: { exec: defaultBinding ? { node: defaultBinding } : {} },
   agents: {
     ownership: "explicit",
     defaults: { systemAgent: { agentId: "main" } },
     entries: {
       main: {},
-      research: { name: "Research", tools: { exec: { node: agentBinding } } },
+      research: { name: "Research", tools: { exec: agentBinding ? { node: agentBinding } : {} } },
     },
   },
 });
+
+async function bindingControls(
+  page: Page,
+  config: ReturnType<typeof makeConfig>,
+  lifecycle = false,
+) {
+  const gateway = await installMockGateway(page, {
+    ...(lifecycle
+      ? {
+          operatorScopes: ["operator.admin", "operator.read", "operator.write", "operator.pairing"],
+        }
+      : {}),
+    methodResponses: {
+      "node.list": { nodes },
+      "config.get": {
+        config,
+        sourceConfig: config,
+        raw: JSON.stringify(config),
+        issues: [],
+        valid: true,
+        hash: lifecycle ? "binding-fixture" : "binding-clear-fixture",
+        ...(lifecycle ? { runtimeConfig: config } : {}),
+      },
+    },
+  });
+  await page.goto(`${suite.server.baseUrl}settings/devices`);
+  const section = page.locator(".settings-section").filter({
+    has: page.getByRole("heading", { name: "Exec node binding", exact: true }),
+  });
+  const defaultSelect = section.getByRole("combobox", { name: "Node", exact: true });
+  const researchSelect = section
+    .locator(".settings-row")
+    .filter({
+      has: page.locator(".settings-row__title").getByText("Research (research)", { exact: true }),
+    })
+    .getByRole("combobox");
+  return { gateway, section, defaultSelect, researchSelect };
+}
+
+async function expectBindings(selects: Locator[], values: string[], labels?: string[]) {
+  for (const [index, select] of selects.entries()) {
+    await expect(select).toHaveValue(values[index]!);
+    if (labels) {
+      await expect(select.locator("option:checked")).toHaveText(labels[index]!);
+    }
+  }
+}
+
+async function expectWrites(
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  count: number,
+) {
+  expect(await gateway.getRequests("config.set")).toHaveLength(count);
+  expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+}
 
 suite.define(() => {
   it.each([
@@ -43,53 +96,35 @@ suite.define(() => {
       const config = makeConfig(defaultBinding, agentBinding);
       const viewport = { width: 1280, height: 900 };
       await suite.withPage(
-        { viewport, colorScheme: "dark", recordVideo: { dir: suite.artifactDir, size: viewport } },
+        {
+          viewport,
+          colorScheme: "dark",
+          ...(captureUiProof ? { recordVideo: { dir: suite.artifactDir, size: viewport } } : {}),
+        },
         async ({ page }) => {
-          const gateway = await installMockGateway(page, {
-            operatorScopes: [
-              "operator.admin",
-              "operator.read",
-              "operator.write",
-              "operator.pairing",
-            ],
-            methodResponses: {
-              "node.list": { nodes },
-              "config.get": {
-                config,
-                sourceConfig: config,
-                runtimeConfig: config,
-                hash: "binding-fixture",
-                issues: [],
-                raw: JSON.stringify(config),
-                valid: true,
-              },
-            },
-          });
-          await page.goto(`${suite.server.baseUrl}settings/devices`);
-          const section = page.locator(".settings-section").filter({
-            has: page.locator(".settings-section__heading", { hasText: "Exec node binding" }),
-          });
-          const defaultSelect = section.getByRole("combobox", { name: "Node", exact: true });
-          const researchSelect = section
-            .locator(".settings-row")
-            .filter({
-              has: page.locator(".settings-row__title", { hasText: "Research (research)" }),
-            })
-            .getByRole("combobox");
-          await expect(defaultSelect).toHaveValue(defaultBinding);
-          await expect(researchSelect).toHaveValue(agentBinding);
-          await expect(defaultSelect.locator("option:checked")).toBeEnabled();
-          await expect(researchSelect.locator("option:checked")).toBeEnabled();
+          const { gateway, section, defaultSelect, researchSelect } = await bindingControls(
+            page,
+            config,
+            true,
+          );
+          const selects = [defaultSelect, researchSelect];
+          const values = [defaultBinding, agentBinding];
+          await expectBindings(selects, values);
+          for (const select of selects) {
+            await expect(select.locator("option:checked")).toBeEnabled();
+          }
           const saveButton = section.getByRole("button", { name: "Save", exact: true });
           await expect(saveButton).toBeDisabled();
           const capture = async (name: string) => {
             await section.scrollIntoViewIfNeeded();
-            for (const select of [defaultSelect, researchSelect]) {
+            for (const select of selects) {
               const bounds = await select.boundingBox();
               expect(bounds?.y).toBeGreaterThanOrEqual(0);
               expect(bounds && bounds.y + bounds.height).toBeLessThanOrEqual(viewport.height);
             }
-            await page.screenshot({ path: path.join(suite.artifactDir, name) });
+            if (captureUiProof) {
+              await page.screenshot({ path: path.join(suite.artifactDir, name) });
+            }
           };
           await capture("available.png");
 
@@ -102,39 +137,24 @@ suite.define(() => {
           await expect(defaultSelect).toBeEnabled();
           await expect(researchSelect).toBeEnabled();
           await capture("unavailable.png");
-          if (
-            (await defaultSelect.inputValue()) !== defaultBinding ||
-            (await researchSelect.inputValue()) !== agentBinding
-          ) {
-            throw new Error(
-              "BINDING_SELECTION_LOSS_133032: inventory refresh dropped a saved binding from the selected options",
-            );
-          }
+          expect(
+            await Promise.all(selects.map((select) => select.inputValue())),
+            "BINDING_SELECTION_LOSS_133032",
+          ).toEqual(values);
           await expect(saveButton).toBeDisabled();
-          await expect(defaultSelect).toHaveValue(defaultBinding);
-          await expect(researchSelect).toHaveValue(agentBinding);
-          await expect(defaultSelect.locator("option:checked")).toHaveText(
-            `${defaultBinding} (Unavailable)`,
-          );
-          await expect(researchSelect.locator("option:checked")).toHaveText(
-            `${agentBinding} (Unavailable)`,
+          await expectBindings(
+            selects,
+            values,
+            values.map((value) => `${value} (Unavailable)`),
           );
 
           await gateway.setMethodResponse("node.list", { nodes });
           await gateway.emitGatewayEvent("node.runnerInventory.changed", {});
           await expect(defaultSelect).toBeEnabled();
-          await expect(defaultSelect).toHaveValue(defaultBinding);
-          await expect(researchSelect).toHaveValue(agentBinding);
-          await expect(defaultSelect.locator("option:checked")).toHaveText(
-            "Default worker · default-node",
-          );
-          await expect(researchSelect.locator("option:checked")).toHaveText(
-            "Research worker · agent-node",
-          );
+          await expectBindings(selects, values, availableLabels);
           await capture("recovered.png");
           await expect(saveButton).toBeDisabled();
-          expect(await gateway.getRequests("config.patch")).toHaveLength(0);
-          expect(await gateway.getRequests("config.set")).toHaveLength(0);
+          await expectWrites(gateway, 0);
         },
       );
     },
@@ -146,35 +166,15 @@ suite.define(() => {
       const requireRecord = createRequireRecord("record", "expected-object-value");
       const config = makeConfig("default-node", "agent-node");
       await suite.withPage({ viewport: { width: 1280, height: 1000 } }, async ({ page }) => {
-        const artifacts = createControlUiE2eArtifactDir("device-binding-clear");
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "node.list": { nodes },
-            "config.get": {
-              config,
-              sourceConfig: config,
-              raw: JSON.stringify(config),
-              hash: "binding-clear-fixture",
-              valid: true,
-              issues: [],
-            },
-          },
-        });
-        await page.goto(`${suite.server.baseUrl}settings/devices`);
-        const section = page.locator(".settings-section").filter({
-          has: page.getByRole("heading", { name: "Exec node binding", exact: true }),
-        });
-        const defaultSelect = section.getByRole("combobox", { name: "Node", exact: true });
-        const researchSelect = section
-          .locator(".settings-row")
-          .filter({
-            has: page
-              .locator(".settings-row__title")
-              .getByText("Research (research)", { exact: true }),
-          })
-          .getByRole("combobox");
-        await expect(defaultSelect).toHaveValue("default-node");
-        await expect(researchSelect).toHaveValue("agent-node");
+        const artifacts = captureUiProof
+          ? createControlUiE2eArtifactDir("device-binding-clear")
+          : undefined;
+        const { gateway, section, defaultSelect, researchSelect } = await bindingControls(
+          page,
+          config,
+        );
+        const selects = [defaultSelect, researchSelect];
+        await expectBindings(selects, ["default-node", "agent-node"]);
         await gateway.setMethodResponse("node.list", {
           nodes:
             inventoryState === "removed" ? [] : nodes.map((node) => ({ ...node, commands: [] })),
@@ -184,21 +184,21 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("node.list")).length)
           .toBeGreaterThan(reads);
-        await expect(defaultSelect.locator("option:checked")).toHaveText(
-          "default-node (Unavailable)",
+        await expectBindings(
+          selects,
+          ["default-node", "agent-node"],
+          ["default-node (Unavailable)", "agent-node (Unavailable)"],
         );
-        await expect(researchSelect.locator("option:checked")).toHaveText(
-          "agent-node (Unavailable)",
-        );
-        expect(await gateway.getRequests("config.set")).toHaveLength(0);
-        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        await expectWrites(gateway, 0);
         await section.scrollIntoViewIfNeeded();
-        await page.screenshot({ path: path.join(artifacts, "unavailable-before-clear.png") });
-        // Unavailable targets stay selected until an administrator explicitly
-        // chooses the existing clear action. Clearing needs no replacement node.
+        if (artifacts) {
+          await page.screenshot({ path: path.join(artifacts, "unavailable-before-clear.png") });
+        }
         await expect(defaultSelect).toBeEnabled();
         await expect(researchSelect).toBeEnabled();
-        await page.screenshot({ path: path.join(artifacts, "unavailable-clear-enabled.png") });
+        if (artifacts) {
+          await page.screenshot({ path: path.join(artifacts, "unavailable-clear-enabled.png") });
+        }
         await gateway.deferNext("config.set");
         await defaultSelect.selectOption({ label: "Any node" });
         const clearedDefault = requireRecord((await gateway.waitForRequest("config.set")).params);
@@ -206,19 +206,19 @@ suite.define(() => {
           ...config,
           tools: { exec: {} },
         });
-        // Applied-state refresh must preserve the acknowledged binding removal.
-        // Hold that read so this verifies the same order on fast and loaded hosts.
+        // Hold refresh until the acknowledged removal is published.
         const refreshReads = (await gateway.getRequests("config.get")).length;
         await gateway.deferNext("config.get");
         await gateway.resolveDeferred("config.set");
         const indicator = page.locator("openclaw-settings-save-indicator");
-        await expect(indicator).toContainText("Saved");
+        await expect(indicator).toContainText("Apply changes");
         await gateway.waitForRequest("config.get", { after: refreshReads });
         await gateway.resolveDeferred("config.get");
-        await page.screenshot({ path: path.join(artifacts, "after-clear-refresh.png") });
-        await expect(defaultSelect).toHaveValue("");
+        if (artifacts) {
+          await page.screenshot({ path: path.join(artifacts, "after-clear-refresh.png") });
+        }
+        await expectBindings(selects, ["", "agent-node"]);
         await expect(defaultSelect).toBeDisabled();
-        await expect(researchSelect).toHaveValue("agent-node");
         await expect(researchSelect).toBeEnabled();
 
         await gateway.deferNext("config.set");
@@ -226,33 +226,23 @@ suite.define(() => {
         const clearedAgent = requireRecord(
           (await gateway.waitForRequest("config.set", { after: 1 })).params,
         );
-        expect(JSON.parse(String(clearedAgent.raw))).toEqual({
-          tools: { exec: {} },
-          agents: {
-            ownership: "explicit",
-            defaults: { systemAgent: { agentId: "main" } },
-            entries: {
-              main: {},
-              research: { name: "Research", tools: { exec: {} } },
-            },
-          },
-        });
+        expect(JSON.parse(String(clearedAgent.raw))).toEqual(makeConfig("", ""));
         await gateway.resolveDeferred("config.set");
-        await expect(indicator).toContainText("Saved");
+        await expect(indicator).toContainText("Apply changes");
         await expect(researchSelect).toHaveValue("__default__");
         await expect(researchSelect).toBeDisabled();
         await expect(defaultSelect).toBeDisabled();
-        await page.screenshot({ path: path.join(artifacts, "unavailable-cleared.png") });
+        if (artifacts) {
+          await page.screenshot({ path: path.join(artifacts, "unavailable-cleared.png") });
+        }
 
         await gateway.setMethodResponse("node.list", { nodes });
         await gateway.emitGatewayEvent("node.runnerInventory.changed", {});
         await expect(
           defaultSelect.getByRole("option", { name: "Default worker · default-node", exact: true }),
         ).toHaveCount(1);
-        await expect(defaultSelect).toHaveValue("");
-        await expect(researchSelect).toHaveValue("__default__");
-        expect(await gateway.getRequests("config.set")).toHaveLength(2);
-        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        await expectBindings(selects, ["", "__default__"]);
+        await expectWrites(gateway, 2);
       });
     },
   );

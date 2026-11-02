@@ -10,8 +10,8 @@ function stringFields(json: string | null): Map<string, string> {
 
 function text(fields: Map<string, string>, key: string): string | null {
   const raw = fields.get(key);
-  const value: unknown = raw?.startsWith('"') ? JSON.parse(raw) : null;
-  return typeof value === "string" ? value : null;
+  const value: string | null = raw?.startsWith('"') ? JSON.parse(raw) : null;
+  return value;
 }
 
 export function deriveMeetingTranscriptSessionColumns(

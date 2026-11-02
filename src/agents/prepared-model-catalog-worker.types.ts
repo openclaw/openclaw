@@ -1,10 +1,10 @@
-import type { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import type { serializeConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { Model } from "../llm/types.js";
 import type { ActiveRemoteModelCatalog } from "../model-catalog/remote-overlay.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import type { AuthProfileCredentialReceipts } from "../state/user-model-account-authority.js";
+import type { captureTemplateInstallSchemaVersionFacts } from "../templates/provenance-runtime-read.js";
 import type { AuthProfileStore, SharedAuthStoreOwnership } from "./auth-profiles/types.js";
 import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -17,7 +17,6 @@ import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.j
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 export type PreparedModelCatalogWorkerInput = Readonly<{
-  generationFingerprint: string;
   remoteCatalog: ActiveRemoteModelCatalog | null;
   input: PreparedModelRuntimeInput & { env: NodeJS.ProcessEnv };
   sourceConfigForSecrets: PreparedModelRuntimeInput["config"];
@@ -31,11 +30,15 @@ export type PreparedModelCatalogWorkerInput = Readonly<{
     "configuredModelRefs" | "configuredRuntimeModels"
   >;
   preferBuiltPluginArtifacts: boolean;
+  installedIndexFingerprint: string;
   pluginMetadataSnapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">;
 }>;
 
 export type PreparedModelCatalogWorkerTask = {
-  value: PreparedModelCatalogWorkerInput;
+  context: { workspaceDir: string | undefined; fingerprint: string };
+  value:
+    | PreparedModelCatalogWorkerInput
+    | Omit<PreparedModelCatalogWorkerInput, "remoteCatalog" | "pluginMetadataSnapshot">;
   request: PreparedModelWorkerRequest;
 };
 
@@ -50,7 +53,7 @@ export type PreparedModelWorkerCommand =
 export type PreparedModelWorkerRequest = PreparedModelWorkerCommand &
   Readonly<{
     syntheticAuth: PreparedSyntheticAuthFacts;
-    clawInstallSchemaVersions: ReturnType<typeof captureClawInstallSchemaVersionFacts>;
+    templateInstallSchemaVersions: ReturnType<typeof captureTemplateInstallSchemaVersionFacts>;
     /** Codex client version decided by the parent; absent means the bundled pin. */
     codexClientVersion?: string;
   }>;
@@ -62,7 +65,6 @@ export type PreparedModelWorkerOutcome =
   | Readonly<
       PreparedModelRuntimeAuth & {
         status: "ok";
-        generationFingerprint: string;
         credentials: Readonly<AuthStorageData>;
       } & (
           | {
@@ -76,9 +78,4 @@ export type PreparedModelWorkerOutcome =
           | { kind: "auth-refresh" }
         )
     >
-  | Readonly<{
-      status: "generation-mismatch";
-      generationFingerprint: string;
-      reconstructedFingerprint: string;
-    }>
   | Readonly<{ status: "failed"; error: string }>;

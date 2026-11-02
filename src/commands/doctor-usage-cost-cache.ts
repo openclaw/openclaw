@@ -127,20 +127,23 @@ async function maybeRemoveLegacySkillUploadTree(params: {
 }): Promise<void> {
   const stateDir = resolveStateDir(params.env ?? process.env, os.homedir);
   const uploadRoot = path.join(stateDir, "tmp", "skill-uploads");
-  if (!(await fs.lstat(uploadRoot).catch(() => null))) {
-    return;
-  }
-  if (!params.shouldRepair) {
-    note(
-      "Legacy skill-upload staging remains. Run `openclaw doctor --fix` to discard it; active uploads now live in SQLite and must be retried.",
-      "Skill uploads",
-    );
-    return;
-  }
   try {
+    await fs.lstat(uploadRoot);
+    if (!params.shouldRepair) {
+      note(
+        "Legacy skill-upload staging remains. Run `openclaw doctor --fix` to discard it; active uploads now live in SQLite and must be retried.",
+        "Skill uploads",
+      );
+      return;
+    }
     await fs.rm(uploadRoot, { recursive: true, force: true });
   } catch (error) {
-    note(`Failed removing legacy skill-upload staging: ${String(error)}`, "Skill uploads");
+    if (!hasErrnoCode(error, "ENOENT")) {
+      note(
+        `Failed ${params.shouldRepair ? "removing" : "inspecting"} legacy skill-upload staging: ${String(error)}`,
+        "Skill uploads",
+      );
+    }
     return;
   }
   note(
@@ -208,18 +211,20 @@ export async function maybeRepairLegacyRuntimeFiles(
   await maybeRemoveLegacyUsageCostCacheFiles({ shouldRepair, env });
   if (shouldRepair) {
     for (const entry of listOpenClawRegisteredAgentDatabases({ env })) {
-      if ((await fs.stat(entry.path).catch(() => null))?.isFile()) {
-        await runDoctorAgentDatabaseOperationAsync({
-          agentId: entry.agentId,
-          path: entry.path,
-          run: () =>
-            retireLegacySessionCostUsageCache({
+      await runDoctorAgentDatabaseOperationAsync({
+        agentId: entry.agentId,
+        path: entry.path,
+        run: async () => {
+          const stats = await readFilesystemEntryOrMissing(entry.path, () => fs.stat(entry.path));
+          if (stats?.isFile()) {
+            await retireLegacySessionCostUsageCache({
               agentId: entry.agentId,
               env,
               databasePath: entry.path,
-            }),
-        });
-      }
+            });
+          }
+        },
+      });
     }
   }
   await maybeRemoveLegacySkillUploadTree({ shouldRepair, env });

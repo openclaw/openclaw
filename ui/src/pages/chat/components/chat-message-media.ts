@@ -3,6 +3,8 @@ import type { ChatImageRenditionWidth } from "../../../../../src/shared/chat-ima
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import type { MessageContentItem, MessageImageSource } from "../../../lib/chat/chat-types.ts";
 import { readTranscriptMediaEntries } from "../../../lib/chat/message-extract.ts";
@@ -15,6 +17,11 @@ import {
   labelForMediaPath,
 } from "../../../lib/media-file-extension.ts";
 import { isCrossOriginHttpSource } from "./chat-attachment-href.ts";
+import type { WorkspaceFileSearchTarget } from "./chat-message-media-actions.ts";
+
+registerChatComposerEnglish();
+
+registerChatMediaEnglish();
 
 export type ImageBlock = {
   factIndex?: number;
@@ -38,7 +45,11 @@ export type ArtifactDownloadResolver = (
 ) => Promise<{ url: string; expiresAt?: string; blob?: Blob } | null>;
 
 export type ImageRenderOptions = {
-  galleryImages?: readonly ImageBlock[];
+  /** Navigation membership for an opened tile; sibling message ids keep their media scope. */
+  galleryImages?: (image: ImageBlock) => {
+    index: number;
+    items: readonly { image: ImageBlock; messageId: string | undefined }[];
+  };
   galleryVideos?: (item: AttachmentItem) => {
     index: number;
     items: readonly (AttachmentItem & { messageId?: string })[];
@@ -49,12 +60,19 @@ export type ImageRenderOptions = {
   policyKey?: string;
   canonicalMessageKey?: string;
   localSubmission?: boolean;
+  messageSendId?: string;
   connectionEpoch?: number;
   resourceBasePath?: string;
   authToken?: string | null;
-  onRequestUpdate?: () => void;
+  /** Synchronous cancellation custody, independent of any rendering callback. */
+  mediaOwner?: object;
+  mediaReadAllowed?: boolean;
+  /** A local resource observer; never a pane or page redraw callback. */
+  onMediaChange?: () => void;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+  /** Filename query only; the Files owner selects and authorizes any eventual file. */
+  onFindWorkspaceFile?: (target: WorkspaceFileSearchTarget) => void;
   resolveArtifactDownload?: ArtifactDownloadResolver;
 };
 
@@ -88,6 +106,7 @@ export type ProjectedMessageContent =
   | AssistantAttachmentItem;
 
 type ChatMediaResourceKind =
+  | "comment-preview"
   | "assistant-attachment"
   | "managed-image"
   | "managed-media"
@@ -112,8 +131,9 @@ export type ChatMediaResource<Value> = {
 
 type ChatMediaSubscriber = {
   resources: Map<string, ChatMediaResource<unknown>>;
-  children: Set<() => void>;
-  owner?: () => void;
+  children: Set<object>;
+  owner?: object;
+  subscriber?: () => void;
 };
 
 type ManagedImageBlobUrl = {
@@ -123,16 +143,15 @@ type ManagedImageBlobUrl = {
 };
 
 const chatMediaResources = new Map<string, ChatMediaResource<unknown>>();
-const chatMediaSubscribers = new Map<() => void, ChatMediaSubscriber>();
+const chatMediaSubscribers = new Map<object, ChatMediaSubscriber>();
 const managedImageBlobUrls = new Map<string, ManagedImageBlobUrl>();
 const CHAT_MEDIA_CACHE_MAX_ENTRIES = 64;
-let chatMediaRenderVersion = 0;
 
 function chatMediaResourceKey(kind: ChatMediaResourceKind, cacheKey: string): string {
   return `${kind}\0${cacheKey}`;
 }
 
-function getChatMediaSubscriber(subscriber: () => void): ChatMediaSubscriber {
+function getChatMediaSubscriber(subscriber: object): ChatMediaSubscriber {
   let state = chatMediaSubscribers.get(subscriber);
   if (!state) {
     state = { resources: new Map(), children: new Set() };
@@ -141,13 +160,13 @@ function getChatMediaSubscriber(subscriber: () => void): ChatMediaSubscriber {
   return state;
 }
 
-function pruneChatMediaSubscriber(subscriber: () => void, state: ChatMediaSubscriber): void {
+function pruneChatMediaSubscriber(subscriber: object, state: ChatMediaSubscriber): void {
   if (!state.owner && state.children.size === 0 && state.resources.size === 0) {
     chatMediaSubscribers.delete(subscriber);
   }
 }
 
-function removeChatMediaSubscriberChild(owner: () => void, subscriber: () => void): void {
+function removeChatMediaSubscriberChild(owner: object, subscriber: object): void {
   const state = chatMediaSubscribers.get(owner);
   if (state) {
     state.children.delete(subscriber);
@@ -169,8 +188,7 @@ function detachChatMediaResourceSubscriber(
   const resourceKey = chatMediaResourceKey(resource.kind, resource.cacheKey);
   if (chatMediaResources.get(resourceKey) === resource) {
     chatMediaResources.delete(resourceKey);
-    // Virtual rows release every subscriber while offscreen. Keep only settled
-    // successes so remounts reuse their signed URL without retaining failed work.
+    // Offscreen virtual rows retain only settled, reusable resources.
     if (
       resource.retainUntil !== undefined &&
       resource.retainUntil > Date.now() &&
@@ -236,7 +254,9 @@ export function observeChatMediaResource<Value>(
   }
   const newObservation = !subscriber || !resource.subscribers.has(subscriber);
   if (subscriber) {
-    const subscriptions = getChatMediaSubscriber(subscriber).resources;
+    const observation = getChatMediaSubscriber(subscriber);
+    observation.subscriber = subscriber;
+    const subscriptions = observation.resources;
     const subscriptionKey = chatMediaResourceKey(kind, subscriberScope);
     const previous = subscriptions.get(subscriptionKey);
     // Protect the target from idle eviction before releasing the previous resource.
@@ -274,15 +294,10 @@ export function isChatMediaResourceCurrent(resource: ChatMediaResource<unknown>)
   );
 }
 
-export function getChatMediaRenderVersion(): number {
-  return chatMediaRenderVersion;
-}
-
 export function notifyChatMediaResourceSubscribers(resource: ChatMediaResource<unknown>) {
   if (!isChatMediaResourceCurrent(resource)) {
     return;
   }
-  chatMediaRenderVersion += 1;
   // A pane can change its subscription while another pane is being notified.
   // Snapshot the current generation so a replacement never receives stale work.
   for (const subscriber of Array.from(resource.subscribers)) {
@@ -311,7 +326,7 @@ export function scheduleChatMediaResourceRefresh(
   if (refreshAt === undefined || resource.subscribers.size === 0) {
     return;
   }
-  const refresh = {
+  resource.refresh = {
     at: refreshAt,
     timer: setTimeout(
       () => {
@@ -321,10 +336,12 @@ export function scheduleChatMediaResourceRefresh(
       Math.max(0, refreshAt - Date.now()),
     ),
   };
-  resource.refresh = refresh;
 }
 
-export function observeChatMediaResourceSubscriber(owner: () => void, subscriber: () => void) {
+export function observeChatMediaResourceSubscriber(
+  owner: object | undefined,
+  subscriber: () => void,
+) {
   const state = getChatMediaSubscriber(subscriber);
   if (state.owner === owner) {
     return;
@@ -332,24 +349,28 @@ export function observeChatMediaResourceSubscriber(owner: () => void, subscriber
   if (state.owner) {
     removeChatMediaSubscriberChild(state.owner, subscriber);
   }
-  getChatMediaSubscriber(owner).children.add(subscriber);
+  if (owner) {
+    getChatMediaSubscriber(owner).children.add(subscriber);
+  }
   state.owner = owner;
 }
 
-export function releaseChatMediaResourceSubscriber(subscriber: (() => void) | undefined) {
+export function releaseChatMediaResourceOwner(subscriber: object | undefined) {
   const state = subscriber && chatMediaSubscribers.get(subscriber);
   if (!subscriber || !state) {
     return;
   }
   chatMediaSubscribers.delete(subscriber);
   for (const child of state.children) {
-    releaseChatMediaResourceSubscriber(child);
+    releaseChatMediaResourceOwner(child);
   }
   if (state.owner) {
     removeChatMediaSubscriberChild(state.owner, subscriber);
   }
   for (const resource of new Set(state.resources.values())) {
-    detachChatMediaResourceSubscriber(resource, subscriber);
+    if (state.subscriber) {
+      detachChatMediaResourceSubscriber(resource, state.subscriber);
+    }
   }
 }
 
@@ -365,12 +386,11 @@ export function trimManagedImageMissResources() {
 
 export function readManagedImageBlobUrl(cacheKey: string): string | undefined {
   const cached = managedImageBlobUrls.get(cacheKey);
-  if (!cached) {
-    return undefined;
+  if (cached) {
+    managedImageBlobUrls.delete(cacheKey);
+    managedImageBlobUrls.set(cacheKey, cached);
   }
-  managedImageBlobUrls.delete(cacheKey);
-  managedImageBlobUrls.set(cacheKey, cached);
-  return cached.url;
+  return cached?.url;
 }
 
 export function readManagedImageBlob(cacheKey: string): Blob | undefined {
@@ -465,11 +485,8 @@ export function resolveAttachmentImageKind(
     : "raster";
 }
 
-export function projectMessageMedia(
-  message: unknown,
-  content: readonly MessageContentItem[],
-  nowMs = Date.now(),
-) {
+export function projectMessageMedia(message: unknown, content: readonly MessageContentItem[]) {
+  const nowMs = Date.now();
   const record = asNonArrayRecord(message);
   const images: ImageBlock[] = [];
   const attachments: AssistantAttachmentItem[] = [];
@@ -570,10 +587,7 @@ export function projectMessageMedia(
         expiredPairingQrCount += 1;
         continue;
       }
-      nextPairingQrExpiresAt = Math.min(
-        nextPairingQrExpiresAt ?? item.expiresAtMs,
-        item.expiresAtMs,
-      );
+      nextPairingQrExpiresAt = Math.min(nextPairingQrExpiresAt ?? Infinity, item.expiresAtMs);
     }
     const factIndex = item.inlineSlot ? inlineSlots[inlineIndex++]?.factIndex : undefined;
     const blockImages: ImageBlock[] = [];
@@ -623,6 +637,16 @@ export function projectMessageMedia(
     height,
     factIndex,
   } of readTranscriptMediaEntries(message)) {
+    // Inline content owns placement; its canonical fact can supply geometry
+    // before deduplication discards the mirrored attachment.
+    if (width !== undefined && height !== undefined) {
+      for (const image of images) {
+        const matches = validLayout ? image.factIndex === factIndex : image.url === mediaPath;
+        if (matches && ((image.width ?? 0) <= 0 || (image.height ?? 0) <= 0)) {
+          Object.assign(image, { width, height });
+        }
+      }
+    }
     // Without slot identity, a persisted fact mirrors the already-positioned media.
     // Valid layouts still distinguish separate uploads of the same source.
     if (!validLayout && positionedSources.has(mediaPath)) {
@@ -688,23 +712,23 @@ export function projectMessageMedia(
 export function schedulePairingQrExpiryRefresh(
   messageKey: string,
   refreshAt: number | undefined,
-  onRequestUpdate: (() => void) | undefined,
+  onMediaChange: (() => void) | undefined,
 ) {
-  if (!onRequestUpdate) {
+  if (!onMediaChange) {
     return;
   }
   if (refreshAt === undefined) {
-    const subscriber = chatMediaSubscribers.get(onRequestUpdate);
+    const subscriber = chatMediaSubscribers.get(onMediaChange);
     const resourceKey = chatMediaResourceKey("pairing-qr", messageKey);
     const resource = subscriber?.resources.get(resourceKey);
     if (subscriber && resource) {
       subscriber.resources.delete(resourceKey);
-      detachChatMediaResourceSubscriber(resource, onRequestUpdate);
-      pruneChatMediaSubscriber(onRequestUpdate, subscriber);
+      detachChatMediaResourceSubscriber(resource, onMediaChange);
+      pruneChatMediaSubscriber(onMediaChange, subscriber);
     }
     return;
   }
-  const resource = observeChatMediaResource<void>("pairing-qr", messageKey, onRequestUpdate);
+  const resource = observeChatMediaResource<void>("pairing-qr", messageKey, onMediaChange);
   scheduleChatMediaResourceRefresh(resource, refreshAt, () =>
     notifyChatMediaResourceSubscribers(resource),
   );
@@ -726,12 +750,11 @@ export function extractMessageMediaText(
     ...images.map(
       (image) => image.fileName?.trim() || image.alt?.trim() || t("chat.imageLightbox.untitled"),
     ),
-    ...content.flatMap((item) => {
-      if (item.type !== "omitted_media") {
-        return [];
-      }
-      return [`${t("chat.attachments.image")} · ${omittedMediaReason(item.media.sizeBytes)}`];
-    }),
+    ...content.flatMap((item) =>
+      item.type === "omitted_media"
+        ? [`${t("chat.attachments.image")} · ${omittedMediaReason(item.media.sizeBytes)}`]
+        : [],
+    ),
     ...attachments.map(
       (item) => item.attachment.label.trim() || t("chat.attachments.attachedFile"),
     ),

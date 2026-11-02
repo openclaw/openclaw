@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AgentRunTerminalDeliverySnapshot } from "../agent-run-terminal-delivery.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import {
   formatAgentRunRouteChange,
@@ -6,6 +7,7 @@ import {
   type AgentRunTerminalReceipt,
 } from "../agent-run-terminal-receipt.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
+import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import { isProviderModelRerouted } from "../provider-model-route.js";
@@ -30,7 +32,12 @@ export type RunEntryTerminalBehavior =
 
 export type EmbeddedAgentRunEntryTerminal = {
   outcome: ReturnType<typeof buildAgentRunTerminalOutcomeFromLifecycleEvent>;
-  metadata: Record<string, unknown>;
+  metadata: Record<string, unknown> & {
+    suppressErrorNotice?: boolean;
+    terminalReply?: AgentRunTerminalReplySnapshot;
+    terminalReceipt?: AgentRunTerminalReceipt;
+    terminalDelivery?: AgentRunTerminalDeliverySnapshot;
+  };
 };
 
 export function resolveRunEntryTerminalOutcome(params: {
@@ -187,7 +194,10 @@ export function buildRunEntryTerminal(params: {
     // report the reroute without exposing it through raw external delivery.
     terminalReply = { ...terminalReply, modelRouteChange };
   }
-  const metadata: Record<string, unknown> = { terminalReply };
+  const metadata: EmbeddedAgentRunEntryTerminal["metadata"] = { terminalReply };
+  if (typeof meta.suppressErrorNotice === "boolean") {
+    metadata.suppressErrorNotice = meta.suppressErrorNotice;
+  }
   if (terminalReceipt) {
     metadata.terminalReceipt = terminalReceipt;
     metadata.assistantTranscriptIdempotencyKey = terminalReceipt.assistantTranscriptIdempotencyKey;

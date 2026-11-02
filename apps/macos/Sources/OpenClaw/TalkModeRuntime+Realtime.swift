@@ -59,7 +59,6 @@ extension TalkModeRuntime {
 
     func start() async {
         let gen = lifecycleGeneration
-        guard self.dependencies.permissions.supported() else { return }
         let hasVoiceWakePermission = await self.dependencies.permissions.ensure(true)
         guard hasVoiceWakePermission else {
             logger.error("talk runtime not starting: permissions missing")
@@ -188,7 +187,6 @@ extension TalkModeRuntime {
 
     func shouldAttemptRealtimeRelay() -> Bool {
         guard macOSRealtimeRelayOptIn else {
-            logger.debug("talk macOS realtime relay disabled locally; using native speech")
             return false
         }
         guard hasGatewayRealtimeRelayTuple else {
@@ -287,9 +285,7 @@ extension TalkModeRuntime {
                 options: options,
                 audioCapture: audioCapture,
                 pcmPlayer: dependencies.pcmPlayer(),
-                onStatus: { [weak self] status in
-                    Task { await self?.handleRealtimeStatus(status, relayGeneration: relayGeneration) }
-                },
+                onStatus: { _ in },
                 onIssue: { [weak self] issue in
                     Task { await self?.handleRealtimeIssue(issue, relayGeneration: relayGeneration) }
                 },
@@ -341,6 +337,10 @@ extension TalkModeRuntime {
         realtimeSession = session
         do {
             try await session.start()
+            // A cancelled startup can return normally without a ready relay.
+            guard await MainActor.run(body: { session.isReady }) else {
+                throw CancellationError()
+            }
         } catch {
             await MainActor.run { session.stop() }
             if realtimeSession === session {
@@ -352,6 +352,8 @@ extension TalkModeRuntime {
             else {
                 throw CancellationError()
             }
+            // Only the current startup may reset the phase.
+            self.phase = .idle
             throw error
         }
         guard isCurrent(lifecycleGeneration), !isPaused,
@@ -364,13 +366,6 @@ extension TalkModeRuntime {
             }
             throw CancellationError()
         }
-    }
-
-    private func handleRealtimeStatus(_ status: String, relayGeneration: UInt64) {
-        guard let session = realtimeSession,
-              ownsRealtimeRelay(relayGeneration, session)
-        else { return }
-        logger.debug("talk realtime status=\(status, privacy: .public)")
     }
 
     private func handleRealtimeIssue(_ issue: RealtimeTalkRelayIssue, relayGeneration: UInt64) async {
@@ -442,10 +437,9 @@ extension TalkModeRuntime {
         let activeDuration = realtimeSessionReadyAt.map { Date().timeIntervalSince($0) } ?? 0
         realtimeRelayGeneration &+= 1
         let terminalGeneration = realtimeRelayGeneration
-        // Session-owned terminations close before signalling; runtime-initiated ones do not.
-        // stop() is idempotent, so closing here keeps a dead relay and its event subscription
-        // from outliving their owner while recovery starts a replacement session.
-        await MainActor.run { session.stop() }
+        // Session-owned terminations already closed; a failed microphone restart leaves the relay
+        // open. Retire it before recovery without cancelling accepted agent work.
+        await MainActor.run { session.stopAfterFailure() }
         guard self.ownsRealtimeRelay(terminalGeneration, session) else { return }
         realtimeSession = nil
         realtimeSessionReadyAt = nil
@@ -481,6 +475,10 @@ extension TalkModeRuntime {
 
     func handleRealtimeSpeakingChanged(_ speaking: Bool, relayGeneration: UInt64) async {
         guard let session = self.activeRealtimeRelay(relayGeneration) else { return }
+        // Closing an unready startup reports speaking false without becoming ready.
+        guard await MainActor.run(body: { session.isReady }),
+              self.activeRealtimeRelay(relayGeneration) === session
+        else { return }
         let phase: TalkModePhase = speaking ? .speaking : .listening
         self.phase = phase
         _ = await self.projectRealtimeRelay(relayGeneration, session) {

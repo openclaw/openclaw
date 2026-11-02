@@ -92,12 +92,11 @@ export function detectGatewayRespawnSupervisor(
   return detectRespawnSupervisor(env, platform, options);
 }
 
-export function detectGatewayRespawnSupervisorIdentity(
-  env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform,
-  options: DetectRespawnSupervisorOptions = {},
-): GatewayOwnerSupervisor | null {
-  const kind = detectGatewayRespawnSupervisor(env, platform, options);
+export function detectGatewayRespawnSupervisorIdentity(): GatewayOwnerSupervisor | null {
+  const env = process.env;
+  const kind = detectGatewayRespawnSupervisor(env, process.platform, {
+    includeLinuxOpenClawGatewayServiceMarker: true,
+  });
   if (!kind) {
     return null;
   }

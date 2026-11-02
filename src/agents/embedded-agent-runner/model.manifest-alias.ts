@@ -12,33 +12,8 @@ import {
   isActivatedManifestOwner,
   isBundledManifestOwner,
 } from "../../plugins/manifest-owner-policy.js";
-import {
-  loadPluginManifestRegistryCore,
-  type PluginManifestRecord,
-} from "../../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../../plugins/manifest-registry.js";
 import { staticModelIdMatches } from "./model.static-id.js";
-
-function resolveConfiguredModelCatalogProviderRoute(params: {
-  provider: string;
-  modelId?: string;
-  cfg?: OpenClawConfig;
-}): { hasEndpoint: boolean; api: ModelCatalogAlias["api"] } {
-  const provider = normalizeProviderId(params.provider);
-  const config = provider
-    ? findNormalizedProviderValue(params.cfg?.models?.providers, provider)
-    : undefined;
-  const modelId = params.modelId?.trim() ?? "";
-  const models = config?.models ?? [];
-  const matches = (candidate: { id: string }) =>
-    Boolean(provider && modelId) &&
-    staticModelIdMatches({ candidateId: candidate.id, provider, modelId });
-  return {
-    hasEndpoint:
-      Boolean(config?.baseUrl?.trim()) ||
-      models.some((model) => Boolean(model.baseUrl?.trim()) && matches(model)),
-    api: models.find(matches)?.api ?? config?.api,
-  };
-}
 
 type ManifestModelCatalogProviderTransport = Readonly<Pick<ModelCatalogAlias, "api" | "baseUrl">>;
 
@@ -47,31 +22,6 @@ export type ManifestModelCatalogProviderAliasMetadata = {
   readonly provider: string;
   readonly transport?: ManifestModelCatalogProviderTransport;
 };
-
-function resolveManifestAliasTargetApi(params: {
-  plugin: Pick<PluginManifestRecord, "modelCatalog">;
-  provider: string;
-  modelId?: string;
-}): ModelCatalogAlias["api"] {
-  const providerCatalog = findNormalizedProviderValue(
-    params.plugin.modelCatalog?.providers,
-    params.provider,
-  );
-  if (!providerCatalog) {
-    return undefined;
-  }
-  const modelId = params.modelId?.trim();
-  const model = modelId
-    ? providerCatalog.models.find((candidate) =>
-        staticModelIdMatches({
-          candidateId: candidate.id,
-          provider: params.provider,
-          modelId,
-        }),
-      )
-    : undefined;
-  return model?.api ?? providerCatalog.api;
-}
 
 export function resolveManifestModelCatalogProviderAliasMetadata(params: {
   provider: string;
@@ -106,6 +56,14 @@ export function resolveManifestModelCatalogProviderAliasMetadata(params: {
   const claims: ManifestModelCatalogProviderAliasMetadata[] = [];
   const normalizedConfig = normalizePluginsConfig(params.cfg?.plugins);
   for (const plugin of plugins) {
+    const aliases = plugin.modelCatalog?.aliases;
+    // Only owners declaring this alias can claim it; skip their activation policy work otherwise.
+    if (
+      !aliases ||
+      !Object.keys(aliases).some((alias) => normalizeProviderId(alias) === provider)
+    ) {
+      continue;
+    }
     if (
       !isActivatedManifestOwner({ plugin, normalizedConfig, rootConfig: params.cfg }) ||
       !(
@@ -116,7 +74,7 @@ export function resolveManifestModelCatalogProviderAliasMetadata(params: {
     ) {
       continue;
     }
-    for (const [rawAlias, alias] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
+    for (const [rawAlias, alias] of Object.entries(aliases)) {
       const normalizedAlias = normalizeProviderId(rawAlias);
       const normalizedTarget = normalizeProviderId(alias.provider);
       if (
@@ -137,20 +95,42 @@ export function resolveManifestModelCatalogProviderAliasMetadata(params: {
           (suppression) =>
             !suppression.when && normalizeProviderId(suppression.provider) === provider,
         );
-      const configuredRoute = resolveConfiguredModelCatalogProviderRoute({
-        provider,
-        modelId: params.modelId,
-        cfg: params.cfg,
-      });
+      const config = findNormalizedProviderValue(params.cfg?.models?.providers, provider);
+      const configuredModelId = params.modelId?.trim() ?? "";
+      const models = config?.models ?? [];
+      const matches = (candidate: { id: string }) =>
+        Boolean(provider && configuredModelId) &&
+        staticModelIdMatches({ candidateId: candidate.id, provider, modelId: configuredModelId });
+      const configuredRoute = {
+        hasEndpoint:
+          Boolean(config?.baseUrl?.trim()) ||
+          models.some((model) => Boolean(model.baseUrl?.trim()) && matches(model)),
+        api: models.find(matches)?.api ?? config?.api,
+      };
       const hasEndpointSurface = Boolean(alias.baseUrl?.trim()) || configuredRoute.hasEndpoint;
       const transportApi =
         configuredRoute.api ??
         alias.api ??
-        resolveManifestAliasTargetApi({
-          plugin,
-          provider: normalizedTarget,
-          modelId: params.modelId,
-        });
+        (() => {
+          const providerCatalog = findNormalizedProviderValue(
+            plugin.modelCatalog?.providers,
+            normalizedTarget,
+          );
+          if (!providerCatalog) {
+            return undefined;
+          }
+          const targetModelId = params.modelId?.trim();
+          const model = targetModelId
+            ? providerCatalog.models.find((candidate) =>
+                staticModelIdMatches({
+                  candidateId: candidate.id,
+                  provider: normalizedTarget,
+                  modelId: targetModelId,
+                }),
+              )
+            : undefined;
+          return model?.api ?? providerCatalog.api;
+        })();
       const hasTransportOverride = Boolean(alias.api?.trim() || alias.baseUrl?.trim());
       if (hasTransportOverride && hasEndpointSurface && !hasApplicableSuppression) {
         // A retained endpoint needs an explicit wire adapter. Otherwise the generic

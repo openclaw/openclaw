@@ -134,12 +134,8 @@ export function createNodeWorkspaceTransferHttpCallback(
         const abortTransfer = () => {
           // The request can be fully read and destroyed while its uploader still
           // awaits staging validation on the open response.
-          if (!res.destroyed) {
-            res.destroy(signal.reason instanceof Error ? signal.reason : undefined);
-          }
-          if (!req.destroyed) {
-            req.destroy(signal.reason instanceof Error ? signal.reason : undefined);
-          }
+          res.destroy(signal.reason instanceof Error ? signal.reason : undefined);
+          req.destroy(signal.reason instanceof Error ? signal.reason : undefined);
         };
         signal.addEventListener("abort", abortTransfer, { once: true });
         if (signal.aborted) {

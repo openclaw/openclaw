@@ -3,7 +3,8 @@
  * unsafe failed turns, maps tool-call ids across model boundaries, and fills
  * strict provider tool-result gaps when supported.
  */
-import { resolveModelBoundThinkingReplayMode } from "@openclaw/ai/internal/anthropic";
+import type { AiTransformTransportMessages } from "@openclaw/ai";
+import { prepareModelBoundThinkingReplay } from "@openclaw/ai/internal/anthropic";
 import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import {
   FAILED_ASSISTANT_REPLAY_TEXT,
@@ -16,8 +17,8 @@ import {
   isSyntheticMissingToolResult,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
-import type { Api, Context, Model } from "../llm/types.js";
-import { repairToolUseResultPairing } from "./session-transcript-repair.js";
+import type { Context } from "../llm/types.js";
+import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 
 const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
   "anthropic-messages",
@@ -29,25 +30,17 @@ const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
 ]);
 
 // Responses-family APIs retain their inherited "aborted" synthetic-result convention.
-/** Transforms transcript messages into a provider-safe replay context. */
 export function transformTransportMessages(
-  messages: Context["messages"],
-  model: Model,
-  normalizeToolCallId?: (
-    id: string,
-    targetModel: Model,
-    source: { provider: string; api: Api; model: string },
-  ) => string,
-  options?: {
-    normalizeSameModelToolCallIds?: boolean;
-    preserveCrossModelToolCallThoughtSignature?: boolean;
-    preserveUnframedToolResults?: boolean;
-  },
+  messages: Parameters<AiTransformTransportMessages>[0],
+  model: Parameters<AiTransformTransportMessages>[1],
+  normalizeToolCallId?: Parameters<AiTransformTransportMessages>[2],
+  options?: Parameters<AiTransformTransportMessages>[3],
 ): Context["messages"] {
   const syntheticToolResultText = OPENAI_RESPONSES_APIS.has(model.api)
     ? "aborted"
     : DEFAULT_MISSING_TOOL_RESULT_TEXT;
   const toolCallIdMap = new Map<string, string>();
+  const thinkingReplay = prepareModelBoundThinkingReplay(model);
   let hasCrossModelAsyncCalls = false;
   const transformed = messages.map((msg) => {
     if (msg.role === "toolResult") {
@@ -78,19 +71,11 @@ export function transformTransportMessages(
     if (msg.role !== "assistant") {
       return msg;
     }
-    const modelBoundThinkingReplayMode = resolveModelBoundThinkingReplayMode({
-      source: {
-        provider: msg.provider,
-        api: msg.api,
-        modelId: msg.model,
-        responseModelId: msg.responseModel,
-      },
-      target: {
-        provider: model.provider,
-        api: model.api,
-        modelId: model.id,
-        modelParams: model.params,
-      },
+    const modelBoundThinkingReplayMode = thinkingReplay({
+      provider: msg.provider,
+      api: msg.api,
+      modelId: msg.model,
+      responseModelId: msg.responseModel,
     });
     const isSameModel =
       modelBoundThinkingReplayMode === "preserve" ||
@@ -149,7 +134,14 @@ export function transformTransportMessages(
       }
       content.push(normalizedToolCall);
     }
-    return { ...msg, content };
+    // Mutable replay callers still own a detached shell and content array.
+    return Array.isArray(msg.content) &&
+      Object.isFrozen(msg) &&
+      Object.isFrozen(msg.content) &&
+      content.length === msg.content.length &&
+      content.every((block, index) => block === msg.content[index])
+      ? msg
+      : { ...msg, content };
   });
   // Pairing-aware transports must let shared repair see errored tool-call frames and
   // their adjacent results together; pre-filtering the call can misattribute its result
@@ -180,9 +172,9 @@ export function transformTransportMessages(
   // The local transport transform can synthesize missing results, but it does not move
   // displaced real results back before an intervening user turn. Shared repair
   // handles both and drops aborted/error turns together with their owned results.
-  return repairToolUseResultPairing(transformed, {
+  return sanitizeToolUseResultPairing(transformed, {
     erroredAssistantResultPolicy: "drop",
     missingToolResultText: syntheticToolResultText,
     preserveUnframedToolResults: options?.preserveUnframedToolResults,
-  }).messages as Context["messages"];
+  }) as Context["messages"];
 }

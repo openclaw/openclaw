@@ -1,3 +1,4 @@
+import type { ModelInferenceCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { z } from "zod";
 import type { ModelDataMediaInputConfig } from "../../packages/llm-core/src/model-data.js";
 import type { OpenAICompletionsCompat, RawModelCostConfig } from "../llm/types.js";
@@ -38,6 +39,12 @@ export type ModelDefinitionConfig = Omit<
   ModelDefinitionSchemaInput,
   "reasoning" | "input" | "cost" | "maxTokens" | "agentRuntime" | "mediaInput" | "compat"
 > & {
+  /** Route-bound discovery capabilities; not a user config option. */
+  inference?: ModelInferenceCapabilities;
+  /** Internal discovery metadata; not a user config option. */
+  parameterCount?: number;
+  /** Provider/catalog-declared canonical family; internal metadata, not a user config option. */
+  family?: string;
   /** Whether the model supports reasoning/thinking controls. */
   reasoning: boolean;
   /** Supported input modalities for routing and media-tool selection. */

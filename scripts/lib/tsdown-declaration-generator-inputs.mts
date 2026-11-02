@@ -2,10 +2,12 @@ import fs from "node:fs";
 import { builtinModules, createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript/unstable/ast";
-import { API } from "typescript/unstable/sync";
+import * as ts from "typescript/ast";
+import { API } from "typescript/sync";
 import { collectModuleReferencesFromSource } from "./guard-inventory-utils.mjs";
+import { isRecord } from "./record-shared.mjs";
 import { createRuntimeImportGraph } from "./runtime-import-closure.mts";
+import { resolveSqliteSchemaAssetInputs } from "./sqlite-schema-assets.mts";
 import { STATE_SCHEMA_GENERATOR_INPUTS } from "./state-schema-inline-plugin.mts";
 import { resolveTsxImport } from "./tsx-cli-shim.mjs";
 import { resolveWorkerDeployGeneratorInputs } from "./worker-deploy-build-plugin.mts";
@@ -49,6 +51,18 @@ export function resolveTsdownDeclarationGeneratorInputs(
   const nativeManifest = createRequire(path.join(root, "package.json")).resolve(
     "typescript/package.json",
   );
+  const nativeManifestJson: unknown = JSON.parse(fs.readFileSync(nativeManifest, "utf8"));
+  const nativeExports =
+    isRecord(nativeManifestJson) && isRecord(nativeManifestJson.exports)
+      ? nativeManifestJson.exports
+      : {};
+  const nativeExport = (name: string) => {
+    const target = nativeExports[name];
+    if (typeof target !== "string") {
+      throw new Error(`Missing native TypeScript export: ${name}`);
+    }
+    return path.join(path.dirname(nativeManifest), target);
+  };
   // Producers traverse only their own reachable owners. Every reached computed
   // import must still match its exact expression and declared targets.
   const dynamicOwners = new Map<string, { expressions: string[]; targets: string[] }>([
@@ -58,6 +72,14 @@ export function resolveTsdownDeclarationGeneratorInputs(
       {
         expressions: ['inputs.assert(path.join(nativeRoot, "lib/getExePath.js"))'],
         targets: [nativeManifest, path.join(path.dirname(nativeManifest), "lib/getExePath.js")],
+      },
+    ],
+    [
+      "scripts/lib/native-declaration-emitter.mts",
+      {
+        // Compiler roots load their own API client; the producer's root is the installed one.
+        expressions: ["compilerModuleUrl"],
+        targets: [nativeManifest, nativeExport("./async"), nativeExport("./fs")],
       },
     ],
     [
@@ -214,6 +236,7 @@ export function resolveTsdownDeclarationGeneratorInputs(
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([, file]) => file),
     ...STATE_SCHEMA_GENERATOR_INPUTS,
+    ...resolveSqliteSchemaAssetInputs(root),
     ...resolveWorkerDeployGeneratorInputs(root),
     fs.realpathSync(path.resolve(root, "node_modules/tree-sitter-bash/LICENSE")),
   ];

@@ -4,6 +4,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { pauseVirtualClock, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import { resolveRenderedColors } from "../test-helpers/rendered-colors.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -204,10 +205,13 @@ suite.define(() => {
               );
               const surface = page.locator('.presentation-fixture[data-ready="true"]');
               await surface.waitFor();
-              const brightness = await surface.evaluate((element) => {
-                const channels = getComputedStyle(element).backgroundColor.match(/\d+/g)!;
-                return channels.slice(0, 3).reduce((sum, value) => sum + Number(value), 0) / 3;
+              const colors = await page.evaluate(resolveRenderedColors, {
+                background: await surface.evaluate(
+                  (element) => getComputedStyle(element).backgroundColor,
+                ),
               });
+              const { red, green, blue } = colors.background!;
+              const brightness = (red + green + blue) / 3;
               expect(theme === "light" ? brightness > 200 : brightness < 70).toBe(true);
               expect(await surface.locator("h1").first().textContent()).toBe(group);
               if (group === "settings") {
@@ -263,11 +267,20 @@ suite.define(() => {
                   ".empty-state__title",
                 );
               } else if (group === "skeleton-content") {
-                await assertShadowParentStyles(
-                  page,
-                  "openclaw-panel-loading-skeleton",
-                  ".skeleton.line",
-                );
+                const styles = await page
+                  .locator("openclaw-panel-loading-skeleton .skeleton.line")
+                  .first()
+                  .evaluate((element) => {
+                    const style = getComputedStyle(element);
+                    return {
+                      background: style.backgroundColor,
+                      overflow: style.overflow,
+                      radius: Number.parseFloat(style.borderRadius),
+                    };
+                  });
+                expect(styles.background).not.toBe("rgba(0, 0, 0, 0)");
+                expect(styles.overflow).toBe("hidden");
+                expect(styles.radius).toBeGreaterThan(0);
               }
             }
           },

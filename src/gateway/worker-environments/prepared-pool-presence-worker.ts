@@ -9,13 +9,7 @@ export async function readPreparedPoolPresenceDemand(): Promise<
   PreparedPoolPresenceDemand | undefined
 > {
   const reply = await executeExistingOpenClawStateRead({}, { type: "preparedPoolPresence.read" });
-  if (!reply) {
-    return undefined;
-  }
-  if (!reply.ok || reply.type !== "preparedPoolPresence.read") {
-    throw new Error("Unexpected prepared-pool presence demand read result");
-  }
-  return reply.demand;
+  return reply?.demand;
 }
 
 export function writePreparedPoolPresenceDemand(

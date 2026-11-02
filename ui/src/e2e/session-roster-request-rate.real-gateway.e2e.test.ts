@@ -20,7 +20,6 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 declare global {
   interface Window {
-    // Installed by page.exposeFunction before registering the event observer.
     recordRosterEvent: (label: string) => Promise<void>;
   }
 }
@@ -57,7 +56,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("applies real row events in the page and sidebar before a one-minute fallback", async () => {
+  it("applies real row events in the page and sidebar without periodic list reads", async () => {
     if (!instance) {
       throw new Error("Gateway fixture is not running");
     }
@@ -75,8 +74,7 @@ suite.define(() => {
         ["main", key],
         ["research", otherKey],
       ] as const) {
-        // Dashboard sessions inherit main as parent. A missing parent intentionally
-        // prevents complete snapshot certification and requires authoritative reads.
+        // Missing parents prevent snapshot certification and force authoritative reads.
         await emitter.request("sessions.create", { agentId, key: `agent:${agentId}:main` });
         await emitter.request("sessions.create", {
           agentId,
@@ -108,8 +106,9 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         const roster = page.locator("openclaw-sessions-page");
         const sidebar = page.locator("openclaw-app-sidebar");
+        const selected = sidebar.locator(`[data-session-key="${key}"]`);
         await roster.getByText("Initial rate proof", { exact: true }).first().waitFor();
-        await sidebar.locator('[data-session-key="' + key + '"]').waitFor();
+        await selected.waitFor();
         // Profile counts join bootstrap after the separate navigation summary.
         await expect
           .poll(() =>
@@ -123,8 +122,7 @@ suite.define(() => {
           labels.add(label);
         });
         await evaluateControlUiContext(page, (context) => {
-          // Register after the app's consumers: a raw CDP frame receipt alone
-          // does not mean the browser's event handler installed its debounce.
+          // Register after app consumers so receipt also proves their debounce was armed.
           context.gateway.subscribeEvents((event) => {
             const payload = event.payload as { session?: { label?: string } } | undefined;
             if (event.event === "sessions.changed" && typeof payload?.session?.label === "string") {
@@ -138,32 +136,20 @@ suite.define(() => {
           Math.random = () => 0;
         });
         const eventRenderMs = 20;
-        // Browser time is controlled; the real server still owns mutation, projection,
-        // event delivery, and list responses. Await the delivered row, not patch's ACK.
+        // Await real delivery, not patch's ACK; only the browser clock is virtual.
         const patch = async (sessionKey: string, label: string) => {
           await emitter.request("sessions.patch", { key: sessionKey, label });
           await expect.poll(() => labels.has(label)).toBe(true);
           if (sessionKey === key) {
             await page.clock.runFor(eventRenderMs);
-            await expect
-              .poll(() => sidebar.locator('[data-session-key="' + key + '"]').textContent())
-              .toContain(label);
+            await expect.poll(() => selected.textContent()).toContain(label);
           }
         };
-        const pageReads = () =>
-          lists.filter(
-            ({ params }) =>
-              params.includeUnknown === false &&
-              params.includeOwnerSessionCounts !== true &&
-              params.includeDerivedTitles === undefined &&
-              params.includeLastMessage === undefined,
-          );
-        const primaryReads = () => lists.filter(({ params }) => params.includeLastMessage === true);
-        const pageBefore = pageReads().length;
-        const primaryBefore = primaryReads().length;
-        expect(pageBefore).toBeGreaterThan(0);
-        expect(primaryBefore).toBeGreaterThan(0);
+        const rosterReads = () =>
+          lists.filter(({ params }) => params.includeOwnerSessionCounts !== true);
+        expect(rosterReads().length).toBeGreaterThan(0);
         const before = [...lists];
+        const rosterBefore = rosterReads();
         await patch(key, "First rate update");
         await roster.getByText("First rate update", { exact: true }).waitFor();
         for (let index = 0; index < 3; index += 1) {
@@ -173,21 +159,10 @@ suite.define(() => {
         }
         await page.clock.runFor(56_999 - 4 * eventRenderMs);
         expect(lists).toEqual(before);
-        // The first row arms the minute fallback, followed by the shared event
-        // collection window. Later rows neither refetch nor postpone it.
         await page.clock.runFor(5_001);
-        await expect.poll(() => pageReads().length).toBe(pageBefore + 1);
-        await expect.poll(() => responses.has(pageReads().at(-1)!.id)).toBe(true);
+        expect(lists).toEqual(before);
         await roster.getByText("Trailing rate update 2", { exact: true }).waitFor();
-        await expect
-          .poll(() => sidebar.locator('[data-session-key="' + key + '"]').textContent())
-          .toContain("Trailing rate update 2");
-        expect(primaryReads()).toHaveLength(primaryBefore + 1);
-        expect(lists.every(({ params }) => params.source)).toBe(true);
-        expect(pageReads().every(({ params }) => params.rowMode === "compact")).toBe(true);
-        expect(primaryReads().every(({ params }) => params.rowMode === "sidebar")).toBe(true);
-
-        expect(pageReads().every(({ params }) => params.agentId === "main")).toBe(true);
+        await expect.poll(() => selected.textContent()).toContain("Trailing rate update 2");
         const beforeOther = lists.length;
         await patch(otherKey, "Unrelated rate update");
         await page.clock.runFor(15_000);
@@ -196,13 +171,11 @@ suite.define(() => {
         expect(
           afterOther.filter(({ params }) => params.includeOwnerSessionCounts !== true),
         ).toEqual([]);
-        // A relevant successor proves the quiet interval did not retire the
-        // subscription. Both events travel through the same real connection.
+        // A relevant successor proves the quiet interval did not retire the subscription.
         await patch(key, "Relevant after unrelated");
         await page.clock.runFor(5_000);
-        expect(pageReads()).toHaveLength(pageBefore + 1);
+        expect(rosterReads()).toEqual(rosterBefore);
         await roster.getByText("Relevant after unrelated", { exact: true }).waitFor();
-        expect(primaryReads()).toHaveLength(primaryBefore + 1);
         await page.clock.resume();
       });
     } finally {

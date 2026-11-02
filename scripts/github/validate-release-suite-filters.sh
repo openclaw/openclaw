@@ -26,7 +26,7 @@ validate_release_suite_filters() {
   case "$dispatch_scope" in
     controller)
       case "$rerun_group" in
-        all|ci|plugin-prerelease|install-smoke|cross-os|live-e2e|package|qa-parity|qa-live|npm-telegram|performance) ;;
+        all|ci|plugin-prerelease|install-smoke|cross-os|windows-node|live-e2e|package|qa-parity|qa-live|npm-telegram|performance) ;;
         *)
           echo "controller rerun_group is invalid: ${rerun_group}." >&2
           return 1
@@ -35,7 +35,7 @@ validate_release_suite_filters() {
       ;;
     release-checks)
       case "$rerun_group" in
-        all|install-smoke|cross-os|live-e2e|package|qa|qa-parity|qa-live) ;;
+        all|install-smoke|cross-os|windows-node|live-e2e|package|qa|qa-parity|qa-live) ;;
         *)
           echo "release-checks rerun_group is invalid: ${rerun_group}." >&2
           return 1

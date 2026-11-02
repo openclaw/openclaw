@@ -7,6 +7,7 @@ import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import { resolveAcpToolTerminalOutcome } from "../../acp/tool-status.js";
 import { emitAgentAuditEvent, emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
+import { PROXY_ENV_KEYS as ACP_PROXY_ENV_KEYS } from "../../infra/net/proxy-env.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
@@ -71,14 +72,6 @@ export function emitAcpLifecycleStart(params: AcpLifecycleContext & { startedAt:
   });
 }
 
-const ACP_PROXY_ENV_KEYS = [
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "all_proxy",
-] as const;
 type ActiveAcpTool = AcpRunIdentity & {
   toolCallId: string;
   toolName: string;

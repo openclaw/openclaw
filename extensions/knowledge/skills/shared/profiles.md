@@ -1,0 +1,108 @@
+# Entity profiles
+
+A profile reads like a briefing, not a scraped bio: what do the sources establish
+about this entity, and why does it matter? Facts are table stakes; texture
+(beliefs, current work, motivations) is the value.
+
+## Sections
+
+- **Introduction:** one or two lines a teammate would need: who they are, how
+  they're known, why they matter. Never a placeholder ("Contact from the
+  network", "Is recorded in the roster").
+- **State:** the current situation in short `###` topics, one topic per subject.
+  Most new sources change nothing here; their contribution is a source note
+  (below). When a fact changes, rewrite the existing topic so it reads as
+  current. Never add a topic or paragraph named for a date, meeting or source.
+
+A page has no Timeline section. Knowledge builds each entity's Timeline from
+records: one row per dated source, shown on the record page and returned by
+`knowledge_timeline` with `entity` and `group: "source"`.
+
+Optional sections, only when the source supports them; omit the rest:
+
+- Person: What They Believe, What They're Building, What Motivates Them, Hobby
+  Horses, Communication Style, Assessment, Trajectory, Relationship, Contact,
+  Network, Open Threads.
+- Company: State covers what they do, stage, key people, key numbers and the
+  user's connection. Open Threads for active items.
+
+**Communication Style** records only what was observed directly or what they
+said about themselves; label each line observed, self-described or inferred. One
+data point is a source note, not a pattern.
+
+## Source notes
+
+A source's row in an entity's Timeline takes its note from the one relationship
+between the entity and that source:
+
+- `attended` (participant → meeting) for people who took part.
+- `discusses` (source → entity) for anything else the source says something
+  substantive about.
+
+The body is one short sentence on what this source says about this entity, with
+no date: the source carries it. Give the relationship evidence and `source_page`
+like any other ([assertions](assertions.md)). Reuse an existing relationship
+between the pair instead of adding a second. Claims about the entity from the
+same source join the row through `source_page` and need no note of their own.
+
+A row needs a dated source: a meeting's `occurred_at`, or the source's
+`source_event` claim. A note on an undated source shows on no Timeline, so date
+the source when it has a date (publication date, message date), and otherwise
+save what happened as an event claim. An event the source reports from another
+date (a founding, a past launch) is an event claim with its own `occurred_at`;
+it keeps its own row.
+
+## Retire a written Timeline
+
+Older pages may still have a `## Timeline` section. Retire it in the same run
+when you edit such a page, write a source note for its entity, or a write to it
+is rejected for its size budget. An ingestion retires at most three sections per
+run, largest first; the Knowledge Consolidation scribe retires the rest.
+
+1. Read the derived rows with `knowledge_timeline({entity, group: "source"})`,
+   following `nextOffset`.
+2. Give every entry a record, then check the rows cover them all:
+   - The first entry for a dated source with no note on its row becomes a
+     `discusses` relationship (source → entity) whose body is the entry's
+     sentence, citing the lines the entry cites. Copy the cited file's path,
+     sha256, filename, mediaType and size from the source page's evidence; a
+     citation that differs from the retained source is rejected.
+   - Any other entry becomes an event claim with the entry's date as
+     `occurred_at`, the entity in `entities`, and the source as `source_page`
+     when there is one. That covers a second entry from the same source, an
+     entry dated differently from its source, an undated source and no source.
+   - Batch the writes, then check every entry before you delete anything.
+     A note shows as its source's row in the grouped rows. A claim from a
+     source that already has a row is folded into that row's claim count, so
+     check claims in the publication receipt or with
+     `knowledge_timeline({entity})` without `group`, which lists each claim.
+3. Delete the whole section with `knowledge_edit_body`. Shrinking edits always
+   succeed, and revision history keeps the old text.
+
+Never move a Timeline section to another page with `knowledge_extract_section`.
+
+## Rules
+
+- Every fact has an inline citation. Dates are event dates.
+- Unknown role, employer and surname stay absent. Populate ontology fields such
+  as `role` only when the source establishes them.
+- Attribute beliefs to the speaker. Your assessment is not their belief.
+- Never overwrite user-written assessments. Flag conflicts with both citations.
+- Different companies' feedback gets separate context, not a copied meeting blob.
+- A page holds what the source says about that entity. Someone else's response
+  to it (a team's fix for a vendor's incident) belongs on the meeting page or the
+  responding project, with at most a source note here.
+- A rerun or repeat report changes nothing; don't save a no-op.
+- Partial identity goes in structured `identity`, not only a parenthetical.
+- Follow [writing](writing.md); no email addresses in prose.
+
+## Update an existing profile
+
+1. Read the page, revision and hash.
+2. Write the source note. Edit a State topic only if its meaning changed.
+3. If the page still has a written Timeline, retire it (above).
+4. Use `knowledge_edit_body` for these local changes rather than resending the
+   page. Never edit from a truncated read.
+
+For a full source-to-profile example, read
+[meeting and entity example](meeting-entity-example.md).

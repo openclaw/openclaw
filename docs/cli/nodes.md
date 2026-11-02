@@ -57,7 +57,12 @@ openclaw nodes remove --node <id|name|ip>
 openclaw nodes rename --node <id|name|ip> --name <displayName>
 ```
 
+`pending` and `list` show **Approval scopes**: the operator permissions required to approve each request, separate from the commands and capabilities granted to the node.
+
 These commands manage the node's approved command/capability surface on its paired-device record. Device pairing (`openclaw devices approve`) gates the node's WebSocket `connect` handshake.
+
+Rename/remove confirmations and command errors escape terminal control characters.
+JSON responses preserve the original values.
 
 For manual enrollment, first approve the device request, then restart or rerun
 a node paused on `PAIRING_REQUIRED`. Its reconnect creates the separate request

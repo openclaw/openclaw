@@ -4,11 +4,11 @@ import path from "node:path";
 import { constants, DatabaseSync } from "node:sqlite";
 import { load as loadSqliteVec } from "sqlite-vec";
 import { afterEach, describe, expect, it } from "vitest";
+import { readSqliteSchemaCatalog } from "../../scripts/lib/sqlite-schema-catalog.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { enableNodeSqliteKyselyStatementCache } from "./kysely-sync.js";
 import type { SqliteSchemaCatalog } from "./sqlite-schema-catalog-types.js";
-import { readSqliteSchemaCatalog } from "./sqlite-schema-catalog.js";
 import {
   collectSqliteNamedIndexContract,
   createSqliteTableContractReader,

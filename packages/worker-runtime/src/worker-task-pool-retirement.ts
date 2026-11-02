@@ -16,9 +16,35 @@ import type { Slot, WorkerTaskPoolOptions } from "./worker-task-pool.types.js";
 
 const WORKER_WARM_WINDOW_MS = 5 * 60_000;
 
+/** Repeated idle notifications preserve the deadline; only admitted work clears it. */
+export function createWorkerIdleTimers(runInContext: <T>(operation: () => T) => T) {
+  // Replies may arrive under another clock; retain the execution owner's clock.
+  const schedule = setTimeout;
+  const cancel = clearTimeout;
+  return {
+    clear(this: void, target: { idleTimer?: NodeJS.Timeout }): void {
+      cancel(target.idleTimer);
+      target.idleTimer = undefined;
+    },
+    arm(target: { idleTimer?: NodeJS.Timeout }, timeoutMs: number, retire: () => void): void {
+      if (target.idleTimer) {
+        return;
+      }
+      target.idleTimer = runInContext(() =>
+        schedule(() => {
+          target.idleTimer = undefined;
+          retire();
+        }, timeoutMs),
+      );
+      target.idleTimer.unref();
+    },
+  };
+}
+
 export function createWorkerTaskPoolRetirement<Input, Output>({
   slots,
   options,
+  retainOneIdleWorker,
   runInContext,
   dispatch,
   onRotationComplete,
@@ -28,23 +54,38 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
 }: {
   slots: Set<Slot<Input, Output>>;
   options: WorkerTaskPoolOptions<Output>;
+  retainOneIdleWorker?: true;
   runInContext: <T>(operation: () => T) => T;
   dispatch: () => void;
   onRotationComplete: () => void;
   serviceDeadlines: () => void;
   markWorkerRetirement: WorkerTaskHost["workerRetiring"];
-  serviceHost: Pick<WorkerTaskHost, "serviceNativeWorkers">;
+  serviceHost: Pick<WorkerTaskHost, "serviceNativeWorkers" | "flushWorkerDiagnostics">;
 }) {
   const artifactCleanups = new Map<Promise<void>, RetainedOperation<void>>();
   let lastIdleRetirementAt = -Infinity;
   let warmSlot: Slot<Input, Output> | undefined;
+  let lastBurstRetirementAt = -Infinity;
+  let warmBurstSlot: Slot<Input, Output> | undefined;
   let rotation: RetainedOperation<void> | undefined;
   let rotationFailed = false;
-  // Worker replies can arrive under an unrelated fake clock; use the owner's clock.
-  const setTimeoutFn = setTimeout;
-  const clearTimeoutFn = clearTimeout;
+  const idleTimers = createWorkerIdleTimers(runInContext);
   const now = performance.now.bind(performance);
-  const clearIdle = (slot: Slot<Input, Output>) => clearTimeoutFn(slot.idleTimer);
+  const idleSlots = retainOneIdleWorker ? new Set<Slot<Input, Output>>() : undefined;
+  function newestIdle() {
+    if (!idleSlots) {
+      return undefined;
+    }
+    let newest: Slot<Input, Output> | undefined;
+    for (const slot of idleSlots) {
+      newest = slot;
+    }
+    return newest;
+  }
+  function clearIdle(slot: Slot<Input, Output>): void {
+    idleSlots?.delete(slot);
+    idleTimers.clear(slot);
+  }
   const isBurstSlot = (slot: Slot<Input, Output>) => {
     if (options.burstIdleTimeoutMs !== undefined) {
       for (const available of slots) {
@@ -113,6 +154,9 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
           if (cleaned.status === "rejected") {
             throw cleaned.error;
           }
+          // An empty pool also starts fresh after rotation.
+          lastIdleRetirementAt = -Infinity;
+          lastBurstRetirementAt = -Infinity;
           rotation = undefined;
           onRotationComplete();
           completion.resolve();
@@ -136,13 +180,18 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
     slot: Slot<Input, Output>,
     reason: WorkerRetirementReason = "closed",
   ): RetainedOperation<void> {
-    if (reason === "idle_timeout" && !isBurstSlot(slot)) {
-      lastIdleRetirementAt = now();
-    } else if (reason === "rotation") {
-      lastIdleRetirementAt = -Infinity;
+    if (reason === "idle_timeout") {
+      if (isBurstSlot(slot)) {
+        lastBurstRetirementAt = now();
+      } else {
+        lastIdleRetirementAt = now();
+      }
     }
     if (warmSlot === slot) {
       warmSlot = undefined;
+    }
+    if (warmBurstSlot === slot) {
+      warmBurstSlot = undefined;
     }
     if (slot.worker) {
       markWorkerRetirement(slot.worker, reason);
@@ -154,6 +203,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
     }
     const runRetirement = AsyncLocalStorage.snapshot();
     let nativeStop: RetainedOperation<void> | undefined;
+    let diagnosticFlush: RetainedOperation<void> | null | undefined;
     let observingSection = false;
     let advancing = false;
     const completion = createRetainedOperation<void>(() => {
@@ -182,6 +232,19 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
           }
           if (slot.worker && !nativeStop) {
             markWorkerRetirement(slot.worker, reason);
+            try {
+              if (diagnosticFlush === undefined) {
+                diagnosticFlush = serviceHost.flushWorkerDiagnostics?.(slot.worker, reason) ?? null;
+                void diagnosticFlush?.result.then(advance, advance);
+              }
+              diagnosticFlush?.service();
+              if (diagnosticFlush?.read().status === "pending") {
+                return;
+              }
+            } catch {
+              // Telemetry cannot prevent native termination or turn it into a failed retirement.
+              diagnosticFlush = null;
+            }
             if (slot.native) {
               nativeStop = slot.native.stop();
             } else {
@@ -306,29 +369,51 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
     if (idleMs <= 0) {
       return;
     }
-    // A promptly reused pool retains one isolate; excess slots keep their own timeout.
+    if (idleSlots && !idleSlots.has(slot)) {
+      const previous = newestIdle();
+      idleSlots.add(slot);
+      // A former floor whose original deadline elapsed is surplus again.
+      if (previous && !previous.idleTimer) {
+        void retire(previous, "idle_timeout").catch(() => undefined);
+      }
+    }
+    // Primary and burst reuse have separate histories so neither extends the other's lifetime.
     if (!burst && !warmSlot && now() - lastIdleRetirementAt < WORKER_WARM_WINDOW_MS) {
       warmSlot = slot;
     }
+    if (
+      burst &&
+      (!warmBurstSlot || !isBurstSlot(warmBurstSlot)) &&
+      now() - lastBurstRetirementAt < WORKER_WARM_WINDOW_MS
+    ) {
+      warmBurstSlot = slot;
+    }
     const startedAt = burst ? now() : 0;
-    const timeoutMs = warmSlot === slot ? Math.max(idleMs, WORKER_WARM_WINDOW_MS) : idleMs;
-    slot.idleTimer = runInContext(() =>
-      setTimeoutFn(
-        () => {
-          // A cancellation can leave this formerly surplus worker as the first live slot.
-          if (burst && !isBurstSlot(slot)) {
-            idle(slot, now() - startedAt);
-            return;
-          }
-          void retire(slot, "idle_timeout").catch(() => undefined);
-        },
-        Math.max(0, timeoutMs - elapsedIdleMs),
-      ),
-    );
-    slot.idleTimer.unref();
+    // Retain only one recently needed burst across polling gaps, then still expire it.
+    const timeoutMs = burst
+      ? warmBurstSlot === slot
+        ? idleMs * 3
+        : idleMs
+      : warmSlot === slot
+        ? Math.max(idleMs, WORKER_WARM_WINDOW_MS)
+        : idleMs;
+    idleTimers.arm(slot, Math.max(0, timeoutMs - elapsedIdleMs), () => {
+      if (newestIdle() === slot) {
+        return;
+      }
+      // A cancellation can leave this formerly surplus worker as the first live slot.
+      if (burst && !isBurstSlot(slot)) {
+        idle(slot, now() - startedAt);
+        return;
+      }
+      void retire(slot, "idle_timeout").catch(() => undefined);
+    });
   }
 
   return {
+    get preferredIdle() {
+      return newestIdle();
+    },
     get dispatchAllowed() {
       return rotation === undefined && !rotationFailed;
     },

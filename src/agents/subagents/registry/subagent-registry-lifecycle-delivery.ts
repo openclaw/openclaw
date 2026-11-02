@@ -1,4 +1,5 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { isSilentReplyText } from "../../../auto-reply/tokens.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
@@ -129,6 +130,7 @@ export const hasPriorRequesterDeliveryMirror = async (
   const isExpectedMirrorIdempotencyKey = (value: unknown): boolean =>
     typeof value === "string" &&
     (value === expectedIdempotencyKey ||
+      value.startsWith(`outbound-delivery:${expectedIdempotencyKey}:`) ||
       value.startsWith(`${expectedIdempotencyKey}:internal-source-reply:`) ||
       value.startsWith(`${expectedIdempotencyKey}:message-tool:internal-source-reply:`) ||
       value.startsWith(`${entry.runId}:message-tool:`) ||
@@ -143,6 +145,7 @@ export const hasPriorRequesterDeliveryMirror = async (
           method: "chat.history",
           params: {
             sessionKey: entry.requesterSessionKey,
+            agentId: entry.requesterAgentId,
             limit: 25,
             maxChars: DELIVERY_MIRROR_HISTORY_MAX_CHARS,
           },
@@ -168,7 +171,7 @@ export const hasPriorRequesterDeliveryMirror = async (
       return (
         record.role === "assistant" &&
         record.provider === "openclaw" &&
-        record.model === "delivery-mirror" &&
+        (record.model === "delivery-mirror" || record.model === "automation-result") &&
         text === expectedText
       );
     });
@@ -334,7 +337,7 @@ export const refreshFrozenResultFromSession = async (
     return false;
   }
   const trimmed = captured?.trim();
-  if (!trimmed) {
+  if (!trimmed || isSilentReplyText(trimmed)) {
     return false;
   }
   // Reply capture yields while registration can transfer session ownership.

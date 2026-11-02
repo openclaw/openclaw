@@ -4,15 +4,13 @@ import { TerminalStates, type CallRecord } from "../types.js";
 
 const CHECK_INTERVAL_MS = 30_000;
 
-type StaleCallReaperManager = {
-  getActiveCalls(): Array<Pick<CallRecord, "answeredAt" | "callId" | "startedAt" | "state">>;
-  endCall: CallManager["endCall"];
-};
-
 /** Stop joins provider hangups before the call manager can close. */
 export function startStaleCallReaper(params: {
   scheduler: PluginServiceSchedulerV1;
-  manager: StaleCallReaperManager;
+  manager: {
+    getActiveCalls(): Array<Pick<CallRecord, "answeredAt" | "callId" | "startedAt" | "state">>;
+    endCall: CallManager["endCall"];
+  };
   staleCallReaperSeconds?: number;
 }): (() => Promise<void>) | null {
   const maxAgeSeconds = params.staleCallReaperSeconds;

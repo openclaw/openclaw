@@ -1,7 +1,8 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { createMemo, createStore, onCleanup, untrack } from "solid-js";
+import { createMemo, createStore, onSettled } from "solid-js";
+import { registerBoardDocumentEnglish } from "../../i18n/locales/en-board-document.ts";
+import { BOARD_GRID_COLUMNS } from "../../lib/board/grid-constants.ts";
 import {
-  BOARD_GRID_COLUMNS,
   BOARD_GRID_GAP,
   BOARD_GRID_ROW_HEIGHT,
   boardChromeRowPx,
@@ -15,9 +16,17 @@ import {
 import type { BoardOp, BoardSnapshot, BoardWidget } from "../../lib/board/types.ts";
 import type { BoardViewCallbacks, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { orderedBoardTabs } from "./board-tabs.tsx";
-import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
+import type {
+  BoardWidgetCellCallbacks,
+  BoardWidgetCellMethods,
+  BoardWidgetCellProps,
+} from "./board-widget-cell-options.ts";
+import { boardWidgetPresentationReady } from "./board-widget-cell.solid.tsx";
+
+registerBoardDocumentEnglish();
 
 type BoardPointerGesture = {
   mode: "move" | "resize";
@@ -58,9 +67,14 @@ export type BoardViewMethods = {
 };
 export type BoardViewElement = SolidBridgeElement<BoardViewProps, BoardViewMethods>;
 
-export function createBoardViewState(props: BoardViewProps, host: BoardViewElement) {
+export function createBoardViewState(
+  props: BoardViewProps,
+  host: BoardViewElement,
+  cells: () => SolidBridgeElement<BoardWidgetCellProps, BoardWidgetCellMethods>[],
+) {
   // Pointer identity and mutation admission must be visible within the same event turn.
   let gesture: BoardPointerGesture | null = null;
+  let gestureListeners: (() => void)[] = [];
   let grid: HTMLElement | undefined;
   let mutationPending = false;
   let mutationRequestId = 0;
@@ -77,16 +91,18 @@ export function createBoardViewState(props: BoardViewProps, host: BoardViewEleme
     hoverTabId: "",
     announcement: "",
     announcementRevision: 0,
-    actionError: "",
+    mutationFailure: undefined,
     focusName: "",
     mutationPending: false,
     initialLoading: true,
     contentHeights: initialHeights,
   };
-  type Presentation = typeof initial;
-  const [presentation, update] = createStore(sync, initial);
+  type Presentation = Omit<typeof initial, "mutationFailure"> & {
+    mutationFailure: { result: Promise<void> } | undefined;
+  };
+  const [presentation, update] = createStore<Presentation>(sync, initial);
   const contentHeights = { get: (name: string) => presentation.contentHeights[name]?.height };
-  onCleanup(stopGesture);
+  onSettled(() => stopGesture);
 
   function sync(local: Presentation): void {
     const before = previous;
@@ -106,7 +122,7 @@ export function createBoardViewState(props: BoardViewProps, host: BoardViewEleme
     }
     // Recovery reads can publish unchanged state after a failed mutation.
     if (ownerChanged || before?.snapshot?.revision !== props.snapshot?.revision) {
-      local.actionError = "";
+      local.mutationFailure = undefined;
     }
     if (snapshotChanged) {
       const currentByName = new Map(props.snapshot?.widgets.map((widget) => [widget.name, widget]));
@@ -143,26 +159,21 @@ export function createBoardViewState(props: BoardViewProps, host: BoardViewEleme
 
   async function teardown(): Promise<void> {
     update(clearGesture);
-    await Promise.all(
-      [...host.querySelectorAll("openclaw-board-widget-cell")].map((cell) => cell.teardown()),
-    );
+    await Promise.all(cells().map((cell) => cell.teardown()));
   }
 
   // Readiness is sampled after a cell commit; this callback owns no subscription.
-  const reconcileInitialPresentation = (): void =>
-    untrack(() => {
-      if (
-        presentation.initialLoading &&
-        props.snapshot &&
-        [...host.querySelectorAll("openclaw-board-widget-cell")].every(
-          (cell) => cell.hidden || cell.presentationReady,
-        )
-      ) {
-        update((local) => {
-          local.initialLoading = false;
-        });
-      }
-    });
+  const reconcileInitialPresentation = (): void => {
+    if (
+      presentation.initialLoading &&
+      props.snapshot &&
+      cells().every((cell) => cell.hidden || boardWidgetPresentationReady(cell))
+    ) {
+      update((local) => {
+        local.initialLoading = false;
+      });
+    }
+  };
   function announce(message: string): void {
     update((local) => {
       local.announcement = message;
@@ -171,7 +182,8 @@ export function createBoardViewState(props: BoardViewProps, host: BoardViewEleme
   }
 
   async function applyOps(ops: BoardOp[], announcement: string): Promise<void> {
-    if (!props.callbacks) {
+    const callbacks = props.callbacks;
+    if (!callbacks) {
       return;
     }
     if (mutationPending) {
@@ -180,32 +192,38 @@ export function createBoardViewState(props: BoardViewProps, host: BoardViewEleme
     const sessionKey = props.snapshot?.sessionKey;
     const requestId = ++mutationRequestId;
     mutationPending = true;
+    // Child cells have independent bridge roots. Keep busy publication outside
+    // an action so a held mutation cannot hold their disabled-control updates.
     update((local) => {
-      local.actionError = "";
+      local.mutationFailure = undefined;
       local.mutationPending = true;
     });
-    try {
-      await props.callbacks.applyOps(ops);
+    const completion = (async () => {
+      try {
+        await callbacks.applyOps(ops);
+        if (requestId === mutationRequestId && sessionKey === props.snapshot?.sessionKey) {
+          announce(announcement);
+        }
+      } finally {
+        if (requestId === mutationRequestId) {
+          mutationPending = false;
+          update((local) => {
+            local.mutationPending = false;
+          });
+        }
+      }
+    })();
+    // Observe only the settled rejection; pending reads would hold the shared
+    // grid presentation and its cell lifecycle updates.
+    void completion.catch(() => {
       if (requestId === mutationRequestId && sessionKey === props.snapshot?.sessionKey) {
-        announce(announcement);
-      }
-    } catch (error) {
-      if (requestId === mutationRequestId && sessionKey === props.snapshot?.sessionKey) {
-        const errorText = t("board.actionFailed");
         update((local) => {
-          local.actionError = errorText;
+          local.mutationFailure = { result: completion };
         });
-        announce(errorText);
+        announce(t("board.actionFailed"));
       }
-      throw error;
-    } finally {
-      if (requestId === mutationRequestId) {
-        mutationPending = false;
-        update((local) => {
-          local.mutationPending = false;
-        });
-      }
-    }
+    });
+    return completion;
   }
 
   function nextPosition(tabId: string): number {
@@ -230,6 +248,7 @@ export function createBoardViewState(props: BoardViewProps, host: BoardViewEleme
   }
 
   const cellCallbacks: BoardWidgetCellCallbacks = {
+    presentationReady: reconcileInitialPresentation,
     appViewGeneration: () => props.callbacks?.appViewGeneration ?? 0,
     grant: async (name, decision) => {
       if (!props.callbacks) {
@@ -326,10 +345,8 @@ export function createBoardViewState(props: BoardViewProps, host: BoardViewEleme
         local.focusName = target.name;
       });
       queueMicrotask(() => {
-        const cell = [...host.querySelectorAll("openclaw-board-widget-cell")].find(
-          (entry) => entry.widget?.name === target.name,
-        );
-        cell?.querySelector<HTMLElement>(".board-widget")?.focus();
+        const cell = cells().find((entry) => entry.widget?.name === target.name);
+        cell?.focusWidget();
       });
     },
     focusChanged: (name) => {
@@ -341,12 +358,10 @@ export function createBoardViewState(props: BoardViewProps, host: BoardViewEleme
     widgetAppView: async (name, revision) =>
       (await props.callbacks?.widgetAppView?.(name, revision)) ?? {
         status: "stale",
-        error: "MCP App view unavailable",
       },
     refreshWidgetAppView: async (name, revision) =>
       (await props.callbacks?.refreshWidgetAppView?.(name, revision)) ?? {
         status: "stale",
-        error: "MCP App view unavailable",
       },
   };
 
@@ -361,9 +376,7 @@ export function createBoardViewState(props: BoardViewProps, host: BoardViewEleme
     ) {
       return;
     }
-    const cell = [...host.querySelectorAll("openclaw-board-widget-cell")].find(
-      (entry) => entry.pageChrome && entry.widget === widget,
-    );
+    const cell = cells().find((entry) => entry.pageChrome && entry.widget === widget);
     cell?.selectMenuItem(value);
   }
 
@@ -408,9 +421,11 @@ export function createBoardViewState(props: BoardViewProps, host: BoardViewEleme
       local.previewItems = items;
       local.gesture = { name: widget.name, mode };
     });
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", handlePointerUp);
-    window.addEventListener("pointercancel", handlePointerCancel);
+    gestureListeners = [
+      listen(window, "pointermove", handlePointerMove),
+      listen(window, "pointerup", handlePointerUp),
+      listen(window, "pointercancel", handlePointerCancel),
+    ];
   }
 
   function pointerPreview(
@@ -519,9 +534,8 @@ export function createBoardViewState(props: BoardViewProps, host: BoardViewEleme
   };
 
   function stopGesture(): void {
-    window.removeEventListener("pointermove", handlePointerMove);
-    window.removeEventListener("pointerup", handlePointerUp);
-    window.removeEventListener("pointercancel", handlePointerCancel);
+    gestureListeners.forEach((stop) => stop());
+    gestureListeners = [];
     gesture = null;
   }
 
@@ -538,6 +552,9 @@ export function createBoardViewState(props: BoardViewProps, host: BoardViewEleme
   };
   return {
     presentation,
+    mutationFailure: createMemo(
+      () => presentation.mutationFailure?.result.then(() => null) ?? null,
+    ),
     visitedTabs,
     contentHeights,
     cellCallbacks,

@@ -3,7 +3,7 @@ import type { NormalizedUsage } from "./usage.js";
 
 export type CliTranscriptUsage = Pick<
   NormalizedUsage,
-  "input" | "output" | "cacheRead" | "cacheWrite" | "total" | "contextUsage"
+  "input" | "output" | "cacheRead" | "cacheWrite" | "cacheWrite1h" | "total" | "contextUsage"
 >;
 
 const CLI_TRANSCRIPT_UNAVAILABLE_USAGE = {

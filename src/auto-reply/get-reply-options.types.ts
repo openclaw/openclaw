@@ -8,6 +8,8 @@ import type {
   SessionSourceCheck,
 } from "../config/sessions/session-source-authority.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
+import type { AgentCommandOutputEventFields } from "../infra/agent-activity-events.js";
+import type { AgentApprovalEventData } from "../infra/agent-events.types.js";
 import type { OutboundPayloadPlan } from "../infra/outbound/reply-payload-parts.js";
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
@@ -72,20 +74,8 @@ export type BlockReplyContext = {
   deliveryIntentId?: string;
 };
 
-/** Context passed to onModelSelected callback with actual model used. */
-type ModelSelectedContext = {
-  provider: string;
-  model: string;
-  thinkLevel: string | undefined;
-};
-
 /** Typing indicator class for channel-owned UX policy. */
-export type TypingPolicy =
-  | "auto"
-  | "user_message"
-  | "system_event"
-  | "internal_webchat"
-  | "heartbeat";
+export type TypingPolicy = "auto" | "user_message" | "system_event" | "internal_webchat";
 
 /** Per-turn policy for source-message reply threading. */
 export type ReplyThreadingPolicy = {
@@ -116,6 +106,32 @@ export type QueuedReplyDeliveryCorrelation = {
     | void;
 };
 
+export type QueuedFollowupReplyBatch = {
+  kind: "queued-followup";
+  runId: string;
+  originatingChannel: string | undefined;
+  payloads: ReplyPayload[];
+  completion:
+    | { kind: "progress" }
+    | { kind: "completed"; stopReason?: string; allowCanvasOnly?: true }
+    | {
+        kind: "failed";
+        error: string;
+        /** Host-authored failure copy with its next step; safe to keep in history. */
+        notice?: string;
+        stopReason?: string;
+        errorKind?: "timeout";
+      }
+    | { kind: "aborted"; stopReason?: string };
+};
+
+export type QueuedFollowupReplyDelivery = ((
+  batch: QueuedFollowupReplyBatch,
+) => Promise<void> | void) & {
+  ownsCompletion?: (originatingChannel: string | undefined) => boolean;
+  createSourceRetry?: () => QueuedFollowupReplyDelivery;
+};
+
 /**
  * Exclusive: each lifecycle is its own collect-admission identity.
  * Cancel-only: share collect identity via ownerKey (gateway chat.send).
@@ -143,9 +159,9 @@ export type TurnAdoptionLifecycle = {
   /** Requested cadence for pre-adoption heartbeats. */
   deferredHeartbeatIntervalMs?: number;
   /** Deferred turn finished without owning the reply lane. */
-  onAbandoned?: () => void;
+  onAbandoned?: () => void | Promise<void>;
   /** Always fires when the followup ownership cycle ends (admitted or not). Gateway cleanup. */
-  onSettled?: () => void;
+  onSettled?: () => void | Promise<void>;
   /** Retires cancellation ownership while retaining live identity. */
   onCancellationRetired?: () => void;
   /** Stable cancellation owner for collect-mode batches. */
@@ -172,10 +188,6 @@ export type ReasoningStreamPayload = Pick<
   "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
 > & {
   requiresReasoningProgressOptIn?: boolean;
-};
-
-type ReasoningProgressPayload = {
-  progressTokens: number;
 };
 
 /** Return false until the channel has accepted operator-visible progress. */
@@ -207,7 +219,7 @@ export type GetReplyOptions = {
   /** Return "reply-dispatch" synchronously to accept the offered completion ownership. */
   onPreparedAgentRunStart?: (start: PreparedAgentRunStart) => unknown;
   /**
-   * @deprecated Use onPreparedAgentRunStart with a prepared transcript boundary. Supported through 2026-12-31.
+   * @deprecated Use onPreparedAgentRunStart with a prepared transcript boundary. Supported through 2026-12-31. Removal in the first January 2027 stable release.
    * Notifies when an agent run starts. Return "reply-dispatch" synchronously to accept
    * completion ownership offered in options; all other legacy callback results are ignored.
    */
@@ -219,6 +231,8 @@ export type GetReplyOptions = {
   ) => unknown;
   /** Reports the terminal agent-run classification to the shared dispatch owner. */
   onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
+  /** Retains source-owned delivery when this turn is queued behind an active run. */
+  onQueuedFollowupReplyBatch?: QueuedFollowupReplyDelivery;
   /** Reports terminal queue-cap rejection or eviction when no agent run will report an outcome. */
   onFollowupQueueDisposition?: (
     disposition: "queue-cap" | "queue-cap-old" | "queue-cap-new",
@@ -239,7 +253,11 @@ export type GetReplyOptions = {
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   /** Gateway-owned start-or-steer decision for this turn. */
-  messageInjectionDisposition?: "none" | "accepted" | "rejected";
+  messageInjectionDisposition?:
+    | "none"
+    | "accepted"
+    | "rejected"
+    | "collaborative-steering-disabled";
   /** Current user turn is already durable; replay it without appending another copy. */
   suppressNextUserMessagePersistence?: boolean;
   onReplyStart?: () => Promise<void> | void;
@@ -248,15 +266,10 @@ export type GetReplyOptions = {
   onTypingController?: (typing: TypingController) => void;
   /** If false, send only the initial typing signal without periodic keepalive refreshes. */
   typingKeepalive?: boolean;
-  isHeartbeat?: boolean;
-  /** Wording only; heartbeat visibility/suppression semantics stay on isHeartbeat. */
-  useHeartbeatFailureCopy?: boolean;
-  /** Policy-level typing control for run classes (user/system/internal/heartbeat). */
+  /** Policy-level typing control for run classes (user/system/internal). */
   typingPolicy?: TypingPolicy;
   /** Force-disable typing indicators for this run (system/internal/cross-channel routes). */
   suppressTyping?: boolean;
-  /** Resolved heartbeat model override (provider/model string from merged per-agent config). */
-  heartbeatModelOverride?: string;
   /** One-shot thinking level override for this run; does not persist to the session. */
   thinkingLevelOverride?: string;
   /** One-shot fast-mode override for this run; does not persist to the session. */
@@ -267,18 +280,8 @@ export type GetReplyOptions = {
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
-  /** @internal Preserve the recovery owner's replay-safe tool restriction for this turn. */
-  forceRestartSafeTools?: boolean;
-  /** @internal Retain restart-safe Code Mode controls for an interrupted continuation. */
-  forceCodeModeTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */
   toolsAllow?: string[];
-  /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
-  enableHeartbeatTool?: boolean;
-  /** If true, keep the heartbeat response tool available even under narrow tool profiles. */
-  forceHeartbeatTool?: boolean;
-  /** Heartbeat-transported turn that continues a conversation (its own command completion). */
-  continuesConversation?: boolean;
   /**
    * @deprecated Ignored. The tool-failure warning is delivered whenever a run ends
    * without a reply and cannot be suppressed. Kept only so plugin-sdk callers that
@@ -302,7 +305,7 @@ export type GetReplyOptions = {
    * commentary progress inside an ephemeral streaming draft should yield those
    * draft lines while the getter returns true, so progress is not rendered in
    * both lanes at once.
-   * @deprecated Use onVerboseProgressVisibilityAsync. Supported through 2026-12-31.
+   * @deprecated Use onVerboseProgressVisibilityAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release.
    */
   onVerboseProgressVisibility?: (isActive: () => boolean) => void;
   /** Registers awaited visibility before dispatch; preferred over the deprecated callback. */
@@ -315,7 +318,7 @@ export type GetReplyOptions = {
   onReasoningStream?: (
     payload: ReasoningStreamPayload,
   ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
-  onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void> | void;
+  onReasoningProgress?: (payload: { progressTokens: number }) => Promise<void> | void;
   streamReasoningInNonStreamModes?: boolean;
   /** Called when a thinking/reasoning block ends. */
   onReasoningEnd?: () => Promise<ProgressCallbackResult> | ProgressCallbackResult;
@@ -409,34 +412,20 @@ export type GetReplyOptions = {
     source?: string;
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when an approval becomes pending or resolves. */
-  onApprovalEvent?: (payload: {
-    phase?: string;
-    kind?: string;
-    status?: string;
-    title?: string;
-    itemId?: string;
-    toolCallId?: string;
-    approvalId?: string;
-    approvalSlug?: string;
-    command?: string;
-    host?: string;
-    reason?: string;
-    scope?: "turn" | "session";
-    message?: string;
-  }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
+  onApprovalEvent?: (
+    payload: Partial<Omit<AgentApprovalEventData, "phase" | "kind" | "status">> & {
+      phase?: string;
+      kind?: string;
+      status?: string;
+    },
+  ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when command output streams or completes. */
-  onCommandOutput?: (payload: {
-    itemId?: string;
-    phase?: string;
-    title?: string;
-    toolCallId?: string;
-    name?: string;
-    output?: string;
-    status?: string;
-    exitCode?: number | null;
-    durationMs?: number;
-    cwd?: string;
-  }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
+  onCommandOutput?: (
+    payload: Partial<Omit<AgentCommandOutputEventFields, "phase" | "status">> & {
+      phase?: string;
+      status?: string;
+    },
+  ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when a patch completes with a file summary. */
   onPatchSummary?: (payload: {
     itemId?: string;
@@ -457,7 +446,12 @@ export type GetReplyOptions = {
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
-  onModelSelected?: (ctx: ModelSelectedContext) => void;
+  /** Context passed to onModelSelected callback with actual model used. */
+  onModelSelected?: (ctx: {
+    provider: string;
+    model: string;
+    thinkLevel: string | undefined;
+  }) => void;
   /**
    * Controls whether normal assistant replies are automatically delivered to
    * the source conversation. `message_tool_only` prefers message-tool visible

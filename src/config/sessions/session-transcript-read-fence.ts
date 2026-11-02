@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import {
   getUserTurnTranscriptAdmissionOwner,
   readPendingUserTurnTranscriptAdmission,
@@ -7,6 +6,7 @@ import type {
   UserTurnTranscriptAdmissionReceipt,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
+import { AsyncContext } from "../../shared/async-context.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
@@ -15,7 +15,9 @@ import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence
 
 export { SessionTranscriptReadFenceError };
 
-const transcriptReadFenceStorage = new AsyncLocalStorage<UserTurnTranscriptAdmissionReceipt>();
+const transcriptReadFenceStorage = new AsyncContext<UserTurnTranscriptAdmissionReceipt>(
+  Symbol("sessionTranscriptReadFence"),
+);
 
 function isSameTranscriptStore(left: string, right: string): boolean {
   return left === right || isSameOpenClawAgentDatabasePath(left, right);
@@ -26,7 +28,9 @@ type QuestionAnswerScope = {
   assertActive: () => void;
   inputs: Map<string, UserTurnTranscriptAdmissionReceipt>;
 };
-const questionAnswerStorage = new AsyncLocalStorage<QuestionAnswerScope>();
+const questionAnswerStorage = new AsyncContext<QuestionAnswerScope>(
+  Symbol("sessionTranscriptQuestionAnswers"),
+);
 
 /** Answer custody outlives question registration, but never the creator's admitted run. */
 export function withSessionTranscriptQuestionAnswers<T>(

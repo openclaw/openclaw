@@ -5,83 +5,20 @@ import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import type { CodexDesktopGeneration } from "./desktop-generation-owner.js";
 
-export type CodexAppServerAcquireBoundary =
-  | "context"
-  | "entry-selection"
-  | "transport-registration"
-  | "initialize"
-  | "catalog-observation"
-  | "runtime-binding"
-  | "auth-handoff"
-  | "ready"
-  | "cleanup";
-
-export type CodexAppServerAcquireObservation = {
-  boundary: CodexAppServerAcquireBoundary;
-  startup?: "created-shared" | "joined-shared" | "ready-cache-hit" | "isolated";
-};
-
-type AcquireObserverOptions = {
-  onAcquireObservation?: (observation: CodexAppServerAcquireObservation) => void;
-};
-
-export function observeAcquire(
-  options: AcquireObserverOptions | undefined,
-  observation: CodexAppServerAcquireObservation,
-): void {
-  try {
-    options?.onAcquireObservation?.(observation);
-  } catch {
-    // Diagnostics do not own startup, cancellation, or a shared client's lifetime.
-  }
-}
-
-export function observeSharedClientAcquire(
-  entry: SharedCodexAppServerClientEntry,
-  options: AcquireObserverOptions | undefined,
-): () => void {
-  const observer = (boundary: CodexAppServerAcquireBoundary) =>
-    observeAcquire(options, { boundary });
-  if (options?.onAcquireObservation) {
-    (entry.acquireBoundaryObservers ??= new Set()).add(observer);
-  }
-  observeAcquire(options, {
-    boundary: entry.acquireBoundary ?? "entry-selection",
-    startup: entry.startup
-      ? entry.acquireBoundary === "ready"
-        ? "ready-cache-hit"
-        : "joined-shared"
-      : "created-shared",
-  });
-  return () => entry.acquireBoundaryObservers?.delete(observer);
-}
-
-export function recordSharedClientAcquireBoundary(
-  entry: SharedCodexAppServerClientEntry,
-  boundary: CodexAppServerAcquireBoundary,
-): void {
-  entry.acquireBoundary = boundary;
-  for (const observer of entry.acquireBoundaryObservers ?? []) {
-    observer(boundary);
-  }
-}
-
 export type SharedCodexAppServerClientEntry = {
   /** Moves only through rekeySharedClientEntry. */
   key: string;
   client?: CodexAppServerClient;
   startup?: SharedCodexAppServerClientStartup;
+  ready: boolean;
   activeLeases: number;
   // Anonymous releases cannot consume explicit native-subagent retains.
   anonymousLeases: number;
   pendingAcquires: number;
   closeWhenIdle: boolean;
-  closeError?: Error;
   idleTimer?: ReturnType<typeof setTimeout>;
   hasOwnedThreads?: () => boolean;
   onStartedClientCallbacks: Set<(client: CodexAppServerClient) => void>;
-  acquireBoundary?: CodexAppServerAcquireBoundary;
-  acquireBoundaryObservers?: Set<(boundary: CodexAppServerAcquireBoundary) => void>;
 };
 
 export type SharedCodexAppServerClientStartup = {
@@ -97,6 +34,7 @@ export function getOrCreateSharedClientEntry(
   if (!entry) {
     entry = {
       key,
+      ready: false,
       activeLeases: 0,
       anonymousLeases: 0,
       pendingAcquires: 0,
@@ -208,6 +146,14 @@ export const getSharedCodexAppServerClientState = defineCodexBuildState(
   }),
 );
 
+export function trackIsolatedCodexAppServerClient(client: CodexAppServerClient): void {
+  const state = getSharedCodexAppServerClientState();
+  state.isolatedClients.add(client);
+  client.addTransportExitHandler((exitedClient) => {
+    state.isolatedClients.delete(exitedClient);
+  });
+}
+
 export function hasActiveSharedCodexAppServerWork(): boolean {
   const state = getSharedCodexAppServerClientState();
   if (state.startup.pending.size > 0 || state.startup.controller.signal.aborted) {
@@ -238,17 +184,11 @@ export function getCurrentSharedClientEntry(
 }
 
 /**
- * Retires a matching shared client. Default is graceful: detach from the map
+ * Retires a matching shared client gracefully: detach from the map
  * (future acquisitions get a fresh client) and close once leases drain.
- * `failActiveLeases` is for suspect clients only (timed-out turns): it closes
- * the physical connection immediately so co-leased attempts hit the normal
- * client-closed retry path, and pending acquires reject instead of leasing
- * the poisoned process. Routine cleanup must NOT use it — it would abort
- * healthy sibling turns on a working client.
  */
 export function retireSharedCodexAppServerClientIfCurrent(
   client: CodexAppServerClient | undefined,
-  opts?: { failActiveLeases?: boolean },
 ): { activeLeases: number; closed: boolean } | undefined {
   if (!client) {
     return undefined;
@@ -256,22 +196,13 @@ export function retireSharedCodexAppServerClientIfCurrent(
   const state = getSharedCodexAppServerClientState();
   const currentEntry = getCurrentSharedClientEntry(client);
   const entry = currentEntry ?? state.entriesByClient.get(client);
-  if (!entry || (entry.client !== client && !entry.closeError)) {
+  if (!entry || entry.client !== client) {
     return undefined;
   }
   cancelSharedClientIdleRetirement(entry);
   if (currentEntry) {
     state.clients.delete(entry.key);
     entry.closeWhenIdle = true;
-  }
-  // Detached entries still own explicit native-subagent retains and remember
-  // forced closure after the physical client has been cleared.
-  if (opts?.failActiveLeases && (currentEntry || !entry.closeError)) {
-    entry.closeError = new Error("codex app-server client is closed");
-    return {
-      activeLeases: entry.activeLeases,
-      closed: closeRetiredSharedClientEntry(entry),
-    };
   }
   return {
     activeLeases: entry.activeLeases,
@@ -354,7 +285,7 @@ export async function retainSharedCodexAppServerClientByInstanceId(
       continue;
     }
     const entry = state.entriesByClient.get(client);
-    if (entry?.client !== client || entry.closeError || client.getCloseError()) {
+    if (entry?.client !== client || client.getCloseError()) {
       // Stop must reach the parent while the transport owner finishes shutdown.
       // Replacement writers keep joining physical exit before acquiring ownership.
       if (options?.waitForExit === false && client.getCloseError()) {
@@ -384,8 +315,8 @@ export async function retainSharedCodexAppServerClientByInstanceId(
   return undefined;
 }
 
-// Cold initialization measured 1–5 seconds; keep adjacent discovery/status requests warm.
-const CODEX_APP_SERVER_CLIENT_IDLE_GRACE_MS = 30_000;
+// Keep minute-scale discovery and background work warm without retaining unused homes forever.
+const CODEX_APP_SERVER_CLIENT_IDLE_GRACE_MS = 5 * 60_000;
 
 function cancelSharedClientIdleRetirement(entry: SharedCodexAppServerClientEntry): void {
   clearTimeout(entry.idleTimer);
@@ -402,7 +333,7 @@ export function refreshSharedClientIdleRetirement(client: CodexAppServerClient):
 function scheduleSharedClientIdleRetirement(entry: SharedCodexAppServerClientEntry): void {
   cancelSharedClientIdleRetirement(entry);
   if (
-    entry.acquireBoundary !== "ready" ||
+    !entry.ready ||
     entry.activeLeases > 0 ||
     entry.pendingAcquires > 0 ||
     !entry.client ||

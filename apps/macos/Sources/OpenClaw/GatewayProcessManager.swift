@@ -1,12 +1,23 @@
 import Foundation
 import Observation
 import OpenClawKit
+import OpenClawNativeState
 
 private struct GatewayHealthProbeTimeout: LocalizedError, Sendable {
     let timeoutMs: Double
 
     var errorDescription: String? {
         "Gateway health probe timed out after \(Int(self.timeoutMs))ms"
+    }
+}
+
+private struct GatewayHealthReadiness: Decodable {
+    let coreReady: Bool?
+}
+
+private struct GatewayHealthStartupPending: LocalizedError, Sendable {
+    var errorDescription: String? {
+        "Gateway is still preparing to accept chat"
     }
 }
 
@@ -243,7 +254,6 @@ final class GatewayProcessManager {
                 return
             }
         }
-        self.logger.debug("gateway active requested active=\(active)")
         self.desiredActive = active
         self.refreshEnvironmentStatus()
         if active, self.hostingChangeInProgress { return }
@@ -481,29 +491,31 @@ final class GatewayProcessManager {
     private func resolveLaunchAgentReadinessFailure(
         port: Int,
         startingPID: Int32?,
-        freshInstall: Bool = false) async -> LaunchAgentReadinessFailure?
+        freshInstall: Bool = false) async -> GatewayReadinessFailure?
     {
-        guard let pid = await self.reusableLaunchdPIDOwningPort(port: port),
-              pid == startingPID || (startingPID == nil && freshInstall)
-        else {
-            return nil
-        }
-        return LaunchAgentReadinessFailure(port: port, pid: pid)
-    }
-
-    private func reusableLaunchdPIDOwningPort(port: Int) async -> Int32? {
-        guard let pid = await GatewayLaunchAgentManager.reusableLoadedGatewayPID(
+        guard let state = try? await GatewayLaunchAgentManager.loadedGatewayState(
             port: port,
             allowUnconfigured: self.hostsLocalGatewayWithRemotePrimary)
         else {
             return nil
         }
+        if state.runningPID == nil,
+           let lastError = state.lastError,
+           lastError.hasPrefix("Gateway ownership could not be verified."),
+           await PortGuardian.shared.describe(port: port) == nil
+        {
+            // Recent logs explain a refused start; they never authorize service repair.
+            return .serviceInspection("Recent Gateway log error (may be from an earlier run): \(lastError)")
+        }
+        guard let pid = state.reusablePID,
+              pid == startingPID || (startingPID == nil && freshInstall)
+        else { return nil }
         // A stable launchd PID that owns the port can still have a wedged health RPC. A listener
         // owned by anyone else is protected and surfaced through the attach path instead.
         if let listener = await PortGuardian.shared.describe(port: port), listener.pid != pid {
             return nil
         }
-        return pid
+        return .timeoutWithRepairEvidence(LaunchAgentReadinessFailure(port: port, pid: pid))
     }
 
     func setLaunchAgentReadinessState(
@@ -551,7 +563,6 @@ final class GatewayProcessManager {
         self.status = .starting
         self.gatewayStartGeneration &+= 1
         let startGeneration = self.gatewayStartGeneration
-        self.logger.debug("gateway start requested")
 
         // First try to attach to an already-running Gateway before enabling launchd.
         self.beginGatewayStartTask(generation: startGeneration) { [weak self] in
@@ -660,7 +671,11 @@ final class GatewayProcessManager {
                         let custody = try await self.retainManagedServiceForResume(
                             expectedServiceAuthority: expectedServiceAuthority)
                         guard self.launchAgentDisableGeneration == stopGeneration else { return }
-                        if custody.migrationPending {
+                        // Passive stop owns only the captured profile definition. A direct low-level
+                        // disable still handles label-based ghost recovery when explicitly requested.
+                        if custody.authority.definition.plist == nil {
+                            failure = nil
+                        } else if custody.migrationPending {
                             self.appendLog("[gateway] Pin migration pending; runtime preserved. Run openclaw doctor.\n")
                             failure = await GatewayLaunchAgentManager.runDaemonCommand(
                                 ["stop"], expectedServiceAuthority: custody.authority, checkCurrent: mutationCheck)
@@ -1067,19 +1082,19 @@ extension GatewayProcessManager {
         guard latestDisposition == .retryWithRepair else {
             return migration ? .failed(fallbackFailure) : .superseded
         }
-        let failure: LaunchAgentReadinessFailure? = if migration || context.readinessCandidate != nil {
+        let failure: GatewayReadinessFailure? = if migration || context.readinessCandidate != nil {
             await self.resolveLaunchAgentReadinessFailure(
                 port: context.port,
                 startingPID: context.readinessPID,
                 freshInstall: self.launchAgentFreshInstallGeneration == context.generation)
         } else {
-            context.readinessFailure
+            context.readinessFailure.map(GatewayReadinessFailure.timeoutWithRepairEvidence)
         }
         guard self.isCurrentGatewayReadiness(context) else { return .superseded }
         guard let failure else {
             return migration ? .failed(fallbackFailure) : .superseded
         }
-        return .failed(.timeoutWithRepairEvidence(failure))
+        return .failed(failure)
     }
 
     private func gatewayProbeFailureTerminal(
@@ -1094,6 +1109,10 @@ extension GatewayProcessManager {
     }
 
     private func probeFailureDisposition(_ error: Error) -> GatewayProbeFailureDisposition {
+        // Startup schema custody blocks the local identity read before the handshake.
+        if let stateError = error as? OpenClawNativeStateError, stateError.code == .busy {
+            return .retryWithoutRepair
+        }
         if self.probeFailureIsCancellation(error) { return .retryWithoutRepair }
         if self.probeFailureShowsStartupProgress(error) { return .retryWithoutRepair }
         if error is GatewayHealthProbeTimeout { return .retryWithRepair }
@@ -1114,6 +1133,7 @@ extension GatewayProcessManager {
     }
 
     private func probeFailureShowsStartupProgress(_ error: Error) -> Bool {
+        if error is GatewayHealthStartupPending { return true }
         if let response = error as? GatewayResponseError {
             return response.code.uppercased() == "UNAVAILABLE"
         }
@@ -1159,7 +1179,6 @@ extension GatewayProcessManager {
             }
         }
         self.appendLog("[gateway] refreshing control channel (\(reason))\n")
-        self.logger.debug("gateway control channel refresh reason=\(reason)")
         Task { await ControlChannel.shared.configure() }
     }
 
@@ -1356,7 +1375,7 @@ extension GatewayProcessManager {
         // Startup owns recovery and its monotonic deadline. A normal request can recursively
         // start the Gateway and spend several 30-second connect retries before its RPC timer begins.
         // Disable the inner RPC timer so it cannot race the owner's typed probe timeout.
-        return try await AsyncTimeout.withTimeout(
+        let data = try await AsyncTimeout.withTimeout(
             seconds: max(0.001, timeoutMs / 1000),
             clock: clock,
             onTimeout: { GatewayHealthProbeTimeout(timeoutMs: timeoutMs) },
@@ -1367,12 +1386,16 @@ extension GatewayProcessManager {
                     timeoutMs: 0,
                     retryTransportFailures: false)
             })
+        // Older Gateways omit this field; newer ones distinguish a responsive server from chat readiness.
+        if (try? JSONDecoder().decode(GatewayHealthReadiness.self, from: data))?.coreReady == false {
+            throw GatewayHealthStartupPending()
+        }
+        return data
     }
 
     func clearLog() {
         self.log = ""
         try? FileManager().removeItem(atPath: GatewayLaunchAgentManager.launchdGatewayLogPath())
-        self.logger.debug("gateway log cleared")
     }
 
     private nonisolated static func readGatewayLog(path: String, limit: Int) -> String {
@@ -1469,9 +1492,14 @@ extension GatewayProcessManager {
     }
 
     func _testRecordLaunchAgentReadinessFailure(port: Int, startingPID: Int32?) async {
-        let failure = await self.resolveLaunchAgentReadinessFailure(
+        let result = await self.resolveLaunchAgentReadinessFailure(
             port: port,
             startingPID: startingPID)
+        let failure: LaunchAgentReadinessFailure? = if case let .timeoutWithRepairEvidence(failure)? = result {
+            failure
+        } else {
+            nil
+        }
         self.setLaunchAgentReadinessState(
             candidate: self.launchAgentReadinessCandidate,
             failure: failure)
@@ -1486,13 +1514,8 @@ extension GatewayProcessManager {
         let failure = await self.resolveLaunchAgentReadinessFailure(
             port: port,
             startingPID: startingPID)
-        let terminalFailure: GatewayReadinessFailure = if let failure {
-            .timeoutWithRepairEvidence(failure)
-        } else {
-            .deadlineWithoutRepairEvidence
-        }
         _ = await self.publishGatewayReadinessTerminal(
-            .failed(terminalFailure),
+            .failed(failure ?? .deadlineWithoutRepairEvidence),
             context: context)
     }
 

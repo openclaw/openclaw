@@ -1,5 +1,4 @@
 import type { Event } from "nostr-tools";
-import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { connectAuthenticatedBuzzRelaySession, parseBuzzAuthTag } from "./relay-auth.js";
 import { openBuzzRelaySubscription } from "./relay-subscription.js";
 import { discoverBuzzRoomsOnRelay, type BuzzDiscoveredRoom } from "./room-discovery.js";
@@ -8,7 +7,6 @@ import { BUZZ_CHANNEL_ID_PATTERN } from "./target.js";
 import { decodeBuzzPrivateKey, resolveBuzzPublicKey } from "./types.js";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 90_000;
-const DISCOVERY_RETRY_DELAYS_MS = [0, 500, 1_500] as const;
 const DISCOVERY_POLL_INTERVAL_MS = 2_000;
 
 function hasValidRoomTag(event: Event): boolean {
@@ -21,13 +19,10 @@ export async function waitForBuzzRoomAccess(params: {
   relayUrl: string;
   privateKey: string;
   authTag?: string;
-  timeoutMs?: number;
-  signal?: AbortSignal;
 }): Promise<BuzzDiscoveredRoom[]> {
   const secretKey = decodeBuzzPrivateKey(params.privateKey);
   const publicKey = resolveBuzzPublicKey(params.privateKey);
-  const timeoutSignal = AbortSignal.timeout(params.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS);
-  const signal = params.signal ? AbortSignal.any([params.signal, timeoutSignal]) : timeoutSignal;
+  const signal = AbortSignal.timeout(DEFAULT_WAIT_TIMEOUT_MS);
   const { relay, relayPublicKey } = await connectAuthenticatedBuzzRelaySession({
     relayUrl: params.relayUrl,
     secretKey,
@@ -39,9 +34,6 @@ export async function waitForBuzzRoomAccess(params: {
     return await new Promise<BuzzDiscoveredRoom[]>((resolve, reject) => {
       let settled = false;
       let checking = false;
-      let queuedRetry = false;
-      let pollTimer: ReturnType<typeof setInterval> | undefined;
-      const seenEvents = new Set<string>();
 
       const finish = (error?: unknown, rooms?: BuzzDiscoveredRoom[]) => {
         if (settled) {
@@ -49,9 +41,7 @@ export async function waitForBuzzRoomAccess(params: {
         }
         settled = true;
         signal.removeEventListener("abort", onAbort);
-        if (pollTimer) {
-          clearInterval(pollTimer);
-        }
+        clearInterval(pollTimer);
         if (error !== undefined) {
           reject(
             error instanceof Error
@@ -62,50 +52,31 @@ export async function waitForBuzzRoomAccess(params: {
           resolve(rooms ?? []);
         }
       };
-      const onAbort = () => {
-        if (timeoutSignal.aborted && !params.signal?.aborted) {
-          finish();
-          return;
-        }
-        finish(signal.reason ?? new Error("Buzz room access wait aborted"));
-      };
-      const checkRooms = async (retry: boolean) => {
+      const onAbort = () => finish();
+      const checkRooms = async () => {
         if (checking) {
-          queuedRetry ||= retry;
           return;
         }
         checking = true;
         try {
-          const delays = retry ? DISCOVERY_RETRY_DELAYS_MS : ([0] as const);
-          for (const delayMs of delays) {
-            signal.throwIfAborted();
-            await sleepWithAbort(delayMs, signal);
-            try {
-              const rooms = await discoverBuzzRoomsOnRelay({
-                relay,
-                relayPublicKey,
-                publicKey,
-                timeoutMs: 10_000,
-                signal,
-              });
-              if (rooms.length > 0) {
-                finish(undefined, rooms);
-                return;
-              }
-            } catch (error) {
-              if (signal.aborted) {
-                throw error;
-              }
-            }
+          signal.throwIfAborted();
+          const rooms = await discoverBuzzRoomsOnRelay({
+            relay,
+            relayPublicKey,
+            publicKey,
+            timeoutMs: 10_000,
+            signal,
+          });
+          if (rooms.length > 0) {
+            finish(undefined, rooms);
           }
         } catch (error) {
-          finish(error);
+          if (signal.aborted) {
+            finish(error);
+          }
+          // Room publication may lag its notification; the next poll retries the snapshot.
         } finally {
           checking = false;
-          if (queuedRetry && !settled) {
-            queuedRetry = false;
-            void checkRooms(true);
-          }
         }
       };
 
@@ -123,23 +94,17 @@ export async function waitForBuzzRoomAccess(params: {
           onevent: (event) => {
             if (
               event.kind !== BUZZ_MEMBER_ADDED_NOTIFICATION_KIND ||
-              seenEvents.has(event.id) ||
               !event.tags.some((tag) => tag[0] === "p" && tag[1] === publicKey) ||
               !hasValidRoomTag(event)
             ) {
               return;
             }
-            seenEvents.add(event.id);
-            void checkRooms(true);
+            void checkRooms();
           },
           oneose: () => {
             // Covers the race where room access was granted between the initial
             // discovery query and this live notification subscription.
-            void checkRooms(false);
-            pollTimer ??= setInterval(() => {
-              void checkRooms(false);
-            }, DISCOVERY_POLL_INTERVAL_MS);
-            pollTimer.unref?.();
+            void checkRooms();
           },
           onclose: (reason) => {
             if (reason !== "room access found") {
@@ -148,6 +113,10 @@ export async function waitForBuzzRoomAccess(params: {
           },
         },
       );
+      const pollTimer = setInterval(() => {
+        void checkRooms();
+      }, DISCOVERY_POLL_INTERVAL_MS);
+      pollTimer.unref?.();
     });
   } finally {
     relay.close();

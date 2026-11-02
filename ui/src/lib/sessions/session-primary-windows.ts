@@ -1,9 +1,4 @@
 import type { SessionsListResult } from "../../api/types.ts";
-import type {
-  SessionConnectionOwner,
-  SessionListScope,
-  SessionListSnapshot,
-} from "./session-capability.ts";
 import { normalizeAgentId } from "./session-key.ts";
 import {
   isPrimarySessionListQuery,
@@ -12,6 +7,11 @@ import {
 } from "./session-list-query.ts";
 import { publishManagedList } from "./session-managed-list-refresh.ts";
 import { sessionListQueryKey } from "./session-requests.ts";
+import type {
+  SessionConnectionOwner,
+  SessionListScope,
+  SessionListSnapshot,
+} from "./session-types.ts";
 
 /** Manage presentation leases on the roster owner's existing managed-list entries. */
 export function createSessionPrimaryWindows(
@@ -60,10 +60,6 @@ export function createSessionPrimaryWindows(
       }
       // Keep invalidation dormant until observed again, without runnable queued work.
       entry.coordinator.setActive(false, entry.queued !== null);
-      if (entry.queued?.immediate) {
-        // Keep an unserved create invalidation urgent if this query is observed again.
-        entry.coordinator.schedule(true);
-      }
       entry.queued = null;
       const release = () => {
         if (
@@ -137,7 +133,7 @@ export function createSessionPrimaryWindows(
             throw new Error(entry.snapshot.error);
           }
         },
-        dispose() {
+        dispose(this: void) {
           if (!disposed) {
             disposed = true;
             unsubscribe();

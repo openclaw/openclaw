@@ -105,16 +105,15 @@ async function mutateCleanupRecord<Key extends keyof WorktreeRetirementOperation
   assertCurrent?: () => void,
 ) {
   const context = captureWorktreeRunEndContext(env);
-  const captured = structuredClone(command);
   const mutation = captureWorktreeRegistryMutation(context, [
     {
-      id: captured.input.observed.id,
-      fields: [captured.type === "worktrees.retireMissing" ? "removal" : "cleanup"],
+      id: command.input.observed.id,
+      fields: [command.type === "worktrees.retireMissing" ? "removal" : "cleanup"],
     },
   ]);
   return await withWorktreeRunEnd(env, async () => {
     try {
-      return await runWorktreeRegistryCommand(context, (scope) => scope.execute(captured), {
+      return await runWorktreeRegistryCommand(context, (scope) => scope.execute(command), {
         assertCurrent: () => mutation.assertAuthority(() => assertCurrent?.()),
         mutation,
         unknownMessage: "Worktree retirement outcome is unknown",

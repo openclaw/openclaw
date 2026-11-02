@@ -7,6 +7,7 @@ import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
+import { gateAgentToolExecution } from "../agent-tool-availability.js";
 import {
   jsonResult,
   readToolStringParam,
@@ -23,7 +24,6 @@ import {
 import {
   bindAgentToolGatewayRequest,
   getInProcessGatewayToolContext,
-  type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import { SessionsCreateToolSchema } from "./sessions-create-tool-schema.js";
 import { hasSessionWriteAuthority } from "./sessions-operator-authority.js";
@@ -33,11 +33,10 @@ async function createSessionFromTool(
   params: Record<string, unknown>,
   toolCallId: string,
   signal?: AbortSignal,
-  callGateway?: AgentToolGatewayRequestCaller,
 ) {
   const caller = getGatewayToolCallerIdentity();
   const assertCallerCurrent = captureGatewayToolCallerAssertion("sessions.create");
-  const selection = resolveGatewayToolOperatorSelection();
+  const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
   const authority = selection.operatorAuthority;
   if (
     !caller?.operationalRunInstance ||
@@ -96,8 +95,7 @@ async function createSessionFromTool(
         .update(JSON.stringify([caller.operationalRunInstance.instanceId, toolCallId]))
         .digest("hex"),
   };
-  const gatewayRequest =
-    callGateway ?? bindAgentToolGatewayRequest({ revalidateOnCompletion: false });
+  const gatewayRequest = bindAgentToolGatewayRequest({ revalidateOnCompletion: false });
   const result = await gatewayRequest<{
     key: string;
     sessionId: string;
@@ -117,6 +115,8 @@ async function createSessionFromTool(
     agentToolCaller: {
       agentId: caller.agentId,
       sessionKey: caller.sessionKey,
+      executionIdentityToken: caller.executionIdentityToken,
+      requesterOrigin: selection.requesterOrigin,
       assertCurrent: composeSessionSourceAssertion(
         [selection.assertCurrent, assertCallerCurrent],
         (assertSource) => {
@@ -140,13 +140,9 @@ async function createSessionFromTool(
 export function createSessionsCreateTool(
   opts: {
     sessionControlAuthority?: AdmittedRunOperatorAuthority;
-    callGateway?: AgentToolGatewayRequestCaller;
   } = {},
-): AnyAgentTool | null {
-  if (!hasSessionWriteAuthority(opts.sessionControlAuthority)) {
-    return null;
-  }
-  return {
+): AnyAgentTool {
+  const tool: AnyAgentTool = {
     label: "New session",
     name: "sessions_create",
     description:
@@ -160,8 +156,15 @@ export function createSessionsCreateTool(
       // The creation owner fences selection through COMMIT/input acceptance. Its
       // receipt remains valid if that turn ends or gains a participant afterward.
       return await withGatewayPersonalToolUser(readToolStringParam(params, "user"), () =>
-        createSessionFromTool(params, toolCallId, signal, opts.callGateway),
+        createSessionFromTool(params, toolCallId, signal),
       );
     },
   };
+  // Turn authority gates execution, never the session's catalog definition.
+  return hasSessionWriteAuthority(opts.sessionControlAuthority)
+    ? tool
+    : gateAgentToolExecution(
+        tool,
+        "sessions_create requires current session write authority. Ask the user to request the new session from an authorized client.",
+      );
 }

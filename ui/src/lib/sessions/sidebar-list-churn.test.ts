@@ -16,7 +16,7 @@ it("reproduces paired sidebar refreshes for Team membership churn while applying
   vi.setSystemTime(now);
   const random = vi.spyOn(Math, "random").mockReturnValue(0);
   const fixture = createControlUiTeamScaleFixture({ now, sidebarListChurn: true });
-  const inventory = fixture.sidebarListChurn!;
+  const inventory = fixture.sidebarListInput;
   const owner = createTeamScaleSidebarListOwner(inventory);
   const reads: Array<{ atMs: number; personal: boolean; ownerFirst: boolean }> = [];
   const client = createTestGatewayClient(async (method, params) => {

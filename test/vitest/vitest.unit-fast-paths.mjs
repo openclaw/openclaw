@@ -101,12 +101,12 @@ export const forcedUnitFastTestFiles = [
   "src/mcp/openclaw-tools-serve.test.ts",
   "src/media-generation/registry.test.ts",
   "src/node-host/plugin-node-host.test.ts",
+  "src/node-host/invoke-system-run-plan.cwd.test.ts",
   "src/node-host/invoke-system-run-plan.test.ts",
   "src/pairing/setup-code.test.ts",
   "src/plugin-activation-boundary.test.ts",
   "src/proxy-capture/runtime.test.ts",
   "src/proxy-capture/store.sqlite.test.ts",
-  "src/security/audit-config-basics.test.ts",
   "src/security/audit-exec-surface.test.ts",
   "src/security/audit-extra.sync.test.ts",
   "src/security/audit-sandbox-docker-config.test.ts",
@@ -125,7 +125,6 @@ export const forcedUnitFastTestFiles = [
   "src/trajectory/metadata.test.ts",
   "src/tts/openai-compatible-speech-provider.test.ts",
   "src/tts/tts.test.ts",
-  "src/tts/status-config.test.ts",
   "src/tts/tts-config.test.ts",
   "packages/terminal-core/src/restore.test.ts",
   "packages/terminal-core/src/table.test.ts",
@@ -178,9 +177,9 @@ const ownerRoutedUnitTestPatterns = [
   // mocks live in a shared helper.
   // Completion custody tests use real session/task SQLite and process-scoped state cleanup.
   "src/agents/agent-harness-completion-delivery.test.ts",
-  "src/agents/agent-harness-completion-ownership.test.ts",
   "src/agents/agent-command.compaction-rotation.test.ts",
   "src/agents/agent-command.embedded-maintenance.test.ts",
+  "src/agents/agent-command.operator-direct-root.test.ts",
   // Source plugin workers retain the agent runtime owner after test extraction.
   "src/agents/code-mode-quickjs.integration.test.ts",
   "src/agents/tool-surface-plan.provider-catalog.integration.test.ts",
@@ -219,7 +218,6 @@ const broadUnitFastCandidateSkipPatterns = prepareGlobPatterns(
     "src/proxy-capture/runtime.test.ts",
     "src/plugins/install.npm-spec.test.ts",
     "src/plugins/contracts/**/*.test.ts",
-    "src/pairing/pairing-store.test.ts",
     "src/plugin-sdk/browser-subpaths.test.ts",
     "src/security/**/*.test.ts",
     "src/secrets/**/*.test.ts",
@@ -281,7 +279,7 @@ const disqualifyingPatterns = [
 ];
 
 const statefulTestHelperImportPattern =
-  /\bfrom\s+["']([^"']*(?:test-support|\.harness|\.test-mocks|prepared-model-runtime\.test-harness|message-action-runner\.test-helpers|computer-tool\.test-helpers)(?:\.js|\.ts)?)["']/gu;
+  /\bfrom\s+["']([^"']*(?:test-support|\.harness|\.test-mocks|\.test-harness|message-action-runner\.test-helpers|computer-tool\.test-helpers)(?:\.js|\.ts)?)["']/gu;
 const statefulTestHelperByKey = new Map();
 
 function importsStatefulTestHelper(cwd, file, source) {
@@ -369,15 +367,29 @@ function collectRepoTestFiles(cwd, selected) {
   if (cached) {
     return cached;
   }
-  const inventory = getRepositoryFileInventory(cwd, selected);
+  const roots = ["src/", "packages/", "test/"];
+  let inventory = new Set();
+  // A single glob per root filters non-test files before Git checks deleted-file
+  // metadata, while retaining untracked tests and each root's directory prefix.
+  for (const scope of selected ? [selected] : roots.map((root) => [`${root}**/*.test.ts`])) {
+    const files = getRepositoryFileInventory(cwd, scope, selected ? "literal" : "glob");
+    if (!files) {
+      inventory = null;
+      break;
+    }
+    for (const file of files) {
+      inventory.add(file);
+    }
+  }
   const files = inventory
     ? [...inventory]
         .map(normalizeRepoPath)
         .filter((file) => /^(?:src|packages|test)\//u.test(file) && file.endsWith(".test.ts"))
-    : (selected ??
-      ["src", "packages", "test"]
-        .flatMap((directory) => walkFiles(path.join(cwd, directory)))
-        .map((file) => normalizeRepoPath(path.relative(cwd, file))));
+    : selected?.every((file) => file.endsWith(".test.ts"))
+      ? selected
+      : roots
+          .flatMap((directory) => walkFiles(path.join(cwd, directory)))
+          .map((file) => normalizeRepoPath(path.relative(cwd, file)));
   walkedTestFilesByCwd.set(key, files);
   return files;
 }
@@ -586,11 +598,19 @@ export function getUnitFastTestFilesForIncludePatterns(includePatterns, options 
     return [];
   }
   const compiledPatterns = prepareGlobPatterns(patterns);
+  const directories = [...new Set(patterns.map(directoryPrefixForGlob))];
   const candidates = patterns.every(
     (pattern) => pattern.endsWith(".test.ts") && literalGlobPrefix(pattern) === pattern,
   )
     ? collectUnitFastCandidateInventory(cwd, patterns)
-    : collectUnitFastCandidateInventory(cwd);
+    : directories.every(Boolean)
+      ? [
+          ...new Set(
+            // Git applies --deleted's metadata filter early only for one pathspec.
+            directories.flatMap((directory) => collectUnitFastCandidateInventory(cwd, [directory])),
+          ),
+        ]
+      : collectUnitFastCandidateInventory(cwd);
 
   const files = candidates
     .filter((file) => {

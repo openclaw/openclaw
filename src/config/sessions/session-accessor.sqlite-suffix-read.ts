@@ -4,7 +4,7 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type {
@@ -12,7 +12,7 @@ import type {
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
-import { getActiveTranscriptKysely } from "./session-accessor.sqlite-projection-read.js";
+import { selectActiveTranscriptIdentityRows } from "./session-accessor.sqlite-projection-read.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptReadScope,
@@ -55,7 +55,7 @@ export function loadTranscriptSuffixEventsBoundedFromDatabase(
   limits: { maxBytes: number; maxEvents: number; retainedCustomDataIds?: readonly string[] },
 ): TranscriptEvent[] {
   const resolved = resolveSqliteTranscriptReadScope(scope);
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     database.db,
     () => {
       assertSessionTranscriptHot(database.db, resolved.sessionId);
@@ -149,16 +149,9 @@ export function readPreviousIndexedTranscriptEventSync(
   return withCurrentProjectionSnapshot(
     scope,
     (projection) => {
-      const db = getActiveTranscriptKysely(projection.database);
       const row = executeSqliteQueryTakeFirstSync(
         projection.database.db,
-        db
-          .selectFrom("transcript_event_identities as identity")
-          .innerJoin("session_transcript_active_events as active", (join) =>
-            join
-              .onRef("active.session_id", "=", "identity.session_id")
-              .onRef("active.event_seq", "=", "identity.seq"),
-          )
+        selectActiveTranscriptIdentityRows(projection.database)
           .innerJoin("transcript_events as event", (join) =>
             join
               .onRef("event.session_id", "=", "identity.session_id")

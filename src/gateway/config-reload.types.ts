@@ -23,8 +23,6 @@ export type GatewayConfigReloadCandidate = {
 
 export type GatewayConfigReloadTransactionOwnership = {
   isCurrent: () => boolean;
-  /** A queued successor can finish model preparation without revoking this transaction. */
-  hasNewerConfig?: () => boolean;
   checkpoint: () => Promise<void>;
   withRestartPreparation: <T>(
     run: (ownership: GatewayConfigReloadTransactionOwnership) => Promise<T>,
@@ -37,14 +35,6 @@ export type GatewayConfigReloadTransactionOwnership = {
   reapplyRuntimeOverlays: (config: OpenClawConfig) => OpenClawConfig;
   runtimeEnv?: NonNullable<ConfigWriteNotification["preparedCandidate"]>["runtimeEnv"];
   runtimeRefresh?: RuntimeConfigSnapshotRefreshOptions;
-};
-
-type PreparedGatewayConfigCandidate = {
-  runtimeConfig: OpenClawConfig;
-  compareConfig: OpenClawConfig;
-  runtimeEnv?: NonNullable<ConfigWriteNotification["preparedCandidate"]>["runtimeEnv"];
-  reapplyRuntimeOverlays?: (config: OpenClawConfig) => OpenClawConfig;
-  reapplyCompareOverlays?: (config: OpenClawConfig) => OpenClawConfig;
 };
 
 export type PluginInstallRecords = Record<string, PluginInstallRecord>;
@@ -68,7 +58,13 @@ export type GatewayConfigReloaderOptions = {
     runtimeConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
     previousSourceConfig: OpenClawConfig;
-  }) => Promise<PreparedGatewayConfigCandidate>;
+  }) => Promise<{
+    runtimeConfig: OpenClawConfig;
+    compareConfig: OpenClawConfig;
+    runtimeEnv?: NonNullable<ConfigWriteNotification["preparedCandidate"]>["runtimeEnv"];
+    reapplyRuntimeOverlays?: (config: OpenClawConfig) => OpenClawConfig;
+    reapplyCompareOverlays?: (config: OpenClawConfig) => OpenClawConfig;
+  }>;
   readSnapshot: (activeSourceConfig: OpenClawConfig) => Promise<ConfigFileSnapshot>;
   /** Pauses restart emission synchronously when a matching disk candidate is observed. */
   onConfigCandidateObserved?: () => void;

@@ -3,6 +3,8 @@ import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   archiveLegacyStateSource,
+  decodeUtf8Input,
+  Utf8InputError,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
@@ -148,7 +150,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       let token: MSTeamsDelegatedTokens | null;
       try {
         token = normalizeMSTeamsDelegatedTokens(
-          JSON.parse(await fs.readFile(filePath, "utf8")) as unknown,
+          JSON.parse(
+            decodeUtf8Input(await fs.readFile(filePath), "Legacy Teams delegated token"),
+          ) as unknown,
         );
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -157,7 +161,13 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         warnings.push(
           `Failed reading ${MSTEAMS_PLUGIN_ID} delegated OAuth token legacy source; left it in place`,
         );
-        return { changes, warnings };
+        return {
+          changes,
+          warnings,
+          ...(error instanceof Utf8InputError
+            ? { warningDisposition: "recoverable" as const }
+            : {}),
+        };
       }
       if (!token) {
         warnings.push(
@@ -179,22 +189,15 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       }
       if (!existing) {
         try {
-          await store.registerIfAbsent(MSTEAMS_DELEGATED_TOKEN_KEY, token);
+          if (!(await store.registerIfAbsent(MSTEAMS_DELEGATED_TOKEN_KEY, token))) {
+            throw new Error("Canonical state appeared during offline import.");
+          }
         } catch (error) {
           warnings.push(
             `Failed importing ${MSTEAMS_PLUGIN_ID} delegated OAuth token: ${String(error)}; left legacy source in place`,
           );
           return { changes, warnings };
         }
-      }
-      const persisted = normalizeMSTeamsDelegatedTokens(
-        await store.lookup(MSTEAMS_DELEGATED_TOKEN_KEY),
-      );
-      if (!persisted || JSON.stringify(persisted) !== JSON.stringify(token)) {
-        warnings.push(
-          `Failed verifying ${MSTEAMS_PLUGIN_ID} delegated OAuth token in plugin state; left legacy source in place`,
-        );
-        return { changes, warnings };
       }
       changes.push(`Migrated ${MSTEAMS_PLUGIN_ID} delegated OAuth token -> plugin state`);
       await archiveLegacyStateSource({

@@ -1,4 +1,3 @@
-// Transport helpers for the GPT-Live browser offer endpoint.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";

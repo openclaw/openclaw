@@ -5,7 +5,6 @@ import {
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
-  formatOAuthRefreshFailureLoginCommandMarkdown,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
@@ -26,19 +25,17 @@ import {
 } from "../../agents/failover/assistant-request-failure-copy.js";
 import {
   ContextPreparationTimeoutError,
-  findLocalWorkerTaskTimeout,
+  findLocalWorkerTaskFailure,
 } from "../../agents/failover/local-preparation-error.js";
 import { resolveExecutionApprovalFailureMessage } from "../../agents/failover/message-patterns.js";
 import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
   renderAuthProfileFailoverCopy,
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
   renderCodexAppServerFailureCopy,
   renderFailoverCodeUserCopy,
-  renderHeartbeatRunFailureCopy,
   renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
@@ -59,6 +56,7 @@ import {
   formatErrorMessage,
   readErrorCauses,
 } from "../../infra/errors.js";
+import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
 import { buildProviderLoginRecovery } from "../provider-login-recovery.js";
 import {
@@ -200,18 +198,15 @@ export function buildAuthProfileFailoverFailureText(error: unknown): string | nu
   });
 }
 
-function resolveExternalRunFailureDetail(message: string): string | undefined {
+function formatForwardedExternalRunFailureText(message: string): string {
   const sanitized = message
     .trim()
     .replace(/^⚠️\s*/u, "")
     .replace(/\s+/gu, " ");
-  return sanitized.length > EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS
-    ? `${truncateUtf16Safe(sanitized, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
-    : sanitized || undefined;
-}
-
-function formatForwardedExternalRunFailureText(message: string): string {
-  const detail = resolveExternalRunFailureDetail(message);
+  const detail =
+    sanitized.length > EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS
+      ? `${truncateUtf16Safe(sanitized, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
+      : sanitized || undefined;
   return detail
     ? `⚠️ Agent failed before reply: ${detail}${/[.!?]$/u.test(detail) ? "" : "."} Please try again, or use /new to start a fresh session.`
     : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
@@ -222,9 +217,6 @@ export function buildExternalRunFailureReply(
   options?: {
     includeAuthProfileId?: boolean;
     includeDetails?: boolean;
-    isHeartbeat?: boolean;
-    /** Wording only; heartbeat visibility/suppression semantics stay on isHeartbeat. */
-    useHeartbeatFailureCopy?: boolean;
     replayPrevented?: boolean;
     failoverFacts?: ReplyFailoverFacts;
   },
@@ -232,18 +224,13 @@ export function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
-  const useHeartbeatFailureCopy = options?.useHeartbeatFailureCopy ?? options?.isHeartbeat === true;
-  const buildUnclassifiedReply = (includeHeartbeatDetails: boolean): ExternalRunFailureReply => {
+  const buildUnclassifiedReply = (): ExternalRunFailureReply => {
     const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
     return {
-      text: useHeartbeatFailureCopy
-        ? renderHeartbeatRunFailureCopy(
-            includeHeartbeatDetails ? resolveExternalRunFailureDetail(sanitizedMessage) : undefined,
-          )
-        : options?.includeDetails
-          ? formatForwardedExternalRunFailureText(sanitizedMessage)
-          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-      isGenericRunnerFailure: !options?.isHeartbeat,
+      text: options?.includeDetails
+        ? formatForwardedExternalRunFailureText(sanitizedMessage)
+        : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: true,
     };
   };
   const approvalMessage = resolveExecutionApprovalFailureMessage(normalizedMessage);
@@ -260,9 +247,8 @@ export function buildExternalRunFailureReply(
       isGenericRunnerFailure: false,
     };
   }
-  // A preflight refusal is host-authored and names the next step. Heartbeats run
-  // unattended in the owner's session, so they disclose it without the verbose
-  // opt-in; raw thrown detail further below stays verbose-gated.
+  // A preflight refusal is host-authored and names the next step;
+  // raw thrown detail further below stays verbose-gated.
   if (isAgentHarnessPreflightError(error)) {
     const userMessage = renderAgentHarnessPreflightUserMessage(error);
     if (userMessage !== undefined) {
@@ -271,15 +257,17 @@ export function buildExternalRunFailureReply(
         isGenericRunnerFailure: false,
       };
     }
-    return buildUnclassifiedReply(true);
+    return buildUnclassifiedReply();
   }
-  const localTimeout = findLocalWorkerTaskTimeout(error);
-  if (localTimeout) {
+  const localFailure = findLocalWorkerTaskFailure(error);
+  if (localFailure) {
     return {
       text:
-        localTimeout instanceof ContextPreparationTimeoutError
-          ? localTimeout.message
-          : "A local worker task timed out. Please try again.",
+        localFailure.code === "overloaded"
+          ? "OpenClaw's local workers are at capacity. Check the conversation for completed work before trying again."
+          : localFailure instanceof ContextPreparationTimeoutError
+            ? localFailure.message
+            : "A local worker task timed out. Please try again.",
       isGenericRunnerFailure: false,
     };
   }
@@ -311,7 +299,7 @@ export function buildExternalRunFailureReply(
     const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider, {
       profileId: options?.includeAuthProfileId ? oauthRefreshFailure.profileId : undefined,
     });
-    const loginCommandMarkdown = formatOAuthRefreshFailureLoginCommandMarkdown(loginCommand);
+    const loginCommandMarkdown = formatInlineCodeSpan(loginCommand);
     const providerText = oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : "";
     const retryLoginHint = providerLoginRecovery
       ? "send `/login` from a private chat or Control UI session to choose a provider, or re-auth"
@@ -384,10 +372,6 @@ export function buildExternalRunFailureReply(
   if (missingApiKeyFailure) {
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
   }
-  if (options?.isHeartbeat) {
-    // Heartbeat-backed event turns remain visible even with generic wording.
-    return buildUnclassifiedReply(options.includeDetails === true);
-  }
   const codexAppServerFailure = renderCodexAppServerFailureCopy(normalizedMessage);
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
@@ -452,20 +436,14 @@ export function resolveAgentRunFailureText(params: {
 }
 
 export function buildTerminalAgentRunFailureReplyPayload(params: {
-  isHeartbeat?: boolean;
-  useHeartbeatFailureCopy?: boolean;
   replyExpectation: ReplyExpectation;
   visibleReplyDelivered: boolean;
 }): ReplyPayload {
-  const useHeartbeatFailureCopy = params.useHeartbeatFailureCopy ?? params.isHeartbeat === true;
   return markAgentRunFailureReplyPayload({
     text: resolveAgentRunFailureText({
       ...params,
-      text: useHeartbeatFailureCopy
-        ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
-        : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-      // Visibility follows the execution surface, not which sentence we render.
-      isGenericRunnerFailure: !params.isHeartbeat,
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: true,
     }),
   });
 }
@@ -474,14 +452,12 @@ export function buildTerminalAgentRunFailureReplyPayload(params: {
 export async function resolveTerminalAgentRunFailurePayload(params: {
   result: EmbeddedAgentRunResult;
   run: Parameters<typeof shouldDeliverMissingReplyNotice>[0];
-  useHeartbeatFailureCopy?: boolean;
   visibleReplyDelivered: () => Promise<boolean>;
 }): Promise<ReplyPayload | undefined> {
   const terminalError = params.result.meta?.error;
   const missingReplyNotice =
     terminalError?.kind === "incomplete_turn" &&
-    terminalError.message.startsWith(MISSING_REPLY_NOTICE_TEXT) &&
-    params.useHeartbeatFailureCopy !== true;
+    terminalError.message.startsWith(MISSING_REPLY_NOTICE_TEXT);
   const suppressMissingReplyNotice =
     missingReplyNotice && !shouldDeliverMissingReplyNotice(params.run);
   const ownedFailureNotice = params.result.payloads?.find(
@@ -506,8 +482,6 @@ export async function resolveTerminalAgentRunFailurePayload(params: {
   }
   const replyExpectation = resolveReplyExpectation(params.run);
   return buildTerminalAgentRunFailureReplyPayload({
-    isHeartbeat: params.run.isHeartbeat,
-    useHeartbeatFailureCopy: params.useHeartbeatFailureCopy,
     replyExpectation,
     visibleReplyDelivered:
       replyExpectation === "optional" ? await params.visibleReplyDelivered() : false,
@@ -521,16 +495,16 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
 }): ReplyPayload | undefined {
   // Preflight diagnostics are not provider failures. Only explicit public copy
   // can bypass the caller's diagnostic disclosure policy.
-  if (isAgentHarnessPreflightError(params.err)) {
+  const message = formatErrorMessage(params.err);
+  if (isAgentHarnessPreflightError(params.err) || findLocalWorkerTaskFailure(params.err)) {
     const reply = buildExternalRunFailureReply({
-      message: params.err.message,
+      message,
       error: params.err,
     });
     return reply.isGenericRunnerFailure
       ? undefined
       : markAgentRunFailureReplyPayload({ text: reply.text });
   }
-  const message = formatErrorMessage(params.err);
   const failoverFacts = resolveReplyFailoverFacts(params.err, message);
   const failureSummary = resolveReplyFailureSummary({
     error: params.err,

@@ -6,7 +6,7 @@ import { ARTIFACT_DOWNLOAD_PATH } from "../../packages/gateway-protocol/src/arti
 import { normalizeChatImageRenditionWidth } from "../shared/chat-image-renditions.js";
 import {
   assertArtifactDownloadGrantCurrent,
-  getArtifactDownloadGrant,
+  resolveArtifactDownloadGrant,
   retainArtifactDownloadStream,
 } from "./artifact-download-grants.js";
 import type { ArtifactDownloadResponse } from "./artifact-download-projection.js";
@@ -42,16 +42,16 @@ export async function handleArtifactDownloadHttpRequest(
     sendMethodNotAllowed(res, "GET, HEAD");
     return true;
   }
-  const [connection, ticket, extra] = pathname.slice(ARTIFACT_DOWNLOAD_PATH.length).split("/");
-  const client = [...opts.clients].find(
-    (candidate) => candidate.connId && encodeURIComponent(candidate.connId) === connection,
+  const selected = resolveArtifactDownloadGrant(
+    opts.clients,
+    pathname.slice(ARTIFACT_DOWNLOAD_PATH.length),
   );
-  const grant =
-    client && ticket && extra === undefined ? getArtifactDownloadGrant(client, ticket) : undefined;
-  if (!client || !grant || !ticket) {
+  if (!selected || selected.grant.source.kind !== "bytes") {
     respondNotFound(res);
     return true;
   }
+  const { client, grant, ticket } = selected;
+  const grantSource = selected.grant.source;
   let assertGrantCurrent = () =>
     assertArtifactDownloadGrantCurrent(opts.clients, client, ticket, grant);
   const assertCurrent = () => {
@@ -67,11 +67,11 @@ export async function handleArtifactDownloadHttpRequest(
     assertGrantCurrent();
   };
   let prepared: ArtifactDownloadResponse | undefined;
-  const thumbnail = grant.image && url.searchParams.get("variant") === "thumbnail";
+  const thumbnail = grantSource.image && url.searchParams.get("variant") === "thumbnail";
   try {
     assertCurrent();
-    prepared = await grant.read({
-      expectedDigest: grant.digest,
+    prepared = await grantSource.read({
+      expectedDigest: grantSource.digest,
       method: thumbnail ? "GET" : req.method,
       headers: thumbnail
         ? {}

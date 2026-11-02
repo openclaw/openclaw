@@ -13,7 +13,6 @@ import {
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceResponseOutcome,
   type RealtimeVoiceTranscriptEntry,
-  type TalkEvent,
   type TalkEventInput,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
@@ -30,18 +29,14 @@ import {
   REALTIME_READY_TIMEOUT_MS,
   resolveFaceTimeRealtimeProvider,
 } from "./talk-driver-config.js";
-import { createFaceTimeInitialGreeting } from "./talk-initial-greeting.js";
 
-export type FaceTimeTalkDriver = {
-  readonly callUUID: string;
-  readonly recentTalkEvents: readonly TalkEvent[];
-  readyForAudio(): Promise<void>;
-  processOutputSuppressed(): boolean;
-  realtimeActive(): boolean;
-  activate(): void;
-  suspendMedia(reason?: string): Promise<void>;
-  close(reason?: string): Promise<void>;
-};
+// The carrier can report active before its newly enabled media route is audible.
+// Give that route one short settling window. Only a real caller transcript may
+// cancel the greeting because raw VAD can fire on route noise and never report a
+// matching stop event, which would otherwise leave an answered call silent.
+const FACETIME_INITIAL_GREETING =
+  "Greet the caller briefly, introduce yourself using your configured identity, and ask how you can help.";
+const FACETIME_GREETING_MEDIA_SETTLE_MS = 100;
 
 export async function startFaceTimeTalkDriver(params: {
   config: FaceTimeConfig;
@@ -50,12 +45,11 @@ export async function startFaceTimeTalkDriver(params: {
   logger: RuntimeLogger;
   callUUID: string;
   senderId: string;
-  senderIsOwner: true;
   captureBinary: string;
   signal?: AbortSignal;
   onHangupRequested: () => Promise<void>;
   onFailure?: (error: Error) => boolean | Promise<boolean>;
-}): Promise<FaceTimeTalkDriver> {
+}) {
   if (params.signal?.aborted) {
     throw new Error("FaceTime talk startup aborted");
   }
@@ -110,7 +104,6 @@ export async function startFaceTimeTalkDriver(params: {
     | undefined;
   const settledResponseIds = new Set<string>();
   let suppressNextUnkeyedLegacyTerminal = false;
-  const consultRef: { current?: ReturnType<typeof createFaceTimeConsultController> } = {};
   let failurePromise: Promise<boolean> | undefined;
   let activated = false;
   let providerReady = false;
@@ -139,13 +132,29 @@ export async function startFaceTimeTalkDriver(params: {
     startupFailureDeferred.reject(error);
   };
 
-  const initialGreeting = createFaceTimeInitialGreeting({
-    speak: (instructions) => {
-      if (!stopped && !mediaSuspended && activated && providerReady) {
-        bridge?.triggerGreeting(instructions);
+  let timer: NodeJS.Timeout | undefined;
+  let dismissed = false;
+  const initialGreeting = {
+    instructions: FACETIME_INITIAL_GREETING,
+    schedule() {
+      if (dismissed || timer) {
+        return;
       }
+      timer = setTimeout(() => {
+        timer = undefined;
+        dismissed = true;
+        if (!stopped && !mediaSuspended && activated && providerReady) {
+          bridge?.triggerGreeting(FACETIME_INITIAL_GREETING);
+        }
+      }, FACETIME_GREETING_MEDIA_SETTLE_MS);
+      timer.unref?.();
     },
-  });
+    cancel() {
+      dismissed = true;
+      clearTimeout(timer);
+      timer = undefined;
+    },
+  };
 
   const reportFailure = (error: Error): Promise<boolean> => {
     if (failurePromise) {
@@ -170,7 +179,7 @@ export async function startFaceTimeTalkDriver(params: {
     mediaSuspensionError ??= new Error(`FaceTime model media suspended: ${reason}`);
     mediaSuspendedDeferred.reject(mediaSuspensionError);
     interruptProviderConnect?.();
-    consultRef.current?.abortForClose();
+    consultController.abortForClose();
     suspendMediaPromise = (async () => {
       try {
         await bridge?.close();
@@ -309,7 +318,7 @@ export async function startFaceTimeTalkDriver(params: {
   };
   const resetProviderContinuity = () => {
     modelMediaGeneration += 1;
-    consultRef.current?.abortForClose();
+    consultController.abortForClose();
     pump?.clearOutputAudio();
     resetResponsePlayback();
     finishOutputAudio("continuity-reset");
@@ -325,7 +334,6 @@ export async function startFaceTimeTalkDriver(params: {
     requesterSessionKey,
     normalizedCallUUID,
     senderId: params.senderId,
-    senderIsOwner: params.senderIsOwner,
     transcript,
     getBridge: () => bridge,
     getGeneration: () => modelMediaGeneration,
@@ -337,7 +345,6 @@ export async function startFaceTimeTalkDriver(params: {
     close,
     onHangupRequested: params.onHangupRequested,
   });
-  consultRef.current = consultController;
 
   remember({ type: "session.started", payload: { callUUID: params.callUUID } });
   const pump = startFaceTimeAudioPump({
@@ -627,7 +634,6 @@ export async function startFaceTimeTalkDriver(params: {
     throw error;
   }
   return {
-    callUUID: params.callUUID,
     get recentTalkEvents() {
       return talk.recentEvents;
     },

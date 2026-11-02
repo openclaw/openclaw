@@ -23,6 +23,7 @@ export function isTransientCodexRestrictedTurn(
       params.toolsAllow !== undefined &&
       !(hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow))) ||
     params.delegationCapability === "report_only" ||
+    params.delegationCapability === "host_only" ||
     params.trigger === "memory"
   );
 }
@@ -66,6 +67,7 @@ export function isRestrictedThreadConfigCompatible(
         params.params,
         context.hostSystemAgentActive,
         context.binding,
+        params,
       )
   );
 }
@@ -88,5 +90,6 @@ export function buildRestrictedThreadConfigFingerprint(
     params.params,
     context.hostSystemAgentActive,
     selection,
+    params,
   );
 }

@@ -3,7 +3,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { applyBoardFixtureOps } from "../../test-helpers/board-fixture.tsx";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import "./board-view.ts";
+import "./board-view.tsx";
 import {
   boardWidget,
   gatewayContext,
@@ -47,66 +47,25 @@ describe("openclaw-board-view retention", () => {
     expect(messages.map((message) => message.mock.calls.length)).toEqual([0, 0, 0]);
     expect(cells.map((cell) => cell.querySelector("iframe"))).toEqual(frames);
 
-    // Availability and connection-authority changes still reach the active cell.
+    const gateway = context.gateway.snapshot;
+    const hello = gatewayHelloForMethods([], ["operator.read"]);
     const transitions: Array<[string, () => void]> = [
-      [
-        "restart",
-        () => {
-          context.gateway.snapshot.restartPending = true;
-        },
-      ],
-      [
-        "restart settled",
-        () => {
-          context.gateway.snapshot.restartPending = false;
-        },
-      ],
-      [
-        "suspension",
-        () => {
-          context.gateway.snapshot.suspensionPhase = "draining";
-        },
-      ],
-      [
-        "accepting",
-        () => {
-          context.gateway.snapshot.suspensionPhase = "accepting";
-        },
-      ],
-      [
-        "client",
-        () => {
-          context.gateway.snapshot.client = createTestGatewayClient(async () => ({}));
-        },
-      ],
+      ["restart", () => (gateway.restartPending = true)],
+      ["restart settled", () => (gateway.restartPending = false)],
+      ["suspension", () => (gateway.suspensionPhase = "draining")],
+      ["accepting", () => (gateway.suspensionPhase = "accepting")],
+      ["client", () => (gateway.client = createTestGatewayClient(async () => ({})))],
       [
         "hello/auth/recovery",
-        () => {
-          const hello = gatewayHelloForMethods([], ["operator.read"]);
-          context.gateway.snapshot.hello = {
+        () =>
+          (gateway.hello = {
             ...hello,
             auth: { ...hello.auth, recoveryScope: "new-principal" },
-          };
-        },
+          }),
       ],
-      [
-        "credentials/account",
-        () => {
-          Object.assign(context.gateway, { connectionRevision: 1 });
-        },
-      ],
-      [
-        "disconnect",
-        () => {
-          context.gateway.snapshot.phase = "reconnecting";
-        },
-      ],
-      [
-        "reconnect",
-        () => {
-          context.gateway.snapshot.phase = "connected";
-        },
-      ],
+      ["credentials/account", () => Object.assign(context.gateway, { connectionRevision: 1 })],
+      ["disconnect", () => (gateway.phase = "reconnecting")],
+      ["reconnect", () => (gateway.phase = "connected")],
     ];
     for (const [label, change] of transitions) {
       messages.forEach((message) => message.mockClear());
@@ -135,6 +94,9 @@ describe("openclaw-board-view retention", () => {
       (cell) => cell.widget?.name === "alpha",
     );
     const frame = before?.querySelector("iframe");
+    const card = before!.querySelector<HTMLElement>(".board-widget")!;
+    expect(card.style.gridColumn).toBe("1 / span 6");
+    expect(card.style.gridRow).toBe("1 / span 4");
     const removedNodes: Node[] = [];
     const observer = new MutationObserver((records) => {
       for (const record of records) {
@@ -150,6 +112,8 @@ describe("openclaw-board-view retention", () => {
     const after = cells.find((cell) => cell.widget?.name === "alpha");
     expect(after).toBe(before);
     expect(after?.querySelector("iframe")).toBe(frame);
+    expect(card.style.gridColumn).toBe("7 / span 6");
+    expect(card.style.gridRow).toBe("1 / span 4");
     expect(removedNodes).not.toContain(before);
     expect(after?.querySelector(".board-widget")?.getAttribute("aria-posinset")).toBe("2");
     expect(
@@ -159,6 +123,21 @@ describe("openclaw-board-view retention", () => {
         ?.getAttribute("aria-posinset"),
     ).toBe("1");
     observer.disconnect();
+
+    view.snapshot = applyBoardFixtureOps(view.snapshot!, [
+      { kind: "widget_resize", name: "alpha", sizeW: 12, sizeH: 6, heightMode: "fixed" },
+    ]);
+    await settleCells(view);
+    expect(card.style.gridColumn).toBe("1 / span 12");
+    expect(card.style.gridRow).toBe("5 / span 6");
+    view.activeTabId = "ops";
+    await settleCells(view);
+    view.activeTabId = "main";
+    await settleCells(view);
+    expect(card.style.gridColumn).toBe("1 / span 12");
+    expect(card.style.gridRow).toBe("5 / span 6");
+    expect(before!.hidden).toBe(false);
+    expect(before!.querySelector("iframe")).toBe(frame);
 
     view.snapshot = { ...snapshot(), sessionKey: "agent:main:other-session" };
     const sessionCells = await settleCells(view);
@@ -234,13 +213,21 @@ describe("openclaw-board-view retention", () => {
 
     view.snapshot = snapshot({ revision: 2, widgets: [] });
     await settleCells(view);
-    expect(cell.isConnected).toBe(true);
+    expect(cell).toMatchObject({ isConnected: true, active: false, hidden: true });
     expect(cell.widget).toBe(widget);
-    expect(cell.active).toBe(false);
-    expect(cell.hidden).toBe(true);
 
     teardown.resolve();
     await settleCells(view);
     expect(cell.isConnected).toBe(false);
+  });
+
+  it("tears down its retained cells when removed before disposal", async () => {
+    const view = await mount();
+    const cells = [...view.querySelectorAll("openclaw-board-widget-cell")];
+    const teardown = cells.map((cell) => vi.spyOn(cell, "teardown"));
+    view.remove();
+    const retired = view.teardown();
+    expect(teardown.every((spy) => spy.mock.calls.length === 1)).toBe(true);
+    await retired;
   });
 });

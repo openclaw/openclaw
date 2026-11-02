@@ -92,7 +92,7 @@ open search wizard
 import memory
 plugins list
 plugins search slack
-plugin install clawhub:openclaw-codex-app-server
+plugin install openclaw-codex-app-server
 talk to work agent
 talk to agent for ~/path/to/work
 audit

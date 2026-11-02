@@ -1,6 +1,7 @@
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { BROWSER_ACT_KIND_FACTS, isActKind } from "../act-kinds.js";
 import { resolveExistingSessionActTimeouts } from "../act-policy.js";
 import type { ChromeMcpTargetOperation } from "../chrome-mcp-contracts.js";
 import {
@@ -17,13 +18,12 @@ import {
   type ChromeMcpOperationOptions,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
-import { BROWSER_ACT_ERROR_CODES } from "../errors.js";
+import { BROWSER_ACT_ERROR_CODES, type BrowserActErrorCode } from "../errors.js";
 import { normalizeBrowserEvaluateFunctionSource } from "../evaluate-source.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { clearSnapshotKeysForTab } from "../snapshot-delta-cache.js";
 import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
-import { browserEvaluateDisabledMessage, jsonActError } from "./agent.act.errors.js";
 import {
   assertExistingSessionPostInteractionNavigationAllowed,
   createExistingSessionDeadline,
@@ -31,7 +31,6 @@ import {
 } from "./agent.act.existing-session.js";
 import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
 import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.normalize.js";
-import { isActKind } from "./agent.act.shared.js";
 import { createTabRouteRegistrar } from "./agent.prepared.js";
 import {
   browserNavigationPolicyForProfile,
@@ -48,19 +47,26 @@ import {
 } from "./agent.snapshot-target.js";
 import { EXISTING_SESSION_LIMITS, admitExistingSessionAction } from "./existing-session-limits.js";
 import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
-import type { BrowserRouteRegistrar } from "./types.js";
+import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toStringOrEmpty } from "./utils.js";
 
-const SELECTOR_ALLOWED_KINDS: ReadonlySet<string> = new Set([
-  "batch",
-  "click",
-  "drag",
-  "hover",
-  "scrollIntoView",
-  "select",
-  "type",
-  "wait",
-]);
+function jsonActError(
+  res: BrowserResponse,
+  status: number,
+  code: BrowserActErrorCode,
+  message: string,
+) {
+  res.status(status).json({ error: message, code });
+}
+
+function browserEvaluateDisabledMessage(action: "wait" | "evaluate"): string {
+  return [
+    action === "wait"
+      ? "wait --fn is disabled by config (browser.evaluateEnabled=false)."
+      : "act:evaluate is disabled by config (browser.evaluateEnabled=false).",
+    "Docs: /tools/browser/configuration#configuration",
+  ].join("\n");
+}
 
 export function registerBrowserAgentActRoutes(
   app: BrowserRouteRegistrar,
@@ -84,7 +90,7 @@ export function registerBrowserAgentActRoutes(
       );
     }
     const targetId = normalizeOptionalString(body.targetId);
-    if (Object.hasOwn(body, "selector") && !SELECTOR_ALLOWED_KINDS.has(kind)) {
+    if (Object.hasOwn(body, "selector") && !BROWSER_ACT_KIND_FACTS[kind].selector) {
       return jsonActError(
         res,
         400,

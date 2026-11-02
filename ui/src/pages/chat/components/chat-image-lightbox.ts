@@ -1,8 +1,9 @@
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
-import { ChatImageLightbox } from "./chat-image-lightbox-view.tsx";
-import { openResolvedImage } from "./chat-message-image-open.ts";
+import { openResolvedImage } from "./chat-image-presentation.ts";
+
+registerChatMediaEnglish();
 
 export function isImageLightboxEvent(event: Event): boolean {
   return event
@@ -44,11 +45,4 @@ export function openInlineChatImage(
   const title = image.alt.trim() || t("chat.imageLightbox.untitled");
   openResolvedImage(onOpenImage, src, title);
   return true;
-}
-
-export function renderChatImageLightbox(
-  item: ImageLightboxItem | null | undefined,
-  onClose: () => void,
-) {
-  return solidContent(ChatImageLightbox, { item, onClose });
 }

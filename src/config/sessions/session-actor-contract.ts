@@ -1,8 +1,11 @@
-import type { RestartRecoveryTerminalDeliveryClaim } from "./restart-recovery-receipt-state.js";
-import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { SessionActivitySummary } from "./activity-summary.js";
+import type { ConversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
+import type { SessionActorTranscriptRow } from "./session-actor-bounded-history.js";
 import type { SessionActorDeliveryEvidence } from "./session-actor-delivery-evidence.types.js";
 import type {
   SessionActorAuthority,
+  SessionActorAuthorityFacts,
   SessionActorTarget,
   SessionActorVersion,
   SessionActorLifetime,
@@ -14,10 +17,8 @@ import type {
   SessionActorStorageReads,
   SessionActorStorageWrites,
 } from "./session-actor-storage-contract.js";
-import type {
-  SessionEntryBookkeepingReducer,
-  SessionEntryPatchOperation,
-} from "./session-entry-patch-operation.js";
+import type { SessionEntryMetadataReceipt } from "./session-entry-metadata-receipt.js";
+import type { SessionEntryBookkeepingReducer } from "./session-entry-patch-operation.js";
 import type {
   InitialSessionEntryCommit,
   SessionMetadataOperations,
@@ -32,6 +33,7 @@ import type { SessionPendingInputWorkerReceipt } from "./session-pending-input.t
 import type { SessionSourcePredicate } from "./session-source-authority.js";
 import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
+import type { SessionMessageRewriteCommitted } from "./session-transcript-mutation.types.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
@@ -78,6 +80,8 @@ export type SessionActorAppend = (
   initialization?: SessionMetadataOperations["session.metadata.initialize"]["input"];
   /** Optional prepared session header, committed atomically before this append. */
   header?: SessionMetadataOperations["session.metadata.append"]["input"];
+  /** Final prompt text joins its runtime-context carrier at the same durable point. */
+  modelPromptProjection?: { anchor: TranscriptEntryAnchor; text: string };
 };
 
 /** The original snapshot preserves canonical adopted IDs, parents, bytes, and versions. */
@@ -93,13 +97,14 @@ export type SessionActorAppendCommitted = (
 ) & {
   initialEntry?: InitialSessionEntryCommit;
   header?: SessionMetadataOperations["session.metadata.append"]["output"];
-};
-
-export type SessionActorInputRecovery = {
-  /** Compare source fields and membership against this transaction's current state. */
-  sources: SessionSourcePredicate[];
-  expectedRunId: string;
-  harnessCompletion?: HarnessCompletionRecovery;
+  modelPromptProjection?: {
+    result: NonNullable<SessionMessageRewriteCommitted["result"]> & {
+      message: PersistedUserTurnMessage;
+    };
+    before: SessionTranscriptContextVersion;
+    after: SessionTranscriptContextVersion;
+    rows: SessionActorTranscriptRow[];
+  };
 };
 
 export type SessionActorPendingFinalDelivery = NonNullable<SessionEntry["pendingFinalDelivery"]> & {
@@ -111,7 +116,6 @@ export type SessionActorPhaseInputs = {
   acceptInput: {
     expectedState: SessionTranscriptTurnExpectedState;
     lifecycle: SessionTranscriptTurnLifecyclePatch;
-    recovery?: SessionActorInputRecovery;
   } & (
     | {
         pending: Extract<PendingInputMutation, { kind: "stage" }>;
@@ -166,32 +170,12 @@ export type SessionActorPhaseInputs = {
     completion?: Extract<PendingInputMutation, { kind: "complete" }>;
     /** Exact delivery intent and payload IDs join terminal accounting in this commit. */
     pendingFinalDelivery?: SessionActorPendingFinalDelivery;
-    restartClaimCleanup?: Extract<SessionEntryPatchOperation, { kind: "restart-claim-clear" }>;
+    activitySummary?: SessionActivitySummary;
   };
-  deliveryPending:
-    | {
-        sessionId: string;
-        expectedState: SessionTranscriptTurnExpectedState;
-        lifecycle: SessionTranscriptTurnLifecyclePatch & {
-          restartRecoveryDeliveryReceiptState: "terminal-pending";
-        };
-        claim?: never;
-      }
-    | { claim: RestartRecoveryTerminalDeliveryClaim; updatedAt: number };
-  deliverySettled:
-    | {
-        settlement: PendingFinalDeliverySettlementInput;
-        evidence?: SessionActorDeliveryEvidence;
-        restart?: never;
-      }
-    | {
-        settlement?: never;
-        restart: {
-          claim: RestartRecoveryTerminalDeliveryClaim;
-          outcome: "confirmed" | "not-sent";
-          updatedAt: number;
-        };
-      };
+  deliverySettled: {
+    settlement: PendingFinalDeliverySettlementInput;
+    evidence?: SessionActorDeliveryEvidence;
+  };
   patch: { reducers: readonly SessionActorReducer[] };
 };
 
@@ -211,19 +195,7 @@ export type SessionActorPhaseResults = {
     | { anchor?: TranscriptEntryAnchor; projectionNeedsReconcile?: boolean }
     | SessionActorAppendCommitted;
   completeTurn: SessionTurnCommitted | { kind: "bookkeeping" };
-  deliveryPending:
-    | undefined
-    | {
-        disposition:
-          | "started"
-          | "already-delivered"
-          | "delivery-ambiguous"
-          | "stale"
-          | "not-applicable";
-      };
-  deliverySettled:
-    | { state: PendingFinalDeliverySettlementInput["state"] | "stale"; wakeRecovery: boolean }
-    | { disposition: "recorded" | "cleared" | "stale" };
+  deliverySettled: { state: PendingFinalDeliverySettlementInput["state"] | "stale" };
   patch: undefined;
 };
 
@@ -253,11 +225,12 @@ export type SessionActorReceipt = {
     append?: SessionActorAppendCommitted;
     projectionNeedsReconcile: boolean;
   };
+  conversationPublication?: readonly ConversationPublication[];
+  entryMetadata?: readonly SessionEntryMetadataReceipt[];
   pendingInputReceipt?: SessionPendingInputWorkerReceipt;
   pendingInputMutationReceipt?: PendingInputMutationReceipt;
-  pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
   reducers: SessionActorReducerOutcome[];
-  /** Complete detached postimage, installed on MAIN before acknowledgement. */
+  /** Complete postimage installed on MAIN; unchanged entries may share its frozen preimage. */
   postimage: SessionActorHotState;
 };
 
@@ -290,7 +263,7 @@ export type SessionActorOutcome<Value> =
       kind: "unknown";
       target: SessionActorTarget;
       commandId: string;
-      error: { name: string; message: string };
+      error: { name: string; message: string; cause?: unknown };
     };
 
 export type SessionActorCommitObserver<Value> = {
@@ -304,6 +277,8 @@ export type SessionActorOperations = {
     input: SessionActorCommandContext &
       SessionActorPhaseInputs[Phase] & {
         target: SessionActorTarget;
+        /** Command-local immutable preimage retained by the host; never grants authority. */
+        entryReference?: string;
       };
     /** Native settlement owns committed data; the reply only acknowledges it. */
     output:
@@ -326,7 +301,11 @@ type SessionActorCommands = {
 };
 
 type SessionActorStorageCommitObserver<Value> = {
-  beforeCommit?(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
+  beforeCommit?(
+    outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>,
+  ): void | Promise<void>;
+  /** Memory companions settle before this owner's FIFO admits later work. */
+  settled?(outcome: SessionActorStorageOutcome<Value>): void | Promise<void>;
   committed?(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
 };
 
@@ -363,6 +342,8 @@ export type SessionActor = SessionActorLifetime &
     readonly storage?: SessionActorStorage;
     /** Read-only installed MAIN revision; copy before editing. Undefined means fenced/missing. Never dispatches a worker request. */
     snapshot(authority: SessionActorAuthority): SessionActorHotState | undefined;
+    /** Entry-only receipts retain the same lifetime and reconciliation fence as full snapshots. */
+    snapshotEntry(authority: SessionActorAuthority): SessionActorAuthorityFacts | undefined;
     read(authority: SessionActorAuthority): Promise<SessionActorHotState>;
     /** Drain retained attempts and accepted descendants; a teardown timeout is not settlement. */
     release(): Promise<void>;

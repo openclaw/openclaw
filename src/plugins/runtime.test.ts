@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { DecisionProviderHost } from "../decisions/provider-host.js";
 import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
 import { runGatewayCloseSteps } from "../gateway/server-shutdown.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
@@ -18,11 +20,13 @@ import { getPluginRegistryState } from "./runtime-state.js";
 import {
   captureActivePluginRegistrySnapshot,
   clearActivePluginRegistry,
+  createPluginRegistryOwner,
   disposePluginRegistryInstances,
   getActivePluginRegistry,
   listImportedRuntimePluginIds,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
+  waitForPluginRegistryRetirement,
 } from "./runtime.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
@@ -64,6 +68,239 @@ describe("setActivePluginRegistry", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  it("keeps predecessor services and authority until the last admitted holder releases", async () => {
+    const previous = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "overlapping-owner" });
+    previous.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry: previous });
+    const parent = instance.retainConsumer(undefined, previous);
+    const child = instance.retainConsumer(undefined, previous);
+    const toolEffect = vi.fn(() => "old tool");
+    const endHookEffect = vi.fn(() => "old end hook");
+    const oldTool = instance.wrap(toolEffect);
+    const oldEndHook = instance.wrap(endHookEffect);
+    const monitor = instance.retainConsumer(undefined, previous, "custody");
+    const stopScheduler = createDeferredCore();
+    const scheduler = instance.runInRegistry(previous, () => stopScheduler.promise, {
+      joinDisposal: false,
+    });
+    const events: string[] = [];
+    instance.lifecycle.onDispose(() => {
+      events.push("dispose");
+    });
+    const next = createEmptyPluginRegistry();
+    next.plugins.push(createPluginRecord({ id: record.id }));
+    setActivePluginRegistry(previous);
+    const owner = createPluginRegistryOwner(previous);
+    setActivePluginRegistry(next);
+    owner.publish(next, async () => {
+      events.push("service-stop");
+      expect(instance.owner?.revoked).toBe(false);
+      monitor.release();
+      stopScheduler.resolve();
+      await scheduler;
+    });
+    try {
+      expect(owner.registry).toBe(next);
+      expect(
+        [...(getPluginRegistryState()?.retiredRegistryCleanups?.values() ?? [])].map(
+          ({ registry }) => registry,
+        ),
+      ).toContain(previous);
+      expect(() => instance.run(() => undefined)).toThrow("was reloaded or disabled");
+      expect(parent.run(oldTool)).toBe("old tool");
+      expect(await waitForPluginRegistryRetirement(previous, { deferConsumers: true })).toEqual({
+        cleanupCount: 0,
+        failures: [],
+        deferredPluginIds: [record.id],
+      });
+      parent.release();
+      await nextTurn();
+      expect(events).toEqual([]);
+      expect(child.run(oldEndHook)).toBe("old end hook");
+      child.release();
+      await expect(waitForPluginRegistryRetirement(previous)).resolves.toMatchObject({
+        failures: [],
+      });
+      expect(events).toEqual(["service-stop", "dispose"]);
+      expect(instance.owner?.revoked).toBe(true);
+      expect(instance.lifecycle.signal.aborted).toBe(true);
+      expect(() => oldTool()).toThrow(/reloaded or disabled/);
+      expect(() => oldEndHook()).toThrow(/reloaded or disabled/);
+      expect(toolEffect).toHaveBeenCalledOnce();
+      expect(endHookEffect).toHaveBeenCalledOnce();
+    } finally {
+      parent.release();
+      child.release();
+      monitor.release();
+      stopScheduler.resolve();
+      await scheduler;
+      await owner.close();
+    }
+  });
+
+  it("retires intermediate generations independently and joins older holders at shutdown", async () => {
+    const createGeneration = () => {
+      const registry = createEmptyPluginRegistry();
+      const record = createPluginRecord({ id: "rapid-overlap" });
+      registry.plugins.push(record);
+      return { registry, instance: new PluginInstance(record.id, { record, registry }) };
+    };
+    const first = createGeneration();
+    const second = createGeneration();
+    const third = createGeneration();
+    const hold = first.instance.retainConsumer(undefined, first.registry);
+    const stopped: string[] = [];
+    setActivePluginRegistry(first.registry);
+    const owner = createPluginRegistryOwner(first.registry);
+    setActivePluginRegistry(second.registry);
+    owner.publish(second.registry, async () => {
+      stopped.push("first");
+    });
+    setActivePluginRegistry(third.registry);
+    owner.publish(third.registry, async () => {
+      stopped.push("second");
+    });
+    let closing: ReturnType<typeof owner.close> | undefined;
+    try {
+      await waitForPluginRegistryRetirement(second.registry);
+      expect(stopped).toEqual(["second"]);
+      expect(owner.registry).toBe(third.registry);
+      expect(first.instance.owner?.revoked).toBe(false);
+      const closed = vi.fn();
+      closing = owner.close().then((result) => {
+        closed();
+        return result;
+      });
+      await nextTurn();
+      expect(closed).not.toHaveBeenCalled();
+      expect(hold.run(() => "finishing before restart")).toBe("finishing before restart");
+      hold.release();
+      await expect(closing).resolves.toMatchObject({ pluginFailures: [] });
+      expect(stopped).toEqual(["second", "first"]);
+      expect(getPluginRegistryState()?.retiredRegistryCleanups?.size ?? 0).toBe(0);
+    } finally {
+      hold.release();
+      await (closing ?? owner.close());
+    }
+  });
+
+  it("retains a predecessor when its service stop fails before instance disposal", async () => {
+    const previous = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "failed-retirement" });
+    previous.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry: previous });
+    const disposed = vi.fn();
+    instance.lifecycle.onDispose(disposed);
+    const failure = new Error("service still owns its connection");
+    setActivePluginRegistry(previous);
+    const owner = createPluginRegistryOwner(previous);
+    const next = createEmptyPluginRegistry();
+    setActivePluginRegistry(next);
+    owner.publish(next, async () => {
+      throw failure;
+    });
+    try {
+      await expect(waitForPluginRegistryRetirement(previous)).rejects.toBe(failure);
+      await expect(owner.close()).rejects.toMatchObject({
+        name: "PluginRuntimeCloseRetainedError",
+        cause: failure,
+      });
+      expect(disposed).not.toHaveBeenCalled();
+      expect(instance.owner?.revoked).toBe(false);
+      expect(
+        [...(getPluginRegistryState()?.retiredRegistryCleanups?.values() ?? [])].map(
+          ({ registry }) => registry,
+        ),
+      ).toContain(previous);
+    } finally {
+      // The synthetic failed prerequisite has no external resource left to recover.
+      for (const [completion, entry] of getPluginRegistryState()?.retiredRegistryCleanups ?? []) {
+        if (entry.registry === previous) {
+          getPluginRegistryState()?.retiredRegistryCleanups?.delete(completion);
+        }
+      }
+      await instance.dispose();
+      await clearActivePluginRegistry();
+    }
+  });
+
+  it("does not cancel successor decisions when its predecessor finally retires", async (ctx) => {
+    const previous = createEmptyPluginRegistry();
+    const consumer = createPluginRecord({ id: "decision-consumer" });
+    const provider = createPluginRecord({ id: "decision-provider" });
+    previous.plugins.push(consumer, provider);
+    const old = new PluginInstance(consumer.id, { record: consumer, registry: previous });
+    const providerInstance = new PluginInstance(provider.id, {
+      record: provider,
+      registry: previous,
+    });
+    const hold = old.retainConsumer(undefined, previous);
+    const entered = createDeferredCore<AbortSignal>();
+    const finish = createDeferredCore();
+    const host = new DecisionProviderHost(
+      {
+        id: "fixture",
+        contractVersion: 1,
+        async evaluate(_batch, context) {
+          entered.resolve(context.signal);
+          await finish.promise;
+          return {
+            status: "ok",
+            result: {
+              model: "fixture-v1",
+              answers: { available: { type: "boolean", probabilityTrue: 1 } },
+            },
+          };
+        },
+      },
+      provider,
+    );
+    previous.decisionProviders.push({ pluginId: provider.id, host });
+    const next = createEmptyPluginRegistry();
+    next.plugins.push(createPluginRecord({ id: consumer.id }), provider);
+    next.decisionProviders = previous.decisionProviders;
+    setActivePluginRegistry(previous);
+    const owner = createPluginRegistryOwner(previous);
+    setActivePluginRegistry(next);
+    owner.publish(next, async () => {});
+    const pending = host.evaluate(
+      { state: "synthetic", questions: { available: { type: "boolean" } } },
+      {
+        purpose: "test",
+        rubricVersion: "1",
+        timeoutMs: 10_000,
+        signal: new AbortController().signal,
+      },
+      "fixture-v1",
+      { agents: { defaults: { decisionModel: "fixture/fixture-v1" } } },
+      next,
+      1,
+      consumer.id,
+    );
+    try {
+      const signal = await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "Decision provider settled before entering evaluation",
+        ),
+        ctx.signal,
+      );
+      expect(providerInstance.owner?.registry).toBe(next);
+      hold.release();
+      await waitForPluginRegistryRetirement(previous);
+      expect(signal.aborted).toBe(false);
+      finish.resolve();
+      await expect(pending).resolves.toMatchObject({ status: "ok" });
+    } finally {
+      hold.release();
+      finish.resolve();
+      await pending.catch(() => {});
+      await owner.close();
+    }
   });
 
   it.each(["empty", "loaded"] as const)(

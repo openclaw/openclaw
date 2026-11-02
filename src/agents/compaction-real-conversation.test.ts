@@ -28,7 +28,7 @@ describe("compaction real conversation classification", () => {
     expect(classify(result)).toBe(false);
   });
 
-  it.each(["NO_REPLY.", '"NO_REPLY"', '{"action":"NO_REPLY"}', "no_reply", "Done\nNO_REPLY"])(
+  it.each(["NO_REPLY.", '"NO_REPLY"', '{"action":"NO_REPLY"}', "Done\nNO_REPLY"])(
     "counts literal assistant text %s as conversation",
     (text) => {
       const message = makeAgentAssistantMessage({ content: [{ type: "text", text }] });

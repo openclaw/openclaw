@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { completeComposerPrediction } from "./composer-prediction-completion.js";
 
@@ -14,15 +14,15 @@ vi.mock("../agents/isolated-completion-route.js", () => ({
   resolveIsolatedCompletionRoute: route,
 }));
 
-const cfg: OpenClawConfig = {
-  agents: {
-    defaults: { model: "example/default", utilityModel: "example/small" },
-    entries: { main: {} },
-  },
-};
-function input(choice: "utility" | "default" | "conversation") {
+const defaults = { model: "example/default", utilityModel: "example/small" };
+const modelWithFallbacks = (primary: string, ...fallbacks: string[]) => ({ primary, fallbacks });
+const runtime = (selectedHarnessId: string) => ({ selection: { selectedHarnessId } });
+function input(
+  choice: "utility" | "default" | "conversation",
+  models: NonNullable<OpenClawConfig["agents"]>["defaults"] = defaults,
+) {
   return {
-    cfg,
+    cfg: { agents: { defaults: models } },
     agentId: "main",
     sessionKey: "agent:main:prediction",
     choice,
@@ -39,52 +39,60 @@ function input(choice: "utility" | "default" | "conversation") {
 }
 beforeEach(() => {
   completion.mockReset().mockResolvedValue({ text: "What should I check next?" });
-  route.mockReset().mockResolvedValue({ selection: { selectedHarnessId: "openclaw" } });
+  route.mockReset().mockResolvedValue(runtime("openclaw"));
 });
 
-describe("composer prediction completion", () => {
-  it.each([
-    ["utility", "small"],
-    ["default", "default"],
-    ["conversation", "conversation"],
-  ] as const)("selects %s without changing the chosen model", async (choice, model) => {
-    const params = input(choice);
-    expect(await completeComposerPrediction(params)).toBe("What should I check next?");
-    expect(completion).toHaveBeenCalledOnce();
-    expect(completion.mock.calls[0]?.[0]).toMatchObject({
+it.each([
+  ["utility", "small"],
+  ["default", "default"],
+  ["conversation", "conversation"],
+] as const)("selects the %s model", async (choice, model) => {
+  const params = input(choice);
+  expect(await completeComposerPrediction(params)).toBe("What should I check next?");
+  expect(completion).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
       provider: "example",
       model,
+      purpose: "composer-prediction",
       thinkLevel: "off",
       answerTokenBudget: 160,
       timeoutMs: 8_000,
       prompt: params.conversation,
       agentHarnessRuntimeOverride: "openclaw",
-    });
-    expect(completion.mock.calls[0]?.[0].authProfileId).toBe(
-      choice === "conversation" ? "profile:chosen" : undefined,
-    );
-    expect(completion.mock.calls[0]?.[0].systemPrompt).toContain("Never suggest granting approval");
-  });
-
-  it("does not silently use the primary model when utility is disabled", async () => {
-    const params = input("utility");
-    params.cfg = { agents: { defaults: { model: "example/default", utilityModel: "" } } };
-    await expect(completeComposerPrediction(params)).rejects.toThrow("No utility model");
-    expect(completion).not.toHaveBeenCalled();
-  });
-
-  it("refuses the runtime that cannot guarantee zero tools before dispatch", async () => {
-    route.mockResolvedValueOnce({ selection: { selectedHarnessId: "agentsapi" } });
-    await expect(completeComposerPrediction(input("utility"))).rejects.toThrow("tool-free");
-    expect(completion).not.toHaveBeenCalled();
-  });
-
-  it.each(["NO_SUGGESTION", "", "x".repeat(501)])(
-    "allows empty or unusable output without buying a retry",
-    async (text) => {
-      completion.mockResolvedValueOnce({ text });
-      expect(await completeComposerPrediction(input("utility"))).toBeNull();
-      expect(completion).toHaveBeenCalledOnce();
-    },
+      systemPrompt: expect.stringContaining("Never suggest granting approval"),
+      authProfileId: choice === "conversation" ? "profile:chosen" : undefined,
+    }),
   );
+});
+
+it.each([
+  [{ ...defaults, utilityModel: "" }, "openclaw", "No utility model"],
+  [defaults, "agentsapi", "tool-free"],
+] as const)("rejects %s via %s: %s", async (configuration, harness, error) => {
+  route.mockResolvedValueOnce(runtime(harness));
+  await expect(completeComposerPrediction(input("utility", configuration))).rejects.toThrow(error);
+  expect(completion).not.toHaveBeenCalled();
+});
+
+it("checks the zero-tool contract again for utility fallback runtimes", async () => {
+  const params = input("utility", {
+    model: modelWithFallbacks("example/default", "example/main-backup"),
+    utilityModel: modelWithFallbacks("example/small", "example/service-tools", "example/backup"),
+  });
+  completion.mockRejectedValueOnce(new Error("503 service unavailable"));
+  for (const harness of ["openclaw", "agentsapi", "openclaw"]) {
+    route.mockResolvedValueOnce(runtime(harness));
+  }
+
+  expect(await completeComposerPrediction(params)).toBe("What should I check next?");
+  expect(completion.mock.calls.map(([call]) => [call.model, call.purpose])).toEqual([
+    ["small", "composer-prediction"],
+    ["backup", "composer-prediction"],
+  ]);
+});
+
+it.each(["NO_SUGGESTION", "", "x".repeat(501)])("does not retry unusable output", async (text) => {
+  completion.mockResolvedValueOnce({ text });
+  expect(await completeComposerPrediction(input("utility"))).toBeNull();
+  expect(completion).toHaveBeenCalledOnce();
 });

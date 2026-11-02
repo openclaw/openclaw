@@ -132,6 +132,9 @@ sidebarTitle: "Troubleshooting"
     by this guard; examples in substantive answers remain text.
     The original reply and corrective continuation remain in session history.
 
+    If tool calls still arrive as text, try [llmman](/providers/llmman#advanced-configuration)
+    with its explicit native Ollama configuration and a model that supports tool calling.
+
   </Accordion>
 
   <Accordion title="Repeated tool errors stop the turn">
@@ -141,9 +144,11 @@ sidebarTitle: "Troubleshooting"
     keep their configured behavior. Direct exposure does not enable a denied
     tool, enable memory, or configure a web-search provider.
 
-    OpenClaw stops after three consecutive identical failures for the same tool
-    and arguments, including repeated unknown tool IDs. This protection is always
-    active; enabling `tools.loopDetection` is not required.
+    After three consecutive identical failures for the same tool and arguments,
+    OpenClaw blocks that exact action and gives the model one chance to replan.
+    An unchanged retry ends the turn without executing the call again. Unknown
+    tool IDs also count. This protection is always active; enabling
+    `tools.loopDetection` is not required.
 
     Ollama 0.40's generic parser can mistake a chat-template marker for an
     advertised tool name. Tool Search uses the collision-free `dispatch_action`
@@ -157,10 +162,34 @@ sidebarTitle: "Troubleshooting"
     OpenAI-compatible chat-completions route. Other providers are unchanged.
     Custom Ollama templates with different markers may need separate diagnosis.
 
-    Check the arguments in the recorded error. If the model repeatedly invents
-    tool names or cannot use the exposed schemas, switch to a model with native
-    tool calling and start a new turn. Changed errors and successful retries
-    reset the count. See [Tool-loop detection](/tools/loop-detection).
+    Check the named tool's inputs or service. If a failed action may have partly
+    applied, inspect its state before choosing another action. If the model
+    repeatedly invents tool names or cannot use exposed schemas, consider a model
+    with native tool calling. Changed errors and successes reset the streak but
+    do not release an already blocked action. A committed new user message
+    starts a fresh recovery allowance. See [Tool-loop detection](/tools/loop-detection).
+
+  </Accordion>
+
+  <Accordion title="Repetitive output stopped">
+    OpenClaw stopped a long repetition-dominated response from a model with a
+    known total size in the 32B class or smaller. It replaced the affected unfinished
+    block in session history with `[Repetitive output stopped]`. Earlier blocks
+    and completed tool work remain; side effects are not retried automatically.
+
+    Try a stronger model, request less output, or split the task into smaller
+    turns. Native Ollama requests also send the resolved model output cap as
+    `num_predict`; lower the model's `maxTokens` if generation runs too long.
+    Discovered local models default to 8,192 output tokens. Ollama Cloud models
+    use their documented output limits, or their context window when a separate
+    output limit is unavailable. Authored `maxTokens` and `params.num_predict`
+    override those defaults. Set `params: { num_predict: -1 }` on a model entry
+    to restore Ollama's unlimited generation default; an explicit request output
+    cap still wins.
+    The detector starts around 16,000 characters and can stop legitimate output
+    with sufficiently dominant repetition. It applies to the 32B class (less than
+    34 billion total parameters) and stays off when total model size is unknown.
+    See [Output budgets and repetition stops](/gateway/local-models#output-budgets-and-repetition-stops).
 
   </Accordion>
 
@@ -238,6 +267,13 @@ sidebarTitle: "Troubleshooting"
     Lower the model entry's `contextTokens` if OpenClaw sends too much prompt. Lower
     `params.num_ctx` if Ollama's runtime context is too large for the machine.
     Lower `maxTokens` if generation runs too long.
+
+  </Accordion>
+
+  <Accordion title="Memory embedding rebuild fails">
+    If `openclaw memory index --force` fails against Ollama (for example with
+    `bge-m3`), try [llmman](/providers/llmman#advanced-configuration) as the
+    embedding server. `provider: "ollama"` only needs a new `remote.baseUrl`.
 
   </Accordion>
 

@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import express from "express";
 import type { BrowserContext, Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { listenOnLoopback } from "../../../../test-support/hanging-loopback-server.js";
 import { useAutoCleanupTempDirTracker } from "../../../test-support.js";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "../bridge-auth-registry.js";
 import { browserAct } from "../client-actions.js";
@@ -12,14 +12,13 @@ import type { BrowserActRequest } from "../client-actions.types.js";
 import { BrowserServiceError } from "../client-fetch.js";
 import { browserSnapshot } from "../client.js";
 import { resolveBrowserConfig } from "../config.js";
-import { getPlaywrightCore } from "../playwright-core.runtime.js";
+import { launchChromium, readTargetId } from "../pw-chromium.test-support.js";
 import { closePlaywrightBrowserConnection } from "../pw-session.js";
 import { createBrowserRouteContext, type BrowserServerState } from "../server-context.js";
 import {
   installBrowserAuthMiddleware,
   installBrowserCommonMiddleware,
 } from "../server-middleware.js";
-import { getFreePort } from "../test-port.js";
 import { registerBrowserRoutes } from "./index.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -52,29 +51,13 @@ describe.runIf(process.env.OPENCLAW_BROWSER_ACTION_ERRORS_E2E === "1")(
           <button id="duplicate">Duplicate button</button>
           <input aria-label="Working input">`);
       });
-      await new Promise<void>((resolve) => {
-        fixture.listen(0, "127.0.0.1", resolve);
-      });
-      const address = fixture.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Fixture did not bind a TCP port");
-      }
-      const port = await getFreePort();
-      cdpUrl = `http://127.0.0.1:${port}`;
-      context = await getPlaywrightCore().chromium.launchPersistentContext(
-        path.join(tempDirs.make("openclaw-browser-action-errors-"), "profile"),
-        {
-          headless: true,
-          executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-          args: [`--remote-debugging-port=${port}`],
-        },
-      );
+      const fixturePort = await listenOnLoopback(fixture);
+      ({ context, cdpUrl } = await launchChromium(
+        tempDirs.make("openclaw-browser-action-errors-"),
+      ));
       page = context.pages()[0] ?? (await context.newPage());
-      await page.goto(`http://127.0.0.1:${address.port}`);
-      const session = await context.newCDPSession(page);
-      const { targetInfo } = await session.send("Target.getTargetInfo");
-      targetId = targetInfo.targetId;
-      await session.detach();
+      await page.goto(`http://127.0.0.1:${fixturePort}`);
+      targetId = await readTargetId(page);
       const state: BrowserServerState = {
         port: 0,
         profiles: new Map(),
@@ -90,14 +73,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_ACTION_ERRORS_E2E === "1")(
       installBrowserAuthMiddleware(app, auth);
       registerBrowserRoutes(app, createBrowserRouteContext({ getState: () => state }));
       controlServer = createServer(app);
-      await new Promise<void>((resolve) => {
-        controlServer.listen(0, "127.0.0.1", resolve);
-      });
-      const controlAddress = controlServer.address();
-      if (!controlAddress || typeof controlAddress === "string") {
-        throw new Error("Browser control did not bind a TCP port");
-      }
-      controlPort = controlAddress.port;
+      controlPort = await listenOnLoopback(controlServer);
       baseUrl = `http://127.0.0.1:${controlPort}`;
       setBridgeAuthForPort(controlPort, auth);
       const snapshot = await browserSnapshot(baseUrl, {

@@ -19,14 +19,12 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";
 import type { ControlUiGitHubError } from "./github-public-api.js";
 import { createAuthenticatedGitHubIdentitySync } from "./github-user-identity.js";
+import { cfg as accessConfig } from "./github-user-identity.oidc.test-support.js";
 import { resolveAuthenticatedHttpUserProfile } from "./http-auth-user-profile.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 
 function githubResponse(body: unknown, status = 200, headers: Record<string, string> = {}) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json", ...headers },
-  });
+  return Response.json(body, { status, headers });
 }
 
 function accessIdentity(id = 58493, email = "ada@example.com", name?: string) {
@@ -132,6 +130,50 @@ afterEach(() => {
 });
 
 describe("authenticated GitHub identity sync", () => {
+  it("adopts trusted Enterprise GitHub account metadata through the canonical profile worker and preserves a chosen name", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const params: Parameters<typeof createAuthenticatedGitHubIdentitySync>[0] = {
+        authResult: { ok: true, method: "trusted-proxy", user: "github:ghe.example.test:101" },
+        config: { gateway: { github: { host: "ghe.example.test" } } },
+        authConfig: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-factory-principal" } },
+        requestHeaders: { "x-factory-github-login": "ada", "x-factory-github-name": "Ada" },
+      };
+      const sync = createAuthenticatedGitHubIdentitySync(params);
+      assert(sync);
+      const result = await sync();
+      expect(result.enterprise).toEqual({ accountId: 101, login: "ada" });
+      expect(getUserProfileListItem(result.profileId)).toMatchObject({ displayName: "Ada" });
+      setDisplayName(result.profileId, "Chosen name");
+      const nextSync = createAuthenticatedGitHubIdentitySync({
+        ...params,
+        requestHeaders: {
+          "x-factory-github-login": "ada",
+          "x-factory-github-name": "Changed upstream",
+        },
+      });
+      assert(nextSync);
+      expect((await nextSync()).profileId).toBe(result.profileId);
+      expect(getUserProfileListItem(result.profileId)).toMatchObject({
+        displayName: "Chosen name",
+      });
+      for (const config of [{}, { gateway: { github: { host: "other.example.test" } } }]) {
+        expect(createAuthenticatedGitHubIdentitySync({ ...params, config })).toBeUndefined();
+      }
+      expect(
+        createAuthenticatedGitHubIdentitySync({
+          ...params,
+          authResult: { ...params.authResult, method: "token" },
+        }),
+      ).toBeUndefined();
+      expect(
+        createAuthenticatedGitHubIdentitySync({
+          ...params,
+          authResult: { ...params.authResult, user: "github:ghe.example.test:9007199254740992" },
+        }),
+      ).toBeUndefined();
+    });
+  });
+
   it("verifies public Access identity without using the Enterprise repository credential", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({
@@ -550,22 +592,7 @@ describe("GitHub public identity metadata cache", () => {
       const auth = accessParams();
       const req = new IncomingMessage(new Socket());
       req.headers = auth.requestHeaders ?? {};
-      const cfg = {
-        gateway: {
-          auth: auth.authConfig,
-          roles: {
-            default: "guest",
-            definitions: {
-              maintainer: {
-                sessions: { others: "view" as const },
-                agents: "*" as const,
-                scopes: ["operator.admin" as const],
-              },
-              guest: { sessions: { others: "none" as const }, agents: [] as string[], scopes: [] },
-            },
-          },
-        },
-      };
+      const cfg = accessConfig;
       const changed = vi.fn();
       const stop = onUserProfilesChanged(changed);
       try {
@@ -627,14 +654,7 @@ describe("GitHub public identity metadata cache", () => {
         .mockResolvedValueOnce(jsonResponse({ id: 101, login: "ada" }))
         .mockResolvedValueOnce(jsonResponse({ id: 102, login: "ada" }));
       const sync = () => {
-        const resolve = createAuthenticatedGitHubIdentitySync({
-          authResult: {
-            ok: true,
-            method: "tailscale",
-            user: "ada@github",
-            tailscaleIdentity: { login: "ada@github", name: "Ada" },
-          },
-        });
+        const resolve = tailscaleSync();
         assert(resolve);
         return resolve();
       };

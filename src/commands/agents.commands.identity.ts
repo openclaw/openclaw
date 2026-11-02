@@ -1,6 +1,9 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   listAgentIds,
@@ -22,13 +25,16 @@ import { logConfigUpdated } from "../config/logging.js";
 import type { IdentityConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
+import { shortenHomePath } from "../utils.js";
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { requireValidConfigForWrite } from "./config-validation.js";
 
-type AgentsSetIdentityOptions = {
+const normalizeWorkspacePath = (input: string) => path.resolve(expandHomePrefix(input));
+
+export async function agentsSetIdentityCommand(opts: {
   agent?: string;
   workspace?: string;
   identityFile?: string;
@@ -38,29 +44,7 @@ type AgentsSetIdentityOptions = {
   avatar?: string;
   fromIdentity?: boolean;
   json?: boolean;
-};
-
-const normalizeWorkspacePath = (input: string) => path.resolve(resolveUserPath(input));
-
-function resolveAgentIdByWorkspace(
-  cfg: Parameters<typeof resolveAgentWorkspaceDir>[0],
-  workspaceDir: string,
-): string[] {
-  const list = listAgentEntries(cfg);
-  const ids =
-    list.length > 0
-      ? list.map((entry) => normalizeAgentId(entry.id))
-      : [resolveDefaultAgentId(cfg)];
-  const normalizedTarget = normalizeWorkspacePath(workspaceDir);
-  return ids.filter(
-    (id) => normalizeWorkspacePath(resolveAgentWorkspaceDir(cfg, id)) === normalizedTarget,
-  );
-}
-
-export async function agentsSetIdentityCommand(
-  opts: AgentsSetIdentityOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-) {
+}) {
   const writeSnapshot = await requireValidConfigForWrite(runtime);
   if (!writeSnapshot) {
     return;
@@ -75,8 +59,14 @@ export async function agentsSetIdentityCommand(
   const avatarRaw = normalizeOptionalString(opts.avatar);
   const hasExplicitIdentity = Boolean(nameRaw || emojiRaw || themeRaw || avatarRaw);
 
-  const identityFileRaw = normalizeOptionalString(opts.identityFile);
-  const workspaceRaw = normalizeOptionalString(opts.workspace);
+  const identityFileRaw = readNonBlankString(opts.identityFile);
+  const workspaceRaw = readNonBlankString(opts.workspace);
+  if (opts.identityFile !== undefined && !identityFileRaw) {
+    throwExpectedCliError("--identity-file must not be blank");
+  }
+  if (opts.workspace !== undefined && !workspaceRaw) {
+    throwExpectedCliError("--workspace must not be blank");
+  }
   const wantsIdentityFile = Boolean(opts.fromIdentity || identityFileRaw || !hasExplicitIdentity);
   const normalizedAgent = opts.agent === undefined ? null : normalizeAgentIdStrict(opts.agent);
   if (normalizedAgent && !normalizedAgent.ok) {
@@ -104,7 +94,15 @@ export async function agentsSetIdentityCommand(
 
   if (!agentId) {
     const resolvedWorkspace = expectDefined(workspaceDir, "agent workspace");
-    const matches = resolveAgentIdByWorkspace(cfg, resolvedWorkspace);
+    const list = listAgentEntries(cfg);
+    const ids =
+      list.length > 0
+        ? list.map((entry) => normalizeAgentId(entry.id))
+        : [resolveDefaultAgentId(cfg)];
+    const normalizedTarget = normalizeWorkspacePath(resolvedWorkspace);
+    const matches = ids.filter(
+      (id) => normalizeWorkspacePath(resolveAgentWorkspaceDir(cfg, id)) === normalizedTarget,
+    );
     if (matches.length === 0) {
       throwExpectedCliError(
         `No agent workspace matches ${shortenHomePath(resolvedWorkspace)}. Pass --agent to target a specific agent.`,
@@ -144,8 +142,7 @@ export async function agentsSetIdentityCommand(
     }
   }
 
-  const fileTheme =
-    identityFromFile?.theme ?? identityFromFile?.creature ?? identityFromFile?.vibe ?? undefined;
+  const fileTheme = identityFromFile?.theme ?? identityFromFile?.creature ?? identityFromFile?.vibe;
   const incomingIdentity: IdentityConfig = {
     ...(nameRaw || identityFromFile?.name ? { name: nameRaw ?? identityFromFile?.name } : {}),
     ...(emojiRaw || identityFromFile?.emoji ? { emoji: emojiRaw ?? identityFromFile?.emoji } : {}),

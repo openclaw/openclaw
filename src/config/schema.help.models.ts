@@ -1,24 +1,29 @@
 export const MODEL_FIELD_HELP: Record<string, string> = {
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
+  "models.usage": "Provider-reported plan usage cache settings.",
+  "models.usage.cacheTtlMs":
+    "Reuse provider usage snapshots for this many milliseconds (default: 60000). Applies to ordinary and post-run reads; 0 disables reuse. Does not enable idle polling.",
   "models.mode":
     'Controls provider catalog behavior: "merge" keeps built-ins and overlays your custom providers, while "replace" uses only your configured providers. In "merge", matching provider IDs preserve non-empty agent models.json baseUrl values, while apiKey values are preserved only when the provider is not SecretRef-managed in current config/auth-profile context; SecretRef-managed providers refresh apiKey from current source markers, and matching model contextWindow/maxTokens use the higher value between explicit and implicit entries.',
   "models.providers":
-    "Provider map keyed by provider ID containing connection/auth settings and concrete model definitions. Built-in providers may be tuned with provider-level overlays; custom providers must include baseUrl and models. Use stable provider keys so references from agents and tooling remain portable across environments.",
+    "Model endpoint configurations keyed by provider ID. Choose a new ID, such as gpu-a or my-lab, for an independent custom endpoint. Built-in and extension-owned IDs and aliases retain their integration semantics; configuring one overlays that integration. The ID does not select the wire protocol: api does. Multiple custom IDs may use the same adapter with different base URLs, credentials, and models. Use a distinct ID for an independent server rather than repurposing openai merely because it is OpenAI-compatible. Custom entries must include baseUrl and models.",
   "models.catalogRefresh":
     "Controls background updates to the bundled model catalog. Remote rows can update model metadata but cannot change provider endpoints or headers.",
   "models.catalogRefresh.enabled":
     "Fetch hosted model catalog updates in the background (default: true). Set to false to disable all remote model catalog traffic.",
   "models.catalogRefresh.url":
     "Override the hosted model catalog URL for a self-hosted HTTPS mirror (localhost HTTP is allowed for testing). A running Gateway stops using the previous source's catalog and adopts the mirror's at its next catalog check, without restarting.",
+  "models.providers.*":
+    "One named provider configuration. Replace * with your chosen ID, or an existing integration ID you intentionally want to override. Schema lookup works before a custom ID is configured.",
   "models.providers.*.baseUrl":
     "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
   "models.providers.*.apiKey":
     "Provider credential used for API-key based authentication when the provider requires direct key auth. Use secret/env substitution and avoid storing real keys in committed config files.",
   "models.providers.*.auth":
-    'Selects provider auth style: "api-key" for API key auth, "token" for bearer token auth, "oauth" for OAuth credentials, "aws-sdk" for AWS credential resolution, and "none" for custom openai-completions endpoints that do not enforce auth. Explicit "none" skips credentials and sends no Authorization header; other effective adapters are rejected.',
+    'Selects provider auth style: "api-key" for API key auth, "token" for bearer token auth, "oauth" for OAuth credentials, "aws-sdk" for AWS credential resolution, and "none" for custom openai-completions endpoints that do not enforce auth. Explicit "none" skips credentials and sends no Authorization header; other effective adapters are rejected. "native-command" delegates credentials to an explicitly configured Codex runtime for a custom HTTPS Responses provider; it cannot be combined with API keys, profiles, or request overrides.',
   "models.providers.*.api":
-    "Provider API adapter selection controlling request/response compatibility handling for model calls. Use the adapter that matches your upstream provider protocol to avoid feature mismatch.",
+    "Wire protocol adapter, independent of the provider ID. Chat Completions: openai-completions; Responses: openai-responses; Messages: anthropic-messages. Choose other adapters from the allowed values to match your upstream protocol.",
   "models.providers.*.maxTokens":
     "Default maximum output token budget applied to models under this provider when a model entry does not set maxTokens.",
   "models.providers.*.timeoutSeconds":
@@ -39,6 +44,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     'Provider agent runtime id: "openclaw", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli". OpenAI on the official endpoint defaults to the Codex harness when omitted.',
   "models.providers.*.localService":
     "Optional on-demand local model server process for this provider. OpenClaw checks healthUrl, starts the command when needed, waits for readiness, and then sends the model request.",
+  "models.providers.*.remote":
+    "Watchdog-only hosted timing override for local relays in front of hosted APIs. When true, the LLM idle and first-event watchdogs use hosted timing even with a local baseUrl, provider ID, localService, or local auth marker. Absent or false preserves locality detection. Explicit timeoutSeconds and run or agent budgets keep their precedence.",
   "models.providers.*.localService.command":
     "Absolute executable path for the local model server process. Keep this path explicit so provider startup is predictable and does not depend on shell PATH lookup.",
   "models.providers.*.localService.args":
@@ -143,6 +150,10 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "auth.order": "Ordered auth profile IDs per provider (used for automatic failover).",
   "agents.defaults.workspace":
     "Default agent workspace for bootstrap and memory files. Also used as the working directory when agents.defaults.cwd is unset. Set this explicitly when running from wrappers so path resolution stays consistent.",
+  "agents.defaults.workspaceFileMode":
+    'New memory-core DREAMS.md, MEMORY.md, and memory/dreaming report permissions: "0600", "0620", "0640", or "0660". Unset keeps exact 0600; configured modes respect the writing host\'s umask. Existing files, daily memory, session corpus, and private state are unchanged. Directory traversal and default ACLs must be provisioned separately.',
+  "agents.entries.*.workspaceFileMode":
+    "Overrides agents.defaults.workspaceFileMode for this agent's newly created human-readable memory outputs. Existing file permissions are preserved; the writing host applies its own umask.",
   "agents.defaults.cwd":
     "Working directory for agent reply runs, separate from workspace bootstrap and memory files. Agent-specific cwd and session-spawned cwd take precedence. Supports ~ and relative paths; a distinct cwd requires an unsandboxed run.",
   "agents.defaults.skipBootstrap":
@@ -184,7 +195,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "agents.defaults.modelPolicy":
     "Explicit policy for model overrides. Omit it or leave allow empty to permit any model.",
   "agents.defaults.modelPolicy.allow":
-    'Allowed model override refs. Accepts aliases, full "provider/model" refs, and provider wildcards such as "openai/*". Empty permits any model.',
+    'Allowed model override refs. Accepts aliases, full "provider/model" refs, and trailing prefix wildcards such as "openai/*", "clawrouter/anthropic/*" or "openai/gpt-*". Empty permits any model.',
   "agents.defaults.models.*.agentRuntime":
     "Optional per-model runtime policy for the default agent. Use this for model-specific runtime exceptions instead of setting a whole-agent runtime.",
   "agents.defaults.models.*.agentRuntime.id":
@@ -204,6 +215,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Sets the extra memory directory or file. Relative paths resolve from the agent workspace; direct file entries are indexed exactly.",
   "memory.search.extraPaths.*.pattern":
     'Limits a directory entry to supported files matching this root-relative glob, for example "runbooks/**/*.md". Omit it to scan all supported files recursively.',
+  "memory.search.extraPaths.*.evergreen":
+    "Keeps matching extra-path reference files out of filesystem-mtime temporal decay. This changes recency ranking only; it does not make the content trusted, promote it, or change source provenance.",
   "memory.search.multimodal":
     'Optional multimodal memory settings for indexing image and audio files from configured extra paths. Keep this off unless your embedding model explicitly supports cross-modal embeddings, and set `memory.search.fallback` to "none" while it is enabled. Matching files are uploaded to the configured remote embedding provider during indexing.',
   "memory.search.multimodal.enabled":
@@ -218,14 +231,22 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     'Selects the embedding backend used to build/query memory vectors. Defaults to "openai"; set "openai-compatible", "gemini", "voyage", "mistral", "bedrock", "deepinfra", "github-copilot", "lmstudio", "ollama", or "local" when you want a different backend.',
   "memory.search.model":
     "Embedding model override used by the selected memory provider when a non-default model is required. Set this only when you need explicit recall quality/cost tuning beyond provider defaults.",
+  "memory.search.inputFormat":
+    'Optional paired literal text prefixes for embedding queries and documents, such as { query: "query: ", document: "passage: " }. Replaces automatic model formatting, including for model aliases. Both strings are required; spaces and newlines are preserved, and empty strings select raw text. A non-empty queryInstruction takes precedence for queries. Changing the document prefix requires a reindex.',
+  "memory.search.inputFormat.query":
+    "Literal prefix for query embeddings. Used unless a non-empty queryInstruction is set; an empty string disables automatic query formatting.",
+  "memory.search.inputFormat.document":
+    "Literal prefix for document embeddings. An empty string selects raw document text. Changing this prefix changes index and embedding-cache identity and requires a reindex.",
   "memory.search.inputType":
     "Use this optional provider-specific `input_type` value only when the same label should apply to both query and document embedding requests. For asymmetric providers, prefer queryInputType and documentInputType.",
   "memory.search.queryInputType":
     "Optional provider-specific `input_type` value for query-time memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a query label.",
+  "memory.search.queryInstruction":
+    'Optional literal prefix for query embeddings, such as "search_query: ". Include required spaces or newlines. Non-empty values replace inputFormat.query and automatic query formatting; unset or empty values use inputFormat.query when set, otherwise provider defaults. Documents and index identity are unchanged, so no reindex is needed. An empty per-agent override clears the inherited instruction.',
   "memory.search.documentInputType":
     "Optional provider-specific `input_type` value for document and indexing memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a passage or document label.",
   "memory.search.outputDimensionality":
-    "Provider-specific output vector size override for memory embeddings. Gemini models support 128-3072 dimensions and recommend 768, 1536, or 3072; Bedrock families such as Titan V2, Cohere V4, and Nova expose their own allowed sizes. Expect a full reindex when you change it because stored vector dimensions must stay consistent.",
+    "Provider-specific output vector size override for memory embeddings. Gemini models support 128-3072 dimensions and recommend 768, 1536, or 3072; Bedrock families such as Titan V2, Cohere V4, and Nova expose their own allowed sizes. OpenAI-compatible endpoints receive it as `dimensions` and must return vectors of exactly that size. Managed local GGUF embeddings truncate and normalize locally. Expect a full reindex when you change it because stored vector dimensions must stay consistent.",
   "memory.search.remote.baseUrl":
     "Overrides the embedding API endpoint, such as an OpenAI-compatible proxy or custom Gemini base URL. Use this only when routing through your own gateway or vendor endpoint; keep provider defaults otherwise.",
   "memory.search.remote.apiKey":

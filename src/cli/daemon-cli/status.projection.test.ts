@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { VERSION } from "../../version.js";
 import { projectDaemonRuntimeStatus } from "./status.projection.js";
@@ -10,6 +10,7 @@ const inspection = vi.hoisted(() => ({
     .fn()
     .mockResolvedValue({ runtimeIntent: { status: "known", stored: false, revision: "empty" } }),
 }));
+afterEach(() => vi.unstubAllGlobals());
 
 vi.mock("./status.runtime-intent.js", () => {
   inspection.loaded();
@@ -17,17 +18,24 @@ vi.mock("./status.runtime-intent.js", () => {
 });
 
 it("keeps fast status lazy and preserves the deep runtime projections", async () => {
+  const env = {
+    HOME: "/fixture",
+    OPENCLAW_PROFILE: "caller",
+    OPENCLAW_HOME: "/caller-home",
+    OPENCLAW_STATE_DIR: "/caller-state",
+    OPENCLAW_CONFIG_PATH: "/caller-config.json",
+  };
+  const argv = ["/fixture/node", " /fixture/entry.js "];
+  vi.stubGlobal("process", { ...process, env, argv });
   const params = {
     service: createMockGatewayService(),
     state: {
       command: {
         programArguments: ["/fixture/node", "/fixture/entry.js"],
-        environment: { OPENCLAW_PROFILE: "work" },
+        environment: { HOME: "/fixture", OPENCLAW_PROFILE: "work" },
       },
       loadState: { status: "not-loaded" as const },
     },
-    env: { HOME: "/fixture", OPENCLAW_PROFILE: "caller" },
-    argv: ["/fixture/node", " /fixture/entry.js "],
   };
   expect(await projectDaemonRuntimeStatus(params)).toEqual({
     cli: { version: VERSION, entrypoint: "/fixture/entry.js" },
@@ -45,7 +53,7 @@ it("keeps fast status lazy and preserves the deep runtime projections", async ()
     kind: "gateway",
     service: params.service,
     command: params.state.command,
-    env: params.env,
+    env,
     serviceEnv: { HOME: "/fixture", OPENCLAW_PROFILE: "work" },
     inspectionKnown: true,
   });

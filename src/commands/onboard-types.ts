@@ -84,6 +84,8 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   customNoAuth?: boolean;
   lmstudioApiKey?: string;
   customModelId?: string;
+  /** Prepared during reset preflight; not a CLI flag. */
+  customModelIds?: string[];
   customProviderId?: string;
   customCompatibility?: "openai" | "openai-responses" | "anthropic";
   customImageInput?: boolean;

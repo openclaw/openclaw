@@ -1,28 +1,35 @@
 import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
-import {
-  For,
-  Show,
-  createEffect,
-  createMemo,
-  createSignal,
-  merge,
-  onCleanup,
-  onSettled,
-  untrack,
-} from "solid-js";
+import { For, Show, createMemo, createSignal, merge, onSettled } from "solid-js";
 import { acquireNativeOverlaySurface } from "../lib/native-overlay-occlusion.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import type { MultiSelectOption, MultiSelectProps } from "./multi-select-types.ts";
+import type { ModelPickerOption } from "./model-picker-options.ts";
 import { createOverlayAnchor } from "./overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
-import { revealInScrollRegion } from "./scroll-state.ts";
 import { Icon } from "./solid/icon.tsx";
 import { useMenuMachine } from "./solid/menu-machine.ts";
+import { MenuNavigationError } from "./solid/menu-navigation-error.tsx";
+import { useOverlayControl } from "./solid/overlay-control.ts";
 import { ProviderBrandIcon } from "./solid/provider-icon.tsx";
 import "./solid/overlay.css";
+import "../styles/select-picker.css";
 import "../styles/multi-select.css";
 
-type MultiSelectRow = MultiSelectOption & { custom?: boolean };
+type MultiSelectProps = {
+  options: readonly ModelPickerOption[];
+  /** Current values in display order. Controlled: the host owns them. */
+  value: readonly string[];
+  isExcluded: (value: string) => boolean;
+  /** The caller owns value identity; search remains case-insensitive. */
+  getValueKey: (value: string) => string;
+  placeholder: string;
+  accessibleLabel: string;
+  allowCustom: boolean;
+  disabled: boolean;
+  onChange: (value: string[]) => void;
+  onOpen: () => void;
+};
+
+type MultiSelectRow = ModelPickerOption & { custom?: boolean };
 let instanceCounter = 0;
 
 function providerFromValue(value: string): string | undefined {
@@ -60,7 +67,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
     const taken = new Set(props.value.map((value) => props.getValueKey(value)));
     const custom = query().trim();
     const customKey = props.getValueKey(custom);
-    const search = custom.toLowerCase();
+    const search = custom.toLowerCase().normalize("NFC");
     const result: MultiSelectRow[] = [];
     let exact: MultiSelectRow | undefined;
     for (const option of props.options) {
@@ -72,8 +79,8 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
         exact = option;
       } else if (
         !search ||
-        [option.label, option.value, option.provider, option.detail].some((text) =>
-          text?.toLowerCase().includes(search),
+        [option.label, option.value, option.provider, option.description].some((text) =>
+          text?.toLowerCase().normalize("NFC").includes(search),
         )
       ) {
         result.push(option);
@@ -114,7 +121,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
       props.onChange([...props.value, ...additions]);
     }
     setQuery("");
-    menu.service.send({ type: "HIGHLIGHTED.SET", value: null });
+    menu.setHighlightedValue(null);
   };
   const select = (value: string) => {
     const row = rows().find((item) => item.value === value);
@@ -134,22 +141,9 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
       ids: { content: `${id}-content`, trigger: `${id}-trigger` },
     },
   );
-  createEffect(
-    () => menu.read().highlightedValue,
-    (value) => {
-      if (value && surface) {
-        const option = document.getElementById(
-          untrack(() => menu.read().getItemProps({ value }).id),
-        );
-        if (option && surface.contains(option)) {
-          revealInScrollRegion(surface, option);
-        }
-      }
-    },
-  );
   const activeId = () => {
-    const value = menu.read().highlightedValue;
-    return value ? menu.read().getItemProps({ value }).id : undefined;
+    const value = menu.highlightedValue();
+    return value ? menu.itemId(value) : undefined;
   };
   const openMenu = () => {
     if (!props.disabled && !overlay.open) {
@@ -162,31 +156,29 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
       input.focus();
     }
   };
-  createEffect(
-    () => props.disabled,
-    (disabled) => {
-      if (disabled) {
-        overlay.request(false);
-      }
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (next) {
+      props.onOpen();
+    } else {
+      setQuery("");
+    }
+  };
+  const control = useOverlayControl(overlay, undefined, {
+    get disabled() {
+      return props.disabled;
     },
-  );
-  onCleanup(() => overlay.dispose());
+    onOpenChange: handleOpenChange,
+  });
   onSettled(() => {
     overlay.bindSurface(surface);
     overlay.bindTrigger(input);
     overlay.setParent(findOverlayParent(field));
     const anchor = createOverlayAnchor(surface);
     anchor.update(field);
-    const unsubscribe = overlay.subscribe((next) => {
-      setOpen(next);
-      if (next) {
-        untrack(() => props.onOpen());
-      } else {
-        setQuery("");
-      }
-    });
+    const disconnectControl = control.connect(() => {});
     return () => {
-      unsubscribe();
+      disconnectControl();
       anchor.dispose();
     };
   });
@@ -211,9 +203,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
   return (
     <openclaw-multi-select class={props.class}>
       <div
-        ref={(node) => {
-          field = node;
-        }}
+        ref={(node) => (field = node)}
         class={["multi-select", { "multi-select--open": open() }]}
         data-disabled={props.disabled ? "" : undefined}
         onClick={(event) => {
@@ -253,9 +243,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
           }}
         </For>
         <input
-          ref={(node) => {
-            input = node;
-          }}
+          ref={(node) => (input = node)}
           id={`${id}-trigger`}
           data-menu-trigger={id}
           class="multi-select__input"
@@ -272,7 +260,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
           value={query()}
           disabled={props.disabled}
           onInput={(event) => {
-            menu.service.send({ type: "HIGHLIGHTED.SET", value: null });
+            menu.setHighlightedValue(null);
             setQuery(event.currentTarget.value);
             openMenu();
           }}
@@ -284,43 +272,48 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
       </div>
       <div
         {...menu.content()}
-        ref={(node) => {
-          surface = node;
-        }}
+        ref={(node) => (surface = node)}
         class="multi-select__popup multi-select__menu oc-overlay"
         popover="manual"
         role="listbox"
         id={`${id}-content`}
         aria-label={label()}
       >
+        <MenuNavigationError binding={menu} />
         <For each={rows()}>
-          {(row) => (
-            <div
-              {...menu.item(row.value, row.disabled)}
-              class="multi-select__option"
-              role="option"
-              aria-selected={menu.read().highlightedValue === row.value ? "true" : "false"}
-              aria-disabled={row.disabled ? "true" : "false"}
-              data-value={row.value}
-              data-custom={row.custom ? "" : undefined}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => select(row.value)}
-            >
-              <Show when={row.provider}>
-                {(provider) => (
-                  <ProviderBrandIcon provider={provider()} class="multi-select__option-icon" />
-                )}
-              </Show>
-              <span class="picker-select__copy">
-                <span class="picker-select__label">
-                  {row.custom ? t("common.multiSelect.addCustom", { value: row.value }) : row.label}
-                </span>
-                <Show when={row.detail}>
-                  <span class="picker-select__description">{row.detail}</span>
+          {(row) => {
+            const itemRef = menu.itemRef();
+            return (
+              <div
+                {...menu.item(row.value, row.disabled)}
+                ref={itemRef}
+                class="multi-select__option"
+                role="option"
+                aria-selected={menu.highlightedValue() === row.value ? "true" : "false"}
+                aria-disabled={row.disabled ? "true" : "false"}
+                data-value={row.value}
+                data-custom={row.custom ? "" : undefined}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => select(row.value)}
+              >
+                <Show when={row.provider}>
+                  {(provider) => (
+                    <ProviderBrandIcon provider={provider()} class="multi-select__option-icon" />
+                  )}
                 </Show>
-              </span>
-            </div>
-          )}
+                <span class="picker-select__copy">
+                  <span class="picker-select__label">
+                    {row.custom
+                      ? t("common.multiSelect.addCustom", { value: row.value })
+                      : row.label}
+                  </span>
+                  <Show when={row.description}>
+                    <span class="picker-select__description">{row.description}</span>
+                  </Show>
+                </span>
+              </div>
+            );
+          }}
         </For>
         <Show when={rows().length === 0}>
           <div class="multi-select__empty">{t("common.multiSelect.noMatches")}</div>

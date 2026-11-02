@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { resolveAgentRuntimePrompt } from "./runtime-prompt.js";
+import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
 
 const {
   resolveChannelCapabilitiesMock,
@@ -105,6 +107,41 @@ describe("resolveAgentRuntimePrompt", () => {
       }),
     );
   });
+
+  it.each([
+    { delivery: { kind: "internal" as const }, expectedChannel: "webchat" },
+    { delivery: { kind: "none" as const }, expectedChannel: undefined },
+    {
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "123", accountId: "work", threadId: "4" },
+      }),
+      expectedChannel: "telegram",
+    },
+  ])(
+    "keeps session presentation for $delivery.kind delivery",
+    async ({ delivery, expectedChannel }) => {
+      const prompts = [];
+      for (const channel of ["webchat", undefined]) {
+        const result = await resolveAgentRuntimePrompt({
+          config: {},
+          agentId: "main",
+          workspaceDir: "/tmp/workspace",
+          sessionKey: "agent:main:prompt-continuity",
+          sessionId: "session-1",
+          preparedSessionEntry: { sessionId: "session-1", updatedAt: 1, delivery },
+          model: "local/qwen3:8b",
+          channel,
+        });
+        expect(result.runtimeInfo.channel).toBe(expectedChannel);
+        expect(result.runtimeChannel).toBe(channel);
+        prompts.push(
+          buildConfiguredAgentSystemPrompt({ ...result, workspaceDir: "/tmp/workspace" }),
+        );
+      }
+      expect(prompts[1]).toBe(prompts[0]);
+      expect(prompts[0]?.includes("## Control UI Embed")).toBe(delivery.kind === "internal");
+    },
+  );
 
   it.each([
     { name: "prepared credit", preparedGitCoauthorPrompt: gitCoauthorPrompt },

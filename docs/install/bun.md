@@ -8,7 +8,7 @@ title: "Bun"
 ---
 
 <Warning>
-Node remains OpenClaw's primary, default, and recommended runtime. The latest stable Bun (currently 1.4.3) and pinned OpenClaw fork can run the CLI, Gateway, and managed node host as an explicit opt-in. Older stock Bun releases are rejected; upgrade before running OpenClaw. [OpenClaw requires SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x](/install/bun-compatibility); older Bun versions and builds with unsafe SQLite are rejected.
+Node remains OpenClaw's primary, default, and recommended runtime. The latest stable Bun (currently 1.4.4) and pinned OpenClaw fork can run the CLI, Gateway, and managed node host as an explicit opt-in. Older stock Bun releases are rejected; upgrade before running OpenClaw. [OpenClaw requires SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x](/install/bun-compatibility); older Bun versions and builds with unsafe SQLite are rejected.
 </Warning>
 
 Desktop apps manage their own runtime: the native macOS app and fresh local
@@ -111,6 +111,10 @@ openclaw --version
 openclaw status --json
 ```
 
+The preinstall check ignores Bun's temporary lifecycle shims and accepts its
+package-manager PATH ordering. If a persistent `node` is on PATH, it must be a
+supported Node runtime; an alias to Bun does not satisfy that check.
+
 On macOS and Linux without Node, the trusted package lifecycle installs a launcher
 that uses that exact Bun executable. Updates preserve it. To repair an older or
 missing launcher, run `/absolute/path/to/bun <package-root>/openclaw.mjs doctor --fix`.
@@ -124,7 +128,7 @@ rollback, and custom-bin behavior.
 
 Bun blocks dependency lifecycle scripts unless explicitly trusted. For this repo, the commonly blocked scripts are not required:
 
-- `baileys` `preinstall`: checks Node major >= 20 (OpenClaw requires Node 24.16+ or 26.1+, with Node 26 recommended)
+- `baileys` `preinstall`: checks Node major >= 20 (OpenClaw accepts Node 24.16.0+ on 24.x or 26.1.0+, with 24.22.1+/26.12.1+ strongly recommended for security)
 - `protobufjs` `postinstall`: emits warnings about incompatible version schemes (no build artifacts)
 
 If you hit a runtime issue that needs these scripts, trust them explicitly:

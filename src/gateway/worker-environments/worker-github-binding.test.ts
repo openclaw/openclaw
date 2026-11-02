@@ -4,6 +4,7 @@ import { WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE } from "../../../packages/gatewa
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  GitHubIdentityError,
   installManagedGitHubProfile,
   writeManagedGitHubProfileFiles,
   removeManagedGitHubProfile,
@@ -16,6 +17,8 @@ import {
 import { recordCommittedSessionMetadataPublication } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as turnClaims from "./placement-turn-claim-events.js";
+import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
+import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import { bindWorkerGitHubTurn, prepareGitHubPublicationFact } from "./worker-github-binding.js";
 
 async function prepareWorkerGitHubBinding(
@@ -283,6 +286,93 @@ describe("worker GitHub launch binding", () => {
     vi.useRealTimers();
   });
 
+  it.each([
+    "missing profile",
+    "unavailable managed identity",
+    "unavailable native identity",
+    "no identity",
+    "invalid author",
+    "closed placement",
+  ] as const)("repository checkout identity: %s", async (scenario) => {
+    vi.stubEnv("GH_TOKEN", undefined);
+    vi.stubEnv("GITHUB_TOKEN", undefined);
+    if (scenario === "unavailable managed identity" || scenario === "invalid author") {
+      await installProfile();
+      if (scenario === "invalid author") {
+        config.tools!.github!.gitAuthor = { name: "Invalid\nAuthor" };
+      } else {
+        mocks.verify.mockResolvedValue({ status: "unavailable" });
+      }
+    }
+    if (scenario === "no identity" || scenario === "unavailable native identity") {
+      config = {};
+      mocks.nativeToken.mockImplementation(async (argv: string[]) => ({
+        code: argv[2] === "token" ? 1 : 0,
+        termination: "exit",
+        stdout: Buffer.from(
+          scenario === "no identity" ? '{"hosts":{}}' : '{"hosts":{"github.com":[{}]}}',
+        ),
+        stderr: Buffer.alloc(0),
+      }));
+    }
+    setRuntimeConfigSnapshot(config);
+    const reachedSync = new Error("repository sync reached");
+    const syncWorkspace = vi
+      .fn<WorkerTunnelHandle["syncWorkspace"]>()
+      .mockRejectedValue(reachedSync);
+    const tunnel: WorkerTunnelHandle = {
+      environmentId: "identity-test",
+      ownerEpoch: 1,
+      runWorkspaceCommand: vi.fn(),
+      stop: vi.fn(),
+      quiesceWorkspace: vi.fn(),
+      reconcileWorkspace: vi.fn(),
+      syncWorkspace,
+    };
+    const operation = syncSessionRepositoryWorkspace({
+      ...session,
+      generation: 1,
+      repository: {
+        ...session,
+        workspaceId: "identity-test",
+        url: "https://github.com/example/repository.git",
+        requestedRef: null,
+        branch: "openclaw/identity-test",
+        runSetupScript: false,
+        baseCommit: null,
+        baseManifestHash: null,
+        checkpointRef: null,
+        manifestHash: null,
+        revision: 1,
+        createdAtMs: 0,
+        updatedAtMs: 0,
+      },
+      tunnel,
+      assertCurrent: () => {
+        if (scenario === "closed placement") {
+          throw new Error("placement closed");
+        }
+      },
+    });
+    if (scenario === "no identity" || scenario === "invalid author") {
+      await expect(operation).rejects.toBe(reachedSync);
+      const source = syncWorkspace.mock.calls[0]?.[0].source;
+      if (scenario === "no identity") {
+        expect(source).not.toHaveProperty("gitToken");
+      } else {
+        expect(source).toHaveProperty("gitToken", token);
+      }
+    } else {
+      if (scenario === "closed placement") {
+        await expect(operation).rejects.toThrow("placement closed");
+      } else {
+        await expect(operation).rejects.toBeInstanceOf(GitHubIdentityError);
+        await expect(operation).rejects.toThrow(/reconnect/iu);
+      }
+      expect(syncWorkspace).not.toHaveBeenCalled();
+    }
+  });
+
   it("binds the verified shared account and canonical HTTPS remote", async () => {
     await installProfile();
 
@@ -312,7 +402,7 @@ describe("worker GitHub launch binding", () => {
   });
 
   it.each([{ name: "Shared\nBot" }, { email: "a".repeat(257) }])(
-    "omits launch-invalid author metadata instead of failing the worker turn: %j",
+    "omits the optional launch binding for invalid author metadata: %j",
     async (gitAuthor) => {
       config = { tools: { github: { profileId, gitAuthor } } };
       await installProfile();
@@ -331,7 +421,7 @@ describe("worker GitHub launch binding", () => {
   });
 
   it.each(["missing-profile", "unavailable"] as const)(
-    "omits credentials when the managed identity is %s",
+    "keeps publication discovery optional when the managed identity is %s",
     async (failure) => {
       if (failure !== "missing-profile") {
         await installProfile();

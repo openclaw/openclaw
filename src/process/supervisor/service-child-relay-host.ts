@@ -8,10 +8,10 @@ import { joinProcessCompletionAndOutput } from "../decoded-output.js";
 import { pipeProcessOutput } from "../pipe-output.js";
 import {
   createServiceChildControlSender,
+  ServiceChildLaunchNotInitiatedError,
   spawnServiceChildRelay,
 } from "../spawn-broker/relay-integration.js";
 import { createManagedChildStdin } from "./adapters/child-stdin.js";
-import { toStringEnv } from "./adapters/env.js";
 import { createProcessAdapterEvents } from "./adapters/process-events.js";
 import { createServiceChildCleanupDeadline } from "./service-child-cleanup-deadline.js";
 import { readServiceChildControl } from "./service-child-control-reader.js";
@@ -21,9 +21,9 @@ import {
   readServiceChildMessage,
   sendServiceChildMessage,
   type ServiceChildAnchorMessage,
-  type ServiceChildStart,
 } from "./service-child-protocol.js";
 import {
+  createServiceChildStart,
   prepareServiceChildRelay,
   type ServiceChildRelayAdapter,
   type ServiceChildRelayParams,
@@ -33,8 +33,6 @@ import {
   stopServiceChildOwner,
 } from "./service-child-relay-retirement.js";
 import type { AwaitedStdoutConsumer, ProcessAdapterStartup } from "./types.js";
-
-type AuthorityState = "starting" | "active" | "closing" | "closed" | "identity-lost";
 
 export function createServiceChildRelayAdapter(
   params: ServiceChildRelayParams & { stdoutConsumption: "awaited" },
@@ -110,7 +108,7 @@ export async function createServiceChildRelayAdapter(
     child.stdin?.on("error", (error) => events.emitError(error, "stdin"));
   }
 
-  let state: AuthorityState = "starting";
+  let state: "starting" | "active" | "closing" | "closed" | "identity-lost" = "starting";
   let commandPid: number | undefined;
   let anchorPid: number | undefined = useLinuxSubreaper ? child.pid : undefined;
   let outboundSequence = 0;
@@ -202,6 +200,7 @@ export async function createServiceChildRelayAdapter(
     if (completionSettled) {
       return;
     }
+    const diagnostics = retirement.diagnostics();
     const error = new Error(
       "service child cleanup did not complete before its hard deadline; pending: " +
         JSON.stringify({
@@ -213,7 +212,23 @@ export async function createServiceChildRelayAdapter(
           stdoutEnd: !stdoutRelay.ended,
           stderrEnd: !stderrRelay.ended,
         }),
-      { cause: retirement.diagnostics() },
+      {
+        // Stability bundles retain bounded Error messages, not arbitrary cause objects.
+        // Keep owner attribution payload-free and the signaling failure in the error graph.
+        cause: new Error(
+          "service child cleanup owner: " +
+            JSON.stringify({
+              generation,
+              relayPid: child.pid,
+              anchorPid,
+              commandPid,
+              treeOwnership: useLinuxSubreaper ? "linux-subreaper" : "process-group",
+              durationMs: diagnostics.durationMs,
+              escalationAfterMs: diagnostics.escalationAfterMs,
+            }),
+          { cause: diagnostics.signalError },
+        ),
+      },
     );
     // Extinction may already be confirmed while an output pipe remains open.
     // Reject pending results before destroy can turn that missing tail into success.
@@ -254,17 +269,17 @@ export async function createServiceChildRelayAdapter(
     nextSequence: () => ++outboundSequence,
     startedAt: () => cleanupDeadline.startedAt!,
     anchorGone: () => {
-      if (anchorPid === undefined) {
-        return false;
-      }
       try {
-        return isOwnedProcessGroupGone(anchorPid);
+        // A native certificate leaves only the retained owner, without PGID authority.
+        return useLinuxSubreaper
+          ? closingReceipt === "linux-subreaper"
+          : anchorPid !== undefined && isOwnedProcessGroupGone(anchorPid);
       } catch {
         return false;
       }
     },
     canRetire: () =>
-      !useLinuxSubreaper &&
+      (!useLinuxSubreaper || closingReceipt === "linux-subreaper") &&
       state === "closing" &&
       control?.closed === true &&
       lineage?.readableEnded === true &&
@@ -299,9 +314,6 @@ export async function createServiceChildRelayAdapter(
     // uncertainty observable; a later receipt cannot prove this aborted startup extinct.
     loseIdentity("construction aborted");
     constructionAbort.reject(waitError ?? new Error("service child construction aborted"));
-  };
-  const removeConstructionAbortListener = () => {
-    params.abortSignal?.removeEventListener("abort", onConstructionAbort);
   };
 
   const finishAuthorityClose = (missingReceiptError: string) => {
@@ -392,9 +404,17 @@ export async function createServiceChildRelayAdapter(
     }
     inboundSequence = message.sequence;
     if (message.type === "prepared" && state === "starting" && params.initiateSpawn) {
-      void sendControlMessage({ type: "launch" }, params.initiateSpawn).catch((error: unknown) =>
-        loseIdentity(String(error)),
-      );
+      void sendControlMessage({ type: "launch" }, params.initiateSpawn).catch((error: unknown) => {
+        if (!(error instanceof ServiceChildLaunchNotInitiatedError) || state !== "starting") {
+          return loseIdentity(String(error));
+        }
+        // No command exists yet: fail startup and join the anchor's startup-error receipt.
+        cleanupDeadline.begin();
+        startup.reject(error.cause);
+        void sendControlMessage({ type: "cancel", signal: "SIGKILL" }).catch((cause: unknown) =>
+          loseIdentity(String(cause)),
+        );
+      });
     } else if (message.type === "ready" && state === "starting") {
       // Ready is not construction-complete: secret delivery can still be
       // blocked. Keep abort protection until the adapter returns.
@@ -441,6 +461,9 @@ export async function createServiceChildRelayAdapter(
       closingReceipt = message.descendantsReaped === true ? "linux-subreaper" : "process-group";
       state = "closing";
       cleanupDeadline.begin();
+      if (useLinuxSubreaper && closingReceipt === "linux-subreaper") {
+        retirement.request();
+      }
       retirement.reconcile();
       if (control) {
         // Retire cancellation before acknowledging this exact POSIX receipt.
@@ -547,12 +570,11 @@ export async function createServiceChildRelayAdapter(
     events.emitError(error, "process");
   });
   const finishWindowsAuthority = () => {
-    if (!useWindowsJobAnchor || !childDisconnected || !childExited) {
-      return;
+    if (useWindowsJobAnchor && childDisconnected && childExited) {
+      finishAuthorityClose(
+        childError?.message ?? "Windows service child anchor exited without a closing receipt",
+      );
     }
-    finishAuthorityClose(
-      childError?.message ?? "Windows service child anchor exited without a closing receipt",
-    );
   };
   child.once("disconnect", () => {
     childDisconnected = true;
@@ -562,30 +584,13 @@ export async function createServiceChildRelayAdapter(
     childExited = true;
     retirement.observeExit(code, signal);
     relayExit.resolve();
-    removeConstructionAbortListener();
+    params.abortSignal?.removeEventListener("abort", onConstructionAbort);
     if (useWindowsJobAnchor) {
       finishWindowsAuthority();
     }
   });
 
-  const start: ServiceChildStart = {
-    type: params.initiateSpawn ? "prepare" : "start",
-    generation,
-    command: params.command,
-    args: params.args,
-    argv0: params.argv0,
-    cwd: params.cwd,
-    env: params.env ? toStringEnv(params.env) : undefined,
-    stdinMode: params.stdinMode,
-    secretFd: params.secretInput?.fd,
-    terminateOnHostLoss: params.terminateOnHostLoss,
-    controlFd,
-    ...preparation.ownership,
-    treeOwnership: useLinuxSubreaper ? "linux-subreaper" : undefined,
-    nativeProcessOwner: preparation.nativeProcessOwner,
-    ...(control ? { acknowledgeClosing: true as const } : {}),
-    windowsShellCommand: params.windowsShellCommand,
-  };
+  const start = createServiceChildStart(params, preparation, generation, Boolean(control));
   const stdin = createManagedChildStdin(
     child.stdin,
     params.terminateOnHostLoss
@@ -614,16 +619,14 @@ export async function createServiceChildRelayAdapter(
         startup.promise,
         delivery?.deliverTo(child, { abortSignal: params.abortSignal }),
       ]);
-      const startupError = startupResult.status === "rejected" ? startupResult.reason : undefined;
-      const secretDeliveryError =
-        secretDeliveryResult.status === "rejected" ? secretDeliveryResult.reason : undefined;
       // Preserve admission failure over the secret pipe it closes as a consequence.
-      if (startupError !== undefined || secretDeliveryError !== undefined) {
-        if (startupError !== undefined) {
-          await startupErrorAckDelivery;
-          await cleanup.promise;
-        }
-        throw startupError ?? secretDeliveryError;
+      if (startupResult.status === "rejected") {
+        await startupErrorAckDelivery;
+        await cleanup.promise;
+        throw startupResult.reason;
+      }
+      if (secretDeliveryResult.status === "rejected") {
+        throw secretDeliveryResult.reason;
       }
       if (params.input !== undefined && params.prepareInput) {
         await params.prepareInput();
@@ -642,10 +645,11 @@ export async function createServiceChildRelayAdapter(
       void stdoutRelay.drain();
       unpipeStderr?.();
       void stderrRelay.drain();
-      stopServiceChildOwner(child, useLinuxSubreaper);
+      // Ready assigns commandPid after native admission; retain transport for its closing/ACK join.
+      stopServiceChildOwner(child, useLinuxSubreaper, commandPid ? kill : undefined);
       throw error;
     } finally {
-      removeConstructionAbortListener();
+      params.abortSignal?.removeEventListener("abort", onConstructionAbort);
     }
   })();
   void ready.catch(() => {});
@@ -686,6 +690,7 @@ export async function createServiceChildRelayAdapter(
     : undefined;
 
   const adapter: ServiceChildRelayAdapter = {
+    memoryRootPid: child.pid,
     // The durable worker receipt binds the group owner, which survives application loss.
     get pid() {
       return params.ownedWorker ? anchorPid : commandPid;

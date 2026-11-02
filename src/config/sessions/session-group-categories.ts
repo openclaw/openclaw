@@ -3,10 +3,8 @@ import {
   readSessionGroupCatalog,
 } from "../../gateway/session-group-catalog.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import {
   publishSessionCollaborationChanges,

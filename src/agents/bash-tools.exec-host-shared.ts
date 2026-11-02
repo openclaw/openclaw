@@ -1,10 +1,13 @@
 /**
- * Shared approval helpers for gateway and node exec hosts.
  * Owns pending-state construction, policy merging, unavailable-route handling,
  * follow-up dispatch, and approval-pending tool result rendering.
  */
 import crypto from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+} from "../../packages/gateway-client/src/protocol-request.js";
 import { isApprovalNotFoundError } from "../infra/approval-errors.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
@@ -26,7 +29,6 @@ import { LruCache } from "../infra/lru-cache.js";
 import { logWarn } from "../logger.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "./bash-tools.exec-approval-followup-state.js";
 import {
-  type ExecApprovalRegistration,
   isExecApprovalRunAbortedError,
   resolveRegisteredExecApprovalDecision,
 } from "./bash-tools.exec-approval-request.js";
@@ -36,9 +38,9 @@ import {
 } from "./bash-tools.exec-runtime.js";
 import type { ExecElevatedDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
 import { isExecDeniedResultText } from "./exec-approval-result.js";
+import type { ExecApprovalRegistration, ExecApprovalTransport } from "./exec-approval-transport.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
-/** Cap for deduplicating repeated follow-up dispatch failure log keys. */
 const MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS = 256;
 const loggedExecApprovalFollowupFailures = new LruCache<boolean>(
   MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS,
@@ -66,7 +68,6 @@ type ExecApprovalUnavailableReason =
   | "initiating-platform-disabled"
   | "initiating-platform-unsupported";
 
-/** Context returned after a default approval request is registered. */
 type RegisteredExecApprovalRequestContext = {
   approvalId: string;
   approvalSlug: string;
@@ -78,7 +79,6 @@ type RegisteredExecApprovalRequestContext = {
   unavailableReason: ExecApprovalUnavailableReason | null;
 };
 
-/** Destination and context for async exec approval follow-up delivery. */
 type ExecApprovalFollowupTarget = {
   approvalId: string;
   agentId?: string;
@@ -121,7 +121,6 @@ function resolveBaseExecApprovalDecision(params: {
   return { approvedByAsk: false, deniedReason: null, timedOut: false };
 }
 
-/** Resolves effective exec policy for a gateway/node host. */
 export async function resolveExecHostApprovalContext(params: {
   agentId?: string;
   security: ExecSecurity;
@@ -191,7 +190,6 @@ type DefaultExecApprovalRequestParams = {
   register: (approvalId: string) => Promise<ExecApprovalRegistration>;
 };
 
-/** Creates, registers, and normalizes a default approval request context. */
 async function createAndRegisterDefaultExecApprovalRequest(
   params: DefaultExecApprovalRequestParams,
 ): Promise<RegisteredExecApprovalRequestContext> {
@@ -306,10 +304,26 @@ export async function createExecApprovalRequestRoute<TTimeoutContext = undefined
   return { ...request, kind: "inline", preResolvedDecision: null, state };
 }
 
+function classifyExecApprovalWaitFailure(error: unknown) {
+  // Only fixed owner errors become categories; command-bearing transport payloads stay private.
+  if (error instanceof Error && error.message === "Approval requester authority changed") {
+    return "authority-changed";
+  }
+  if (error instanceof GatewayProtocolRequestTimeoutError) {
+    return "gateway-timeout";
+  }
+  if (error instanceof GatewayProtocolRequestError) {
+    return "gateway-rejected";
+  }
+  return "unknown";
+}
+
 /** Waits for an approval and normalizes cancellation, request failure, and resolved policy. */
 export async function resolveExecApprovalWaitOutcome<TTimeoutContext = undefined>(
   params: Omit<ExecApprovalDecisionParams<TTimeoutContext>, "decision"> & {
+    approvalTransport?: ExecApprovalTransport;
     approvalId: string;
+    expiresAtMs?: number;
     preResolvedDecision: string | null | undefined;
     signal?: AbortSignal;
   },
@@ -325,11 +339,19 @@ export async function resolveExecApprovalWaitOutcome<TTimeoutContext = undefined
   let decision: string | null;
   try {
     decision = await resolveRegisteredExecApprovalDecision({
+      approvalTransport: params.approvalTransport,
       approvalId: params.approvalId,
+      expiresAtMs: params.expiresAtMs,
       preResolvedDecision: params.preResolvedDecision,
     });
   } catch (error) {
-    return { kind: isExecApprovalRunAbortedError(error) ? "run-aborted" : "request-failed" };
+    if (isExecApprovalRunAbortedError(error)) {
+      return { kind: "run-aborted" };
+    }
+    logWarn(
+      `exec approval wait failed (id=${params.approvalId}, reason=${classifyExecApprovalWaitFailure(error)})`,
+    );
+    return { kind: "request-failed" };
   }
   if (params.signal?.aborted) {
     return { kind: "run-aborted" };

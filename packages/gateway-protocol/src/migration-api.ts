@@ -1,5 +1,6 @@
+import * as Checks from "./compiled/protocol.generated/migration-api.js";
 // Public memory-migration wire contracts and validators.
-import { lazyCompile } from "./protocol-validator.js";
+import { createProtocolValidator } from "./protocol-validator.js";
 import {
   MigrationsMemoryApplyParamsSchema,
   MigrationsMemoryPlanParamsSchema,
@@ -7,5 +8,11 @@ import {
 
 export * from "./schema/migrations.js";
 
-export const validateMigrationsMemoryPlanParams = lazyCompile(MigrationsMemoryPlanParamsSchema);
-export const validateMigrationsMemoryApplyParams = lazyCompile(MigrationsMemoryApplyParamsSchema);
+export const validateMigrationsMemoryPlanParams = createProtocolValidator(
+  MigrationsMemoryPlanParamsSchema,
+  Checks.isMigrationsMemoryPlanParams,
+);
+export const validateMigrationsMemoryApplyParams = createProtocolValidator(
+  MigrationsMemoryApplyParamsSchema,
+  Checks.isMigrationsMemoryApplyParams,
+);

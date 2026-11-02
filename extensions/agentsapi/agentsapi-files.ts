@@ -84,7 +84,18 @@ export async function prepareInputs(
     ) {
       throw new Error("Agents API input attachment has an invalid size");
     }
-    const managed = managedMediaIdentity(fact);
+    let managed: { id: string; subdir: "inbound" | "outbound" } | undefined;
+    const match = /^media:\/\/(inbound|outbound)\/([^/?#]+)$/u.exec(fact.url ?? fact.path ?? "");
+    const id = match?.[2];
+    const managedSubdir = match?.[1];
+    if (id && (managedSubdir === "inbound" || managedSubdir === "outbound")) {
+      managed = { id, subdir: managedSubdir };
+    } else if (fact.path && path.isAbsolute(fact.path)) {
+      const subdir = path.basename(path.dirname(fact.path));
+      if (subdir === "inbound" || subdir === "outbound") {
+        managed = { id: path.basename(fact.path), subdir };
+      }
+    }
     const maxBytes = Math.min(maxFileBytes, maxTotalBytes - totalBytes);
     let readInput: () => Promise<
       Pick<Awaited<ReturnType<typeof readMediaBuffer>>, "buffer" | "path" | "size">
@@ -139,8 +150,6 @@ export async function prepareInputs(
         return { buffer: read.buffer, path: read.realPath, size: read.buffer.length };
       };
     }
-    assertCurrent();
-    signal.throwIfAborted();
     if (fact.sizeBytes !== undefined && fact.sizeBytes > maxFileBytes) {
       omitted.push({ attachment: index + 1, reason: "exceeds the 5 MiB file limit" });
       continue;
@@ -286,27 +295,6 @@ export async function collectOutputs(
     toolMediaUrls.push(prepared.payload.mediaUrl);
   }
   return toolMediaUrls;
-}
-
-function managedMediaIdentity(fact: NonNullable<AgentHarnessAttemptParamsV2["media"]>[number]):
-  | {
-      id: string;
-      subdir: "inbound" | "outbound";
-    }
-  | undefined {
-  const match = /^media:\/\/(inbound|outbound)\/([^/?#]+)$/u.exec(fact.url ?? fact.path ?? "");
-  const id = match?.[2];
-  const managedSubdir = match?.[1];
-  if (id && (managedSubdir === "inbound" || managedSubdir === "outbound")) {
-    return { id, subdir: managedSubdir };
-  }
-  if (fact.path && path.isAbsolute(fact.path)) {
-    const subdir = path.basename(path.dirname(fact.path));
-    if (subdir === "inbound" || subdir === "outbound") {
-      return { id: path.basename(fact.path), subdir };
-    }
-  }
-  return undefined;
 }
 
 async function preparedWorkspaceReader(workspaceDir: string) {

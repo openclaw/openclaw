@@ -1,396 +1,214 @@
-// Control UI tests cover the semantic cursor policy.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type BrowserContext, type Locator, type Page } from "playwright";
 import postcss from "postcss";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
 import { controlUiHoverGuardPlugin } from "../../config/control-ui-hover-guard.ts";
 import { withBrowserPage } from "../test-helpers/browser-page.ts";
-import {
-  canRunPlaywrightChromium,
-  resolvePlaywrightChromiumExecutablePath,
-} from "../test-helpers/control-ui-e2e.ts";
+import { readStyles, styleFixture } from "./style-fixture.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const describeCursorPolicy = canRunPlaywrightChromium(chromiumExecutablePath)
-  ? describe
-  : describe.skip;
+const fixture = styleFixture("cursor-policy-", { ignoreCloseErrors: true });
+// Expectations live beside the fixture, not in a second selector inventory.
+const samples = (cursor: string | null, decoration: string | null, ...html: string[]) =>
+  html
+    .map((markup) =>
+      markup.replace(
+        /^(<\w+)/,
+        `$1${cursor ? ` data-cursor="${cursor}"` : ""}${decoration ? ` data-decoration="${decoration}"` : ""}`,
+      ),
+    )
+    .join("");
+const classLinks = (cursor: string, decoration: string | null, classes: string) =>
+  samples(
+    cursor,
+    decoration,
+    ...classes.split(" ").map((name) => `<a class="${name}" href="/fixture">Link</a>`),
+  );
 
-// What `DashboardWindowController.installNativeChromeScript` stamps on <html>.
-const NATIVE_HOST_MARKERS = ["openclaw-native-macos", "openclaw-native-web-chrome"] as const;
-
-type CursorCase = {
-  readonly expected: string;
-  readonly selector: string;
-  readonly shadow?: boolean;
-};
-
-const CURSOR_CASES: readonly CursorCase[] = [
-  // State-changing controls use the desktop arrow in every host.
-  { expected: "default", selector: ".btn" },
-  { expected: "default", selector: "#plain-summary" },
-  { expected: "default", selector: "#plain-select" },
-  { expected: "default", selector: "#plain-checkbox" },
-  { expected: "default", selector: "#role-button" },
-  { expected: "default", selector: ".settings-secret__toggle" },
-  { expected: "default", selector: ".nav-item" },
-  { expected: "default", selector: ".nav-item__text" },
-  { expected: "default", selector: ".sidebar-recent-session__link" },
-  { expected: "default", selector: ".sidebar-recent-session__name" },
-  { expected: "default", selector: ".sidebar-online__person" },
-  { expected: "default", selector: ".sidebar-new-session" },
-  { expected: "default", selector: ".sidebar-session-catalog-new" },
-  { expected: "default", selector: ".settings-sidebar__item" },
-  { expected: "default", selector: ".settings-sidebar__subitem" },
-  { expected: "default", selector: ".sidebar-issues-panel__navigation-link" },
-  { expected: "default", selector: ".sidebar-approval-row__open-session" },
-  { expected: "default", selector: ".sidebar-footer-build" },
-  // Links and explicit new-tab controls keep the hand.
-  { expected: "pointer", selector: "#real-link" },
-  { expected: "pointer", selector: "#sidebar-external-link" },
-  { expected: "pointer", selector: "#sidebar-help-link" },
-  { expected: "pointer", selector: "#sidebar-new-tab-link" },
-  { expected: "pointer", selector: "#sidebar-new-tab-action" },
-  { expected: "pointer", selector: "#new-tab-link" },
-  { expected: "pointer", selector: "#new-tab-button" },
-  { expected: "pointer", selector: "#shadow-new-tab-button", shadow: true },
-  { expected: "pointer", selector: ".markdown-file-link" },
-  { expected: "pointer", selector: ".markdown-github-item" },
-  // Semantic cursors remain owned by their components.
-  { expected: "text", selector: "#plain-text-input" },
-  { expected: "text", selector: ".chat-pane__session-title-button" },
-  { expected: "grab", selector: ".sidebar-session-group-drag-handle" },
-  { expected: "zoom-in", selector: ".chat-message-image-button" },
-  { expected: "not-allowed", selector: ".btn--ghost:disabled" },
-  { expected: "not-allowed", selector: "#disabled-new-tab-button" },
-  { expected: "default", selector: "#shadow-disabled-new-tab-button", shadow: true },
-  { expected: "wait", selector: ".sidebar-update-card__hold:disabled" },
-  { expected: "default", selector: ".session-tokens" },
-  { expected: "default", selector: ".agent-tools-runtime-chip--more" },
-  { expected: "default", selector: ".chat-assistant-attachment-card[data-openable]" },
-];
-
-function readUiCss(): string {
-  const css = [
-    "ui/src/styles/base.css",
-    "ui/src/styles/components.css",
-    "ui/src/styles/layout.css",
-    "ui/src/styles/sidebar-update-card.css",
-    "ui/src/styles/sidebar-issues.css",
-    "ui/src/styles/sidebar-markdown.css",
-    "ui/src/styles/sessions.css",
-    "ui/src/styles/settings-controls.css",
-    "ui/src/styles/settings.css",
-    "ui/src/styles/agents.css",
-    "ui/src/styles/skill-workshop.css",
-    "ui/src/styles/rail-header.css",
-    "ui/src/styles/chat/startup-layout.css",
-    "ui/src/styles/chat/layout.css",
-    "ui/src/styles/chat/message-layout.css",
-    "ui/src/styles/chat/composer-surface.css",
-    "ui/src/styles/chat/composer.css",
-    "ui/src/styles/chat/split-view.css",
-    "ui/src/styles/chat/text.css",
-  ]
-    .map((file) => readStyleSheet(file))
-    .join("\n");
-  return postcss([controlUiHoverGuardPlugin()]).process(css, { from: undefined }).css;
+function fixtureDocument() {
+  const css = readStyles(
+    ...`base components layout sidebar-update-card sidebar-issues
+    sidebar-markdown sessions settings-controls settings agents skill-workshop rail-header
+    chat/startup-layout chat/layout chat/message-layout chat/composer-surface chat/composer
+    chat/split-view chat/text`
+      .split(/\s+/)
+      .map((name) => `styles/${name}`),
+  );
+  return `<!doctype html><html data-theme-mode="light"><head><style>${postcss([controlUiHoverGuardPlugin()]).process(css, { from: undefined }).css}</style></head><body>
+    ${samples(
+      "default",
+      null,
+      '<button class="btn">Primary</button>',
+      "<select><option>option</option></select>",
+      '<input type="checkbox">',
+      '<div role="button" tabindex="0">Role button</div>',
+      '<button class="settings-secret__toggle">Reveal</button>',
+      '<div class="chat-assistant-attachment-card" data-openable>Attachment</div>',
+      '<span class="agent-tools-runtime-chip--more">+3</span>',
+    )}
+    <details>${samples("default", null, "<summary>Details</summary>")}<p>body</p></details>
+    ${samples("text", null, '<input type="text" value="text">', '<button class="chat-pane__session-title-button">Session title</button>')}
+    ${samples("zoom-in", null, '<button class="chat-message-image-button">Image</button>')}
+    ${samples("not-allowed", null, '<button class="btn btn--ghost" disabled>Ghost disabled</button>', '<button class="btn btn--ghost" data-new-tab-action disabled>Unavailable new tab</button>')}
+    ${samples("wait", null, '<button class="sidebar-update-card__hold" disabled>Hold</button>')}
+    ${samples("pointer", "underline", '<a href="https://example.com">Real link</a>')}
+    ${samples(
+      null,
+      "none",
+      '<a class="btn primary" href="/new">Primary action</a>',
+      '<a class="btn btn--ghost" href="/new">Secondary action</a>',
+      '<a role="button" href="/new">Action</a>',
+      '<a id="person-link" class="person-activity-link" href="/activity">Person</a>',
+      '<a id="participant-link" class="session-menu__item learn-more-link session-hovercard__participant-link person-activity-link" href="/activity">Participant</a>',
+    )}
+    <div class="callout">${samples(null, "underline", '<a href="https://example.com/docs">Documentation</a>')}</div>
+    <div class="chat-text">
+      ${samples(null, "underline", '<a href="https://example.com">Chat link</a>')}
+      ${samples(null, "none", '<a class="btn" href="/new">Chat action</a>')}
+      ${samples("pointer", "none", '<a class="markdown-file-link">src/index.ts</a>', '<a class="markdown-github-link markdown-github-item" data-github-kind="pull" href="https://github.com/openclaw/openclaw/pull/3434" target="_blank">#3434</a>')}
+    </div>
+    <div class="sidebar-markdown">${samples(null, "underline", '<a href="https://example.com">Sidebar link</a>')}</div>
+    ${["markdown", "chat-thinking", "markdown-body", "dreams-diary__para"].map((name) => `<div class="${name}">${samples(null, "underline", '<a class="markdown-bare-url" href="https://example.com">Content link</a>')}</div>`).join("")}
+    <div class="chat-position-rail__preview-copy" inert>${samples(null, "none", '<a class="markdown-bare-url" href="https://example.com">Preview URL</a>', '<a class="markdown-github-link" href="https://github.com/example/project">Preview repository</a>')}</div>
+    ${classLinks("pointer", "underline", "activity-entry__run-link settings-row__value memory-page__link portals-preview__notice-url settings-account transcripts-back")}
+    <aside class="sidebar">
+      ${samples(
+        "default",
+        null,
+        '<a class="nav-item" href="/chat"><span data-cursor="default" class="nav-item__text">Home</span></a>',
+        '<a class="sidebar-recent-session__link" href="/chat/test"><span data-cursor="default" class="sidebar-recent-session__name">Session</span></a>',
+      )}
+      ${samples("default", "none", '<a class="sidebar-online__person" href="/activity"><span data-decoration="none" class="sidebar-online__person-name">Person</span></a>', '<button class="sidebar-online__person"><span data-decoration="none" class="sidebar-online__person-name">Viewer</span></button>')}
+      ${classLinks("default", null, "sidebar-new-session sidebar-session-catalog-new sidebar-issues-panel__navigation-link sidebar-approval-row__open-session")}
+      ${samples("pointer", null, '<a href="https://example.com">External link</a>', '<a class="nav-item" href="/chat" target="_BLANK">New tab</a>', '<a class="nav-item" href="/chat" data-new-tab-action>New window</a>')}
+    </aside>
+    <aside class="settings-sidebar">${classLinks("default", null, "settings-sidebar__item settings-sidebar__subitem sidebar-footer-build")}</aside>
+    <div class="sidebar-agent-menu"><div class="sidebar-customize-menu__item">${samples("pointer", null, '<a href="https://example.com/docs" target="_blank">Docs</a>')}</div></div>
+    ${samples("pointer", "none", '<a id="new-tab-link" class="btn" href="https://example.com/docs" target="_blank">Docs</a>')}
+    ${samples("pointer", null, '<button id="new-tab-button" class="btn" data-new-tab-action>New tab</button>')}
+    <div id="shadow-policy-host"><template shadowrootmode="open"><style>${readStyleSheet("ui/src/components/dock-panel.css")}</style>
+      ${samples("pointer", null, '<button class="rail-header__action" data-new-tab-action>New tab</button>')}
+      ${samples("default", null, '<button class="rail-header__action" data-new-tab-action disabled>Unavailable new tab</button>')}
+    </template></div></body></html>`;
 }
 
-function fixtureDocument(): string {
-  return `<!doctype html><html data-theme-mode="light"><head><style>${readUiCss()}</style></head><body>
-    <main>
-      <button class="btn" type="button">Primary</button>
-      <button class="btn btn--ghost" type="button" disabled>Ghost disabled</button>
-      <details><summary id="plain-summary">Details</summary><p>body</p></details>
-      <select id="plain-select"><option>option</option></select>
-      <input id="plain-checkbox" type="checkbox" />
-      <input id="plain-text-input" type="text" value="text" />
-      <div id="role-button" role="button" tabindex="0">Role button</div>
-      <a id="real-link" href="https://example.com">Real link</a>
-      <a id="primary-button-link" class="btn primary" href="/new">Primary action</a>
-      <a id="ghost-button-link" class="btn btn--ghost" href="/new">Secondary action</a>
-      <a id="role-button-link" role="button" href="/new">Action</a>
-      <div class="callout"><a id="docs-link" href="https://example.com/docs">Documentation</a></div>
-      <div class="chat-text">
-        <a id="chat-content-link" href="https://example.com">Chat link</a>
-        <a id="chat-button-link" class="btn" href="/new">Chat action</a>
-      </div>
-      <div class="sidebar-markdown"><a id="sidebar-content-link" href="https://example.com">Sidebar link</a></div>
-      <div class="markdown"><a class="markdown-bare-url" href="https://example.com">Transcript link</a></div>
-      <div class="chat-thinking"><a class="markdown-bare-url" href="https://example.com">Reasoning link</a></div>
-      <div class="markdown-body"><a class="markdown-bare-url" href="https://example.com">Logbook link</a></div>
-      <div class="chat-session-rail__answer"><a class="markdown-bare-url" href="https://example.com">Answer link</a></div>
-      <div class="chat-position-rail__preview-copy" inert>
-        <a class="markdown-bare-url" href="https://example.com">Preview URL</a>
-        <a id="preview-github-link" class="markdown-github-link" href="https://github.com/example/project">Preview repository</a>
-      </div>
-      <div class="dreams-diary__para"><a class="markdown-bare-url" href="https://example.com">Diary link</a></div>
-      <a class="activity-entry__run-link" href="/activity">Run</a>
-      <a class="settings-row__value" href="https://example.com/docs">Setup documentation</a>
-      <a class="memory-page__link" href="/settings/memory">Memory settings</a>
-      <a class="portals-preview__notice-url" href="https://example.com">Portal address</a>
-      <a class="settings-account" href="https://github.com/example">Account</a>
-      <a class="transcripts-back" href="/meetings">Transcripts</a>
-      <a id="person-link" class="person-activity-link" href="/activity">Person</a>
-      <a id="participant-link" class="session-menu__item learn-more-link session-hovercard__participant-link person-activity-link" href="/activity">Participant</a>
-      <aside class="sidebar">
-        <a class="nav-item" href="/chat"><span class="nav-item__text">Home</span></a>
-        <a class="sidebar-recent-session__link" href="/chat/test"><span class="sidebar-recent-session__name">Session</span></a>
-        <a class="sidebar-online__person" href="/activity"><span class="sidebar-online__person-name">Person</span></a>
-        <button class="sidebar-online__person" type="button"><span class="sidebar-online__person-name">Viewer</span></button>
-        <a class="sidebar-new-session" href="/new">New group session</a>
-        <a class="sidebar-session-catalog-new" href="/new">New catalog session</a>
-        <a class="sidebar-issues-panel__navigation-link" href="/settings/channels">Channel issue</a>
-        <a class="sidebar-approval-row__open-session" href="/chat/test">Open approval session</a>
-        <a id="sidebar-external-link" href="https://example.com">External link</a>
-        <a id="sidebar-new-tab-link" class="nav-item" href="/chat" target="_BLANK">New tab</a>
-        <a id="sidebar-new-tab-action" class="nav-item" href="/chat" data-new-tab-action>New window</a>
-      </aside>
-      <aside class="settings-sidebar">
-        <a class="settings-sidebar__item" href="/settings">Settings</a>
-        <a class="settings-sidebar__subitem" href="/settings#theme">Theme</a>
-        <a class="sidebar-footer-build" href="/settings/about">Build</a>
-      </aside>
-      <div class="sidebar-agent-menu"><div class="sidebar-customize-menu__item"><a id="sidebar-help-link" href="https://example.com/docs" target="_blank">Docs</a></div></div>
-      <a id="new-tab-link" class="btn" href="https://example.com/docs" target="_blank">Docs</a>
-      <button id="new-tab-button" class="btn" type="button" data-new-tab-action>New tab</button>
-      <button id="disabled-new-tab-button" class="btn btn--ghost" type="button" data-new-tab-action disabled>Unavailable new tab</button>
-      <button class="settings-secret__toggle" type="button">Reveal</button>
-      <button class="sidebar-update-card__hold" type="button" disabled>Hold</button>
-      <button class="chat-pane__session-title-button" type="button">Session title</button>
-      <button class="chat-message-image-button" type="button">Image</button>
-      <div class="chat-assistant-attachment-card" data-openable>Attachment</div>
-      <div class="sidebar-session-group-drag-handle"></div>
-      <div class="session-tokens"><span class="session-tokens__value">12k</span></div>
-      <span class="agent-tools-runtime-chip--more">+3</span>
-      <div class="chat-text"><a class="markdown-file-link">src/index.ts</a></div>
-      <div class="chat-text"><a class="markdown-github-link markdown-github-item" data-github-kind="pull" href="https://github.com/openclaw/openclaw/pull/3434" target="_blank">#3434</a></div>
-      <div id="shadow-policy-host"><template shadowrootmode="open">
-        <style>${readStyleSheet("ui/src/components/dock-panel.css")}</style>
-        <button id="shadow-new-tab-button" class="rail-header__action" type="button" data-new-tab-action>New tab</button>
-        <button id="shadow-disabled-new-tab-button" class="rail-header__action" type="button" data-new-tab-action disabled>Unavailable new tab</button>
-      </template></div>
-    </main>
-  </body></html>`;
-}
-
-type WindowProbe = {
-  readonly cursors: Record<string, string>;
-  readonly displayMode: string;
-};
-
-async function probeWindow(page: Page): Promise<WindowProbe> {
-  return await page.evaluate((cursorCases: readonly CursorCase[]) => {
+async function expectCursors(page: Page, displayMode: string) {
+  const observed = await page.evaluate(() => {
+    const roots = [document, document.querySelector("#shadow-policy-host")!.shadowRoot!];
+    const cursors = roots.flatMap((root) =>
+      Array.from(root.querySelectorAll<HTMLElement>("[data-cursor]"), (element) => [
+        element.dataset.cursor,
+        getComputedStyle(element).cursor,
+      ]),
+    );
     const modes = ["browser", "standalone", "minimal-ui", "window-controls-overlay", "fullscreen"];
-    const cursors = cursorCases.map(({ selector, shadow }) => {
-      const element = shadow
-        ? document
-            .querySelector<HTMLElement>("#shadow-policy-host")
-            ?.shadowRoot?.querySelector(selector)
-        : document.querySelector(selector);
-      if (!element) {
-        throw new Error(`Missing cursor fixture element for ${selector}`);
-      }
-      return [selector, getComputedStyle(element).cursor] as const;
-    });
     return {
-      cursors: Object.fromEntries(cursors),
+      cursors,
       displayMode: modes.find((mode) => matchMedia(`(display-mode: ${mode})`).matches) ?? "unknown",
     };
-  }, CURSOR_CASES);
+  });
+  expect(observed.displayMode).toBe(displayMode);
+  expect(observed.cursors.length).toBeGreaterThan(0);
+  for (const [expected, actual] of observed.cursors) {
+    expect(actual).toBe(expected);
+  }
 }
-
-function expectedCursors(): Record<string, string> {
-  return Object.fromEntries(
-    CURSOR_CASES.map((cursorCase) => [cursorCase.selector, cursorCase.expected]),
-  );
-}
+const style = (
+  locator: Locator,
+  property: "color" | "textDecorationLine" | "textDecorationThickness",
+) => locator.evaluate((element, key) => getComputedStyle(element)[key], property);
 
 let fixtureDirectory: string;
 let fixtureFile: string;
-let tabBrowser: Browser;
 let appContext: BrowserContext;
-
 beforeAll(async () => {
-  if (!canRunPlaywrightChromium(chromiumExecutablePath)) {
+  if (!fixture.available) {
     return;
   }
   fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-policy-"));
   fixtureFile = path.join(fixtureDirectory, "fixture.html");
   fs.writeFileSync(fixtureFile, fixtureDocument(), "utf8");
-  tabBrowser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
-  try {
-    // `--app=` opens a real Chromium app window, which is the only way to get a
-    // genuine `display-mode: standalone` match; CDP media emulation does not
-    // drive this feature.
-    appContext = await chromium.launchPersistentContext(path.join(fixtureDirectory, "profile"), {
-      args: [`--app=file://${fixtureFile}`],
-      executablePath: chromiumExecutablePath,
-      headless: true,
-    });
-  } catch (error) {
-    await tabBrowser.close().catch(() => {});
-    throw error;
-  }
+  // Only a real app window, not media emulation, proves standalone display mode.
+  appContext = await chromium.launchPersistentContext(path.join(fixtureDirectory, "profile"), {
+    args: [`--app=file://${fixtureFile}`],
+    executablePath: fixture.executablePath,
+    headless: true,
+  });
 });
-
 afterAll(async () => {
   await appContext?.close().catch(() => {});
-  await tabBrowser?.close().catch(() => {});
   if (fixtureDirectory) {
     fs.rmSync(fixtureDirectory, { force: true, recursive: true });
   }
 });
 
-describeCursorPolicy("Control UI cursor policy", () => {
+fixture.describe("Control UI cursor policy", () => {
   it.each([
     { theme: "light", hasTouch: false },
     { theme: "dark", hasTouch: false },
     { theme: "light", hasTouch: true },
     { theme: "dark", hasTouch: true },
   ])("underlines content, not controls ($theme, touch=$hasTouch)", async ({ theme, hasTouch }) => {
-    await withBrowserPage(tabBrowser.newPage({ hasTouch }), async (page) => {
+    await withBrowserPage(fixture.page({ hasTouch }), async (page) => {
       await page.goto(`file://${fixtureFile}`);
       await page.evaluate((mode) => {
         document.documentElement.dataset.themeMode = mode;
       }, theme);
-      expect(
-        await page.locator("#new-tab-link").evaluate((element) => getComputedStyle(element).color),
-      ).toBe(
-        await page
-          .locator("#new-tab-button")
-          .evaluate((element) => getComputedStyle(element).color),
+      expect(await style(page.locator("#new-tab-link"), "color")).toBe(
+        await style(page.locator("#new-tab-button"), "color"),
       );
-      const people = await page.locator(".sidebar-online__person").all();
-      expect(people).toHaveLength(2);
-      for (const person of people) {
-        // Ancestor decorations propagate visually without inheriting the computed value.
-        expect(
-          await person.evaluate((element) => getComputedStyle(element).textDecorationLine),
-        ).toBe("none");
-        expect(
-          await person
-            .locator(".sidebar-online__person-name")
-            .evaluate((element) => getComputedStyle(element).textDecorationLine),
-        ).toBe("none");
-      }
-      for (const [expected, selectors] of [
-        [
-          "none",
-          [
-            "#new-tab-link",
-            "#primary-button-link",
-            "#ghost-button-link",
-            "#role-button-link",
-            "#chat-button-link",
-            ".person-activity-link",
-            ".markdown-github-item",
-            ".markdown-file-link",
-            ".chat-position-rail__preview-copy a",
-          ],
-        ],
-        [
-          "underline",
-          [
-            "#real-link",
-            "#docs-link",
-            "#chat-content-link",
-            "#sidebar-content-link",
-            ".markdown-bare-url:not(.chat-position-rail__preview-copy a)",
-            ".activity-entry__run-link",
-            ".settings-row__value",
-            ".memory-page__link",
-            ".portals-preview__notice-url",
-            ".settings-account",
-            ".transcripts-back",
-          ],
-        ],
-      ] as const) {
-        for (const selector of selectors) {
-          const links = await page.locator(selector).all();
-          expect(links.length, selector).toBeGreaterThan(0);
-          for (const link of links) {
-            expect(
-              await link.evaluate((element) => getComputedStyle(element).textDecorationLine),
-              selector,
-            ).toBe(expected);
-          }
-        }
-      }
-      const personLink = page.locator("#person-link");
-      for (const link of await page.locator(".chat-position-rail__preview-copy a").all()) {
-        expect(await link.evaluate((element) => getComputedStyle(element).color)).toBe(
-          await page
-            .locator(".chat-position-rail__preview-copy")
-            .evaluate((element) => getComputedStyle(element).color),
+      for (const element of await page.locator("[data-decoration]").all()) {
+        expect(await style(element, "textDecorationLine")).toBe(
+          await element.getAttribute("data-decoration"),
         );
       }
-      if (!hasTouch) {
-        await personLink.hover();
-        expect(
-          await personLink.evaluate((element) => getComputedStyle(element).textDecorationLine),
-        ).toBe("underline");
-        expect(
-          await personLink.evaluate((element) => getComputedStyle(element).textDecorationThickness),
-        ).toBe("2px");
+      for (const link of await page.locator(".chat-position-rail__preview-copy a").all()) {
+        expect(await style(link, "color")).toBe(
+          await style(page.locator(".chat-position-rail__preview-copy"), "color"),
+        );
       }
-      await page.mouse.move(0, 0);
-      await page.keyboard.press("Tab");
-      await personLink.focus();
-      expect(
-        await personLink.evaluate((element) => getComputedStyle(element).textDecorationLine),
-      ).toBe("underline");
-      const participantLink = page.locator("#participant-link");
-      if (!hasTouch) {
-        await participantLink.hover();
-        expect(
-          await participantLink.evaluate((element) => getComputedStyle(element).textDecorationLine),
-        ).toBe("none");
+      for (const [id, decoration] of [
+        ["person-link", "underline"],
+        ["participant-link", "none"],
+      ]) {
+        const link = page.locator(`#${id}`);
+        if (!hasTouch) {
+          await link.hover();
+          expect(await style(link, "textDecorationLine")).toBe(decoration);
+          if (id === "person-link") {
+            expect(await style(link, "textDecorationThickness")).toBe("2px");
+          }
+        }
+        await page.mouse.move(0, 0);
+        await page.keyboard.press("Tab");
+        await link.focus();
+        expect(await style(link, "textDecorationLine")).toBe(decoration);
       }
-      await page.mouse.move(0, 0);
-      await page.keyboard.press("Tab");
-      await participantLink.focus();
-      expect(
-        await participantLink.evaluate((element) => getComputedStyle(element).textDecorationLine),
-      ).toBe("none");
     });
   });
-
-  it("uses semantic cursors in a browser tab", async () => {
-    await withBrowserPage(tabBrowser.newPage(), async (page) => {
-      await page.goto(`file://${fixtureFile}`);
-      const probe = await probeWindow(page);
-
-      expect(probe.displayMode).toBe("browser");
-      expect(probe.cursors).toEqual(expectedCursors());
-    });
-  });
-
-  it("uses the same semantic cursors in a native app host", async () => {
-    await withBrowserPage(tabBrowser.newPage(), async (page) => {
-      await page.goto(`file://${fixtureFile}`);
-      // The macOS dashboard is a plain web view, so it reports display-mode
-      // browser and marks itself with these classes at document end instead.
-      await page.evaluate((markers: readonly string[]) => {
-        document.documentElement.classList.add(...markers);
-      }, NATIVE_HOST_MARKERS);
-      const probe = await probeWindow(page);
-
-      expect(probe.displayMode).toBe("browser");
-      expect(probe.cursors).toEqual(expectedCursors());
-    });
-  });
-
+  it.each([false, true])(
+    "uses semantic cursors in a browser window (native=%s)",
+    async (native) => {
+      await withBrowserPage(fixture.page(), async (page) => {
+        await page.goto(`file://${fixtureFile}`);
+        if (native) {
+          await page.evaluate(() =>
+            document.documentElement.classList.add(
+              "openclaw-native-macos",
+              "openclaw-native-web-chrome",
+            ),
+          );
+        }
+        await expectCursors(page, "browser");
+      });
+    },
+  );
   it("uses the same semantic cursors in an installed window", async () => {
     const [page] = appContext.pages();
     expect(page, "Chromium --app window did not expose a page").toBeDefined();
     await page!.waitForLoadState("load");
-    const probe = await probeWindow(page!);
-
-    expect(probe.displayMode).toBe("standalone");
-    expect(probe.cursors).toEqual(expectedCursors());
+    await expectCursors(page!, "standalone");
   });
 });

@@ -3,6 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   checkAgentCreationGate,
   createAgent,
@@ -19,14 +20,16 @@ import {
   buildPortableAuthProfileStoreForAgentCopy,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
-import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/legacy-source-diagnostic.js";
-import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
-  inspectPersistedAuthProfileStoreRaw,
+  loadPersistedAuthProfileStoreFromRows,
+  prepareAgentAuthProfileRowsRead,
+} from "../agents/auth-profiles/sqlite-read.js";
+import {
+  resolveAuthProfileDatabaseOwnerId,
   resolveAuthProfileDatabasePath,
 } from "../agents/auth-profiles/sqlite.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { throwExpectedCliError } from "../cli/failure-output.js";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
@@ -41,8 +44,8 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { stageProviderAuthProfileBatch } from "../plugins/provider-auth-persistence.js";
 import type { ProviderAuthProfile } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { defaultRuntime as runtime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { displayPath, resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { describeBinding, describeBindingConflict } from "./agents.binding-format.js";
@@ -70,12 +73,21 @@ type AgentsAddOptions = {
   json?: boolean;
 };
 
-function loadReadablePersistedAuthProfileStore(agentDir: string): AuthProfileStore | null {
-  const store = loadPersistedAuthProfileStore(agentDir);
-  if (!store && inspectPersistedAuthProfileStoreRaw(agentDir).status !== "missing") {
-    throw new AuthProfileStoreUnreadableError(resolveAuthProfileDatabasePath(agentDir));
+async function loadReadablePersistedAuthProfileStore(
+  agentDir: string,
+): Promise<AuthProfileStore | null> {
+  const databasePath = resolveAuthProfileDatabasePath(agentDir);
+  const reader = prepareAgentAuthProfileRowsRead({
+    databasePath,
+    agentId: resolveAuthProfileDatabaseOwnerId(agentDir),
+    env: process.env,
+    source: "canonical",
+  });
+  try {
+    return loadPersistedAuthProfileStoreFromRows(await reader.read(), databasePath);
+  } finally {
+    await reader.dispose();
   }
-  return store;
 }
 
 function formatSkippedOAuthProfilesMessage(
@@ -83,13 +95,12 @@ function formatSkippedOAuthProfilesMessage(
   sourceIsInheritedMain: boolean,
 ): string {
   return sourceIsInheritedMain
-    ? `OAuth profiles stay shared from "${sourceAgentId}" unless this agent signs in separately.`
-    : `OAuth profiles were not copied from "${sourceAgentId}"; sign in separately for this agent.`;
+    ? terminalText`OAuth profiles stay shared from "${sourceAgentId}" unless this agent signs in separately.`
+    : terminalText`OAuth profiles were not copied from "${sourceAgentId}"; sign in separately for this agent.`;
 }
 
 export async function agentsAddCommand(
   opts: AgentsAddOptions,
-  runtime: RuntimeEnv = defaultRuntime,
   params?: { hasAutomationFlags?: boolean },
 ) {
   if (opts.role !== undefined) {
@@ -132,7 +143,7 @@ export async function agentsAddCommand(
     }
     const agentId = validation.agentId;
     if (!opts.json && agentId !== nameInput) {
-      runtime.log(`Normalized agent id to "${agentId}".`);
+      runtime.log(terminalText`Normalized agent id to "${agentId}".`);
     }
 
     const created = await runWithLocalStateOwner<
@@ -169,9 +180,7 @@ export async function agentsAddCommand(
             throwExpectedCliError(
               result.reason === "reserved-id"
                 ? `"${result.agentId}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`
-                : result.reason === "already-exists"
-                  ? `Agent "${result.agentId}" already exists.`
-                  : result.message,
+                : result.message,
             );
           }
           return result;
@@ -199,17 +208,17 @@ export async function agentsAddCommand(
     if (opts.json) {
       writeRuntimeJson(runtime, payload);
     } else {
-      runtime.log(`Agent: ${agentId}`);
-      runtime.log(`Workspace: ${shortenHomePath(created.workspace)}`);
-      runtime.log(`Agent dir: ${shortenHomePath(created.agentDir)}`);
+      runtime.log(terminalText`Agent: ${agentId}`);
+      runtime.log(`Workspace: ${displayPath(created.workspace)}`);
+      runtime.log(`Agent dir: ${displayPath(created.agentDir)}`);
       if (created.model) {
-        runtime.log(`Model: ${created.model}`);
+        runtime.log(terminalText`Model: ${created.model}`);
       }
       if (conflicts.length > 0) {
         runtime.error(
           [
             "Skipped bindings already claimed by another agent:",
-            ...conflicts.map((conflict) => `- ${describeBindingConflict(conflict)}`),
+            ...payload.bindings.conflicts.map((description) => terminalText`- ${description}`),
           ].join("\n"),
         );
       }
@@ -225,15 +234,11 @@ export async function agentsAddCommand(
     params: {},
     target: nameInput ?? "interactive agent setup",
     onForeignOwner: "refuse",
-    runLocal: () => runInteractiveAgentsAdd(opts, runtime, wizardOutput),
+    runLocal: () => runInteractiveAgentsAdd(opts, wizardOutput),
   });
 }
 
-async function runInteractiveAgentsAdd(
-  opts: AgentsAddOptions,
-  runtime: RuntimeEnv,
-  wizardOutput: NodeJS.WriteStream,
-) {
+async function runInteractiveAgentsAdd(opts: AgentsAddOptions, wizardOutput: NodeJS.WriteStream) {
   const writeSnapshot = await requireValidConfigForWrite(runtime);
   if (!writeSnapshot) {
     return;
@@ -257,8 +262,8 @@ async function runInteractiveAgentsAdd(
           const validation = validateAgentIdInput(value);
           if (!validation.ok) {
             return validation.reason === "reserved-id"
-              ? `"${validation.agentId}" is reserved. Choose another name.`
-              : validation.message;
+              ? terminalText`"${validation.agentId}" is reserved. Choose another name.`
+              : terminalText`${validation.message}`;
           }
           return undefined;
         },
@@ -268,15 +273,17 @@ async function runInteractiveAgentsAdd(
     const validation = validateAgentIdInput(agentName);
     if (!validation.ok) {
       if (validation.reason === "reserved-id") {
-        await prompter.outro(`"${validation.agentId}" is reserved. Choose another name.`);
+        await prompter.outro(
+          terminalText`"${validation.agentId}" is reserved. Choose another name.`,
+        );
         return;
       }
-      await prompter.outro(validation.message);
+      await prompter.outro(terminalText`${validation.message}`);
       return;
     }
     const agentId = validation.agentId;
     if (agentName !== agentId) {
-      await prompter.note(`Normalized id to "${agentId}".`, "Agent id");
+      await prompter.note(terminalText`Normalized id to "${agentId}".`, "Agent id");
     }
 
     const existingAgent = listAgentEntries(cfg).find(
@@ -289,7 +296,7 @@ async function runInteractiveAgentsAdd(
         );
       }
       const shouldUpdate = await prompter.confirm({
-        message: `Agent "${agentId}" already exists. Update it?`,
+        message: terminalText`Agent "${agentId}" already exists. Update it?`,
         initialValue: false,
       });
       if (!shouldUpdate) {
@@ -299,7 +306,7 @@ async function runInteractiveAgentsAdd(
     } else {
       const gateError = await checkAgentCreationGate(agentId);
       if (gateError) {
-        await prompter.outro(gateError.message);
+        await prompter.outro(terminalText`${gateError.message}`);
         return;
       }
     }
@@ -335,7 +342,7 @@ async function runInteractiveAgentsAdd(
           ...listAgentEntries(cfg)
             .map((agent) => normalizeAgentId(agent.id))
             .filter((id) => id !== agentId)
-            .map((id) => ({ value: id, label: id })),
+            .map((id) => ({ value: id, label: terminalText`${id}` })),
         ],
       }));
     if (copySourceAgentId !== "__skip__" && copySourceAgentId !== agentId) {
@@ -351,9 +358,9 @@ async function runInteractiveAgentsAdd(
         normalizeLowercaseStringOrEmpty(path.resolve(sharedMainAgentPath));
       if (!sameAuthPath) {
         const sourceStore = sourceIsInheritedMain
-          ? loadAuthProfileStoreWithoutExternalProfiles(sourceAgentDir)
-          : loadReadablePersistedAuthProfileStore(sourceAgentDir);
-        const destStore = loadReadablePersistedAuthProfileStore(agentDir);
+          ? await loadAuthProfileStoreWithoutExternalProfilesAsync(sourceAgentDir)
+          : await loadReadablePersistedAuthProfileStore(sourceAgentDir);
+        const destStore = await loadReadablePersistedAuthProfileStore(agentDir);
         const portable = sourceStore
           ? buildPortableAuthProfileStoreForAgentCopy(sourceStore)
           : undefined;
@@ -370,7 +377,7 @@ async function runInteractiveAgentsAdd(
           Object.keys(destStore?.profiles ?? {}).length === 0
         ) {
           const shouldCopy = await prompter.confirm({
-            message: `Copy portable auth profiles from "${copySourceAgentId}"?`,
+            message: terminalText`Copy portable auth profiles from "${copySourceAgentId}"?`,
             initialValue: false,
           });
           if (shouldCopy) {
@@ -383,7 +390,7 @@ async function runInteractiveAgentsAdd(
             }
             stagedAuthOrder = portable.store.order;
             reportPortableAuthCopy = async () => {
-              const persisted = loadPersistedAuthProfileStore(agentDir);
+              const persisted = await loadReadablePersistedAuthProfileStore(agentDir);
               const persistedIds = new Set(Object.keys(persisted?.profiles ?? {}));
               const copiedCount = copiedProfileIds.filter((profileId) =>
                 persistedIds.has(profileId),
@@ -392,7 +399,7 @@ async function runInteractiveAgentsAdd(
                 skippedOAuthProfiles ||
                 copiedOAuthProfileIds.some((profileId) => !persistedIds.has(profileId));
               const copied = copiedCount
-                ? `Copied ${copiedCount} portable auth profile${copiedCount === 1 ? "" : "s"} from "${copySourceAgentId}".`
+                ? terminalText`Copied ${copiedCount} portable auth profile${copiedCount === 1 ? "" : "s"} from "${copySourceAgentId}".`
                 : "";
               const skipped = skippedOAuth
                 ? ` ${formatSkippedOAuthProfilesMessage(copySourceAgentId, sourceIsInheritedMain)}`
@@ -499,7 +506,9 @@ async function runInteractiveAgentsAdd(
           await prompter.note(
             [
               "Skipped bindings already claimed by another agent:",
-              ...result.conflicts.map((conflict) => `- ${describeBindingConflict(conflict)}`),
+              ...result.conflicts.map(
+                (conflict) => terminalText`- ${describeBindingConflict(conflict)}`,
+              ),
             ].join("\n"),
             "Routing bindings",
           );
@@ -577,7 +586,7 @@ async function runInteractiveAgentsAdd(
         });
       });
       if (created.status === "error") {
-        await prompter.outro(created.message);
+        await prompter.outro(terminalText`${created.message}`);
         return;
       }
       payload = {
@@ -595,7 +604,7 @@ async function runInteractiveAgentsAdd(
     if (opts.json) {
       writeRuntimeJson(runtime, payload);
     }
-    await prompter.outro(`Agent "${agentId}" ready.`);
+    await prompter.outro(terminalText`Agent "${agentId}" ready.`);
   } catch (err) {
     if (err instanceof WizardCancelledError) {
       runtime.exit(1);

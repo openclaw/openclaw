@@ -35,7 +35,7 @@ const preserved = (reason: string) =>
  */
 export async function recoverManagedWorktreeRemoval(
   params: { id: string; snapshot: string; signal?: AbortSignal; commitGuard?: () => void },
-  context: { env: NodeJS.ProcessEnv; now: () => number },
+  context: { env: NodeJS.ProcessEnv },
 ) {
   return await withGitProcessOperation("worktree.recovery", () =>
     withWorktreeAllocationLease({ ...params, env: context.env }, async (guard) =>
@@ -48,7 +48,6 @@ async function recoverRemovalWithAllocation(params: {
   id: string;
   snapshot: string;
   env: NodeJS.ProcessEnv;
-  now: () => number;
   signal?: AbortSignal;
   commitGuard?: () => void;
   workerAuthority?: WorktreeWorkerAuthority;
@@ -537,7 +536,7 @@ async function recoverRemovalWithAllocation(params: {
     await updateRegistryWorktree(
       params.env,
       record.id,
-      { removedAt: record.removedAt ?? params.now() },
+      { removedAt: record.removedAt ?? Date.now() },
       {
         assertCurrent,
         removalToken: token,

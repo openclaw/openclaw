@@ -1,7 +1,6 @@
-// Codex tests cover plugin inventory plugin behavior.
 import { describe, expect, it } from "vitest";
 import { CodexAppInventoryCache } from "./app-inventory-cache.js";
-import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
+import { appMetadata, codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
@@ -12,6 +11,8 @@ import {
   appInfo,
   appSummary,
   asPluginInstalled,
+  codexPluginConfig,
+  curatedPlugin,
   pluginDetail,
   pluginInstalled,
   pluginList,
@@ -21,49 +22,57 @@ import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { v2 } from "./protocol.js";
 
 describe("Codex plugin inventory", () => {
-  it("returns enabled migrated curated plugins with stable owned app ids", async () => {
-    const appCache = await cachedApps(appInfo("google-calendar-app", true));
-    const calls: string[] = [];
-    const inventory = await readCodexPluginInventory({
-      policy: pluginPolicy({
-        "google-calendar": curatedPlugin("google-calendar"),
-        slack: curatedPlugin("slack", { enabled: false }),
-      }),
-      appCache,
-      appCacheKey: "runtime",
-      nowMs: 1,
-      request: async (method, params) => {
-        calls.push(method);
-        if (method === "plugin/installed") {
-          return pluginInstalled([activePlugin("google-calendar"), activePlugin("slack")]);
-        }
-        if (method === "plugin/read") {
-          expect(params).toEqual({
-            marketplacePath: "/marketplaces/openai-curated",
-            pluginName: "google-calendar",
-          });
-          return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
-    });
+  it.each([true, false])(
+    "returns enabled migrated plugins with stable app ids and authorized metadata=%s",
+    async (authorized) => {
+      const appCache = authorized
+        ? await cachedApps(appInfo("google-calendar-app", true))
+        : new CodexAppInventoryCache();
+      if (!authorized) {
+        await appCache.refreshNow({
+          key: "runtime",
+          nowMs: 0,
+          request: async (method) =>
+            codexAppInventoryResponse(
+              method,
+              method === "app/installed" ? [appInfo("google-calendar-app", true)] : [],
+            ),
+        });
+      }
+      const { request, calls } = inventoryRequest(
+        pluginInstalled([activePlugin("google-calendar"), activePlugin("slack")]),
+        pluginDetail("google-calendar", [appSummary("google-calendar-app")]),
+        { marketplacePath: "/marketplaces/openai-curated", pluginName: "google-calendar" },
+      );
+      const inventory = await readCodexPluginInventory({
+        policy: pluginPolicy({
+          "google-calendar": curatedPlugin("google-calendar"),
+          slack: curatedPlugin("slack", { enabled: false }),
+        }),
+        appCache,
+        appCacheKey: "runtime",
+        nowMs: 1,
+        request,
+      });
 
-    expect(inventory.records).toHaveLength(1);
-    const record = inventory.records[0];
-    expect(record?.policy.pluginName).toBe("google-calendar");
-    expect(record?.summary.installed).toBe(true);
-    expect(record?.summary.enabled).toBe(true);
-    expect(record?.appOwnership).toBe("proven");
-    expect(record?.ownedAppIds).toStrictEqual(["google-calendar-app"]);
-    expect(record?.apps).toStrictEqual([
-      {
-        id: "google-calendar-app",
-        name: "google-calendar-app",
-        accessible: true,
-      },
-    ]);
-    expect(calls).toEqual(["plugin/installed", "plugin/read"]);
-  });
+      expect(inventory.records).toHaveLength(1);
+      const record = inventory.records[0];
+      expect(record).toMatchObject({
+        policy: { pluginName: "google-calendar" },
+        summary: { installed: true, enabled: true },
+        appOwnership: "proven",
+      });
+      expect(record?.ownedAppIds).toStrictEqual(["google-calendar-app"]);
+      expect(record?.apps).toStrictEqual([
+        {
+          id: "google-calendar-app",
+          name: "google-calendar-app",
+          accessible: authorized,
+        },
+      ]);
+      expect(calls).toEqual(["plugin/installed", "plugin/read"]);
+    },
+  );
 
   it("reuses one installed snapshot for consecutive configured plugin inventories", async () => {
     const metadataCache = new CodexPluginMetadataCache();
@@ -145,28 +154,20 @@ describe("Codex plugin inventory", () => {
       appCache,
       appCacheKey: "runtime",
       nowMs: 1,
-      request: async (method, params) => {
-        if (method === "plugin/installed") {
-          return asPluginInstalled(listed);
-        }
-        if (method === "plugin/read") {
-          expect(params).toEqual({
-            marketplacePath: "/marketplaces/openai-curated",
-            pluginName: "github",
-          });
-          return pluginDetail("github", [appSummary("github-app")]);
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
+      request: inventoryRequest(
+        asPluginInstalled(listed),
+        pluginDetail("github", [appSummary("github-app")]),
+        { marketplacePath: "/marketplaces/openai-curated", pluginName: "github" },
+      ).request,
     });
 
     expect(inventory.records).toHaveLength(1);
     const record = inventory.records[0];
-    expect(record?.policy.pluginName).toBe("github");
-    expect(record?.summary.id).toBe("openai-curated/github");
-    expect(record?.summary.installed).toBe(true);
-    expect(record?.summary.enabled).toBe(true);
-    expect(record?.appOwnership).toBe("proven");
+    expect(record).toMatchObject({
+      policy: { pluginName: "github" },
+      summary: { id: "openai-curated/github", installed: true, enabled: true },
+      appOwnership: "proven",
+    });
     expect(record?.ownedAppIds).toStrictEqual(["github-app"]);
     expect(inventory.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain(
       "plugin_missing",
@@ -300,47 +301,6 @@ describe("Codex plugin inventory", () => {
     ]);
   });
 
-  it("requires authorized metadata for an installed plugin app", async () => {
-    const appCache = new CodexAppInventoryCache();
-    await appCache.refreshNow({
-      key: "runtime",
-      nowMs: 0,
-      request: async (method) =>
-        codexAppInventoryResponse(
-          method,
-          method === "app/installed" ? [appInfo("google-calendar-app", true)] : [],
-        ),
-    });
-    const inventory = await readCodexPluginInventory({
-      policy: pluginPolicy({
-        "google-calendar": curatedPlugin("google-calendar"),
-      }),
-      appCache,
-      appCacheKey: "runtime",
-      nowMs: 1,
-      request: async (method) => {
-        if (method === "plugin/installed") {
-          return pluginInstalled([activePlugin("google-calendar")]);
-        }
-        if (method === "plugin/read") {
-          return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
-    });
-
-    const record = inventory.records[0];
-    expect(record?.appOwnership).toBe("proven");
-    expect(record?.ownedAppIds).toStrictEqual(["google-calendar-app"]);
-    expect(record?.apps).toStrictEqual([
-      {
-        id: "google-calendar-app",
-        name: "google-calendar-app",
-        accessible: false,
-      },
-    ]);
-  });
-
   it("marks display-name-only app matches ambiguous instead of exposing app ids", async () => {
     const appCache = await cachedApps({
       ...appInfo("calendar-app", true),
@@ -354,19 +314,10 @@ describe("Codex plugin inventory", () => {
       appCache,
       appCacheKey: "runtime",
       nowMs: 1,
-      request: async (method) => {
-        if (method === "plugin/installed") {
-          return pluginInstalled([
-            activePlugin("google-calendar", {
-              name: "Google Calendar",
-            }),
-          ]);
-        }
-        if (method === "plugin/read") {
-          return pluginDetail("google-calendar", []);
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
+      request: inventoryRequest(
+        pluginInstalled([activePlugin("google-calendar", { name: "Google Calendar" })]),
+        pluginDetail("google-calendar", []),
+      ).request,
     });
 
     expect(inventory.records[0]?.appOwnership).toBe("ambiguous");
@@ -407,6 +358,31 @@ describe("Codex plugin inventory", () => {
   });
 });
 
+function inventoryRequest(
+  installed: v2.PluginInstalledResponse,
+  detail: v2.PluginReadResponse,
+  readParams?: unknown,
+) {
+  const calls: string[] = [];
+  const request: Parameters<typeof readCodexPluginInventory>[0]["request"] = async (
+    method,
+    params,
+  ) => {
+    calls.push(method);
+    if (method === "plugin/installed") {
+      return installed;
+    }
+    if (method === "plugin/read") {
+      if (readParams !== undefined) {
+        expect(params).toEqual(readParams);
+      }
+      return detail;
+    }
+    throw new Error(`unexpected request ${method}`);
+  };
+  return { request, calls };
+}
+
 type ConfiguredPlugin = {
   enabled?: boolean;
   marketplaceName:
@@ -416,11 +392,7 @@ type ConfiguredPlugin = {
 };
 
 function pluginPolicy(plugins: Record<string, ConfiguredPlugin>) {
-  return resolveCodexPluginsPolicy({ codexPlugins: { enabled: true, plugins } });
-}
-
-function curatedPlugin(pluginName: string, options: { enabled?: boolean } = {}): ConfiguredPlugin {
-  return { marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME, pluginName, ...options };
+  return resolveCodexPluginsPolicy(codexPluginConfig({ plugins }));
 }
 
 function workspacePlugin(pluginName: string): ConfiguredPlugin {
@@ -446,12 +418,7 @@ function configuredPlugin(
   pluginName: string,
   configKey = `${pluginName}@${marketplaceName}`,
 ) {
-  return {
-    codexPlugins: {
-      enabled: true,
-      plugins: { [configKey]: { marketplaceName, pluginName } },
-    },
-  };
+  return codexPluginConfig({ plugins: { [configKey]: { marketplaceName, pluginName } } });
 }
 
 describe("Codex marketplace-qualified plugin inventory", () => {
@@ -462,15 +429,11 @@ describe("Codex marketplace-qualified plugin inventory", () => {
       request: async (method, params) => {
         expect(params).toEqual({ cwds: ["/repo/company"] });
         if (method === "plugin/installed" || method === "plugin/list") {
-          const marketplace = {
+          const listed = pluginList([activePlugin("audit")], {
             name: "untrusted-company",
             path: "/repo/untrusted/.agents/plugins/marketplace.json",
-            interface: null,
-            plugins: [pluginSummary("audit", { installed: true, enabled: true })],
-          };
-          return method === "plugin/installed"
-            ? { marketplaces: [marketplace], marketplaceLoadErrors: [] }
-            : { marketplaces: [marketplace], marketplaceLoadErrors: [], featuredPluginIds: [] };
+          });
+          return method === "plugin/installed" ? asPluginInstalled(listed) : listed;
         }
         throw new Error(`unexpected request ${method}`);
       },
@@ -488,20 +451,13 @@ describe("Codex marketplace-qualified plugin inventory", () => {
       request: async (method, params) => {
         if (method === "plugin/installed") {
           return {
-            marketplaces: [
-              {
-                name: "untrusted-company",
-                path: "/untrusted/marketplace.json",
-                interface: null,
-                plugins: [pluginSummary("audit", { installed: true, enabled: true })],
-              },
-              {
-                name: "trusted-company",
-                path: "/trusted/marketplace.json",
-                interface: null,
-                plugins: [pluginSummary("audit", { installed: true, enabled: true })],
-              },
-            ],
+            marketplaces: ["untrusted", "trusted"].flatMap(
+              (trust) =>
+                pluginInstalled([activePlugin("audit")], {
+                  name: `${trust}-company`,
+                  path: `/${trust}/marketplace.json`,
+                }).marketplaces,
+            ),
             marketplaceLoadErrors: [],
           } satisfies v2.PluginInstalledResponse;
         }
@@ -527,9 +483,8 @@ describe("Codex marketplace-qualified plugin inventory", () => {
     const metadataCache = new CodexPluginMetadataCache();
     let catalogCalls = 0;
     const inventory = await readCodexPluginInventory({
-      policy: resolveCodexPluginsPolicy({
-        codexPlugins: {
-          enabled: true,
+      policy: resolveCodexPluginsPolicy(
+        codexPluginConfig({
           plugins: {
             "a-security": {
               marketplaceName: "company-tools",
@@ -540,8 +495,8 @@ describe("Codex marketplace-qualified plugin inventory", () => {
               pluginName: "calendar",
             },
           },
-        },
-      }),
+        }),
+      ),
       appCacheKey: "runtime",
       configCwd: "/repo/company",
       metadataCache,
@@ -617,17 +572,7 @@ describe("Codex marketplace-qualified plugin inventory", () => {
   });
 });
 
-const approvalAppMetadata = {
-  id: "linear",
-  name: "linear",
-  description: null,
-  iconUrl: null,
-  iconUrlDark: null,
-  distributionChannel: null,
-  installUrl: null,
-  pluginDisplayNames: [],
-  toolSummaries: null,
-};
+const approvalAppMetadata = appMetadata("linear");
 
 describe("Codex owned app approval metadata", () => {
   it("keeps approval checks conservative when tool metadata is absent", () => {

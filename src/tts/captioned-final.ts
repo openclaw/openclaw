@@ -1,15 +1,11 @@
-import {
-  copyReplyPayloadMetadata,
-  isReplyPayloadTerminalContent,
-  type ReplyPayload,
-} from "../auto-reply/reply-payload.js";
+import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { resolveChannelTtsVoiceDelivery } from "../channels/plugins/tts-capabilities.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
-import { createTtsDirectiveTextStreamCleaner } from "./directives.js";
-import { resolveStatusTtsSnapshot } from "./status-config.js";
+import { createTtsDirectiveTextStreamCleaner } from "./directive-facts.js";
 import { resolveConfiguredTtsMode } from "./tts-config.js";
 import type { PreparedTtsPreferences } from "./tts-preferences.js";
+import { resolveTtsSettingsSnapshot } from "./tts-settings.js";
 
 export function shouldDeferFinalTtsText(params: {
   cfg: OpenClawConfig;
@@ -32,7 +28,7 @@ export function shouldDeferFinalTtsText(params: {
   ) {
     return false;
   }
-  const status = resolveStatusTtsSnapshot({
+  const settings = resolveTtsSettingsSnapshot({
     cfg: params.cfg,
     preparedTtsPreferences: params.preparedTtsPreferences,
     sessionAuto: params.ttsAuto,
@@ -41,30 +37,25 @@ export function shouldDeferFinalTtsText(params: {
     accountId: params.accountId,
   });
   return (
-    status != null &&
-    status.autoMode !== "off" &&
-    status.autoMode !== "tagged" &&
-    (status.autoMode !== "inbound" || params.inboundAudio)
+    settings.autoMode !== "off" &&
+    settings.autoMode !== "tagged" &&
+    (settings.autoMode !== "inbound" || params.inboundAudio)
   );
 }
 
 export function mergeDeferredFinalText(streamedText: string, finalText?: string): string {
   const streamed = streamedText.trim();
   const final = finalText?.trim() ?? "";
-  if (!streamed) {
+  if (!streamed || streamed.replace(/\n{2,}/g, "\n") === final.replace(/\n{2,}/g, "\n")) {
     return final;
   }
-  if (!final || streamed === final || streamed.startsWith(final)) {
+  if (!final || streamed.startsWith(final)) {
     return streamed;
   }
   if (final.startsWith(streamed)) {
     return final;
   }
   return `${streamed}\n${final}`;
-}
-
-export function isCaptionedFinalTextPayload(payload: ReplyPayload): boolean {
-  return isReplyPayloadTerminalContent(payload);
 }
 
 export function cleanDeferredFinalText(text: string | undefined): string {

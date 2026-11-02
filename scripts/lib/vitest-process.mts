@@ -68,8 +68,8 @@ export function spawnOwnedVitestProcess(spec: {
     owner = createVitestResourceOwner(tempRoot);
     const childEnv: NodeJS.ProcessEnv = { ...env, TMPDIR: tempRoot, TMP: tempRoot, TEMP: tempRoot };
     if (mode !== "tooling") {
-      // The tooling shim avoids the shared tsx cache. Test children have this owned
-      // temp namespace, so source subprocesses can reuse transforms until cleanup.
+      // Source subprocesses share this owned cache until the invocation joins.
+      // Fixtures with descriptor-heavy source Workers can opt out locally.
       delete childEnv.TSX_DISABLE_CACHE;
     }
     if (mode !== "tooling" && !(policy.live && policy.allowRealHome)) {

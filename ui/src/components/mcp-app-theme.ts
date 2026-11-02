@@ -60,13 +60,8 @@ type StyleVariableKey = keyof typeof HOST_TOKEN_SOURCES | keyof typeof STATIC_VA
 type StyleVariables = Partial<Record<StyleVariableKey, string>>;
 
 // Resolve nested var() references before crossing into the app's separate origin.
-export function collectMcpAppStyleVariables(
-  root: HTMLElement | undefined = document.documentElement,
-): StyleVariables | undefined {
-  if (!root) {
-    return undefined;
-  }
-  const computed = getComputedStyle(root);
+export function collectMcpAppStyleVariables(): StyleVariables {
+  const computed = getComputedStyle(document.documentElement);
   const variables: Record<string, string> = { ...STATIC_VARIABLES };
   for (const [specKey, hostToken] of Object.entries(HOST_TOKEN_SOURCES)) {
     const value = computed.getPropertyValue(hostToken).trim();

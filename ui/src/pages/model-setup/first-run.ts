@@ -107,6 +107,7 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
     }
     settleInitialDecision();
   };
+  // The first terminal connection decision settles the router gate exactly once.
   const unsubscribe = context.gateway.subscribe(handleSnapshot);
   handleSnapshot(context.gateway.snapshot);
   return () => {

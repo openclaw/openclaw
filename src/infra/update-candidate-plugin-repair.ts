@@ -5,17 +5,18 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isPluginInPackageBundledRoots } from "../plugins/bundled-dir.js";
 import { discoverConfiguredPluginLoadPaths } from "../plugins/discovery.js";
-import { inspectPluginSourceDependencies } from "../plugins/plugin-generation-source-inspection.js";
+import { inspectPluginSourceDependenciesAsync } from "../plugins/plugin-generation-worker.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { isPathInside } from "./path-guards.js";
-import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import {
   resolveUpdateCandidatePluginPath,
   resolveUpdateCandidatePluginSourcePath,
 } from "./update-candidate-paths.js";
 import {
-  inspectUpdateCandidatePluginSource,
+  inspectUpdateCandidatePluginSourceAsync,
   resolveUpdateCandidatePluginSourceEntries,
 } from "./update-candidate-plugin-sources.js";
 import {
@@ -24,10 +25,6 @@ import {
 } from "./update-candidate-plugin-tree.js";
 import { resolveUpdateRehearsalRoot } from "./update-rehearsal-paths.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
-
-async function readOptionalFile(file: string): Promise<Buffer | undefined> {
-  return fs.readFile(file).catch(ignoreMissingUpdateCandidateFile);
-}
 
 /** Complete a published driver's private snapshot before candidate Doctor loads plugins. */
 export async function completeUpdateCandidatePluginRehearsal(params: {
@@ -42,7 +39,9 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     return { copiedFiles: 0, warnings };
   }
   const privateRoot = await fs.realpath(rehearsalRoot);
+  const signal = getAsyncWorkSignal();
   const assertPrivate = (file: string) => {
+    signal?.throwIfAborted();
     if (
       !isPathInside(privateRoot, path.resolve(file)) ||
       !isPathInside(privateRoot, resolvePathViaExistingAncestorSync(file))
@@ -91,29 +90,13 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     ),
     params.config,
   );
-  const originals: Array<ReturnType<typeof inspectPluginSourceDependencies>> = [];
-  const comparedFiles = new Map<string, string>();
+  const originals: Array<Awaited<ReturnType<typeof inspectPluginSourceDependenciesAsync>>> = [];
   const project = (source: string) =>
     resolveUpdateCandidatePluginPath(privateRoot, privateRoot, source);
-  const assertMatchingFile = async (source: string, copied: string) => {
-    assertPrivate(copied);
-    const [original, existing] = await Promise.all([
-      readOptionalFile(source),
-      readOptionalFile(copied),
-    ]);
-    if (
-      (original === undefined) !== (existing === undefined) ||
-      (original && existing && !original.equals(existing))
-    ) {
-      throw new Error(
-        `Plugin source changed since the update snapshot: ${source}. Retry the update after plugin edits finish.`,
-      );
-    }
-  };
   for (const entry of entries) {
     assertPrivate(entry.rootDir);
     assertPrivate(entry.entryFile);
-    const copiedGraph = inspectUpdateCandidatePluginSource(entry, warnings, {
+    const copiedGraph = await inspectUpdateCandidatePluginSourceAsync(entry, warnings, {
       root: privateRoot,
       onUnresolvable: (name, importer) => {
         if (warnings.length < UPDATE_RUN_DIAGNOSTIC_LIMIT) {
@@ -126,6 +109,8 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
         }
       },
     });
+    assertPrivate(entry.rootDir);
+    assertPrivate(entry.entryFile);
     if (!copiedGraph) {
       continue;
     }
@@ -165,10 +150,12 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
       warnings.push(`Plugin source for update checks is no longer available: ${entryFile}.`);
       continue;
     }
-    let available: ReturnType<typeof inspectPluginSourceDependencies>;
+    let available: Awaited<ReturnType<typeof inspectPluginSourceDependenciesAsync>>;
     try {
-      available = inspectPluginSourceDependencies([{ rootDir, entryFile }]);
+      available = await inspectPluginSourceDependenciesAsync([{ rootDir, entryFile }]);
+      signal?.throwIfAborted();
     } catch (error) {
+      signal?.throwIfAborted();
       // Source edits cannot invalidate an already runnable copy. Without a
       // supplied missing edge, candidate execution still owns optional imports.
       warnings.push(
@@ -183,42 +170,12 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     ) {
       continue;
     }
-    if (canonicalSource !== entryFile || (await fs.realpath(rootDir)) !== rootDir) {
-      throw new Error(`Plugin source location changed since the update snapshot: ${entryFile}.`);
-    }
-    for (const [source, copied] of [
-      [entryFile, copiedEntry],
-      [path.join(rootDir, "package.json"), path.join(copiedRoot, "package.json")],
-      [path.join(rootDir, "openclaw.plugin.json"), path.join(copiedRoot, "openclaw.plugin.json")],
-    ] as const) {
-      await assertMatchingFile(source, copied);
-      comparedFiles.set(source, copied);
-    }
     originals.push(available);
   }
   if (originals.length === 0) {
     return { copiedFiles: 0, warnings };
   }
-  const files = new Set(originals.flatMap((graph) => graph.files));
-  for (const source of files) {
-    const copied = project(source);
-    assertPrivate(copied);
-    if (await readOptionalFile(copied)) {
-      comparedFiles.set(source, copied);
-    }
-  }
-  const assertCurrent = async () => {
-    if (
-      params.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1" ||
-      resolveUpdateRehearsalRoot(params.env) !== rehearsalRoot
-    ) {
-      throw new Error("Update authority changed during plugin dependency preparation");
-    }
-    for (const [source, copied] of comparedFiles) {
-      await assertMatchingFile(source, copied);
-    }
-  };
-  await assertCurrent();
+  // Fill missing private dependencies without comparing or overwriting existing bytes.
   const plan = await prepareUpdateCandidatePluginTrees({
     roots: new Map(
       originals
@@ -246,7 +203,6 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
       );
     }
   }
-  await assertCurrent();
   if (missing.length > 0) {
     await copyUpdateCandidatePluginTrees(
       { ...plan, entries: missing },
@@ -255,7 +211,6 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
         candidateRoot,
       },
     );
-    await assertCurrent();
   }
   return { copiedFiles: missing.filter((entry) => entry.kind === "file").length, warnings };
 }

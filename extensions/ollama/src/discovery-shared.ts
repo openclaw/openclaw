@@ -5,7 +5,7 @@ import type {
   ModelProviderConfig,
   ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input-runtime";
+import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -80,46 +80,6 @@ export function resolveOllamaRuntimeBaseUrl(params: {
     return params.configuredBaseUrl;
   }
   return params.discoveredBaseUrl;
-}
-
-function resolveOllamaDiscoveryAuth(params: {
-  env: NodeJS.ProcessEnv;
-  baseUrl?: string;
-  explicitApiKey?: ModelProviderConfig["apiKey"];
-  resolvedAuth: ReturnType<OllamaDiscoveryContext["resolveProviderApiKey"]>;
-}): { apiKey?: ModelProviderConfig["apiKey"]; discoveryApiKey?: string } | null {
-  const envValue = normalizeOptionalString(params.env.OLLAMA_API_KEY);
-  const resolvedApiKey = normalizeOptionalString(params.resolvedAuth.apiKey);
-  const resolvedDiscoveryApiKey = normalizeOptionalString(params.resolvedAuth.discoveryApiKey);
-  const explicitRef = coerceSecretRef(params.explicitApiKey);
-  const explicitApiKey = explicitRef
-    ? resolvedDiscoveryApiKey
-    : readOllamaStringValue(params.explicitApiKey);
-  // Only discoveryApiKey proves a SecretRef resolved. Keep its reference in
-  // config, even when the credential bytes happen to equal a local marker.
-  if (explicitRef && !explicitApiKey) {
-    return null;
-  }
-  if (explicitApiKey && (explicitRef || !isOllamaApiKeyMarker(explicitApiKey))) {
-    return { apiKey: explicitRef ?? explicitApiKey, discoveryApiKey: explicitApiKey };
-  }
-  if (!isLocalOllamaBaseUrl(params.baseUrl)) {
-    if (resolvedDiscoveryApiKey) {
-      return { apiKey: resolvedApiKey, discoveryApiKey: resolvedDiscoveryApiKey };
-    }
-    if (resolvedApiKey && !isOllamaApiKeyMarker(resolvedApiKey)) {
-      return { apiKey: resolvedApiKey, discoveryApiKey: resolvedApiKey };
-    }
-    return envValue && envValue !== OLLAMA_DEFAULT_API_KEY
-      ? { apiKey: "OLLAMA_API_KEY", discoveryApiKey: envValue }
-      : {};
-  }
-  if (resolvedApiKey && resolvedApiKey !== envValue && !isOllamaApiKeyMarker(resolvedApiKey)) {
-    return { apiKey: resolvedApiKey, discoveryApiKey: resolvedDiscoveryApiKey ?? resolvedApiKey };
-  }
-  // Ambient cloud credentials must not reach local servers; synthetic local
-  // auth belongs only in config, never in HTTP discovery headers.
-  return { apiKey: OLLAMA_DEFAULT_API_KEY };
 }
 
 const LOCAL_OLLAMA_HOSTNAMES = new Set([
@@ -273,12 +233,46 @@ export async function resolveOllamaDiscoveryResult(params: {
   const resolvedOllamaAuth = params.ctx.resolveProviderApiKey(OLLAMA_PROVIDER_ID);
   const ollamaKey = resolvedOllamaAuth.apiKey;
   const hasOllamaDiscoveryOptIn = typeof ollamaKey === "string" && ollamaKey.trim().length > 0;
-  const auth = resolveOllamaDiscoveryAuth({
-    env: params.ctx.env,
-    baseUrl: configuredBaseUrl,
-    explicitApiKey: explicit?.apiKey,
-    resolvedAuth: resolvedOllamaAuth,
-  });
+  const env = params.ctx.env;
+  const configuredApiKey = explicit?.apiKey;
+  const resolveOllamaDiscoveryAuth = (): {
+    apiKey?: ModelProviderConfig["apiKey"];
+    discoveryApiKey?: string;
+  } | null => {
+    const envValue = normalizeOptionalString(env.OLLAMA_API_KEY);
+    const resolvedApiKey = normalizeOptionalString(resolvedOllamaAuth.apiKey);
+    const resolvedDiscoveryApiKey = normalizeOptionalString(resolvedOllamaAuth.discoveryApiKey);
+    const explicitRef = coerceSecretRef(configuredApiKey);
+    const explicitApiKey = explicitRef
+      ? resolvedDiscoveryApiKey
+      : readOllamaStringValue(configuredApiKey);
+    // Only discoveryApiKey proves a SecretRef resolved. Keep its reference in
+    // config, even when the credential bytes happen to equal a local marker.
+    if (explicitRef && !explicitApiKey) {
+      return null;
+    }
+    if (explicitApiKey && (explicitRef || !isOllamaApiKeyMarker(explicitApiKey))) {
+      return { apiKey: explicitRef ?? explicitApiKey, discoveryApiKey: explicitApiKey };
+    }
+    if (!isLocalOllamaBaseUrl(configuredBaseUrl)) {
+      if (resolvedDiscoveryApiKey) {
+        return { apiKey: resolvedApiKey, discoveryApiKey: resolvedDiscoveryApiKey };
+      }
+      if (resolvedApiKey && !isOllamaApiKeyMarker(resolvedApiKey)) {
+        return { apiKey: resolvedApiKey, discoveryApiKey: resolvedApiKey };
+      }
+      return envValue && envValue !== OLLAMA_DEFAULT_API_KEY
+        ? { apiKey: "OLLAMA_API_KEY", discoveryApiKey: envValue }
+        : {};
+    }
+    if (resolvedApiKey && resolvedApiKey !== envValue && !isOllamaApiKeyMarker(resolvedApiKey)) {
+      return { apiKey: resolvedApiKey, discoveryApiKey: resolvedDiscoveryApiKey ?? resolvedApiKey };
+    }
+    // Ambient cloud credentials must not reach local servers; synthetic local
+    // auth belongs only in config, never in HTTP discovery headers.
+    return { apiKey: OLLAMA_DEFAULT_API_KEY };
+  };
+  const auth = resolveOllamaDiscoveryAuth();
   if (!auth) {
     return null;
   }
@@ -315,8 +309,7 @@ export async function resolveOllamaDiscoveryResult(params: {
         ...(discoveryApiKey ? { apiKey: discoveryApiKey } : {}),
       });
       const api = explicit?.api ?? provider.api;
-      // Keep configured settings, including tool workarounds, while filling missing native
-      // thinking metadata so mandatory-thinking models keep reasoning out of answer text.
+      // Keep configured settings while filling provider-owned model size and native thinking metadata.
       const configuredModels = new Map(explicit?.models?.map((model) => [model.id, model]));
       return {
         ...(modelIds
@@ -339,11 +332,23 @@ export async function resolveOllamaDiscoveryResult(params: {
               const sameEndpoint =
                 !configured.baseUrl ||
                 resolveOllamaApiBase(configured.baseUrl) === resolveOllamaApiBase(provider.baseUrl);
-              return (configured.api ?? api) === "ollama" &&
-                sameEndpoint &&
-                configured.thinkingLevelMap === undefined &&
-                model.thinkingLevelMap
-                ? [{ ...configured, thinkingLevelMap: model.thinkingLevelMap }]
+              if (!sameEndpoint) {
+                return [];
+              }
+              const thinkingLevelMap =
+                (configured.api ?? api) === "ollama" && configured.thinkingLevelMap === undefined
+                  ? model.thinkingLevelMap
+                  : undefined;
+              return thinkingLevelMap || model.parameterCount !== undefined
+                ? [
+                    {
+                      ...configured,
+                      ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+                      ...(model.parameterCount !== undefined
+                        ? { parameterCount: model.parameterCount }
+                        : {}),
+                    },
+                  ]
                 : [];
             }
             return [

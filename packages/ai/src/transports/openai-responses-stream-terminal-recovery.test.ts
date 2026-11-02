@@ -1,9 +1,24 @@
 import { describe, expect, it } from "vitest";
 import {
+  blockEvent,
+  textBlock,
+  thinkingBlock,
+  thinkingEvents,
   completed,
+  fixture as parityFixture,
+  message,
+  outputItem,
+  outputTextDelta,
+  outputTextPart,
+  reasoning,
   runFixture,
+  startedMessage,
+  textEvents,
+  tool,
+  toolCall,
   type ParityFixture,
 } from "./openai-responses-stream-parity.test-helpers.js";
+import { argumentDelta } from "./openai-stream-cases.test-support.js";
 
 const rejectedTerminalToolFixture = (params: {
   name: string;
@@ -11,41 +26,19 @@ const rejectedTerminalToolFixture = (params: {
   arguments: string;
   error: string;
 }): ParityFixture => {
-  const commentary = {
-    id: "msg_before_rejected_tool",
-    type: "message",
-    role: "assistant",
-    status: "completed",
-    phase: "commentary",
-    content: [{ type: "output_text", text: "Checking...", annotations: [] }],
-  };
-  return {
-    name: params.name,
-    events: [
-      { type: "response.output_item.done", output_index: 0, item: commentary },
-      completed("resp_rejected_terminal_tool", [
-        commentary,
-        {
-          id: "fc_rejected_terminal",
-          call_id: "call_rejected_terminal",
-          type: "function_call",
-          name: "lookup",
-          arguments: params.arguments,
-          status: params.status,
-        },
-      ]),
+  const commentary = message("msg_before_rejected_tool", "Checking...", "commentary");
+  return parityFixture(
+    params.name,
+    [
+      outputItem("done", commentary, 0),
+      completed("resp", [commentary, tool("rejected_terminal", params.arguments, params.status)]),
     ],
-    canonical: {
-      events: [
-        { type: "text_start", contentIndex: 0 },
-        { type: "text_end", contentIndex: 0, content: "Checking..." },
-      ],
-      content: [{ type: "text", text: "Checking..." }],
-      responseId: "resp_rejected_terminal_tool",
-      stopReason: "stop",
+    textEvents("Checking..."),
+    [textBlock("Checking...")],
+    {
       error: params.error,
     },
-  };
+  );
 };
 
 const rejectedTerminalToolBatchFixture = (params: {
@@ -54,36 +47,19 @@ const rejectedTerminalToolBatchFixture = (params: {
   arguments: string;
   error: string;
   toolName?: string;
-}): ParityFixture => ({
-  name: params.name,
-  events: [
-    completed("resp_rejected_terminal_tool_batch", [
-      {
-        id: "fc_valid_before_rejection",
-        call_id: "call_valid_before_rejection",
-        type: "function_call",
-        name: "lookup",
-        arguments: '{"q":"valid"}',
-        status: "completed",
-      },
-      {
-        id: "fc_rejected_after_valid",
-        call_id: "call_rejected_after_valid",
-        type: "function_call",
-        name: params.toolName ?? "lookup",
-        arguments: params.arguments,
-        status: params.status,
-      },
-    ]),
-  ],
-  canonical: {
-    events: [],
-    content: [],
-    responseId: "resp_rejected_terminal_tool_batch",
-    stopReason: "stop",
-    error: params.error,
-  },
-});
+}): ParityFixture =>
+  parityFixture(
+    params.name,
+    [
+      completed("resp", [
+        tool("valid_before_rejection", '{"q":"valid"}', "completed"),
+        tool("rejected_after_valid", params.arguments, params.status, params.toolName ?? "lookup"),
+      ]),
+    ],
+    [],
+    [],
+    { error: params.error },
+  );
 
 const rejectedStreamedToolFixture = (params: {
   name: string;
@@ -102,49 +78,17 @@ const rejectedStreamedToolFixture = (params: {
   };
   const started = params.started
     ? [
-        {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: { ...item, arguments: "", status: "in_progress" },
-        },
-        {
-          type: "response.function_call_arguments.delta",
-          output_index: 0,
-          item_id: item.id,
-          delta: "{",
-        },
+        outputItem("added", { ...item, arguments: "", status: "in_progress" }, 0),
+        argumentDelta(item.id, "{"),
       ]
     : [];
-  return {
-    name: params.name,
-    events: [
-      ...started,
-      { type: "response.output_item.done", output_index: 0, item },
-      completed("resp_rejected_streamed_tool", [item]),
-    ],
-    canonical: {
-      events: params.started
-        ? [
-            { type: "toolcall_start", contentIndex: 0 },
-            { type: "toolcall_delta", contentIndex: 0, delta: "{" },
-          ]
-        : [],
-      content: params.started
-        ? [
-            {
-              type: "toolCall",
-              id: "call_rejected_streamed|fc_rejected_streamed",
-              name: "lookup",
-              arguments: {},
-              partialJson: false,
-            },
-          ]
-        : [],
-      responseId: "resp_rejected_streamed_tool",
-      stopReason: params.started ? "toolUse" : "stop",
-      error: params.error,
-    },
-  };
+  return parityFixture(
+    params.name,
+    [...started, outputItem("done", item, 0), completed("resp", [item])],
+    params.started ? [blockEvent("toolcall_start"), blockEvent("toolcall_delta", 0, "{")] : [],
+    params.started ? [toolCall("call_rejected_streamed|fc_rejected_streamed", "lookup", {})] : [],
+    { error: params.error, stopReason: params.started ? "toolUse" : "stop" },
+  );
 };
 
 const unsafeIntegerToolFixture = (source: "streamed" | "terminal"): ParityFixture => {
@@ -160,50 +104,37 @@ const unsafeIntegerToolFixture = (source: "streamed" | "terminal"): ParityFixtur
   const streamed =
     source === "streamed"
       ? [
-          {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: { ...item, arguments: "", status: "in_progress" },
-          },
-          {
-            type: "response.function_call_arguments.delta",
-            output_index: 0,
-            item_id: item.id,
-            delta: '{"to":',
-          },
-          { type: "response.output_item.done", output_index: 0, item },
+          outputItem("added", { ...item, arguments: "", status: "in_progress" }, 0),
+          argumentDelta(item.id, '{"to":'),
+          outputItem("done", item, 0),
         ]
       : [];
-  return {
-    name: `${source} completed tool arguments preserve unsafe integers`,
-    events: [...streamed, completed("resp_unsafe_integer_tool", [item])],
-    canonical: {
-      events: [
-        { type: "toolcall_start", contentIndex: 0 },
-        ...(source === "streamed"
-          ? [{ type: "toolcall_delta", contentIndex: 0, delta: '{"to":' }]
-          : []),
-        { type: "toolcall_end", contentIndex: 0 },
-      ],
-      content: [
-        {
-          type: "toolCall",
-          id: "call_unsafe_integer|fc_unsafe_integer",
-          name: "send_message",
-          arguments: {
-            to: "1481220477346119781",
-            safe: 42,
-            maxSafe: 9007199254740991,
-            nested: { ids: ["9007199254740993", "-9007199254740992"] },
-          },
-          partialJson: false,
+  return parityFixture(
+    `${source} completed tool arguments preserve unsafe integers`,
+    [...streamed, completed("resp", [item])],
+    [
+      blockEvent("toolcall_start"),
+      ...(source === "streamed"
+        ? [{ type: "toolcall_delta", contentIndex: 0, delta: '{"to":' }]
+        : []),
+      blockEvent("toolcall_end"),
+    ],
+    [
+      {
+        type: "toolCall",
+        id: "call_unsafe_integer|fc_unsafe_integer",
+        name: "send_message",
+        arguments: {
+          to: "1481220477346119781",
+          safe: 42,
+          maxSafe: 9007199254740991,
+          nested: { ids: ["9007199254740993", "-9007199254740992"] },
         },
-      ],
-      responseId: "resp_unsafe_integer_tool",
-      stopReason: "toolUse",
-      error: null,
-    },
-  };
+        partialJson: false,
+      },
+    ],
+    { stopReason: "toolUse" },
+  );
 };
 
 const rejectedOutOfOrderTerminalFixture = (
@@ -211,246 +142,76 @@ const rejectedOutOfOrderTerminalFixture = (
 ): ParityFixture => {
   const later =
     state === "reasoning"
-      ? {
-          id: "rs_later_already_streamed",
-          type: "reasoning",
-          summary: [{ type: "summary_text", text: "Thinking..." }],
-          content: [],
-        }
-      : {
-          id: "msg_later_already_streamed",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          phase: "final_answer",
-          content: [{ type: "output_text", text: "Final answer", annotations: [] }],
-        };
+      ? reasoning("rs_later_already_streamed", "Thinking...")
+      : message("msg_later_already_streamed", "Final answer", "final_answer");
   const streamed =
     state === "completed" || state === "reasoning"
-      ? [{ type: "response.output_item.done", output_index: 1, item: later }]
+      ? [outputItem("done", later, 1)]
       : [
-          {
-            type: "response.output_item.added",
-            output_index: 1,
-            item: { ...later, status: "in_progress", content: [] },
-          },
-          {
-            type: "response.output_text.delta",
-            output_index: 1,
-            item_id: later.id,
-            content_index: 0,
-            delta: "Final answer",
-          },
+          outputItem("added", { ...later, status: "in_progress", content: [] }, 1),
+          outputTextDelta(later.id, "Final answer", 1),
         ];
-  return {
-    name: `terminal recovery rejects missing output before a ${state} item`,
-    events: [
+  return parityFixture(
+    `terminal recovery rejects missing output before a ${state} item`,
+    [
       ...streamed,
-      completed("resp_out_of_order_recovery", [
-        {
-          id: "msg_earlier_missing",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          phase: "commentary",
-          content: [{ type: "output_text", text: "Working...", annotations: [] }],
-        },
-        later,
-      ]),
+      completed("resp", [message("msg_earlier_missing", "Working...", "commentary"), later]),
     ],
-    canonical: {
-      events:
-        state === "reasoning"
-          ? [
-              { type: "thinking_start", contentIndex: 0 },
-              { type: "thinking_end", contentIndex: 0, content: "Thinking..." },
-            ]
-          : [
-              { type: "text_start", contentIndex: 0 },
-              ...(state === "completed"
-                ? [{ type: "text_end", contentIndex: 0, content: "Final answer" }]
-                : [{ type: "text_delta", contentIndex: 0, delta: "Final answer" }]),
-            ],
-      content:
-        state === "reasoning"
-          ? [{ type: "thinking", thinking: "Thinking...", encrypted: false }]
-          : [{ type: "text", text: "Final answer" }],
-      responseId: "resp_out_of_order_recovery",
-      stopReason: "stop",
-      error: "Responses stream omitted an output item before completed output",
-    },
-  };
+    state === "reasoning"
+      ? thinkingEvents("Thinking...")
+      : [
+          blockEvent("text_start"),
+          ...(state === "completed"
+            ? [blockEvent("text_end", 0, "Final answer")]
+            : [blockEvent("text_delta", 0, "Final answer")]),
+        ],
+    state === "reasoning" ? [thinkingBlock("Thinking...")] : [textBlock("Final answer")],
+    { error: "Responses stream omitted an output item before completed output" },
+  );
 };
 
 const leadingFixtures: ParityFixture[] = [
-  {
-    name: "terminal final answer recovery preserves streamed commentary",
-    events: [
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        item: {
-          id: "msg_streamed_commentary",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          phase: "commentary",
-          content: [{ type: "output_text", text: "Working on it...", annotations: [] }],
-        },
-      },
-      completed("resp_commentary_terminal_answer", [
-        {
-          id: "msg_streamed_commentary",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          phase: "commentary",
-          content: [{ type: "output_text", text: "Working on it...", annotations: [] }],
-        },
-        {
-          id: "msg_terminal_answer",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          phase: "final_answer",
-          content: [{ type: "output_text", text: "Final answer", annotations: [] }],
-        },
+  parityFixture(
+    "terminal final answer recovery preserves streamed commentary",
+    [
+      outputItem("done", message("msg_streamed_commentary", "Working on it...", "commentary"), 0),
+      completed("resp", [
+        message("msg_streamed_commentary", "Working on it...", "commentary"),
+        message("msg_terminal_answer", "Final answer", "final_answer"),
       ]),
     ],
-    canonical: {
-      events: [
-        { type: "text_start", contentIndex: 0 },
-        { type: "text_end", contentIndex: 0, content: "Working on it..." },
-        { type: "text_start", contentIndex: 1 },
-        { type: "text_end", contentIndex: 1, content: "Final answer" },
-      ],
-      content: [
-        { type: "text", text: "Working on it..." },
-        { type: "text", text: "Final answer" },
-      ],
-      responseId: "resp_commentary_terminal_answer",
-      stopReason: "stop",
-      error: null,
-    },
-  },
-  {
-    name: "terminal tool recovery preserves streamed commentary",
-    events: [
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        item: {
-          id: "msg_tool_commentary",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          phase: "commentary",
-          content: [{ type: "output_text", text: "Checking...", annotations: [] }],
-        },
-      },
-      completed("resp_commentary_terminal_tool", [
-        {
-          id: "msg_tool_commentary",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          phase: "commentary",
-          content: [{ type: "output_text", text: "Checking...", annotations: [] }],
-        },
-        {
-          id: "fc_after_commentary",
-          call_id: "call_after_commentary",
-          type: "function_call",
-          name: "lookup",
-          arguments: '{"q":"x"}',
-          status: "completed",
-        },
+    [...textEvents("Working on it..."), ...textEvents("Final answer", 1)],
+    [textBlock("Working on it..."), textBlock("Final answer")],
+  ),
+  parityFixture(
+    "terminal tool recovery preserves streamed commentary",
+    [
+      outputItem("done", message("msg_tool_commentary", "Checking...", "commentary"), 0),
+      completed("resp", [
+        message("msg_tool_commentary", "Checking...", "commentary"),
+        tool("after_commentary", '{"q":"x"}', "completed"),
       ]),
     ],
-    canonical: {
-      events: [
-        { type: "text_start", contentIndex: 0 },
-        { type: "text_end", contentIndex: 0, content: "Checking..." },
-        { type: "toolcall_start", contentIndex: 1 },
-        { type: "toolcall_end", contentIndex: 1 },
-      ],
-      content: [
-        { type: "text", text: "Checking..." },
-        {
-          type: "toolCall",
-          id: "call_after_commentary|fc_after_commentary",
-          name: "lookup",
-          arguments: { q: "x" },
-          partialJson: false,
-        },
-      ],
-      responseId: "resp_commentary_terminal_tool",
-      stopReason: "toolUse",
-      error: null,
-    },
-  },
-  {
-    name: "terminal snapshot does not duplicate streamed commentary or final answer",
-    events: [
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        item: {
-          id: "msg_complete_commentary",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          phase: "commentary",
-          content: [{ type: "output_text", text: "Checking...", annotations: [] }],
-        },
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 1,
-        item: {
-          id: "msg_complete_answer",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          phase: "final_answer",
-          content: [{ type: "output_text", text: "Done.", annotations: [] }],
-        },
-      },
-      completed("resp_complete_messages", [
-        {
-          id: "msg_complete_commentary",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          phase: "commentary",
-          content: [{ type: "output_text", text: "Checking...", annotations: [] }],
-        },
-        {
-          id: "msg_complete_answer",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          phase: "final_answer",
-          content: [{ type: "output_text", text: "Done.", annotations: [] }],
-        },
+    [...textEvents("Checking..."), blockEvent("toolcall_start", 1), blockEvent("toolcall_end", 1)],
+    [
+      textBlock("Checking..."),
+      toolCall("call_after_commentary|fc_after_commentary", "lookup", { q: "x" }),
+    ],
+    { stopReason: "toolUse" },
+  ),
+  parityFixture(
+    "terminal snapshot does not duplicate streamed commentary or final answer",
+    [
+      outputItem("done", message("msg_complete_commentary", "Checking...", "commentary"), 0),
+      outputItem("done", message("msg_complete_answer", "Done.", "final_answer"), 1),
+      completed("resp", [
+        message("msg_complete_commentary", "Checking...", "commentary"),
+        message("msg_complete_answer", "Done.", "final_answer"),
       ]),
     ],
-    canonical: {
-      events: [
-        { type: "text_start", contentIndex: 0 },
-        { type: "text_end", contentIndex: 0, content: "Checking..." },
-        { type: "text_start", contentIndex: 1 },
-        { type: "text_end", contentIndex: 1, content: "Done." },
-      ],
-      content: [
-        { type: "text", text: "Checking..." },
-        { type: "text", text: "Done." },
-      ],
-      responseId: "resp_complete_messages",
-      stopReason: "stop",
-      error: null,
-    },
-  },
+    [...textEvents("Checking..."), ...textEvents("Done.", 1)],
+    [textBlock("Checking..."), textBlock("Done.")],
+  ),
   rejectedTerminalToolFixture({
     name: "terminal incomplete tool snapshot after streamed commentary is rejected",
     status: "incomplete",
@@ -511,211 +272,81 @@ const toolOnlyFixtures: ParityFixture[] = [
     toolName: "",
     error: "Responses stream completed tool call without a function name",
   }),
-  {
-    name: "terminal tool snapshots preserve optional SDK completion status",
-    events: [
-      completed("resp_terminal_tool_optional_status", [
-        {
-          id: "fc_optional_status",
-          call_id: "call_optional_status",
-          type: "function_call",
-          name: "lookup",
-          arguments: '{"q":"x"}',
-        },
-      ]),
-    ],
-    canonical: {
-      events: [
-        { type: "toolcall_start", contentIndex: 0 },
-        { type: "toolcall_end", contentIndex: 0 },
-      ],
-      content: [
-        {
-          type: "toolCall",
-          id: "call_optional_status|fc_optional_status",
-          name: "lookup",
-          arguments: { q: "x" },
-          partialJson: false,
-        },
-      ],
-      responseId: "resp_terminal_tool_optional_status",
-      stopReason: "toolUse",
-      error: null,
-    },
-  },
+  parityFixture(
+    "terminal tool snapshots preserve optional SDK completion status",
+    [completed("resp", [tool("optional_status", '{"q":"x"}')])],
+    [blockEvent("toolcall_start"), blockEvent("toolcall_end")],
+    [toolCall("call_optional_status|fc_optional_status", "lookup", { q: "x" })],
+    { stopReason: "toolUse" },
+  ),
 ];
 
 const trailingFixtures: ParityFixture[] = [
   rejectedOutOfOrderTerminalFixture("completed"),
   rejectedOutOfOrderTerminalFixture("started"),
   rejectedOutOfOrderTerminalFixture("reasoning"),
-  {
-    name: "incomplete terminal recovery preserves completed tool-call ordering",
-    events: [
-      {
-        type: "response.output_item.done",
-        output_index: 1,
-        item: {
-          id: "fc_completed_before_incomplete",
-          call_id: "call_completed_before_incomplete",
-          type: "function_call",
-          name: "lookup",
-          arguments: '{"q":"x"}',
-          status: "completed",
-        },
-      },
+  parityFixture(
+    "incomplete terminal recovery preserves completed tool-call ordering",
+    [
+      outputItem("done", tool("completed_before_incomplete", '{"q":"x"}', "completed"), 1),
       {
         type: "response.incomplete",
         response: {
-          id: "resp_incomplete_out_of_order",
+          id: "resp",
           status: "incomplete",
           incomplete_details: { reason: "max_output_tokens" },
           output: [
-            {
-              id: "msg_earlier_missing_before_tool",
-              type: "message",
-              role: "assistant",
-              status: "completed",
-              phase: "commentary",
-              content: [{ type: "output_text", text: "Working...", annotations: [] }],
-            },
-            {
-              id: "fc_completed_before_incomplete",
-              call_id: "call_completed_before_incomplete",
-              type: "function_call",
-              name: "lookup",
-              arguments: '{"q":"x"}',
-              status: "completed",
-            },
+            message("msg_earlier_missing_before_tool", "Working...", "commentary"),
+            tool("completed_before_incomplete", '{"q":"x"}', "completed"),
           ],
         },
       },
     ],
-    canonical: {
-      events: [
-        { type: "toolcall_start", contentIndex: 0 },
-        { type: "toolcall_end", contentIndex: 0 },
-      ],
-      content: [
-        {
-          type: "toolCall",
-          id: "call_completed_before_incomplete|fc_completed_before_incomplete",
-          name: "lookup",
-          arguments: { q: "x" },
-          partialJson: false,
-        },
-      ],
-      responseId: "resp_incomplete_out_of_order",
-      stopReason: "length",
+    [blockEvent("toolcall_start"), blockEvent("toolcall_end")],
+    [
+      toolCall("call_completed_before_incomplete|fc_completed_before_incomplete", "lookup", {
+        q: "x",
+      }),
+    ],
+    {
       error: "Responses stream omitted an output item before completed output",
+      stopReason: "length",
     },
-  },
-  {
-    name: "terminal snapshot closes an already started empty message",
-    events: [
-      {
-        type: "response.output_item.added",
-        output_index: 0,
-        item: {
-          id: "msg_started_empty",
-          type: "message",
-          role: "assistant",
-          status: "in_progress",
-          content: [],
-        },
-      },
-      completed("resp_started_empty", [
-        {
-          id: "msg_started_empty",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: [],
-        },
-      ]),
+  ),
+  parityFixture(
+    "terminal snapshot closes an already started empty message",
+    [
+      outputItem("added", startedMessage("msg_started_empty"), 0),
+      completed("resp", [{ ...message("msg_started_empty", ""), content: [] }]),
     ],
-    canonical: {
-      events: [
-        { type: "text_start", contentIndex: 0 },
-        { type: "text_end", contentIndex: 0, content: "" },
-      ],
-      content: [{ type: "text", text: "" }],
-      responseId: "resp_started_empty",
-      stopReason: "stop",
-      error: null,
-    },
-  },
-  {
-    name: "terminal snapshot completes an unfinished streamed message once",
-    events: [
-      {
-        type: "response.output_item.added",
-        output_index: 0,
-        item: {
-          id: "msg_unfinished_terminal",
-          type: "message",
-          role: "assistant",
-          status: "in_progress",
-          phase: "final_answer",
-          content: [],
-        },
-      },
-      {
-        type: "response.content_part.added",
-        output_index: 0,
-        item_id: "msg_unfinished_terminal",
-        content_index: 0,
-        part: { type: "output_text", text: "", annotations: [] },
-      },
-      {
-        type: "response.output_text.delta",
-        output_index: 0,
-        item_id: "msg_unfinished_terminal",
-        content_index: 0,
-        delta: "Partial",
-      },
-      completed("resp_unfinished_terminal_message", [
-        {
-          id: "msg_unfinished_terminal",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          phase: "final_answer",
-          content: [{ type: "output_text", text: "Partial answer", annotations: [] }],
-        },
-      ]),
+    textEvents(""),
+    [textBlock("")],
+  ),
+  parityFixture(
+    "terminal snapshot completes an unfinished streamed message once",
+    [
+      outputItem("added", startedMessage("msg_unfinished_terminal", "final_answer"), 0),
+      outputTextPart("msg_unfinished_terminal"),
+      outputTextDelta("msg_unfinished_terminal", "Partial"),
+      completed("resp", [message("msg_unfinished_terminal", "Partial answer", "final_answer")]),
     ],
-    canonical: {
-      events: [
-        { type: "text_start", contentIndex: 0 },
-        { type: "text_delta", contentIndex: 0, delta: "Partial" },
-        { type: "text_delta", contentIndex: 0, delta: " answer" },
-        { type: "text_end", contentIndex: 0, content: "Partial answer" },
-      ],
-      content: [{ type: "text", text: "Partial answer" }],
-      responseId: "resp_unfinished_terminal_message",
-      stopReason: "stop",
-      error: null,
-    },
-  },
-  {
-    name: "terminal reasoning backfill follows the completed output slot",
-    events: [
-      {
-        type: "response.output_item.added",
-        output_index: 0,
-        item: { id: "rs_backfill", type: "reasoning", summary: [] },
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        item: {
+    textEvents("Partial answer", 0, ["Partial", " answer"]),
+    [textBlock("Partial answer")],
+  ),
+  parityFixture(
+    "terminal reasoning backfill follows the completed output slot",
+    [
+      outputItem("added", { id: "rs_backfill", type: "reasoning", summary: [] }, 0),
+      outputItem(
+        "done",
+        {
           id: "rs_backfill",
           type: "reasoning",
           summary: [{ type: "summary_text", text: "Checking the answer." }],
         },
-      },
-      completed("resp_reasoning_backfill", [
+        0,
+      ),
+      completed("resp", [
         {
           id: "rs_backfill",
           type: "reasoning",
@@ -724,38 +355,30 @@ const trailingFixtures: ParityFixture[] = [
         },
       ]),
     ],
-    canonical: {
-      events: [
-        { type: "thinking_start", contentIndex: 0 },
-        { type: "thinking_end", contentIndex: 0, content: "Checking the answer." },
-      ],
-      content: [{ type: "thinking", thinking: "Checking the answer.", encrypted: true }],
-      responseId: "resp_reasoning_backfill",
-      stopReason: "stop",
-      error: null,
-    },
-  },
-  {
-    name: "equal text in distinct output slots remains distinct",
-    events: [
+    thinkingEvents("Checking the answer."),
+    [thinkingBlock("Checking the answer.", true)],
+  ),
+  parityFixture(
+    "equal text in distinct output slots remains distinct",
+    [
       ...[0, 1].flatMap((outputIndex) => [
-        {
-          type: "response.output_item.added",
-          output_index: outputIndex,
-          item: { id: `msg_equal_${outputIndex}`, type: "message", content: [] },
-        },
-        {
-          type: "response.output_item.done",
-          output_index: outputIndex,
-          item: {
+        outputItem(
+          "added",
+          { id: `msg_equal_${outputIndex}`, type: "message", content: [] },
+          outputIndex,
+        ),
+        outputItem(
+          "done",
+          {
             id: `msg_equal_${outputIndex}`,
             type: "message",
             content: [{ type: "output_text", text: "Again." }],
           },
-        },
+          outputIndex,
+        ),
       ]),
       completed(
-        "resp_equal_messages",
+        "resp",
         [0, 1].map((outputIndex) => ({
           id: `msg_equal_${outputIndex}`,
           type: "message",
@@ -763,22 +386,9 @@ const trailingFixtures: ParityFixture[] = [
         })),
       ),
     ],
-    canonical: {
-      events: [
-        { type: "text_start", contentIndex: 0 },
-        { type: "text_end", contentIndex: 0, content: "Again." },
-        { type: "text_start", contentIndex: 1 },
-        { type: "text_end", contentIndex: 1, content: "Again." },
-      ],
-      content: [
-        { type: "text", text: "Again." },
-        { type: "text", text: "Again." },
-      ],
-      responseId: "resp_equal_messages",
-      stopReason: "stop",
-      error: null,
-    },
-  },
+    [...textEvents("Again."), ...textEvents("Again.", 1)],
+    [textBlock("Again."), textBlock("Again.")],
+  ),
 ];
 
 const fixtures = [...leadingFixtures, ...toolOnlyFixtures, ...trailingFixtures];
@@ -814,11 +424,20 @@ it.each(["type", "call_id"])("rejects terminal output that changes its %s", asyn
     field === "type"
       ? { type: "message", id: "msg_changed", content: [{ type: "output_text", text: "Changed" }] }
       : { ...streamed, call_id: "call_changed" };
-  const result = await runFixture([
-    { type: "response.output_item.done", output_index: 0, item: streamed },
-    completed("resp_changed_identity", [terminal]),
-  ]);
+  const result = await runFixture([outputItem("done", streamed, 0), completed("resp", [terminal])]);
   expect(result.error).toBe("Responses stream changed output item identity");
   expect(result.content).toHaveLength(1);
   expect(result.events.filter((event) => event.type === "toolcall_end")).toHaveLength(1);
 });
+
+it.each([undefined, null, "standard", "daybreak_blue", "daybreak_red", "unknown"])(
+  "reports only the provider's terminal access program: %s",
+  async (program) => {
+    const terminal = completed("resp_access", []);
+    const result = await runFixture([
+      { ...terminal, response: { ...terminal.response, access_programs: { cyber: program } } },
+    ]);
+    expect(result.error).toBeNull();
+    expect(result.responseAccessProgram).toBe(program === "unknown" ? undefined : program);
+  },
+);

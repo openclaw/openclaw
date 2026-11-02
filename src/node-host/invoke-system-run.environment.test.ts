@@ -1,5 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as runtimeConfig from "../config/config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runCommand } from "./invoke-run-command.js";
@@ -41,6 +42,10 @@ describe("node command service identity", () => {
           OPENCLAW_PROFILE: "node-proof",
         },
         async () => {
+          const config = vi.spyOn(runtimeConfig, "getRuntimeConfig").mockReturnValue({
+            tools: { exec: { security: "full", ask: "off" } },
+          });
+          onTestFinished(() => config.mockRestore());
           const keys = [...Object.keys(serviceEnv), "OPENCLAW_STATE_DIR", "OPENCLAW_PROFILE"];
           const command = [
             process.execPath,
@@ -57,7 +62,6 @@ describe("node command service identity", () => {
               runCommand,
               sendInvokeResult,
               preferMacAppExecHost: false,
-              getRuntimeConfig: () => ({ tools: { exec: { security: "full", ask: "off" } } }),
             });
             const [response] = sendInvokeResult.mock.calls[0] ?? [];
             expect(response?.ok).toBe(true);

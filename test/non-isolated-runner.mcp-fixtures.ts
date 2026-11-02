@@ -6,10 +6,9 @@ export function mcpManagerFixtureFiles(repoRoot: string): Record<string, string>
 const key = Symbol.for("openclaw.sessionMcpRuntimeManager");
 const probeKey = Symbol.for("fixture.sessionMcpManager");
 async function fixtureManager() {
-  const { bindSessionMcpRuntimeTestScheduler } = await import(${source("agents/agent-bundle-mcp-manager.test-support.ts")});
+  const { bindSessionMcpRuntimeTestScheduler, getSessionMcpRuntimeTestManager } = await import(${source("agents/agent-bundle-mcp-manager.test-support.ts")});
   await bindSessionMcpRuntimeTestScheduler();
-  const { getSessionMcpRuntimeManagerForTesting } = await import(${source("agents/agent-bundle-mcp-manager-api.ts")});
-  return getSessionMcpRuntimeManagerForTesting();
+  return getSessionMcpRuntimeTestManager();
 }
 `;
   return {
@@ -35,8 +34,17 @@ it("cancels the agent before publishing a successor during MCP disposal", async 
   const probe = globalThis[probeKey] = { successor, joined: false, cancelled: false };
   let cancel;
   const cancelled = new Promise(resolve => { cancel = resolve; });
-  const { ACTIVE_EMBEDDED_RUNS } = await import(${source("agents/embedded-agent-runner/run-state.ts")});
-  ACTIVE_EMBEDDED_RUNS.set("mcp-dependent-run", { cancel() { probe.cancelled = true; cancel(); } });
+  const { createEmbeddedRunHandle, registerTestEmbeddedRun, clearTestEmbeddedRun } = await import(${source("agents/embedded-agent-runner/runs.test-support.ts")});
+  let handle;
+  handle = createEmbeddedRunHandle({
+    runId: "mcp-dependent-run",
+    abort() {
+      probe.cancelled = true;
+      cancel();
+      clearTestEmbeddedRun("mcp-dependent-run", handle);
+    },
+  });
+  registerTestEmbeddedRun("mcp-dependent-run", handle);
   lease.runtime.joinCleanup = async () => {
     expect(probe.cancelled, "agent cancellation must release the MCP cleanup barrier").toBe(true);
     await cancelled;
@@ -85,18 +93,22 @@ it("keeps run-owned resources when cancellation fails", async () => {
   const lease = await manager.acquire({ sessionId: "cancel-failure", workspaceDir: process.cwd(), cfg: { plugins: { enabled: false }, mcp: { servers: { probe: { command: process.execPath } } } } });
   lease.releaseLease();
   const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: path.join(import.meta.dirname, "cancel-state") } });
-  const handle = { cancel() { throw new Error("Synthetic run cancellation failed"); } };
+  const { createEmbeddedRunHandle, registerTestEmbeddedRun, clearTestEmbeddedRun } = await import(${source("agents/embedded-agent-runner/runs.test-support.ts")});
+  const handle = createEmbeddedRunHandle({
+    runId: "cancel-failure",
+    abort() { throw new Error("Synthetic run cancellation failed"); },
+  });
   const baseline = {
     env: process.env.OPENCLAW_MCP_CANCEL_FIXTURE,
     global: globalThis.__openclawMcpCancelFixture,
     hasGlobal: Object.hasOwn(globalThis, "__openclawMcpCancelFixture"),
   };
-  const probe = globalThis[probeKey] = { manager, runState, database, handle, baseline, closes: 0 };
+  const probe = globalThis[probeKey] = { manager, runState, database, handle, clearTestEmbeddedRun, baseline, closes: 0 };
   vi.stubEnv("OPENCLAW_MCP_CANCEL_FIXTURE", "file-owned");
   vi.stubGlobal("__openclawMcpCancelFixture", "file-owned");
   const join = lease.runtime.joinCleanup.bind(lease.runtime);
   lease.runtime.joinCleanup = async () => { probe.closes++; await join(); };
-  runState.ACTIVE_EMBEDDED_RUNS.set("cancel-failure", handle);
+  registerTestEmbeddedRun("cancel-failure", handle);
 });
 `,
     "97-mcp-b-cancel-custody.test.ts": `${imports}
@@ -111,9 +123,9 @@ it("preserves active runs and their module, MCP and database owners after failed
     expect(globalThis[key]).toBe(probe.manager);
     expect(probe.database.db.isOpen).toBe(true);
     expect(runState).toBe(probe.runState);
-    expect(runState.ACTIVE_EMBEDDED_RUNS.get("cancel-failure")).toBe(probe.handle);
+    expect(runState.getActiveNativeAttempt("cancel-failure")).toBe(probe.handle);
   } finally {
-    probe.runState.ACTIVE_EMBEDDED_RUNS.delete("cancel-failure");
+    probe.clearTestEmbeddedRun("cancel-failure", probe.handle);
     await probe.manager.disposeAll();
     const { closeOpenClawStateDatabaseAsync } = await import(${source("state/openclaw-state-db.ts")});
     await closeOpenClawStateDatabaseAsync();

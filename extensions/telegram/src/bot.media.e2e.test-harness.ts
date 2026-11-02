@@ -4,6 +4,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helper
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
@@ -22,8 +23,8 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, vi, type Mock } from "vitest";
 import { telegramDirectDeliveryDepsForTest } from "./bot-delivery-deps.test-support.js";
-import type { TelegramBotDeps } from "./bot-deps.js";
 import * as telegramSessionRuntime from "./bot-message-context.session.runtime.js";
+import type { TelegramBotFixtureMocks } from "./bot-module-mocks.test-support.js";
 import { runTelegramChannelInboundEventWithHarness } from "./bot.test-helpers.js";
 import { setTelegramRuntime } from "./runtime.js";
 import { resetTelegramTopicNameCacheForTest } from "./runtime.test-support.js";
@@ -146,7 +147,7 @@ const defaultRuntimeConfig = (() =>
   ({
     messages: { inbound: { debounceMs: 0 } },
     channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
-  }) as OpenClawConfig) as TelegramBotDeps["getRuntimeConfig"];
+  }) as OpenClawConfig) as TelegramBotFixtureMocks["getRuntimeConfig"];
 
 function installTopicNameRuntimeForTest(): void {
   setTelegramRuntime({
@@ -156,6 +157,8 @@ function installTopicNameRuntimeForTest(): void {
           "telegram",
           options,
         )) as TelegramRuntime["state"]["openKeyedStore"],
+      openKeyedStoreV2: <T>(options: Parameters<TelegramRuntime["state"]["openKeyedStoreV2"]>[0]) =>
+        createPluginStateKeyedStoreV2ForTests<T>("telegram", options, { assertCurrent() {} }),
     },
     channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
   } as TelegramRuntime);
@@ -215,7 +218,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   };
 });
 
-export const telegramBotDepsForTest: TelegramBotDeps = {
+export const telegramBotDepsForTest: TelegramBotFixtureMocks = {
   ...telegramDirectDeliveryDepsForTest,
   ...telegramSessionRuntime,
   getSessionEntryAsync,
@@ -223,13 +226,15 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   getRuntimeConfig: defaultRuntimeConfig,
   resolveStorePath: vi.fn(
     (storePath?: string) => storePath ?? path.join(ensureMediaHarnessStoreRoot(), "sessions.json"),
-  ) as TelegramBotDeps["resolveStorePath"],
-  readChannelAllowFromStore: vi.fn(async () => []) as TelegramBotDeps["readChannelAllowFromStore"],
+  ) as TelegramBotFixtureMocks["resolveStorePath"],
+  readChannelAllowFromStore: vi.fn(
+    async () => [],
+  ) as TelegramBotFixtureMocks["readChannelAllowFromStore"],
   upsertChannelPairingRequest: vi.fn(async () => ({
     code: "PAIRCODE",
     created: true,
-  })) as TelegramBotDeps["upsertChannelPairingRequest"],
-  enqueueRoutedSystemEvent: vi.fn() as TelegramBotDeps["enqueueRoutedSystemEvent"],
+  })) as TelegramBotFixtureMocks["upsertChannelPairingRequest"],
+  enqueueRoutedSystemEvent: vi.fn() as TelegramBotFixtureMocks["enqueueRoutedSystemEvent"],
   dispatchReplyWithBufferedBlockDispatcher: mediaHarnessDispatchReplyWithBufferedBlockDispatcher,
   buildModelsProviderData: vi.fn(async () => ({
     byProvider: new Map<string, Set<string>>(),
@@ -237,12 +242,73 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
     resolvedDefault: { provider: "openai", model: "gpt-4.1" },
     modelNames: new Map<string, string>(),
     modelCatalog: [],
-  })) as TelegramBotDeps["buildModelsProviderData"],
+  })) as TelegramBotFixtureMocks["buildModelsProviderData"],
   prepareSkillCommandsForAgents: vi.fn(
     async () => [],
-  ) as TelegramBotDeps["prepareSkillCommandsForAgents"],
-  wasSentByBot: vi.fn(() => false) as TelegramBotDeps["wasSentByBot"],
+  ) as TelegramBotFixtureMocks["prepareSkillCommandsForAgents"],
+  wasSentByBot: vi.fn(() => false) as TelegramBotFixtureMocks["wasSentByBot"],
 };
+
+vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-outbound")>()),
+  // This harness proves the direct-delivery fallback, not durable owner admission.
+  deliverStructuredInboundReplyWithMessageSendContext: async () => ({
+    status: "unsupported",
+    reason: "missing_outbound_handler",
+  }),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  readRuntimeConfig: (...args: Parameters<TelegramBotFixtureMocks["getRuntimeConfig"]>) =>
+    telegramBotDepsForTest.getRuntimeConfig(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/session-store-runtime")>()),
+  resolveStorePath: (...args: Parameters<TelegramBotFixtureMocks["resolveStorePath"]>) =>
+    telegramBotDepsForTest.resolveStorePath(...args),
+  readSessionUpdatedAtAsync: (
+    ...args: Parameters<TelegramBotFixtureMocks["readSessionUpdatedAtAsync"]>
+  ) => telegramBotDepsForTest.readSessionUpdatedAtAsync(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
+  readChannelAllowFromStore: (
+    ...args: Parameters<TelegramBotFixtureMocks["readChannelAllowFromStore"]>
+  ) => telegramBotDepsForTest.readChannelAllowFromStore(...args),
+  upsertChannelPairingRequest: (
+    ...args: Parameters<TelegramBotFixtureMocks["upsertChannelPairingRequest"]>
+  ) => telegramBotDepsForTest.upsertChannelPairingRequest(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>()),
+  enqueueRoutedSystemEvent: (
+    ...args: Parameters<TelegramBotFixtureMocks["enqueueRoutedSystemEvent"]>
+  ) => telegramBotDepsForTest.enqueueRoutedSystemEvent(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>()),
+  buildPreparedModelsProviderData: (
+    ...args: Parameters<TelegramBotFixtureMocks["buildModelsProviderData"]>
+  ) => telegramBotDepsForTest.buildModelsProviderData(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/skill-commands-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/skill-commands-runtime")>()),
+  prepareSkillCommandsForAgents: (
+    ...args: Parameters<TelegramBotFixtureMocks["prepareSkillCommandsForAgents"]>
+  ) => telegramBotDepsForTest.prepareSkillCommandsForAgents(...args),
+}));
+
+vi.mock("./sent-message-cache.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./sent-message-cache.js")>()),
+  wasSentByBot: (...args: Parameters<TelegramBotFixtureMocks["wasSentByBot"]>) =>
+    telegramBotDepsForTest.wasSentByBot(...args),
+}));
 
 beforeEach(() => {
   clearRuntimeConfigSnapshot();
@@ -338,21 +404,9 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   },
 }));
 
-vi.mock("./bot-handlers.agent.runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>()),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-  resolveDefaultModelForAgent: vi.fn(() => ({
-    provider: "openai",
-    model: "gpt-test",
-  })),
-}));
-
-vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
-  findModelInCatalog: vi.fn(() => undefined),
-  loadPreparedModelCatalog: vi.fn(async () => []),
-  modelSupportsVision: vi.fn(() => false),
-  resolveAgentDir: vi.fn(() => "/tmp/agent"),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveDefaultModelForAgent: vi.fn(() => ({
     provider: "openai",
     model: "gpt-test",

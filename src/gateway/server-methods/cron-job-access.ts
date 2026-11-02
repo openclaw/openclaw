@@ -4,6 +4,7 @@ import {
   errorShape,
   GatewayErrorDetailCodes,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
 import type { CronJob, CronJobPatch } from "../../cron/types.js";
 import {
   createAgentDatabaseAdmissionErrorShape,
@@ -12,26 +13,26 @@ import {
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import {
   cronJobMatchesCallerScope,
+  cronTrustedJobOwnedByCaller,
   readCronCallerScope,
   type CronCallerScope,
 } from "./cron-caller-scope.js";
+import {
+  canHumanManageCronJob,
+  isHumanCronJobOwner,
+  isHumanCronMutation,
+} from "./cron-human-owner.js";
+import { requiresExplicitAgentRuntimeToolsAllow } from "./cron-input-validation.js";
 import { createCronSessionVisibility, cronJobIsVisible } from "./cron-visibility.js";
 import type { GatewayRequestHandler, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
 type CronJobIdParams = { id?: string; jobId?: string };
 
-export function isLegacyCreatorPromptUpdate(
-  job: CronJob,
-  patch: CronJobPatch,
-  callerScope: CronCallerScope | undefined,
-): boolean {
+function isLegacyCreatorPromptUpdate(job: CronJob, patch: CronJobPatch): boolean {
   // A prompt edit keeps the legacy execution policy; it cannot establish new
   // authority or transfer management to another session/account.
   return (
-    callerScope?.sessionKey !== undefined &&
-    job.owner?.sessionKey === callerScope.sessionKey &&
-    job.owner?.accountId === callerScope.accountId &&
     job.scheduledToolPolicy === undefined &&
     job.payload.kind === "agentTurn" &&
     patch.payload !== undefined &&
@@ -39,6 +40,79 @@ export function isLegacyCreatorPromptUpdate(
     Object.keys(patch).every((key) => key === "payload") &&
     Object.keys(patch.payload).every((key) => key === "kind" || key === "message")
   );
+}
+
+/** Plain refusal a scoped model caller can act on when a tool-runtime edit needs ownership. */
+export function resolveCronScopedToolEditRefusal(params: {
+  job: CronJob;
+  nextJob: CronJob;
+  patch: CronJobPatch;
+  callerScope: CronCallerScope | undefined;
+}): string | undefined {
+  const { job, nextJob, patch, callerScope } = params;
+  if (!callerScope || callerScope.manageAll || !cronJobUsesToolRuntime(nextJob)) {
+    return undefined;
+  }
+  const ownedByCaller =
+    callerScope.sessionKey !== undefined &&
+    job.owner?.sessionKey === callerScope.sessionKey &&
+    job.owner?.accountId === callerScope.accountId;
+  // A payload or trigger edit runs with the job's tool authority, so only the
+  // recorded owner may make it; other jobs need a Gateway owner or operator.
+  if (!ownedByCaller) {
+    return job.owner?.sessionKey
+      ? "This automation belongs to another conversation or account. Only its owner, a Gateway " +
+          "owner or an operator can change its prompt or tools; you can create a new automation here instead."
+      : "This automation has no recorded owner, so only a Gateway owner or an operator can change " +
+          "its prompt or tools (for example on the Automations page). You can still enable, " +
+          "disable, reschedule or remove it, or create a new automation here.";
+  }
+  return requiresExplicitAgentRuntimeToolsAllow({ job: nextJob, callerScope }) &&
+    !isLegacyCreatorPromptUpdate(job, patch)
+    ? "Include payload.toolsAllow listing the tools this automation needs (use [] for none)."
+    : undefined;
+}
+
+// Only these fields keep a trusted job's operator authority when a scoped conversation edits it.
+// `name` is excluded: the run prompt includes it.
+const TRUSTED_LIFECYCLE_PATCH_KEYS: ReadonlySet<string> = new Set([
+  "enabled",
+  "schedule",
+  "displayName",
+  "description",
+  "deleteAfterRun",
+  "wakeMode",
+  "pacing",
+  "activeHours",
+  "idleOnly",
+]);
+
+/** Any other edit (prompt, tools, routes, failure alerts, future fields) narrows the job to the caller. */
+export function cronUpdateNarrowsTrustedJob(
+  job: CronJob,
+  patch: CronJobPatch,
+  callerScope: CronCallerScope | undefined,
+): boolean {
+  return (
+    job.scheduledToolPolicy?.mode === "trusted" &&
+    callerScope !== undefined &&
+    !callerScope.manageAll &&
+    Object.keys(patch).some((key) => !TRUSTED_LIFECYCLE_PATCH_KEYS.has(key))
+  );
+}
+
+/** Narrowing needs the owner's proven account; legacy owner records keep lifecycle edits only. */
+export function assertTrustedJobNarrowingOwner(
+  job: CronJob,
+  callerScope: CronCallerScope | undefined,
+): void {
+  if (!callerScope || !cronTrustedJobOwnedByCaller(job, callerScope, { requireAccount: true })) {
+    throw new TypeError(
+      "This automation runs with operator access and its owner record has no account, so from " +
+        "here you can only pause, resume, reschedule or remove it. To change what it runs or its name, " +
+        "where it reports or where failures alert, create a new automation here or use the Automations page.",
+    );
+  }
 }
 
 export function respondRefusedCronAgent(agentId: string | undefined, respond: RespondFn): boolean {
@@ -144,7 +218,9 @@ export function scopedCronJobHandler<P extends CronJobIdParams>(
     const visibility = scope.checkVisibility ? visibilityRead.resolve() : undefined;
     if (
       !job ||
+      (isHumanCronMutation(method) && !canHumanManageCronJob(client, job)) ||
       (scope.checkVisibility &&
+        !(method === "cron.get" && isHumanCronJobOwner(client, job)) &&
         !cronJobIsVisible(job, visibility, context.cron.getDefaultAgentId())) ||
       !cronJobMatchesCallerScope({
         job,

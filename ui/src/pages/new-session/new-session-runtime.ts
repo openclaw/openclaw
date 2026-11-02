@@ -1,5 +1,4 @@
 import type { PresenceEntry } from "../../api/types.ts";
-import { closeMenusWithin } from "../../components/solid/menu.tsx";
 
 const PLACE_TOPOLOGY_EVENTS = new Set([
   "config.changed",
@@ -24,17 +23,4 @@ export function nodePresenceStateSignature(entries: PresenceEntry[]): string {
     states.set(id, entry.reason?.trim().toLowerCase() === "disconnect" ? "offline" : "connected");
   }
   return JSON.stringify([...states].toSorted(([left], [right]) => left.localeCompare(right)));
-}
-
-export function closeAgentPicker(root: ParentNode) {
-  const picker = root.querySelector(".new-session-page__select--agent");
-  if (picker) {
-    closeMenusWithin(picker);
-  }
-}
-
-export function closeSessionMenus(
-  root: Pick<ParentNode, "querySelectorAll"> & { ownerDocument: Document },
-) {
-  closeMenusWithin(root);
 }

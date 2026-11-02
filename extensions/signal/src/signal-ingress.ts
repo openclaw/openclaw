@@ -1,4 +1,3 @@
-// Signal plugin module owns raw-envelope durable ingress mapping and draining.
 import {
   createChannelIngressError,
   createChannelIngressMonitor,

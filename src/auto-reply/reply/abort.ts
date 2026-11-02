@@ -23,6 +23,7 @@ export type FastAbortResult = {
   handled: boolean;
   aborted: boolean;
   rejectionReason?: "finalizing";
+  localModelMayStillBeFinishing?: true;
   stoppedSubagents?: number;
   failedSubagents?: number;
 };
@@ -31,20 +32,25 @@ export function formatAbortReplyText(
   stoppedSubagents?: number,
   rejectionReason?: "finalizing",
   failedSubagents?: number,
+  localModelMayStillBeFinishing?: boolean,
 ): string {
   const failureSuffix =
     failedSubagents !== undefined && failedSubagents > 0
       ? ` Cancellation was incomplete for ${failedSubagents} sub-agent${failedSubagents === 1 ? "" : "s"}. Retry /stop.`
+      : "";
+  const caveat =
+    localModelMayStillBeFinishing && !rejectionReason
+      ? " Cancellation requested; the local model may still be finishing."
       : "";
   const base =
     rejectionReason === "finalizing"
       ? "Agent reply is already finalizing and can no longer be aborted."
       : "⚙️ Agent was aborted.";
   if (stoppedSubagents === undefined || stoppedSubagents <= 0) {
-    return `${base}${failureSuffix}`;
+    return `${base}${failureSuffix}${caveat}`;
   }
   const label = stoppedSubagents === 1 ? "sub-agent" : "sub-agents";
-  return `${base} Stopped ${stoppedSubagents} ${label}.${failureSuffix}`;
+  return `${base} Stopped ${stoppedSubagents} ${label}.${failureSuffix}${caveat}`;
 }
 
 /** Normalize ingress once; current authorization belongs to the loaded operation. */

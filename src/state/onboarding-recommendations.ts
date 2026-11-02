@@ -49,7 +49,7 @@ export function createOnboardingRecommendationsStore(params: {
     },
     acknowledge: (options: AcknowledgeOnboardingRecommendationsParams = {}) => {
       const context = captureOpenClawStateWorkerContext(database);
-      const captured = structuredClone({ ...options, nowMs: options.nowMs ?? Date.now() });
+      const captured = { ...options, nowMs: options.nowMs ?? Date.now() };
       return executeOpenClawStateWorker(context, {
         type: "onboardingRecommendations.acknowledge",
         input: { workspaceKey, params: captured },
@@ -65,10 +65,9 @@ export function createOnboardingRecommendationsStore(params: {
     },
     clearPending: (options: ClearPendingOnboardingRecommendationsParams) => {
       const context = captureOpenClawStateWorkerContext(database);
-      const captured = structuredClone(options);
       return executeOpenClawStateWorker(context, {
         type: "onboardingRecommendations.clearPending",
-        input: { workspaceKey, params: captured },
+        input: { workspaceKey, params: options },
       });
     },
     clear: () => {

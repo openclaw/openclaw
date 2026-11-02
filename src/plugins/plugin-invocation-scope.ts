@@ -1,3 +1,4 @@
+import { runWithAsyncStore } from "../shared/async-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import {
@@ -6,6 +7,7 @@ import {
   pluginInvocationContext,
   type PluginInstanceHandle,
   type PluginInvocationBinding,
+  type PluginInvocationContext,
 } from "./plugin-instance-scope.js";
 import type { PluginInstanceConsumer } from "./plugin-instance.types.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -38,7 +40,8 @@ export async function runPluginCleanupScope<T>(values: readonly object[], run: (
     ]),
   );
   try {
-    return await pluginInvocationContext.run(
+    return await runWithAsyncStore(
+      pluginInvocationContext,
       {
         lookup: (instance) => {
           const binding = bindings.get(instance);
@@ -57,30 +60,41 @@ export async function runPluginCleanupScope<T>(values: readonly object[], run: (
 
 /** Finite execution custody for one host-selected registry and its exact instances. */
 export class PluginInvocationScope {
-  private readonly bindings = new Map<PluginInstanceHandle, PluginInvocationBinding>();
-  private readonly consumers = new Map<PluginInstanceHandle, PluginInstanceConsumer>();
+  private readonly bindings: Map<PluginInstanceHandle, PluginInvocationBinding>;
+  private readonly consumers?: Map<PluginInstanceHandle, PluginInstanceConsumer>;
   private closed = false;
-  private readonly consumerKind: "work" | "custody";
 
   constructor(
     readonly registry: PluginRegistry,
     instances: Iterable<PluginInstanceHandle>,
-    options: { retained?: boolean; parent?: PluginInvocationScope; kind?: "work" | "custody" } = {},
+    options: {
+      retained?: boolean;
+      parent?: PluginInvocationContext;
+      kind?: "work" | "custody";
+      registryByInstance?: ReadonlyMap<PluginInstanceHandle, PluginRegistry>;
+    } = {},
   ) {
-    this.consumerKind = options.kind ?? "work";
+    this.bindings = options.retained ? (this.consumers = new Map()) : new Map();
+    const consumerKind = options.kind ?? "work";
+    const invoke = <T>(run: () => T): T => this.run(run);
     try {
-      for (const instance of new Set(instances)) {
-        if (options.retained) {
+      for (const instance of instances) {
+        if (this.bindings.has(instance)) {
+          continue;
+        }
+        const instanceRegistry = options.registryByInstance?.get(instance) ?? registry;
+        if (this.consumers) {
           const acquire = () =>
-            instance.retainConsumer((run) => this.run(run), registry, this.consumerKind);
-          const parent = options.parent?.consumer(instance);
+            instance.retainConsumer(invoke, instanceRegistry, consumerKind, {
+              reason: "invocation-scope",
+            });
+          const parent = options.parent?.lookup(instance);
           const consumer = parent ? parent.run(acquire) : acquire();
           this.consumers.set(instance, consumer);
-          this.bindings.set(instance, consumer);
         } else {
           this.bindings.set(instance, {
-            run: (run) => this.run(() => instance.runInRegistry(registry, run)),
-            wrap: instance.createRegistryView(registry, (run) => this.run(run)),
+            run: (run) => this.run(() => instance.runInRegistry(instanceRegistry, run)),
+            wrap: instance.createRegistryView(instanceRegistry, invoke),
           });
         }
       }
@@ -90,21 +104,20 @@ export class PluginInvocationScope {
     }
   }
 
-  private consumer(instance: PluginInstanceHandle): PluginInstanceConsumer | undefined {
-    this.assertOpen();
-    return this.consumers.get(instance);
-  }
-
   private assertOpen(): void {
     if (this.closed) {
       throw new Error("Plugin invocation scope is closed");
     }
   }
 
+  get pendingReplacementInstances(): readonly PluginInstanceHandle[] {
+    return this.closed || !this.consumers
+      ? []
+      : [...this.consumers.keys()].filter((instance) => instance.replacementPending);
+  }
+
   get holdsPendingReplacement(): boolean {
-    return (
-      !this.closed && [...this.consumers.keys()].some((instance) => instance.replacementPending)
-    );
+    return this.pendingReplacementInstances.length > 0;
   }
 
   lookup(instance: PluginInstanceHandle): PluginInvocationBinding | undefined {
@@ -117,7 +130,14 @@ export class PluginInvocationScope {
 
   run<T>(run: () => T): T {
     this.assertOpen();
-    return pluginInvocationContext.run(this, run);
+    if (this.consumers?.size && pluginInvocationContext.getStore() !== this) {
+      // A child owns its streams; inherited caller tokens must not capture them.
+      // Consumer reentry within this scope keeps the token it just installed.
+      return pluginInstanceInvocation.exit(() =>
+        runWithAsyncStore(pluginInvocationContext, this, run),
+      );
+    }
+    return runWithAsyncStore(pluginInvocationContext, this, run);
   }
 
   wrap<T>(value: T): T {
@@ -131,12 +151,16 @@ export class PluginInvocationScope {
   /** Transfer custody before revoking callbacks captured by ordinary engine operations. */
   beginCleanup(): { scope: PluginInvocationScope; release: () => Promise<void> } {
     this.assertOpen();
-    const cleanup = new PluginInvocationScope(this.registry, this.bindings.keys());
+    // Retained scopes install teardown bindings below, not temporary ordinary views.
+    const cleanup = new PluginInvocationScope(
+      this.registry,
+      this.consumers?.size ? [] : this.bindings.keys(),
+    );
     const finished = createDeferredCore();
     // Retirement may already await these exact consumers. Revoke their callbacks
     // now, but keep their physical completion until the cleanup owner drains.
     const closed = Promise.all(
-      [...this.consumers].map(([instance, consumer]) =>
+      [...(this.consumers ?? [])].map(([instance, consumer]) =>
         consumer.close(() => {
           const teardown = pluginInstanceInvocation.getStore();
           if (!teardown) {
@@ -172,7 +196,7 @@ export class PluginInvocationScope {
       return;
     }
     this.closed = true;
-    for (const consumer of this.consumers.values()) {
+    for (const consumer of this.consumers?.values() ?? []) {
       consumer.release();
     }
   }
@@ -181,34 +205,48 @@ export class PluginInvocationScope {
 /** Enumerate exact instances already represented by this finite registry view. */
 export function collectRegistryInvocationInstances(
   registry: PluginRegistry,
+  overlapOnly = false,
 ): Set<PluginInstanceHandle> {
   const instances = new Set<PluginInstanceHandle>();
-  const records = [
-    // Rollback preserves failed records for diagnostics, not executable custody.
-    ...registry.plugins.filter((record) => record.status === "loaded"),
-    ...registry.decisionProviders.map(({ host }) => host.record),
-    ...registry.channels.flatMap(({ borrowedRuntimeRecord }) => borrowedRuntimeRecord ?? []),
-  ];
-  for (const record of records) {
-    const instance = getPluginInstance(record);
-    if (instance) {
+  const add = (instance: PluginInstanceHandle | undefined) => {
+    if (instance && (!overlapOnly || instance.owner?.record.generationOverlap === true)) {
       instances.add(instance);
+    }
+  };
+  for (const record of registry.plugins) {
+    // Rollback preserves failed records for diagnostics, not executable custody.
+    if (record.status === "loaded") {
+      add(getPluginInstance(record));
     }
   }
-  const values = [
-    ...registry.tools.map(({ factory }) => factory),
-    ...registry.channels.map(({ plugin }) => plugin),
-    ...[...registry.contextEngines.values()].map(({ factory }) => factory),
-    ...registry.widgetPresenters.map(({ presenter }) => presenter),
-    ...registry.memoryCorpusSupplements.map(({ supplement }) => supplement),
-    ...registry.memoryPromptPreparations.map(({ prepare }) => prepare),
-    ...registry.memoryPromptSupplements.map(({ builder }) => builder),
-  ];
-  for (const value of values) {
-    const instance = getPluginValueInstance(value);
-    if (instance) {
-      instances.add(instance);
+  for (const { host } of registry.decisionProviders) {
+    add(getPluginInstance(host.record));
+  }
+  for (const { borrowedRuntimeRecord } of registry.channels) {
+    if (borrowedRuntimeRecord) {
+      add(getPluginInstance(borrowedRuntimeRecord));
     }
+  }
+  for (const { factory } of registry.tools) {
+    add(getPluginValueInstance(factory));
+  }
+  for (const { plugin } of registry.channels) {
+    add(getPluginValueInstance(plugin));
+  }
+  for (const { factory } of registry.contextEngines.values()) {
+    add(getPluginValueInstance(factory));
+  }
+  for (const { presenter } of registry.widgetPresenters) {
+    add(getPluginValueInstance(presenter));
+  }
+  for (const { supplement } of registry.memoryCorpusSupplements) {
+    add(getPluginValueInstance(supplement));
+  }
+  for (const { prepare } of registry.memoryPromptPreparations) {
+    add(getPluginValueInstance(prepare));
+  }
+  for (const { builder } of registry.memoryPromptSupplements) {
+    add(getPluginValueInstance(builder));
   }
   return instances;
 }

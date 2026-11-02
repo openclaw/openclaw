@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import {
@@ -26,7 +25,6 @@ import {
   SqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
   type SqliteWorkerOperations,
-  type SqliteWorkerStore,
 } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
@@ -43,7 +41,10 @@ import {
 import * as agentWorkers from "../../state/openclaw-agent-worker-store.js";
 import { emitUserProfilesChanged } from "../../state/user-profile-events.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
 import {
   loadSessionEntry,
@@ -70,140 +71,132 @@ import { bindSqliteWorkerBackend } from "./session-sharing-store.worker.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
-it("lists current membership evidence while transcript reads wait", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    await captureRuntimeConfigAsyncReader()();
-    const scope = { agentId: "main", sessionKey: "agent:main:worker-members" };
-    const entry = { sessionId: "worker-members", updatedAt: 1 };
-    await patchSessionEntryCore(scope, () => entry, {
-      fallbackEntry: entry,
-      skipMaintenance: true,
-    });
-    await addSessionMember(scope, {
-      identityId: "zoe",
-      addedBy: "actor-evidence:unknown",
-      addedAt: 2,
-    });
-    await addSessionMember(scope, {
-      identityId: "alice",
-      addedBy: "actor-evidence:unattributed",
-      addedAt: 3,
-    });
-    const requestContext = context(vi.fn());
-    await initializeSessionReadContext(requestContext);
-    await getSessionRowProjection(requestContext)!.ensureMaterialized();
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const historyEntered = createDeferredCore();
-    const historyContended = createDeferredCore();
-    const releaseHistory = createDeferredCore();
-    const runHistory = historyLane.pool.run.bind(historyLane.pool);
-    let historyRequests = 0;
-    const historyRun = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
-      if (++historyRequests === 1) {
-        historyEntered.resolve();
-      } else {
-        historyContended.resolve();
-      }
-      await releaseHistory.promise;
-      return await runHistory(...args);
-    });
-    const historyRead = withSessionHistoryWorkerDatabase({ agentId: "main" }, (owner) =>
-      owner.readEntryPresence({ ...scope, databaseAgentId: "main", storePath: database.path }),
-    );
-    const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
-    const databasePrototype: DatabaseSync = Object.getPrototypeOf(database.db);
-    const methods = [
-      vi.spyOn(prototype, "all"),
-      vi.spyOn(prototype, "get"),
-      vi.spyOn(prototype, "iterate"),
-      vi.spyOn(prototype, "run"),
-      vi.spyOn(databasePrototype, "exec"),
-    ];
-    let membersRead: ReturnType<typeof call> | undefined;
-    try {
-      await Promise.race([historyEntered.promise, historyRead]);
-      expect(historyRequests).toBe(1);
-      membersRead = call(
-        "session.members.listEvidence",
-        { sessionKey: scope.sessionKey },
-        requestContext,
-      );
-      // A queued dependency signals contention directly; no timing threshold decides success.
-      expect(
-        await Promise.race([
-          membersRead.then((responses) => responses[0]?.[1]),
-          historyContended.promise.then(() => ({ blockedByTranscript: true })),
-        ]),
-      ).toMatchObject({
-        members: [
-          { identityId: "alice", addedAt: 3 },
-          { identityId: "zoe", addedByState: "unknown", addedAt: 2 },
-        ],
-      });
-      for (const method of methods) {
-        expect(method).not.toHaveBeenCalled();
-      }
-    } finally {
-      for (const method of methods) {
-        method.mockRestore();
-      }
-      releaseHistory.resolve();
-      await Promise.allSettled([historyRead, membersRead]);
-      historyRun.mockRestore();
-    }
-    expect(await historyRead).toBe(true);
-    await addSessionMember(scope, { identityId: "bob", addedBy: "owner", addedAt: 4 });
-    expect((await readSessionMembersInWorker(scope)).members).toEqual([
-      { identityId: "alice", addedBy: "actor-evidence:unattributed", addedAt: 3 },
-      { identityId: "bob", addedBy: "owner", addedAt: 4 },
-      { identityId: "zoe", addedBy: "actor-evidence:unknown", addedAt: 2 },
-    ]);
-    const missing = { agentId: "missing", sessionKey: "agent:missing:main" };
-    expect((await readSessionMembersInWorker(missing)).members).toEqual([]);
-    expect(fs.existsSync(resolveOpenClawAgentSqlitePath({ agentId: "missing" }))).toBe(false);
-  });
+function memberRow(identityId: string, addedAt: number, addedBy = "owner") {
+  return { identityId, addedBy, addedAt };
+}
+
+const withState = (run: (state: OpenClawTestState) => Promise<void>) =>
+  withOpenClawTestState({ scenario: "minimal" }, run);
+const mainScope = (name: string, storePath?: string) => ({
+  agentId: "main",
+  sessionKey: `agent:main:${name}`,
+  ...(storePath ? { storePath } : {}),
 });
+const readMembers = async (scope: Parameters<typeof readSessionMembersInWorker>[0]) =>
+  (await readSessionMembersInWorker(scope)).members;
+async function readContext() {
+  const ctx = context(vi.fn());
+  await initializeSessionReadContext(ctx);
+  return ctx;
+}
+
+it.each(["session.members.list", "session.members.listEvidence"] as const)(
+  "%s reads current cached membership while transcript reads wait",
+  async (method) => {
+    await withState(async () => {
+      await captureRuntimeConfigAsyncReader()();
+      const scope = mainScope("worker-members");
+      const entry = { sessionId: "worker-members", updatedAt: 1 };
+      await patchSessionEntryCore(scope, () => entry, {
+        fallbackEntry: entry,
+        skipMaintenance: true,
+      });
+      const evidenceAware = method === "session.members.listEvidence";
+      const zoe = memberRow("zoe", 2, evidenceAware ? "actor-evidence:unknown" : "owner");
+      const alice = memberRow("alice", 3, evidenceAware ? "actor-evidence:unattributed" : "owner");
+      await addSessionMember(scope, zoe);
+      await addSessionMember(scope, alice);
+      const expected = evidenceAware
+        ? [
+            { identityId: "alice", addedAt: 3 },
+            { identityId: "zoe", addedByState: "unknown", addedAt: 2 },
+          ]
+        : [alice, zoe];
+      const requestContext = await readContext();
+      await getSessionRowProjection(requestContext)!.ensureMaterialized();
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const historyEntered = createDeferredCore();
+      const historyContended = createDeferredCore();
+      const releaseHistory = createDeferredCore();
+      const runHistory = historyLane.pool.run.bind(historyLane.pool);
+      let historyRequests = 0;
+      const historyRun = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+        if (++historyRequests === 1) {
+          historyEntered.resolve();
+        } else {
+          historyContended.resolve();
+        }
+        await releaseHistory.promise;
+        return await runHistory(...args);
+      });
+      const historyRead = withSessionHistoryWorkerDatabase({ agentId: "main" }, (owner) =>
+        owner.readEntryPresence({ ...scope, databaseAgentId: "main", storePath: database.path }),
+      );
+      const sql = observeHostDataSql();
+      let membersRead: ReturnType<typeof call> | undefined;
+      try {
+        await Promise.race([historyEntered.promise, historyRead]);
+        expect(historyRequests).toBe(1);
+        for (let round = 0; round < 2; round++) {
+          membersRead = call(method, { sessionKey: scope.sessionKey }, requestContext);
+          expect(
+            await Promise.race([
+              membersRead.then((responses) => responses[0]?.[1]),
+              historyContended.promise.then(() => ({ blockedByTranscript: true })),
+            ]),
+          ).toMatchObject({ members: expected });
+          if (evidenceAware && round === 0) {
+            expect(sql.queries).toEqual([]);
+          }
+          expect(
+            sql.queries.filter((query) => /from ["`]?session_members["`]?/i.test(query)),
+          ).toEqual([]);
+          sql.queries.length = 0;
+        }
+      } finally {
+        sql.restore();
+        releaseHistory.resolve();
+        await Promise.allSettled([historyRead, membersRead]);
+        historyRun.mockRestore();
+      }
+      expect(await historyRead).toBe(true);
+      await addSessionMember(scope, memberRow("bob", 4));
+      expect(await readMembers(scope)).toEqual([alice, memberRow("bob", 4), zoe]);
+      const missing = { agentId: "missing", sessionKey: "agent:missing:main" };
+      expect(await readMembers(missing)).toEqual([]);
+      expect(fs.existsSync(resolveOpenClawAgentSqlitePath({ agentId: "missing" }))).toBe(false);
+    });
+  },
+);
 
 it("retains the physical owner and logical partition of a shared member store", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withState(async (state) => {
     const database = openOpenClawAgentDatabase({
       agentId: "main",
       path: state.statePath("shared-members.sqlite"),
     });
     const scope = { agentId: "other", sessionKey: "agent:other:members", storePath: database.path };
     await upsertSessionEntryCore(scope, { sessionId: "other-members", updatedAt: 1 });
-    await addSessionMember(scope, {
-      identityId: "other-guest",
-      addedBy: "other-owner",
-      addedAt: 2,
-    });
+    await addSessionMember(scope, memberRow("other-guest", 2, "other-owner"));
     const sibling = { ...scope, agentId: "main", sessionKey: "agent:main:members" };
     await upsertSessionEntryCore(sibling, { sessionId: "main-members", updatedAt: 1 });
-    await addSessionMember(sibling, {
-      identityId: "main-guest",
-      addedBy: "main-owner",
-      addedAt: 3,
-    });
-    expect((await readSessionMembersInWorker(scope)).members).toEqual([
-      { identityId: "other-guest", addedBy: "other-owner", addedAt: 2 },
-    ]);
+    await addSessionMember(sibling, memberRow("main-guest", 3, "main-owner"));
+    expect(await readMembers(scope)).toEqual([memberRow("other-guest", 2, "other-owner")]);
     expect(database.agentId).toBe("main");
   });
 });
 
 it("keeps process-local incognito membership with its native owner", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const scope = { agentId: "main", sessionKey: "agent:main:dashboard:incognito-members" };
-    expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
+  await withState(async () => {
+    const scope = mainScope("dashboard:incognito-members");
+    expect(await readMembers(scope)).toEqual([]);
     await upsertSessionEntryCore(scope, {
       sessionId: "incognito-members",
       updatedAt: 1,
       incognito: true,
     });
-    await addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 });
-    expect((await readSessionMembersInWorker(scope)).members).toEqual([
-      { identityId: "guest", addedBy: "owner", addedAt: 2 },
-    ]);
+    await addSessionMember(scope, memberRow("guest", 2));
+    expect(await readMembers(scope)).toEqual([memberRow("guest", 2)]);
   });
 });
 
@@ -225,58 +218,18 @@ async function call(
   return responses;
 }
 
-it.each(["session.members.list", "session.members.listEvidence"] as const)(
-  "%s reads full member rows off the Gateway thread, including cached statements",
-  async (method) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await captureRuntimeConfigAsyncReader()();
-      const scope = { agentId: "main", sessionKey: "agent:main:worker-members" };
-      await upsertSessionEntryCore(scope, { sessionId: "worker-members", updatedAt: 1 });
-      await addSessionMember(scope, { identityId: "zoe", addedBy: "owner", addedAt: 2 });
-      await addSessionMember(scope, { identityId: "alice", addedBy: "owner", addedAt: 3 });
-      const requestContext = context(vi.fn());
-      await initializeSessionReadContext(requestContext);
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
-      // Observe native execution, including statements prepared before the request.
-      const all = vi.spyOn(prototype, "all");
-      const iterate = vi.spyOn(prototype, "iterate");
-      try {
-        for (let round = 0; round < 2; round++) {
-          const result = await call(method, { sessionKey: scope.sessionKey }, requestContext);
-          expect(result[0]?.[1]).toMatchObject({
-            members: [
-              { identityId: "alice", addedBy: "owner", addedAt: 3 },
-              { identityId: "zoe", addedBy: "owner", addedAt: 2 },
-            ],
-          });
-        }
-        expect(
-          [...all.mock.contexts, ...iterate.mock.contexts]
-            .map((statement) => (statement as StatementSync).sourceSQL)
-            .filter((sql) => /from ["`]?session_members["`]?/i.test(sql)),
-        ).toEqual([]);
-      } finally {
-        all.mockRestore();
-        iterate.mockRestore();
-      }
-    });
-  },
-);
-
 it("rechecks the current manager after the membership read yields", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withState(async () => {
     await captureRuntimeConfigAsyncReader()();
-    const scope = { agentId: "main", sessionKey: "agent:main:member-reader-authority" };
+    const scope = mainScope("member-reader-authority");
     await upsertSessionEntryCore(scope, {
       sessionId: "member-reader-authority",
       updatedAt: 1,
       createdActor: { type: "human", source: "profile", id: "owner" },
     });
-    await addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 });
+    await addSessionMember(scope, memberRow("guest", 2));
     const client = identifiedClient("owner");
-    const requestContext = context(vi.fn());
-    await initializeSessionReadContext(requestContext);
+    const requestContext = await readContext();
     const pending = call(
       "session.members.listEvidence",
       { sessionKey: scope.sessionKey },
@@ -289,15 +242,11 @@ it("rechecks the current manager after the membership read yields", async () => 
 });
 
 it("commits aliased worker membership and participant facts before publishing, and rejects stale authority", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withState(async (state) => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const alias = state.path("member-alias");
     fs.symlinkSync(path.dirname(database.path), alias, "junction");
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:worker-writes",
-      storePath: path.join(alias, path.basename(database.path)),
-    };
+    const scope = mainScope("worker-writes", path.join(alias, path.basename(database.path)));
     const entry = {
       sessionId: "worker-writes",
       updatedAt: 1,
@@ -326,6 +275,11 @@ it("commits aliased worker membership and participant facts before publishing, a
       incognito: undefined,
     };
     const changes: SessionRowChange[] = [];
+    const expectFact = (facts: object) =>
+      expect(changes.at(-1)).toMatchObject({ sessionKey: scope.sessionKey, facts });
+    const peer = { type: "agent" as const, id: "peer" };
+    const recordPeer = (promptedAt: number) =>
+      recordSessionParticipant(scope, { identity: peer, promptedAt });
     const stop = sessionChanges.subscribeFacts((change) => changes.push(change));
     const participantLifecycle = vi.fn();
     const stopLifecycle = onSessionLifecycleEvent((event) => {
@@ -338,32 +292,16 @@ it("commits aliased worker membership and participant facts before publishing, a
     try {
       expect(
         await addSessionMember(scope, {
-          identityId: "guest",
-          addedBy: "owner",
-          addedAt: 2,
+          ...memberRow("guest", 2),
           expectedSessionId: entry.sessionId,
           expectedEntry,
         }),
-      ).toEqual({ inserted: true, member: { identityId: "guest", addedBy: "owner", addedAt: 2 } });
-      expect(changes.at(-1)).toMatchObject({
-        sessionKey: scope.sessionKey,
-        facts: { kind: "member", identityId: "guest", present: true },
-      });
-      expect(
-        await recordSessionParticipant(scope, {
-          identity: { type: "agent", id: "peer" },
-          promptedAt: 3,
-        }),
-      ).toBe("inserted");
-      expect(changes.at(-1)).toMatchObject({
-        sessionKey: scope.sessionKey,
-        facts: {
-          kind: "participants",
-          projection: {
-            participants: [{ identity: { type: "agent", id: "peer" } }],
-            participantCount: 1,
-          },
-        },
+      ).toEqual({ inserted: true, member: memberRow("guest", 2) });
+      expectFact({ kind: "member", identityId: "guest", present: true });
+      expect(await recordPeer(3)).toBe("inserted");
+      expectFact({
+        kind: "participants",
+        projection: { participants: [{ identity: peer }], participantCount: 1 },
       });
       actor = captureDurableSessionActor({
         database: { agentId: "main", path: database.path },
@@ -372,27 +310,12 @@ it("commits aliased worker membership and participant facts before publishing, a
       });
       const before = await actor.read(authority);
       const publications = changes.length;
-      expect(
-        await recordSessionParticipant(scope, {
-          identity: { type: "agent", id: "peer" },
-          promptedAt: 4,
-        }),
-      ).toBe("updated");
+      expect(await recordPeer(4)).toBe("updated");
       expect(changes).toHaveLength(publications + 1);
-      expect(changes.at(-1)).toMatchObject({
-        sessionKey: scope.sessionKey,
-        facts: {
-          kind: "participants",
-          projectionChanged: false,
-          records: [
-            {
-              identity: { type: "agent", id: "peer" },
-              contributionCount: 2,
-              firstPromptedAt: 3,
-              lastPromptedAt: 4,
-            },
-          ],
-        },
+      expectFact({
+        kind: "participants",
+        projectionChanged: false,
+        records: [{ identity: peer, contributionCount: 2, firstPromptedAt: 3, lastPromptedAt: 4 }],
       });
       expect(changes.at(-1)).not.toHaveProperty("facts.projection");
       const after = actor.snapshot(authority);
@@ -416,15 +339,10 @@ it("commits aliased worker membership and participant facts before publishing, a
           throw new Error("revoked manager");
         }),
       ).rejects.toThrow("revoked manager");
-      expect(await removeSessionMember(scope, "guest", undefined, entry.sessionId)).toEqual({
-        identityId: "guest",
-        addedBy: "owner",
-        addedAt: 2,
-      });
-      expect(changes.at(-1)).toMatchObject({
-        sessionKey: scope.sessionKey,
-        facts: { kind: "member", identityId: "guest", present: false },
-      });
+      expect(await removeSessionMember(scope, "guest", undefined, entry.sessionId)).toEqual(
+        memberRow("guest", 2),
+      );
+      expectFact({ kind: "member", identityId: "guest", present: false });
       expect(actor.snapshot(authority)).toBeUndefined();
       expect((await actor.read(authority)).participants).toEqual(after?.participants);
       expect(sql.queries).toEqual([]);
@@ -435,19 +353,15 @@ it("commits aliased worker membership and participant facts before publishing, a
       stopLifecycle();
       sql.restore();
     }
-    expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
+    expect(await readMembers(scope)).toEqual([]);
   });
 });
 
 it("prepares admitted category keys in one statement and observes committed replacements", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withState(async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     setCanonicalSqliteSessionMainKey(database, "main");
-    const scope = {
-      agentId: "main",
-      storePath: database.path,
-      sessionKey: "agent:main:category-preparation",
-    };
+    const scope = mainScope("category-preparation", database.path);
     const entry = { sessionId: "category-preparation", updatedAt: 1, category: "Work" };
     replaceSessionEntrySync(scope, entry);
     const backend = bindSqliteWorkerBackend(undefined, {
@@ -480,24 +394,20 @@ it("prepares admitted category keys in one statement and observes committed repl
 });
 
 it("preserves entry changes and skips reassigned categories after preparation", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withState(async (state) => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const alias = state.path("category-alias");
     fs.symlinkSync(path.dirname(database.path), alias, "junction");
-    const scope = {
-      agentId: "main",
-      storePath: path.join(alias, path.basename(database.path)),
-      sessionKey: "agent:main:category-current",
-    };
+    const scope = mainScope("category-current", path.join(alias, path.basename(database.path)));
     const reassigned = { ...scope, sessionKey: "agent:main:category-reassigned" };
-    for (const target of [scope, reassigned]) {
-      replaceSessionEntrySync(target, {
-        sessionId: target.sessionKey,
-        updatedAt: 1,
-        category: "Work",
-        label: "Before",
-      });
-    }
+    const replaceCategory = (
+      target: typeof scope,
+      updatedAt = 1,
+      category = "Work",
+      label = "Before",
+    ) =>
+      replaceSessionEntrySync(target, { sessionId: target.sessionKey, updatedAt, category, label });
+    [scope, reassigned].forEach((target) => replaceCategory(target));
     let changed = false;
     await expect(
       updateSessionGroupCategoriesInWorker({
@@ -506,18 +416,8 @@ it("preserves entry changes and skips reassigned categories after preparation", 
         assertTargetCurrent() {
           if (!changed) {
             changed = true;
-            replaceSessionEntrySync(scope, {
-              sessionId: scope.sessionKey,
-              updatedAt: 2,
-              category: "Work",
-              label: "After",
-            });
-            replaceSessionEntrySync(reassigned, {
-              sessionId: reassigned.sessionKey,
-              updatedAt: 3,
-              category: "Replacement",
-              label: "Reassigned",
-            });
+            replaceCategory(scope, 2, "Work", "After");
+            replaceCategory(reassigned, 3, "Replacement", "Reassigned");
           }
         },
       }),
@@ -543,21 +443,18 @@ it.each([
 ] as const)(
   "settles committed $mutation with $receipt receipt when the ordinary worker reply is lost (host closed: $closeBeforeFailure)",
   async ({ mutation, receipt, closeBeforeFailure }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withState(async (state) => {
       await captureRuntimeConfigAsyncReader()();
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:lost-member-reply",
-        ...(mutation === "category"
-          ? { storePath: state.statePath("shared-category.sqlite") }
-          : {}),
-      };
+      const scope = mainScope(
+        "lost-member-reply",
+        mutation === "category" ? state.statePath("shared-category.sqlite") : undefined,
+      );
       await upsertSessionEntryCore(scope, {
         sessionId: "lost-member-reply",
         updatedAt: 1,
         category: " Work ",
       });
-      await addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 });
+      await addSessionMember(scope, memberRow("guest", 2));
       const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
       const aliasedScope = {
         agentId: "other",
@@ -582,15 +479,18 @@ it.each([
       ]);
       const changes: SessionRowChange[] = [];
       const cachesAtPublication: Array<ReturnType<typeof readCommittedSessionEntryCache>> = [];
+      const committedCache = () =>
+        readCommittedSessionEntryCache(requireNativeSqliteDatabase(database.db));
       const stop = sessionChanges.subscribeFacts((change) => {
         changes.push(change);
-        cachesAtPublication.push(
-          readCommittedSessionEntryCache(requireNativeSqliteDatabase(database.db)),
-        );
+        cachesAtPublication.push(committedCache());
         projection.invalidate(change);
       });
       const cfg = { agents: { entries: { main: {} } }, session: { store: database.path } };
       const sharing = await prepareSessionMutationFacts({ cfg, ...scope });
+      const unavailable = "Session access facts are unavailable";
+      const expectUnavailable = () =>
+        expect(prepareSessionMutationFacts({ cfg, ...scope })).rejects.toThrow(unavailable);
       const publishedMemberships: boolean[] = [];
       const stopPublic = sessionChanges.subscribe((change) => {
         if (
@@ -637,9 +537,7 @@ it.each([
               onAdmitted(request) {
                 configuration.onAdmitted?.(request);
                 if (request.stage === "commit") {
-                  expect(() => sharing.readCurrent(cfg)).toThrow(
-                    "Session access facts are unavailable",
-                  );
+                  expect(() => sharing.readCurrent(cfg)).toThrow(unavailable);
                 }
               },
             });
@@ -647,37 +545,27 @@ it.each([
               type: keyof Operations,
               run: () => Promise<T>,
             ): Promise<T> => {
-              const selected = type === (mutation === "category" ? "category.apply" : "remove");
-              if (selected) {
-                mutations++;
+              if (type !== (mutation === "category" ? "category.apply" : "remove")) {
+                return run();
               }
-              const result = await run();
-              if (selected) {
-                if (closeBeforeFailure) {
-                  expect(closeOpenClawAgentDatabaseByPath(database.path, database.agentId)).toBe(
-                    true,
-                  );
-                  expect(database.db.isOpen).toBe(false);
-                }
-                throw failure;
+              mutations++;
+              await run();
+              if (closeBeforeFailure) {
+                expect(closeOpenClawAgentDatabaseByPath(database.path, database.agentId)).toBe(
+                  true,
+                );
+                expect(database.db.isOpen).toBe(false);
               }
-              return result;
+              throw failure;
             };
-            return {
+            const interrupted: typeof worker = {
               ...worker,
-              execute<Key extends keyof Operations>(
-                command: { type: Key; input: Operations[Key]["input"] },
-                assertCurrent: () => void,
-                options?: { signal?: AbortSignal },
-              ) {
+              execute(command, assertCurrent, options) {
                 return intercept(command.type, () =>
                   worker.execute(command, assertCurrent, options),
                 );
               },
-              run<T>(
-                consume: (operation: Pick<SqliteWorkerStore<Operations>, "execute">) => Promise<T>,
-                assertCurrent: () => void,
-              ) {
+              run(consume, assertCurrent) {
                 return worker.run(
                   (operation) =>
                     consume({
@@ -689,6 +577,7 @@ it.each([
                 );
               },
             };
+            return interrupted;
           },
         );
       const run = (assertCurrent?: () => void) =>
@@ -709,11 +598,7 @@ it.each([
         ).rejects.toThrow("manager already revoked");
         expect(changes).toEqual([]);
         expect(projection.membership(database.path, scope.sessionKey)).toEqual(["guest"]);
-        expect(
-          readCommittedSessionEntryCache(requireNativeSqliteDatabase(database.db))?.get(
-            scope.sessionKey,
-          )?.category,
-        ).toBe(" Work ");
+        expect(committedCache()?.get(scope.sessionKey)?.category).toBe(" Work ");
         if (receipt !== "valid") {
           const outcome = await run().then(
             () => undefined,
@@ -726,22 +611,16 @@ it.each([
           if (closeBeforeFailure) {
             await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
           }
-          expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
-          expect(() => sharing.readCurrent(cfg)).toThrow("Session access facts are unavailable");
-          await expect(prepareSessionMutationFacts({ cfg, ...scope })).rejects.toThrow(
-            "Session access facts are unavailable",
-          );
+          expect(await readMembers(scope)).toEqual([]);
+          expect(() => sharing.readCurrent(cfg)).toThrow(unavailable);
+          await expectUnavailable();
           open.mockRestore();
           corruptReceipt.mockRestore();
-          await addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 3 });
-          await expect(prepareSessionMutationFacts({ cfg, ...scope })).rejects.toThrow(
-            "Session access facts are unavailable",
-          );
+          await addSessionMember(scope, memberRow("guest", 3));
+          await expectUnavailable();
           return;
         }
-        await expect(run()).resolves.toEqual(
-          mutation === "category" ? 2 : { identityId: "guest", addedBy: "owner", addedAt: 2 },
-        );
+        await expect(run()).resolves.toEqual(mutation === "category" ? 2 : memberRow("guest", 2));
         expect(changes).toEqual(
           mutation === "category"
             ? [scope.sessionKey, aliasedScope.sessionKey].map((sessionKey) =>
@@ -777,9 +656,7 @@ it.each([
         expect(publishedMemberships).toEqual([mutation === "category"]);
         expect(projection.membership(database.path, scope.sessionKey)).toEqual(members);
         expect(projection.needsPreparation).toBe(false);
-        expect(
-          (await readSessionMembersInWorker(scope)).members.map((member) => member.identityId),
-        ).toEqual(members);
+        expect((await readMembers(scope)).map((member) => member.identityId)).toEqual(members);
         expect(
           readSessionEntryCache(database, { cache: true }).entries.get(scope.sessionKey)?.category,
         ).toBe(mutation === "category" ? undefined : " Work ");
@@ -799,13 +676,9 @@ it.each([
 it.each(["agent", "profile"] as const)(
   "publishes a committed owner assignment through an unrelated %s invalidation",
   async (notice) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withState(async () => {
       const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const scope = {
-        agentId: "main",
-        storePath: database.path,
-        sessionKey: "agent:main:scoped-owner-receipt",
-      };
+      const scope = mainScope("scoped-owner-receipt", database.path);
       const entry = {
         sessionId: "scoped-owner-receipt",
         lifecycleRevision: "current-generation",
@@ -813,11 +686,12 @@ it.each(["agent", "profile"] as const)(
       };
       replaceSessionEntrySync(scope, entry);
       const assignedBy = { type: "human" as const, id: "assigner" };
-      const previousOwner = {
-        actor: { type: "human" as const, id: "previous-owner" },
+      const ownerRecord = (id: string, assignedAt: number) => ({
+        actor: { type: "human" as const, id },
         assignedBy,
-        assignedAt: 1,
-      };
+        assignedAt,
+      });
+      const previousOwner = ownerRecord("previous-owner", 1);
       assignSessionOwner(scope, { owner: previousOwner.actor, assignedBy, assignedAt: 1 });
       const source = readOpenClawAgentDatabaseIdentity(database);
       if (typeof source.identity !== "string") {
@@ -830,11 +704,7 @@ it.each(["agent", "profile"] as const)(
         membership: new Set(),
       });
       expect(sharing.readCurrent()?.entry?.owner).toEqual(previousOwner);
-      const nextOwner = {
-        actor: { type: "human" as const, id: "committed-owner" },
-        assignedBy,
-        assignedAt: 2,
-      };
+      const nextOwner = ownerRecord("committed-owner", 2);
       const publications: unknown[] = [];
       const stop = sessionChanges.subscribeProjection((change) => {
         if (

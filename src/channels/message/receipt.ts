@@ -141,24 +141,20 @@ export function createMessageReceiptFromOutboundResults(params: {
       : {}),
     sentAt: params.sentAt ?? firstNestedReceipt?.sentAt ?? Date.now(),
     raw: params.results,
-    sourceResults: Object.freeze(
-      params.results.flatMap((result) =>
-        result.outcome !== "not_sent" && result.receipt?.sourceResults?.length
-          ? result.receipt.sourceResults.map((source) =>
-              Object.freeze({
-                ...(source.channel !== undefined ? { channel: source.channel } : {}),
-                ...(source.outcome === "not_sent" ? { outcome: "not_sent" as const } : {}),
-                messageId: source.messageId ?? "",
-              }),
-            )
-          : [
-              Object.freeze({
-                ...(result.channel ? { channel: result.channel } : {}),
-                ...(result.outcome === "not_sent" ? { outcome: "not_sent" as const } : {}),
-                messageId: resolveReceiptSourceId(result) ?? "",
-              }),
-            ],
-      ),
+    sourceResults: params.results.flatMap((result) =>
+      result.outcome !== "not_sent" && result.receipt?.sourceResults?.length
+        ? result.receipt.sourceResults.map((source) => ({
+            ...(source.channel !== undefined ? { channel: source.channel } : {}),
+            ...(source.outcome === "not_sent" ? { outcome: "not_sent" as const } : {}),
+            messageId: source.messageId ?? "",
+          }))
+        : [
+            {
+              ...(result.channel ? { channel: result.channel } : {}),
+              ...(result.outcome === "not_sent" ? { outcome: "not_sent" as const } : {}),
+              messageId: resolveReceiptSourceId(result) ?? "",
+            },
+          ],
     ),
   };
 }

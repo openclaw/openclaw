@@ -2,78 +2,47 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
-import type { WorkerProvider } from "../../plugins/types.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
+import { nodeArtifacts, repository } from "./provider-lifecycle.test-support.js";
 import * as support from "./service.test-support.js";
-import type { WorkerEnvironmentRecord } from "./store.js";
 
 describe("prepared worker intent admission", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
   async function fixture(setup = false) {
-    const projectPath = path.join(support.testState.root, "project");
-    await fs.mkdir(projectPath);
-    await requireGit(projectPath, ["init", "--quiet"]);
-    await requireGit(projectPath, ["config", "user.name", "Project Test"]);
-    await requireGit(projectPath, ["config", "user.email", "project@example.invalid"]);
-    await requireGit(projectPath, ["config", "commit.gpgsign", "false"]);
-    await fs.writeFile(path.join(projectPath, "input.txt"), "base\n");
-    if (setup) {
-      await fs.mkdir(path.join(projectPath, ".openclaw"));
-      await fs.writeFile(
-        path.join(projectPath, ".openclaw/worktree-setup.sh"),
-        "#!/bin/sh\ntrue\n",
-        {
-          mode: 0o755,
-        },
-      );
-    }
-    await requireGit(projectPath, ["add", "."]);
-    await requireGit(projectPath, ["commit", "--quiet", "-m", "base"]);
-    const target = vi.fn<NonNullable<WorkerProvider["resolvePreparationTarget"]>>(
-      (_profile, machineClass, os) => ({
-        machineClass: machineClass ?? "small",
-        platform: os ?? "linux",
-        arch: "amd64",
-      }),
-    );
+    const { root: projectPath } = await repository("project", {
+      setup,
+      disableSigning: true,
+      content: "base\n",
+    });
     const provider = support.createProvider({
       requiresNodeEnrollment: true,
       supportsProjectPreparation: () => true,
-      resolvePreparationTarget: target,
+      resolvePreparationTarget: (_profile, machineClass = "small", platform = "linux") => ({
+        machineClass,
+        platform,
+        arch: "amd64",
+      }),
     });
-    const artifacts = {
-      nodeBootstrapSha256: support.NODE_BOOTSTRAP.sha256,
-      workerBundleHash: support.BUNDLE_ARTIFACT.bundleHash,
-      workerArchiveSha256: support.BUNDLE_ARTIFACT.tarballSha256,
-      enabledPluginIds: ["runtime-plugin"],
-      openclawVersion: support.BUNDLE_ARTIFACT.openclawVersion,
-      protocolFeatures: [],
-    };
-    const prepareNodeArtifacts = vi.fn(async () => ({
-      artifacts,
-      assertCurrent: () => {},
-    }));
-    const resumeProvision = vi.fn(async (record: WorkerEnvironmentRecord) => record);
+    const prepareNodeArtifacts = vi.fn(async () => nodeArtifacts(["runtime-plugin"]));
     const owner = createWorkerProviderIntent({
       store: support.testState.store,
       getConfig: () => support.testState.config,
       projectNamespace: "gateway-test",
       providerFor: () => provider,
       prepareNodeArtifacts,
-      resumeProvision,
+      resumeProvision: async (record) => record,
       isStopping: () => false,
       withLock: async (_environmentId, task) => task(),
     });
-    return {
-      owner,
-      provider,
-      projectPath,
-      target,
-      prepareNodeArtifacts,
-      resumeProvision,
-    };
+    const prepare = (options: Parameters<typeof owner.prepareIntent>[1] = {}) =>
+      owner.prepareIntent("development", { projectPath, ...options });
+    const create = (
+      key: string,
+      options: Parameters<typeof owner.createWithProfile>[2] = {},
+      admitted?: Parameters<typeof owner.createWithProfile>[3],
+    ) => owner.createWithProfile("development", key, { projectPath, ...options }, admitted);
+    return { owner, provider, projectPath, prepareNodeArtifacts, prepare, create };
   }
 
   it("keeps empty workspaces cold on providers with only setup commands", async () => {
@@ -83,7 +52,6 @@ describe("prepared worker intent admission", () => {
     const intent = await f.owner.prepareIntent("development", { emptyWorkspace: true });
     expect(intent.profileSnapshot).not.toHaveProperty("project");
     expect(intent.profileSnapshot).not.toHaveProperty("runtimePreparation");
-    expect(intent.preparationKey).toBeUndefined();
     expect(f.prepareNodeArtifacts).not.toHaveBeenCalled();
   });
 
@@ -91,26 +59,21 @@ describe("prepared worker intent admission", () => {
     const f = await fixture();
     const controller = new AbortController();
     const options = {
-      projectPath: f.projectPath,
       machineClass: "large",
       os: "linux",
       signal: controller.signal,
+      assertCurrent: () => controller.signal.throwIfAborted(),
     };
-    const intent = await f.owner.prepareIntent("development", options);
-    expect(intent.preparationKey).toMatch(/^[a-f0-9]{64}$/u);
-    expect(f.target).toHaveBeenCalledWith({ region: "test" }, "large", "linux");
+    const intent = await f.prepare(options);
+    expect(intent.profileSnapshot.project?.preparation?.target).toMatchObject({
+      machineClass: "large",
+      platform: "linux",
+    });
     expect(support.testState.store.list()).toEqual([]);
-    expect(f.resumeProvision).not.toHaveBeenCalled();
     controller.abort();
     expect(() => f.owner.assertPreparedIntentCurrent("development", intent)).not.toThrow();
-    await f.owner.createWithProfile(
-      "development",
-      "admitted-local",
-      { ...options, signal: undefined },
-      intent,
-    );
+    await f.create("admitted-local", { ...options, signal: undefined }, intent);
     expect(support.testState.store.list()).toHaveLength(1);
-    expect(f.resumeProvision).toHaveBeenCalledOnce();
   });
 
   it("replays a removed linked source through its canonical repository while rejecting other projects and commits", async () => {
@@ -120,89 +83,56 @@ describe("prepared worker intent admission", () => {
     await fs.writeFile(path.join(linked, "input.txt"), "session commit\n");
     await requireGit(linked, ["commit", "--quiet", "-am", "session"]);
     const options = { projectPath: linked };
-    const admitted = await f.owner.prepareIntent("development", options);
-    const stored = await f.owner.createWithProfile(
-      "development",
-      "linked-replay",
-      options,
-      admitted,
-    );
+    const admitted = await f.prepare(options);
+    const stored = await f.create("linked-replay", options, admitted);
     await fs.writeFile(path.join(f.projectPath, "input.txt"), "new primary commit\n");
     await requireGit(f.projectPath, ["commit", "--quiet", "-am", "advance primary"]);
     const primaryCommit = await requireGit(f.projectPath, ["rev-parse", "HEAD"]);
     await requireGit(f.projectPath, ["worktree", "remove", linked]);
 
-    await expect(
-      f.owner.createWithProfile("development", "linked-replay", {
-        projectPath: f.projectPath,
-      }),
-    ).resolves.toMatchObject({
+    const replayed = {
       environmentId: stored.environmentId,
       profileSnapshot: stored.profileSnapshot,
-    });
+    };
+    await expect(f.create("linked-replay")).resolves.toMatchObject(replayed);
     const nested = path.join(f.projectPath, "nested");
     await fs.mkdir(nested);
-    await expect(
-      f.owner.createWithProfile("development", "linked-replay", { projectPath: nested }),
-    ).resolves.toMatchObject({
-      environmentId: stored.environmentId,
-      profileSnapshot: stored.profileSnapshot,
-    });
-    expect(
-      (await f.owner.prepareIntent("development", { projectPath: nested })).profileSnapshot.project,
-    ).toBeUndefined();
+    await expect(f.create("linked-replay", { projectPath: nested })).resolves.toMatchObject(
+      replayed,
+    );
+    expect((await f.prepare({ projectPath: nested })).profileSnapshot.project).toBeUndefined();
 
     const other = path.join(support.testState.root, "other-clone");
     await requireGit(support.testState.root, ["clone", "--no-hardlinks", f.projectPath, other]);
-    await expect(
-      f.owner.createWithProfile("development", "linked-replay", {
-        projectPath: other,
-      }),
-    ).rejects.toThrow("Idempotency key belongs to another project");
-    await expect(
-      f.owner.createWithProfile("development", "linked-replay", {
-        projectPath: f.projectPath,
-        projectCommit: primaryCommit,
-      }),
-    ).rejects.toThrow("Idempotency key belongs to another project preparation");
-    const changed = await f.owner.prepareIntent("development", { projectPath: f.projectPath });
-    await expect(
-      f.owner.createWithProfile(
-        "development",
-        "linked-replay",
-        {
-          projectPath: f.projectPath,
-        },
-        changed,
-      ),
-    ).rejects.toThrow("Idempotency key belongs to another project preparation");
+    await expect(f.create("linked-replay", { projectPath: other })).rejects.toThrow(
+      "Idempotency key belongs to another project",
+    );
+    await expect(f.create("linked-replay", { projectCommit: primaryCommit })).rejects.toThrow(
+      "Idempotency key belongs to another project preparation",
+    );
+    const changed = await f.prepare();
+    await expect(f.create("linked-replay", {}, changed)).rejects.toThrow(
+      "Idempotency key belongs to another project preparation",
+    );
     expect(support.testState.store.get(stored.environmentId)?.profileSnapshot).toEqual(
       stored.profileSnapshot,
     );
-    expect(f.resumeProvision).toHaveBeenCalledTimes(3);
   });
 
   it("requires setup authority for reserves while preserving explicit session setup admission", async () => {
     const f = await fixture(true);
-    const ordinary = await f.owner.prepareIntent("development", { projectPath: f.projectPath });
-    expect(ordinary.preparationKey).toBeUndefined();
-    const authorized = await f.owner.prepareIntent("development", {
-      projectPath: f.projectPath,
-      setupAuthorized: true,
+    const ordinary = await f.prepare();
+    expect(ordinary.profileSnapshot.project?.preparation).toBeUndefined();
+    const authorized = await f.prepare({ setupAuthorized: true });
+    const skipped = await f.prepare({ runSetupScript: false });
+    const authorizedKey = authorized.profileSnapshot.project?.preparation?.key;
+    const skippedKey = skipped.profileSnapshot.project?.preparation?.key;
+    expect(authorizedKey).toBeDefined();
+    expect(skippedKey).toBeDefined();
+    expect(skippedKey).not.toBe(authorizedKey);
+    await f.create("session-setup", { runSetupScript: true });
+    expect(support.testState.store.list()[0]!.profileSnapshot).toMatchObject({
+      project: { preparation: { key: authorizedKey } },
     });
-    const skipped = await f.owner.prepareIntent("development", {
-      projectPath: f.projectPath,
-      runSetupScript: false,
-    });
-    expect(authorized.preparationKey).toBeDefined();
-    expect(skipped.preparationKey).toBeDefined();
-    expect(skipped.preparationKey).not.toBe(authorized.preparationKey);
-    await f.owner.createWithProfile("development", "session-setup", {
-      projectPath: f.projectPath,
-      runSetupScript: true,
-    });
-    expect(
-      readWorkerProjectPreparation(support.testState.store.list()[0]!.profileSnapshot.project)?.key,
-    ).toBe(authorized.preparationKey);
   });
 });

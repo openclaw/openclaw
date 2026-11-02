@@ -1,13 +1,13 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import * as toast from "../../lib/toast.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
-import { createNewSessionComposerTextarea } from "./composer-controller.ts";
-import { NewSessionComposer, type NewSessionComposerOptions } from "./composer.tsx";
+import { createNewSessionComposerTextarea } from "./composer-textarea.ts";
+import { mountNewSessionComposer } from "./composer.test-support.ts";
+import type { NewSessionComposerOptions } from "./composer.tsx";
 import { NewSessionModelControl } from "./model-control.ts";
 
 afterEach(() => {
@@ -33,7 +33,7 @@ it.each(["owner", "tile"] as const)(
       () => redraw(),
       () => {},
     );
-    const textareaController = createNewSessionComposerTextarea();
+    const composerTextarea = createNewSessionComposerTextarea();
     const modelControl = new NewSessionModelControl(() => {});
     const currentOptions = (): NewSessionComposerOptions => ({
       agentId: "main",
@@ -47,30 +47,14 @@ it.each(["owner", "tile"] as const)(
       requiresModifier: false,
       onChange: redraw,
       submitting: false,
-      textareaController,
       onInput: () => {},
       onSubmit: () => {},
     });
-    let update: (options: NewSessionComposerOptions) => void;
-    const redraw = () => {
-      update(currentOptions());
-      flush();
-    };
-    const mounted = mountSolid(
-      () => {
-        const [options, setOptions] = createSignal(currentOptions());
-        update = setOptions;
-        return createComponent(NewSessionComposer, {
-          get options() {
-            return options();
-          },
-        });
-      },
-      { container },
-    );
+    const redraw = () => mounted.rerender();
+    const mounted = mountNewSessionComposer(currentOptions, composerTextarea, container);
     onTestFinished(() => {
       attachmentDraft.reset();
-      textareaController.disconnect();
+      composerTextarea.disconnect();
       mounted.unmount();
     });
     const composer = expectDefined(
@@ -78,55 +62,58 @@ it.each(["owner", "tile"] as const)(
       "new-session composer",
     );
     const status = () => container.querySelector(".chat-attachments-status");
+    const submitBusy = () =>
+      container.querySelector(".new-session-page__start-submit")?.getAttribute("aria-busy");
+    const fileNames = () => attachmentDraft.attachments.map(({ fileName }) => fileName);
+    const expectStableTiles = () =>
+      tiles.forEach((tile, index) =>
+        expect(container.querySelectorAll(".chat-attachment-thumb")[index]).toBe(tile),
+      );
+    const load = (index: number, base64: string) => {
+      Object.defineProperty(readers[index], "result", {
+        value: `data:text/plain;base64,${base64}`,
+      });
+      readers[index]?.dispatchEvent(new ProgressEvent("load"));
+    };
     composer.dispatchEvent(
       createDragEvent("drop", [new File(["first"], "first.txt"), new File(["bad"], "bad.txt")]),
     );
     composer.dispatchEvent(createDragEvent("drop", [new File(["second"], "second.txt")]));
-    expect(attachmentDraft.reads.pendingReads).toBe(3);
-    expect(
-      container.querySelector(".new-session-page__start-submit")?.getAttribute("aria-busy"),
-    ).toBe("true");
+    expect(submitBusy()).toBe("true");
     expect(status()?.textContent).toContain("Preparing 3 attachments");
     expect(status()?.classList.contains("sr-only")).toBe(true);
-    expect(status()?.querySelector(".btn__spinner")).toBeNull();
+    await waitForFast(() =>
+      expect(container.querySelectorAll(".chat-attachment-thumb")).toHaveLength(3),
+    );
     const tiles = [...container.querySelectorAll(".chat-attachment-thumb")];
-    expect(tiles).toHaveLength(3);
     expect(tiles.every((tile) => tile.getAttribute("aria-busy") === "true")).toBe(true);
     readers[0]?.dispatchEvent(
       new ProgressEvent("progress", { lengthComputable: true, loaded: 5, total: 10 }),
     );
     expect(
-      tiles[0]?.querySelector<HTMLElement>(".chat-attachment-loading > span")?.style.transform,
+      tiles[0]?.querySelector<HTMLElement>(".chat-attachment-loading__line > span")?.style
+        .transform,
     ).toBe("scaleX(0.5)");
     expect(
       tiles[1]?.querySelector(".chat-attachment-loading")?.getAttribute("data-indeterminate"),
     ).toBe("true");
     // Complete the later batch first. Its tile and payload must keep admission order.
-    Object.defineProperty(readers[2], "result", { value: "data:text/plain;base64,c2Vjb25k" });
-    readers[2]?.dispatchEvent(new ProgressEvent("load"));
-    await waitForFast(() =>
-      expect(attachmentDraft.attachments.map(({ fileName }) => fileName)).toEqual(["second.txt"]),
-    );
-    tiles.forEach((tile, index) =>
-      expect(container.querySelectorAll(".chat-attachment-thumb")[index]).toBe(tile),
-    );
-    Object.defineProperty(readers[0], "result", { value: "data:text/plain;base64,Zmlyc3Q=" });
-    readers[0]?.dispatchEvent(new ProgressEvent("load"));
-    await waitForFast(() =>
-      expect(attachmentDraft.attachments.map(({ fileName }) => fileName)).toEqual([
-        "first.txt",
-        "second.txt",
-      ]),
-    );
+    load(2, "c2Vjb25k");
+    await waitForFast(() => expect(fileNames()).toEqual(["second.txt"]));
+    expectStableTiles();
+    load(0, "Zmlyc3Q=");
+    await waitForFast(() => expect(fileNames()).toEqual(["first.txt", "second.txt"]));
     expect(status()?.textContent).toContain("Preparing 1 attachment");
+    const notify = vi.spyOn(toast, "showToast");
     readers[1]?.dispatchEvent(new ProgressEvent("error"));
     await waitForFast(() => expect(attachmentDraft.reads.pendingReads).toBe(0));
-    tiles.forEach((tile, index) =>
-      expect(container.querySelectorAll(".chat-attachment-thumb")[index]).toBe(tile),
-    );
-    expect(
-      tiles[1]?.querySelector('.chat-attachment-error[role="img"]')?.getAttribute("aria-label"),
-    ).toContain("bad.txt");
+    expect([...container.querySelectorAll(".chat-attachment-thumb")]).toEqual([tiles[0], tiles[2]]);
+    expect(container.querySelector(".chat-attachment-error")).toBeNull();
+    expect(notify).toHaveBeenCalledExactlyOnceWith({
+      message: "Could not attach file. Try again.",
+      placement: "top-center",
+      severity: "error",
+    });
     expect(status()?.textContent?.trim()).toBe("");
 
     composer.dispatchEvent(createDragEvent("drop", [new File(["held"], "held.txt")]));
@@ -136,18 +123,12 @@ it.each(["owner", "tile"] as const)(
     } else {
       container.querySelector<HTMLButtonElement>('button[aria-label="Remove held.txt"]')?.click();
     }
-    expect(
-      container.querySelector(".new-session-page__start-submit")?.getAttribute("aria-busy"),
-    ).toBe("false");
+    expect(submitBusy()).toBe("false");
     expect(status()?.textContent?.trim()).toBe("");
-    Object.defineProperty(readers[3], "result", { value: "data:text/plain;base64,aGVsZA==" });
-    readers[3]?.dispatchEvent(new ProgressEvent("load"));
+    load(3, "aGVsZA==");
     await Promise.resolve();
     expect(attachmentDraft.reads.pendingReads).toBe(0);
-    expect(attachmentDraft.attachments.map(({ fileName }) => fileName)).toEqual([
-      "first.txt",
-      "second.txt",
-    ]);
+    expect(fileNames()).toEqual(["first.txt", "second.txt"]);
     expect(container.querySelector('button[aria-label="Remove held.txt"]')).toBeNull();
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("Keep this draft");
   },

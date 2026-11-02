@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { stripMixedSilentReplyTokens } from "../../auto-reply/reply/mixed-silent-reply-tokens.js";
 import type { AssistantDeliveryTtsFacts, AssistantMessage } from "../../llm/types.js";
 import { readAssistantTextBlocksForPhase } from "../../shared/chat-message-content.js";
 import { createTextPartCodeRegionResolver } from "../../shared/text/code-regions.js";
@@ -106,7 +106,7 @@ export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMes
   if (
     textChanged &&
     message.display === undefined &&
-    !original.join("").startsWith(`${SILENT_REPLY_TOKEN}\n`)
+    stripMixedSilentReplyTokens(original.join("")) === null
   ) {
     Object.assign(message, { display: true });
   }

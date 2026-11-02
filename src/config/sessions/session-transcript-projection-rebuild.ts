@@ -8,7 +8,7 @@ import {
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   createSessionTranscriptFtsInserter,
@@ -90,24 +90,6 @@ const PROJECTION_FINALIZE_TAIL_BYTES = 256 * 1024;
 
 function getProjectionKysely(db: EngineConnection) {
   return getNodeSqliteKysely<TranscriptProjectionDatabase>(db);
-}
-
-/** Older same-version writers can leave a current watermark over unclassified rows. */
-export function hasUnclassifiedSessionTranscriptEvents(
-  db: EngineConnection,
-  sessionId: string,
-): boolean {
-  return (
-    executeSqliteQueryTakeFirstSync(
-      db,
-      getProjectionKysely(db)
-        .selectFrom("session_transcript_active_events")
-        .select("session_id")
-        .where("session_id", "=", sessionId)
-        .where("context_eligible", "is", null)
-        .limit(1),
-    ) !== undefined
-  );
 }
 
 function readCanonicalEventId(event: unknown): string | null {
@@ -248,7 +230,7 @@ function visitProjectionSource(
   };
 }
 
-function prepareProjectionSource(
+export function prepareProjectionSource(
   source: SessionTranscriptProjectionSource,
 ): PreparedSessionTranscriptProjection | undefined {
   const activeRows: PreparedSessionTranscriptProjection["activeRows"] = [];
@@ -265,7 +247,7 @@ export function prepareSessionTranscriptProjection(
   db: EngineConnection,
   sessionId: string,
 ): PreparedSessionTranscriptProjection | undefined {
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     db,
     () => {
       const source = readProjectionSource(db, sessionId);
@@ -464,9 +446,7 @@ function insertPreparedSessionTranscriptProjectionRows(
   }
   if (params.ftsRows && params.ftsRows.length > 0) {
     const insertFts = createSessionTranscriptFtsInserter(db, params.sessionId);
-    for (const row of params.ftsRows) {
-      insertFts(row);
-    }
+    insertFts(params.ftsRows);
   }
 }
 

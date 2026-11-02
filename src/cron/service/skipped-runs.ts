@@ -22,7 +22,6 @@ export async function recordSkippedCronRuns(params: {
   afterCommit: (outcome: SkippedOutcome, historySource: CronRunHistorySource) => Promise<void>;
 }): Promise<void> {
   const { state, source } = params;
-  const change = structuredClone(params.change);
   let committed: SkippedOutcome | undefined;
   const defaultAgentId = state.deps.resolveDefaultAgentId
     ? state.deps.resolveDefaultAgentId()
@@ -37,7 +36,7 @@ export async function recordSkippedCronRuns(params: {
     await runCronRuntimeMutation({
       context: source.context,
       type: "cron.recordSkippedRuns",
-      input: { storeKey: source.storeKey, change },
+      input: { storeKey: source.storeKey, change: params.change },
       assertCurrent: () => source.assertCurrent(),
       // Routing and activity may change after submission; this snapshot owns the outcome.
       snapshot: {
@@ -47,7 +46,7 @@ export async function recordSkippedCronRuns(params: {
           defaultAgentId,
           state.deps.defaultAgentId,
         ),
-        cronConfig: structuredClone(state.deps.cronConfig),
+        cronConfig: state.deps.cronConfig,
         failureRepairTimeoutMs: state.deps.failureRepairTimeoutMs,
         ownership: (state.store?.jobs ?? []).map((job) => ({
           jobId: job.id,

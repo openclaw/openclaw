@@ -7,7 +7,7 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import { executeSessionMessageRewriteOperation } from "./session-message-rewrite-domain.js";
 import type { SessionTranscriptEventCommitted } from "./session-transcript-mutation.types.js";

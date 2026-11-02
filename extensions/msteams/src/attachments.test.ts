@@ -1,9 +1,14 @@
 // Msteams tests cover attachments plugin behavior.
+import {
+  useAttachmentTestTransport,
+  type AttachmentTestTransport,
+} from "./attachments/transport.test-support.js";
+const installAttachmentTestTransport = useAttachmentTestTransport();
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
-import { downloadMSTeamsAttachments } from "./attachments/download.js";
+import { downloadMSTeamsAttachments as downloadAttachments } from "./attachments/download.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
 const saveResponseMediaMock = vi.hoisted(() =>
@@ -67,8 +72,14 @@ const runtimeStub = {
   },
 } as unknown as PluginRuntime;
 
-type DownloadAttachmentsParams = Parameters<typeof downloadMSTeamsAttachments>[0];
-type DownloadedMedia = Awaited<ReturnType<typeof downloadMSTeamsAttachments>>;
+type DownloadAttachmentsParams = Parameters<typeof downloadAttachments>[0] &
+  AttachmentTestTransport;
+type DownloadedMedia = Awaited<ReturnType<typeof downloadAttachments>>;
+
+function downloadMSTeamsAttachments({ fetchFn, resolveFn, ...params }: DownloadAttachmentsParams) {
+  installAttachmentTestTransport({ fetchFn, resolveFn });
+  return downloadAttachments(params);
+}
 type DownloadAttachmentsBuildOverrides = Partial<
   Omit<DownloadAttachmentsParams, "attachments" | "allowHosts">
 > &

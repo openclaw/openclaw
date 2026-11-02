@@ -163,7 +163,7 @@ describe("AppSidebar gateway session pagination", () => {
     const staleRefresh = sidebar.sessionData.refreshSidebarSessions("main");
     context.agentSelection.state.selectedId = "research";
     context.agentSelection.state.scopeId = "research";
-    sidebar.requestUpdate();
+    sidebar.invalidate();
     await sidebar.updateComplete;
 
     expect(harness.list).toHaveBeenCalledWith(

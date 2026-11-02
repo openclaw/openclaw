@@ -27,7 +27,15 @@ export function assertLegacyTranscriptPreparation<TMessage>(
       "Opaque transcript callbacks are unavailable for incognito sessions. Use withSessionTranscriptWrite and preparation.prepareMessage / preparation.source instead.",
     );
   }
-  warnSessionTranscriptPreparationDeprecation();
+  if (options?.prepareMessageAfterIdempotencyCheck) {
+    warnSessionTranscriptPreparationDeprecation(
+      "prepareMessageAfterIdempotencyCheck",
+      "preparation.prepareMessage outside the transaction",
+    );
+  }
+  if (options?.beforeFreshMessageCommit) {
+    warnSessionTranscriptPreparationDeprecation("beforeFreshMessageCommit", "preparation.source");
+  }
 }
 
 /** Turn workers serialize prepared values and source predicates, never host preparation callbacks. */

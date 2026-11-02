@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -7,6 +8,7 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 import {
   POST_CORE_EXECUTOR_CAPABILITY,
   POST_CORE_MUTATION_PROTOCOL,
+  supportsPostCoreExecutor,
 } from "./update-post-core-capability.js";
 
 it("advertises the post-core executor through the actual compiled worker check", async () => {
@@ -34,5 +36,23 @@ it("advertises the post-core executor through the actual compiled worker check",
       postCoreExecutor: POST_CORE_EXECUTOR_CAPABILITY,
       mutationProtocol: POST_CORE_MUTATION_PROTOCOL,
     });
+  });
+});
+
+it("probes the selected installed recovery worker with the selected runtime", async () => {
+  await withTestDir({ prefix: "selected-post-core-capability-" }, async (root) => {
+    const worker = path.join(root, "dist/infra/update-migrated-finalize.worker.js");
+    await fs.mkdir(path.dirname(worker), { recursive: true });
+    await fs.writeFile(
+      worker,
+      `if(JSON.stringify(process.argv.slice(2))!=='["--check"]')process.exit(2);console.log(JSON.stringify({postCoreExecutor:"stdin-pid-start-v1",mutationProtocol:"original-cancellation-v1"}));`,
+    );
+    expect(await supportsPostCoreExecutor(root, process.execPath)).toBe(true);
+  });
+});
+
+it("keeps a missing installed recovery worker as an unsupported capability", async () => {
+  await withTestDir({ prefix: "missing-post-core-capability-" }, async (root) => {
+    expect(await supportsPostCoreExecutor(root, process.execPath)).toBe(false);
   });
 });

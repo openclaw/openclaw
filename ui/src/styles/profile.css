@@ -1,6 +1,34 @@
 /* Profile settings page: authenticated user profile and identity controls.
    Structural surfaces come from settings.css. */
 
+.profile-discord-availability {
+  display: block;
+}
+
+.profile-refresh {
+  display: inline-grid;
+  grid-template-areas: "label";
+}
+
+.profile-refresh > span,
+.profile-refresh::before,
+.profile-refresh::after {
+  grid-area: label;
+}
+
+.profile-refresh::before,
+.profile-refresh::after {
+  visibility: hidden;
+}
+
+.profile-refresh::before {
+  content: attr(data-refresh-label);
+}
+
+.profile-refresh::after {
+  content: attr(data-refreshing-label);
+}
+
 .profile-hero {
   display: flex;
   flex-direction: column;
@@ -27,6 +55,7 @@
   width: 100%;
   height: 100%;
   border: 0;
+  outline: 0;
   font-size: 42px;
 }
 
@@ -92,13 +121,6 @@
   overflow-y: auto;
   font-family: var(--mono);
   line-height: 1.5;
-}
-
-.personal-instructions__actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
 }
 
 .personal-instructions__error {

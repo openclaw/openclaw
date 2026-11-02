@@ -20,31 +20,26 @@ native thread configuration before the turn; changing back to Fast or standard
 restores the configured native limit on the next turn. Other tiers retain their
 native compaction settings.
 
+Native token-based compaction does not enforce the inference relay's request-byte
+limit. Inline images can exceed that limit before token pressure triggers, and
+the compaction request itself can be too large. See
+[image-heavy conversation troubleshooting](/plugins/codex-harness/troubleshooting#image-heavy-conversations-exceed-the-request-size-limit).
+
 An incognito thread has no persisted resume source, so its creation-time
 compaction settings cannot change in place. If a speed change requires a different
 limit, OpenClaw preserves the conversation and asks you to restore the previous
 speed or start a new incognito conversation. No turn is sent with mismatched settings.
 
-When `agents.defaults.compaction.maxActiveTranscriptBytes`
-is set to a positive value, OpenClaw checks that mirror before ordinary and
-heartbeat turns. When the byte guard trips, OpenClaw attempts semantic
-compaction through its selected host context engine before admitting the turn.
-This host compaction does not itself replace or rewrite Codex's
-native thread.
-
-If the context engine declines host compaction or leaves history oversized,
-OpenClaw continues with a bounded projection of recent whole turns. The native
-thread follows that projection so omitted history cannot remain in its context.
-A visible notice asks you to resend any essential earlier details; saved history
-is unchanged. The failure reason is logged at warning level. Failed attempts do
-not count as successful compaction, and suppressed retries still receive bounded
-context. System instructions and the current request remain intact.
-
-After host mirror compaction commits, OpenClaw may request
-`thread/compact/start` to synchronize an eligible native thread. This request
-is secondary: OpenClaw does not send it for host-isolated operations or
-bindings with restricted native authority, and unavailable or failed native
-synchronization does not roll back committed host compaction.
+`agents.defaults.compaction.maxActiveTranscriptBytes` bounds older history when
+seeding a **fresh** native thread, not during ordinary or heartbeat turns.
+Before omitting history not covered by a summary, OpenClaw attempts one host
+compaction using the seed's retained-history allowance and reserves a fitting summary.
+Whole turns and tool/result pairs stay intact; required instructions and the
+active request or runtime-refresh exchange are outside the historical cap.
+With compaction disabled, older history is still omitted with a notice;
+no-cap defaults and the full saved transcript are unchanged.
+The notice appears in the seed and user-facing events. Native rollout/token
+fuses and owning-engine compaction with native follow-up remain unchanged.
 
 Explicit compaction requests, such as `/compact` or a plugin-requested manual
 compact operation, start native Codex compaction with `thread/compact/start`.
@@ -58,10 +53,7 @@ period, OpenClaw retires the connection before releasing the fence. Remote
 connections also detach the matching thread binding so later work cannot
 overlap an unconfirmed remote turn. Other turns on a retired connection fail
 and can retry on a fresh client. Client closure, request cancellation, or a
-failed compaction turn returns a failed operation. Automatic native
-token-pressure compaction remains Codex's job. Outside the secondary
-synchronization described above, OpenClaw starts native compaction only for
-explicit manual requests.
+failed compaction turn returns a failed operation.
 
 A standalone cold compact operation does not run prompt-build hooks or establish
 ordinary-turn configuration. It releases its subscription after the operation;
@@ -86,7 +78,7 @@ thread, it includes saved compaction and branch summaries, even when no
 earlier user messages remain. Context-engine projections preserve those
 summary entries too. Summaries stay quoted as prior context, separate from
 the current request, and remain subject to the projection's size limits;
-oversized summaries or older context can be truncated. This handoff does not
+oversized summaries or older whole turns can be omitted. This handoff does not
 change native Codex compaction ownership.
 
 When a context engine requests Codex thread-bootstrap projection, OpenClaw

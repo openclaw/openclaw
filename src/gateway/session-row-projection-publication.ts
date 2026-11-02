@@ -84,10 +84,7 @@ export function createSessionRowPublication(owner: {
     const store = owner.store(row.storeTarget.storePath);
     if (
       prepared &&
-      (!source ||
-        store?.identity !== source.identity ||
-        store.birthtime !== source.birthtime ||
-        store.filename !== source.filename)
+      (!source || store?.identity !== source.identity || store.birthtime !== source.birthtime)
     ) {
       return;
     }
@@ -169,6 +166,9 @@ export function createSessionRowPublication(owner: {
             hasBoard: projection.hasBoard,
             activitySummaryWatermark,
             transcriptPreview: sameTranscript ? previousFacts.transcriptPreview : undefined,
+            transcriptAssistantMessage: sameTranscript
+              ? previousFacts.transcriptAssistantMessage
+              : "unknown",
             transcriptTerminalModel: sameTranscript
               ? previousFacts.transcriptTerminalModel
               : undefined,

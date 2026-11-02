@@ -1,15 +1,89 @@
 import fs from "node:fs/promises";
 import type { DatabaseSync } from "node:sqlite";
 import { expect } from "vitest";
+import { backupRestoreCommand } from "../commands/backup-restore.js";
+import { backupCreateCommand } from "../commands/backup.js";
+import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import {
   createColdPluginConfig,
   createColdPluginFixture,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
-import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { retireIdleOpenClawStateReadWorkers } from "../state/openclaw-state-read-worker.js";
+import {
+  type OpenClawTestState as State,
+  withOpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import type { BackupCreateOptions, BackupCreateResult } from "./backup-create.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { captureRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
+
+type FixtureOptions = Parameters<typeof withOpenClawTestState>[0];
+
+export function withDatabase<T>(pathname: string, run: (db: DatabaseSync) => T): T {
+  using db = new (requireNodeSqlite().DatabaseSync)(pathname);
+  return run(db);
+}
+
+export async function mkdirs(...directories: string[]) {
+  for (const directory of directories) {
+    await fs.mkdir(directory, { recursive: true });
+  }
+}
+
+export const withBackupFixture = <T>(options: FixtureOptions, run: (state: State) => Promise<T>) =>
+  withOpenClawTestState({ layout: "state-only", scenario: "minimal", ...options }, run);
+
+export function backupCase(options: FixtureOptions) {
+  return <Args extends unknown[]>(run: (state: State, ...args: Args) => Promise<void>) =>
+    (...args: Args) =>
+      withBackupFixture(options, (state) => run(state, ...args));
+}
+
+export async function isolateBackupScratch(state: State) {
+  const scratchRoot = state.path("scratch");
+  await fs.mkdir(scratchRoot);
+  Object.assign(state.envVars, { TMPDIR: scratchRoot, TMP: scratchRoot, TEMP: scratchRoot });
+  state.applyEnv();
+  const cleanup = state.cleanup;
+  let cleanupPromise: Promise<void> | undefined;
+  // Scratch can contain the retained broker socket; join native custody before removal.
+  state.cleanup = () =>
+    (cleanupPromise ??= Promise.resolve().then(async () => {
+      await state.restoreEnv();
+      const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+      expect(await retireIdleOpenClawStateReadWorkers(source)).toBe(true);
+      expect(await source.retireIdleBroker()).toBe(true);
+      await cleanup();
+    }));
+}
+
+export const createVerifiedBackup = (
+  state: State,
+  options: BackupCreateOptions = {},
+  runtime = createTestRuntime(),
+) =>
+  backupCreateCommand(runtime, {
+    output: state.path("backup.tar.gz"),
+    includeWorkspace: false,
+    verify: true,
+    ...options,
+  });
+
+export const restoreBackup = (
+  state: State,
+  archive: BackupCreateResult,
+  runtime = createTestRuntime(),
+) =>
+  backupRestoreCommand(runtime, {
+    archive: archive.archivePath,
+    target: state.path("restored"),
+  });
+
+export const expectAbsent = (file: string) =>
+  expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
 
 export async function declarePluginSqliteResources(
-  state: OpenClawTestState,
+  state: State,
   relativePath = "plugins/dedicated",
 ) {
   const rootDir = state.path("synthetic-backup-plugin");
@@ -25,12 +99,8 @@ export async function declarePluginSqliteResources(
 }
 
 export function inspectDatabase(databasePath: string, inspect: (database: DatabaseSync) => void) {
-  const database = new (requireNodeSqlite().DatabaseSync)(databasePath, { readOnly: true });
-  try {
-    inspect(database);
-  } finally {
-    database.close();
-  }
+  using database = new (requireNodeSqlite().DatabaseSync)(databasePath, { readOnly: true });
+  inspect(database);
 }
 
 export function expectDatabaseRows(databasePath: string, sql: string, rows: unknown) {
@@ -43,22 +113,18 @@ export function createOwnedSqliteDatabase(params: {
   agentId?: string;
   schemaVersion?: number;
 }): void {
-  const database = new (requireNodeSqlite().DatabaseSync)(params.sqlitePath);
+  using database = new (requireNodeSqlite().DatabaseSync)(params.sqlitePath);
   const schemaVersion = params.schemaVersion ?? 1;
-  try {
-    database.exec(`
+  database.exec(`
       CREATE TABLE schema_meta (
         meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL, schema_version INTEGER NOT NULL,
         agent_id TEXT, app_version TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
       );
       PRAGMA user_version = ${schemaVersion};
     `);
-    database
-      .prepare(`INSERT INTO schema_meta
+  database
+    .prepare(`INSERT INTO schema_meta
       (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
       VALUES ('primary', ?, ?, ?, NULL, 1, 1)`)
-      .run(params.role, schemaVersion, params.agentId ?? null);
-  } finally {
-    database.close();
-  }
+    .run(params.role, schemaVersion, params.agentId ?? null);
 }

@@ -126,26 +126,17 @@ mod tests {
     }
 
     #[test]
-    fn diff_reports_new_ids_once_and_deduplicates_a_snapshot() {
-        let current = vec![
-            request(ApprovalKind::Node, "node-1", "Kitchen Mac"),
-            request(ApprovalKind::Node, "node-1", "Kitchen Mac"),
-            request(ApprovalKind::Device, "device-1", "Browser"),
-        ];
-
-        let diff = PendingApprovalState::default().update(current.clone());
-
-        assert_eq!(diff.new, vec![current[0].clone(), current[2].clone()]);
-        assert_eq!(diff.count, 2);
-    }
-
-    #[test]
-    fn state_deduplicates_retained_ids_and_forgets_removed_ids() {
+    fn state_deduplicates_snapshot_and_retained_ids_and_forgets_removed_ids() {
         let node = request(ApprovalKind::Node, "request-1", "Kitchen Mac");
         let device = request(ApprovalKind::Device, "request-2", "Browser");
         let mut state = PendingApprovalState::default();
 
-        let first = state.update(vec![node.clone(), device.clone()]);
+        let first = state.update(vec![
+            node.clone(),
+            node.clone(),
+            request(ApprovalKind::Device, "request-1", "Browser"),
+            device.clone(),
+        ]);
         assert_eq!(first.new, vec![node.clone(), device.clone()]);
         assert_eq!(first.count, 2);
 
@@ -156,17 +147,6 @@ mod tests {
         let returned = state.update(vec![node.clone(), device]);
         assert_eq!(returned.new, vec![node]);
         assert_eq!(returned.count, 2);
-    }
-
-    #[test]
-    fn same_id_is_deduplicated_across_request_kinds() {
-        let node = request(ApprovalKind::Node, "same-id", "Node");
-        let device = request(ApprovalKind::Device, "same-id", "Browser");
-
-        let diff = PendingApprovalState::default().update(vec![node.clone(), device]);
-
-        assert_eq!(diff.new, vec![node]);
-        assert_eq!(diff.count, 1);
     }
 
     #[test]

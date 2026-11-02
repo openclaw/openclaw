@@ -14,27 +14,47 @@ function installColdLoadProbes(
   createEventStream: typeof createColdLoadEventStream,
 ) {
   Reflect.set(Error, "stackTraceLimit", 40);
-  const updates = new Map<string, { count: number; ms: number }>();
-  const rpcs: Array<{
-    method: string;
-    requestBytes: number;
-    responseBytes: number;
-    ms: number;
-    dispatchMs?: number;
-    responseAtMs?: number;
-    params: unknown;
-    stack: string | undefined;
-  }> = [];
+  const rpcs: ProbeInit.ColdLoadRpcRecord[] = [];
+  const socketCloses: ProbeInit.ColdLoadSocketClose[] = [];
+  const eventHeaders: ProbeInit.ColdLoadEventHeader[] = [];
+  let nextSocketId = 0;
+  let nextEventDeliveryOrder = 0;
+  let omittedEventHeaders = 0;
   const pending = new Map<
     string,
-    { method: string; bytes: number; at: number; params: unknown; stack: string | undefined }
+    {
+      socket: WebSocket;
+      method: string;
+      bytes: number;
+      at: number;
+      params: Record<string, unknown>;
+      stack: string | undefined;
+    }
   >();
   let lastActivity = performance.now();
+  const increment = (counts: Map<string, number>, key: string) =>
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  const recordLifecycle = <K extends string>(
+    groups: Map<string, Map<K, { count: number; ms: number }>>,
+    method: K,
+    ms: number,
+  ) => {
+    const methods = groups.get(liveKind) ?? new Map<K, { count: number; ms: number }>();
+    const stats = methods.get(method) ?? { count: 0, ms: 0 };
+    stats.count++;
+    stats.ms += ms;
+    methods.set(method, stats);
+    groups.set(liveKind, methods);
+    lastActivity = performance.now();
+  };
+  const lifecycleSnapshot = <K extends string>(
+    groups: Map<string, Map<K, { count: number; ms: number }>>,
+  ) =>
+    Object.fromEntries([...groups].map(([kind, methods]) => [kind, Object.fromEntries(methods)]));
   let queued = 0;
   let nextFrameAt = 0;
+  let nextWireAt = 0;
   const eventStream = createEventStream(input);
-  const liveUpdates = new Map<string, Map<string, { count: number; ms: number }>>();
-  const liveStacks = new Map<string, number>();
   const liveOrigins = new Map<string, number>();
   let liveInvalidatorOwner: ProbeInit.SessionDataProbeOwner | undefined;
   let originalLiveInvalidator: ProbeInit.ProbeMethod | undefined;
@@ -61,45 +81,29 @@ function installColdLoadProbes(
     unattributed: boolean;
     entryStack: string;
   }> = [];
+  const matchesOwner = (
+    host: unknown,
+    owner: unknown,
+    tag: string,
+    hostKey: string,
+    methods: string[],
+  ) =>
+    host instanceof HTMLElement &&
+    host.localName === tag &&
+    typeof owner === "object" &&
+    owner !== null &&
+    Reflect.get(owner, hostKey) === host &&
+    typeof Reflect.get(owner, "isConnected") === "boolean" &&
+    methods.every((method) => typeof Reflect.get(owner, method) === "function");
   const chatProbe = {
     installed: false,
     matches(host: unknown, owner: unknown): owner is ProbeInit.ChatProbeOwner {
-      return (
-        host instanceof HTMLElement &&
-        typeof owner === "object" &&
-        owner !== null &&
-        "isConnected" in owner &&
-        typeof owner.isConnected === "boolean" &&
-        "requestUpdate" in owner &&
-        typeof owner.requestUpdate === "function" &&
-        "performUpdate" in owner &&
-        typeof owner.performUpdate === "function" &&
-        "render" in owner &&
-        typeof owner.render === "function" &&
-        ((host.localName === "openclaw-chat-page" &&
-          "host" in owner &&
-          owner.host === host &&
-          "afterCommit" in owner &&
-          typeof owner.afterCommit === "function") ||
-          (host.localName === "openclaw-chat-pane" &&
-            "element" in owner &&
-            owner.element === host &&
-            "prepareRender" in owner &&
-            typeof owner.prepareRender === "function" &&
-            "commitRender" in owner &&
-            typeof owner.commitRender === "function"))
-      );
+      return matchesOwner(host, owner, "openclaw-chat-pane", "element", ["render"]);
     },
     record(tag: string, method: string, ms = 0) {
       const kinds = chatLifecycle.get(tag) ?? new Map();
-      const methods = kinds.get(liveKind) ?? new Map();
-      const stats = methods.get(method) ?? { count: 0, ms: 0 };
-      stats.count++;
-      stats.ms += ms;
-      methods.set(method, stats);
-      kinds.set(liveKind, methods);
+      recordLifecycle(kinds, method, ms);
       chatLifecycle.set(tag, kinds);
-      lastActivity = performance.now();
     },
     producer(record: ProbeInit.ChatOwnerRecord, source: string) {
       const stack = new Error().stack?.split("\n").slice(3, 18).join(" <- ") ?? "";
@@ -107,22 +111,19 @@ function installColdLoadProbes(
       if (!chatProducerStacks.has(key) && chatProducerStacks.size >= 1000) {
         throw new Error("Live chat producer stack limit exceeded");
       }
-      chatProducerStacks.set(key, (chatProducerStacks.get(key) ?? 0) + 1);
-      record.pending.set(key, (record.pending.get(key) ?? 0) + 1);
-      if (source.startsWith("requestUpdate:")) {
-        if (chatRequests.size >= 5000) {
-          throw new Error("Live chat owner request limit exceeded");
-        }
-        const id = chatRequests.size + 1;
-        chatRequests.set(id, {
-          tag: record.host.localName,
-          producer: key,
-          // Null includes callbacks queued before live instrumentation; never infer their caller.
-          frameOriginId: frameProbe.currentOriginId(),
-        });
-        record.pendingRequests.set(id, key);
-        record.queuedRequests.set(id, key);
+      increment(chatProducerStacks, key);
+      increment(record.pending, key);
+      if (chatRequests.size >= 5000) {
+        throw new Error("Live chat lifecycle request limit exceeded");
       }
+      const id = chatRequests.size + 1;
+      chatRequests.set(id, {
+        tag: record.host.localName,
+        producer: key,
+        // Null includes callbacks queued before live instrumentation; never infer their caller.
+        frameOriginId: frameProbe.currentOriginId(),
+      });
+      record.pendingRequests.set(id, key);
     },
     hook(this: void, host: object, phase: "invalidate" | "commit") {
       if (liveStartedAt && !liveFinishedAt) {
@@ -141,88 +142,44 @@ function installColdLoadProbes(
       }
     },
     install() {
-      for (const tag of ["openclaw-chat-page", "openclaw-chat-pane"]) {
-        for (const host of document.querySelectorAll(tag)) {
-          if (!(host instanceof HTMLElement)) {
-            continue;
-          }
-          if (!chatOwners.has(host) && typeof Reflect.get(host, "performUpdate") !== "function") {
-            throw new Error(`Solid ${tag} owner registration was not captured`);
-          }
+      for (const host of document.querySelectorAll("openclaw-chat-pane")) {
+        if (host instanceof HTMLElement && !chatOwners.has(host)) {
+          throw new Error("Solid openclaw-chat-pane owner registration was not captured");
         }
       }
       for (const record of chatOwners.values()) {
-        const owner = record.owner;
-        for (const method of [
-          "requestUpdate",
-          "performUpdate",
-          "render",
-          "prepareRender",
-          "commitRender",
-          "afterCommit",
-        ] as const) {
-          const original = owner[method];
-          if (!original) {
-            continue;
+        const original = record.owner.render;
+        record.originalRender = original;
+        record.owner.render = function (this: ProbeInit.ChatProbeOwner, ...args: unknown[]) {
+          const connected = this.isConnected;
+          if (connected) {
+            if (chatPasses.length >= 5000) {
+              throw new Error("Live chat projection pass limit exceeded");
+            }
+            chatPasses.push({
+              tag: record.host.localName,
+              kind: liveKind,
+              atMs: performance.now() - liveStartedAt,
+              producers: Object.fromEntries(record.pending),
+              requestIds: [...record.pendingRequests.keys()].toSorted(
+                (left, right) => left - right,
+              ),
+              requestAttributed: record.pendingRequests.size > 0,
+              unattributed: record.pending.size === 0,
+              entryStack: new Error().stack?.split("\n").slice(2, 18).join(" <- ") ?? "",
+            });
+            record.pending.clear();
+            record.pendingRequests.clear();
           }
-          record.originals.set(method, original);
-          owner[method] = function (this: ProbeInit.ChatProbeOwner, ...args: unknown[]) {
-            const connected = this.isConnected;
-            if (connected && method === "requestUpdate") {
-              const property = args[0];
-              const propertyLabel =
-                typeof property === "string" ||
-                typeof property === "number" ||
-                typeof property === "symbol"
-                  ? String(property)
-                  : "-";
-              chatProbe.producer(record, `requestUpdate:${propertyLabel}`);
+          const started = performance.now();
+          try {
+            return original.apply(this, args);
+          } finally {
+            if (connected) {
+              chatProbe.record(record.host.localName, "render", performance.now() - started);
             }
-            if (connected && method === "performUpdate") {
-              record.publicationRequests = new Map(record.queuedRequests);
-              record.queuedRequests.clear();
-              record.publicationPending = true;
-            }
-            if (connected && method === "render") {
-              if (chatPasses.length >= 5000) {
-                throw new Error("Live chat projection pass limit exceeded");
-              }
-              const requests = record.publicationPending
-                ? new Map(record.publicationRequests)
-                : new Map<number, string>();
-              const producers = new Map(record.pending);
-              for (const [id, producer] of requests) {
-                if (!record.pendingRequests.has(id)) {
-                  producers.set(producer, (producers.get(producer) ?? 0) + 1);
-                }
-              }
-              for (const [id, producer] of record.pendingRequests) {
-                requests.set(id, producer);
-              }
-              chatPasses.push({
-                tag: record.host.localName,
-                kind: liveKind,
-                atMs: performance.now() - liveStartedAt,
-                producers: Object.fromEntries(producers),
-                requestIds: [...requests.keys()].toSorted((left, right) => left - right),
-                requestAttributed: requests.size > 0,
-                unattributed: producers.size === 0,
-                entryStack: new Error().stack?.split("\n").slice(2, 18).join(" <- ") ?? "",
-              });
-              record.pending.clear();
-              record.pendingRequests.clear();
-              record.publicationPending = false;
-            }
-            const started = performance.now();
-            try {
-              return original.apply(this, args);
-            } finally {
-              if (connected) {
-                chatProbe.record(record.host.localName, method, performance.now() - started);
-              }
-            }
-          };
-        }
+          }
+        };
       }
       previousChatHookDescriptor = Object.getOwnPropertyDescriptor(
         globalThis,
@@ -239,10 +196,10 @@ function installColdLoadProbes(
     },
     restore() {
       for (const record of chatOwners.values()) {
-        for (const [method, original] of record.originals) {
-          record.owner[method] = original;
+        if (record.originalRender) {
+          record.owner.render = record.originalRender;
+          record.originalRender = undefined;
         }
-        record.originals.clear();
       }
       if (
         chatProbe.installed &&
@@ -262,14 +219,10 @@ function installColdLoadProbes(
     },
     read() {
       return {
-        measurement: "owner-requests-publications-projection-passes-and-commits",
+        measurement: "pane-render-passes-and-explicit-lifecycle-notifications",
+        unmeasured: ["page snapshot computations", "fine-grained Solid bindings"],
         lifecycle: Object.fromEntries(
-          [...chatLifecycle].map(([tag, kinds]) => [
-            tag,
-            Object.fromEntries(
-              [...kinds].map(([kind, methods]) => [kind, Object.fromEntries(methods)]),
-            ),
-          ]),
+          [...chatLifecycle].map(([tag, kinds]) => [tag, lifecycleSnapshot(kinds)]),
         ),
         producerStacks: Object.fromEntries(chatProducerStacks),
         requests: Object.fromEntries(chatRequests),
@@ -283,6 +236,17 @@ function installColdLoadProbes(
     },
   };
   let solidSidebarOwner: ProbeInit.SolidSidebarProbeOwner | undefined;
+  const sidebarHandoffs: Array<{ atMs: number; durationMs: number; frameMs?: number }> = [];
+  let originalPublicationGate:
+    | ProbeInit.SolidSidebarProbeOwner["shouldPublishSessionData"]
+    | undefined;
+  const sidebarCounts = {
+    admissions: 0,
+    publications: 0,
+    invalidate: 0,
+    prepareRender: 0,
+    commitRender: 0,
+  };
   const sidebarLifecycleOriginals = new Map<ProbeInit.SidebarLifecycle, () => void>();
   const sidebarPasses: Array<{ method: ProbeInit.SidebarLifecycle; kind: string; atMs: number }> =
     [];
@@ -302,20 +266,14 @@ function installColdLoadProbes(
   const sidebarRegistration = {
     matches(host: unknown, owner: unknown): owner is ProbeInit.SolidSidebarProbeOwner {
       return (
-        host instanceof HTMLElement &&
-        host.localName === "openclaw-app-sidebar" &&
+        matchesOwner(host, owner, "openclaw-app-sidebar", "hostElement", [
+          "invalidate",
+          "prepareRender",
+          "commitRender",
+          "shouldPublishSessionData",
+        ]) &&
         typeof owner === "object" &&
         owner !== null &&
-        "hostElement" in owner &&
-        owner.hostElement === host &&
-        "isConnected" in owner &&
-        typeof owner.isConnected === "boolean" &&
-        "requestUpdate" in owner &&
-        typeof owner.requestUpdate === "function" &&
-        "prepareRender" in owner &&
-        typeof owner.prepareRender === "function" &&
-        "commitRender" in owner &&
-        typeof owner.commitRender === "function" &&
         "sessionData" in owner &&
         typeof owner.sessionData === "object" &&
         owner.sessionData !== null &&
@@ -324,24 +282,32 @@ function installColdLoadProbes(
       );
     },
     capture(host: WeakKey, owner: unknown) {
-      if (sidebarRegistration.matches(host, owner)) {
+      if (sidebarRegistration.matches(host, owner) && owner !== solidSidebarOwner) {
         solidSidebarOwner = owner;
+        const release = owner.releaseSidebarSnapshot.bind(owner);
+        owner.releaseSidebarSnapshot = () => {
+          const atMs = performance.now();
+          release();
+          const handoff: { atMs: number; durationMs: number; frameMs?: number } = {
+            atMs,
+            durationMs: performance.now() - atMs,
+          };
+          sidebarHandoffs.push(handoff);
+          requestAnimationFrame(() => {
+            handoff.frameMs = performance.now() - atMs;
+          });
+        };
       }
       if (host instanceof HTMLElement && chatProbe.matches(host, owner)) {
         chatOwners.set(host, {
           host,
           owner,
-          originals: new Map(),
           pending: new Map(),
           pendingRequests: new Map(),
-          queuedRequests: new Map(),
-          publicationRequests: new Map(),
-          publicationPending: false,
         });
       }
       if (
         solidSidebarOwner &&
-        [...chatOwners.keys()].some((chatHost) => chatHost.localName === "openclaw-chat-page") &&
         [...chatOwners.keys()].some((chatHost) => chatHost.localName === "openclaw-chat-pane")
       ) {
         sidebarRegistration.restore();
@@ -356,7 +322,9 @@ function installColdLoadProbes(
     },
   };
   // The init script precedes application modules, including their host→owner maps.
-  window.WeakMap = RegistrationWeakMap;
+  if (input.ownerProbes !== false || input.sidebarCounters) {
+    window.WeakMap = RegistrationWeakMap;
+  }
   window.addEventListener(
     "pagehide",
     () => {
@@ -367,90 +335,79 @@ function installColdLoadProbes(
     { once: true },
   );
   const liveEvents = new Map<string, number>();
-  const liveWatch = new Set([
-    "openclaw-app-sidebar",
-    "openclaw-sidebar-agent-card",
-    "openclaw-sidebar-attention",
-    "openclaw-chat-page",
-    "openclaw-chat-pane",
-    "openclaw-app-shell",
-  ]);
   let liveStartedAt = 0;
   let liveRpcOffset = 0;
   let liveFinishedAt = 0;
   let liveKind = "idle";
-  const patchedRequests = new WeakSet<object>();
-  const patched = new WeakSet<object>();
-  const define = customElements.define.bind(customElements);
-  customElements.define = (name, constructor, options) => {
-    let prototype = constructor.prototype;
-    while (prototype && !Object.hasOwn(prototype, "performUpdate")) {
-      prototype = Object.getPrototypeOf(prototype);
-    }
-    if (prototype && !patched.has(prototype)) {
-      patched.add(prototype);
-      const performUpdate = prototype.performUpdate;
-      prototype.performUpdate = function (...args: unknown[]) {
-        const stats = updates.get(this.localName) ?? { count: 0, ms: 0 };
-        const started = performance.now();
-        try {
-          return performUpdate.apply(this, args);
-        } finally {
-          if (liveStartedAt) {
-            const group = liveUpdates.get(liveKind) ?? new Map();
-            const live = group.get(this.localName) ?? { count: 0, ms: 0 };
-            live.count++;
-            live.ms += performance.now() - started;
-            group.set(this.localName, live);
-            liveUpdates.set(liveKind, group);
-          }
-          stats.count++;
-          stats.ms += performance.now() - started;
-          updates.set(this.localName, stats);
-          lastActivity = performance.now();
-        }
-      };
-    }
-    prototype = constructor.prototype;
-    while (prototype && !Object.hasOwn(prototype, "requestUpdate")) {
-      prototype = Object.getPrototypeOf(prototype);
-    }
-    if (prototype && !patchedRequests.has(prototype)) {
-      patchedRequests.add(prototype);
-      const requestUpdate = prototype.requestUpdate;
-      prototype.requestUpdate = function (property: PropertyKey | undefined, ...args: unknown[]) {
-        const wasPending = this.isUpdatePending;
-        const result = requestUpdate.apply(this, [property, ...args]);
-        if (
-          liveStartedAt &&
-          liveWatch.has(this.localName) &&
-          this.hasUpdated &&
-          !wasPending &&
-          this.isUpdatePending
-        ) {
-          const stack = new Error().stack?.split("\n").slice(2, 14).join(" <- ") ?? "";
-          const key = `${liveKind} :: ${this.localName} :: ${String(property ?? "-")} :: ${stack}`;
-          if (liveStacks.has(key) || liveStacks.size < 500) {
-            liveStacks.set(key, (liveStacks.get(key) ?? 0) + 1);
-          }
-        }
-        return result;
-      };
-    }
-    define(name, constructor, options);
-  };
   const Original = window.WebSocket;
+  const rpcRecord = (
+    request: NonNullable<ReturnType<typeof pending.get>>,
+    responseBytes: number,
+  ) => ({
+    method: request.method,
+    params: request.params,
+    stack: request.stack,
+    requestBytes: request.bytes,
+    responseBytes,
+    ms: performance.now() - request.at,
+    requestMs: request.at,
+    responseMs: performance.now(),
+  });
   window.WebSocket = new Proxy(Original, {
     construct(target, args) {
       // The mock constructor returns its routed socket rather than its own instance.
       const socket: WebSocket = Reflect.construct(target, args);
+      const socketId = ++nextSocketId;
+      // A closed transport cannot answer; count its attempts without blocking settlement.
+      socket.addEventListener(
+        "close",
+        (event) => {
+          socketCloses.push({
+            socketId,
+            atMs: performance.now(),
+            code: event.code,
+            reason: event.reason,
+            wasClean: event.wasClean,
+          });
+          for (const [id, request] of pending) {
+            if (request.socket !== socket) {
+              continue;
+            }
+            pending.delete(id);
+            rpcs.push({
+              ...rpcRecord(request, 0),
+              abandoned: true,
+            });
+          }
+          lastActivity = performance.now();
+        },
+        { once: true },
+      );
       const send = socket.send.bind(socket);
       const dispatch = socket.dispatchEvent.bind(socket);
+      const eventDeliveries: Array<{ ready: boolean; deliver: () => void }> = [];
+      let eventDeliveryScheduled = false;
+      const deliverNextEvent = () => {
+        eventDeliveryScheduled = false;
+        const next = eventDeliveries[0];
+        if (!next?.ready) {
+          return;
+        }
+        eventDeliveries.shift();
+        next.deliver();
+        if (eventDeliveries[0]?.ready) {
+          // A late timer may have made later events ready first. Keep wire order
+          // without dispatching their message handlers in the same browser task.
+          eventDeliveryScheduled = true;
+          window.setTimeout(deliverNextEvent, 0);
+        }
+      };
       socket.send = (data) => {
         if (typeof data === "string") {
           const frame = JSON.parse(data);
           if (frame.type === "req") {
             pending.set(frame.id, {
+              socket,
               method: frame.method,
               params: frame.params,
               stack: new Error().stack,
@@ -466,49 +423,140 @@ function installColdLoadProbes(
         if (!(event instanceof MessageEvent) || typeof event.data !== "string") {
           return dispatch(event);
         }
+        let deliveredEvent = event;
         const frame = JSON.parse(event.data);
         const responseBytes = new TextEncoder().encode(event.data).length;
         const liveEvent = eventStream.emitting;
         // A single wire delivers one message task at a time, including concurrent RPC replies.
         nextFrameAt = Math.max(performance.now() + input.latencyMs, nextFrameAt + input.frameGapMs);
+        const queuedRequest = pending.get(frame.id);
+        if (input.omitHelloSelfPresence && queuedRequest?.method === "connect") {
+          const client = queuedRequest.params.client;
+          const instanceId =
+            client && typeof client === "object" && "instanceId" in client
+              ? client.instanceId
+              : undefined;
+          const presence = frame.payload?.snapshot?.presence;
+          if (Array.isArray(presence)) {
+            frame.payload.snapshot.presence = presence.filter(
+              (entry) => entry.instanceId !== instanceId,
+            );
+            deliveredEvent = new MessageEvent("message", { data: JSON.stringify(frame) });
+          }
+        }
+        const query = queuedRequest?.params;
+        const queryKind =
+          queuedRequest?.method !== "sessions.list"
+            ? undefined
+            : query?.ownerFirst
+              ? "ownerFirst"
+              : query?.involvingMe
+                ? "involvingMe"
+                : query?.includeOwnerSessionCounts
+                  ? "ownerCounts"
+                  : query?.spawnedBy
+                    ? "children"
+                    : undefined;
+        // Per-method delay models a queued RPC without holding unrelated replies.
+        const deliverAt = Math.max(
+          nextFrameAt,
+          // Delay the challenge so initialConnectSent still means the request left.
+          frame.type === "event" && frame.event === "connect.challenge"
+            ? (input.connectNotBeforeMs ?? 0)
+            : 0,
+          queuedRequest
+            ? queuedRequest.at +
+                ((queryKind && input.sidebarQueryLatencyMs?.[queryKind]) ??
+                  input.methodLatencyMs?.[queuedRequest.method] ??
+                  0)
+            : 0,
+        );
+        // Retain headers only: enough to distinguish skipped and reordered wire events.
+        const eventHeader =
+          frame.type === "event" && eventHeaders.length < 512
+            ? {
+                socketId,
+                event: String(frame.event),
+                seq: typeof frame.seq === "number" ? frame.seq : null,
+                queuedAtMs: performance.now(),
+                eligibleAtMs: deliverAt,
+              }
+            : undefined;
+        if (eventHeader) {
+          eventHeaders.push(eventHeader);
+        } else if (frame.type === "event") {
+          omittedEventHeaders++;
+        }
         queued++;
+        const deliver = () => {
+          queued--;
+          if (eventHeader) {
+            Object.assign(eventHeader, {
+              deliveredAtMs: performance.now(),
+              deliveryOrder: ++nextEventDeliveryOrder,
+              socketStateAtDelivery: socket.readyState,
+            });
+          }
+          const request = pending.get(frame.id);
+          const rpcIndex = rpcs.length;
+          if (request) {
+            pending.delete(frame.id);
+            rpcs.push({
+              ...rpcRecord(request, responseBytes),
+              responseOk: frame.ok === true,
+              ...(request.method === "sessions.messages.subscribe" &&
+              typeof frame.payload?.initialHistory?.ok === "boolean"
+                ? { initialHistoryOk: frame.payload.initialHistory.ok }
+                : {}),
+              ...(liveStartedAt ? { responseAtMs: performance.now() - liveStartedAt } : {}),
+            });
+          }
+          const responseMark = request && `cold-load-rpc:${rpcIndex}:${request.method}`;
+          const delivery = liveEvent
+            ? { ...liveEvent, deliveredAtMs: performance.now() - liveStartedAt }
+            : null;
+          if (delivery) {
+            liveKind = delivery.kind;
+            increment(liveEvents, delivery.kind);
+          }
+          const dispatchStarted = performance.now();
+          if (responseMark) {
+            performance.mark(`${responseMark}:start`);
+          }
+          frameProbe.withDelivery(delivery, () => dispatch(deliveredEvent));
+          if (request) {
+            rpcs[rpcIndex]!.dispatchMs = performance.now() - dispatchStarted;
+            performance.mark(`${responseMark}:end`);
+          }
+          lastActivity = performance.now();
+        };
+        const eventDelivery = frame.type === "event" ? { ready: false, deliver } : undefined;
+        if (eventDelivery) {
+          eventDeliveries.push(eventDelivery);
+        }
+        const deliverReady = () => {
+          if (!eventDelivery) {
+            deliver();
+            return;
+          }
+          eventDelivery.ready = true;
+          if (eventDeliveries[0] === eventDelivery && !eventDeliveryScheduled) {
+            deliverNextEvent();
+          }
+        };
         window.setTimeout(
           () => {
-            queued--;
-            const request = pending.get(frame.id);
-            const rpcIndex = rpcs.length;
-            if (request) {
-              pending.delete(frame.id);
-              rpcs.push({
-                method: request.method,
-                params: request.params,
-                stack: request.stack,
-                requestBytes: request.bytes,
-                responseBytes,
-                ms: performance.now() - request.at,
-                ...(liveStartedAt ? { responseAtMs: performance.now() - liveStartedAt } : {}),
-              });
+            if (input.downloadKbps) {
+              // Reserve the wire only once the reply is ready, so server delay
+              // cannot hold unrelated replies behind it.
+              nextWireAt =
+                Math.max(performance.now(), nextWireAt) + (responseBytes * 8) / input.downloadKbps;
+              window.setTimeout(deliverReady, Math.max(0, nextWireAt - performance.now()));
+            } else {
+              deliverReady();
             }
-            const responseMark = request && `cold-load-rpc:${rpcIndex}:${request.method}`;
-            const delivery = liveEvent
-              ? { ...liveEvent, deliveredAtMs: performance.now() - liveStartedAt }
-              : null;
-            if (delivery) {
-              liveKind = delivery.kind;
-              liveEvents.set(delivery.kind, (liveEvents.get(delivery.kind) ?? 0) + 1);
-            }
-            const dispatchStarted = performance.now();
-            if (responseMark) {
-              performance.mark(`${responseMark}:start`);
-            }
-            frameProbe.withDelivery(delivery, () => dispatch(event));
-            if (request) {
-              rpcs[rpcIndex]!.dispatchMs = performance.now() - dispatchStarted;
-              performance.mark(`${responseMark}:end`);
-            }
-            lastActivity = performance.now();
           },
-          Math.max(0, nextFrameAt - performance.now()),
+          Math.max(0, deliverAt - performance.now()),
         );
         return true;
       };
@@ -526,29 +574,45 @@ function installColdLoadProbes(
     startLive() {
       liveStartedAt = performance.now();
       liveRpcOffset = rpcs.length;
-      frameProbe.install();
+      if (input.ownerProbes === false && !input.sidebarCounters) {
+        eventStream.startLive(liveStartedAt);
+        return;
+      }
+      if (input.ownerProbes !== false) {
+        frameProbe.install();
+        chatProbe.install();
+      }
       const sidebar = document.querySelector("openclaw-app-sidebar");
       sidebarRegistration.restore();
-      chatProbe.install();
-      if (
-        sidebar &&
-        !solidSidebarOwner &&
-        typeof Reflect.get(sidebar, "performUpdate") !== "function"
-      ) {
+      if (sidebar && !solidSidebarOwner) {
         throw new Error("Solid sidebar owner registration was not captured");
       }
       if (solidSidebarOwner) {
         const owner = solidSidebarOwner;
-        for (const method of ["requestUpdate", "prepareRender", "commitRender"] as const) {
+        const originalGate = owner.shouldPublishSessionData;
+        originalPublicationGate = originalGate;
+        owner.shouldPublishSessionData = function () {
+          sidebarCounts.admissions++;
+          const publish = originalGate.call(this);
+          sidebarCounts.publications += Number(publish);
+          return publish;
+        };
+        for (const method of ["invalidate", "prepareRender", "commitRender"] as const) {
           const original = owner[method];
           sidebarLifecycleOriginals.set(method, original);
           owner[method] = function (this: ProbeInit.SolidSidebarProbeOwner) {
             const connected = this.isConnected;
-            if (method === "requestUpdate" && connected) {
+            if (connected) {
+              sidebarCounts[method]++;
+            }
+            if (input.ownerProbes === false) {
+              return original.call(this);
+            }
+            if (method === "invalidate" && connected) {
               const stack = new Error().stack?.split("\n").slice(2, 14).join(" <- ") ?? "";
               const key = `${liveKind} :: ${stack}`;
               if (sidebarOwnerStacks.has(key) || sidebarOwnerStacks.size < 100) {
-                sidebarOwnerStacks.set(key, (sidebarOwnerStacks.get(key) ?? 0) + 1);
+                increment(sidebarOwnerStacks, key);
               }
             }
             const started = performance.now();
@@ -557,13 +621,7 @@ function installColdLoadProbes(
             } finally {
               if (connected) {
                 sidebarPasses.push({ method, kind: liveKind, atMs: started - liveStartedAt });
-                const group = sidebarLifecycle.get(liveKind) ?? new Map();
-                const stats = group.get(method) ?? { count: 0, ms: 0 };
-                stats.count++;
-                stats.ms += performance.now() - started;
-                group.set(method, stats);
-                sidebarLifecycle.set(liveKind, group);
-                lastActivity = performance.now();
+                recordLifecycle(sidebarLifecycle, method, performance.now() - started);
               }
             }
           };
@@ -572,13 +630,13 @@ function installColdLoadProbes(
       const owner: ProbeInit.SessionDataProbeOwner | undefined =
         solidSidebarOwner?.sessionData ??
         (sidebar ? Reflect.get(sidebar, "sessionData") : undefined);
-      if (owner) {
+      if (owner && input.ownerProbes !== false) {
         const original = owner.requestSessionDataUpdate;
         owner.requestSessionDataUpdate = function (...args: unknown[]) {
           const stack = new Error().stack?.split("\n").slice(2, 14).join(" <- ") ?? "";
           const key = `${liveKind} :: ${stack}`;
           if (liveOrigins.has(key) || liveOrigins.size < 100) {
-            liveOrigins.set(key, (liveOrigins.get(key) ?? 0) + 1);
+            increment(liveOrigins, key);
           }
           return original.apply(this, args);
         };
@@ -593,6 +651,9 @@ function installColdLoadProbes(
       sidebarRegistration.restore();
       chatProbe.restore();
       if (solidSidebarOwner) {
+        if (originalPublicationGate) {
+          solidSidebarOwner.shouldPublishSessionData = originalPublicationGate;
+        }
         for (const [method, original] of sidebarLifecycleOriginals) {
           solidSidebarOwner[method] = original;
         }
@@ -605,24 +666,24 @@ function installColdLoadProbes(
     readLive() {
       return {
         elapsedMs: (liveFinishedAt || performance.now()) - liveStartedAt,
+        longTasks: longTasks.filter(
+          (task) =>
+            task.start >= liveStartedAt && (!liveFinishedAt || task.start <= liveFinishedAt),
+        ),
         rpcs: rpcs.slice(liveRpcOffset),
         rpcOffset: liveRpcOffset,
         sentEvents: [...liveEvents.values()].reduce((sum, count) => sum + count, 0),
         events: Object.fromEntries(liveEvents),
         deliveryCadence: frameProbe.readDeliveryCadence(),
-        updates: Object.fromEntries(
-          [...liveUpdates].map(([kind, tags]) => [kind, Object.fromEntries(tags)]),
-        ),
-        stacks: Object.fromEntries(liveStacks),
         sidebarInvalidations: Object.fromEntries(liveOrigins),
-        solidChat: chatProbe.read(),
+        ownerProbes: input.ownerProbes !== false,
+        solidChat: input.ownerProbes === false ? null : chatProbe.read(),
         solidSidebar: solidSidebarOwner
           ? {
               measurement: "owner-invalidations-and-projection-lifecycle-passes",
+              counts: sidebarCounts,
               passes: sidebarPasses,
-              lifecycle: Object.fromEntries(
-                [...sidebarLifecycle].map(([kind, methods]) => [kind, Object.fromEntries(methods)]),
-              ),
+              lifecycle: lifecycleSnapshot(sidebarLifecycle),
               invalidationStacks: Object.fromEntries(sidebarOwnerStacks),
             }
           : null,
@@ -636,9 +697,12 @@ function installColdLoadProbes(
         queued: queued + eventStream.queued,
         sentEvents: eventStream.sentEvents,
         idleMs: performance.now() - lastActivity,
-        updates: Object.fromEntries(updates),
         rpcs,
+        socketCloses,
+        eventHeaders,
+        omittedEventHeaders,
         longTasks,
+        sidebarHandoffs,
       };
     },
   });

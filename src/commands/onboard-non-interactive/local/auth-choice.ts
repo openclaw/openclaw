@@ -2,7 +2,7 @@ import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import { quoteCliArg } from "../../../cli/quote-cli-arg.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { SecretInput } from "../../../config/types.secrets.js";
+import { hasConfiguredSecretInput, type SecretInput } from "../../../config/types.secrets.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveManifestDeprecatedProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
 import type {
@@ -22,6 +22,8 @@ import {
   CustomApiError,
   parseNonInteractiveCustomApiFlags,
   resolveCustomProviderId,
+  resolveCustomProviderNoAuth,
+  resolveNonInteractiveCustomApiModelIds,
 } from "../../onboard-custom-config.js";
 import { rejectOnboardingOption } from "../../onboard-options.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
@@ -188,7 +190,13 @@ export async function applyNonInteractiveAuthChoice(params: {
       // No-auth selection must not resolve ambient credentials: keeping the
       // env/flag key alive would serialize it next to auth: "none" and crash
       // the replacement branch (which expects a staged profile).
-      const resolvedCustomApiKey = customAuth.noAuth
+      const noAuth = resolveCustomProviderNoAuth({
+        ...customAuth,
+        config: nextConfig,
+        providerId: resolvedProviderId.providerId,
+        apiKey: customAuth.apiKey ?? process.env.CUSTOM_API_KEY?.trim(),
+      });
+      const resolvedCustomApiKey = noAuth
         ? undefined
         : await resolveApiKey({
             provider: resolvedProviderId.providerId,
@@ -196,6 +204,11 @@ export async function applyNonInteractiveAuthChoice(params: {
             flagName: "--custom-api-key",
             envVar: "CUSTOM_API_KEY",
             envVarName: "CUSTOM_API_KEY",
+            allowProfile:
+              !opts.customModelIds &&
+              !hasConfiguredSecretInput(
+                nextConfig.models?.providers?.[resolvedProviderId.providerId]?.apiKey,
+              ),
             required: false,
           });
       let customApiKeyInput: SecretInput | undefined;
@@ -215,20 +228,26 @@ export async function applyNonInteractiveAuthChoice(params: {
         }
         customApiKeyInput = stored;
       }
+      const modelIds = await resolveNonInteractiveCustomApiModelIds({
+        ...customAuth,
+        config: nextConfig,
+        noAuth,
+        apiKey: resolvedCustomApiKey?.key,
+        agentDir: params.target.agentDir,
+        modelIds: opts.customModelIds,
+      });
       const result = applyCustomApiConfig({
         config: nextConfig,
-        baseUrl: customAuth.baseUrl,
-        modelId: customAuth.modelId,
-        compatibility: customAuth.compatibility,
+        ...customAuth,
+        modelId: modelIds[0] ?? "",
+        modelIds: customAuth.modelId ? undefined : modelIds,
+        preserveExistingModelMetadata: !customAuth.modelId,
         apiKey: customApiKeyInput,
-        ...(customAuth.noAuth ? { noAuth: true } : {}),
-        providerId: customAuth.providerId,
-        supportsImageInput: customAuth.supportsImageInput,
         target: params.target,
       });
-      if (result.providerIdRenamedFrom && result.providerId) {
+      if (resolvedProviderId.providerIdRenamedFrom) {
         runtime.log(
-          `Custom provider ID "${result.providerIdRenamedFrom}" already exists for a different base URL. Using "${result.providerId}".`,
+          `Custom provider ID "${resolvedProviderId.providerIdRenamedFrom}" already exists for a different base URL. Using "${result.providerId}".`,
         );
       }
       if (customApiKeyInput !== undefined && resolvedCustomApiKey?.source !== "profile") {

@@ -81,6 +81,8 @@ export type PluginStateOperation<Operations extends PluginStateOperationDefiniti
       watchStores?: readonly number[];
       /** Explicit noncreating result when a read-only source does not exist. */
       missingValue?: Operations[Type]["output"];
+      /** Read-only shortcut: return this value when an autocommit namespace read is empty. */
+      ifEmpty?: { store: number; value: Operations[Type]["output"] };
     },
   ): Promise<PluginStateOperationReceipt<Operations[Type]["output"]>>;
 };
@@ -95,6 +97,7 @@ export type PluginStateKeyRange = {
 export type PluginStateKeyRangeParams = {
   pluginId: string;
   namespace: string;
+  valueFilter?: { path: string; equals: string };
 } & PluginStateKeyRange;
 
 export type PluginStateMoveEntries = {
@@ -110,7 +113,7 @@ type PluginStateKeyedStoreBase<T> = {
     handler: { moduleName: string; exportName: string },
     authority?: { assertCurrent(): void; sourceReceipt?: PluginStateOperationReceipt<unknown> },
   ) => PluginStateOperation<Operations>;
-  /** Prepares a mutation observation through canonical writable admission; may create state. */
+  /** Uses the admitted resident view when available; writable fallback may create state. */
   observe?: (key: string) => Promise<PluginStateObservation<T>>;
   /**
    * Compares the observed row and optional same-plugin conditions atomically before applying data.

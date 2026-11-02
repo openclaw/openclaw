@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
+import { captureSessionStoreEnvironment } from "../config/sessions/session-store-target-inventory.js";
 import type { SessionObserverDeps, SessionObserverRead } from "./session-observer-model.js";
 import { defaultPersistDigest } from "./session-observer-model.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
@@ -19,7 +19,7 @@ export function captureSessionObserverRead(
 ): SessionObserverRead {
   const cfg = deps.getConfig();
   const routing = captureSessionMutationRouting(cfg, undefined, [{ sessionKey, agentId }]);
-  const inventory = prepareSessionStoreTargetInventory(cfg, [agentId]);
+  const { config, serialized: env } = captureSessionStoreEnvironment(cfg);
   let target: GatewaySessionStoreTargetWithStore | undefined;
   let selection: GatewaySessionStoreSelection | undefined;
   const assertCurrent = () => {
@@ -66,8 +66,8 @@ export function captureSessionObserverRead(
       }
       return withGatewaySessionStoreTarget(
         {
-          cfg: inventory.config,
-          env: inventory.env,
+          cfg: config,
+          env,
           key: sessionKey,
           agentId,
           projection: "full",
@@ -98,7 +98,7 @@ export function captureSessionObserverRead(
           storePath: target.storePath,
           readSource: target.capturedReadSource,
           target: { canonicalKey: target.canonicalKey, storeKeys: target.storeKeys },
-          env: inventory.env,
+          env,
         },
         stillCurrent: () => {
           assertCurrent();

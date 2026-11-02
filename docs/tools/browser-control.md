@@ -566,7 +566,8 @@ These are useful for "make the site behave like X" workflows:
 - `openclaw browser evaluate --fn` accepts a function source, an expression, or
   a statement body. Statement bodies are wrapped as async functions, so use
   `return` for the value you want back. Use `--timeout-ms <ms>` when the
-  page-side function may need longer than the default evaluate timeout.
+  page-side function may need longer than the default evaluate timeout. The Gateway
+  parses this input for routing; supplied JavaScript runs only inside the page.
 - For logins and anti-bot notes (X/Twitter, etc.), see [Browser login + X/Twitter posting](/tools/browser-login).
 - Keep the Gateway/node host private (loopback or tailnet-only).
 - Remote CDP endpoints are powerful. Tunnel and protect them.

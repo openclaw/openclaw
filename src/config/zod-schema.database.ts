@@ -1,12 +1,11 @@
 import { z } from "zod";
-import { getMixedPostgresAgentError } from "../infra/database-engine/registry.js";
 import { projectConfigFieldMetadata } from "./schema.field-metadata.js";
 import { SecretInputSchema } from "./zod-schema.secret-input.js";
 import { configUiMetadata, sensitive } from "./zod-schema.sensitive.js";
 
 const DatabaseFamilyEngineSchema = z.enum(["sqlite", "postgres"]).register(configUiMetadata, {
-  label: "Family Database Engine (Experimental)",
-  help: "Override database.engine for this family. Changing an engine requires a port and a restart; it does not migrate existing data. Port, backup/restore, and update refuse mixed-engine installations until family-scoped support is available.",
+  label: "Family Database Engine",
+  help: "Override database.engine for this family. Changing an engine requires database port --family and a restart; editing config does not migrate existing data. Mixed-engine backup/restore preserves each store's engine, and updates require candidate family support.",
 });
 
 const DatabaseFamilySchema = z.strictObject({ engine: DatabaseFamilyEngineSchema }).optional();
@@ -14,28 +13,21 @@ const DatabaseFamilySchema = z.strictObject({ engine: DatabaseFamilyEngineSchema
 export const DatabaseConfigSchema = z
   .strictObject({
     engine: z.enum(["sqlite", "postgres"]).optional().register(configUiMetadata, {
-      label: "Database Engine (Experimental)",
-      help: "Default store engine (default: sqlite). Experimental postgres selects supported families unless database.families overrides them; unsupported families stay on SQLite. Changing an engine does not migrate existing data.",
+      label: "Database Engine",
+      help: "Default store engine (default: sqlite). PostgreSQL supports state, agent, workboard, logbook, and team-reports unless database.families overrides them; safety stores stay local SQLite. Changing an engine does not migrate existing data.",
     }),
     families: z
       .strictObject({
         state: DatabaseFamilySchema,
-        agent: z
-          .strictObject({
-            engine: DatabaseFamilyEngineSchema.clone().register(configUiMetadata, {
-              label: "Agent Database Engine (Experimental)",
-              help: "Agent databases support sqlite in mixed-engine installations. PostgreSQL agents require PostgreSQL for every configurable family until mixed-pair conformance is available.",
-            }),
-          })
-          .optional(),
+        agent: DatabaseFamilySchema,
         workboard: DatabaseFamilySchema,
         logbook: DatabaseFamilySchema,
         "team-reports": DatabaseFamilySchema,
       })
       .optional()
       .register(configUiMetadata, {
-        label: "Family Database Engines (Experimental)",
-        help: "Optional engine overrides for state, agent, workboard, logbook, and team-reports. Each override requires engine. PostgreSQL agents require PostgreSQL for every configurable family; local safety journals are not configurable. All PostgreSQL families share database.postgres.",
+        label: "Family Database Engines",
+        help: "Optional engine overrides for state, agent, workboard, logbook, and team-reports. Each override requires engine. State and agent families may use different engines; local safety journals are not configurable. All PostgreSQL families share database.postgres.",
       }),
     postgres: z
       .strictObject({
@@ -46,34 +38,28 @@ export const DatabaseConfigSchema = z
           .optional()
           .register(sensitive)
           .register(configUiMetadata, {
-            label: "PostgreSQL Connection (Experimental)",
-            help: "Shared experimental PostgreSQL connection DSN, required when any effective family engine is postgres. Use an env/file/exec SecretRef; store-backed refs cannot bootstrap the database. The host resolves it once before handing it to database workers. Connection failures never fall back to SQLite.",
+            label: "PostgreSQL Connection",
+            help: "Shared PostgreSQL DSN, required when any effective family engine is postgres. Env/file SecretRefs are qualified; TLS and exec-backed DSNs remain experimental pending live qualification. Store-backed refs cannot bootstrap the database. The host resolves it once for database workers. Connection failures never fall back to SQLite.",
           }),
         schemaPrefix: z
           .string()
           .regex(/^[a-z_][a-z0-9_]{0,26}$/)
           .optional()
           .register(configUiMetadata, {
-            label: "PostgreSQL Schema Prefix (Experimental)",
-            help: "Prefix for new experimental PostgreSQL store schemas (default: openclaw). Use 1–27 lowercase letters, digits, or underscores, starting with a letter or underscore. Existing anchors retain their schema.",
+            label: "PostgreSQL Schema Prefix",
+            help: "Prefix for new PostgreSQL store schemas (default: openclaw). Use 1–27 lowercase letters, digits, or underscores, starting with a letter or underscore. Existing anchors retain their schema.",
           }),
       })
       .optional()
       .register(configUiMetadata, {
-        label: "PostgreSQL (Experimental)",
-        help: "Experimental PostgreSQL connection and schema naming. Back up each PostgreSQL store schema together with its SQLite anchor.",
+        label: "PostgreSQL",
+        help: "PostgreSQL connection and schema naming. PostgreSQL 16–18 are qualified; other admitted majors remain experimental pending conformance. Back up each store schema together with its local SQLite anchor. See the PostgreSQL operator guide for deployment qualification limits.",
       }),
-  })
-  .superRefine((database, ctx) => {
-    const message = getMixedPostgresAgentError({ database });
-    if (message) {
-      ctx.addIssue({ code: "custom", path: ["families", "agent", "engine"], message });
-    }
   })
   .optional()
   .register(configUiMetadata, {
-    label: "Database (Experimental)",
-    help: "Database engine selection. SQLite is the supported default; experimental PostgreSQL applies to supported store families. Doctor reports each store's engine and warns about stores that remain on SQLite.",
+    label: "Database",
+    help: "Database engine selection. SQLite is the default; PostgreSQL is a supported alternative for the five configurable families. Doctor reports configured and observed engines and warns about mismatches, missing capabilities, or unavailable stores. See the PostgreSQL operator guide for platform and upgrade qualification limits.",
   });
 
 export const { labels: DATABASE_FIELD_LABELS, help: DATABASE_FIELD_HELP } =

@@ -1,8 +1,7 @@
-/** Tests agent model discovery registry refresh and lookup cache behavior. */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
@@ -11,10 +10,9 @@ import {
   discoverModelsFromCapturedSources,
 } from "./agent-model-discovery.js";
 
-// Discovery must not cold-load bundled plugin runtime: with build artifacts
-// present, the openai plugin's normalizeResolvedModel currently overrides
-// authored models.json api values, making these assertions machine-dependent.
-// The ambient plugin metadata snapshot is cleared for the same reason.
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+// Keep authored API assertions independent of ambient plugin build artifacts.
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
   clearPluginMetadataLifecycleCaches();
@@ -40,34 +38,29 @@ function writeModelsJson(agentDir: string, modelId: string): void {
 
 describe("discoverModels", () => {
   it("uses a directory-independent source label for lifecycle-captured catalogs", async () => {
-    const firstAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-models-first-"));
-    const secondAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-models-second-"));
-    try {
-      const createRegistry = async (agentDir: string) =>
-        discoverModelsFromCapturedSources(
-          (await discoverAuthStorageFacts(agentDir, { skipCredentials: true })).authStorage,
-          {
-            includePluginCatalogs: true,
-            modelsJsonContents: "not valid json",
-            pluginCatalogs: [],
-          },
-        );
+    const firstAgentDir = tempDirs.make("openclaw-agent-models-first-");
+    const secondAgentDir = tempDirs.make("openclaw-agent-models-second-");
+    const createRegistry = async (agentDir: string) =>
+      discoverModelsFromCapturedSources(
+        (await discoverAuthStorageFacts(agentDir, { skipCredentials: true })).authStorage,
+        {
+          includePluginCatalogs: true,
+          modelsJsonContents: "not valid json",
+          pluginCatalogs: [],
+        },
+      );
 
-      const firstError = (await createRegistry(firstAgentDir)).getError();
-      const secondError = (await createRegistry(secondAgentDir)).getError();
+    const firstError = (await createRegistry(firstAgentDir)).getError();
+    const secondError = (await createRegistry(secondAgentDir)).getError();
 
-      expect(firstError).toBe(secondError);
-      expect(firstError).toContain("captured:models.json");
-      expect(firstError).not.toContain(firstAgentDir);
-      expect(secondError).not.toContain(secondAgentDir);
-    } finally {
-      fs.rmSync(firstAgentDir, { recursive: true, force: true });
-      fs.rmSync(secondAgentDir, { recursive: true, force: true });
-    }
+    expect(firstError).toBe(secondError);
+    expect(firstError).toContain("captured:models.json");
+    expect(firstError).not.toContain(firstAgentDir);
+    expect(secondError).not.toContain(secondAgentDir);
   });
 
   it("clears cached find results when the agent model registry refreshes", async () => {
-    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-models-"));
+    const agentDir = tempDirs.make("openclaw-agent-models-");
     writeModelsJson(agentDir, "old-model");
     const { authStorage } = await discoverAuthStorageFacts(agentDir, { skipCredentials: true });
     const registry = await discoverModelsAsync(authStorage, agentDir, { normalizeModels: false });
@@ -85,43 +78,17 @@ describe("discoverModels", () => {
   });
 
   it("preserves authored OpenAI Completions while normalizing models.json entries", async () => {
-    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-models-"));
+    const agentDir = tempDirs.make("openclaw-agent-models-");
+    const provider = {
+      baseUrl: "https://api.openai.com/v1",
+      api: "openai-completions" as const,
+      models: [{ id: "gpt-5.5", name: "GPT-5.5", baseUrl: "https://api.openai.com/v1" }],
+    };
     fs.writeFileSync(
       path.join(agentDir, "models.json"),
-      JSON.stringify({
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "sk-test",
-            api: "openai-completions",
-            models: [
-              {
-                id: "gpt-5.5",
-                name: "GPT-5.5",
-                baseUrl: "https://api.openai.com/v1",
-              },
-            ],
-          },
-        },
-      }),
+      JSON.stringify({ providers: { openai: { ...provider, apiKey: "sk-test" } } }),
     );
-    const config = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            api: "openai-completions",
-            models: [
-              {
-                id: "gpt-5.5",
-                name: "GPT-5.5",
-                baseUrl: "https://api.openai.com/v1",
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const config = { models: { providers: { openai: provider } } } as unknown as OpenClawConfig;
     const { authStorage } = await discoverAuthStorageFacts(agentDir, { skipCredentials: true });
     const registry = await discoverModelsAsync(authStorage, agentDir, { config });
 

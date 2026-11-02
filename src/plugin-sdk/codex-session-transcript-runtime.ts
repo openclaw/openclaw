@@ -122,7 +122,7 @@ function assertCodexSessionSyncAccess(target: SessionTranscriptReadScope, method
   }
 }
 
-/** @deprecated Use createCodexSessionContextReader with the captured admission. Final compatibility day: 2026-12-31. */
+/** @deprecated Use createCodexSessionContextReader with the captured admission. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function validateCodexSessionTranscriptReadAdmission(
   ...args: Parameters<typeof validateSessionTranscriptContextAdmission>
 ): void {
@@ -135,7 +135,7 @@ export function validateCodexSessionTranscriptReadAdmission(
   validateSessionTranscriptContextAdmission(...args);
 }
 
-/** @deprecated Use createCodexSessionContextReader with a prepared current source. Final compatibility day: 2026-12-31. */
+/** @deprecated Use createCodexSessionContextReader with a prepared current source. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function validateCodexSessionTranscriptContextVersion(
   ...args: Parameters<typeof validateSessionTranscriptContextVersion>
 ): void {
@@ -148,7 +148,7 @@ export function validateCodexSessionTranscriptContextVersion(
   validateSessionTranscriptContextVersion(...args);
 }
 
-/** @deprecated Use createCodexSessionContextReader. Final compatibility day: 2026-12-31. */
+/** @deprecated Use createCodexSessionContextReader. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function readCodexSessionContext<T>(
   target: SessionTranscriptRuntimeTarget,
   read: (
@@ -222,7 +222,7 @@ export type CodexSessionTranscriptMirrorWriteLockContext = Omit<
   }>;
 };
 
-/** @deprecated Use withCodexSessionTranscriptMirrorWrite. Final compatibility day: 2026-12-31. */
+/** @deprecated Use withCodexSessionTranscriptMirrorWrite. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export async function withCodexSessionTranscriptMirrorWriteLock<T>(
   params: InternalSessionTranscriptWriteLockParams,
   run: (context: CodexSessionTranscriptMirrorWriteLockContext) => Promise<T> | T,
@@ -296,6 +296,7 @@ async function withMirrorWrite<T>(
       },
     }),
     mode,
+    "withCodexSessionTranscriptMirrorWriteLock",
   );
 }
 

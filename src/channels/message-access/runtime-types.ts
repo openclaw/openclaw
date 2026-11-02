@@ -5,6 +5,7 @@ import type {
   AccessGroupMembershipFact,
   AccessGraphGate,
   ChannelIngressChannelId,
+  ChannelIngressMatchContext,
   ChannelIngressDecision,
   ChannelIngressEventInput,
   ChannelIngressIdentifierKind,
@@ -56,7 +57,7 @@ export type ChannelIngressIdentityDescriptor = {
   matchEntry?: (params: {
     subject: InternalChannelIngressSubject;
     entry: InternalNormalizedEntry;
-    context: "dm" | "group" | "route" | "command";
+    context: ChannelIngressMatchContext;
   }) => boolean | undefined;
   /** Generates stable redacted entry ids for diagnostics. */
   resolveEntryId?: (params: {

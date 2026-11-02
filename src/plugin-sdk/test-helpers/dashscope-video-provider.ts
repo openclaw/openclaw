@@ -2,40 +2,19 @@
 import { expect, vi } from "vitest";
 import type { VideoGenerationResult } from "../video-generation.js";
 
-type ClearableMock = {
-  mockClear(): unknown;
-};
-
-type ResettableMock = {
-  mockReset(): unknown;
-};
-
 type ImplementableMock = {
   mockImplementation(implementation: () => Promise<unknown>): unknown;
 };
 
-type ChainableResolvedValueMock = ResettableMock & {
+type ChainableResolvedValueMock = {
   mockResolvedValueOnce(value: unknown): ChainableResolvedValueMock;
 };
 
-export type DashscopeVideoProviderMocks = {
-  resolveApiKeyForProviderMock: ClearableMock;
-  postJsonRequestMock: ResettableMock & ImplementableMock;
-  fetchWithTimeoutMock: ChainableResolvedValueMock;
-  assertOkOrThrowHttpErrorMock: ClearableMock;
-  resolveProviderHttpRequestConfigMock: ClearableMock;
-};
-
-export function resetDashscopeVideoProviderMocks(mocks: DashscopeVideoProviderMocks): void {
-  mocks.resolveApiKeyForProviderMock.mockClear();
-  mocks.postJsonRequestMock.mockReset();
-  mocks.fetchWithTimeoutMock.mockReset();
-  mocks.assertOkOrThrowHttpErrorMock.mockClear();
-  mocks.resolveProviderHttpRequestConfigMock.mockClear();
-}
-
 export function mockSuccessfulDashscopeVideoTask(
-  mocks: Pick<DashscopeVideoProviderMocks, "postJsonRequestMock" | "fetchWithTimeoutMock">,
+  mocks: {
+    postJsonRequestMock: ImplementableMock;
+    fetchWithTimeoutMock: ChainableResolvedValueMock;
+  },
   params: {
     requestId?: string;
     taskId?: string;

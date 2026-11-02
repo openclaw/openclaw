@@ -10,12 +10,13 @@ import {
   installMissingStylesheetRecovery,
   installStaleChunkReloadListener,
   isStaleChunkImportError,
+  retryControlUiImport,
   retryStaleChunkReloadWhenReachable,
   scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
 
 const GUARD_KEY = "openclaw.controlUi.staleChunkReloadBuildId";
-const PROBE_TIMEOUT_MS = 3_000;
+const PROBE_TIMEOUT_MS = 10_000;
 
 function guard(buildId: string, at = Date.now()) {
   return JSON.stringify({ buildId, at });
@@ -80,6 +81,12 @@ function stubDocumentNavigation() {
   return replace;
 }
 
+function dispatchPreloadError(payload: unknown) {
+  const event = new Event("vite:preloadError", { cancelable: true });
+  Object.defineProperty(event, "payload", { value: payload });
+  window.dispatchEvent(event);
+}
+
 beforeEach(() => {
   vi.useFakeTimers({ now: 1_000 });
   vi.spyOn(Math, "random").mockReturnValue(0);
@@ -98,6 +105,77 @@ afterEach(async () => {
 });
 
 describe("isStaleChunkImportError", () => {
+  it.each([false, true])(
+    "leaves route recovery to its retry owner (persistent failure: %s)",
+    async (persistent) => {
+      const replace = stubDocumentNavigation();
+      const uninstall = installStaleChunkReloadListener();
+      const reload = vi.fn();
+      const probe = vi.fn().mockRejectedValue(new TypeError("offline"));
+      vi.stubGlobal("fetch", probe);
+      const failImport = async () => {
+        const error = new TypeError("Failed to fetch dynamically imported module");
+        dispatchPreloadError(error);
+        throw error;
+      };
+      const load = vi
+        .fn<() => Promise<string>>()
+        .mockImplementationOnce(failImport)
+        .mockImplementation(persistent ? failImport : async () => "loaded");
+      const completion = retryControlUiImport(load).catch(async (error: unknown) => {
+        expect(isStaleChunkImportError(error)).toBe(true);
+        return scheduleStaleChunkReload({ reload, storage: memoryStorage() });
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(reload).not.toHaveBeenCalled();
+        expect(replace).not.toHaveBeenCalled();
+        expect(load).toHaveBeenCalledOnce();
+        probe.mockResolvedValue(new Response(null, { status: 200 }));
+        window.dispatchEvent(new Event("online"));
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(completion).resolves.toBe(persistent ? true : "loaded");
+        expect(load).toHaveBeenCalledTimes(2);
+        expect(reload).toHaveBeenCalledTimes(persistent ? 1 : 0);
+        expect(replace).not.toHaveBeenCalled();
+      } finally {
+        uninstall();
+      }
+    },
+  );
+  it("does not retry a failed CSS preload without its styles after reachability returns", async () => {
+    const probe = vi.fn().mockRejectedValue(new TypeError("offline"));
+    vi.stubGlobal("fetch", probe);
+    const failure = new Error("Unable to preload CSS for /assets/route-AbCd1234.css");
+    const load = vi.fn().mockRejectedValue(failure);
+    const pending = retryControlUiImport(load);
+    const rejected = expect(pending).rejects.toBe(failure);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(load).toHaveBeenCalledOnce();
+    probe.mockResolvedValue(new Response(null, { status: 200 }));
+    window.dispatchEvent(new Event("online"));
+    await vi.advanceTimersByTimeAsync(0);
+    await rejected;
+    expect(load).toHaveBeenCalledOnce();
+  });
+
+  it("does not rerun a retired route loader after reconnect", async () => {
+    const probe = vi.fn().mockRejectedValue(new TypeError("offline"));
+    vi.stubGlobal("fetch", probe);
+    const controller = new AbortController();
+    const load = vi
+      .fn()
+      .mockRejectedValue(new TypeError("Failed to fetch dynamically imported module"));
+    const pending = retryControlUiImport(load, controller.signal);
+    const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort();
+    probe.mockResolvedValue(new Response(null, { status: 200 }));
+    window.dispatchEvent(new Event("online"));
+    await vi.advanceTimersByTimeAsync(0);
+    await rejected;
+    expect(load).toHaveBeenCalledOnce();
+  });
   it("ignores unrelated errors and non-error values", () => {
     expect(isStaleChunkImportError(new Error("request failed"))).toBe(false);
     expect(isStaleChunkImportError("Importing a module script failed.")).toBe(false);
@@ -733,13 +811,7 @@ describe("retryStaleChunkReloadWhenReachable", () => {
 });
 
 describe("installStaleChunkReloadListener", () => {
-  function dispatchPreloadError(payload: unknown) {
-    const event = new Event("vite:preloadError", { cancelable: true });
-    (event as Event & { payload?: unknown }).payload = payload;
-    window.dispatchEvent(event);
-  }
-
-  it("schedules recovery only for stale-chunk payloads", async () => {
+  it("recovers caught lazy-surface failures when the document is reachable, not evaluation errors", async () => {
     const replace = stubDocumentNavigation();
     const fetchMock = stubDocumentFetch(new Response(null, { status: 200 }));
     const uninstall = installStaleChunkReloadListener();
@@ -761,13 +833,33 @@ describe("installMissingStylesheetRecovery", () => {
     return vi.spyOn(document, "readyState", "get").mockReturnValue(readyState);
   }
 
-  function dispatchStylesheetError() {
+  function dispatchStylesheetError(href = "/assets/index-AbCd1234.css") {
     const link = document.createElement("link");
     link.rel = "stylesheet";
+    link.href = href;
     document.head.append(link);
     link.dispatchEvent(new Event("error"));
     link.remove();
   }
+
+  it.each(["/fonts/geist.css", "/themes/claw.css", "/plugins/example/style.css"])(
+    "ignores optional stylesheet failure: %s",
+    async (href) => {
+      const replace = stubDocumentNavigation();
+      setReadyState("loading");
+      const probe = stubDocumentFetch();
+      const uninstall = installMissingStylesheetRecovery();
+      try {
+        dispatchStylesheetError(href);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(probe).not.toHaveBeenCalled();
+        expect(replace).not.toHaveBeenCalled();
+        expect(document.querySelector('[role="alert"]')).toBeNull();
+      } finally {
+        uninstall();
+      }
+    },
+  );
 
   it("does nothing when the stylesheet sentinel is present and removes listeners", () => {
     stubDocumentNavigation();

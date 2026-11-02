@@ -18,6 +18,7 @@ beforeAll(() => {
   sdkHost = createCompiledSdkHost(
     [mcpProviderCatalogEntrypoint, mcpPluginToolsServeEntrypoint],
     lifetime.createTempDir,
+    { mode: "link" },
   );
 });
 afterAll(() => lifetime.cleanup());

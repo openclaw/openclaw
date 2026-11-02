@@ -375,10 +375,12 @@ function resolveInstallRoute(packageJson: PluginPackageJson, status: PluginStatu
   const install = packageJson.openclaw?.install;
   const release = packageJson.openclaw?.release;
   const clawhubSpec =
-    typeof install?.clawhubSpec === "string" ? `: \`${install.clawhubSpec}\`` : "";
+    typeof install?.clawhubSpec === "string"
+      ? `: \`${install.clawhubSpec.replace(/^clawhub:/, "")}\``
+      : "";
   const npmSpec =
     typeof install?.npmSpec === "string" && install.npmSpec !== packageJson.name
-      ? `: \`${install.npmSpec}\``
+      ? `: \`npm:${install.npmSpec}\``
       : "";
   if (release?.publishToClawHub === true && release?.publishToNpm === true) {
     if (install?.defaultChoice === "clawhub") {
@@ -659,7 +661,9 @@ openclaw plugins install @openclaw/discord
 openclaw plugins inspect discord --runtime --json
 \`\`\`
 
-Ordinary bare package specs install from npm. Use \`clawhub:@openclaw/discord\`
+Package specs, including \`@openclaw/*\`, install from ClawHub by default. Only
+bare plugin ids without a version or tag retain bundled and official catalog
+shortcuts. Use \`clawhub:@openclaw/discord\`
 or \`npm:@openclaw/discord\` when you need an explicit source. After install,
 follow the plugin's setup doc, such as [Discord](/channels/discord), to add
 credentials and channel config. See

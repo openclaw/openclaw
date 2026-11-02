@@ -143,14 +143,13 @@ function postNativeHookRelayBridgeRecord(params: {
         let responseText = "";
         let responseBytes = 0;
         res.setEncoding("utf8");
-        res.on("data", (chunk) => {
-          const chunkText = typeof chunk === "string" ? chunk : String(chunk);
-          responseBytes += Buffer.byteLength(chunkText);
+        res.on("data", (chunk: string) => {
+          responseBytes += Buffer.byteLength(chunk);
           if (responseBytes > MAX_NATIVE_HOOK_BRIDGE_RESPONSE_BYTES) {
             fail(new Error("native hook relay bridge response too large"));
             return;
           }
-          responseText += chunkText;
+          responseText += chunk;
         });
         res.on("error", fail);
         res.on("end", () => {

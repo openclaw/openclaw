@@ -1,11 +1,13 @@
-import { mkdirSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { StatementSync } from "node:sqlite";
 import type { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withTestTimeout,
+} from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { maybeRepairLegacyRuntimeFiles } from "../commands/doctor-usage-cost-cache.js";
 import {
@@ -15,15 +17,22 @@ import {
 import { createWorkerPlacementSessionEvidenceResolver } from "../gateway/server-worker-placement-session-evidence.js";
 import { createWorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
+import {
+  acquireUsageLock,
+  createUsageCacheWrite,
+} from "./session-cost-usage-cache.fixtures.test-support.js";
 import * as usageCacheSqlite from "./session-cost-usage-cache.sqlite.js";
 import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
-import { onSessionCostUsageUpdated } from "./session-cost-usage-events.js";
-import { USAGE_COST_PARTITION_SCOPE } from "./session-cost-usage-partitions.js";
+import { sessionCostUsageNotifications } from "./session-cost-usage-events.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
 import { openUsageCostRefreshFailures } from "./session-cost-usage-refresh-health.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
@@ -32,8 +41,6 @@ import {
   loadSessionCostSummariesFromCache,
 } from "./session-cost-usage.js";
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
-import * as operationAdmission from "./sqlite-worker-operation-admission.js";
-import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 import type { WorkerTaskInput, WorkerTaskOptions } from "./worker-task-pool.types.js";
 
@@ -72,6 +79,8 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  sessionCostUsageNotifications.onUpdated = () => {};
   const workers = [...observed.workers];
   observed.workers.clear();
   observed.refreshWorkers.clear();
@@ -80,135 +89,206 @@ afterEach(() => {
   }
 });
 
-function usageLine(id: string): string {
+function usageLine(id?: string, priced = true): string {
   return `${JSON.stringify({
     type: "message",
-    id,
-    parentId: null,
+    ...(id ? { id, parentId: null } : {}),
     timestamp: "2026-09-18T00:00:00Z",
     message: {
       role: "assistant",
       provider: "test",
       model: "test",
-      usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
+      usage: { input: 7, output: 3, totalTokens: 10, ...(priced ? { cost: { total: 1 } } : {}) },
     },
   })}\n`;
 }
 
-it("batches full-refresh snapshots within payload bounds and preserves targeted refreshes and later writes", async () => {
+function readSession(
+  agentId: string,
+  sessionFile: string,
+  extra: Partial<Parameters<typeof loadSessionCostSummariesFromCache>[0]> = {},
+) {
+  return loadSessionCostSummariesFromCache({
+    config,
+    agentId,
+    sessions: [{ sessionFile }],
+    requestRefresh: false,
+    ...extra,
+  });
+}
+
+function refresh(agentId: string, sessionFiles?: string[]) {
+  return refreshCostUsageCacheForAgent({ config, agentId, sessionFiles });
+}
+
+function expectFresh(result: unknown, totalTokens: number) {
+  expect(result).toMatchObject({
+    summaries: [{ totalTokens }],
+    cacheStatus: { status: "fresh" },
+  });
+}
+
+async function sessionReport(
+  agentId: string,
+  sessionFile: string,
+  pricingConfig?: Parameters<typeof resolveUsageCostPricingFingerprint>[0],
+) {
+  const prepared = prepareUsageCostWorker({ config, agentId, sessionFiles: [sessionFile] });
+  const pricingFingerprint = await resolveUsageCostPricingFingerprint(
+    pricingConfig,
+    prepared.agentDir,
+  );
+  const request = {
+    kind: "sessions" as const,
+    pricingFingerprint,
+    sessions: [{ sessionFile }],
+    dayBucket: { mode: "utc-offset" as const, utcOffsetMinutes: 0 },
+  };
+  return { prepared, request, read: () => runUsageCostWorker(prepared, request) };
+}
+
+type HostRequestResult = ReturnType<NonNullable<WorkerTaskOptions<unknown>["onRequest"]>>;
+function observeHostRequests(
+  observe: (value: unknown, next: () => HostRequestResult) => HostRequestResult,
+) {
+  // oxlint-disable-next-line typescript/unbound-method -- Forward with the original pool receiver.
+  const run = WorkerTaskPool.prototype.run;
+  return vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(function (
+    this: WorkerTaskPool<unknown, unknown>,
+    input,
+    options,
+  ) {
+    const onRequest = options.onRequest;
+    return run.call(this, input, {
+      ...options,
+      onRequest: onRequest && ((value, context) => observe(value, () => onRequest(value, context))),
+    });
+  });
+}
+
+function holdRefreshWrites(
+  agentIds: string[],
+  options: { commitBeforeWait?: boolean; failure?: Error } = {},
+) {
+  const gates = new Map(
+    agentIds.map((agentId) => [
+      agentId,
+      {
+        entered: createDeferred(),
+        release: createDeferred(),
+        events: [] as string[],
+        writes: 0,
+        cleaned: false,
+      },
+    ]),
+  );
+  const prepareLock = usageCacheSqlite.prepareSessionCostUsageRefreshLock;
+  const observer = vi
+    .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
+    .mockImplementation((...args) => {
+      const lock = prepareLock(...args);
+      const gate = args[0] === undefined ? undefined : gates.get(args[0]);
+      if (!gate) {
+        return lock;
+      }
+      return {
+        ...lock,
+        writeRollup: async (rows) => {
+          gate.writes++;
+          if (options.commitBeforeWait) {
+            expect(await lock.writeRollup(rows)).toBe(true);
+            gate.events.push("write-committed");
+          }
+          gate.entered.resolve();
+          await gate.release.promise;
+          gate.events.push("write-settled");
+          if (options.failure) {
+            throw options.failure;
+          }
+          return options.commitBeforeWait ? true : lock.writeRollup(rows);
+        },
+        release: async () => {
+          gate.events.push("lock-cleanup");
+          await lock.release();
+          gate.cleaned = true;
+        },
+      };
+    });
+  return { observer, gate: (agentId: string) => gates.get(agentId)! };
+}
+
+function waitForHost(gate: Promise<void>, operation: Promise<unknown>, message: string) {
+  return withTestTimeout(awaitGateBeforeSettlement(gate, operation, message), 10_000, message);
+}
+
+it("bounds prune writer batches and recovers partial cleanup after restart without changing live totals", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const agentId = "usage-prune-refresh";
     const sessionsDir = state.sessionsDir(agentId);
     const sessionFile = path.join(sessionsDir, "live.jsonl");
     await fs.mkdir(sessionsDir, { recursive: true });
-    const september = usageLine("september");
-    const october = usageLine("october").replace("2026-09-18", "2026-10-18");
-    await fs.writeFile(sessionFile, september + october);
-    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
-    const staleKeys = Array.from({ length: 97 }, (_, index) =>
-      path.join(sessionsDir, `removed-${index}.jsonl`),
+    await fs.writeFile(sessionFile, usageLine("first"));
+    await refresh(agentId, [sessionFile]);
+    const staleKeys = Array.from({ length: 1_089 }, (_, index) =>
+      path.join(sessionsDir, `removed-${String(index).padStart(4, "0")}.jsonl`),
     );
-    const owner = usageCacheSqlite.prepareSessionCostUsageRefreshLock(agentId);
-    try {
-      expect(await owner.acquire()).toBe(true);
-      expect(
-        await owner.writeRollup(
-          staleKeys.map((rollupId, index) => ({
-            rollupId,
-            valueJson: new TextEncoder().encode(
-              index === 3
-                ? JSON.stringify({ padding: "x".repeat(1024 * 1024) })
-                : index === 1 || index === 2
-                  ? JSON.stringify({ padding: "x".repeat(600 * 1024) })
-                  : "{}",
-            ),
-            blob: null,
-            updatedAt: 1,
-            partitions: [{ date: "2026-09-01", valueJson: "{}", blob: new Uint8Array([1]) }],
-          })),
-        ),
-      ).toBe(true);
-    } finally {
-      await owner.release();
-    }
-    await fs.appendFile(sessionFile, october.replace("october", "october-next"));
-    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
-    expect(readSessionCostUsageRollupRows(agentId)).toHaveLength(98);
-
-    const pruneRequests: Array<{ kind: string; keys: string[]; bytes: number }> = [];
-    // oxlint-disable-next-line typescript/unbound-method -- The observer forwards the pool receiver.
-    const run = WorkerTaskPool.prototype.run;
-    const observer = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(function (
-      this: WorkerTaskPool<unknown, unknown>,
-      input: WorkerTaskInput<unknown>,
-      options: WorkerTaskOptions<unknown>,
-    ) {
-      const onRequest = options.onRequest;
-      return run.call(this, input, {
-        ...options,
-        onRequest:
-          onRequest &&
-          ((value, context) => {
-            if (isRecord(value) && value.kind === "prune-rows" && Array.isArray(value.input)) {
-              const keys: string[] = [];
-              let bytes = 0;
-              for (const row of value.input) {
-                if (
-                  !isRecord(row) ||
-                  typeof row.key !== "string" ||
-                  !(row.value instanceof Uint8Array)
-                ) {
-                  throw new Error("Expected a transferred usage prune snapshot");
-                }
-                keys.push(row.key);
-                bytes += row.value.byteLength + 2 * row.key.length;
-              }
-              pruneRequests.push({ kind: value.kind, keys, bytes });
-            } else if (isRecord(value) && value.kind === "prune") {
-              pruneRequests.push({ kind: value.kind, keys: [], bytes: 0 });
-            }
-            return onRequest(value, context);
+    {
+      await using owner = await acquireUsageLock(agentId);
+      await owner.writeRollup(
+        staleKeys.map((rollupId, index) => ({
+          ...createUsageCacheWrite(rollupId, {
+            padding: "x".repeat(([0, 600, 600, 1024][index] ?? 0) * 1024),
           }),
-      });
-    });
-    try {
-      await refreshCostUsageCacheForAgent({ config, agentId });
-    } finally {
-      observer.mockRestore();
+          partitions: [{ date: "2026-09-01", valueJson: "{}", blob: new Uint8Array([1]) }],
+        })),
+      );
     }
-    const batches = pruneRequests.filter((request) => request.kind === "prune-rows");
-    expect(pruneRequests.at(-1)).toEqual({ kind: "prune", keys: [], bytes: 0 });
-    expect(pruneRequests.filter((request) => request.kind === "prune")).toHaveLength(1);
-    expect(batches.flatMap((batch) => batch.keys).toSorted()).toEqual(staleKeys.toSorted());
-    expect(batches.some((batch) => batch.bytes > 1024 * 1024)).toBe(true);
-    for (const batch of batches) {
-      expect(batch.keys.length).toBeLessThanOrEqual(64);
-      expect(batch.bytes <= 1024 * 1024 || batch.keys.length === 1).toBe(true);
-    }
-    expect(readSessionCostUsageRollupRows(agentId).map((row) => row.key)).toEqual([sessionFile]);
-    const { db } = openOpenClawAgentDatabase({ agentId });
-    expect(
-      db.prepare("SELECT key FROM cache_entries WHERE scope = ?").all(USAGE_COST_PARTITION_SCOPE),
-    ).toHaveLength(2);
+    await fs.appendFile(sessionFile, usageLine("second"));
+    await refresh(agentId, [sessionFile]);
+    expect(readSessionCostUsageRollupRows(agentId)).toHaveLength(staleKeys.length + 1);
 
-    await fs.appendFile(sessionFile, usageLine("november").replace("2026-09-18", "2026-11-18"));
-    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
-    for (const [month, totalTokens] of [
-      [8, 10],
-      [9, 20],
-      [10, 10],
-    ] as const) {
-      expect(
-        await loadSessionCostSummariesFromCache({
-          config,
-          agentId,
-          sessions: [{ sessionFile }],
-          requestRefresh: false,
-          startMs: Date.UTC(2026, month, 1),
-          endMs: Date.UTC(2026, month + 1, 1) - 1,
-        }),
-      ).toMatchObject({ cacheStatus: { status: "fresh" }, summaries: [{ totalTokens }] });
-    }
+    let batches = 0;
+    let oversized = false;
+    const committedKeys: string[] = [];
+    const failure = new Error("Prune batch interrupted");
+    const prepareLock = usageCacheSqlite.prepareSessionCostUsageRefreshLock;
+    using _ = vi
+      .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
+      .mockImplementation((...args) => {
+        const lock = prepareLock(...args);
+        return {
+          ...lock,
+          pruneRows: async (rows, signal) => {
+            const bytes = rows.reduce(
+              (sum, row) => sum + Buffer.byteLength(row.valueJson) + 2 * row.key.length,
+              0,
+            );
+            expect(rows.length).toBeLessThanOrEqual(1_024);
+            expect(bytes <= 1024 * 1024 || rows.length === 1).toBe(true);
+            oversized ||= bytes > 1024 * 1024;
+            if (++batches === 2) {
+              throw failure;
+            }
+            await lock.pruneRows(rows, signal);
+            committedKeys.push(...rows.map((row) => row.key));
+          },
+        };
+      });
+    await expect(refresh(agentId)).rejects.toBe(failure);
+    expect(committedKeys.length).toBeGreaterThan(0);
+    expect(readSessionCostUsageRollupRows(agentId)).toHaveLength(
+      staleKeys.length + 1 - committedKeys.length,
+    );
+    await closeOpenClawAgentDatabasesAsync();
+    await closeStateDatabaseForTest();
+    await refresh(agentId);
+    expect(committedKeys.toSorted()).toEqual(staleKeys.toSorted());
+    expect(oversized).toBe(true);
+    expect(readSessionCostUsageRollupRows(agentId).map((row) => row.key)).toEqual([sessionFile]);
+
+    await fs.appendFile(sessionFile, usageLine("third"));
+    await refresh(agentId, [sessionFile]);
+    expectFresh(await readSession(agentId, sessionFile), 30);
   });
 });
 
@@ -217,18 +297,8 @@ it("rebuilds corrupt report bodies only for the exact rejected metadata snapshot
     const agentId = "usage-corrupt-body";
     const sessionFile = state.path("usage-corrupt-body.jsonl");
     await fs.writeFile(sessionFile, usageLine("stored"));
-    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
-    const prepared = prepareUsageCostWorker({ config, agentId, sessionFiles: [sessionFile] });
-    const pricingFingerprint = await resolveUsageCostPricingFingerprint(
-      undefined,
-      prepared.agentDir,
-    );
-    const request = {
-      kind: "sessions" as const,
-      pricingFingerprint,
-      sessions: [{ sessionFile }],
-      dayBucket: { mode: "utc-offset" as const, utcOffsetMinutes: 0 },
-    };
+    await refresh(agentId, [sessionFile]);
+    const report = await sessionReport(agentId, sessionFile);
     const { db } = openOpenClawAgentDatabase({ agentId });
     const stored = db
       .prepare(
@@ -245,7 +315,7 @@ it("rebuilds corrupt report bodies only for the exact rejected metadata snapshot
         )
         .run(sessionFile);
     corrupt();
-    const rejected = await runUsageCostWorker(prepared, request);
+    const rejected = await report.read();
     expect(rejected).toMatchObject({
       kind: "sessions",
       summaries: [null],
@@ -269,13 +339,13 @@ it("rebuilds corrupt report bodies only for the exact rejected metadata snapshot
       rebuildRows: rejected.invalidRows,
     });
     expect(readSessionCostUsageRollupRows(agentId)).toEqual(before);
-    expect(await runUsageCostWorker(prepared, request)).toMatchObject({
+    expect(await report.read()).toMatchObject({
       summaries: [{ totalTokens: 10 }],
       invalidRows: [],
     });
 
     corrupt();
-    const current = await runUsageCostWorker(prepared, request);
+    const current = await report.read();
     if (current.kind !== "sessions") {
       throw new Error("Expected current session report");
     }
@@ -285,46 +355,11 @@ it("rebuilds corrupt report bodies only for the exact rejected metadata snapshot
       sessionFiles: [sessionFile],
       rebuildRows: current.invalidRows,
     });
-    expect(await runUsageCostWorker(prepared, request)).toMatchObject({
+    expect(await report.read()).toMatchObject({
       summaries: [{ totalTokens: 10 }],
       cacheStatus: { status: "fresh" },
       invalidRows: [],
     });
-  });
-});
-
-it("refuses a foreign cache file appearing after its creating grant", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const agentId = "usage-foreign-creation";
-    const sessionFile = state.path("usage.jsonl");
-    await fs.writeFile(sessionFile, usageLine("foreign-creation"));
-    const prepared = prepareUsageCostWorker({ config, agentId, sessionFiles: [sessionFile] });
-    const target = prepared.location.databasePath;
-    mkdirSync(path.dirname(target), { recursive: true });
-    let injected = false;
-    const observer = probe.admission(operationAdmission, (request, grant, authorize) => {
-      authorize(request, () => {
-        if (
-          !injected &&
-          request.stage === "prepare" &&
-          isRecord(request.facts) &&
-          request.facts.kind === "shared-owner"
-        ) {
-          writeFileSync(target, "foreign file");
-          injected = true;
-        }
-        return grant();
-      });
-    });
-    try {
-      await expect(
-        refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] }),
-      ).rejects.toThrow("Agent database target changed before creating open");
-      expect(injected).toBe(true);
-      expect(await fs.readFile(target, "utf8")).toBe("foreign file");
-    } finally {
-      observer.mockRestore();
-    }
   });
 });
 
@@ -333,89 +368,36 @@ it("refreshes and loads usage without executing cache SQL on the caller", async 
     const agentId = "usage-worker";
     const sessionFile = state.path("usage.jsonl");
     const otherFile = state.path("other-usage.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      JSON.stringify({
-        type: "message",
-        timestamp: "2026-09-18T00:00:00Z",
-        message: {
-          role: "assistant",
-          provider: "test",
-          model: "test",
-          usage: { input: 7, output: 3, totalTokens: 10 },
-        },
-      }) + "\n",
-    );
+    await fs.writeFile(sessionFile, usageLine(undefined, false));
     await fs.writeFile(otherFile, usageLine("other-1") + usageLine("other-2"));
-    openOpenClawAgentDatabase({ agentId });
+    const database = openOpenClawAgentDatabase({ agentId });
     const hostSql = observeHostDataSql();
     try {
-      expect(
-        await refreshCostUsageCacheForAgent({
-          config,
-          agentId,
-          sessionFiles: [sessionFile, otherFile],
-        }),
-      ).toBe("refreshed");
+      expect(await refresh(agentId, [sessionFile, otherFile])).toBe("refreshed");
       expect(hostSql.queries.filter((sql) => /\bcache_entries\b/i.test(sql))).toEqual([]);
     } finally {
       hostSql.restore();
     }
     expect(await usageCacheSqlite.isSessionCostUsageRefreshRunning(agentId)).toBe(false);
-    const prepared = prepareUsageCostWorker({
-      config,
-      agentId,
-      sessionFiles: [sessionFile, otherFile],
-    });
-    const pricingFingerprint = await resolveUsageCostPricingFingerprint(
-      undefined,
-      prepared.agentDir,
-    );
-    const database = openOpenClawAgentDatabase({ agentId });
+    const { prepared, request } = await sessionReport(agentId, sessionFile);
     const statement = database.db.prepare("SELECT value_json FROM cache_entries");
-    const prototype: StatementSync = Object.getPrototypeOf(statement);
-    const observers = [
-      vi.spyOn(prototype, "all"),
-      vi.spyOn(prototype, "get"),
-      vi.spyOn(prototype, "iterate"),
-      vi.spyOn(prototype, "run"),
-    ];
+    const reads = observeHostDataSql();
     const cacheReads = () =>
-      observers.flatMap((observer) =>
-        observer.mock.contexts
-          .map((value) => (value as StatementSync).sourceSQL)
-          .filter((sql) => /^select\b.*\bfrom\s+["`]?cache_entries["`]?/is.test(sql)),
-      );
+      reads.queries.filter((sql) => /^select\b.*\bfrom\s+["`]?cache_entries["`]?/is.test(sql));
     try {
       statement.all();
       expect(cacheReads()).toHaveLength(1);
-      for (const observer of observers) {
-        observer.mockClear();
-      }
-      const refreshStatus = vi
-        .spyOn(usageCacheSqlite, "isSessionCostUsageRefreshRunning")
-        .mockRejectedValue(new Error("Refresh status is unavailable"));
-      try {
+      reads.queries.length = 0;
+      {
+        using _ = vi
+          .spyOn(usageCacheSqlite, "isSessionCostUsageRefreshRunning")
+          .mockRejectedValue(new Error("Refresh status is unavailable"));
         for (let round = 0; round < 2; round++) {
-          const result = await loadSessionCostSummariesFromCache({
-            config,
-            agentId,
-            sessions: [{ sessionFile }],
-            requestRefresh: false,
-          });
-          expect(result.cacheStatus.status).toBe("fresh");
-          expect(result.summaries[0]).toMatchObject({ totalTokens: 10 });
+          expectFresh(await readSession(agentId, sessionFile), 10);
         }
-      } finally {
-        refreshStatus.mockRestore();
       }
       const selection = [{ sessionId: "selected", sessionFile }];
-      const reading = runUsageCostWorker(prepared, {
-        kind: "sessions",
-        pricingFingerprint,
-        sessions: selection,
-        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-      });
+      const reading = runUsageCostWorker(prepared, { ...request, sessions: selection });
       selection[0]!.sessionFile = otherFile;
       selection.push({ sessionId: "other", sessionFile: otherFile });
       expect(await reading).toMatchObject({
@@ -423,23 +405,14 @@ it("refreshes and loads usage without executing cache SQL on the caller", async 
         summaries: [{ sessionId: "selected", sessionFile, totalTokens: 10 }],
         cacheStatus: { status: "fresh", cachedFiles: 1 },
       });
-      expect(
-        await runUsageCostWorker(prepared, {
-          kind: "sessions",
-          pricingFingerprint,
-          sessions: [],
-          dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-        }),
-      ).toMatchObject({
+      expect(await runUsageCostWorker(prepared, { ...request, sessions: [] })).toMatchObject({
         kind: "sessions",
         summaries: [],
         cacheStatus: { status: "fresh", cachedFiles: 0 },
       });
       expect(cacheReads()).toEqual([]);
     } finally {
-      for (const observer of observers) {
-        observer.mockRestore();
-      }
+      reads.restore();
     }
   });
 });
@@ -449,51 +422,66 @@ it("leaves an empty usage store absent until a transcript needs a rollup", async
     const agentId = "usage-empty-refresh";
     const { databasePath } = prepareUsageCostWorker({ config, agentId }).location;
     await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(await refreshCostUsageCacheForAgent({ config, agentId })).toBe("refreshed");
+    expect(await refresh(agentId)).toBe("refreshed");
     await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
 
     openOpenClawAgentDatabase({ agentId });
-    let pruneRows: ReturnType<typeof vi.fn> | undefined;
-    const prepareLock = usageCacheSqlite.prepareSessionCostUsageRefreshLock;
-    const observer = vi
-      .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
-      .mockImplementation((...args) => {
-        const owner = prepareLock(...args);
-        const prune = vi.fn(owner.pruneRows.bind(owner));
-        pruneRows = prune;
-        return { ...owner, pruneRows: prune };
-      });
-    try {
-      expect(await refreshCostUsageCacheForAgent({ config, agentId })).toBe("refreshed");
-      expect(pruneRows).not.toHaveBeenCalled();
-    } finally {
-      observer.mockRestore();
-    }
+    expect(await refresh(agentId)).toBe("refreshed");
 
     const sessionsDir = state.sessionsDir(agentId);
     const sessionFile = path.join(sessionsDir, "recorded.jsonl");
     await fs.mkdir(sessionsDir, { recursive: true });
     await fs.writeFile(sessionFile, usageLine("recorded"));
-    expect(await refreshCostUsageCacheForAgent({ config, agentId })).toBe("refreshed");
-    expect(
-      await loadSessionCostSummariesFromCache({
-        config,
-        agentId,
-        sessions: [{ sessionFile }],
-        requestRefresh: false,
-      }),
-    ).toMatchObject({ summaries: [{ totalTokens: 10 }], cacheStatus: { status: "fresh" } });
+    expect(await refresh(agentId)).toBe("refreshed");
+    expectFresh(await readSession(agentId, sessionFile), 10);
   });
   // A cache-miss worker retains no database; runtime shutdown owns its retirement.
   await closeStateDatabaseForTest();
 });
 
-it("serves fresh and partial usage while refresh waits for its host writer", async ({
-  onTestFinished,
-}) => {
+it("waits for another session's refresh before filling its own detail cache", async () => {
+  try {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const agentId = "usage-waiting-detail";
+      const firstFile = state.path("first-detail.jsonl");
+      const secondFile = state.path("second-detail.jsonl");
+      await fs.writeFile(firstFile, usageLine("first"));
+      await fs.writeFile(secondFile, usageLine("second-before"));
+      const held = holdRefreshWrites([agentId]);
+      const first = held.gate(agentId);
+      const refreshing = refresh(agentId, [firstFile]);
+      let waiting: ReturnType<typeof refreshCostUsageCacheForAgent> | undefined;
+      try {
+        await waitForHost(
+          first.entered.promise,
+          refreshing,
+          "Refresh did not reach its host write",
+        );
+        await fs.appendFile(secondFile, usageLine("second-after"));
+        waiting = refreshCostUsageCacheForAgent({
+          config,
+          agentId,
+          sessionFiles: [secondFile],
+          waitForRefresh: true,
+        });
+        first.release.resolve();
+        expect(await refreshing).toBe("refreshed");
+        expect(await waiting).toBe("refreshed");
+        expectFresh(await readSession(agentId, secondFile), 20);
+      } finally {
+        first.release.resolve();
+        await Promise.allSettled([refreshing, waiting]);
+        held.observer.mockRestore();
+      }
+    });
+  } finally {
+    await closeStateDatabaseForTest();
+  }
+});
+
+it("serves fresh and partial usage while refresh waits for its host writer", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     setRuntimeConfigSnapshot(config);
-    onTestFinished(clearRuntimeConfigSnapshot);
     const agentId = "usage-read-during-refresh";
     const sessionsDir = state.sessionsDir(agentId);
     const growingFile = path.join(sessionsDir, "growing.jsonl");
@@ -501,7 +489,7 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
     await fs.mkdir(sessionsDir, { recursive: true });
     await fs.writeFile(growingFile, usageLine("before-refresh"));
     await fs.writeFile(steadyFile, usageLine("unchanged"));
-    expect(await refreshCostUsageCacheForAgent({ config, agentId })).toBe("refreshed");
+    expect(await refresh(agentId)).toBe("refreshed");
     await fs.appendFile(growingFile, usageLine("awaiting-write"));
     const placement = await createWorkerSessionPlacementStore({
       database: openOpenClawStateDatabase(),
@@ -515,38 +503,23 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
     const releaseWrite = createDeferred();
     let heldWrite = false;
     let refreshFinished = false;
-    // oxlint-disable-next-line typescript/unbound-method -- The observer forwards the pool receiver.
-    const run = WorkerTaskPool.prototype.run;
-    const observer = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(function (
-      this: WorkerTaskPool<unknown, unknown>,
-      input: WorkerTaskInput<unknown>,
-      options: WorkerTaskOptions<unknown>,
-    ) {
-      const onRequest = options.onRequest;
-      if (!onRequest) {
-        return run.call(this, input, options);
+    using _ = observeHostRequests(async (value, next) => {
+      if (
+        !heldWrite &&
+        isRecord(value) &&
+        value.kind === "write" &&
+        Array.isArray(value.input) &&
+        value.input.some((row) => isRecord(row) && row.key === growingFile)
+      ) {
+        heldWrite = true;
+        writeEntered.resolve();
+        await releaseWrite.promise;
       }
-      return run.call(this, input, {
-        ...options,
-        onRequest: async (value, context) => {
-          if (
-            !heldWrite &&
-            isRecord(value) &&
-            value.kind === "write" &&
-            Array.isArray(value.input) &&
-            value.input.some((row) => isRecord(row) && row.key === growingFile)
-          ) {
-            heldWrite = true;
-            writeEntered.resolve();
-            await releaseWrite.promise;
-          }
-          return onRequest(value, context);
-        },
-      });
+      return next();
     });
     const published = vi.fn();
-    const unsubscribeUsage = onSessionCostUsageUpdated(published);
-    const refresh = refreshCostUsageCacheForAgent({ config, agentId }).then((result) => {
+    sessionCostUsageNotifications.onUpdated = published;
+    const refreshing = refresh(agentId).then((result) => {
       refreshFinished = true;
       return result;
     });
@@ -559,29 +532,10 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
       requestRefresh: false,
     };
     try {
-      await withTestTimeout(
-        Promise.race([
-          writeEntered.promise,
-          refresh.then(() => {
-            throw new Error("Refresh completed before requesting its rollup write");
-          }),
-        ]),
-        10_000,
-        "Refresh did not reach its host write",
-      );
-      const fresh = loadSessionCostSummariesFromCache({
-        config,
-        agentId,
-        sessions: [{ sessionFile: steadyFile }],
-        requestRefresh: false,
-      });
+      await waitForHost(writeEntered.promise, refreshing, "Refresh did not reach its host write");
+      const fresh = readSession(agentId, steadyFile);
       const partial = loadCostUsageSummaryFromCache(summaryParams);
-      const stale = loadSessionCostSummariesFromCache({
-        config,
-        agentId,
-        sessions: [{ sessionFile: growingFile }],
-        requestRefresh: false,
-      });
+      const stale = readSession(agentId, growingFile);
       const evidence = createWorkerPlacementSessionEvidenceResolver([placement]).then((resolve) =>
         resolve(placement),
       );
@@ -594,36 +548,30 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
       expect(refreshFinished).toBe(false);
       expect(published).not.toHaveBeenCalled();
       expect(placementEvidence).toBe("absent");
-      expect(observed.refreshWorkers.size).toBeGreaterThan(0);
-      for (const worker of observed.refreshWorkers) {
-        expect(worker.threadId).not.toBe(-1);
-      }
-      expect(freshResult.cacheStatus).toMatchObject({ status: "fresh", cachedFiles: 1 });
-      expect(freshResult.summaries[0]).toMatchObject({ totalTokens: 10 });
-      expect(partialResult.totals.totalTokens).toBe(20);
-      expect(partialResult.cacheStatus).toMatchObject({
-        status: "refreshing",
-        cachedFiles: 2,
-        staleFiles: 1,
+      expect(freshResult).toMatchObject({
+        cacheStatus: { status: "fresh", cachedFiles: 1 },
+        summaries: [{ totalTokens: 10 }],
       });
-      expect(staleResult.summaries[0]).toMatchObject({
-        totalTokens: 10,
-        refreshing: true,
-        computedAt: expect.any(Number),
-        staleSince: expect.any(Number),
+      expect(partialResult).toMatchObject({
+        totals: { totalTokens: 20 },
+        cacheStatus: { status: "refreshing", cachedFiles: 2, staleFiles: 1 },
       });
-      expect(staleResult.cacheStatus).toMatchObject({
-        status: "refreshing",
-        cachedFiles: 1,
-        staleFiles: 1,
+      expect(staleResult).toMatchObject({
+        summaries: [
+          {
+            totalTokens: 10,
+            refreshing: true,
+            computedAt: expect.any(Number),
+            staleSince: expect.any(Number),
+          },
+        ],
+        cacheStatus: { status: "refreshing", cachedFiles: 1, staleFiles: 1 },
       });
     } finally {
       releaseWrite.resolve();
-      await Promise.allSettled([refresh, ...reads]);
-      observer.mockRestore();
-      unsubscribeUsage();
+      await Promise.allSettled([refreshing, ...reads]);
     }
-    expect(await refresh).toBe("refreshed");
+    expect(await refreshing).toBe("refreshed");
     expect(published).toHaveBeenCalledExactlyOnceWith({
       agentId,
       usageUpdatedAt: expect.any(Number),
@@ -638,14 +586,12 @@ it("prunes a cached transcript after its queued selection disappears", async () 
     const sessionFile = state.path("disappearing.jsonl");
     const sessions = [{ sessionFile }];
     await fs.writeFile(sessionFile, usageLine("selected"));
-    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
-    expect(
-      await loadSessionCostSummariesFromCache({ config, agentId, sessions, requestRefresh: false }),
-    ).toMatchObject({ summaries: [{ totalTokens: 10 }], cacheStatus: { status: "fresh" } });
+    await refresh(agentId, [sessionFile]);
+    expectFresh(await readSession(agentId, sessionFile), 10);
     await fs.rm(sessionFile);
     const work = new AsyncWorkScope();
     const published = vi.fn();
-    const unsubscribe = onSessionCostUsageUpdated(published);
+    sessionCostUsageNotifications.onUpdated = published;
     try {
       expect(
         await work.track(() => loadSessionCostSummariesFromCache({ config, agentId, sessions })),
@@ -661,46 +607,69 @@ it("prunes a cached transcript after its queued selection disappears", async () 
         false,
       );
       await fs.writeFile(sessionFile, usageLine("restored"));
-      await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
+      await refresh(agentId, [sessionFile]);
       expect(published).toHaveBeenCalledTimes(3);
       expect(published).toHaveBeenLastCalledWith({ agentId, usageUpdatedAt: expect.any(Number) });
-      await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
+      await refresh(agentId, [sessionFile]);
       expect(published).toHaveBeenCalledTimes(3);
     } finally {
       await work.drain();
-      unsubscribe();
     }
   });
 });
 
-it("records failed rollups and clears health after retry", async ({ onTestFinished }) => {
+it("propagates an original host pricing error through exact report replay", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-host-pricing-failure";
+    const sessionFile = state.path("unpriced.jsonl");
+    const timestamp = Date.UTC(2026, 8, 18);
+    await fs.writeFile(sessionFile, usageLine(undefined, false));
+    await refresh(agentId, [sessionFile]);
+    const { prepared, request } = await sessionReport(agentId, sessionFile, config);
+    const exactRequest = { ...request, startMs: timestamp, endMs: timestamp + 1 };
+    const original = new Error("Host pricing is unavailable");
+    const pricing = await import("./session-cost-usage-pricing-context.js");
+    {
+      using _ = vi.spyOn(pricing, "createUsageCostResolver").mockReturnValue(() => {
+        throw original;
+      });
+      await expect(runUsageCostWorker(prepared, exactRequest)).rejects.toBe(original);
+    }
+    await expect(runUsageCostWorker(prepared, exactRequest)).resolves.toMatchObject({
+      kind: "sessions",
+      summaries: [{ totalTokens: 10 }],
+    });
+  });
+  // Close the pooled runtime before asserting every observed worker retired.
+  await closeStateDatabaseForTest();
+});
+
+it("records failed rollups and clears health after retry", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const agentId = "usage-failure-health";
     const sessionFiles = ["a", "b"].map((id) => state.path(`${id}.jsonl`));
-    const refresh = () => refreshCostUsageCacheForAgent({ config, agentId, sessionFiles });
+    const refreshFailed = () => refresh(agentId, sessionFiles);
     await Promise.all(sessionFiles.map((file) => fs.writeFile(file, usageLine("failed-refresh"))));
     let failedFiles: string[] = [];
     const published = vi.fn();
-    onTestFinished(onSessionCostUsageUpdated(published));
+    sessionCostUsageNotifications.onUpdated = published;
     const prepareLock = usageCacheSqlite.prepareSessionCostUsageRefreshLock;
-    const observer = vi
-      .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
-      .mockImplementation((...args) => ({
-        ...prepareLock(...args),
-        writeRollup: async (rows) => {
-          failedFiles = rows.map((row) => row.rollupId);
-          throw new Error("private transcript content");
-        },
-      }));
-    try {
-      await expect(refresh()).rejects.toThrow("private transcript content");
+    {
+      using _ = vi
+        .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
+        .mockImplementation((...args) => ({
+          ...prepareLock(...args),
+          writeRollup: async (rows) => {
+            failedFiles = rows.map((row) => row.rollupId);
+            throw new Error("private transcript content");
+          },
+        }));
+      await expect(refreshFailed()).rejects.toThrow("private transcript content");
       expect(published).toHaveBeenCalledExactlyOnceWith({
         agentId,
         usageUpdatedAt: expect.any(Number),
         usageRefreshFailed: true,
       });
-    } finally {
-      observer.mockRestore();
     }
     const failures = await openUsageCostRefreshFailures(state.env).entries();
     expect(failures.map(({ value }) => value)).toMatchObject(
@@ -716,7 +685,7 @@ it("records failed rollups and clears health after retry", async ({ onTestFinish
       expect.stringContaining("cached totals may be incomplete"),
       "Usage cost cache",
     );
-    await refresh();
+    await refreshFailed();
     expect(published).toHaveBeenCalledTimes(2);
     expect(published).toHaveBeenLastCalledWith({ agentId, usageUpdatedAt: expect.any(Number) });
     expect(await openUsageCostRefreshFailures(state.env).entries()).toEqual([]);
@@ -733,9 +702,7 @@ it("retains a late host write failure after cancellation and releases the lock o
     const agentId = "usage-canceled-write";
     const sessionFile = state.path("canceled-write.jsonl");
     await fs.writeFile(sessionFile, usageLine("before-cancellation"));
-    expect(
-      await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] }),
-    ).toBe("refreshed");
+    expect(await refresh(agentId, [sessionFile])).toBe("refreshed");
     await fs.appendFile(sessionFile, usageLine("committed-before-cancellation"));
 
     const work = new AsyncWorkScope();
@@ -744,43 +711,12 @@ it("retains a late host write failure after cancellation and releases the lock o
       new SqliteWorkerError("Rollup commit acknowledgement was lost", "outcome-unknown"),
       { operation: "session-cost-usage.rollup.write", sqliteCode: "SQLITE_IOERR" },
     );
-    const writeAccepted = createDeferred();
-    const releaseWrite = createDeferred();
-    const events: string[] = [];
-    let writeAttempts = 0;
+    const held = holdRefreshWrites([agentId], { commitBeforeWait: true, failure: original });
+    const write = held.gate(agentId);
+    const { entered: writeAccepted, release: releaseWrite, events } = write;
     let refreshSettled = false;
-    const prepareLock = usageCacheSqlite.prepareSessionCostUsageRefreshLock;
-    const observer = vi
-      .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
-      .mockImplementation((...args) => {
-        const lock = prepareLock(...args);
-        if (args[0] !== agentId) {
-          return lock;
-        }
-        return {
-          ...lock,
-          writeRollup: async (params) => {
-            writeAttempts++;
-            const written = await lock.writeRollup(params);
-            if (!written) {
-              throw new Error("The prepared rollup was not committed");
-            }
-            events.push("write-committed");
-            writeAccepted.resolve();
-            await releaseWrite.promise;
-            events.push("write-settled");
-            throw original;
-          },
-          release: async () => {
-            events.push("lock-cleanup");
-            await lock.release();
-          },
-        };
-      });
-    const refresh = work.track(() =>
-      refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] }),
-    );
-    const outcome = refresh.then(
+    const refreshing = work.track(() => refresh(agentId, [sessionFile]));
+    const outcome = refreshing.then(
       () => {
         refreshSettled = true;
         throw new Error("Canceled refresh concealed its late host write failure");
@@ -791,16 +727,7 @@ it("retains a late host write failure after cancellation and releases the lock o
       },
     );
     try {
-      await withTestTimeout(
-        Promise.race([
-          writeAccepted.promise,
-          outcome.then((error) => {
-            throw new Error("Refresh ended before committing its host write", { cause: error });
-          }),
-        ]),
-        10_000,
-        "Refresh did not reach its host write",
-      );
+      await waitForHost(writeAccepted.promise, outcome, "Refresh did not reach its host write");
       events.push("canceled");
       work.beginClose(cancellation);
       await expect
@@ -821,41 +748,19 @@ it("retains a late host write failure after cancellation and releases the lock o
         10_000,
         "Canceled refresh did not join its host write",
       );
-      const errors = new Set<unknown>();
-      const pending = [failure];
-      while (pending.length > 0) {
-        const error = pending.pop();
-        if (errors.has(error)) {
-          continue;
-        }
-        errors.add(error);
-        if (error instanceof Error) {
-          pending.push(error.cause);
-          if (error instanceof AggregateError) {
-            pending.push(...error.errors);
-          }
-        }
-      }
-      expect(errors.has(original)).toBe(true);
+      expect(collectNestedErrorCandidates(failure)).toContain(original);
       expect(failure).toMatchObject({ code: "outcome-unknown" });
       expect(events).toEqual(["write-committed", "canceled", "write-settled", "lock-cleanup"]);
-      expect(writeAttempts).toBe(1);
+      expect(write.writes).toBe(1);
     } finally {
       work.beginClose(cancellation);
       releaseWrite.resolve();
       await Promise.allSettled([outcome]);
       await work.drain();
-      observer.mockRestore();
+      held.observer.mockRestore();
     }
     expect(await usageCacheSqlite.isSessionCostUsageRefreshRunning(agentId)).toBe(false);
-    const persisted = await loadSessionCostSummariesFromCache({
-      config,
-      agentId,
-      sessions: [{ sessionFile }],
-      requestRefresh: false,
-    });
-    expect(persisted.cacheStatus.status).toBe("fresh");
-    expect(persisted.summaries[0]).toMatchObject({ totalTokens: 20 });
+    expectFresh(await readSession(agentId, sessionFile), 20);
   });
 }, 40_000);
 
@@ -873,41 +778,13 @@ it("settles canceled refresh cleanup without waiting for its admitted successor"
       await fs.writeFile(sessionFile, usageLine("first") + usageLine("second"));
     }
     const workA = new AsyncWorkScope();
-    const enteredA = createDeferred();
-    const enteredB = createDeferred();
+    const held = holdRefreshWrites([agentA, agentB]);
+    const first = held.gate(agentA);
+    const successor = held.gate(agentB);
     const queuedB = createDeferred();
-    const releaseA = createDeferred();
-    const releaseB = createDeferred();
-    const cleaned = new Set<string>();
     const canceled = new Error("First refresh canceled");
     let watchSuccessor = false;
     let successorSettled = false;
-    let successorWrites = 0;
-    const prepareLock = usageCacheSqlite.prepareSessionCostUsageRefreshLock;
-    const locks = vi
-      .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
-      .mockImplementation((...args) => {
-        const lock = prepareLock(...args);
-        const agentId = args[0];
-        if (agentId !== agentA && agentId !== agentB) {
-          return lock;
-        }
-        return {
-          ...lock,
-          writeRollup: async (params) => {
-            if (agentId === agentB) {
-              successorWrites++;
-            }
-            (agentId === agentA ? enteredA : enteredB).resolve();
-            await (agentId === agentA ? releaseA : releaseB).promise;
-            return lock.writeRollup(params);
-          },
-          release: async () => {
-            await lock.release();
-            cleaned.add(agentId);
-          },
-        };
-      });
     // oxlint-disable-next-line typescript/unbound-method -- The observer forwards the pool receiver.
     const run = WorkerTaskPool.prototype.run;
     const pools = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(function (
@@ -922,67 +799,44 @@ it("settles canceled refresh cleanup without waiting for its admitted successor"
       }
       return result;
     });
-    const refreshA = workA.track(() =>
-      refreshCostUsageCacheForAgent({ config, agentId: agentA, sessionFiles: [fileA] }),
-    );
+    const refreshA = workA.track(() => refresh(agentA, [fileA]));
     const outcomeA = refreshA.then(
       (value) => ({ ok: true, value }),
       (error: unknown) => ({ ok: false, error }),
     );
     let refreshB: Promise<"refreshed" | "busy"> | undefined;
     try {
-      await withTestTimeout(
-        Promise.race([
-          enteredA.promise,
-          outcomeA.then((outcome) => {
-            throw new Error("First refresh ended before its host write", { cause: outcome });
-          }),
-        ]),
-        10_000,
+      await waitForHost(
+        first.entered.promise,
+        outcomeA,
         "First refresh did not reach its host write",
       );
       watchSuccessor = true;
-      refreshB = refreshCostUsageCacheForAgent({
-        config,
-        agentId: agentB,
-        sessionFiles: [fileB],
+      refreshB = refresh(agentB, [fileB]);
+      const outcomeB = refreshB.finally(() => {
+        successorSettled = true;
       });
-      const outcomeB = refreshB.then(
-        (value) => {
-          successorSettled = true;
-          return { value };
-        },
-        (error: unknown) => {
-          successorSettled = true;
-          return { error };
-        },
-      );
-      await withTestTimeout(
-        Promise.race([
-          queuedB.promise,
-          outcomeB.then((outcome) => {
-            throw new Error("Successor ended before worker admission", { cause: outcome });
-          }),
-        ]),
-        10_000,
+      await waitForHost(
+        queuedB.promise,
+        outcomeB,
         "Successor was not queued behind the first refresh",
       );
       workA.beginClose(canceled);
       await withTestTimeout(
-        enteredB.promise,
+        successor.entered.promise,
         10_000,
         "Successor did not reach its held host write",
       );
       const successorWorker = [...observed.refreshWorkers].find((worker) => worker.threadId !== -1);
       const successorThreadId = successorWorker?.threadId;
       expect(successorThreadId).toBeGreaterThan(0);
-      releaseA.resolve();
+      first.release.resolve();
       expect(
         await withTestTimeout(outcomeA, 10_000, "Canceled refresh waited for its held successor"),
       ).toMatchObject({ ok: false });
       await workA.drain();
-      expect(cleaned.has(agentA)).toBe(true);
-      expect(cleaned.has(agentB)).toBe(false);
+      expect(first.cleaned).toBe(true);
+      expect(successor.cleaned).toBe(false);
       expect(successorSettled).toBe(false);
       expect(successorWorker?.threadId).toBe(successorThreadId);
       expect([...observed.refreshWorkers].filter((worker) => worker.threadId !== -1)).toHaveLength(
@@ -992,22 +846,15 @@ it("settles canceled refresh cleanup without waiting for its admitted successor"
       expect(await usageCacheSqlite.isSessionCostUsageRefreshRunning(agentB)).toBe(true);
     } finally {
       workA.beginClose(canceled);
-      releaseA.resolve();
-      releaseB.resolve();
+      first.release.resolve();
+      successor.release.resolve();
       await Promise.allSettled([refreshA, refreshB]);
       await workA.drain();
       pools.mockRestore();
-      locks.mockRestore();
+      held.observer.mockRestore();
     }
     expect(await refreshB).toBe("refreshed");
-    expect(successorWrites).toBe(1);
-    const result = await loadSessionCostSummariesFromCache({
-      config,
-      agentId: agentB,
-      sessions: [{ sessionFile: fileB }],
-      requestRefresh: false,
-    });
-    expect(result.cacheStatus.status).toBe("fresh");
-    expect(result.summaries[0]).toMatchObject({ totalTokens: 20 });
+    expect(successor.writes).toBe(1);
+    expectFresh(await readSession(agentB, fileB), 20);
   });
 }, 40_000);

@@ -1,6 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { summarizeMcpServers } from "../../lib/config/mcp-servers.ts";
-import { validateCronForm } from "../../lib/cron/index.ts";
+import { validateCronForm } from "../../lib/cron/form.ts";
 import type { CronState } from "../../lib/cron/types.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -32,40 +32,6 @@ export function createCronEventEditor(deps: CronEventEditorDependencies) {
       canCallGatewayMethod(deps.context().gateway.snapshot, "mcp.events.list", "operator.admin") &&
       canCallGatewayMethod(deps.context().gateway.snapshot, "mcp-events.status", "operator.admin")
     );
-  }
-
-  function view(): CronEventSourceView {
-    const cron = deps.currentCronState();
-    const canDiscover = available();
-    const active =
-      Boolean(cron.cronCreateOpen || cron.cronEditingJob) &&
-      cron.cronForm.scheduleKind === "event" &&
-      cron.cronForm.eventSource === "mcp-events" &&
-      deps.isConnected() &&
-      canDiscover;
-    return {
-      available: canDiscover,
-      servers: active
-        ? (
-            summarizeMcpServers(
-              deps.context().runtimeConfig.state.configSnapshot?.config ?? null,
-            ) ?? []
-          )
-            .filter((server) => server.enabled)
-            .map((server) => server.name)
-        : [],
-      loading: source.loading,
-      error: source.error,
-      events: source.events,
-      subscriptions: source.subscriptions,
-      statusError: source.statusError,
-      onRefresh: () => {
-        deps.currentCronState().cronFieldErrors = validateCronForm(
-          deps.currentCronState().cronForm,
-        );
-        sync(true);
-      },
-    };
   }
 
   function sync(force = false) {
@@ -133,8 +99,38 @@ export function createCronEventEditor(deps: CronEventEditorDependencies) {
   return {
     reset,
     sync,
-    get view() {
-      return view();
+    get view(): CronEventSourceView {
+      const cron = deps.currentCronState();
+      const canDiscover = available();
+      const active =
+        Boolean(cron.cronCreateOpen || cron.cronEditingJob) &&
+        cron.cronForm.scheduleKind === "event" &&
+        cron.cronForm.eventSource === "mcp-events" &&
+        deps.isConnected() &&
+        canDiscover;
+      return {
+        available: canDiscover,
+        servers: active
+          ? (
+              summarizeMcpServers(
+                deps.context().runtimeConfig.state.configSnapshot?.config ?? null,
+              ) ?? []
+            )
+              .filter((server) => server.enabled)
+              .map((server) => server.name)
+          : [],
+        loading: source.loading,
+        error: source.error,
+        events: source.events,
+        subscriptions: source.subscriptions,
+        statusError: source.statusError,
+        onRefresh: () => {
+          deps.currentCronState().cronFieldErrors = validateCronForm(
+            deps.currentCronState().cronForm,
+          );
+          sync(true);
+        },
+      };
     },
   };
 }

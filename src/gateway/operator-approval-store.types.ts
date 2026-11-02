@@ -1,5 +1,9 @@
 import type { Selectable } from "kysely";
-import type { ApprovalPresentation } from "../../packages/gateway-protocol/src/schema/approvals.js";
+import type {
+  ApprovalPresentation,
+  ApprovalTerminalReason,
+  TerminalApprovalSnapshot,
+} from "../../packages/gateway-protocol/src/schema/approvals.js";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/schema/audit-run.js";
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type {
@@ -10,15 +14,10 @@ import type {
 export type OperatorApprovalKind = "exec" | "plugin" | "system-agent";
 export type OperatorApprovalStatus = "pending" | "allowed" | "denied" | "expired" | "cancelled";
 export type OperatorApprovalDecision = "allow-once" | "allow-always" | "deny";
-export type OperatorApprovalTerminalReason =
-  | "user"
-  | "timeout"
-  | "malformed-verdict"
-  | "no-route"
-  | "run-aborted"
-  | "gateway-restart"
-  | "storage-corrupt";
-export type OperatorApprovalResolverKind = "device" | "channel" | "runtime" | "system";
+export type OperatorApprovalTerminalReason = ApprovalTerminalReason;
+export type OperatorApprovalResolverKind = NonNullable<
+  TerminalApprovalSnapshot["resolver"]
+>["kind"];
 type OperatorApprovalRequester = {
   deviceId: string | null;
   clientId: string | null;
@@ -59,6 +58,14 @@ export type OperatorApprovalRecord = {
   resolver: OperatorApprovalResolver | null;
   consumedAtMs: number | null;
   consumedBy: string | null;
+};
+
+/** A live waiter lends consumption to the effect's transaction and observes only its commit. */
+export type ExecApprovalPreparedConsumption = {
+  input: Readonly<OperatorApprovalConsumptionInput>;
+  databasePath: string;
+  assertCurrent: () => void;
+  markCommitted: (record: OperatorApprovalRecord) => void;
 };
 
 export type NewOperatorApproval = {
@@ -112,6 +119,15 @@ export type ConsumeOperatorApprovalResult =
   | { outcome: "not-allow-once"; record: OperatorApprovalRecord }
   | { outcome: "not-found" }
   | { outcome: "corrupt" };
+
+export type OperatorApprovalConsumptionInput = {
+  id: string;
+  consumerId: string;
+  expectedKind?: OperatorApprovalKind;
+  runtimeEpoch?: string;
+  redemptionWindowMs?: number;
+  nowMs?: number;
+};
 
 export type TerminalizeOperatorApprovalsResult = {
   affected: number;
@@ -168,6 +184,8 @@ export type OperatorApprovalReceiptPage = {
 export type OperatorApprovalExecutionLinkState = "exact" | "missing" | "malformed" | "mismatch";
 
 export type ListTerminalOperatorApprovalsInput = {
+  /** Stable session/run attribution survives Doctor routing repairs; it grants no authority. */
+  source?: { sessionId: string; runId: string };
   cursor?: string;
   limit?: number;
   kind?: OperatorApprovalKind;

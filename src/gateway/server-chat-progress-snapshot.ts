@@ -1,11 +1,14 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
-import { AgentActivityItemSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import {
+  AgentActivityItemSchema,
+  ChatRunStartupPhaseSchema,
+} from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isCompleteAgentPreamble } from "../agents/agent-activity-presentation.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
-import { deepFreezeDiagnosticValue } from "../infra/diagnostic-event-snapshot.js";
-import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 
+const STARTUP_PHASES = new Set<string>(ChatRunStartupPhaseSchema.anyOf.map((phase) => phase.const));
 const CHAT_RUN_PROGRESS_MAX_EVENTS = 50;
 const CHAT_RUN_PROGRESS_MAX_BYTES = 128 * 1024;
 const CHAT_RUN_PROGRESS_MAX_EVENT_BYTES = 64 * 1024;
@@ -30,8 +33,18 @@ function stringifyProgressEvent(event: AgentEventPayload): string {
       throw new RangeError("Progress event exceeds replay budget");
     }
   };
-  const primitive = (value: unknown) =>
-    charge(boundedJsonUtf8Bytes(value, CHAT_RUN_PROGRESS_MAX_EVENT_BYTES - bytes).bytes);
+  const primitive = (value: unknown) => {
+    if (typeof value === "string" && value.length + 2 > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES - bytes) {
+      throw new RangeError("Progress event exceeds replay budget");
+    }
+    charge(
+      value === null || value === true
+        ? 4
+        : value === false
+          ? 5
+          : Buffer.byteLength(JSON.stringify(value), "utf8"),
+    );
+  };
 
   // Native traversal owns getters and toJSON. Only already-observed primitives
   // are measured separately, so producer callbacks execute exactly once.
@@ -68,7 +81,7 @@ function stringifyProgressEvent(event: AgentEventPayload): string {
         // each time native JSON revisits a shared, non-cyclic container.
         containers.set(value, { array: Array.isArray(value), count: 0 });
       }
-    } else {
+    } else if (typeof value !== "bigint") {
       primitive(value);
     }
     return value;
@@ -85,7 +98,7 @@ function captureProgressEvent(event: AgentEventPayload) {
     // Own the wire representation; producers and replay readers cannot change
     // captured content or invalidate its size after this synchronous receipt.
     const captured: AgentEventPayload = JSON.parse(json);
-    deepFreezeDiagnosticValue(captured);
+    freezeTrustedJsonSnapshot(captured);
     if (!asNullableRecord(captured.data)) {
       return undefined;
     }
@@ -108,24 +121,14 @@ export function updateChatRunProgressSnapshot(
   mode: "full" | "summary" = "full",
 ): ChatRunProgressSnapshot | undefined {
   const data = event.data ?? {};
+  if ((event.stream === "tool" || event.stream === "item") && data.display === false) {
+    return snapshot;
+  }
   const phase = typeof data.phase === "string" ? data.phase : "";
   const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId.trim() : "";
   const review = asNullableRecord(data.review) ?? undefined;
   const reviewId = typeof review?.id === "string" ? review.id.trim() : "";
-  const isStartupStatus =
-    event.stream === "run_status" &&
-    [
-      "waiting_for_state",
-      "preparing_workspace",
-      "naming_worktree",
-      "creating_worktree",
-      "running_setup",
-      "provisioning_environment",
-      "preparing_context",
-      "memory_flushing",
-      "starting_model",
-      "waiting_for_model",
-    ].includes(phase);
+  const isStartupStatus = event.stream === "run_status" && STARTUP_PHASES.has(phase);
   const isModelWait =
     event.stream === "run_status" &&
     (phase === "waiting_for_model" ||
@@ -137,6 +140,7 @@ export function updateChatRunProgressSnapshot(
   const isRetryStatus = event.stream === "run_status" && phase === "retrying";
   const isFallbackStatus = event.stream === "lifecycle" && phase === "fallback_step";
   const isFinishing = event.stream === "lifecycle" && phase === "finishing";
+  const isCompaction = event.stream === "compaction" && (phase === "start" || phase === "end");
   const isAssistant =
     event.stream === "assistant" &&
     Boolean(
@@ -196,6 +200,7 @@ export function updateChatRunProgressSnapshot(
     isRetryStatus ||
     isFallbackStatus ||
     isFinishing ||
+    isCompaction ||
     isAssistant ||
     isNotice;
   if (
@@ -263,6 +268,7 @@ export function updateChatRunProgressSnapshot(
     isRetryStatus ||
     isFallbackStatus ||
     isFinishing ||
+    isCompaction ||
     isAssistant ||
     isTool ||
     isItem
@@ -272,6 +278,7 @@ export function updateChatRunProgressSnapshot(
       if (
         candidate.stream === "run_status" ||
         candidate.stream === "assistant" ||
+        (isCompaction && candidate.stream === "compaction") ||
         (candidate.stream === "lifecycle" &&
           (candidate.data.phase === "fallback_step" || candidate.data.phase === "finishing"))
       ) {

@@ -53,7 +53,12 @@ type SourceMediaFixture = {
     transcriptOwner?: true;
   }) => SourceReply;
   setAgentRunReplies: (replies: SourceReply[]) => void;
-  send: (params: { idempotencyKey: string; message: string }) => Promise<unknown>;
+  onAfterAgentRunStart: (run: () => Promise<void>) => void;
+  send: (params: {
+    idempotencyKey: string;
+    message: string;
+    expectBroadcast?: boolean;
+  }) => Promise<unknown>;
   sendLate: (params: {
     runId: string;
     payloads: ReplyPayload[];
@@ -219,6 +224,7 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
               ? await fixture.send({
                   idempotencyKey: runId,
                   message: "Send the probe attachment.",
+                  expectBroadcast: false,
                 })
               : await fixture.sendLate({
                   runId,
@@ -226,13 +232,30 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
                   canvas,
                   bufferCurrent: delivery === "late canvas",
                 });
-          expect(broadcast).toMatchObject({ state: "final", runId });
-          if (delivery === "late canvas") {
+          if (delivery === "direct") {
+            expect(broadcast).toBeUndefined();
+          } else if (delivery === "late canvas") {
+            expect(broadcast).toMatchObject({ state: "final", runId });
             expect(getMessageContent(broadcast)).toEqual([{ type: "canvas", ...canvas }]);
           } else {
+            expect(broadcast).toMatchObject({ state: "final", runId });
             expect(asOptionalRecord(broadcast)?.message).toBeUndefined();
           }
-          expect(loadTranscriptEventsSync(scope)).toEqual(before);
+          const after = loadTranscriptEventsSync(scope);
+          expect(after.slice(0, before.length)).toEqual(before);
+          expect(after.slice(before.length)).toEqual(
+            delivery === "direct"
+              ? [
+                  expect.objectContaining({
+                    message: expect.objectContaining({
+                      role: "user",
+                      content: "Send the probe attachment.",
+                      idempotencyKey: `${runId}:user`,
+                    }),
+                  }),
+                ]
+              : [],
+          );
           const previousConfig = getRuntimeConfigSnapshot();
           setRuntimeConfigSnapshot(cfg);
           try {
@@ -271,7 +294,7 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
         const mirrorIdempotencyKey = "idem-agent-source-reply-deduped:internal-source-reply:0";
         const originalText =
           resolveMirroredTranscriptText({ text: replyText, mediaUrls: [mediaUrl] }) ?? "media";
-        await appendSourceReplyMirrorEntry({ text: originalText });
+        fixture.onAfterAgentRunStart(() => appendSourceReplyMirrorEntry({ text: originalText }));
         setAgentRunReplies([
           createMainSourceReply({
             idempotencyKey: mirrorIdempotencyKey,
@@ -314,10 +337,12 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
         writeSavedPng(fixtureDir, "source-reply-missing.png");
         const backedMirrorKey = "idem-agent-source-reply-partial:internal-source-reply:0";
         const missingMirrorKey = "idem-agent-source-reply-partial:internal-source-reply:1";
-        await appendSourceReplyMirrorEntry({
-          idempotencyKey: backedMirrorKey,
-          text: "Backed source reply",
-        });
+        fixture.onAfterAgentRunStart(() =>
+          appendSourceReplyMirrorEntry({
+            idempotencyKey: backedMirrorKey,
+            text: "Backed source reply",
+          }),
+        );
         setAgentRunReplies([
           createMainSourceReply({
             idempotencyKey: backedMirrorKey,
@@ -360,18 +385,20 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
           writeSavedPng(fixtureDir, "source-reply.png");
           const mirrorKey = "idem-source-rewrite-refusal:internal-source-reply:0";
           const text = collision ? "Existing assistant content" : "Source reply with media";
-          await appendSourceReplyMirrorEntry({
-            idempotencyKey: mirrorKey,
-            text,
-            ...(collision ? { model: "gateway-injected" } : {}),
-          });
-          if (!collision) {
+          fixture.onAfterAgentRunStart(async () => {
             await appendSourceReplyMirrorEntry({
-              idempotencyKey: "later-assistant-entry",
-              text: "Later assistant content",
-              model: "gateway-injected",
+              idempotencyKey: mirrorKey,
+              text,
+              ...(collision ? { model: "gateway-injected" } : {}),
             });
-          }
+            if (!collision) {
+              await appendSourceReplyMirrorEntry({
+                idempotencyKey: "later-assistant-entry",
+                text: "Later assistant content",
+                model: "gateway-injected",
+              });
+            }
+          });
           setAgentRunReplies([
             createMainSourceReply({
               idempotencyKey: mirrorKey,

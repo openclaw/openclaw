@@ -1,8 +1,9 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { readConfigFileSnapshotForWrite, resolveConfigSnapshotHash } from "../../config/io.js";
 import { invalidateConfigGetResponseCache } from "../config-get-response.js";
 import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import { resolveBaseHashParam } from "./base-hash.js";
+import { respondError } from "./response.js";
 import type { RespondFn } from "./types.js";
 
 function requireConfigBaseHash(
@@ -17,26 +18,20 @@ function requireConfigBaseHash(
   const snapshotHash = resolveConfigSnapshotHash(snapshot);
   const baseHash = resolveBaseHashParam(params);
   if (!snapshotHash || !baseHash) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `config base hash ${snapshotHash ? "required" : "unavailable"}; re-run config.get and retry`,
-      ),
+    respondError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      `config base hash ${snapshotHash ? "required" : "unavailable"}; re-run config.get and retry`,
     );
     return false;
   }
   if (baseHash !== revisionProjector.projectRawHash(snapshotHash)) {
     // A fresh write snapshot can observe an edit before the watcher invalidates reads.
     invalidateConfigGetResponseCache();
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "config changed since last load; re-run config.get and retry",
-      ),
+    respondError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      "config changed since last load; re-run config.get and retry",
     );
     return false;
   }

@@ -3,9 +3,10 @@ import {
   normalizeTabIconPreference,
   UI_APPEARANCE_PREFERENCE_KEYS,
 } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { DEFAULT_SIDEBAR_ENTRIES } from "../app-navigation.ts";
-import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
+import type { RuntimeConfigExternalMutationResult } from "../lib/config/config-gateway-operations.ts";
 import type { ApplicationContext } from "./context.ts";
 import { hasOperatorWriteAccess } from "./operator-access.ts";
 import type {
@@ -47,17 +48,24 @@ export function canSyncAppearancePreference(
 export async function writeProfileAppearancePrefs(
   client: GatewayBrowserClient | null,
   preferences: ServerUiPrefs,
-  canDispatch: boolean | (() => boolean),
+  canDispatch: () => boolean,
   profileId?: string | null,
   expectedBackground?: BackgroundPreference | null,
 ): Promise<
-  Awaited<ReturnType<RuntimeConfigCapability["runExternalMutation"]>> & {
+  RuntimeConfigExternalMutationResult<unknown> & {
     batch: ServerUiPrefs;
     committedBatch?: ServerUiPrefs;
   }
 > {
   let batch = preferences;
-  const current = () => (typeof canDispatch === "function" ? canDispatch() : canDispatch);
+  const failure = (
+    error: string,
+    reason: Extract<
+      RuntimeConfigExternalMutationResult<unknown>,
+      { ok: false }
+    >["reason"] = "unavailable",
+    failedBatch = batch,
+  ) => ({ ok: false as const, reason, error, batch: failedBatch });
   const writesNavigation = Object.keys(batch).some(isNavigationPref);
   if (writesNavigation) {
     batch = Object.fromEntries(Object.entries(batch).filter(([key]) => isNavigationPref(key)));
@@ -72,21 +80,11 @@ export async function writeProfileAppearancePrefs(
       ),
     );
   }
-  if (!client || !current()) {
-    return {
-      ok: false,
-      reason: "unavailable",
-      error: "Profile preferences are unavailable.",
-      batch,
-    };
+  if (!client || !canDispatch()) {
+    return failure("Profile preferences are unavailable.");
   }
   if (batch.background !== undefined && expectedBackground === undefined) {
-    return {
-      ok: false,
-      reason: "unavailable",
-      error: "Background preferences have not loaded.",
-      batch,
-    };
+    return failure("Background preferences have not loaded.");
   }
   if (writesTheme) {
     invalidateUserPreferences(client);
@@ -94,12 +92,7 @@ export async function writeProfileAppearancePrefs(
   try {
     if (writesNavigation) {
       if (!profileId) {
-        return {
-          ok: false,
-          reason: "unavailable",
-          error: "Navigation profile is unavailable.",
-          batch,
-        };
+        return failure("Navigation profile is unavailable.");
       }
       const base = preferences.sidebarEntriesBase;
       const keys = Object.keys(batch).filter(isNavigationPref);
@@ -107,13 +100,8 @@ export async function writeProfileAppearancePrefs(
         keys: keys.map((key) => UI_NAVIGATION_PREFERENCE_KEYS[key]),
       });
       // A read without complete coverage is never absence and must not seed a write.
-      if (!current() || snapshot.status !== "ok") {
-        return {
-          ok: false,
-          reason: "unavailable",
-          error: "Navigation preferences are unavailable.",
-          batch,
-        };
+      if (!canDispatch() || snapshot.status !== "ok") {
+        return failure("Navigation preferences are unavailable.");
       }
       const committedBatch = { ...batch };
       if (Array.isArray(batch.sidebarEntries)) {
@@ -122,21 +110,14 @@ export async function writeProfileAppearancePrefs(
           snapshot.entries[UI_NAVIGATION_PREFERENCE_KEYS.sidebarEntries] ?? DEFAULT_SIDEBAR_ENTRIES,
         );
         if (!observed || !prefValuesEqual(observed, base)) {
-          return {
-            ok: false,
-            reason: "rejected",
-            error:
-              "Shortcuts are saved only on this device because their previous sync state is missing. Edit a shortcut to sync again.",
-            batch: { sidebarEntries: batch.sidebarEntries },
-          };
+          return failure(
+            "Shortcuts are saved only on this device because their previous sync state is missing. Edit a shortcut to sync again.",
+            "rejected",
+            { sidebarEntries: batch.sidebarEntries },
+          );
         }
         if (!remote) {
-          return {
-            ok: false,
-            reason: "unavailable",
-            error: "Navigation preferences are unavailable.",
-            batch,
-          };
+          return failure("Navigation preferences are unavailable.");
         }
         committedBatch.sidebarEntries = rebaseSidebarEntries(
           observed,
@@ -157,12 +138,10 @@ export async function writeProfileAppearancePrefs(
       const result = await saveUserPreferences(client, { entries, expectedEntries });
       return result.status === "ok"
         ? { ok: true, value: result, refresh: { ok: true }, batch, committedBatch }
-        : {
-            ok: false,
-            reason: result.status === "conflict" ? "conflict" : "unavailable",
-            error: "Navigation preferences changed or are unavailable.",
-            batch,
-          };
+        : failure(
+            "Navigation preferences changed or are unavailable.",
+            result.status === "conflict" ? "conflict" : "unavailable",
+          );
     }
     if (writesTheme) {
       const appearance = {
@@ -178,7 +157,7 @@ export async function writeProfileAppearancePrefs(
       return { ok: true, value, refresh: { ok: true }, batch };
     }
     if (batch.tabIcon != null && !normalizeTabIconPreference(batch.tabIcon)) {
-      return { ok: false, reason: "rejected", error: "Invalid tab icon preference.", batch };
+      return failure("Invalid tab icon preference.", "rejected");
     }
     const entries = Object.fromEntries(
       Object.entries(batch).flatMap(([key, value]) =>
@@ -193,22 +172,18 @@ export async function writeProfileAppearancePrefs(
     });
     return result.status === "ok"
       ? { ok: true, value: result, refresh: { ok: true }, batch }
-      : {
-          ok: false,
-          reason: result.status === "conflict" ? "conflict" : "rejected",
-          error: "Profile preferences are unavailable.",
-          batch,
-        };
+      : failure(
+          "Profile preferences are unavailable.",
+          result.status === "conflict" ? "conflict" : "rejected",
+        );
   } catch (error) {
     const rejected =
       error instanceof GatewayRequestError &&
       (error.gatewayCode === "INVALID_REQUEST" || error.gatewayCode === "FORBIDDEN");
-    return {
-      ok: false,
-      reason: rejected ? "rejected" : "error",
-      error: error instanceof Error ? error.message : String(error),
-      batch,
-    };
+    return failure(
+      error instanceof Error ? error.message : String(error),
+      rejected ? "rejected" : "error",
+    );
   } finally {
     if (writesTheme) {
       invalidateUserPreferences(client);

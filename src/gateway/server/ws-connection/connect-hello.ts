@@ -1,4 +1,5 @@
 // Gateway WebSocket connect completion sends hello-ok and commits post-handshake state.
+import { GATEWAY_CLIENT_CAPS } from "../../../../packages/gateway-protocol/src/client-info.js";
 import {
   GATEWAY_SERVER_CAPS,
   ErrorCodes,
@@ -20,7 +21,12 @@ import { formatErrorMessage as formatError } from "../../../infra/errors.js";
 import { commitPresence } from "../../../infra/system-presence.js";
 import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
 import { hasMultipleResidentSessionSharingIdentities } from "../../../state/user-profile-list.js";
-import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
+import {
+  resolveRuntimeServiceBuildId,
+  resolveRuntimeServiceCommit,
+  resolveRuntimeServiceBuiltAt,
+  resolveRuntimeServiceVersion,
+} from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
 import { resolveControlUiIdentity } from "../../control-ui-identity.js";
 import {
@@ -37,10 +43,12 @@ import {
   type SetupHandoff,
 } from "../../device-pair-setup-completion.js";
 import { canReadDetailedUpdateMetadata } from "../../events.js";
+import { projectHealthSummary } from "../../health/presentation.js";
 import { getRemoteControlUiIngressContext } from "../../ingress-attribution.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
-import { operatorSessionCap } from "../../operator-role-policy.js";
+import { resolveOperatorRolePolicy } from "../../operator-role-policy.js";
+import { broadcastRejectedNodePairing } from "../../pairing-events.js";
 import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
 import { resolveBrowserAuthOrigin } from "../../provider-browser-auth.js";
 import {
@@ -123,6 +131,7 @@ export async function sendGatewayHello(
       ? sha256Base64Url(JSON.stringify(recoveryScopeMaterial))
       : undefined;
   const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
+  const snapshotStartedAt = performance.now();
   const sessionRowProjection = getSessionRowProjection(buildRequestContext());
   const snapshot = buildGatewaySnapshot({
     client: context.handler.getClient(),
@@ -132,10 +141,14 @@ export async function sendGatewayHello(
     sessionRowProjection,
   });
   const cachedHealth = getHealthCache();
-  if (cachedHealth) {
-    snapshot.health = cachedHealth;
+  if (cachedHealth && !connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND)) {
+    snapshot.health = connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY)
+      ? projectHealthSummary(cachedHealth)
+      : cachedHealth;
     snapshot.stateVersion.health = getHealthVersion();
   }
+  context.recordAttachTiming?.("snapshotMs", snapshotStartedAt);
+  const descriptorsStartedAt = performance.now();
   const controlUiTabs = listControlUiPluginTabs(scopes, {
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
@@ -145,11 +158,11 @@ export async function sendGatewayHello(
     buildRequestContext().getGatewayMethodRegistry?.(),
   );
   const ingress = getRemoteControlUiIngressContext(context.handler.upgradeReq);
+  const controlUiBasePath = normalizeControlUiBasePath(
+    context.configSnapshot.gateway?.controlUi?.basePath,
+  );
   const controlUiLocation = ingress
-    ? {
-        origin: ingress.publicOrigin,
-        basePath: normalizeControlUiBasePath(context.configSnapshot.gateway?.controlUi?.basePath),
-      }
+    ? { origin: ingress.publicOrigin, basePath: controlUiBasePath }
     : resolveControlUiLinkLocation(context.configSnapshot);
   // Gateway runtime provenance is independent of the UI artifact source.
   // Consumers use the source field to decide whether UI build comparison applies.
@@ -157,10 +170,13 @@ export async function sendGatewayHello(
     ? ("configured" as const)
     : ("bundled" as const);
   const serverBuildId = resolveRuntimeServiceBuildId();
-  const sessionCap =
+  const serverCommit = resolveRuntimeServiceCommit();
+  const serverBuiltAt = resolveRuntimeServiceBuiltAt();
+  const rolePolicy =
     role === "operator"
-      ? operatorSessionCap(context.handler.getClient(), context.configSnapshot)
+      ? resolveOperatorRolePolicy(context.handler.getClient(), context.configSnapshot)
       : undefined;
+  const sessionCap = rolePolicy?.sessions.others;
   const helloOk = {
     type: "hello-ok",
     // Admission already verified range overlap; this field reports the server's current protocol.
@@ -168,12 +184,14 @@ export async function sendGatewayHello(
     server: {
       version: resolveRuntimeServiceVersion(process.env),
       ...(serverBuildId ? { buildId: serverBuildId } : {}),
+      ...(serverCommit ? { commit: serverCommit } : {}),
+      ...(serverBuiltAt ? { builtAt: serverBuiltAt } : {}),
       bootId,
       controlUiBuildSource,
       connId,
     },
     features: {
-      methods: resolveBrowserAuthOrigin(context.browserOrigin, new AbortController().signal)
+      methods: resolveBrowserAuthOrigin(context.browserOrigin)
         ? gatewayMethods
         : gatewayMethods.filter((method) => method !== "mcp.authLogin"),
       events,
@@ -195,6 +213,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.CHANNELS_PAIRING_APPROVE_OWNER,
         GATEWAY_SERVER_CAPS.EXEC_APPROVALS_GET_OWNER,
         GATEWAY_SERVER_CAPS.EXEC_APPROVALS_SET_OWNER,
+        GATEWAY_SERVER_CAPS.EXEC_APPROVALS_NATIVE_COMMIT,
         GATEWAY_SERVER_CAPS.WORKTREES_REMOVE_OWNER,
         GATEWAY_SERVER_CAPS.WORKTREES_RESTORE_OWNER,
         GATEWAY_SERVER_CAPS.WORKTREES_GC_OWNER,
@@ -205,8 +224,10 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.NODE_PERMISSION_ERRORS,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_PREFETCH,
         GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY,
         GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_QUIESCENCE,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_RESULT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_HOST_DIAGNOSTICS,
         GATEWAY_SERVER_CAPS.NODE_WORKER_IDLE_RETENTION,
@@ -235,6 +256,9 @@ export async function sendGatewayHello(
     ...(controlUiLocation
       ? { controlUiUrl: `${controlUiLocation.origin}${controlUiLocation.basePath}` }
       : {}),
+    ...(controlUiBasePath && context.configSnapshot.gateway?.controlUi?.enabled !== false
+      ? { controlUiBasePath }
+      : {}),
     ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
     ...(controlUiWidgetKinds.length > 0 ? { controlUiWidgetKinds } : {}),
     ...(controlUiLinkReaders.length > 0 ? { controlUiLinkReaders } : {}),
@@ -243,6 +267,9 @@ export async function sendGatewayHello(
       method: authMethod,
       role,
       scopes,
+      ...(role === "operator"
+        ? { roleAllowsAdmin: !rolePolicy || rolePolicy.scopes.includes(ADMIN_SCOPE) }
+        : {}),
       ...(sessionCap !== undefined ? { sessionCap } : {}),
       ...(recoveryScope ? { recoveryScope } : {}),
       ...(canMigrateRecovery ? { recoveryMigrationAllowed: true as const } : {}),
@@ -265,6 +292,7 @@ export async function sendGatewayHello(
       hasMultipleSessionSharingIdentities: hasMultipleResidentSessionSharingIdentities(),
     },
   };
+  context.recordAttachTiming?.("helloDescriptorsMs", descriptorsStartedAt);
   advanceHandshakePhase("hello_payload_prepared");
 
   let bootstrapHandoff: SetupHandoff | undefined;
@@ -477,16 +505,7 @@ export async function sendGatewayHello(
         : await finalizeNodePairingCleanupClaim(cleanupClaim);
       const resolvedAt = Date.now();
       for (const resolved of resolvedPairings) {
-        requestContext.broadcast(
-          "node.pair.resolved",
-          {
-            requestId: resolved.requestId,
-            nodeId: resolved.nodeId,
-            decision: "rejected",
-            ts: resolvedAt,
-          },
-          { dropIfSlow: true },
-        );
+        broadcastRejectedNodePairing(requestContext.broadcast, resolved, resolvedAt);
       }
     } catch (error) {
       logGateway.warn(
