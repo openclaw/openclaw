@@ -54,6 +54,7 @@ async function setup(handlers: Record<string, () => unknown>, advertiseMcpLogin 
   const result = createResult(createPlugin({ enabled: true, state: "enabled" }));
   const route = fixture.route("/settings/plugins/workboard", result);
   const mounted = await fixture.mount("/settings/plugins/workboard", result);
+  await vi.dynamicImportSettled();
   await waitForSolid(() =>
     expect(mounted.page.querySelector(".plugin-capabilities")).not.toBeNull(),
   );
