@@ -55,22 +55,25 @@ export function formatReadContinuationNotice(
 }
 
 /** Format the aggregate footer from a page's own truncation facts. */
+function readModelBudgetBound(truncation: unknown): boolean {
+  if (typeof truncation !== "object" || truncation === null) {
+    return false;
+  }
+  // SAFETY: callers pass their own truncation payload; only a literal true selects the budget.
+  return (truncation as { modelBudgetBound?: unknown }).modelBudgetBound === true;
+}
+
+/** Format the aggregate footer from a page's own truncation facts. */
 export function formatReadPageContinuationNotice(
   continuation: ReadToolContinuation,
   maxBytes: number,
   truncation: unknown,
 ): string {
-  // Readers hand over their own truncation shape; read the flag defensively instead of
-  // coupling this module to it.
-  const budgetBound =
-    typeof truncation === "object" &&
-    truncation !== null &&
-    (truncation as { modelBudgetBound?: unknown }).modelBudgetBound === true;
   return formatReadContinuationNotice(
     continuation,
     maxBytes,
     undefined,
-    budgetBound ? "model-budget" : "bytes",
+    readModelBudgetBound(truncation) ? "model-budget" : "bytes",
   );
 }
 
