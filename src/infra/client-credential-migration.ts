@@ -159,7 +159,7 @@ export async function prepareClientCredentialMigrationCustody(options: {
     : undefined;
 }
 
-export type PreparedClientCredentialRecovery = {
+type PreparedClientCredentialRecovery = {
   kind: "existing" | "replacement";
   custody: ClientCredentialCustody;
 };
