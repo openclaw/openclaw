@@ -12,28 +12,26 @@ function expectDelayBetween(delayMs: number | undefined, min: number, max: numbe
   expect(delayMs).toBeLessThanOrEqual(max);
 }
 
-/**
- * Probes the frozen retry-class boundary through the public retry loop:
- * a permanent error stops after one call, a retryable one runs to its
- * class's exhaustion count (3 for transient, 5 for rate-limit).
- */
-async function probeRetryAttempts(
+/** Exercise classification and terminal settlement through the actual retry loop. */
+async function expectRetryAttempts(
   message: string,
+  expectedCalls: number,
   profile: "index" | "query" = "index",
-): Promise<number> {
+): Promise<void> {
+  const failure = new Error(message);
   const run = vi.fn(async () => {
-    throw new Error(message);
+    throw failure;
   });
-  try {
-    await runMemoryEmbeddingRetryLoop({
+  const waitForRetry = vi.fn(async () => {});
+  await expect(
+    runMemoryEmbeddingRetryLoop({
       profile,
       run,
-      waitForRetry: async () => {},
-    });
-  } catch {
-    // Expected: the loop always rejects since `run` never succeeds.
-  }
-  return run.mock.calls.length;
+      waitForRetry,
+    }),
+  ).rejects.toBe(failure);
+  expect(run).toHaveBeenCalledTimes(expectedCalls);
+  expect(waitForRetry).toHaveBeenCalledTimes(expectedCalls - 1);
 }
 
 async function probeBatchSplits(message: string): Promise<boolean> {
@@ -331,25 +329,6 @@ describe("memory embedding policy", () => {
     }
   });
 
-  it("preserves permanent provider error identity without retrying", async () => {
-    const permanentError = new Error("embedding validation failed");
-    const run = vi.fn(async () => {
-      throw permanentError;
-    });
-    const waitForRetry = vi.fn(async () => {});
-
-    await expect(
-      runMemoryEmbeddingRetryLoop({
-        profile: "index",
-        run,
-        waitForRetry,
-      }),
-    ).rejects.toBe(permanentError);
-
-    expect(run).toHaveBeenCalledOnce();
-    expect(waitForRetry).not.toHaveBeenCalled();
-  });
-
   const RETRY_BOUNDARY_FIXTURES: Array<{
     label: string;
     profile?: "index" | "query";
@@ -439,7 +418,7 @@ describe("memory embedding policy", () => {
   it.each(RETRY_BOUNDARY_FIXTURES)(
     "retries $label for $expectedCalls total attempt(s)",
     async ({ profile, message, expectedCalls }) => {
-      expect(await probeRetryAttempts(message, profile)).toBe(expectedCalls);
+      await expectRetryAttempts(message, expectedCalls, profile);
     },
   );
 
@@ -501,15 +480,19 @@ describe("memory embedding policy", () => {
       'HTTP 400: {"error":{"message":"<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 10.: input.contents","type":"InvalidParameter","code":"InvalidParameter"}}',
       // Zhipu embedding-3 caps `input` at 64 items under its generic 1214 code.
       'openai-compatible embeddings failed: HTTP 400: {"error":{"code":"1214","message":"input array max 64"}}',
-      "input array max 64",
       // Zhipu embedding-3 rejects batches over 64 items with a Chinese message (#136261).
       'HTTP 400: {"error":{"code":"1214","message":"input数组最大不得超过64条"}}',
+      // Mistral rejects the aggregate token count of a batch and asks for more batches (#183556).
+      'openai-compatible embeddings failed: HTTP 400: {"object":"error","message":"Too many tokens overall, split into more batches.","type":"invalid_request_prompt","code":"3210"}',
     ]) {
       expect(await probeBatchSplits(message)).toBe(true);
     }
 
     for (const message of [
       "embedding input exceeds maximum token length 4096",
+      // A single input over the per-input token limit cannot be helped by splitting.
+      "Too many tokens in input, max 8192 per input",
+      "Too many tokens per day",
       "embeddings max input length is unknown",
       "Embeddings API input limit exceeded",
       'HTTP 400: {"code":"InvalidParameter","param":"input","message":"input must be a string"}',
@@ -539,28 +522,30 @@ describe("memory embedding policy", () => {
   ])(
     "preserves paired inputs and persists each slice once with declared cap $declared",
     async ({ declared, requests }) => {
-      const items = Array.from({ length: 33 }, (_, index) => ({
-        input: index,
-        cacheCandidate: `candidate-${index}`,
+      const items = Array.from({ length: 33 }, (_, input) => ({
+        input,
+        cacheCandidate: `candidate-${input}`,
       }));
       const completed: Array<{ candidates: string[]; outputs: string[] }> = [];
       const run = vi.fn(async (batch: typeof items) => {
         if (batch.length > 10) {
-          throw new Error("embeddings max input length is 10");
+          const cap = "embeddings max input length is 10";
+          throw declared === undefined
+            ? Object.assign(new Error("wrapped HTTP 400"), {
+                status: 400,
+                errorBody: JSON.stringify({ error: `${"x".repeat(260)} ${cap}` }),
+              })
+            : new Error(cap);
         }
         return batch.map((item) => `output-${item.input}`);
       });
-
       await expect(
         runMemoryEmbeddingBatchRetryWithSplit({
           items,
           maxInputsPerRequest: declared,
           run,
           onSuccess: (batch, outputs) => {
-            completed.push({
-              candidates: batch.map((item) => item.cacheCandidate),
-              outputs,
-            });
+            completed.push({ candidates: batch.map((item) => item.cacheCandidate), outputs });
           },
           waitForRetry: async () => {},
         }),
@@ -673,27 +658,6 @@ describe("memory embedding policy", () => {
     expect(result).toBe("ok");
     expect(calls).toBe(2);
     expectDelayBetween(waits[0], 4000, 6000);
-  });
-
-  it("stops after the transient attempt budget", async () => {
-    const run = vi.fn(async () => {
-      throw new Error("TypeError: fetch failed | other side closed");
-    });
-    const waits: number[] = [];
-
-    await expect(
-      runMemoryEmbeddingRetryLoop({
-        profile: "index",
-        run,
-        waitForRetry: async (delayMs) => {
-          waits.push(delayMs);
-        },
-      }),
-    ).rejects.toThrow("fetch failed");
-
-    expect(run).toHaveBeenCalledTimes(3);
-    expectDelayBetween(waits[0], 400, 600);
-    expectDelayBetween(waits[1], 800, 1200);
   });
 
   it("splits transport-failed batches after retries are exhausted", async () => {

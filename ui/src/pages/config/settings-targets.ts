@@ -1,10 +1,20 @@
 import type { RouteId } from "../../app-route-paths.ts";
 import type { NativeDeviceSettingsSnapshot } from "../../app/native-device-settings.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
+import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
 import {
   appearanceSettingsRouteTarget,
   APPEARANCE_SETTINGS_TARGET_IDS,
   SETTINGS_ROUTE_TARGETS,
 } from "./route-data.ts";
+import { sessionSourcePresentations } from "./session-source-presentation.ts";
+
+registerRouteSubtitlesEnglish();
+
+registerChatComposerEnglish();
+
+registerSessionOrganizationSharedEnglish();
 
 export const SESSION_STORAGE_SETTINGS_TARGET_ID = "settings-session-storage";
 
@@ -230,6 +240,8 @@ export const SETTINGS_SEARCH_TARGETS = {
       "profilePage.identity.chooseAvatar",
       "profilePage.identity.displayName",
       "profilePage.identity.linkedEmails",
+      "profilePage.identity.prAttribution",
+      "profilePage.identity.prAttributionDescription",
     ],
     aliases: "profile avatar image email",
     requiresIdentity: true,
@@ -369,10 +381,7 @@ export const SETTINGS_SEARCH_TARGETS = {
     labelKey: "configView.sessionSources.title",
     searchKeys: [
       "configView.sessionSources.hint",
-      "configView.sessionSources.claude",
-      "configView.sessionSources.codex",
-      "configView.sessionSources.opencode",
-      "configView.sessionSources.pi",
+      ...sessionSourcePresentations.map((source) => source.labelKey),
     ],
     aliases:
       "automatic auto discover discovery native external conversations show hide sidebar claude sessions",
@@ -390,6 +399,7 @@ export const SETTINGS_SEARCH_TARGETS = {
       "configView.chatPrefs.collapseTaskProgress",
       "configView.chatPrefs.collapseTaskProgressHint",
       "chat.sendShortcut",
+      "chat.sendShortcutHint",
       "chat.sendShortcutEnter",
       "chat.sendShortcutModifierEnter",
       "chat.followUpMode",

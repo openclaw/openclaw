@@ -8,7 +8,6 @@ import type {
   QaBusSnapshotConversation,
   QaBusStateSnapshot,
   QaBusThread,
-  QaBusToolCall,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -20,21 +19,11 @@ export function normalizeAccountId(raw?: string): string {
 }
 
 export function cloneMessage(message: QaBusMessage): QaBusMessage {
-  return {
+  return structuredClone({
     ...message,
-    conversation: { ...message.conversation },
-    attachments: (message.attachments ?? []).map((attachment) => Object.assign({}, attachment)),
-    ...(message.nativeCommand ? { nativeCommand: { ...message.nativeCommand } } : {}),
-    toolCalls: message.toolCalls?.map(cloneToolCall),
-    reactions: message.reactions.map((reaction) => ({ ...reaction })),
-  };
-}
-
-function cloneToolCall(toolCall: QaBusToolCall): QaBusToolCall {
-  return {
-    name: toolCall.name,
-    ...(toolCall.arguments ? { arguments: structuredClone(toolCall.arguments) } : {}),
-  };
+    attachments: message.attachments ?? [],
+    toolCalls: message.toolCalls,
+  });
 }
 
 function cloneEvent(event: QaBusEvent): QaBusEvent {
@@ -130,7 +119,7 @@ export function searchQaBusMessages(params: {
     .map(cloneMessage);
 }
 
-export function resolveQaBusPollStartCursor(params: {
+function resolveQaBusPollStartCursor(params: {
   currentCursor: number;
   requestedCursor?: number;
 }): number {
@@ -142,6 +131,7 @@ export function pollQaBusEvents(params: {
   events: QaBusEvent[];
   cursor: number;
   input?: QaBusPollInput;
+  isAdoptedInbound: (eventCursor: number) => boolean;
 }): QaBusPollResult {
   const accountId = normalizeAccountId(params.input?.accountId);
   const effectiveStartCursor = resolveQaBusPollStartCursor({
@@ -150,7 +140,10 @@ export function pollQaBusEvents(params: {
   });
   const limit = Math.max(1, Math.min(params.input?.limit ?? 100, 500));
   const matchingEvents = params.events.filter(
-    (event) => event.accountId === accountId && event.cursor > effectiveStartCursor,
+    (event) =>
+      event.accountId === accountId &&
+      event.cursor > effectiveStartCursor &&
+      (event.kind !== "inbound-message" || !params.isAdoptedInbound(event.cursor)),
   );
   const page = matchingEvents.slice(0, limit);
   // A limited page may advance only through events it returns. Jumping to the

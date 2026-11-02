@@ -12,8 +12,8 @@ import type {
   SessionEntryCreateWithTranscriptPrepareResult,
   SessionEntryCreateWithTranscriptResult,
 } from "./session-accessor.types.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
   type SessionActorStorageBinding,
@@ -162,6 +162,7 @@ async function patchSessionActorEntry(
         assertCurrent() {
           authority.assertCurrent();
           source.assertCurrent();
+          maintenancePreservation?.capture();
           options.workerGuard?.assertCurrent?.();
           options.workerGuard?.assertMutationAllowed?.();
           options.assertCommitAllowed?.();
@@ -170,16 +171,23 @@ async function patchSessionActorEntry(
       {
         committed(outcome) {
           const change = outcome.changes.find((value) => value.sessionKey === sessionKey);
-          if (!outcome.value || isDeepStrictEqual(change?.before?.entry, change?.after?.entry)) {
+          if (
+            !outcome.value ||
+            (!outcome.entryPatchEffects &&
+              isDeepStrictEqual(change?.before?.entry, change?.after?.entry))
+          ) {
             return;
           }
           const predicate = options.workerGuard?.shouldCommitIf;
-          options.onCommitted?.(
-            outcome.value,
+          const transcriptPredicate =
             predicate && change?.before?.entry?.sessionId === outcome.value.sessionId
               ? { sessionId: predicate.sessionId, watermark: change.before.transcript.watermark }
-              : undefined,
-          );
+              : undefined;
+          if (outcome.entryPatchEffects) {
+            options.onCommitted?.(outcome.value, transcriptPredicate, outcome.entryPatchEffects);
+          } else {
+            options.onCommitted?.(outcome.value, transcriptPredicate);
+          }
           const database = actor.target.database;
           if (database.kind !== "memory") {
             throw new Error("Memory patch lost its owner");

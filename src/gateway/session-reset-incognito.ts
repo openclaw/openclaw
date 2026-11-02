@@ -1,10 +1,10 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import { deleteSessionEntryLifecycle, type SessionEntry } from "../config/sessions.js";
-import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { getInProcessGatewayRequestContext } from "../plugins/runtime/gateway-request-scope.js";
-import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../sessions/session-lifecycle-admission.js";
+import { SESSION_CONTROLLER_DRAIN_TIMEOUT_MS } from "../sessions/session-controller.lifecycle.js";
 import { unavailableSessionRequest } from "./session-request-error.js";
 
 /** The caller retains the reset lifecycle fence through deletion and its notifications. */
@@ -48,7 +48,7 @@ async function deleteIncognitoSessionForResetInScope(
       try {
         await withTimeout(
           terminalDrain.drained,
-          SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+          SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
           "agent terminal lifecycle drain",
         );
       } catch {

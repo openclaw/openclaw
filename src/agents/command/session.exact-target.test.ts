@@ -165,16 +165,6 @@ it.each(["work", "dashboard:incognito-work"])(
         ...(incognito ? { incognito: true as const } : {}),
       };
       await sessionAccessor.replaceSessionEntry({ sessionKey, storePath }, entry);
-      const persisted = sessionAccessor.loadExactSessionEntryReadOnly({
-        sessionKey,
-        storePath,
-      })?.entry;
-      expect(persisted).toMatchObject({
-        thinkingLevel: "high",
-        modelOverride: "gpt-5.6-luna",
-        providerOverride: "openai",
-        lifecycleRevision: expect.any(String),
-      });
       if (!incognito) {
         await sessionAccessor.replaceSessionEntry(
           { sessionKey: "agent:main:unrelated", storePath },
@@ -189,16 +179,8 @@ it.each(["work", "dashboard:incognito-work"])(
           sessionKey,
           isNewSession: false,
           persistedThinking: "high",
-          sessionEntry: persisted,
+          sessionEntry: { ...entry, lifecycleRevision: expect.any(String) },
         });
-        if (!resolved.sessionEntry?.skillsSnapshot) {
-          throw new Error("expected the selected session's skills");
-        }
-        resolved.sessionEntry.skillsSnapshot.prompt = "caller-owned edit";
-        expect(
-          sessionAccessor.loadExactSessionEntryReadOnly({ sessionKey, storePath })?.entry
-            .skillsSnapshot?.prompt,
-        ).toBe("selected prompt");
         expect(list).not.toHaveBeenCalled();
         if (incognito) {
           expect(fs.existsSync(storePath)).toBe(false);

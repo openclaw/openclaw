@@ -1,13 +1,14 @@
+import { createComponent } from "solid-js";
 /* @vitest-environment jsdom */
-
-import { nothing, render } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import * as chatThread from "./chat-thread.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
-import { renderChatThread } from "./components/chat-thread.test-support.ts";
+import { ChatThread } from "./components/chat-thread-view.tsx";
 import { threadProps } from "./components/chat-transcript.test-support.ts";
-import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
+import { resolveChatProjectionRunId } from "./tool-stream-snapshot.ts";
 
 describe("resolveChatProjectionRunId", () => {
   it("restores only an active run proven by the reconnecting outbox", () => {
@@ -48,37 +49,36 @@ describe("transcript run identity", () => {
     const container = document.body.appendChild(document.createElement("div"));
     const transcript = createTestTranscript();
     onTestFinished(() => {
-      render(nothing, container);
-      transcript.hostDisconnected();
+      view.unmount();
+      transcript.dispose();
       container.remove();
     });
-    render(
-      renderChatThread(
-        {
-          ...threadProps("run-id-projection"),
-          sessions: {
-            ts: 0,
-            path: "",
-            count: 1,
-            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-            sessions: [
-              {
-                key: "agent:main:main",
-                kind: "direct",
-                updatedAt: 1,
-                hasActiveRun: true,
-                activeRunIds: ["arbitrary-first", "other-run"],
-              },
-            ],
+    const view = mountSolid(
+      () =>
+        createComponent(ChatThread, {
+          props: {
+            ...threadProps("run-id-projection"),
+            sessions: sessionListResult(
+              0,
+              [
+                {
+                  key: "agent:main:main",
+                  kind: "direct",
+                  updatedAt: 1,
+                  hasActiveRun: true,
+                  activeRunIds: ["arbitrary-first", "other-run"],
+                },
+              ],
+              { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+            ),
           },
-        },
-        transcript,
-      ),
-      container,
+          transcript,
+        }),
+      { container },
     );
     flush();
-    transcript.hostConnected();
-    transcript.hostUpdated();
+    transcript.start();
+    transcript.update();
     flush();
 
     expect(build).toHaveBeenCalledWith(expect.objectContaining({ runId: null }));

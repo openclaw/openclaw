@@ -18,6 +18,7 @@ import type { PluginOrigin } from "./plugin-origin.types.js";
 import { resolvePluginNativeAliasForParent } from "./plugin-sdk-native-resolver.js";
 import { resolvePluginPackageMapTarget } from "./plugin-source-references.js";
 import { isPluginSdkAliasSpecifier } from "./sdk-alias.js";
+import { recordPluginSdkDeprecatedImport } from "./sdk-deprecated-imports.js";
 
 /** Native adapters acquire source through the instance's artifact without replacing evaluation. */
 export function bindNativePluginInstanceModuleLoader(
@@ -86,6 +87,14 @@ export function bindNativePluginInstanceModuleLoader(
         if (params.ownsResolution && !params.ownsResolution()) {
           return undefined;
         }
+        // Host imports do not belong to this capture and must not enter its worker.
+        const requestedPath = request.startsWith("file:") ? fileURLToPath(request) : request;
+        if (
+          !isPathInside(artifact.boundaryRoot, parent) &&
+          (!path.isAbsolute(requestedPath) || !isPathInside(artifact.boundaryRoot, requestedPath))
+        ) {
+          return undefined;
+        }
         // Resolved URLs and built relative imports retain the selected host SDK's identity.
         const original = artifact.sourceForCaptured(parent);
         const sdkTarget = hostSdkTarget(request, original);
@@ -109,7 +118,11 @@ export function bindNativePluginInstanceModuleLoader(
           }
           // Deferred SDK imports retain their generation's host selection after cache replacement.
           if (source === parent && isPluginSdkAliasSpecifier(request)) {
-            return resolvePluginNativeAliasForParent(request, parent);
+            const target = resolvePluginNativeAliasForParent(request, parent);
+            if (target) {
+              recordPluginSdkDeprecatedImport(params.instance.pluginId, request);
+            }
+            return target;
           }
           let target: string | undefined;
           const requireMode = kind === "require-call" || kind === "require-resolve";
@@ -178,8 +191,13 @@ export function bindNativePluginInstanceModuleLoader(
           return undefined;
         }
         const original = artifact.sourceForCaptured(parent);
-        if (!original || isPluginSdkAliasSpecifier(request) || isBuiltin(request)) {
+        if (!original || isBuiltin(request)) {
           return undefined;
+        }
+        if (isPluginSdkAliasSpecifier(request)) {
+          const target = resolve();
+          recordPluginSdkDeprecatedImport(params.instance.pluginId, request);
+          return target;
         }
         const sdkTarget = hostSdkTarget(request, original);
         if (sdkTarget) {

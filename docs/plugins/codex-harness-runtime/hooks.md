@@ -157,6 +157,12 @@ observations for native tool completions not already covered by the native
 `PostToolUse` relay. These are telemetry/compatibility only; they cannot
 block, delay, or mutate the native tool call.
 
+When `post_tool_use` is enabled, the relay also records native `send_input`
+receipts before observer middleware runs. This preserves separate follow-up
+assignments when Code Mode wraps the nested tool result. Disabling that event,
+or a managed-only Codex hook policy, leaves this receipt path unavailable;
+observational hooks do not become a requirement for thread startup.
+
 Compaction and LLM lifecycle projections come from Codex app-server
 notifications and OpenClaw adapter state, not native Codex hook commands.
 `before_compaction`, `after_compaction`, `llm_input`, and `llm_output` are

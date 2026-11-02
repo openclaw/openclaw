@@ -12,6 +12,31 @@ type LocatedSecretRef = {
   ref: SecretRef;
 };
 
+export function hasSameSecretProviderDefinition(
+  ref: SecretRef,
+  configs: OpenClawConfig[],
+): boolean {
+  const definition = configs[0]?.secrets?.providers?.[ref.provider];
+  if (
+    !configs.every((config) =>
+      isDeepStrictEqual(config.secrets?.providers?.[ref.provider], definition),
+    )
+  ) {
+    return false;
+  }
+  if (!definition || !("pluginIntegration" in definition)) {
+    return true;
+  }
+  // Plugin integration ownership is not fully normalized to one entry. Preserve a resolved value
+  // only across an unchanged plugin/channel snapshot, or rollback can pair it with rejected owner state.
+  const dependency = (config: OpenClawConfig) => ({
+    plugins: config.plugins,
+    channels: config.channels,
+  });
+  const previous = dependency(configs[0]!);
+  return configs.every((config) => isDeepStrictEqual(dependency(config), previous));
+}
+
 function listLocatedSecretRefs(
   value: unknown,
   defaults: Parameters<typeof parseSecretRef>[1],

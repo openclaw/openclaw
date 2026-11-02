@@ -2,7 +2,12 @@ import { publishTranscriptUpdate } from "../../../config/sessions/session-access
 import { appendExpectedSessionTranscriptTurn } from "../../../config/sessions/session-accessor.sqlite-transcript-turn.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
-import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
+import {
+  getRpcSourceForGateway,
+  getRpcSourceIdentity,
+  getRpcSourceLifecycleGeneration,
+} from "../../../sessions/session-controller.rpc-sources.js";
 import { withClientVoiceSessionSettlement } from "../../../talk/client-voice-session-lifecycle.js";
 import type { ClientVoiceSessionSource } from "../../../talk/client-voice-session-source.js";
 import { registerClientVoiceConsultRun } from "../../../talk/client-voice-session.js";
@@ -13,6 +18,7 @@ import {
   prepareTalkAgentConsultTranscript,
 } from "../agent-consult-transcript.js";
 import type { TalkAgentConsultRequest } from "../client-agent-consult.types.js";
+import { isTalkConsultSourceCurrent } from "../run-ownership.js";
 import {
   hasRelayAgentRunRegistrations,
   type RelayAgentRun,
@@ -93,24 +99,41 @@ export function createRelayAgentRunRegistration(
       previous?.sessionKey === params.sessionKey
         ? previous
         : { runId: params.runId, sessionKey: params.sessionKey };
-    const chat = session.context.chatAbortControllers.get(params.runId);
-    const chatGeneration = chat?.lifecycleGeneration;
+    const controllerTarget = captureSessionTarget({
+      storeScope: session.sessionTarget.storePath,
+      sessionKey: session.sessionTarget.canonicalKey,
+      agentId: session.sessionTarget.agentId,
+    });
+    const chat = getRpcSourceForGateway(
+      params.runId,
+      session.context.resolveGatewayContext,
+      controllerTarget,
+    );
+    const chatSessionId = chat && getRpcSourceIdentity(chat).sessionId;
+    const chatGeneration = chat && getRpcSourceLifecycleGeneration(chat);
     let installed = false;
     let transcriptSession: { sessionId: string; lifecycleRevision?: string } | undefined;
     const ownsSlot = () =>
       callId
         ? session.activeAgentToolCalls.get(callId) === registration
         : run.standalone === registration;
-    const ownsChat = () =>
-      session.context.chatAbortControllers.get(params.runId) === chat &&
-      (!chat ||
-        (!chat.controller.signal.aborted &&
-          chat.registrationCleanupRequested !== true &&
-          chat.lifecycleGeneration === chatGeneration &&
-          (chatGeneration === undefined ||
-            isAgentEventLifecycleGenerationCurrent(chatGeneration))));
-    const isCurrent = () =>
-      ownsChat() && session.activeAgentRuns.get(params.runId) === run && ownsSlot();
+    const ownsChat = (phase: "active" | "completion" = "active") =>
+      chat && chatSessionId
+        ? isTalkConsultSourceCurrent({
+            entry: chat,
+            connectionId: params.connId,
+            sessionId: chatSessionId,
+            sessionKey: params.sessionKey,
+            lifecycleGeneration: chatGeneration,
+            phase,
+          })
+        : getRpcSourceForGateway(
+            params.runId,
+            session.context.resolveGatewayContext,
+            controllerTarget,
+          ) === undefined;
+    const isCurrent = (phase: "active" | "completion" = "active") =>
+      ownsChat(phase) && session.activeAgentRuns.get(params.runId) === run && ownsSlot();
     const canReleaseVoice = () =>
       isCurrent() && !hasRelayAgentRunRegistrations(session, run, registration);
     const release = () => {
@@ -200,11 +223,16 @@ export function createRelayAgentRunRegistration(
         if (
           (canReleaseVoice() || uninstalled) &&
           chat &&
-          session.context.chatAbortControllers.get(params.runId) === chat
+          getRpcSourceForGateway(
+            params.runId,
+            session.context.resolveGatewayContext,
+            controllerTarget,
+          ) === chat
         ) {
           abortChatRunById(session.context, {
             runId: params.runId,
             sessionKey: params.sessionKey,
+            expectedEntry: chat,
             stopReason: "voice session binding failed",
           });
         }

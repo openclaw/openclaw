@@ -7,7 +7,7 @@ import type {
 } from "./device-pairing-read.types.js";
 import { readCachedDevicePairingStoreSnapshot } from "./device-pairing-store-cache.js";
 import {
-  readDevicePairingStoreStateFromDatabase,
+  readDevicePairingStoreSnapshotFromDatabase,
   readDeviceBootstrapTokenRecordsFromDatabase,
   type DevicePairingStoreState,
 } from "./device-pairing-store.js";
@@ -21,8 +21,13 @@ export function executeDevicePairingRead(
   path: string,
   command: DevicePairingReadCommand,
 ): DevicePairingReadReply {
-  const { state, revision } = readCachedDevicePairingStoreSnapshot(db, path, () =>
-    readDevicePairingStoreStateFromDatabase(db),
+  const lookupDeviceId =
+    command.type === "devicePairing.lookup" ? command.deviceId.trim() : undefined;
+  const { state, revision } = readCachedDevicePairingStoreSnapshot(
+    db,
+    path,
+    () => readDevicePairingStoreSnapshotFromDatabase(db, lookupDeviceId),
+    lookupDeviceId,
   );
   const common = { ok: true as const, sourceAdmitted: true as const, revision };
   if (command.type === "devicePairing.lookup") {

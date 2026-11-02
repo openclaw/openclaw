@@ -8,7 +8,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import type { EngineConnection } from "../../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import type {
   DB as StateDatabase,
   WorkerInferenceTurns,
@@ -74,17 +74,6 @@ function parseTerminalJson(value: string): WorkerInferenceTerminalOutcome {
   return parsed;
 }
 
-function serializeTerminalOutcome(outcome: WorkerInferenceTerminalOutcome): string {
-  if (!validateWorkerInferenceTerminalOutcome(outcome)) {
-    throw new Error("Worker inference terminal outcome is invalid");
-  }
-  const serialized = JSON.stringify(outcome);
-  if (!serialized) {
-    throw new Error("Worker inference terminal outcome is not serializable");
-  }
-  return serialized;
-}
-
 /** The shared-state worker supplies the already-admitted transaction connection. */
 export function createWorkerInferenceStoreKernel(options: {
   db: EngineConnection;
@@ -127,6 +116,7 @@ export function createWorkerInferenceStoreKernel(options: {
 
   const pruneTerminalTurns = (nowMs: number, preserve?: WorkerInferenceTurnIdentity): void => {
     const utf8 =
+      isPostgresSqlConnection(db) ||
       executeSqliteQueryTakeFirstSync(db, query.selectFrom("pragma_encoding").select("encoding"))
         ?.encoding === "UTF-8";
     const retained = query
@@ -232,7 +222,7 @@ export function createWorkerInferenceStoreKernel(options: {
     rawInput: WorkerInferenceTurnInput & { outcome: WorkerInferenceTerminalOutcome },
   ): WorkerInferenceTerminalOutcome => {
     const input = normalizeInput(rawInput, now());
-    const terminalJson = serializeTerminalOutcome(rawInput.outcome);
+    const terminalJson = JSON.stringify(rawInput.outcome);
     const existing = classifyTurn(input);
     if (!existing) {
       throw new Error("Worker inference turn must begin before terminal completion");
@@ -268,7 +258,7 @@ export function createWorkerInferenceStoreKernel(options: {
     },
   ): void => {
     const nowMs = nonNegativeInteger(now(), "timestamp");
-    const terminalJson = serializeTerminalOutcome(params.outcome);
+    const terminalJson = JSON.stringify(params.outcome);
     const identity = {
       environmentId: required(params.environmentId, "environment id"),
       sessionId: required(params.sessionId, "session id"),
@@ -291,7 +281,7 @@ export function createWorkerInferenceStoreKernel(options: {
 
   const recoverPending = (outcome: WorkerInferenceTerminalOutcome): void => {
     const nowMs = nonNegativeInteger(now(), "timestamp");
-    const terminalJson = serializeTerminalOutcome(outcome);
+    const terminalJson = JSON.stringify(outcome);
     executeSqliteQuerySync(db, terminalUpdate(terminalJson, nowMs).where("state", "=", "pending"));
     pruneTerminalTurns(nowMs);
   };

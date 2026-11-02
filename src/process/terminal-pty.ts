@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import {
   materializeWindowsSpawnProgram,
@@ -6,7 +7,9 @@ import {
   resolveWindowsSpawnProgram,
 } from "../plugin-sdk/windows-spawn.js";
 import { signalPtySessionTree } from "./kill-tree.js";
+import { getAgentExecCgroup, type ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import { resolvePtyTerminalName, setPtyTerminalName } from "./pty-terminal-name.js";
+import { getSpawnBroker } from "./spawn-broker/context.js";
 import { prepareChildProcessSpawnRecorder } from "./spawn-diagnostics.js";
 import type { SpawnInitiation } from "./spawn-initiation.js";
 import {
@@ -46,38 +49,8 @@ function resolveTerminalNodeExecutable(env: NodeJS.ProcessEnv): string {
   );
 }
 
-function resolveTerminalPtyInvocation(params: {
-  file: string;
-  args: string[];
-  env: NodeJS.ProcessEnv;
-}): { file: string; args: string[] | string } {
-  if (!isWindowsBatchCommand(params.file)) {
-    return { file: params.file, args: params.args };
-  }
-  const program = resolveWindowsSpawnProgram({
-    command: params.file,
-    platform: process.platform,
-    env: params.env,
-    execPath: process.execPath,
-    allowShellFallback: true,
-  });
-  if (program.resolution !== "shell-fallback") {
-    const invocation = materializeWindowsSpawnProgram(
-      program.resolution === "node-entrypoint"
-        ? { ...program, command: resolveTerminalNodeExecutable(params.env) }
-        : program,
-      params.args,
-    );
-    return { file: invocation.command, args: invocation.argv };
-  }
-  return {
-    file: resolveEnvironmentValue(params.env, "COMSPEC")?.trim() || resolveTrustedWindowsCmdExe(),
-    // node-pty preserves string tails verbatim; arrays would escape the prepared cmd quotes again.
-    args: `/d /s /c ${buildWindowsCmdExeCommandLine(params.file, params.args)}`,
-  };
-}
-
 export type TerminalPtySpawnParams = {
+  executionIntent?: ProcessExecutionIntent;
   file: string;
   args: string[];
   cwd?: string;
@@ -109,9 +82,19 @@ export async function spawnTerminalPty(
       throw new Error("PTY construction aborted");
     }
   };
-  if (process.versions.bun && process.platform !== "win32" && !bunTerminalHasFlowControl()) {
+  assertCurrent();
+  const needsNodeFlowControl =
+    process.versions.bun && process.platform !== "win32" && !bunTerminalHasFlowControl();
+  const execCgroup = params.executionIntent === "agent-tool" ? getAgentExecCgroup() : undefined;
+  const canIsolate = execCgroup && (needsNodeFlowControl || resolveNodeRuntimeExecutable());
+  if (execCgroup && !canIsolate) {
+    process.emitWarning(
+      "Agent exec isolation is partial: Node is unavailable for the terminal helper; native PTY commands remain in the Gateway cgroup. Add node to PATH to isolate them.",
+    );
+  }
+  if (getSpawnBroker() || canIsolate || needsNodeFlowControl) {
     const recordSpawn = prepareChildProcessSpawnRecorder(params.file, params.args);
-    // Stock Bun lacks read backpressure; the fork shipping pause also fixes macOS wait4 deadlocks.
+    // The broker launches the existing helper, which owns PTY I/O and exec cgroup placement.
     const { spawnNodeTerminalPty } = await import("./terminal-pty-node.js");
     assertCurrent();
     const pty = await spawnNodeTerminalPty(params, assertCurrent, lifecycle?.initiateSpawn);
@@ -154,11 +137,35 @@ export async function prepareTerminalPty(
     };
   }
   const { spawn } = await import("@lydell/node-pty");
-  const invocation = resolveTerminalPtyInvocation({
-    file: params.file,
-    args: params.args,
-    env: env ?? process.env,
-  });
+  const { file, args } = params;
+  const invocationEnv = env ?? process.env;
+  const invocation = ((): { file: string; args: string[] | string } => {
+    if (!isWindowsBatchCommand(file)) {
+      return { file, args };
+    }
+    const program = resolveWindowsSpawnProgram({
+      command: file,
+      platform: process.platform,
+      env: invocationEnv,
+      execPath: process.execPath,
+      allowShellFallback: true,
+    });
+    if (program.resolution !== "shell-fallback") {
+      const resolvedInvocation = materializeWindowsSpawnProgram(
+        program.resolution === "node-entrypoint"
+          ? { ...program, command: resolveTerminalNodeExecutable(invocationEnv) }
+          : program,
+        args,
+      );
+      return { file: resolvedInvocation.command, args: resolvedInvocation.argv };
+    }
+    return {
+      file:
+        resolveEnvironmentValue(invocationEnv, "COMSPEC")?.trim() || resolveTrustedWindowsCmdExe(),
+      // node-pty preserves string tails verbatim; arrays would escape the prepared cmd quotes again.
+      args: `/d /s /c ${buildWindowsCmdExeCommandLine(file, args)}`,
+    };
+  })();
   return () => {
     const pty = spawn(invocation.file, invocation.args, {
       name: terminalName,

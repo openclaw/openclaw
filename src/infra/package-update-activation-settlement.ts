@@ -29,6 +29,7 @@ import {
 import {
   assertPackageIntegritySettlementUnchanged,
   createPackageIntegrityReader,
+  packageIntegrityMatches,
   packageStatUnchanged,
 } from "./package-update-integrity.js";
 
@@ -78,9 +79,12 @@ export function inspectRemountedPackagePublication(
     // does not authorize accepting a replacement inode.
     const previous = entry.previousIdentity;
     const historical =
-      previous && previous.split(":")[1] === current?.split(":")[1]
+      (selected === "candidate"
+        ? record.publications.find((published) => published.name === entry.name)?.identity
+        : undefined) ??
+      (previous && previous.split(":")[1] === current?.split(":")[1]
         ? previous
-        : entry.candidateIdentity;
+        : entry.candidateIdentity);
     if (
       selected === "candidate" &&
       historical === previous &&
@@ -140,7 +144,10 @@ export async function verifyPackagePublicationSettlement(
     );
     assertCurrent();
     remount.assertUnchanged();
-    if (!isDeepStrictEqual(tree, { ...expectedTree, identity: installedIdentity })) {
+    if (
+      !("digest" in expectedTree) ||
+      !packageIntegrityMatches({ ...expectedTree, identity: installedIdentity }, tree)
+    ) {
       throw new Error(`Package settlement full ${selected} fingerprint changed.`);
     }
     assertTreeUnchanged = () => assertPackageIntegritySettlementUnchanged(tree);

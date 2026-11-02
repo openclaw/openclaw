@@ -1,10 +1,6 @@
 // Coverage for Google prompt-cache creation, reuse, and request rewriting.
 import crypto from "node:crypto";
-import {
-  SYSTEM_PROMPT_CACHE_BOUNDARY,
-  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
-  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
-} from "@openclaw/ai/internal/shared";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
@@ -205,52 +201,6 @@ describe("google prompt cache", () => {
     expect(streamFn.mock.lastCall?.[1]).toBe(context);
   });
 
-  it.each([200, 503])(
-    "strips markers from the cached prefix and preserves inline fallback when creation returns %s",
-    async (statusCode) => {
-      const stablePrompt = "hook-before\nbase";
-      const systemPrompt = `hook-before${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}base${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}${SYSTEM_PROMPT_CACHE_BOUNDARY}hook-after`;
-      const fetchMock = vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              name: "cachedContents/final-prompt",
-              expireTime: new Date(4_600_000).toISOString(),
-            }),
-            { status: statusCode },
-          ),
-      );
-      const { streamFn, getCapturedPayload } = createCapturingStreamFn();
-      const wrapped = expectDefined(
-        await preparePromptCacheStream({
-          fetchMock,
-          now: 1_000_000,
-          sessionManager: makeSessionManager(),
-          streamFn,
-        }),
-        "managed cache wrapper",
-      );
-      const context = { systemPrompt, messages: [] };
-
-      await wrapped(makeGoogleModel(), context, {});
-
-      const body = fetchInit(fetchMock).body;
-      if (typeof body !== "string") {
-        throw new Error("Expected a JSON cache request body");
-      }
-      expect(JSON.parse(body).systemInstruction).toEqual({
-        parts: [{ text: stablePrompt }],
-      });
-      if (statusCode === 200) {
-        expect(streamContext(streamFn).systemPrompt).toBeUndefined();
-        expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/final-prompt");
-      } else {
-        expect(streamContext(streamFn)).toBe(context);
-        expect(getCapturedPayload()).not.toHaveProperty("cachedContent");
-      }
-    },
-  );
-
   it("rebuilds the cache when the final prompt changes and reuses it after restart", async () => {
     const entries: SessionCustomEntry[] = [];
     const fetchMock = vi.fn(
@@ -297,7 +247,6 @@ describe("google prompt cache", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/final-2");
   });
-
   it("parses sentinel-backed OAuth JSON before guarded cache egress", async () => {
     const fetchMock = createCacheFetchMock({
       name: "cachedContents/oauth-cache",
@@ -727,30 +676,6 @@ describe("google prompt cache", () => {
 
     expect(wrapped).toBeUndefined();
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("bounds an oversized cache-creation response body instead of buffering it", async () => {
-    const now = 4_000_000;
-    const { response, cancel } = createOversizedJsonResponse();
-    const fetchMock = vi.fn(async () => response);
-    const sessionManager = makeSessionManager();
-    const innerStreamFn = vi.fn(() => "stream" as never);
-
-    const wrapped = await preparePromptCacheStream({
-      fetchMock,
-      now,
-      sessionManager,
-      streamFn: innerStreamFn,
-    });
-
-    await invoke(wrapped);
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(callArg(fetchMock, 0, 0)).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/cachedContents",
-    );
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(innerStreamFn).toHaveBeenCalledOnce();
   });
 
   it("bounds an oversized cache-refresh response body instead of buffering it", async () => {

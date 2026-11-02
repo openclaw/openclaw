@@ -2,7 +2,9 @@ import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import { loadDiscordThreadBindingsManagerModule } from "./channel.loaders.js";
 import {
+  setThreadBindingIdleTimeoutBySessionKey,
   setThreadBindingIdleTimeoutBySessionKeyAsync,
+  setThreadBindingMaxAgeBySessionKey,
   setThreadBindingMaxAgeBySessionKeyAsync,
 } from "./monitor/thread-bindings.session-updates.js";
 import { defaultTopLevelPlacement } from "./thread-binding-api.js";
@@ -15,10 +17,9 @@ function toConversationLifecycleBinding(binding: {
 }) {
   return {
     boundAt: binding.boundAt,
-    lastActivityAt:
-      typeof binding.lastActivityAt === "number" ? binding.lastActivityAt : binding.boundAt,
-    idleTimeoutMs: typeof binding.idleTimeoutMs === "number" ? binding.idleTimeoutMs : undefined,
-    maxAgeMs: typeof binding.maxAgeMs === "number" ? binding.maxAgeMs : undefined,
+    lastActivityAt: binding.lastActivityAt ?? binding.boundAt,
+    idleTimeoutMs: binding.idleTimeoutMs,
+    maxAgeMs: binding.maxAgeMs,
   };
 }
 
@@ -35,6 +36,17 @@ export const discordConversationBindings: NonNullable<
       persist: false,
       enableSweeper: false,
     }),
+  // Released synchronous runtime setters dispatch here through 2026-12-31.
+  setIdleTimeoutBySessionKey: (params) =>
+    setThreadBindingIdleTimeoutBySessionKey({
+      ...params,
+      accountId: params.accountId ?? undefined,
+    }).map(toConversationLifecycleBinding),
+  setMaxAgeBySessionKey: (params) =>
+    setThreadBindingMaxAgeBySessionKey({
+      ...params,
+      accountId: params.accountId ?? undefined,
+    }).map(toConversationLifecycleBinding),
   setIdleTimeoutBySessionKeyAsync: async (params) =>
     (
       await setThreadBindingIdleTimeoutBySessionKeyAsync({

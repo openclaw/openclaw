@@ -14,6 +14,9 @@ export function projectSessionMetadata(
     agentId: instance.agentId,
     sessionId: instance.sessionId,
     sessionKey: instance.sessionKey,
+    ...(instance.provenanceKnown && instance.entry.pluginOwnerId
+      ? { pluginOwnerId: instance.entry.pluginOwnerId }
+      : {}),
     resolution: "live",
     ...instance.sourceMetadata,
     participants,

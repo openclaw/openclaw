@@ -66,6 +66,7 @@ export function withSessionCleanupStore<T>(
         read: async (fixMissing = false) => {
           assertCurrent();
           const snapshot = await reader.readCleanup({
+            target,
             env: database.env,
             expectedIdentity: identity && { ...identity, canonicalPath: database.path },
             continuation,
@@ -156,7 +157,7 @@ async function withMemorySessionCleanupStore<T>(
           }
         }
       }
-      return { kind: "session-cleanup", store, missing };
+      return { kind: "session-cleanup", store, missing, retainedArtifactPaths: [] };
     },
   });
 }

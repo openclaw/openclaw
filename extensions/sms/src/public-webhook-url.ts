@@ -1,4 +1,3 @@
-// Sms public webhook URL validation is shared by startup diagnostics and Twilio callbacks.
 import { isIP } from "node:net";
 import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 

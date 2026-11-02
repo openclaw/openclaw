@@ -2,11 +2,13 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   resolveOpenAIRequestReasoning,
   streamSimple,
+  type AssistantMessage,
   type ToolCall,
 } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   normalizeOpenAICompatibleReasoningReplay,
+  mapAssistantMessageStream,
   streamWithPayloadPatch,
   transformProviderStreamMessages,
 } from "openclaw/plugin-sdk/provider-stream-shared";
@@ -16,7 +18,11 @@ import {
   isRecord,
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isKimiK3ModelId, KIMI_K3_THINKING_EFFORTS } from "./provider-policy-api.js";
+import {
+  isKimiCodeEnabledOnlyModelId,
+  isKimiK3ModelId,
+  KIMI_K3_THINKING_EFFORTS,
+} from "./provider-policy-api.js";
 
 const TOOL_CALLS_SECTION_BEGIN = "<|tool_calls_section_begin|>";
 const TOOL_CALLS_SECTION_END = "<|tool_calls_section_end|>";
@@ -175,20 +181,11 @@ function parseKimiTaggedToolCalls(text: string): ToolCall[] | null {
   return toolCalls.length > 0 ? toolCalls : null;
 }
 
-function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
-  const record = asOptionalObjectRecord(message);
-  if (!record || !Array.isArray(record.content)) {
-    return;
-  }
-
+function rewriteKimiTaggedToolCallsInMessage(message: AssistantMessage): void {
   let changed = false;
-  const nextContent: unknown[] = [];
-  for (const block of record.content) {
-    const typedBlock = asOptionalObjectRecord(block);
-    const parsed =
-      typedBlock?.type === "text" && typeof typedBlock.text === "string"
-        ? parseKimiTaggedToolCalls(typedBlock.text)
-        : null;
+  const nextContent: AssistantMessage["content"] = [];
+  for (const block of message.content) {
+    const parsed = block.type === "text" ? parseKimiTaggedToolCalls(block.text) : null;
     if (!parsed) {
       nextContent.push(block);
       continue;
@@ -202,23 +199,10 @@ function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
     return;
   }
 
-  record.content = nextContent;
-  if (record.stopReason === "stop") {
-    record.stopReason = "toolUse";
+  message.content = nextContent;
+  if (message.stopReason === "stop") {
+    message.stopReason = "toolUse";
   }
-}
-
-function createKimiToolCallMarkupWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    const maybeStream = underlying(model, context, options);
-    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) =>
-        transformProviderStreamMessages(stream, rewriteKimiTaggedToolCallsInMessage),
-      );
-    }
-    return transformProviderStreamMessages(maybeStream, rewriteKimiTaggedToolCallsInMessage);
-  };
 }
 
 export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
@@ -232,12 +216,20 @@ export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): Stream
       ctx.extraParams?.chatTemplateKwargs,
   );
   const underlying = ctx.streamFn ?? streamSimple;
-  return createKimiToolCallMarkupWrapper((model, context, options) => {
+  return (model, context, options) => {
     const api = ctx.sourceApi ?? model.api;
     const anthropic = api === "anthropic-messages";
     const k3 = anthropic && isKimiK3ModelId(model.id);
     const openaiK3 = api === "openai-completions" && isKimiK3ModelId(model.id);
-    const thinkingLevel = options?.reasoning ?? ctx.thinkingLevel ?? (k3 ? "high" : undefined);
+    const requestedLevel = options?.reasoning ?? ctx.thinkingLevel ?? (k3 ? "high" : undefined);
+    const thinkingLevel =
+      anthropic &&
+      isKimiCodeEnabledOnlyModelId(model.id) &&
+      (!requestedLevel || requestedLevel === "off")
+        ? k3
+          ? "high"
+          : "low"
+        : requestedLevel;
     const thinkingConfig = resolveKimiThinkingConfig(configured, thinkingLevel);
     const enabledLevel =
       thinkingLevel && thinkingLevel !== "off" ? thinkingLevel : k3 || openaiK3 ? "high" : "low";
@@ -254,7 +246,7 @@ export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): Stream
       : openaiK3
         ? { ...model, thinkingLevelMap: { ...KIMI_K3_THINKING_EFFORTS, ...model.thinkingLevelMap } }
         : model;
-    return streamWithPayloadPatch(
+    const stream = streamWithPayloadPatch(
       underlying,
       runtimeModel,
       context,
@@ -304,7 +296,10 @@ export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): Stream
         }
       },
     );
-  });
+    return mapAssistantMessageStream(stream, (resolved) =>
+      transformProviderStreamMessages(resolved, rewriteKimiTaggedToolCallsInMessage),
+    );
+  };
 }
 
 function stripContentArrayCacheControl(value: unknown): void {

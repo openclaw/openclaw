@@ -6,6 +6,7 @@ import {
   assertSandboxRegistryGenerationCurrent,
   rowToBrowserEntry,
   rowToContainerEntry,
+  sameSandboxRegistryGeneration,
 } from "./registry.kernel.js";
 import type { SandboxBrowserRegistryEntry, SandboxRegistryEntry } from "./registry.types.js";
 
@@ -26,7 +27,7 @@ function factsFor(identity: string): Facts {
 
 sandboxRegistryPublication.subscribeFacts((change) => {
   if ("kind" in change) {
-    if (change.kind === "unknown" || (change.kind === "settled" && change.outcome === "unknown")) {
+    if (change.kind === "unknown") {
       const facts = databases.get(String(change.identity));
       if (facts) {
         facts.revision++;
@@ -80,12 +81,30 @@ export function captureSandboxRegistryFacts(context: OpenClawStateWorkerContext)
   };
 }
 
-export function assertSandboxRegistryFactsCurrent(entry: Entry, kind: Kind): void {
-  const { admission } = captureOpenClawStateReadWorkerContext();
+function currentFact(
+  entry: Entry,
+  kind: Kind,
+  options: { path?: string; env?: NodeJS.ProcessEnv } = {},
+) {
+  const { admission } = captureOpenClawStateReadWorkerContext(options);
   admission.assertCurrent();
-  const current = databases
-    .get(admission.identity.key)
-    ?.entries.get(keyFor(kind, entry.containerName));
+  return databases.get(admission.identity.key)?.entries.get(keyFor(kind, entry.containerName));
+}
+
+/** Cleanup also accepts an already-removing allocation, but never a different generation. */
+export async function assertSandboxRegistryRetirementCurrent(
+  kind: Kind,
+  entry: Entry,
+  options: { path?: string; env?: NodeJS.ProcessEnv } = {},
+): Promise<void> {
+  const current = currentFact(entry, kind, options);
+  if (!current || !sameSandboxRegistryGeneration(current, entry)) {
+    throw new Error("Sandbox runtime generation changed during retirement");
+  }
+}
+
+export function assertSandboxRegistryFactsCurrent(entry: Entry, kind: Kind): void {
+  const current = currentFact(entry, kind);
   if (kind === "container") {
     assertSandboxRegistryGenerationCurrent(current ?? null, entry);
     return;

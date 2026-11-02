@@ -104,7 +104,8 @@ too.
 
 Outbound `initiate_call`, `voicecall.initiate`, and the CLI accept an optional
 `brief`. It applies only to that call and reaches both the voice model and its
-agent consult. The opening `message` stays the first verbatim spoken line.
+agent consult. Supply `brief.task` for the ongoing errand; the opening `message`
+stays the first verbatim spoken line.
 
 Every brief field is optional:
 
@@ -119,6 +120,11 @@ Every brief field is optional:
 | `voicemailMessage`   | Exact message to leave when voicemail is detected.                                 |
 | `successCriteria`    | What counts as completing the task.                                                |
 | `maxDurationSeconds` | Positive integer override, capped by plugin `maxDurationSeconds`.                  |
+
+For realtime transcription, a recognized two-letter language code such as `cs`
+also supplies the input-language hint. Regional tags such as `cs-CZ` use their
+base language. Free-form descriptions remain voice instructions only; they are
+not sent as transcription language codes.
 
 The encoded brief is limited to 8,000 characters. See the plugin README for
 individual field limits and a plumber booking example. Treat both the brief
@@ -189,6 +195,11 @@ preventing a second message from the model.
 Notify calls wait for detection before playing their opening message to a human
 or their voicemail message to a machine. `onMachine: "hang-up"` ends machine calls immediately.
 The mock provider can simulate detection; other carriers are unchanged.
+
+If detected-call cleanup fails, OpenClaw logs a warning with the affected call ID.
+The failure can come from carrier hangup or local finalization after hangup succeeds.
+Inspect that call's status and logs before retrying; an active local record does not
+necessarily mean the carrier call is still connected.
 
 ### Hangup detection
 
@@ -403,6 +414,7 @@ Runtime behavior:
 - Bundled realtime transcription providers: Deepgram (`deepgram`), ElevenLabs (`elevenlabs`), Mistral (`mistral`), OpenAI (`openai`), and xAI (`xai`), registered by their provider plugins.
 - Provider-owned raw config lives under `streaming.providers.<providerId>`.
 - After Twilio sends an accepted stream `start` message, Voice Call registers the stream immediately, queues inbound media through the transcription provider while the provider connects, and starts the initial greeting only after realtime transcription is ready.
+- Frames with non-string audio payloads, playback-mark names, or start identifiers and tokens are discarded before dispatch. Valid base64 and base64url audio continue normally on the same stream.
 - If `streaming.provider` points at an unregistered provider, or none is registered, Voice Call logs a warning and skips media streaming instead of failing the whole plugin.
 
 ### Streaming provider examples

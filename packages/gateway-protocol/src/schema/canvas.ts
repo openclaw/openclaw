@@ -1,9 +1,10 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { CANVAS_DOCUMENT_PREVIEW_MAX_BYTES, WIDGET_HTML_MAX_UTF8_BYTES } from "../canvas-limits.js";
 import { closedObject } from "./closed-object.js";
+import { NonEmptyString } from "./primitives.js";
 
-export const CANVAS_DOCUMENT_PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
-export const WIDGET_HTML_MAX_UTF8_BYTES = 10 * 1024 * 1024;
+export { CANVAS_DOCUMENT_PREVIEW_MAX_BYTES, WIDGET_HTML_MAX_UTF8_BYTES } from "../canvas-limits.js";
 
 export const CanvasDocumentPreviewParamsSchema = closedObject({
   html: Type.String({
@@ -14,6 +15,7 @@ export const CanvasDocumentPreviewParamsSchema = closedObject({
 
 export const CanvasDocumentViewParamsSchema = closedObject({
   docId: Type.String({ minLength: 1, maxLength: 256, pattern: "^(?!\\.{1,2}$)[A-Za-z0-9._-]+$" }),
+  sessionKey: Type.Optional(NonEmptyString),
 });
 
 export const CanvasDocumentViewResultSchema = closedObject({

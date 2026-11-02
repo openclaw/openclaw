@@ -1,7 +1,7 @@
 import { expect, it, vi, type Mock } from "vitest";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 
-export type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unknown>;
+type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unknown>;
 export type GatewayLoopParams = {
   start: GatewayLoopStart;
   beginBoot?: (startedAtMs: number) => Promise<void> | void;

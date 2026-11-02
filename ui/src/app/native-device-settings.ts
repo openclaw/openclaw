@@ -4,6 +4,7 @@ import {
   type NodePermissionRequest,
 } from "../../../packages/gateway-protocol/src/node-permissions.js";
 import { registerListener } from "../../../src/shared/listeners.js";
+import { listen } from "../lib/reactive/listener.ts";
 import {
   nativeChromeExtensionSetupActionSchema,
   nativeChromeExtensionSetupResultSchema,
@@ -254,12 +255,15 @@ const legacyChromeStatusResultSchema = legacyChromeInstallResultSchema.required(
 
 export type NativeDeviceSettingsCapability = {
   readonly snapshot: NativeDeviceSettingsSnapshot | null;
+  /** First accepted snapshot, or null when this capability retires before one arrives. */
+  readonly initialSnapshot: Promise<NativeDeviceSettingsSnapshot | null>;
   subscribe(listener: (snapshot: NativeDeviceSettingsSnapshot) => void): () => void;
+  /** Settles after reply publication or retirement; edit failures use the callback. */
   set(
     key: SettingKey,
     value: boolean | string | string[] | null,
     onSettled?: (error?: Error) => void,
-  ): void;
+  ): Promise<void>;
   requestPermission(id: PermissionId): void;
   openSystemSettings(id: PermissionId): void;
   resolvePermission?: (this: void, request: NodePermissionRequest) => Promise<void>;
@@ -304,7 +308,13 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     nativeWindow["__OPENCLAW_NATIVE_DEVICE_SETTINGS__"],
   );
   let snapshot = initial.success ? initial.data : null;
+  const initialSnapshot = Promise.withResolvers<NativeDeviceSettingsSnapshot | null>();
+  if (snapshot) {
+    initialSnapshot.resolve(snapshot);
+  }
   let disposed = false;
+  // Retiring the host releases awaiting presenters without publishing another snapshot.
+  const pendingRequests = new Set<() => void>();
   const isCurrent = () =>
     !disposed &&
     nativeWindow.webkit?.messageHandlers?.openclawDeviceSettings === handler &&
@@ -312,12 +322,14 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
   const listeners = new Set<(snapshot: NativeDeviceSettingsSnapshot) => void>();
   const acceptSnapshot = (next: NativeDeviceSettingsSnapshot) => {
     if (
-      snapshot?.revision !== undefined &&
-      (next.revision === undefined || next.revision <= snapshot.revision)
+      disposed ||
+      (snapshot?.revision !== undefined &&
+        (next.revision === undefined || next.revision <= snapshot.revision))
     ) {
       return false;
     }
     snapshot = next;
+    initialSnapshot.resolve(next);
     return true;
   };
   const onChange = (event: Event) => {
@@ -334,9 +346,14 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     message: NativeDeviceSettingsMessage,
     onSettled?: (error?: Error) => void,
   ) => {
+    if (disposed) {
+      return;
+    }
     let failure: Error | undefined;
+    const { promise, resolve } = Promise.withResolvers<void>();
+    pendingRequests.add(resolve);
     try {
-      const reply = await post(message);
+      const reply = await Promise.race([post(message), promise]);
       if (disposed) {
         return;
       }
@@ -350,6 +367,8 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     } catch (error) {
       failure = error instanceof Error ? error : new Error(String(error));
       console.warn("Native device settings request failed", error);
+    } finally {
+      pendingRequests.delete(resolve);
     }
     if (!disposed && message.type === "set") {
       // Clear the originating draft before notifying whichever page is now mounted.
@@ -362,8 +381,7 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
   };
   // System Settings can change permissions while the app is backgrounded.
   const refresh = () => void send({ type: "status" });
-  window.addEventListener(CHANGE_EVENT, onChange);
-  window.addEventListener("focus", refresh);
+  const stops = [listen(window, CHANGE_EVENT, onChange), listen(window, "focus", refresh)];
   refresh();
   const legacyChromeRequest = async (
     type: "chrome-extension-status" | "install-chrome-extension",
@@ -396,11 +414,12 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     }
   };
   return {
+    initialSnapshot: initialSnapshot.promise,
     get snapshot() {
       return snapshot;
     },
     subscribe: (listener) => registerListener(listeners, listener),
-    set: (key, value, onSettled) => void send({ type: "set", key, value }, onSettled),
+    set: (key, value, onSettled) => send({ type: "set", key, value }, onSettled),
     requestPermission: (id) => void send({ type: "request-permission", id }),
     openSystemSettings: (id) => void send({ type: "open-system-settings", id }),
     get resolvePermission() {
@@ -442,8 +461,10 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     refresh,
     dispose() {
       disposed = true;
-      window.removeEventListener(CHANGE_EVENT, onChange);
-      window.removeEventListener("focus", refresh);
+      initialSnapshot.resolve(null);
+      pendingRequests.forEach((stop) => stop());
+      pendingRequests.clear();
+      stops.forEach((stop) => stop());
       listeners.clear();
     },
   };

@@ -10,8 +10,11 @@ import {
   prepareCodexAppServerProcessRegistration,
   waitForCodexAppServerProcessRegistrationCleanup,
 } from "./transport-process-registration.js";
-import { RegistrationTestChildProcess } from "./transport-process-registration.test-support.js";
 import { readCodexAppServerProcessSnapshot } from "./transport-process-snapshot.js";
+import {
+  createRegistrationChild,
+  registrationStoreOptions,
+} from "./transport-registration-fixtures.test-support.js";
 
 const procfs = vi.hoisted(() => {
   const files = new Map<string, string | Error | (() => string)>();
@@ -29,36 +32,13 @@ const procfs = vi.hoisted(() => {
 });
 vi.mock("node:fs/promises", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs/promises")>();
+  const { createProcfsFixture } = await import("./transport-procfs.test-support.js");
   return {
     ...original,
-    readFile: (...args: Parameters<typeof original.readFile>) => {
-      const file = args[0];
-      if (typeof file !== "string" || !file.startsWith("/proc/")) {
-        return original.readFile(...args);
-      }
-      return Promise.resolve().then(() => procfs.readFile(file));
-    },
-    readdir: (...args: Parameters<typeof original.readdir>) =>
-      args[0] === "/proc"
-        ? Promise.resolve(
-            [...procfs.files.keys()].flatMap(
-              (file) => /^\/proc\/(\d+)\/stat$/.exec(file)?.[1] ?? [],
-            ),
-          )
-        : original.readdir(...args),
+    ...createProcfsFixture(original, procfs.readFile, () =>
+      [...procfs.files.keys()].flatMap((file) => /^\/proc\/(\d+)\/stat$/.exec(file)?.[1] ?? []),
+    ),
   };
-});
-
-vi.mock("node:fs", async (importOriginal) => {
-  const original = await importOriginal<typeof import("node:fs")>();
-  const { createProcfsSyncFixture } = await import("./transport-procfs.test-support.js");
-  return { ...original, ...createProcfsSyncFixture(original, procfs.readFile) };
-});
-
-vi.mock("node:child_process", async (importOriginal) => {
-  const original = await importOriginal<typeof import("node:child_process")>();
-  const { createProcfsCommandFixture } = await import("./transport-procfs.test-support.js");
-  return { ...original, execFile: createProcfsCommandFixture(original, procfs.readFile) };
 });
 
 const bootId = "00000000-0000-0000-0000-000000000001";
@@ -68,33 +48,31 @@ const child = identity(500002);
 const neighbor = 500003;
 const command = "/opt/codex app-server --listen stdio://";
 const commandFingerprint = createHash("sha256").update(command).digest("hex");
+const registration = { parent, child: { ...child, commandFingerprint } };
+const procFile = (pid: number, name = "stat") => `/proc/${pid}/${name}`;
+const inspectionError = (code: string) => Object.assign(new Error("inspection failed"), { code });
+
+function failStat(pid: number, code: string) {
+  procfs.files.set(procFile(pid), inspectionError(code));
+}
 
 function addProcess(pid: number, ppid: number, state = "S", threads = 1) {
   procfs.files.set(
-    `/proc/${pid}/stat`,
+    procFile(pid),
     `${pid} (worker) ${state} ${ppid} ${pid}${" 0".repeat(14)} ${threads} 0 12345\n`,
   );
-  procfs.files.set(`/proc/${pid}/cmdline`, command.replaceAll(" ", "\0"));
+  procfs.files.set(procFile(pid, "cmdline"), command.replaceAll(" ", "\0"));
 }
 
-describe("Codex registration procfs boundary", () => {
-  let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
-  let store: ReturnType<
-    typeof createPluginStateSyncKeyedStore<{
-      parent: ReturnType<typeof identity>;
-      child: ReturnType<typeof identity> & { commandFingerprint: string };
-    }>
-  >;
-  let kill: MockInstance<typeof process.kill>;
+let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
+let store: ReturnType<typeof createPluginStateSyncKeyedStore<typeof registration>>;
+let kill: MockInstance<typeof process.kill>;
 
+// Real SQLite workers and procfs inspection must observe the same native platform.
+describe.skipIf(process.platform !== "linux")("Codex procfs registration", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ prefix: "codex-registration-procfs-" });
-    store = createPluginStateSyncKeyedStore("codex", {
-      namespace: "app-server-processes",
-      maxEntries: 512,
-      overflowPolicy: "reject-new",
-    });
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    store = createPluginStateSyncKeyedStore("codex", registrationStoreOptions);
     // Synthetic PIDs must never reach the real signal syscall, even on regression.
     kill = vi.spyOn(process, "kill").mockImplementation(() => {
       throw new Error("unexpected signal");
@@ -103,10 +81,7 @@ describe("Codex registration procfs boundary", () => {
     addProcess(process.pid, process.ppid);
     addProcess(parent.pid, 1);
     addProcess(child.pid, parent.pid);
-    procfs.files.set(
-      `/proc/${neighbor}/stat`,
-      Object.assign(new Error("unreadable neighbor"), { code: "EACCES" }),
-    );
+    failStat(neighbor, "EACCES");
   });
 
   afterEach(async () => {
@@ -116,84 +91,66 @@ describe("Codex registration procfs boundary", () => {
     await state.cleanup();
   });
 
-  it("preserves a threaded zombie owner's registration despite an unreadable unrelated process", async () => {
-    const registration = { parent, child: { ...child, commandFingerprint } };
+  it.each([
+    { code: "threaded-owner", reason: undefined },
+    { code: "EIO", reason: "unavailable" },
+    { code: "EACCES", reason: "permission" },
+  ])("preserves the registration when the owner is $code", async ({ code, reason }) => {
     store.register("owned", registration);
-    addProcess(parent.pid, 1, "Z", 2);
-
-    await expect(
-      Promise.all([
-        prepareCodexAppServerProcessRegistration(),
-        prepareCodexAppServerProcessRegistration(),
-      ]),
-    ).resolves.toHaveLength(2);
-
+    if (reason) {
+      failStat(parent.pid, code);
+      await expect(prepareCodexAppServerProcessRegistration()).rejects.toMatchObject({ reason });
+    } else {
+      addProcess(parent.pid, 1, "Z", 2);
+      await expect(
+        Promise.all(Array.from({ length: 2 }, () => prepareCodexAppServerProcessRegistration())),
+      ).resolves.toHaveLength(2);
+    }
     expect(store.lookup("owned")).toEqual(registration);
     expect(kill).not.toHaveBeenCalled();
   });
 
   it.for([
-    "startup",
-    "slow-inspection",
-    "exhausted-inspection",
-    "malformed",
-    "deadline",
-    "missing-observer",
+    { mode: "startup", delayMs: 0, reason: undefined },
+    { mode: "slow-inspection", delayMs: 3_000, reason: undefined },
+    { mode: "exhausted-inspection", delayMs: 6_000, reason: "deadline" },
+    { mode: "malformed", delayMs: 0, reason: "unavailable" },
+    { mode: "deadline", delayMs: 0, reason: "deadline" },
+    { mode: "missing-observer", delayMs: 0, reason: "unavailable" },
   ])(
-    "registers a direct child despite an unreadable unrelated process only with usable ownership: %s",
-    async (mode, ctx) => {
+    "registers a direct child only with usable ownership: $mode",
+    async ({ mode, delayMs, reason }, ctx) => {
       addProcess(child.pid, process.pid);
-      const spawned = new RegistrationTestChildProcess(child.pid);
-      ctx.onTestFinished(() => {
-        spawned.stdin.destroy();
-        spawned.stdout.destroy();
-        spawned.stderr.destroy();
-        spawned.removeAllListeners();
-      });
+      const spawned = createRegistrationChild(ctx, child.pid);
       const register = await prepareCodexAppServerProcessRegistration();
-      if (mode.startsWith("slow-") || mode === "exhausted-inspection") {
+      if (delayMs || mode === "startup") {
         let now = performance.now();
-        vi.spyOn(performance, "now").mockImplementation(() => now);
-        const delayMs = mode === "exhausted-inspection" ? 6_000 : 3_000;
-        procfs.files.set("/proc/sys/kernel/random/boot_id", () => {
-          now += delayMs;
-          return bootId;
-        });
-        procfs.files.set(`/proc/${child.pid}/cmdline`, () => {
-          expect(store.entries()).toEqual([]);
-          now += delayMs;
-          return command.replaceAll(" ", "\0");
-        });
-      } else if (mode === "startup") {
         let reads = 0;
-        procfs.files.set(`/proc/${child.pid}/cmdline`, () => {
+        if (delayMs) {
+          vi.spyOn(performance, "now").mockImplementation(() => now);
+          procfs.files.set("/proc/sys/kernel/random/boot_id", () => {
+            now += delayMs;
+            return bootId;
+          });
+        }
+        procfs.files.set(procFile(child.pid, "cmdline"), () => {
           expect(store.entries()).toEqual([]);
-          return reads++ === 0 ? "" : command.replaceAll(" ", "\0");
+          now += delayMs;
+          return mode === "startup" && reads++ === 0 ? "" : command.replaceAll(" ", "\0");
         });
       } else if (mode === "missing-observer") {
-        procfs.files.delete(`/proc/${process.pid}/stat`);
+        procfs.files.delete(procFile(process.pid));
       } else {
         procfs.files.set(
-          `/proc/${child.pid}/stat`,
-          mode === "malformed"
-            ? ""
-            : Object.assign(new Error("child inspection failed"), {
-                code: mode === "deadline" ? "ABORT_ERR" : "EACCES",
-              }),
+          procFile(child.pid),
+          mode === "malformed" ? "" : inspectionError("ABORT_ERR"),
         );
       }
       const registered = register(spawned);
       spawned.emit("spawn");
 
-      if (mode !== "startup" && mode !== "slow-inspection") {
-        await expect(registered).rejects.toMatchObject({
-          reason:
-            mode === "exhausted-inspection"
-              ? "deadline"
-              : mode === "deadline"
-                ? "deadline"
-                : "unavailable",
-        });
+      if (reason) {
+        await expect(registered).rejects.toMatchObject({ reason });
         expect(store.entries()).toEqual([]);
         expect(kill).not.toHaveBeenCalled();
         return;
@@ -207,25 +164,6 @@ describe("Codex registration procfs boundary", () => {
       spawned.emit("exit", 0, null);
       await waitForCodexAppServerProcessRegistrationCleanup(spawned);
       expect(store.entries()).toEqual([]);
-    },
-  );
-
-  it.each([
-    { code: "EIO", reason: "unavailable" },
-    { code: "EACCES", reason: "permission" },
-  ])(
-    "retains registrations when required identity inspection fails with $code",
-    async ({ code, reason }) => {
-      const registration = { parent, child: { ...child, commandFingerprint } };
-      store.register("owned", registration);
-      procfs.files.set(
-        `/proc/${parent.pid}/stat`,
-        Object.assign(new Error("required inspection failed"), { code }),
-      );
-
-      await expect(prepareCodexAppServerProcessRegistration()).rejects.toMatchObject({ reason });
-      expect(store.lookup("owned")).toEqual(registration);
-      expect(kill).not.toHaveBeenCalled();
     },
   );
 
@@ -273,38 +211,30 @@ describe("Codex registration procfs boundary", () => {
     },
   );
 
-  it("retires a verified dead identity despite an unreadable unrelated process", async () => {
-    store.register("orphan", { parent, child: { ...child, commandFingerprint } });
-    procfs.files.delete(`/proc/${parent.pid}/stat`);
-    addProcess(child.pid, 1, "Z");
-
+  it.for(["already dead", "killed"])("retires an orphan that is %s", async (mode) => {
+    store.register("orphan", registration);
+    procfs.files.delete(procFile(parent.pid));
+    addProcess(child.pid, 1, mode === "already dead" ? "Z" : "S");
+    if (mode === "killed") {
+      procfs.files.delete(procFile(neighbor));
+      kill.mockImplementation((pid, signal) => {
+        if (pid === child.pid && signal === "SIGSTOP") {
+          addProcess(child.pid, 1, "T");
+        } else if (pid === -child.pid && signal === "SIGKILL") {
+          procfs.files.delete(procFile(child.pid));
+          failStat(neighbor, "EACCES");
+        } else {
+          throw new Error("unexpected signal");
+        }
+        return true;
+      });
+    }
     await expect(prepareCodexAppServerProcessRegistration()).resolves.toBeTypeOf("function");
-    expect(store.lookup("orphan")).toBeUndefined();
-    expect(kill).not.toHaveBeenCalled();
-  });
-
-  it("confirms an orphan's exit without rereading unrelated processes after containment", async () => {
-    store.register("orphan", { parent, child: { ...child, commandFingerprint } });
-    procfs.files.delete(`/proc/${parent.pid}/stat`);
-    addProcess(child.pid, 1);
-    procfs.files.delete(`/proc/${neighbor}/stat`);
-    kill.mockImplementation((pid, signal) => {
-      if (pid === child.pid && signal === "SIGSTOP") {
-        addProcess(child.pid, 1, "T");
-      } else if (pid === -child.pid && signal === "SIGKILL") {
-        procfs.files.delete(`/proc/${child.pid}/stat`);
-        procfs.files.set(
-          `/proc/${neighbor}/stat`,
-          Object.assign(new Error("unreadable neighbor"), { code: "EACCES" }),
-        );
-      } else {
-        throw new Error("unexpected signal");
-      }
-      return true;
-    });
-
-    await expect(prepareCodexAppServerProcessRegistration()).resolves.toBeTypeOf("function");
-    expect(kill).toHaveBeenCalledWith(-child.pid, "SIGKILL");
+    if (mode === "killed") {
+      expect(kill).toHaveBeenCalledWith(-child.pid, "SIGKILL");
+    } else {
+      expect(kill).not.toHaveBeenCalled();
+    }
     expect(store.lookup("orphan")).toBeUndefined();
   });
 });

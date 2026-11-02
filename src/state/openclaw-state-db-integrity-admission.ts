@@ -27,6 +27,7 @@ export type OpenClawStateIntegrityPolicy = "verify" | "require-proof";
 
 const integrityKey: SqliteDatabaseAdmissionKey<true> = {
   name: "state.integrity",
+  lifetime: "process",
   read: (value) => (value === true ? true : undefined),
 };
 
@@ -143,7 +144,7 @@ export function assertOpenClawStateRuntimeIntegrity(
   };
   return () => {
     if (database.isTransaction) {
-      stageSqliteTransactionState(database, { stage() {}, rollback() {}, commit: publish });
+      stageSqliteTransactionState(database, { commit: publish });
     } else {
       publish();
     }

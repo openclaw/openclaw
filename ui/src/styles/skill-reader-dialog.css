@@ -1,0 +1,82 @@
+/* Use the same card and ghost close control as Connect machine and confirmations. */
+.exec-approval-card.skill-reader-dialog {
+  --skill-reader-inset: var(--space-5);
+
+  height: fit-content;
+  min-height: 0;
+  max-height: var(--openclaw-modal-height-limit);
+  padding: 0;
+  overflow: hidden;
+}
+
+.skill-reader-dialog .exec-approval-header {
+  flex-shrink: 0;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--skill-reader-inset);
+  border-bottom: 1px solid var(--border);
+}
+
+.skill-reader-dialog .exec-approval-header > .btn--icon {
+  min-width: var(--space-7);
+  height: var(--space-7);
+  padding: 0;
+}
+
+.skill-reader-dialog .exec-approval-header .clawhub-skill-icon {
+  width: var(--space-7);
+  height: var(--space-7);
+  flex-basis: var(--space-7);
+}
+
+.skill-reader-dialog .exec-approval-header > :first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.skill-reader-dialog .btn--icon,
+.skill-reader-dialog .statusDot {
+  flex-shrink: 0;
+}
+
+.skill-reader-dialog__body {
+  flex: 0 1 auto;
+  min-height: 0;
+  align-content: start;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--skill-reader-inset);
+}
+
+.skill-reader-dialog__actions {
+  flex-shrink: 0;
+  margin-top: 0;
+  padding: var(--space-3) var(--skill-reader-inset);
+  border-top: 1px solid var(--border);
+}
+
+.skill-reader-dialog__body > p {
+  margin: 0;
+}
+
+.skill-reader-dialog__error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+.skill-reader-dialog__error > [aria-hidden] {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.skill-reader-dialog__error svg {
+  width: var(--space-5);
+  height: var(--space-5);
+}
+
+@media (max-width: 768px) {
+  .exec-approval-card.skill-reader-dialog {
+    --skill-reader-inset: var(--space-4);
+  }
+}

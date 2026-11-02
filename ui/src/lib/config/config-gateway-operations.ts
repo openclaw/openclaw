@@ -1,7 +1,8 @@
 import { ErrorCodes, isGatewayProtocolResponseError } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err as failure, ok, type Result } from "@openclaw/normalization-core/result";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
@@ -21,19 +22,15 @@ import {
   type ConfigWriteAck,
   type ConfigPatchAck,
 } from "./config-draft-model.ts";
+import { loadConfigSnapshot, refreshConfigSnapshotAfterMutation } from "./config-gateway-read.ts";
 import {
   configMutationFailure,
   isDefinitiveConfigMutationRejection,
 } from "./config-mutation-error.ts";
 import {
-  beginConfigRead,
-  currentConfigRead,
   currentConfigConnectionEpoch,
   isCurrentConfigConnection,
-  isCurrentRequest,
-  nextRequestVersion,
   resolveEditableSnapshotConfig,
-  type ConfigRead,
   type ConfigGatewayClient,
   type LoadConfigOptions,
   type RuntimeConfigState,
@@ -101,10 +98,6 @@ export type RuntimeConfigExternalMutationOptions<T = unknown> = {
   configWriteAck?: (value: T) => ConfigPatchAck;
 };
 
-type RuntimeConfigDispatchOptions = {
-  canDispatch?: () => boolean;
-};
-
 export type ConfigMethod =
   | "config.set"
   | "config.apply"
@@ -123,7 +116,7 @@ export type ConfigWriteCoordinator = {
   setWritesSuspended: (suspended: boolean, refreshAdmission?: () => Promise<void>) => void;
   waitForPendingWrites: () => Promise<void>;
   flushFormChanges: () => Promise<boolean>;
-  save: (options?: RuntimeConfigDispatchOptions) => Promise<boolean>;
+  save: (options?: { canDispatch?: () => boolean }) => Promise<boolean>;
   retry: () => Promise<boolean>;
   apply: () => Promise<boolean>;
   stageDefaultAgent: (agentId: string) => boolean;
@@ -231,9 +224,12 @@ export async function executeConfigExternalMutation<T>(
     if (!refreshed.ok) {
       return refreshFailure(refreshed.error);
     }
-    if (receipt?.noop === true) {
-      // A no-op has no write revision. Reconcile only the source admitted by
-      // the read owner, without invalidating its successors as a new write.
+    if (
+      receipt?.noop === true ||
+      (!receipt && state.configFormMode === "form" && state.configFormDirty)
+    ) {
+      // Refresh-only mutations have no write receipt. Reconcile Form edits
+      // against the admitted source; overlapping changes still conflict.
       const snapshot = state.configSnapshot;
       const config = resolveEditableSnapshotConfig(snapshot);
       if (!config || !snapshot?.hash) {
@@ -262,141 +258,38 @@ type ConfigLoadOptions = LoadConfigOptions & {
   draftWrites?: Pick<ConfigWriteCoordinator, "hasUnacknowledgedDraftWrite" | "applySnapshot">;
 };
 
-function startConfigLoad(
-  state: RuntimeConfigState,
-  options: ConfigLoadOptions,
-  isCurrentLoad: () => boolean = () => true,
-): ConfigRead | null {
-  const client = state.client;
-  if (!client || !state.connected || !hasOperatorReadAccess(client.auth)) {
-    return null;
-  }
-  const read = beginConfigRead(state, client);
-  void readConfig(state, read, options, isCurrentLoad).then(read.completion.resolve);
-  return read;
-}
-
 export function loadConfig(
   state: RuntimeConfigState,
   options: ConfigLoadOptions = {},
   isCurrentLoad: () => boolean = () => true,
 ): Promise<boolean> {
-  const read = startConfigLoad(state, options, isCurrentLoad);
-  return read ? read.completion.promise.then((result) => result.ok) : Promise.resolve(false);
+  return loadConfigSnapshot(
+    state,
+    {
+      ...options,
+      snapshotOwner: options.draftWrites ?? {
+        hasUnacknowledgedDraftWrite: () => false,
+        applySnapshot: (snapshot, loadOptions) => applyConfigSnapshot(state, snapshot, loadOptions),
+      },
+    },
+    isCurrentLoad,
+  );
 }
 
-export async function refreshConfigAfterMutation(
+export function refreshConfigAfterMutation(
   state: RuntimeConfigState,
   options: ConfigLoadOptions,
 ): Promise<Result<void, string>> {
-  // A generation event can precede the RPC's final commit. Always issue a fresh
-  // read here; only actual later reads can satisfy this mutation's refresh.
-  let read = startConfigLoad(state, options);
-  if (!read) {
-    return failure("Configuration is unavailable; reconnect and try again.");
-  }
-  const { client, connectionEpoch } = read;
-  while (true) {
-    const result = await Promise.race([read.completion.promise, read.invalidated.promise]);
-    if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
-      return failure("Connection changed before the configuration update was refreshed.");
-    }
-    const latest = currentConfigRead(state);
-    if (!latest) {
-      return failure("The configuration refresh was superseded by a configuration write.");
-    }
-    if (latest === read) {
-      return result;
-    }
-    read = latest;
-  }
+  return refreshConfigSnapshotAfterMutation(state, {
+    ...options,
+    snapshotOwner: options.draftWrites ?? {
+      hasUnacknowledgedDraftWrite: () => false,
+      applySnapshot: (snapshot, loadOptions) => applyConfigSnapshot(state, snapshot, loadOptions),
+    },
+  });
 }
 
-async function readConfig(
-  state: RuntimeConfigState,
-  { client, connectionEpoch, version }: ConfigRead,
-  options: ConfigLoadOptions,
-  isCurrentLoad: () => boolean,
-): Promise<Result<void, string>> {
-  const isCurrent = () =>
-    isCurrentLoad() && isCurrentRequest(state, "config", version, client, connectionEpoch);
-  if (!options.background) {
-    state.configLoading = true;
-  }
-  // Foreground reads replace transient errors, but a retained draft conflict still needs resolution.
-  if (
-    !options.draftWrites?.hasUnacknowledgedDraftWrite() &&
-    state.configAutoSaveStatus !== "conflict" &&
-    state.configAutoSaveStatus !== "rejected" &&
-    (!options.background || state.configAutoSaveStatus !== "error")
-  ) {
-    state.lastError = null;
-    state.chatError = null;
-  }
-  try {
-    const res = await client.request<ConfigSnapshot>("config.get", {});
-    if (!isCurrent()) {
-      return failure("The configuration refresh was superseded.");
-    }
-    state.configValid = typeof res.valid === "boolean" ? res.valid : null;
-    state.configIssues = Array.isArray(res.issues) ? res.issues : [];
-    if (res.writeError) {
-      const outcome = configMutationFailure(state, new GatewayRequestError(res.writeError));
-      state.lastError = outcome.message;
-      state.configAutoSaveStatus = "error";
-      return failure(outcome.message);
-    }
-    if (state.configRecoveryError !== null && (!res.exists || !res.valid)) {
-      return failure(state.configRecoveryError);
-    }
-    // Recovery captures the latest intent before a clean draft is replaced.
-    options.beforeApplySnapshot?.();
-    if (!isCurrent()) {
-      return failure("The configuration refresh was superseded.");
-    }
-    if (options.draftWrites) {
-      options.draftWrites.applySnapshot(res, options);
-    } else {
-      applyConfigSnapshot(state, res, options);
-    }
-    // An explicit reload reconciles a clean patch failure. Background applied-revision
-    // polling must leave the rejected intent and its explanation visible.
-    if (
-      !options.background &&
-      !state.configFormDirty &&
-      !options.draftWrites?.hasUnacknowledgedDraftWrite()
-    ) {
-      if (
-        state.configAutoSaveStatus === "error" ||
-        state.configAutoSaveStatus === "conflict" ||
-        state.configAutoSaveStatus === "rejected"
-      ) {
-        state.configAutoSaveStatus = "idle";
-      }
-      state.lastError = null;
-    }
-    return ok(undefined);
-  } catch (error) {
-    if (!isCurrent()) {
-      return failure("The configuration refresh was superseded.");
-    }
-    const outcome = configMutationFailure(state, error);
-    state.lastError = outcome.message;
-    if (
-      state.configAutoSaveStatus === "rejected" ||
-      options.draftWrites?.hasUnacknowledgedDraftWrite()
-    ) {
-      state.configAutoSaveStatus = "error";
-    }
-    return failure(outcome.message);
-  } finally {
-    if (isCurrentRequest(state, "config", version, client, connectionEpoch)) {
-      state.configLoading = false;
-    }
-  }
-}
-
-export async function loadConfigSchema(state: RuntimeConfigState) {
+export async function loadConfigSchema(state: RuntimeConfigState): Promise<Result<void, string>> {
   const client = state.client;
   if (
     !client ||
@@ -404,28 +297,30 @@ export async function loadConfigSchema(state: RuntimeConfigState) {
     state.configSchemaLoading ||
     !hasOperatorReadAccess(client.auth)
   ) {
-    return;
+    return ok(undefined);
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
-  const version = nextRequestVersion(state, "schema");
   state.configSchemaLoading = true;
   try {
     const res = await client.request<ConfigSchemaResponse>("config.schema", {});
-    if (!isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
-      return;
+    if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
+      return failure("The schema refresh was superseded.");
     }
     state.configSchema = res.schema ?? null;
     state.configUiHints = res.uiHints ?? {};
     state.configSchemaVersion = res.version ?? null;
+    return ok(undefined);
   } catch (err) {
-    if (isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
-      state.lastError = formatUiError(err);
+    const message = formatUiError(err);
+    if (isCurrentConfigConnection(state, client, connectionEpoch)) {
+      state.lastError = message;
       if (state.configAutoSaveStatus === "rejected") {
         state.configAutoSaveStatus = "error";
       }
     }
+    return failure(message);
   } finally {
-    if (isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
+    if (isCurrentConfigConnection(state, client, connectionEpoch)) {
       state.configSchemaLoading = false;
     }
   }

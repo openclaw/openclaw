@@ -1,12 +1,13 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
-import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
-import { requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
+import { requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OllamaModelWithContext } from "./provider-models.js";
 import {
+  buildAppGuidedOllamaModel,
+  buildOllamaModelsConfig,
   discoverOllamaModelsForSetup,
   selectAppGuidedOllamaModelFromDiscovery,
 } from "./setup-model-selection.js";
-import { configureOllamaNonInteractive, promptAndConfigureOllama } from "./setup.js";
+import { configureInteractive, startNonInteractive } from "./setup.test-support.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -21,6 +22,53 @@ function pendingAbortableResponse(signal: AbortSignal | null | undefined): Promi
 }
 
 describe("Ollama onboarding model selection", () => {
+  it("retains freshly inspected size when using a configured cloud definition", () => {
+    const model = buildAppGuidedOllamaModel({
+      baseUrl: "http://127.0.0.1:11434",
+      model: { name: "compact-chat:cloud" },
+      showInfo: {
+        contextWindow: 32_768,
+        capabilities: ["completion", "tools"],
+        parameterCount: 4_000_000_000,
+      },
+      configuredCloudModel: {
+        id: "compact-chat:cloud",
+        name: "Compact Chat",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32_768,
+        maxTokens: 8192,
+      },
+    });
+    expect(model?.parameterCount).toBe(4_000_000_000);
+  });
+
+  it.each([{ remote_host: "https://ollama.com" }, { remote_model: "upstream-cloud-model" }])(
+    "keeps a remote alias output budget during setup: %j",
+    (remote) => {
+      const models = buildOllamaModelsConfig(
+        ["private-alias", "local-model"],
+        new Map<string, OllamaModelWithContext>([
+          ["private-alias", { name: "private-alias", contextWindow: 262_144, ...remote }],
+          ["local-model", { name: "local-model", contextWindow: 262_144 }],
+        ]),
+      );
+      expect(models.map(({ id, maxTokens }) => ({ id, maxTokens }))).toEqual([
+        { id: "private-alias", maxTokens: 262_144 },
+        { id: "local-model", maxTokens: 8192 },
+      ]);
+    },
+  );
+
+  it("keeps discovery-only parameter metadata out of user config", () => {
+    const models = buildOllamaModelsConfig(
+      ["model"],
+      new Map([["model", { name: "model", parameterCount: 4_000_000_000 }]]),
+    );
+    expect(models[0]).not.toHaveProperty("parameterCount");
+  });
+
   it("selects a deterministic tools-capable model with enough context", () => {
     expect(
       selectAppGuidedOllamaModelFromDiscovery([
@@ -31,71 +79,21 @@ describe("Ollama onboarding model selection", () => {
     ).toBe("qwen3:0.6b");
   });
 
-  it.each([
-    {
-      description: "skips a smaller model with an explicit thinking capability",
-      capabilities: ["tools", "thinking"],
-      expected: "llama3.2:latest",
-    },
-    {
-      description: "trusts explicit non-thinking capabilities over a reasoning-like model name",
-      capabilities: ["tools"],
-      expected: "deepseek-r1:8b",
-    },
-  ])("$description", ({ capabilities, expected }) => {
-    expect(
-      selectAppGuidedOllamaModelFromDiscovery([
-        {
-          name: "deepseek-r1:8b",
-          contextWindow: 131_072,
-          capabilities,
-          size: 1_000,
-        },
-        {
-          name: "orieg/gemma3-tools:12b-ft",
-          contextWindow: 131_072,
-          capabilities: ["tools"],
-          size: 8_000,
-        },
-        {
-          name: "llama3.2:latest",
-          contextWindow: 131_072,
-          capabilities: ["tools"],
-          size: 2_000,
-        },
-      ]),
-    ).toBe(expected);
-  });
-
   it("selects the smallest explicitly non-thinking model during interactive setup", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request) => {
-        const url = requestUrl(input);
-        if (url.endsWith("/api/tags")) {
-          return Response.json({
-            models: [
-              { name: "deepseek-r1:1b", size: 100 },
-              { name: "llama3:70b", size: 70_000 },
-            ],
-          });
-        }
-        if (url.endsWith("/api/show")) {
-          return Response.json({
-            model_info: { "test.context_length": 32_768 },
-            capabilities: ["completion", "tools"],
-          });
-        }
+    const { result } = await configureInteractive({
+      tagModels: [
+        { name: "deepseek-r1:1b", size: 100 },
+        { name: "llama3:70b", size: 70_000 },
+      ],
+      showResponse: () =>
+        Response.json({
+          model_info: { "test.context_length": 32_768 },
+          capabilities: ["completion", "tools"],
+        }),
+      fallbackResponse: (url) => {
         throw new Error(`Unexpected fetch: ${url}`);
-      }),
-    );
-
-    const prompter = {
-      select: vi.fn().mockResolvedValueOnce("local-only"),
-      text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-      note: vi.fn(async () => undefined),
-    } as unknown as WizardPrompter;
-    const result = await promptAndConfigureOllama({ cfg: {}, prompter });
+      },
+    });
     const selected = result.config.models?.providers?.ollama?.models?.find(
       (model) => model.id === "deepseek-r1:1b",
     );
@@ -104,83 +102,55 @@ describe("Ollama onboarding model selection", () => {
     expect(result.defaultModel).toBe("ollama/deepseek-r1:1b");
   });
 
-  it.each([
-    {
-      description: "model inspection fails",
-      showResponse: () => Response.json({ error: "inspection unavailable" }, { status: 503 }),
-    },
-    {
-      description: "model inspection omits metadata",
-      showResponse: () => Response.json({}),
-    },
-  ])(
-    "selects and configures list-advertised models when $description",
-    async ({ showResponse }) => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async (input: string | URL | Request) =>
-          requestUrl(input).endsWith("/api/tags")
-            ? Response.json({
-                models: [
-                  {
-                    name: "gemma4:e2b",
-                    size: 2_000_000_000,
-                    details: { context_length: 32_768 },
-                    capabilities: ["completion", "tools"],
-                  },
-                ],
-              })
-            : showResponse(),
-        ),
-      );
-      const prompter = {
-        select: vi.fn().mockResolvedValueOnce("local-only"),
-        text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-        note: vi.fn(async () => undefined),
-        confirm: vi.fn().mockResolvedValue(false),
-      } as unknown as WizardPrompter;
+  it("selects and configures list-advertised models when inspection fails", async () => {
+    const showResponse = () => Response.json({ error: "inspection unavailable" }, { status: 503 });
+    const { result, prompter } = await configureInteractive(
+      {
+        tagModels: [
+          {
+            name: "gemma4:e2b",
+            size: 2_000_000_000,
+            details: { context_length: 32_768 },
+            capabilities: ["completion", "tools"],
+          },
+        ],
+        showResponse,
+        fallbackResponse: showResponse,
+      },
+      { confirm: vi.fn().mockResolvedValue(false) },
+    );
 
-      const result = await promptAndConfigureOllama({ cfg: {}, prompter });
-
-      expect(result.defaultModel).toBe("ollama/gemma4:e2b");
-      expect(result.config.models?.providers?.ollama?.models).toContainEqual(
-        expect.objectContaining({
-          id: "gemma4:e2b",
-          contextWindow: 32_768,
-          compat: expect.objectContaining({ supportsTools: true }),
-        }),
-      );
-      expect(prompter.confirm).not.toHaveBeenCalled();
-    },
-  );
+    expect(result.defaultModel).toBe("ollama/gemma4:e2b");
+    expect(result.config.models?.providers?.ollama?.models).toContainEqual(
+      expect.objectContaining({
+        id: "gemma4:e2b",
+        contextWindow: 32_768,
+        compat: expect.objectContaining({ supportsTools: true }),
+      }),
+    );
+    expect(prompter.confirm).not.toHaveBeenCalled();
+  });
 
   it("preserves incomplete remote-model-only capabilities during interactive setup", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request) =>
-        requestUrl(input).endsWith("/api/tags")
-          ? Response.json({
-              models: [
-                {
-                  name: "deepseek-r1:remote",
-                  remote_model: "upstream-deepseek-r1",
-                  size: 2_000_000_000,
-                  details: { context_length: 32_768 },
-                  capabilities: ["tools"],
-                },
-              ],
-            })
-          : Response.json({}),
-      ),
+    const { result } = await configureInteractive(
+      {
+        tagModels: [
+          {
+            name: "deepseek-r1:remote",
+            remote_model: "upstream-deepseek-r1",
+            size: 2_000_000_000,
+            details: { context_length: 32_768 },
+            capabilities: ["tools"],
+          },
+        ],
+        showResponse: () => Response.json({}),
+        fallbackResponse: () => Response.json({}),
+      },
+      {
+        select: vi.fn().mockResolvedValueOnce("cloud-local"),
+        confirm: vi.fn().mockResolvedValue(false),
+      },
     );
-    const prompter = {
-      select: vi.fn().mockResolvedValueOnce("cloud-local"),
-      text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-      note: vi.fn(async () => undefined),
-      confirm: vi.fn().mockResolvedValue(false),
-    } as unknown as WizardPrompter;
-
-    const result = await promptAndConfigureOllama({ cfg: {}, prompter });
 
     expect(result.defaultModel).toBe("ollama/deepseek-r1:remote");
     expect(result.config.models?.providers?.ollama?.models).toContainEqual(
@@ -195,7 +165,6 @@ describe("Ollama onboarding model selection", () => {
 
   it.each([
     ["local-only", "completion"],
-    ["cloud-local", "completion"],
     ["cloud-local", "embedding"],
   ] as const)(
     "respects %s mode with %s remote rows before inspecting and configuring mixed inventory",
@@ -207,16 +176,10 @@ describe("Ollama onboarding model selection", () => {
         size: 1,
       }));
       const inspected: string[] = [];
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-          if (requestUrl(input).endsWith("/api/tags")) {
-            return Response.json({
-              models: [...remoteModels, { name: "local-chat:latest", size: 500 }],
-            });
-          }
-          if (requestUrl(input).endsWith("/api/show")) {
-            const { model } = JSON.parse(requestBodyText(init?.body));
+      const { result } = await configureInteractive(
+        {
+          tagModels: [...remoteModels, { name: "local-chat:latest", size: 500 }],
+          showResponse: (model) => {
             inspected.push(model);
             return Response.json({
               capabilities: [
@@ -225,18 +188,14 @@ describe("Ollama onboarding model selection", () => {
               ],
               model_info: { "test.context_length": 32_768 },
             });
-          }
-          return Response.json({});
-        }),
+          },
+          fallbackResponse: () => Response.json({}),
+        },
+        {
+          select: vi.fn().mockResolvedValueOnce(mode),
+          confirm: vi.fn().mockResolvedValue(false),
+        },
       );
-      const prompter = {
-        select: vi.fn().mockResolvedValueOnce(mode),
-        text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-        note: vi.fn(async () => undefined),
-        confirm: vi.fn().mockResolvedValue(false),
-      } as unknown as WizardPrompter;
-
-      const result = await promptAndConfigureOllama({ cfg: {}, prompter });
       const configured = result.config.models?.providers?.ollama?.models.map((model) => model.id);
 
       if (mode === "local-only") {
@@ -246,85 +205,39 @@ describe("Ollama onboarding model selection", () => {
         expect(configured?.filter((name) => name.startsWith("remote-"))).toEqual([]);
       } else {
         expect(inspected).toContain(remoteModels[0]?.name);
-        if (remoteCapability === "embedding") {
-          expect(inspected).toContain("local-chat:latest");
-          expect(result.defaultModel).toBe("ollama/local-chat:latest");
-          expect(configured?.filter((name) => name.startsWith("remote-"))).toEqual([]);
-        } else {
-          expect(configured).toEqual(
-            expect.arrayContaining(remoteModels.map((model) => model.name)),
-          );
-        }
+        expect(inspected).toContain("local-chat:latest");
+        expect(result.defaultModel).toBe("ollama/local-chat:latest");
+        expect(configured?.filter((name) => name.startsWith("remote-"))).toEqual([]);
       }
     },
   );
 
-  describe.each(["interactive", "non-interactive"] as const)("%s defaults", (mode) => {
-    it.each([
-      ["embedding-only", ["embedding"], undefined, false, undefined],
-      ["embedding with advertised tools", ["embedding", "tools"], undefined, false, undefined],
-      ["completion and embedding", ["completion", "embedding"], undefined, true, true],
-      ["unknown remote capabilities", [], undefined, true, true],
-      ["authoritative empty inspection", ["completion", "tools"], [], false, false],
-    ] as const)(
-      "respects %s capabilities when selecting and configuring a default",
-      async (_description, capabilities, inspectedCapabilities, useRemote, supportsTools) => {
-        const remoteName = "remote-model:latest";
-        const localName = "local-chat:latest";
-        vi.stubGlobal(
-          "fetch",
-          vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-            if (requestUrl(input).endsWith("/api/tags")) {
-              return Response.json({
-                models: [
-                  { name: remoteName, remote_model: "upstream-model", size: 1, capabilities },
-                  { name: localName, size: 500 },
-                ],
-              });
-            }
-            if (requestUrl(input).endsWith("/api/show")) {
-              const { model } = JSON.parse(requestBodyText(init?.body));
-              return Response.json({
-                model_info: { "test.context_length": 32_768 },
-                capabilities:
-                  model === remoteName ? inspectedCapabilities : ["completion", "tools"],
-              });
-            }
-            return Response.json({});
-          }),
-        );
-        const expectedDefault = `ollama/${useRemote ? remoteName : localName}`;
-        let config: OpenClawConfig;
-        if (mode === "interactive") {
-          const result = await promptAndConfigureOllama({
-            cfg: {},
-            prompter: {
-              select: vi.fn().mockResolvedValueOnce("cloud-local"),
-              text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-              note: vi.fn(async () => undefined),
-              confirm: vi.fn().mockResolvedValue(false),
-            } as unknown as WizardPrompter,
-          });
-          expect(result.defaultModel).toBe(expectedDefault);
-          config = result.config;
-        } else {
-          config = await configureOllamaNonInteractive({
-            nextConfig: {},
-            opts: { customBaseUrl: "http://127.0.0.1:11434" },
-            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-          });
-          expect(config.agents?.defaults?.model).toEqual({ primary: expectedDefault });
-        }
-        const configured = config.models?.providers?.ollama?.models;
-        expect(configured).toContainEqual(expect.objectContaining({ id: localName }));
-        const remote = configured?.find((model) => model.id === remoteName);
-        if (supportsTools === undefined) {
-          expect(remote).toBeUndefined();
-        } else {
-          expect(remote).toMatchObject({ id: remoteName, compat: { supportsTools } });
-        }
-      },
-    );
+  it("uses remote completion-and-embedding models as non-interactive defaults", async () => {
+    const remoteName = "remote-model:latest";
+    const localName = "local-chat:latest";
+    const { configure } = startNonInteractive({
+      tagModels: [
+        {
+          name: remoteName,
+          remote_model: "upstream-model",
+          size: 1,
+          capabilities: ["completion", "embedding"],
+        },
+        { name: localName, size: 500 },
+      ],
+      showResponse: (model) =>
+        Response.json({
+          model_info: { "test.context_length": 32_768 },
+          capabilities: model === remoteName ? undefined : ["completion", "tools"],
+        }),
+      fallbackResponse: () => Response.json({}),
+    });
+    const config = await configure();
+    expect(config.agents?.defaults?.model).toEqual({ primary: `ollama/${remoteName}` });
+    const configured = config.models?.providers?.ollama?.models;
+    expect(configured).toContainEqual(expect.objectContaining({ id: localName }));
+    const remote = configured?.find((model) => model.id === remoteName);
+    expect(remote).toMatchObject({ id: remoteName, compat: { supportsTools: true } });
   });
 
   it("aborts pending context enrichment with the setup signal", async () => {

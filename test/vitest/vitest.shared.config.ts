@@ -1,4 +1,5 @@
 // Threads inherit admission; forks also run this bootstrap in their own process.
+import "../helpers/postgres-pool-roots.ts";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,17 +33,6 @@ if (process.versions.bun) {
 }
 
 export type { LocalVitestScheduling };
-
-export const jsdomOptimizedDeps = {
-  optimizer: {
-    client: {
-      enabled: true,
-      // Root and directives must share browser/development internals; native
-      // Node deep imports otherwise mix incompatible private Lit fields.
-      include: ["lit/**"] as string[],
-    },
-  },
-};
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 export const nonIsolatedRunnerPath = path.join(repoRoot, "test", "non-isolated-runner.ts");
@@ -136,6 +126,7 @@ export const sharedVitestConfig = {
     ...controlUiSolidPlugin([
       `${repoRoot.replaceAll("\\", "/")}/ui/**/*.tsx`,
       `${repoRoot.replaceAll("\\", "/")}/extensions/*/browser/**/*.tsx`,
+      `${repoRoot.replaceAll("\\", "/")}/extensions/*/src/control-ui.tsx`,
     ]),
     createStateSchemaInlinePlugin(repoRoot),
     compiledSubprocessesPlugin(),

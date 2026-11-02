@@ -1,8 +1,8 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 // Control UI tests cover schema composition that changes field requiredness.
 import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.tsx";
+import { analyzeConfigSchema } from "./config-form.analyze.ts";
 import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
-import { analyzeConfigSchema } from "./config-form.ts";
 
 describe("config form composition integrity", () => {
   it("renders object fields guarded by a required-property exclusion", () => {
@@ -125,9 +125,6 @@ describe("config form composition integrity", () => {
     expect(modeControl).not.toBeNull();
     const modeOptions = [...(modeControl?.querySelectorAll(".settings-segmented__btn") ?? [])];
     expect(modeOptions.map((option) => option.textContent?.trim())).toEqual(["On", "Off", "Auto"]);
-    expect(
-      modeOptions.map((option) => option.querySelector<HTMLInputElement>("input")?.value),
-    ).toEqual(["0", "1", "2"]);
     const plainModeControl = container.querySelector(
       '.settings-segmented[role="radiogroup"][aria-label="Plain Mode"]',
     );

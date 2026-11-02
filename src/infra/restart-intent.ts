@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 // Persists short-lived gateway restart intent for supervisor SIGTERM handoff.
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { gatewayServiceCommandMatchesRoot } from "../daemon/service-layout.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
@@ -92,10 +93,8 @@ export async function prepareGatewayRestartIntentLegacyProcess(opts: {
 }): Promise<GatewayRestartIntentLegacyProcess | undefined> {
   opts.assertCurrent();
   try {
-    if (
-      readGatewayOwnerLease({ env: opts.env, current: true }) !== undefined ||
-      !existsSync(resolveGatewayLockPaths(opts.env).stateLockPath)
-    ) {
+    const owner = readGatewayOwnerLease({ env: opts.env, current: true });
+    if (owner && owner.state !== "dead") {
       return undefined;
     }
     const pid = asPositiveSafeInteger(opts.runtimePid);
@@ -125,6 +124,34 @@ export async function prepareGatewayRestartIntentLegacyProcess(opts: {
       getFileLockProcessStartTime(pid, opts.env) !== startTime
     ) {
       return undefined;
+    }
+    // Activation can precede publication, leaving no owner or a dead predecessor.
+    // Wait for fresh evidence; an unpublished native PID never authorizes a signal.
+    const deadline = Date.now() + resolveGatewayStartupTiming().deadlineMs;
+    while (true) {
+      const published = readGatewayOwnerLease({ env: opts.env, current: true });
+      if (published && published.state !== "dead") {
+        break;
+      }
+      const legacy = readLegacyGatewayRestartLockSync(opts.env);
+      if (
+        legacy &&
+        !isPidDefinitelyDead(legacy.pid) &&
+        (!published || !isLegacyProcessInService(legacy.pid, pid))
+      ) {
+        break;
+      }
+      opts.assertCurrent();
+      if (
+        Date.now() >= deadline ||
+        !isPidAlive(pid) ||
+        getFileLockProcessStartTime(pid, opts.env) !== startTime
+      ) {
+        return undefined;
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 200);
+      });
     }
     return { pid, startTime };
   } catch {
@@ -286,8 +313,9 @@ export function writeGatewayServiceRestartIntentSync(opts: {
   const written = writeGatewayRestartIntentForTargetSync(
     opts,
     (db) => {
+      let owner: ReturnType<typeof readGatewayOwnerLeaseFromDatabase>;
       try {
-        const owner = readGatewayOwnerLeaseFromDatabase(db);
+        owner = readGatewayOwnerLeaseFromDatabase(db);
         if (owner === undefined) {
           const legacyPid = readLegacyGatewayRestartTargetSync(opts);
           if (legacyPid !== undefined) {
@@ -308,10 +336,8 @@ export function writeGatewayServiceRestartIntentSync(opts: {
         ) {
           return owner.pid;
         }
-      } catch {
-        throw new GatewayRestartPreparationError("serving-owner");
-      }
-      throw new GatewayRestartPreparationError("serving-owner");
+      } catch {}
+      throw new GatewayRestartPreparationError("serving-owner", owner?.host);
     },
     opts.assertCurrent,
   );
@@ -427,7 +453,9 @@ export function clearGatewayRestartIntentSync(
       { env },
       { schemaSql: schema, operationLabel: "gateway.restart-intent.clear" },
     );
-  } catch {}
+  } catch (err) {
+    restartLog.warn(`failed to clear gateway restart intent: ${String(err)}`);
+  }
 }
 
 /** Consume the exact row once, after the shared writer's earlier accepted work. */
@@ -435,11 +463,13 @@ export function prepareGatewayRestartIntentConsumption(
   env: NodeJS.ProcessEnv = process.env,
   now?: number,
   assertCurrent?: () => void,
+  signal?: AbortSignal,
 ): () => Promise<GatewayRestartIntent | null> {
   const source = prepareOpenClawStateReadSource({ path: resolveOpenClawStateSqlitePath(env), env });
   return async () => {
     const context = source.workerContext();
     const check = () => {
+      signal?.throwIfAborted();
       context.admission.assertCurrent();
       assertCurrent?.();
     };
@@ -451,6 +481,7 @@ export function prepareGatewayRestartIntentConsumption(
         (scope) => scope.execute({ type: "restartLifecycle.consumeIntent", input: undefined }),
         {
           existingOnly: true,
+          signal,
           assertCurrent: check,
           createAdmission: () => {
             admission = createSqliteWorkerOperationAdmission((_request, grant) => {

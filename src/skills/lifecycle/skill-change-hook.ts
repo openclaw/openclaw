@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root } from "@openclaw/fs-safe/root";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -65,7 +66,9 @@ async function snapshotCommittedSkillArtifact(params: {
     });
     try {
       const content =
-        portablePath === selectedSkillPath ? await opened.handle.readFile() : undefined;
+        portablePath === selectedSkillPath
+          ? await readFileHandleBounded(opened.handle, Infinity)
+          : undefined;
       const { digest, bytes } = content
         ? { digest: sha256Hex(content), bytes: content.byteLength }
         : await sha256File(opened.handle);

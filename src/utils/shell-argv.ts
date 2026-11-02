@@ -52,9 +52,14 @@ export function hasTopLevelShellControlOperator(raw: string): boolean {
   return false;
 }
 
-/** Splits a shell-like argv string into tokens, returning null for unterminated quotes or escapes. */
-export function splitShellArgs(raw: string): string[] | null {
-  return splitQuotedArgs(raw, "shell");
+type ShellSyntaxOptions = {
+  rejectShellSyntax?: boolean;
+  onUnquotedGlob?: (argvIndex: number) => void;
+};
+
+/** Splits shell-like argv; strict callers can inspect globs instead of rejecting them. */
+export function splitShellArgs(raw: string, options?: ShellSyntaxOptions): string[] | null {
+  return splitQuotedArgs(raw, "shell", false, options);
 }
 
 /** Groups quoted process arguments, preserving literal backslashes and hash characters. */
@@ -74,18 +79,22 @@ function splitQuotedArgs(
   raw: string,
   syntax: "shell" | "command",
   allowUnclosedQuotes = false,
+  options?: ShellSyntaxOptions,
 ): string[] | null {
+  const rejectShellSyntax = options?.rejectShellSyntax;
   const backslashEscapes = syntax === "shell";
   const tokens: string[] = [];
   let buf = "";
   let quote: "'" | '"' | undefined;
   let escaped = false;
+  let wordStarted = false;
 
   const pushToken = () => {
-    if (buf.length > 0) {
+    if (buf.length > 0 || (rejectShellSyntax && wordStarted)) {
       tokens.push(buf);
       buf = "";
     }
+    wordStarted = false;
   };
 
   for (let i = 0; i < raw.length; i += 1) {
@@ -95,8 +104,13 @@ function splitQuotedArgs(
       escaped = false;
       continue;
     }
+    // Continuations can hide an interpreter name from approval operand binding.
+    if (rejectShellSyntax && quote !== "'" && ch === "\\" && /[\r\n]/u.test(raw[i + 1] ?? "")) {
+      return null;
+    }
     if (backslashEscapes && !quote && ch === "\\") {
       escaped = true;
+      wordStarted = true;
       continue;
     }
     if (quote) {
@@ -110,24 +124,46 @@ function splitQuotedArgs(
       if (ch === quote) {
         quote = undefined;
       } else {
+        if (rejectShellSyntax && quote === '"' && (ch === "$" || ch === "`")) {
+          return null;
+        }
         buf += ch;
       }
       continue;
     }
     if (ch === "'" || ch === '"') {
       quote = ch;
+      wordStarted = true;
       continue;
     }
     // In POSIX shells, "#" starts a comment only when it begins a word; keep
     // inline hashes inside tokens so URLs/fragments are not truncated.
-    if (syntax === "shell" && ch === "#" && buf.length === 0) {
+    if (syntax === "shell" && ch === "#" && (rejectShellSyntax ? !wordStarted : buf.length === 0)) {
+      if (rejectShellSyntax) {
+        return null;
+      }
       break;
     }
+    if (rejectShellSyntax && /[*?[]/u.test(ch)) {
+      if (!options?.onUnquotedGlob) {
+        return null;
+      }
+      options.onUnquotedGlob(tokens.length);
+    }
+    if (rejectShellSyntax && /[;&|<>$`\r\n(){}~]/u.test(ch)) {
+      return null;
+    }
     if (/\s/.test(ch)) {
+      // Only space and tab separate POSIX shell words; other whitespace must
+      // not create a comment boundary in strict approval parsing.
+      if (rejectShellSyntax && ch !== " " && ch !== "\t") {
+        return null;
+      }
       pushToken();
       continue;
     }
     buf += ch;
+    wordStarted = true;
   }
 
   if (escaped || (!allowUnclosedQuotes && quote)) {

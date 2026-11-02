@@ -125,7 +125,7 @@ cloud key may not authorize `/api/embed`):
 export OLLAMA_API_KEY='<your-ollama-cloud-api-key>'
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_OLLAMA=1 \
 OPENCLAW_LIVE_OLLAMA_BASE_URL=https://ollama.com \
-OPENCLAW_LIVE_OLLAMA_MODEL=glm-5.1:cloud \
+OPENCLAW_LIVE_OLLAMA_MODEL=glm-5.2:cloud \
 OPENCLAW_LIVE_OLLAMA_WEB_SEARCH=1 \
 pnpm test:live -- extensions/ollama/ollama.live.test.ts
 ```

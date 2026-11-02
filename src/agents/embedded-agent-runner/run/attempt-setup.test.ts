@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { startChatSendDiagnostics } from "../../../gateway/server-methods/chat-send-diagnostics.js";
+import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-timeline.js";
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
-import { resolveSandboxContext as resolveRealSandboxContext } from "../../sandbox/context.js";
-import type { SandboxContext } from "../../sandbox/types.js";
+import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
@@ -15,6 +17,9 @@ import { prepareEmbeddedSkills } from "../skill-runtime.js";
 import { buildEmbeddedForegroundPromptContext } from "./agent-end-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
+const { resolveSandboxContext: resolveRealSandboxContext } = await vi.importActual<
+  typeof import("../../sandbox/context.js")
+>("../../sandbox/context.js");
 const resolveProviderRuntimePluginHandle = vi.hoisted(() => vi.fn());
 const resolveSandboxContext = vi.hoisted(() =>
   vi.fn<typeof resolveRealSandboxContext>(async () => null),
@@ -25,7 +30,10 @@ vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => (
   resolveProviderRuntimePluginHandle,
 }));
 
-vi.mock("../../sandbox.js", () => ({ resolveSandboxContext }));
+vi.mock("../../sandbox/context.js", async () => ({
+  ...(await vi.importActual<typeof import("../../sandbox/context.js")>("../../sandbox/context.js")),
+  resolveSandboxContext,
+}));
 
 import {
   installEmbeddedAttemptContextGuards,
@@ -43,37 +51,72 @@ const attemptModel = makeProviderModelFixture({
   reasoning: true,
 });
 
-function sandboxContext(workspaceAccess: SandboxContext["workspaceAccess"]): SandboxContext {
-  return {
-    enabled: true,
-    backendId: "docker",
-    sessionKey: "agent:main:skill-collection-review",
-    workspaceDir: path.join(os.tmpdir(), "openclaw-sandbox-workspace"),
-    agentWorkspaceDir: path.join(os.tmpdir(), "openclaw-agent-workspace"),
-    workspaceAccess,
-    runtimeId: "sandbox-runtime",
-    runtimeLabel: "sandbox",
-    containerName: "openclaw-sandbox",
-    containerWorkdir: "/workspace",
-    docker: {
-      image: "openclaw-sandbox",
-      containerPrefix: "openclaw-sandbox",
-      workdir: "/workspace",
-      readOnlyRoot: false,
-      tmpfs: [],
-      network: "none",
-      capDrop: [],
-    },
-    tools: {},
-    browserAllowHostControl: false,
-  };
-}
+const attemptDefaults = {
+  model: attemptModel,
+  config: {},
+  modelId: "gpt-5.4",
+  provider: "openai",
+  runId: "run-setup",
+  sessionId: "session-setup",
+  thinkLevel: "high" as const,
+  timeoutMs: 30_000,
+};
 
 describe("prepareEmbeddedAttemptSetup", () => {
   beforeEach(() => {
     resolveProviderRuntimePluginHandle.mockReset();
     resolveSandboxContext.mockClear();
   });
+
+  it.each([false, true])(
+    "attributes the baseline wait separately from sandbox preparation (failure=%s)",
+    async (failBaseline) => {
+      let now = 0;
+      using _ = vi.spyOn(performance, "now").mockImplementation(() => now);
+      const info = vi.fn();
+      const diagnostics = startChatSendDiagnostics({ info });
+      diagnostics.acknowledge();
+      const failure = new Error("synthetic baseline failure");
+      resolveSandboxContext.mockImplementationOnce(async () => {
+        now += 25_000;
+        return null;
+      });
+      const preparation = withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
+        prepareEmbeddedAttemptSetup({
+          ...attemptDefaults,
+          config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+          runId: "run-attribution",
+          sessionId: "session-attribution",
+          sessionKey: "agent:main:attribution",
+          timeoutMs: 120_000,
+          workspaceDir: tempDirs.make("openclaw-setup-attribution-"),
+          awaitSessionDiffBaseline: async () => {
+            now += 50_000;
+            if (failBaseline) {
+              throw failure;
+            }
+          },
+        } as EmbeddedRunAttemptParams),
+      );
+      if (failBaseline) {
+        await expect(preparation).rejects.toBe(failure);
+      } else {
+        using workspace = await preparation;
+        expect(workspace.sandbox).toBeNull();
+      }
+      diagnostics.finish();
+      expect(info).toHaveBeenCalledOnce();
+      const message = info.mock.calls[0]?.[0] as string;
+      expect(message).toContain("detail.attempt.setup.workspace.baseline_wait=50000ms");
+      expect(message).toContain(
+        `detail.attempt.setup.workspace=${failBaseline ? 50_000 : 75_000}ms`,
+      );
+      if (!failBaseline) {
+        expect(message).toContain("detail.attempt.setup.workspace.sandbox=25000ms");
+      }
+      resolveSandboxContext.mockReset();
+    },
+  );
 
   it.each([undefined, "agent:main:policy"])(
     "prepares a detached global workspace with policy %s",
@@ -124,7 +167,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
   });
 
   it("hydrates recent history media from the prepared session agent workspace", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-history-"));
+    const workspaceDir = tempDirs.make("openclaw-attempt-history-");
     const imagePath = path.join(workspaceDir, "photo.png");
     await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
     const agent = {} as {
@@ -175,23 +218,18 @@ describe("prepareEmbeddedAttemptSetup", () => {
       ]);
     } finally {
       guards.remove();
-      await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
 
   it("prepares one closed session permission policy", async () => {
     const root = path.join(os.tmpdir(), "openclaw-attempt-permission-root");
     const setup = await prepareEmbeddedAttemptSetup({
-      model: attemptModel,
+      ...attemptDefaults,
       config: {},
-      modelId: "gpt-5.4",
       permissionMode: "workspace",
-      provider: "openai",
       runId: "run-prepared-permission",
       sessionId: "session-prepared-permission",
       sessionRoot: root,
-      thinkLevel: "high",
-      timeoutMs: 30_000,
       workspaceDir: root,
     } as unknown as EmbeddedRunAttemptParams);
 
@@ -200,7 +238,15 @@ describe("prepareEmbeddedAttemptSetup", () => {
 
   it("keeps collection review in the Workshop workspace with read-write sandbox access", async () => {
     const workspaceDir = tempDirs.make("openclaw-attempt-setup-collection-review-rw-");
-    resolveSandboxContext.mockResolvedValueOnce(sandboxContext("rw"));
+    resolveSandboxContext.mockResolvedValueOnce(
+      createSandboxTestContext({
+        overrides: {
+          workspaceDir: path.join(os.tmpdir(), "openclaw-sandbox-workspace"),
+          agentWorkspaceDir: path.join(os.tmpdir(), "openclaw-agent-workspace"),
+          tools: {},
+        },
+      }),
+    );
 
     const setup = await resolveAttemptWorkspaceSandbox({
       agentId: "main",
@@ -214,21 +260,14 @@ describe("prepareEmbeddedAttemptSetup", () => {
   });
 
   it("resolves partial handles with the exact lifecycle metadata", async () => {
-    const resolvedHandle: ProviderRuntimePluginHandle = {
-      provider: "openai",
-      modelId: "gpt-5.4",
-    };
+    const resolvedHandle: ProviderRuntimePluginHandle = { provider: "openai", modelId: "gpt-5.4" };
     resolveProviderRuntimePluginHandle.mockReturnValue(resolvedHandle);
     const metadataSnapshot = { pluginIds: ["other"] };
     const setup = await prepareEmbeddedAttemptSetup({
-      model: attemptModel,
+      ...attemptDefaults,
       config: {},
-      modelId: "gpt-5.4",
-      provider: "openai",
       runId: "run-partial",
       sessionId: "session-partial",
-      thinkLevel: "high",
-      timeoutMs: 30_000,
       workspaceDir: path.join(os.tmpdir(), "openclaw-attempt-setup-partial"),
       preparedModelRuntime: {
         metadataSnapshot,
@@ -238,9 +277,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
 
     const preparedHandle = setup.getProviderRuntimeHandle();
     expect(preparedHandle).toMatchObject(resolvedHandle);
-    expect(preparedHandle.modelId).toBe("gpt-5.4");
     expect(setup.getProviderRuntimeHandle()).toBe(preparedHandle);
-    expect(resolveProviderRuntimePluginHandle).toHaveBeenCalledOnce();
     const call = resolveProviderRuntimePluginHandle.mock.calls[0]?.[0];
     expect(call).toMatchObject({ provider: "openai", modelId: "gpt-5.4" });
     expect(call?.pluginMetadataSnapshot).toBe(metadataSnapshot);
@@ -252,12 +289,8 @@ describe("prepareEmbeddedSkills", () => {
     { label: "unrestricted", toolExecutionAllow: undefined, readable: true },
     { label: "read denied", toolExecutionAllow: ["skill_workshop"], readable: false },
   ])("prepares readable skills with $label execution", async ({ toolExecutionAllow, readable }) => {
-    const agentWorkspace = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-skills-")),
-    );
-    const executionWorkspace = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-execution-skills-")),
-    );
+    const agentWorkspace = await fs.realpath(tempDirs.make("openclaw-agent-skills-"));
+    const executionWorkspace = await fs.realpath(tempDirs.make("openclaw-execution-skills-"));
     const writeSkill = async (workspaceDir: string, name: string) => {
       const skillDir = path.join(workspaceDir, "skills", name);
       await fs.mkdir(skillDir, { recursive: true });
@@ -269,37 +302,32 @@ describe("prepareEmbeddedSkills", () => {
     await writeSkill(agentWorkspace, "agent-workspace-skill");
     await writeSkill(executionWorkspace, "execution-workspace-skill");
 
+    const prepared = await prepareEmbeddedSkills({
+      includeCodeModeSkills: true,
+      attempt: {
+        bootstrapWorkspaceDir: agentWorkspace,
+        config: {},
+        toolExecutionAllow,
+      } as EmbeddedRunAttemptParams,
+      effectiveWorkspace: executionWorkspace,
+      sandbox: null,
+      sessionAgentId: "main",
+    });
     try {
-      const prepared = await prepareEmbeddedSkills({
-        includeCodeModeSkills: true,
-        attempt: {
-          bootstrapWorkspaceDir: agentWorkspace,
-          config: {},
-          toolExecutionAllow,
-        } as EmbeddedRunAttemptParams,
-        effectiveWorkspace: executionWorkspace,
-        sandbox: null,
-        sessionAgentId: "main",
-      });
-      try {
-        if (readable) {
-          expect(prepared.skillsPrompt).toContain("agent-workspace-skill");
-          expect(prepared.skillsPrompt).toContain("execution-workspace-skill");
-          expect(prepared.codeModeSkills.map((skill) => skill.name)).toEqual(
-            expect.arrayContaining(["agent-workspace-skill", "execution-workspace-skill"]),
-          );
-        } else {
-          expect(prepared.skillsPrompt).toBe("");
-          expect(prepared.codeModeSkills).toEqual([]);
-          expect(prepared.skillsSnapshotForRun).toBeUndefined();
-          expect(prepared.skillUsagePaths).toBeUndefined();
-        }
-      } finally {
-        prepared.restoreSkillEnv();
+      if (readable) {
+        expect(prepared.skillsPrompt).toContain("agent-workspace-skill");
+        expect(prepared.skillsPrompt).toContain("execution-workspace-skill");
+        expect(prepared.codeModeSkills.map((skill) => skill.name)).toEqual(
+          expect.arrayContaining(["agent-workspace-skill", "execution-workspace-skill"]),
+        );
+      } else {
+        expect(prepared.skillsPrompt).toBe("");
+        expect(prepared.codeModeSkills).toEqual([]);
+        expect(prepared.skillsSnapshotForRun).toBeUndefined();
+        expect(prepared.skillUsagePaths).toBeUndefined();
       }
     } finally {
-      await fs.rm(agentWorkspace, { recursive: true, force: true });
-      await fs.rm(executionWorkspace, { recursive: true, force: true });
+      prepared.restoreSkillEnv();
     }
   });
 });

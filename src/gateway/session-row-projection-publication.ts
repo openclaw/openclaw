@@ -84,10 +84,7 @@ export function createSessionRowPublication(owner: {
     const store = owner.store(row.storeTarget.storePath);
     if (
       prepared &&
-      (!source ||
-        store?.identity !== source.identity ||
-        store.birthtime !== source.birthtime ||
-        store.filename !== source.filename)
+      (!source || store?.identity !== source.identity || store.birthtime !== source.birthtime)
     ) {
       return;
     }
@@ -169,6 +166,9 @@ export function createSessionRowPublication(owner: {
             hasBoard: projection.hasBoard,
             activitySummaryWatermark,
             transcriptPreview: sameTranscript ? previousFacts.transcriptPreview : undefined,
+            transcriptAssistantMessage: sameTranscript
+              ? previousFacts.transcriptAssistantMessage
+              : "unknown",
             transcriptTerminalModel: sameTranscript
               ? previousFacts.transcriptTerminalModel
               : undefined,
@@ -333,13 +333,17 @@ export function subscribeSessionRowPublications({
 }): Array<() => void> {
   return [
     pluginStatePublication.subscribeFacts((change) => {
+      if (change.kind === "pending" || change.kind === "settled") {
+        return;
+      }
       const changed: records.Row[] = [];
-      for (const row of rows.values()) {
+      // Plugin writes are frequent; avoid an iterator result for every resident row.
+      rows.forEach((row) => {
         if (
-          !row.runtimeOwnershipDependencies ||
+          !row.runtimeOwnershipDependencies?.length ||
           !pluginStateReadDependenciesAffected(row.runtimeOwnershipDependencies, change)
         ) {
-          continue;
+          return;
         }
         records.invalidateDatabaseFacts(
           row,
@@ -351,7 +355,7 @@ export function subscribeSessionRowPublications({
         );
         dirty.add(records.identity(row));
         changed.push(row);
-      }
+      });
       if (changed.length > 0) {
         advanceRevision();
         revisions.invalidate(true);

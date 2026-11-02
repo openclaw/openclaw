@@ -1,8 +1,10 @@
 import { createMemo, For } from "solid-js";
 import { LobsterSvg } from "../../../components/lobster-pet-artwork.tsx";
 import { lobsterPetSeed } from "../../../components/lobster-pet-contract.ts";
-import { createLobsterPetLook } from "../../../components/lobster-pet-look.ts";
+import { createLobsterPetLook } from "../../../components/lobster-pet-identity.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { DREAM_PHRASE_KEYS } from "./dreaming.ts";
+import { DreamingRead } from "./view-shared.tsx";
 import type { DreamingProps } from "./view-types.ts";
 
 const DREAM_PHASES = ["light", "deep", "rem"] as const;
@@ -28,12 +30,14 @@ const STARS: {
   { top: 88, left: 18, size: 2, delay: 2.3, hue: "neutral" },
 ];
 
-export function renderScene(props: DreamingProps, dreamText: () => string) {
+export function DreamingScene(props: DreamingProps) {
+  const data = () => props.readStatusData();
+  const dreamText = () => t(DREAM_PHRASE_KEYS[props.viewState.dreamIndex] ?? DREAM_PHRASE_KEYS[0]);
   // Keep the sleeper's seeded identity consistent with this agent's sidebar pet.
   const look = createMemo(() => createLobsterPetLook(lobsterPetSeed(props.selectedAgentId)));
   const style = () => `--lob-shell:${look().palette.shell};--lob-claw:${look().palette.claw}`;
   return (
-    <section class={`dreams ${!props.active ? "dreams--idle" : ""}`}>
+    <section class={["dreams", { "dreams--idle": !props.active }]}>
       <For each={STARS}>
         {(s) => (
           <div
@@ -76,61 +80,68 @@ export function renderScene(props: DreamingProps, dreamText: () => string) {
       <span class="dreams__z">z</span>
       <span class="dreams__z">Z</span>
 
-      <div class="dreams__status">
-        <span class="dreams__status-label">
-          {props.active ? t("dreaming.status.active") : t("dreaming.status.idle")}
-        </span>
-        <div class="dreams__status-detail">
-          <div class="dreams__status-dot" />
-          <span>
-            {props.promotedCount} {t("dreaming.status.promotedSuffix")}
-            {props.nextCycle ? (
-              <>
-                {" "}
-                · {t("dreaming.status.nextSweepPrefix")} {props.nextCycle}{" "}
-              </>
-            ) : undefined}
-            {props.timezone ? <> · {props.timezone} </> : undefined}
+      <DreamingRead on={props.selectedAgentId}>
+        <div class="dreams__status">
+          <span class="dreams__status-label">
+            {props.active ? t("dreaming.status.active") : t("dreaming.status.idle")}
           </span>
+          <div class="dreams__status-detail">
+            <div class="dreams__status-dot" />
+            <span>
+              {data().promotedCount} {t("dreaming.status.promotedSuffix")}
+              {data().nextCycle ? (
+                <>
+                  {" "}
+                  · {t("dreaming.status.nextSweepPrefix")} {data().nextCycle}{" "}
+                </>
+              ) : undefined}
+              {data().timezone ? <> · {data().timezone} </> : undefined}
+            </span>
+          </div>
         </div>
-      </div>
 
-      <div class="dreams__phases">
-        <For each={DREAM_PHASES}>
-          {(phaseId) => {
-            const phase = createMemo(() => props.phases?.[phaseId]);
-            const enabled = () => phase()?.enabled === true;
-            const status = () => {
-              const current = phase();
-              if (!current) {
-                return "—";
-              }
-              if (!current.enabled) {
-                return t("dreaming.phase.off");
-              }
-              return current.nextRunAtMs
-                ? new Date(current.nextRunAtMs).toLocaleTimeString([], {
-                    hour: "numeric",
-                    minute: "2-digit",
-                  })
-                : "—";
-            };
-            return (
-              <div
-                class={[
-                  "dreams__phase",
-                  { "dreams__phase--off": phase() !== undefined && !enabled() },
-                ]}
-              >
-                <div class={["dreams__phase-dot", { "dreams__phase-dot--on": enabled() }]} />
-                <span class="dreams__phase-name">{t(`dreaming.phase.${phaseId}`)}</span>
-                <span class="dreams__phase-next">{status()}</span>
-              </div>
-            );
-          }}
-        </For>
-      </div>
+        <div class="dreams__phases">
+          <For each={DREAM_PHASES}>
+            {(phaseId) => {
+              const phase = () => data().phases?.[phaseId];
+              const enabled = () => phase()?.enabled === true;
+              const status = () => {
+                const current = phase();
+                if (!current) {
+                  return "—";
+                }
+                if (!current.enabled) {
+                  return t("dreaming.phase.off");
+                }
+                return current.nextRunAtMs
+                  ? new Date(current.nextRunAtMs).toLocaleTimeString([], {
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })
+                  : "—";
+              };
+              return (
+                <div
+                  class={[
+                    "dreams__phase",
+                    { "dreams__phase--off": phase() !== undefined && !enabled() },
+                  ]}
+                >
+                  <div class={["dreams__phase-dot", { "dreams__phase-dot--on": enabled() }]} />
+                  <span class="dreams__phase-name">{t(`dreaming.phase.${phaseId}`)}</span>
+                  <span class="dreams__phase-next">{status()}</span>
+                </div>
+              );
+            }}
+          </For>
+        </div>
+      </DreamingRead>
 
+      <DreamingRead
+        read={props.readStatus}
+        on={props.selectedAgentId}
+        errorClass="dreams__controls-error"
+      />
       {props.statusError ? (
         <div class="dreams__controls-error">{props.statusError}</div>
       ) : undefined}

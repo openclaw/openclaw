@@ -38,7 +38,14 @@ const transactionOperations = new Set([
   "session.actor.deliverySettled",
   "session.actor.patch",
 ]);
-const phaseNames = ["prepareMs", "beginMs", "hostAdmissionWaitMs", "sqlMs", "commitMs"] as const;
+const phaseNames = [
+  "prepareMs",
+  "beginMs",
+  "hostAdmissionWaitMs",
+  "databaseAdmissionWaitMs",
+  "sqlMs",
+  "commitMs",
+] as const;
 const messages = new Set([
   "slow agent database reservation",
   "slow SQLite session write",

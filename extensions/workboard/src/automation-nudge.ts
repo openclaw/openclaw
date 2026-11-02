@@ -72,7 +72,7 @@ export function createWorkboardAutomationNudgeService(params: {
       );
       return;
     }
-    const expiresAt = Date.now() + WORKBOARD_AUTOMATION_NUDGE_DEBOUNCE_MS;
+    const expiresAt = performance.now() + WORKBOARD_AUTOMATION_NUDGE_DEBOUNCE_MS;
     // The board entry owns both the in-flight request and its cooldown, so a
     // second lifecycle event can never overlap the first automation run request.
     state.pendingByBoard.set(boardId, undefined);
@@ -101,7 +101,7 @@ export function createWorkboardAutomationNudgeService(params: {
       if (state.owner === owner) {
         const timer = setTimeout(
           () => state.pendingByBoard.delete(boardId),
-          Math.max(0, expiresAt - Date.now()),
+          Math.max(0, expiresAt - performance.now()),
         );
         timer.unref?.();
         state.pendingByBoard.set(boardId, timer);

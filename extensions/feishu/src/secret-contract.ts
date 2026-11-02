@@ -1,4 +1,3 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   collectConditionalChannelFieldAssignments,
   createChannelSecretContract,
@@ -11,26 +10,11 @@ export const channelSecrets = createChannelSecretContract({
   channelKey: "feishu",
   account: ["appSecret", "encryptKey", "verificationToken"],
   channel: ["appSecret", "encryptKey", "verificationToken"],
+  hasImplicitDefaultAccount: ({ channel, defaults }) =>
+    hasConfiguredSecretInputValue(channel.appId, defaults) &&
+    hasConfiguredSecretInputValue(channel.appSecret, defaults),
   collect(params) {
     const { channel: feishu, surface } = params;
-    // Feishu account listing starts an implicit default account from top-level
-    // appId+appSecret even when every named account overrides appSecret.  The
-    // shared helper's isBaseFieldActiveForChannelSurface only checks whether any
-    // explicit account inherits the field, so top-level appSecret refs would be
-    // skipped when all accounts override.  Account for the implicit default here.
-    const hasImplicitDefaultAccount =
-      surface.channelEnabled &&
-      hasConfiguredSecretInputValue(feishu.appId, params.defaults) &&
-      hasConfiguredSecretInputValue(feishu.appSecret, params.defaults);
-    if (
-      hasImplicitDefaultAccount &&
-      surface.hasExplicitAccounts &&
-      !surface.accounts.some(
-        ({ accountId }) => normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID,
-      )
-    ) {
-      surface.accounts.push({ accountId: "default", account: {}, enabled: true });
-    }
     collectConditionalChannelFieldAssignments({
       ...params,
       field: "appSecret",

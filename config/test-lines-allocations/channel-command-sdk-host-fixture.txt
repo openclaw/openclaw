@@ -1,0 +1,2 @@
+14
+# Bind the fixture SDK host and scheduler to one stable Gateway resolver for existing capability and revocation cases.

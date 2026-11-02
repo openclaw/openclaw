@@ -82,7 +82,7 @@ extension BundledRuntime {
             }
             try self.replaceBuildLink("current", target: buildID, in: directory)
         }
-        let runtime = try self.resolve(root: target, bundle: bundle)
+        let runtime = Self(root: target)
         let allowsPersistentIntegration = await ApplicationRelocator.currentBundleAllowsPersistentIntegration(
             bundle: bundle)
         runtime.installCLI(

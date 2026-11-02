@@ -2,7 +2,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { hasProviderBrandIcon } from "../../components/provider-icon-data.ts";
 import { ProviderBrandIcon, ProviderFallbackIcon } from "../../components/solid/provider-icon.tsx";
 import { fetchCatalogIconBlobUrl } from "../plugins/icon-loader.ts";
-import { PluginIconController, pluginIconFetchContext } from "../plugins/plugin-icon-controller.ts";
+import { PluginIconOwner, pluginIconFetchContext } from "../plugins/plugin-icon-owner.ts";
 import type { ModelSetupPageState } from "./state.ts";
 
 type SetupIconEntry = {
@@ -22,7 +22,7 @@ export function renderProviderIcon(
   className = "",
 ) {
   const localBrand = resolveSetupBrandIcon(entry);
-  const iconClass = `model-setup__icon ${className}`.trim();
+  const iconClass = ["model-setup__icon", className];
   if (localBrand) {
     return <ProviderBrandIcon provider={localBrand} class={iconClass} />;
   }
@@ -63,7 +63,7 @@ export function createModelSetupIconLoader(
       ].flatMap((entry) => (entry.icon && !resolveSetupBrandIcon(entry) ? [entry.icon] : [])),
     );
   }
-  const loader = new PluginIconController({
+  const loader = new PluginIconOwner({
     getFetchContext: () => pluginIconFetchContext(getContext()),
     // Eligibility can change before the next reconciliation callback.
     isConnected: (iconUrl) =>

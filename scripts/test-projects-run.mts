@@ -45,7 +45,7 @@ import {
   readShardTimings,
   writeShardTimings,
 } from "./lib/vitest-shard-timings.mts";
-import { getVitestWorkerDescriptor } from "./lib/vitest-worker-bootstrap.mts";
+import { getVitestWorkerDescriptor } from "./lib/vitest-worker-descriptor.mts";
 import { createVitestWorkerRun, type VitestWorkerRun } from "./lib/vitest-worker-run.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "./run-vitest.mts";
 import {
@@ -54,6 +54,7 @@ import {
   applyFullExtensionsHeapBudget,
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
+  createVitestArgs,
   createVitestPreflightPnpmArgs,
   createVitestRunSpecs,
   findUnmatchedExplicitTestTargets,
@@ -65,7 +66,6 @@ import {
   parseTestProjectsArgs,
   resolveParallelFullSuiteConcurrency,
   resolveChangedTestTargetPlanForArgs,
-  resolveChangedTargetArgs,
   type FailedVitestShard,
   type VitestRunSpec as BaseVitestRunSpec,
   type VitestCacheAssignment,
@@ -188,7 +188,11 @@ async function runVitestSpec(
   }
 }
 
-function applyDefaultParallelVitestWorkerBudget(specs: VitestRunSpec[], env: NodeJS.ProcessEnv) {
+function applyDefaultParallelVitestWorkerBudget(
+  specs: VitestRunSpec[],
+  env: NodeJS.ProcessEnv,
+  concurrency: number,
+) {
   if (env.OPENCLAW_VITEST_MAX_WORKERS || env.OPENCLAW_TEST_WORKERS || isCiLikeEnv(env)) {
     return specs;
   }
@@ -197,7 +201,10 @@ function applyDefaultParallelVitestWorkerBudget(specs: VitestRunSpec[], env: Nod
     ...spec,
     env: {
       ...spec.env,
-      OPENCLAW_VITEST_MAX_WORKERS: String(vitestMaxWorkers),
+      // Exclusive plans run alone, so they can spend the otherwise idle shard budget.
+      OPENCLAW_VITEST_MAX_WORKERS: String(
+        isExclusiveCiTestConfig(spec.config) ? concurrency : vitestMaxWorkers,
+      ),
     },
   }));
 }
@@ -243,9 +250,7 @@ function isFullExtensionsProjectRun(specs: VitestRunSpec[]) {
   );
 }
 
-function printNoChangedTestTargets(args: string[], cwd: string, baseEnv: NodeJS.ProcessEnv) {
-  const plan = resolveChangedTestTargetPlanForArgs(args, cwd, undefined, { env: baseEnv });
-  const skippedBroadFallbackPaths = plan?.skippedBroadFallbackPaths ?? [];
+function printNoChangedTestTargets(skippedBroadFallbackPaths: string[]) {
   for (const line of formatNoChangedTestTargetLines(skippedBroadFallbackPaths)) {
     console.error(line);
   }
@@ -350,10 +355,14 @@ export async function runTestProjects(
     process.exitCode = 1;
     return;
   }
-  const changedTargetArgs =
+  // Selection belongs to this invocation; specs and empty-run diagnostics must
+  // reuse it instead of rescanning Git and rebuilding the dependency plan.
+  const changedTargetPlan =
     targetArgs.length === 0
-      ? resolveChangedTargetArgs(args, process.cwd(), undefined, { env: baseEnv })
+      ? resolveChangedTestTargetPlanForArgs(args, process.cwd(), undefined, { env: baseEnv })
       : null;
+  const changedTargetArgs =
+    changedTargetPlan && changedTargetPlan.mode !== "broad" ? changedTargetPlan.targets : null;
   const rawRunSpecs: VitestRunSpec[] =
     targetArgs.length === 0 && changedTargetArgs === null
       ? buildFullSuiteVitestRunPlans(args, process.cwd()).map((plan) => ({
@@ -363,22 +372,14 @@ export async function runTestProjects(
           env: baseEnv,
           includeFilePath: null,
           includePatterns: null,
-          pnpmArgs: [
-            "exec",
-            "node",
-            ...resolveVitestNodeArgs(baseEnv),
-            resolveVitestCliEntry(),
-            ...(plan.watchMode ? [] : ["run"]),
-            "--config",
-            plan.config,
-            ...plan.forwardedArgs,
-          ],
+          pnpmArgs: createVitestArgs({ ...plan, env: baseEnv }),
           preflightPnpmArgs: createVitestPreflightPnpmArgs(plan.config),
           watchMode: plan.watchMode,
         }))
       : createVitestRunSpecs(args, {
           baseEnv,
           cwd: process.cwd(),
+          changedTargetArgs,
         });
   const inheritedIncludePatterns = rawRunSpecs.some((spec) => !spec.includeFilePath)
     ? loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", baseEnv)
@@ -401,7 +402,7 @@ export async function runTestProjects(
   );
 
   if (runSpecs.length === 0) {
-    printNoChangedTestTargets(args, process.cwd(), baseEnv);
+    printNoChangedTestTargets(changedTargetPlan?.skippedBroadFallbackPaths ?? []);
     printTestSummary("skipped", 0, performance.now() - suiteStartedAt);
     return;
   }
@@ -606,6 +607,7 @@ export async function runTestProjects(
             env: baseEnv,
           }),
           baseEnv,
+          concurrency,
         );
         console.error(
           `[test] running ${scheduledSpecs.length} Vitest shards with parallelism ${concurrency}`,
@@ -649,11 +651,13 @@ export async function runTestProjects(
     throw error;
   } finally {
     try {
-      await workers?.dispose().catch((error: unknown) => {
-        reportFailure ??= String(error);
-        process.exitCode = vitestInfrastructureExitCode(Number(process.exitCode));
-        console.error(error);
-      });
+      await workers
+        ?.dispose({ interrupted: Boolean(termination.signal) })
+        .catch((error: unknown) => {
+          reportFailure ??= String(error);
+          process.exitCode = vitestInfrastructureExitCode(Number(process.exitCode));
+          console.error(error);
+        });
       if (reports) {
         const reportCode = await reports.finish(
           async (mergeArgs) => {

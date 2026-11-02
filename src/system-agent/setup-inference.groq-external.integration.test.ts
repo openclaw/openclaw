@@ -19,6 +19,7 @@ import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plug
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
 import { groqSetupSdkEntrypoints } from "./setup-inference-groq-sdk.test-support.js";
+import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -52,42 +53,16 @@ it("resolves a Groq manifest model from a global external install during setup",
         recursive: true,
         filter: (source) => path.basename(source) !== "node_modules",
       });
-      // The changed-node job uses a sparse checkout, so untouched package files
-      // such as the runtime entry may not be present. Keep this external package
-      // fixture self-contained while retaining the real Groq manifest and
-      // provider-discovery entry under test.
-      await fs.writeFile(
-        path.join(pluginDir, "package.json"),
-        JSON.stringify({
+      // Sparse CI may omit the runtime entry; retain the real manifest/discovery
+      // and supply only the package and text-provider entry this flow needs.
+      for (const [file, content] of Object.entries({
+        "package.json": JSON.stringify({
           name: "@openclaw/groq-provider",
           version: "2026.9.4",
-          description: "OpenClaw Groq media-understanding provider.",
-          repository: {
-            type: "git",
-            url: "https://github.com/openclaw/openclaw",
-          },
           type: "module",
-          devDependencies: { "@openclaw/plugin-sdk": "workspace:*" },
-          peerDependencies: { openclaw: ">=2026.9.4" },
-          peerDependenciesMeta: { openclaw: { optional: true } },
-          openclaw: {
-            extensions: ["./index.ts"],
-            install: {
-              clawhubSpec: "clawhub:@openclaw/groq-provider",
-              npmSpec: "@openclaw/groq-provider",
-              defaultChoice: "npm",
-              minHostVersion: ">=2026.6.8",
-            },
-            compat: { pluginApi: ">=2026.9.4" },
-            build: { bundledDist: false },
-            release: { publishToClawHub: true, publishToNpm: true },
-          },
+          openclaw: { extensions: ["./index.ts"], compat: { pluginApi: ">=2026.9.4" } },
         }),
-        "utf8",
-      );
-      await fs.writeFile(
-        path.join(pluginDir, "index.ts"),
-        `import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+        "index.ts": `import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export default defineSingleProviderPluginEntry({
@@ -98,28 +73,13 @@ export default defineSingleProviderPluginEntry({
   provider: {
     label: "Groq",
     docsPath: "/providers/groq",
-    auth: [{
-      methodId: "api-key",
-      label: "Groq API key",
-      optionKey: "groqApiKey",
-      flagName: "--groq-api-key",
-      envVar: "GROQ_API_KEY",
-      promptMessage: "Enter Groq API key",
-      defaultModel: "groq/openai/gpt-oss-120b",
-      wizard: {
-        choiceId: "groq-api-key",
-        choiceLabel: "Groq API key",
-        groupId: "groq",
-        groupLabel: "Groq",
-        onboardingScopes: ["text-inference"],
-      },
-    }],
     catalog: { liveModelDiscovery: true, discoveryMode: "strict" },
   },
 });
 `,
-        "utf8",
-      );
+      })) {
+        await fs.writeFile(path.join(pluginDir, file), content, "utf8");
+      }
       const hostRoot =
         sdkHost ??
         resolveOpenClawPackageRootSync({
@@ -137,19 +97,13 @@ export default defineSingleProviderPluginEntry({
       setRuntimeConfigSnapshot(config, config);
       onTestFinished(clearRuntimeConfigSnapshot);
       await seedInstalledPluginIndex(
-        {
-          groq: {
-            source: "path",
-            sourcePath: pluginDir,
-            installPath: pluginDir,
-          },
-        },
+        { groq: { source: "path", sourcePath: pluginDir, installPath: pluginDir } },
         { config, env: state.env },
       );
       clearLoadInstalledPluginIndexInstallRecordsCache();
 
       const requests: Array<{ method?: string; url?: string }> = [];
-      const runtimeErrors: string[] = [];
+      const { runtime, lines: runtimeErrors } = createSystemAgentTestRuntime();
       const server = http.createServer((request, response) => {
         requests.push({ method: request.method, url: request.url });
         response.writeHead(200, { "content-type": "text/event-stream; charset=utf-8" });
@@ -178,9 +132,8 @@ export default defineSingleProviderPluginEntry({
         ...originalHost,
         buildModelFetch: () => async (input, init) => {
           const original = new Request(input, init);
-          const url = new URL(original.url);
-          expect(url.hostname).toBe("api.groq.com");
           const replacement = new URL(original.url);
+          expect(replacement.hostname).toBe("api.groq.com");
           replacement.protocol = "http:";
           replacement.hostname = "127.0.0.1";
           replacement.port = String(address.port);
@@ -196,25 +149,10 @@ export default defineSingleProviderPluginEntry({
           modelRef: "groq/openai/gpt-oss-120b",
           workspace: state.workspaceDir,
           surface: "gateway",
-          runtime: {
-            log: () => {},
-            error: (message) => {
-              runtimeErrors.push(String(message));
-            },
-            exit: (code) => {
-              throw new Error(`exit ${code}`);
-            },
-          },
+          runtime,
         });
 
-        expect(
-          result,
-          JSON.stringify({
-            result,
-            runtimeErrors,
-            requests,
-          }),
-        ).toMatchObject({
+        expect(result, JSON.stringify({ result, runtimeErrors, requests })).toMatchObject({
           ok: true,
           modelRef: "groq/openai/gpt-oss-120b",
         });

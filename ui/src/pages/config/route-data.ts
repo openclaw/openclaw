@@ -36,6 +36,11 @@ export type ConfigRouteData = ReturnType<typeof configRouteData> & {
   agentSelectionIntent?: { owner: AgentSelectionCapability; revision: number };
 };
 
+export type ConfigRouteSource = {
+  read(): ConfigRouteData | null;
+  subscribe(listener: () => void): () => void;
+};
+
 export function configTargetIdFromHash(hash: string): string | null {
   if (!hash) {
     return null;

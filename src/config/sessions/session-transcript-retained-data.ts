@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql, type AliasableExpression } from "kysely";
@@ -9,6 +8,7 @@ import {
   jsonValid,
 } from "../../infra/database-engine/json-values.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import {
   sqliteSessionIdWriteScope,
@@ -21,6 +21,7 @@ import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { readNextTranscriptSeq } from "./session-accessor.sqlite-transcript-state.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import {
+  TRANSCRIPT_PAYLOAD_COLUMNS,
   transcriptEventJsonSql,
   transcriptEventNavigationSql,
   transcriptEventWithoutCustomDataBytesSql,
@@ -28,7 +29,7 @@ import {
 
 /** Admit suffix repairs against their projected bytes without decoding opaque bodies. */
 export function transcriptRetainedDataBytesSql(
-  database: DatabaseSync,
+  database: EngineConnection,
   retainedIds: readonly string[],
 ) {
   if (retainedIds.length === 0) {
@@ -44,7 +45,7 @@ export function transcriptRetainedDataBytesSql(
 
 /** Custom data is opaque to topology and indexing; cleanup keeps it in SQLite. */
 export function projectTranscriptRetainedDataSql(
-  database: DatabaseSync,
+  database: EngineConnection,
   event: AliasableExpression<string>,
   retainedIds: readonly string[],
 ): AliasableExpression<string> {
@@ -137,22 +138,7 @@ export function copyRetainedTranscriptPayload(
         database.db,
         db
           .insertInto("transcript_events")
-          .columns([
-            "session_id",
-            "seq",
-            "event_json",
-            "event_zstd",
-            "event_utf8_bytes",
-            "navigation_json",
-            "navigation_type",
-            "navigation_custom_type",
-            "navigation_display",
-            "message_role",
-            "navigation_last_type",
-            "navigation_last_custom_type",
-            "navigation_valid",
-            "created_at",
-          ])
+          .columns(TRANSCRIPT_PAYLOAD_COLUMNS)
           .expression(
             db
               .selectFrom("transcript_events")

@@ -8,8 +8,6 @@ export type DraftGatewaySnapshot = Readonly<{
   data: NewSessionRouteData | undefined;
   isConnected: boolean;
   isAdmin: boolean;
-  canStartAsDraft: boolean;
-  visibility: "normal" | "draft" | "incognito";
   cloudProfileId: string;
   pendingPlacement: Readonly<{
     sessionKey: string;
@@ -28,10 +26,9 @@ export type DraftPreferenceOptions = {
 export type DraftGatewayCallbacks = DraftPreferenceOptions & {
   // Read apart from the snapshot: the snapshot's place fields depend on this policy.
   readAgents: () => ApplicationContext["agents"] | undefined;
-  requestUpdate: () => void;
+  changed: () => void;
   updateComplete: () => Promise<unknown>;
   onInvalidate: (resetHostSelection: boolean, outcome: SubmissionOutcomeReason) => void;
-  onVisibilityRetired: () => void;
   onCloudProfileCleared: () => void;
   onCloudState: (error: string | null) => void;
   onPendingPlacementReset: () => void;

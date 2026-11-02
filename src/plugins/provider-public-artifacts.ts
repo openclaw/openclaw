@@ -1,5 +1,4 @@
 import path from "node:path";
-// Extracts provider public artifacts from plugin metadata.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
@@ -9,7 +8,11 @@ import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
 import { loadPluginManifestRegistryCore, type PluginManifestRecord } from "./manifest-registry.js";
 import { getCurrentPluginMetadataSnapshotRuntime } from "./plugin-metadata-snapshot.runtime.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
-import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
+import {
+  getPluginSetupModuleLoader,
+  preparePluginSetupModuleLoader,
+  withPluginSetupPreparation,
+} from "./plugin-setup-module.js";
 import {
   listProviderPolicyOwners,
   listTrustedExternalProviderPolicyOwners,
@@ -23,7 +26,7 @@ import {
   type ProviderPolicySurface,
 } from "./provider-policy-surface.js";
 import { loadValidatedPublicSurfaceModule } from "./public-surface-loader.js";
-import { resolvePluginRootPublicSurfacePath } from "./public-surface-runtime.js";
+import { resolvePluginRootPublicSurfaceLocation } from "./public-surface-runtime.js";
 import { resolvePluginRuntimeRecord } from "./runtime-context.js";
 
 export { listProviderPolicyOwners } from "./provider-policy-owners.js";
@@ -120,7 +123,7 @@ export function resolveProviderPolicySurface(
 }
 
 /** Loads the first usable policy surface from caller-selected admitted owners. */
-export function loadProviderPolicyArtifacts(owners: readonly PluginManifestRecord[]) {
+function loadProviderPolicyArtifacts(owners: readonly PluginManifestRecord[]) {
   for (const owner of owners) {
     const surface = resolveProviderPolicySurfaceForOwner(owner);
     if (surface) {
@@ -131,44 +134,79 @@ export function loadProviderPolicyArtifacts(owners: readonly PluginManifestRecor
   return owner ? { owner, surface: null } : null;
 }
 
+/** Prepare only the first usable admitted policy owner, preserving selection order. */
+export async function loadProviderPolicyArtifactsAsync(owners: readonly PluginManifestRecord[]) {
+  return await withPluginSetupPreparation({}, async ({ assertCurrent }) => {
+    for (const owner of owners) {
+      const plan = prepareProviderPolicySurfaceForOwner(owner);
+      if (!plan) {
+        continue;
+      }
+      await plan.prepare?.(assertCurrent);
+      assertCurrent();
+      const surface = plan.load();
+      if (surface) {
+        return { owner, surface };
+      }
+    }
+    const owner = owners[0];
+    return owner ? { owner, surface: null } : null;
+  });
+}
+
 /** Loads policy hooks from the selected bundled or host-verified official owner. */
 export function resolveProviderPolicySurfaceForOwner(
   record: PluginManifestRecord,
 ): ProviderPolicySurface | null {
+  return prepareProviderPolicySurfaceForOwner(record)?.load() ?? null;
+}
+
+function prepareProviderPolicySurfaceForOwner(record: PluginManifestRecord): {
+  prepare?: (assertCurrent: () => void) => Promise<void>;
+  load: () => ProviderPolicySurface | null;
+} | null {
   if (record.origin !== "bundled" && record.trustedOfficialInstall !== true) {
     return null;
   }
-  const modulePath = resolvePluginRootPublicSurfacePath({
+  const resolved = resolvePluginRootPublicSurfaceLocation({
     pluginRoot: record.rootDir,
     pluginId: record.id,
     entrySource: record.source,
     artifactBasename: PROVIDER_POLICY_ARTIFACT,
   });
-  if (!modulePath) {
+  if (!resolved) {
     return null;
   }
   const location = {
-    modulePath,
-    boundaryRoot: record.rootDir,
+    ...resolved,
     surfaceLabel: `plugin public surface ${PROVIDER_POLICY_ARTIFACT}`,
     origin: record.origin,
     pluginId: record.id,
   };
   const runtime = resolvePluginRuntimeRecord({ pluginRoot: record.rootDir, pluginId: record.id });
   if (runtime?.status === "loaded") {
-    return extractProviderPolicySurface(
-      // SAFETY: The public-artifact extractor validates each named export before exposing it.
-      loadValidatedPublicSurfaceModule(location) as Record<string, unknown>,
-    );
+    return {
+      load: () =>
+        extractProviderPolicySurface(
+          // SAFETY: The public-artifact extractor validates each named export before exposing it.
+          loadValidatedPublicSurfaceModule(location) as Record<string, unknown>,
+        ),
+    };
   }
   const source = preparePluginModule({
     ...location,
     boundaryLabel: "plugin root",
     rejectHardlinks: shouldRejectHardlinkedPluginFiles(record),
   }).modulePath;
-  const loader = getPluginSetupModuleLoader(record, source, record.rootDir);
-  return loader.initialize(() =>
-    // SAFETY: The public-artifact extractor validates each named export before exposing it.
-    extractProviderPolicySurface(loader(source) as Record<string, unknown>),
-  );
+  return {
+    prepare: (assertCurrent) =>
+      preparePluginSetupModuleLoader(record, source, resolved.boundaryRoot, { assertCurrent }),
+    load: () => {
+      const loader = getPluginSetupModuleLoader(record, source, resolved.boundaryRoot);
+      return loader.initialize(() =>
+        // SAFETY: The public-artifact extractor validates each named export before exposing it.
+        extractProviderPolicySurface(loader(source) as Record<string, unknown>),
+      );
+    },
+  };
 }

@@ -30,36 +30,15 @@ export async function prepareTalkSessionTarget(
     () => new Error("Talk session storage target changed; retry the request"),
     [{ sessionKey, agentId: owner }],
   );
-  const { agentId, canonicalKey, storePath } = await resolveTalkSessionStorageTarget(
-    cfg,
-    sessionKey,
-    owner,
-  );
-  return Object.freeze({ agentId, sessionKey, canonicalKey, storePath, assertCurrent });
-}
-
-/** Revalidate a retained owner without consulting the current ambient Talk default. */
-export function assertTalkSessionStorageTarget(
-  cfg: OpenClawConfig,
-  target: PreparedTalkSessionTarget,
-): void {
-  target.assertCurrent(cfg);
-}
-
-async function resolveTalkSessionStorageTarget(
-  cfg: OpenClawConfig,
-  sessionKey: string,
-  owner: string,
-) {
   const { agentId, canonicalKey } = resolveSessionStoreIdentity({
     cfg,
     sessionKey,
     agentId: resolveConfiguredAgentId(cfg, owner),
   });
-  const target = await resolveGatewaySessionStoreTargetInWorker({
+  const { storePath } = await resolveGatewaySessionStoreTargetInWorker({
     cfg,
     key: canonicalKey,
     agentId,
   });
-  return { agentId, canonicalKey, storePath: target.storePath };
+  return Object.freeze({ agentId, sessionKey, canonicalKey, storePath, assertCurrent });
 }

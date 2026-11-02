@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildFileEntry,
@@ -73,14 +73,19 @@ export async function inspectMemorySourceState(params: {
     ...params,
     onSkippedSymlinkRoot: (root) => skippedRoots.add(root),
   });
-  const indexedByPath = new Map(
-    (await params.readIndexedRows()).map((row) => [row.path, row.hash]),
-  );
+  const indexedByPath = new Map((await params.readIndexedRows()).map((row) => [row.path, row]));
   return {
     source: "memory",
     dirty:
       indexedByPath.size !== entries.length ||
-      entries.some((entry) => indexedByPath.get(entry.path) !== entry.hash),
+      entries.some((entry) => {
+        const indexed = indexedByPath.get(entry.path);
+        return (
+          indexed?.hash !== entry.hash ||
+          indexed.mtime !== entry.mtimeMs ||
+          indexed.size !== entry.size
+        );
+      }),
     eligible: entries.length,
     issues: [
       ...(entries.length === 0 ? ["no eligible memory files found"] : []),
@@ -94,7 +99,7 @@ export async function inspectMemorySourceState(params: {
 }
 
 export function loadMemorySourceFileState(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   source: MemorySource;
   paths?: readonly string[];
 }): MemorySourceFileStateRow[] {
@@ -109,7 +114,7 @@ export function loadMemorySourceFileState(params: {
 }
 
 export function refreshMemorySessionSourceState(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: { path: string; hash: string; mtime: number; size: number; expectedHash: string },
 ): boolean {
   return (

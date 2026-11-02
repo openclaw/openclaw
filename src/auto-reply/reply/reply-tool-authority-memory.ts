@@ -3,21 +3,23 @@ import { createMemorySessionCapabilityStore } from "../../agents/subagents/spawn
 import {
   captureSessionActorStorageOwner,
   readCapturedSessionActorEntry,
+  type SessionActorStorageScope,
 } from "../../config/sessions/session-actor-storage-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 
 /** Pin one memory namespace for both classification and capability policy. */
 export function captureMemoryReplyToolAuthoritySession(
-  sessionKey: string | undefined,
+  scope: Pick<SessionActorStorageScope, "sessionKey" | "agentId" | "storePath">,
   assertCurrent: () => void,
 ) {
+  const { sessionKey } = scope;
   if (!sessionKey) {
     return undefined;
   }
-  const memory = captureSessionActorStorageOwner(
-    { sessionKey },
-    { assertCurrent, authorize: assertCurrent },
-  );
+  const memory = captureSessionActorStorageOwner(scope, {
+    assertCurrent,
+    authorize: assertCurrent,
+  });
   if (!memory) {
     return undefined;
   }

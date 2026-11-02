@@ -1,8 +1,9 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { activityPersonFromPath } from "../../app-route-paths.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import { useSessionActivityControllerFixture } from "./session-activity-controller.test-support.ts";
 import {
@@ -11,6 +12,7 @@ import {
   projectSessionActivity,
   reconcileSessionActivityRead,
   sessionActivityLocation,
+  sessionActivityOwner,
 } from "./session-activity.ts";
 
 const { active, listing, setup } = useSessionActivityControllerFixture();
@@ -39,7 +41,7 @@ it("orders refreshed membership by the activity timestamps actually displayed", 
     provenance,
     2,
   );
-  expect(read.result.sessions.map((row) => [row.key, row.lastActivityAt])).toEqual([
+  expect(read.sessions.map((row) => [row.key, row.lastActivityAt])).toEqual([
     [current.key, 30],
     [other.key, 20],
   ]);
@@ -63,6 +65,50 @@ function result(sessions: GatewaySessionRow[]): SessionsListResult {
 }
 
 describe("session activity projection", () => {
+  it.each([
+    ["gateway-owner", undefined, undefined],
+    ["gateway-owner", "  ", undefined],
+    ["gateway-owner", "Alex", "Alex"],
+    ["profile-ada", undefined, undefined],
+    [undefined, undefined, "main"],
+  ])("keeps actor %s names separate from the session agent", (id, label, name) => {
+    expect(
+      sessionActivityOwner(
+        {
+          key: "agent:main:work",
+          kind: "direct",
+          agentId: "main",
+          createdActor: id ? { type: "human", id, label } : undefined,
+        },
+        null,
+      ),
+    ).toMatchObject({ id: id ?? "main", name });
+  });
+
+  it.each(["main", "codex"])("does not invent an avatar for ownerless %s sessions", (agentId) => {
+    expect(
+      sessionActivityOwner({ key: `agent:${agentId}:main`, kind: "direct", agentId }, null),
+    ).toEqual({ id: agentId, name: agentId, avatarUrl: undefined, watchedSessions: [] });
+  });
+
+  it("uses the advertised owner's avatar instead of the creator's avatar", () => {
+    const agents: AgentsListResult = makeBootRoster({
+      agents: [{ id: "main", identity: { avatarUrl: "/avatar/main?roster=1" } }],
+    });
+    const row: GatewaySessionRow = {
+      key: "agent:main:work",
+      kind: "direct",
+      agentId: "main",
+      createdActor: { type: "agent", id: "main", avatarUrl: "/avatar/main?v=1" },
+      owner: { actor: { type: "agent", id: "codex", label: "Codex" } },
+    };
+    expect(sessionActivityOwner(row, agents).avatarUrl).toBeUndefined();
+    row.owner!.actor.avatarUrl = "/avatar/codex?v=2";
+    expect(sessionActivityOwner(row, agents).avatarUrl).toBe("/avatar/codex?v=2");
+    delete row.owner;
+    expect(sessionActivityOwner(row, agents).avatarUrl).toBe("/avatar/main?v=1");
+  });
+
   it("refreshes decorative names while retaining exact references, longer prefixes, filters and anchors", () => {
     const personId = "12345678-abcd-4123-8123-123456789abc";
     const legacy = {

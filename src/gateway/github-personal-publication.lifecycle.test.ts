@@ -109,14 +109,19 @@ describe("personal publication session lifecycle", () => {
       params,
     );
 
+  const readReceipt = (requestId: string) =>
+    readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, fixture.owner, {
+      requestId,
+    });
+  const readLifecycle = (binding: Parameters<typeof readGitHubPublicationSessionLifecycle>[0]) =>
+    readGitHubPublicationSessionLifecycle(binding, openOpenClawStateDatabase().db);
+
   async function publishReceipt() {
-    const { owner, client, context, coordinator } = fixture;
+    const { client, context, coordinator } = fixture;
     const session = await persistPublicationTestSession();
     const action = await preparePersonalPublicationFixtureAction({ client, context });
     const published = await coordinator.requestPersonalForSessionV2(request(), action);
-    const receipt = readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, owner, {
-      requestId: published.requestId,
-    });
+    const receipt = readReceipt(published.requestId);
     expect(receipt?.status).toBe("published");
     const binding = { publicationKind: "personal" as const, requestId: published.requestId };
     return {
@@ -124,7 +129,7 @@ describe("personal publication session lifecycle", () => {
       published,
       receipt,
       binding,
-      lifecycle: readGitHubPublicationSessionLifecycle(binding, openOpenClawStateDatabase().db),
+      lifecycle: readLifecycle(binding),
     };
   }
 
@@ -154,7 +159,6 @@ describe("personal publication session lifecycle", () => {
   });
 
   it("preserves repository receipts when a session is recreated before receipt deletion admission", async () => {
-    const { owner } = fixture;
     const { session, published, receipt, binding, lifecycle } = await publishReceipt();
     const repositories = getSessionRepositoryWorkspaceStore();
     const workspace = await repositories.create({
@@ -178,11 +182,7 @@ describe("personal publication session lifecycle", () => {
     try {
       await waitForReceiptDeletion(waiting.promise, deletion);
       expect(session.read()).toBeUndefined();
-      expect(
-        readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, owner, {
-          requestId: published.requestId,
-        }),
-      ).toEqual(receipt);
+      expect(readReceipt(published.requestId)).toEqual(receipt);
       const successor = {
         ...original,
         sessionId: "receipt-guard-successor",
@@ -202,14 +202,8 @@ describe("personal publication session lifecycle", () => {
       });
       expect(session.read()).toMatchObject(successor);
       expect(await repositories.get(workspace.workspaceId)).toEqual(workspace);
-      expect(
-        readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, owner, {
-          requestId: published.requestId,
-        }),
-      ).toEqual(receipt);
-      expect(
-        readGitHubPublicationSessionLifecycle(binding, openOpenClawStateDatabase().db),
-      ).toEqual(lifecycle);
+      expect(readReceipt(published.requestId)).toEqual(receipt);
+      expect(readLifecycle(binding)).toEqual(lifecycle);
     } finally {
       release.resolve();
       await deletion;
@@ -218,7 +212,6 @@ describe("personal publication session lifecycle", () => {
   });
 
   it("preserves receipts and repository ownership when an owner write crosses the native receipt grant", async () => {
-    const { owner } = fixture;
     const { session, published, receipt, binding, lifecycle } = await publishReceipt();
     expect(lifecycle).toBeDefined();
     const repositories = getSessionRepositoryWorkspaceStore();
@@ -291,14 +284,8 @@ describe("personal publication session lifecycle", () => {
       expect(injected, String(outcome.error)).toBe(true);
       expect(session.read()).toEqual(successor);
       expect(await repositories.get(workspace.workspaceId)).toEqual(workspace);
-      expect(
-        readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, owner, {
-          requestId: published.requestId,
-        }),
-      ).toEqual(receipt);
-      expect(
-        readGitHubPublicationSessionLifecycle(binding, openOpenClawStateDatabase().db),
-      ).toEqual(lifecycle);
+      expect(readReceipt(published.requestId)).toEqual(receipt);
+      expect(readLifecycle(binding)).toEqual(lifecycle);
       expect(nativeAbsent).toBe(true);
       expect(outcome.error).toMatchObject({
         message: expect.stringContaining(
@@ -314,7 +301,7 @@ describe("personal publication session lifecycle", () => {
   });
 
   it("preserves a same-key successor receipt while direct deletion removes historical receipts", async () => {
-    const { owner, client, context, coordinator, placements } = fixture;
+    const { client, context, coordinator, placements } = fixture;
     const {
       session,
       published: historical,
@@ -324,11 +311,7 @@ describe("personal publication session lifecycle", () => {
     } = await publishReceipt();
     await session.reset(placements);
     const original = session.read();
-    expect(
-      readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, owner, {
-        requestId: historical.requestId,
-      }),
-    ).toEqual(oldReceipt);
+    expect(readReceipt(historical.requestId)).toEqual(oldReceipt);
     expect(oldLifecycle?.lifecycle_revision).not.toBe(original.lifecycleRevision);
     expect(
       await getSessionRepositoryWorkspaceStore().find({ agentId: "main", sessionKey: SESSION_KEY }),
@@ -343,11 +326,7 @@ describe("personal publication session lifecycle", () => {
         lateAction,
       );
       expect(late.requestId).not.toBe(historical.requestId);
-      expect(
-        readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, owner, {
-          requestId: late.requestId,
-        }),
-      ).toMatchObject({
+      expect(readReceipt(late.requestId)).toMatchObject({
         status: "published",
         session_id: original.sessionId,
       });
@@ -391,43 +370,20 @@ describe("personal publication session lifecycle", () => {
         successorAction,
       );
       expect(published.requestId).not.toBe(historical.requestId);
-      const receipt = readPersonalGitHubPublicationInDatabase(
-        openOpenClawStateDatabase().db,
-        owner,
-        { requestId: published.requestId },
-      );
+      const receipt = readReceipt(published.requestId);
       const binding = { publicationKind: "personal" as const, requestId: published.requestId };
-      const lifecycle = readGitHubPublicationSessionLifecycle(
-        binding,
-        openOpenClawStateDatabase().db,
-      );
+      const lifecycle = readLifecycle(binding);
       expect(receipt).toMatchObject({ status: "published", session_id: successor.sessionId });
       expect(lifecycle?.lifecycle_revision).toBe(successor.lifecycleRevision);
       release.resolve();
       const outcome = await deletion;
       expect(outcome).toMatchObject({ ok: true, value: { deleted: true } });
-      expect(
-        readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, owner, {
-          requestId: published.requestId,
-        }),
-      ).toEqual(receipt);
-      expect(
-        readGitHubPublicationSessionLifecycle(binding, openOpenClawStateDatabase().db),
-      ).toEqual(lifecycle);
+      expect(readReceipt(published.requestId)).toEqual(receipt);
+      expect(readLifecycle(binding)).toEqual(lifecycle);
       expect(session.read()).toMatchObject(successor);
-      expect(
-        readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, owner, {
-          requestId: historical.requestId,
-        }),
-      ).toBeUndefined();
-      expect(
-        readGitHubPublicationSessionLifecycle(oldBinding, openOpenClawStateDatabase().db),
-      ).toBeUndefined();
-      expect(
-        readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, owner, {
-          requestId: lateRequestId,
-        }),
-      ).toBeUndefined();
+      expect(readReceipt(historical.requestId)).toBeUndefined();
+      expect(readLifecycle(oldBinding)).toBeUndefined();
+      expect(readReceipt(lateRequestId)).toBeUndefined();
       expect(
         readGitHubPublicationSessionLifecycle(
           {
@@ -475,11 +431,7 @@ describe("personal publication session lifecycle", () => {
     const lifecycle_revision = session.read().lifecycleRevision;
     expect(originalLifecycle).toEqual({ lifecycle_revision, requester_authority_json: null });
     await session.reset(placements);
-    expect(
-      readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, owner, {
-        requestId: result.requestId,
-      }),
-    ).toEqual(receipt);
+    expect(readReceipt(result.requestId)).toEqual(receipt);
     expect(
       (
         await rpc("sessions.github.status", {
@@ -493,14 +445,8 @@ describe("personal publication session lifecycle", () => {
       archivedAt: Date.now(),
     }));
     const target = { canonicalKey: SESSION_KEY, storeKeys: [SESSION_KEY] };
-    expect(
-      readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, owner, {
-        requestId: result.requestId,
-      }),
-    ).toEqual(receipt);
-    expect(readGitHubPublicationSessionLifecycle(binding, openOpenClawStateDatabase().db)).toEqual(
-      originalLifecycle,
-    );
+    expect(readReceipt(result.requestId)).toEqual(receipt);
+    expect(readLifecycle(binding)).toEqual(originalLifecycle);
     const lostReply = probe.command(stateWorker, async (command, options, scope) => {
       const outcome = await scope.execute(command, options);
       if (command.type === "githubPublication.deleteSessionReceipts") {
@@ -517,14 +463,8 @@ describe("personal publication session lifecycle", () => {
       }),
     ).rejects.toThrow("committed receipt cleanup reply lost");
     lostReply.mockRestore();
-    expect(
-      readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, owner, {
-        requestId: result.requestId,
-      }),
-    ).toBeUndefined();
-    expect(
-      readGitHubPublicationSessionLifecycle(binding, openOpenClawStateDatabase().db),
-    ).toBeUndefined();
+    expect(readReceipt(result.requestId)).toBeUndefined();
+    expect(readLifecycle(binding)).toBeUndefined();
     expect(installed.get(JSON.stringify(["personal", result.requestId]))).toEqual({
       kind: "absent",
     });

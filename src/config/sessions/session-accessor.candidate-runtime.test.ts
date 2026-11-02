@@ -5,6 +5,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   readResolvedSessionEntryInWorker,
+  readResolvedSessionEntriesInWorker,
   resolveSessionEntryCandidateTargetForRuntime,
 } from "./session-accessor.entry.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
@@ -20,6 +21,14 @@ it("keeps an unbound incognito read in its process-local store", async () => {
       sessionId: "private",
       incognito: true,
     });
+    const requestedKey = ` ${scope.sessionKey} `;
+    const entries = await readResolvedSessionEntriesInWorker({
+      ...scope,
+      cfg: {},
+      sessionKeys: [requestedKey],
+    });
+    expect([...entries.keys()]).toEqual([requestedKey]);
+    expect(entries.get(requestedKey)?.entry?.sessionId).toBe("private");
   });
 });
 

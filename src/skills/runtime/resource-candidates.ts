@@ -9,6 +9,11 @@ export function resolveSkillResourceCandidates(
     return undefined;
   }
   const candidates = [...(snapshot.resolvedSkills ?? [])];
+  for (const skill of snapshot.discoverySkills ?? []) {
+    if (!candidates.some((candidate) => candidate.name === skill.name)) {
+      candidates.push(skill);
+    }
+  }
   for (const entry of libraryEntries) {
     if (
       snapshot.skills.some((skill) => skill.name === entry.skill.name) &&

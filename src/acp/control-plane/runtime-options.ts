@@ -219,9 +219,8 @@ export function mergeRuntimeOptions({
 }
 
 export function isThinkingConfigKey(key: string): boolean {
-  return RUNTIME_CONFIG_OPTION_ALIASES.thinking.some(
-    (alias) => alias === normalizeLowercaseStringOrEmpty(key),
-  );
+  const normalizedKey = normalizeLowercaseStringOrEmpty(key);
+  return RUNTIME_CONFIG_OPTION_ALIASES.thinking.some((alias) => alias === normalizedKey);
 }
 
 /** Reconcile only selected thinking; backend defaults must not become new session overrides. */

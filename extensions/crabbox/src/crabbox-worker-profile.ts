@@ -4,6 +4,7 @@ import {
   WorkerProviderError,
   type WorkerMachineOption,
   type WorkerProfile,
+  type WorkerRetentionPolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { isSecretRef, isValidSecretRef } from "openclaw/plugin-sdk/secret-input";
 import type { SecretRef } from "openclaw/plugin-sdk/secret-ref-runtime";
@@ -14,6 +15,7 @@ import {
 import { CRABBOX_HEARTBEAT_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const PROFILE_KEYS = new Set([
+  "azureSandboxDiskId",
   "binary",
   "class",
   "desktop",
@@ -43,6 +45,7 @@ const DURATION_UNIT_NANOSECONDS: Readonly<Record<string, bigint>> = {
 };
 
 type CrabboxProfile = {
+  azureSandboxDiskId?: string;
   binary?: string;
   class?: string;
   desktop?: boolean;
@@ -74,7 +77,7 @@ export const CRABBOX_OS_LABELS: Record<CrabboxOperatingSystem, string> = {
   macos: "macOS",
 };
 
-export function parseCrabboxOperatingSystem(value: unknown): CrabboxOperatingSystem {
+function parseCrabboxOperatingSystem(value: unknown): CrabboxOperatingSystem {
   if (value === undefined) {
     return "linux";
   }
@@ -112,6 +115,12 @@ function requirePositiveDuration(
   return { duration, milliseconds: Number(nanoseconds) / 1_000_000 };
 }
 
+export function parseCrabboxDurationMs(value: unknown): number | undefined {
+  const text = nonEmptyString(value);
+  const nanoseconds = text ? parsePositiveGoDurationNanoseconds(text) : undefined;
+  return nanoseconds === undefined ? undefined : Number(nanoseconds) / 1_000_000;
+}
+
 function parsePositiveGoDurationNanoseconds(duration: string): bigint | undefined {
   if (!GO_DURATION_PATTERN.test(duration)) {
     return undefined;
@@ -140,7 +149,7 @@ function parsePositiveGoDurationNanoseconds(duration: string): bigint | undefine
   return total > 0n ? total : undefined;
 }
 
-function heartbeatIntervalMs(idleTimeoutMs: number): number {
+export function heartbeatIntervalMs(idleTimeoutMs: number): number {
   const referenceIntervalMs = Math.max(5_000, Math.min(60_000, idleTimeoutMs / 3));
   // Crabbox's floor can exceed short accepted timeouts. Keep renewal ahead of
   // coordinator idle expiry without changing the profile contract.
@@ -185,6 +194,15 @@ export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>):
     );
   }
   const setupSecrets = parseCrabboxSetupSecrets(profile.setupSecrets);
+  const azureSandboxDiskId = nonEmptyString(profile.azureSandboxDiskId);
+  if (
+    profile.azureSandboxDiskId !== undefined &&
+    (provider !== "azure-sandbox" || !azureSandboxDiskId || azureSandboxDiskId.length > 256)
+  ) {
+    throw new WorkerProviderError(
+      "Crabbox Azure Sandbox disk ID requires an azure-sandbox profile and a non-empty string of at most 256 characters",
+    );
+  }
   const desktop = profile.desktop;
   if (desktop !== undefined && typeof desktop !== "boolean") {
     throw new WorkerProviderError("Crabbox profile desktop must be a boolean");
@@ -199,6 +217,7 @@ export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>):
     throw new WorkerProviderError("Crabbox profile warmImage must be a boolean");
   }
   return {
+    ...(azureSandboxDiskId ? { azureSandboxDiskId } : {}),
     binary,
     class: machineClass,
     desktop,
@@ -303,6 +322,7 @@ export function resolveCrabboxWarmImageProfileKey(
     .update(
       JSON.stringify({
         backendProvider: profile.provider,
+        ...(profile.azureSandboxDiskId ? { azureSandboxDiskId: profile.azureSandboxDiskId } : {}),
         // Missing target in persisted Linux keys already means Linux.
         ...(profile.target !== "linux" ? { target: profile.target } : {}),
         setup: profile.setup ?? "",
@@ -330,7 +350,7 @@ export function resolveCrabboxPreparationTarget(
     machineClass ?? parsed.class,
     os === undefined ? parsed.target : parseCrabboxOperatingSystem(os),
   );
-  return (effective.warmImage || Object.keys(effective.setupSecrets ?? {}).length > 0) &&
+  return supportsResolvedCrabboxProjectPreparation(effective) &&
     effective.class &&
     effective.target === "linux"
     ? {
@@ -352,12 +372,37 @@ export function supportsCrabboxProjectPreparation(
     machineClass ?? parsed.class,
     os === undefined ? parsed.target : parseCrabboxOperatingSystem(os),
   );
-  return resolved.warmImage || Object.keys(resolved.setupSecrets ?? {}).length > 0;
+  return supportsResolvedCrabboxProjectPreparation(resolved);
+}
+
+function supportsResolvedCrabboxProjectPreparation(resolved: CrabboxProfile): boolean {
+  return (
+    Boolean(resolved.warmImage) ||
+    Object.keys(resolved.setupSecrets ?? {}).length > 0 ||
+    Boolean(
+      resolved.provider === "azure-sandbox" &&
+      resolved.azureSandboxDiskId &&
+      resolved.target === "linux" &&
+      resolved.class,
+    )
+  );
 }
 
 export function resolveCrabboxPreparedIdleTimeoutMs(profile: WorkerProfile): number | undefined {
   const parsed = parseCrabboxProfile(profile);
-  return parsed.warmImage === false || parsed.target !== "linux" ? undefined : parsed.idleTimeoutMs;
+  // The pool passes original settings; placement may supply the required machine class.
+  return (parsed.warmImage === false && !parsed.azureSandboxDiskId) || parsed.target !== "linux"
+    ? undefined
+    : parsed.idleTimeoutMs;
+}
+
+// Setup belongs to the configured target's interpreter, not the requested OS.
+// POSIX-to-POSIX portability remains the profile author's responsibility.
+export function isCrabboxSetupTargetCompatible(
+  profile: CrabboxProfile,
+  target: CrabboxOperatingSystem,
+): boolean {
+  return !profile.setup || (profile.target === "windows/normal") === (target === "windows/normal");
 }
 
 type CrabboxProvisionProfile = CrabboxProfile &
@@ -385,6 +430,12 @@ export function resolveCrabboxProvisionProfile(
       ? configured.target
       : parseCrabboxOperatingSystem(requestedOsValue),
   );
+  if (!isCrabboxSetupTargetCompatible(configured, resolved.target)) {
+    const shell = resolved.target === "windows/normal" ? "PowerShell" : "POSIX";
+    throw new WorkerProviderError(
+      `Crabbox profile setup for ${configured.target} cannot run on ${resolved.target}; select a profile with settings.target=${resolved.target} and a compatible ${shell} setup command`,
+    );
+  }
   let provisionProfile: CrabboxProvisionProfile;
   if (!resolved.warmImage) {
     provisionProfile = { ...resolved, warmImage: false };
@@ -449,10 +500,20 @@ export function buildCrabboxAllocationArgs(
   profile: CrabboxProfile,
   leaseId: string,
   slug: string,
+  retention?: WorkerRetentionPolicy,
 ): string[] {
   const args = [
     "--provider",
     profile.provider,
+    ...(retention
+      ? [
+          "--azure-sandbox-retention",
+          "session-disk",
+          "--azure-sandbox-owner-binding",
+          retention.ownerBinding,
+        ]
+      : []),
+    ...(profile.azureSandboxDiskId ? ["--azure-sandbox-disk-id", profile.azureSandboxDiskId] : []),
     "--network",
     "public",
     "--tailscale=false",
@@ -464,7 +525,7 @@ export function buildCrabboxAllocationArgs(
       : []),
     ...(profile.target === "macos" ? ["--target", "macos", "--market", "on-demand"] : []),
     "--ttl",
-    profile.ttl,
+    retention ? `${retention.computeWindowSeconds}s` : profile.ttl,
     "--idle-timeout",
     profile.idleTimeout,
     "--lease-id",

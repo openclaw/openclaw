@@ -1,4 +1,5 @@
 import path from "node:path";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { timeWorktreePreparationPhase } from "../worktrees/preparation-timing.js";
 import {
   DOCKER_SANDBOX_ENGINE,
@@ -79,8 +80,18 @@ export async function retireSandboxDependencyTemplate(
   directory: string,
   rollbackGuard: () => void,
 ): Promise<void> {
-  const { entries } = await readRegistry();
-  rollbackGuard();
+  const context = captureOpenClawStateWorkerContext();
+  const assertOwner = () => {
+    context.admission.assertCurrent();
+    rollbackGuard();
+  };
+  const database = {
+    path: context.admission.databasePath,
+    env: context.environment,
+    assertCurrent: assertOwner,
+  };
+  const { entries } = await readRegistry(database);
+  assertOwner();
   for (const entry of entries) {
     if (entry.workspaceDir !== directory || !entry.sessionKey.startsWith(SCOPE_PREFIX)) {
       continue;
@@ -115,11 +126,15 @@ export async function retireSandboxDependencyTemplate(
     }
     const { removeSandboxRuntimeGeneration } = await import("./manage.js");
     await removeSandboxRuntimeGeneration({
-      runtime: { kind: "container", entry, assertCurrent },
+      runtime: { kind: "container", entry },
+      database,
       engine,
       id,
       bridges: [],
-      assertCurrent: rollbackGuard,
+      assertCurrent: () => {
+        assertOwner();
+        assertCurrent();
+      },
     });
   }
 }

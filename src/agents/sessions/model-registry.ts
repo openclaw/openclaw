@@ -1,11 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/runtime-source-projection.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { Api, Model, SimpleStreamOptions } from "../../llm/types.js";
+import type { Model, SimpleStreamOptions } from "../../llm/types.js";
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
@@ -35,6 +34,12 @@ import {
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.js";
 import {
+  resolveModelRegistryRequestAuth,
+  hasModelRegistryConfiguredAuth,
+  resolveModelRegistryProviderApiKey,
+} from "./model-registry-request-auth.js";
+import { createRegistryRuntimeModel } from "./model-registry-runtime-model.js";
+import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
   resetModelRegistryRuntime,
@@ -57,11 +62,6 @@ import {
 } from "./model-registry-sources.js";
 import type { ProviderConfigInput } from "./provider-config.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
-import {
-  resolveConfigValueOrThrow,
-  resolveConfigValueUncached,
-  resolveHeadersOrThrow,
-} from "./resolve-config-value.js";
 
 export type { ProviderConfigInput } from "./provider-config.js";
 export type { ResolvedRequestAuth } from "./model-registry-sources.js";
@@ -180,7 +180,7 @@ export class ModelRegistry {
     this.pluginMetadataSnapshot = source.pluginMetadataSnapshot;
   }
 
-  /** @deprecated Use createAsync for disk discovery or fromCapturedSources for prepared catalogs. */
+  /** @deprecated Use createAsync or fromCapturedSources. Supported through 2026-12-31; removal ships in the first January 2027 stable release. */
   static create(
     authStorage: AuthStorage,
     modelsJsonPath: string = join(getAgentDir(), "models.json"),
@@ -230,12 +230,17 @@ export class ModelRegistry {
     return new ModelRegistry(authStorage, undefined, { sourceSnapshot: this }, publishedModels);
   }
 
-  /** @deprecated Await refreshAsync when refreshing disk-backed catalogs. */
+  /** @deprecated Await refreshAsync for disk-backed catalogs. Supported through 2026-12-31; removal ships in the first January 2027 stable release. */
   refresh(): void {
     if (this.reloadPluginCatalogs && this.modelsJsonPath) {
       ModelRegistry.warnNativeCatalogRead("ModelRegistry.refresh", "ModelRegistry.refreshAsync");
-      // Legacy SDK callers retain synchronous disk freshness until removal in a later stable
-      // release after deprecation ships.
+    }
+    this.refreshFromStorage();
+  }
+
+  private refreshFromStorage(): void {
+    if (this.reloadPluginCatalogs && this.modelsJsonPath) {
+      // Legacy SDK callers retain synchronous disk freshness through 2026-12-31.
       this.pluginCatalogs = undefined;
       this.pluginCatalogReadError = undefined;
     }
@@ -628,7 +633,7 @@ export class ModelRegistry {
 
         this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
         models.push(
-          this.createRuntimeModel(providerName, providerConfig, modelDef, api, {
+          createRegistryRuntimeModel(providerName, providerConfig, modelDef, api, {
             baseUrl,
             input: runtimeInput,
           }),
@@ -637,39 +642,6 @@ export class ModelRegistry {
     }
 
     return models;
-  }
-
-  private createRuntimeModel(
-    provider: string,
-    config: ProviderModelCatalog,
-    model: NonNullable<ProviderModelCatalog["models"]>[number],
-    api: string | undefined,
-    catalog?: { baseUrl: string; input: Model["input"] },
-  ): Model {
-    return {
-      id: model.id,
-      name: catalog ? (model.name ?? model.id) : model.name,
-      api: api as Api,
-      provider,
-      baseUrl: catalog ? catalog.baseUrl : (model.baseUrl ?? config.baseUrl!),
-      reasoning: catalog ? (model.reasoning ?? false) : model.reasoning,
-      thinkingLevelMap: model.thinkingLevelMap,
-      input: catalog ? catalog.input : model.input,
-      cost: catalog ? normalizeResolvedPricing(model.cost ?? {}) : model.cost,
-      // Missing catalog windows remain unknown on disk; estimates belong to runtime models.
-      contextWindow: model.contextWindow ?? Math.max(model.contextTokens ?? 0, 128000),
-      ...(model.contextWindow === undefined ? { contextWindowSource: "synthetic" } : {}),
-      contextTokens: model.contextTokens,
-      contextWindows: model.contextWindows,
-      contextWindowDefault: model.contextWindowDefault,
-      maxTokens: catalog ? (model.maxTokens ?? 16384) : model.maxTokens,
-      ...(catalog && model.maxTokens !== undefined
-        ? { maxTokensSource: model.maxTokensSource }
-        : {}),
-      params: model.params,
-      headers: undefined,
-      compat: model.compat,
-    } as Model;
   }
 
   getAll(): Model[] {
@@ -689,12 +661,11 @@ export class ModelRegistry {
   }
 
   hasConfiguredAuth(model: Model): boolean {
-    const providerConfig = this.getModelProviderRequestConfig(model);
-    return (
-      this.authStorage.hasAuth(model.provider) ||
-      providerConfig?.auth === "aws-sdk" ||
-      providerConfig?.apiKey !== undefined
-    );
+    return hasModelRegistryConfiguredAuth({
+      model,
+      providerConfig: this.getModelProviderRequestConfig(model),
+      authStorage: this.authStorage,
+    });
   }
 
   private getModelProviderRequestConfig(model: Model): ProviderRequestConfig | undefined {
@@ -708,10 +679,6 @@ export class ModelRegistry {
       return undefined;
     }
     return config;
-  }
-
-  private getModelRequestKey(provider: string, modelId: string): string {
-    return JSON.stringify([provider, modelId]);
   }
 
   private storeProviderRequestConfig(
@@ -747,7 +714,7 @@ export class ModelRegistry {
     modelId: string,
     headers?: Record<string, string>,
   ): void {
-    const key = this.getModelRequestKey(providerName, modelId);
+    const key = JSON.stringify([providerName, modelId]);
     if (!headers || Object.keys(headers).length === 0) {
       this.modelRequestHeaders.delete(key);
       return;
@@ -756,56 +723,12 @@ export class ModelRegistry {
   }
 
   async getApiKeyAndHeaders(model: Model): Promise<ResolvedRequestAuth> {
-    try {
-      const providerConfig = this.getModelProviderRequestConfig(model);
-      const usesAwsSdkAuth = providerConfig?.auth === "aws-sdk";
-      const apiKeyFromAuthStorage = usesAwsSdkAuth
-        ? undefined
-        : await this.authStorage.getApiKey(model.provider, {
-            includeFallback: false,
-            baseUrl: model.baseUrl,
-          });
-      const apiKey =
-        apiKeyFromAuthStorage ??
-        (!usesAwsSdkAuth && providerConfig?.apiKey
-          ? resolveConfigValueOrThrow(
-              providerConfig.apiKey,
-              `API key for provider "${model.provider}"`,
-            )
-          : undefined);
-
-      const providerHeaders = resolveHeadersOrThrow(
-        providerConfig?.headers,
-        `provider "${model.provider}"`,
-      );
-      const modelHeaders = resolveHeadersOrThrow(
-        this.modelRequestHeaders.get(this.getModelRequestKey(model.provider, model.id)),
-        `model "${model.provider}/${model.id}"`,
-      );
-
-      let headers =
-        model.headers || providerHeaders || modelHeaders
-          ? { ...model.headers, ...providerHeaders, ...modelHeaders }
-          : undefined;
-
-      if (providerConfig?.authHeader) {
-        if (!apiKey) {
-          return { ok: false, error: `No API key found for "${model.provider}"` };
-        }
-        headers = { ...headers, Authorization: `Bearer ${apiKey}` };
-      }
-
-      return {
-        ok: true,
-        apiKey,
-        headers: headers && Object.keys(headers).length > 0 ? headers : undefined,
-      };
-    } catch (error) {
-      return {
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
+    return resolveModelRegistryRequestAuth({
+      model,
+      providerConfig: this.getModelProviderRequestConfig(model),
+      modelHeaders: this.modelRequestHeaders.get(JSON.stringify([model.provider, model.id])),
+      authStorage: this.authStorage,
+    });
   }
 
   /**
@@ -853,13 +776,11 @@ export class ModelRegistry {
   }
 
   async getApiKeyForProvider(provider: string): Promise<string | undefined> {
-    const apiKey = await this.authStorage.getApiKey(provider, { includeFallback: false });
-    if (apiKey !== undefined) {
-      return apiKey;
-    }
-
-    const providerApiKey = this.providerRequestConfigs.get(provider)?.apiKey;
-    return providerApiKey ? resolveConfigValueUncached(providerApiKey) : undefined;
+    return resolveModelRegistryProviderApiKey({
+      provider,
+      readProviderConfig: () => this.providerRequestConfigs.get(provider),
+      authStorage: this.authStorage,
+    });
   }
 
   isUsingOAuth(model: Model): boolean {
@@ -901,14 +822,19 @@ export class ModelRegistry {
    * Also resets dynamic OAuth and API stream registrations before reapplying
    * remaining dynamic providers.
    * Has no effect if the provider was never registered.
-   * @deprecated Use unregisterProviderAsync for disk-backed registries.
+   * @deprecated Use unregisterProviderAsync for disk-backed registries. Supported through 2026-12-31; removal ships in the first January 2027 stable release.
    */
   unregisterProvider(providerName: string): void {
-    if (!this.registeredProviders.has(providerName)) {
+    if (this.reloadPluginCatalogs && this.modelsJsonPath) {
+      ModelRegistry.warnNativeCatalogRead(
+        "ModelRegistry.unregisterProvider",
+        "ModelRegistry.unregisterProviderAsync",
+      );
+    }
+    if (!this.registeredProviders.delete(providerName)) {
       return;
     }
-    this.registeredProviders.delete(providerName);
-    this.refresh();
+    this.refreshFromStorage();
   }
 
   async unregisterProviderAsync(providerName: string): Promise<void> {
@@ -949,7 +875,7 @@ export class ModelRegistry {
         const api = modelDef.api || config.api;
         this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
 
-        this.models.push(this.createRuntimeModel(providerName, config, modelDef, api));
+        this.models.push(createRegistryRuntimeModel(providerName, config, modelDef, api));
       }
 
       if (config.oauth?.modifyModels) {

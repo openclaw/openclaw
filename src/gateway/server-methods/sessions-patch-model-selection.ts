@@ -6,6 +6,7 @@ import {
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  assertOperatorAccessProgramAllowed,
   assertOperatorModelAllowed,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
@@ -29,6 +30,7 @@ import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
 import { prepareModelSelectionRuntime } from "../../auto-reply/reply/model-runtime-normalization.js";
 import { refreshQueuedFollowupSession } from "../../auto-reply/reply/queue.js";
+import { hasRememberedNativeRuntimeConsent } from "../../config/native-runtime-consent.js";
 import { assertRequiredWorkerSelection } from "../../config/required-worker-profile.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -39,6 +41,26 @@ import { SessionMutationAuthorizationChangedError } from "../session-sharing.js"
 import type { SessionWorkerPlacementContext } from "../worker-environments/session-placement-lifecycle.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import { prepareSessionWorkerPlacementPatchValidation } from "./sessions-shared.js";
+
+/** Recheck the composed model and Access selection immediately before its effect. */
+export function createSessionAccessProgramValidation(params: {
+  operatorAuthority: AdmittedRunOperatorAuthority | undefined;
+  entry: SessionEntry;
+  validateModelSelection?: () => ErrorShape | undefined;
+}): () => ErrorShape | undefined {
+  return () => {
+    const modelError = params.validateModelSelection?.();
+    if (modelError) {
+      return modelError;
+    }
+    try {
+      assertOperatorAccessProgramAllowed(params.operatorAuthority, params.entry.cyberAccessProgram);
+      return undefined;
+    } catch (error) {
+      return errorShape(ErrorCodes.FORBIDDEN, formatErrorMessage(error));
+    }
+  };
+}
 
 export function persistSessionPatchModelSelection(params: {
   callerScopes: readonly string[];
@@ -89,14 +111,15 @@ export function refreshSessionPatchQueuedSelection(params: {
   catalog?: ModelCatalogEntry[];
 }): void {
   const modelSelectionChanged = "agentRuntime" in params.patch || params.patch.model !== undefined;
-  if (!modelSelectionChanged && params.patch.thinkingLevel === undefined) {
+  const thinkingChanged = modelSelectionChanged || params.patch.thinkingLevel !== undefined;
+  if (!thinkingChanged && params.patch.cyberAccessProgram === undefined) {
     return;
   }
   const { cfg, entry, sessionKey, agentId } = params;
   const model = resolveSessionModelRef(cfg, entry, agentId);
   refreshQueuedFollowupSession({
     key: sessionKey,
-    // An effort-only edit must not replace a queued route/account or clear its
+    // A preference-only edit must not replace a queued route/account or clear its
     // fallback provenance. Model changes still retarget waiting work as before.
     ...(modelSelectionChanged
       ? {
@@ -109,18 +132,23 @@ export function refreshSessionPatchQueuedSelection(params: {
           nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(entry),
         }
       : {}),
-    nextThinking: {
-      level: entry.thinkingLevel,
-      catalog: params.catalog,
-      agentRuntime: resolveEffectiveAgentRuntime({
-        cfg,
-        provider: model.provider,
-        modelId: model.model,
-        agentId,
-        sessionKey,
-        sessionEntry: entry,
-      }),
-    },
+    ...(params.patch.cyberAccessProgram !== undefined
+      ? { nextCyberAccessProgram: entry.cyberAccessProgram ?? null }
+      : {}),
+    nextThinking: thinkingChanged
+      ? {
+          level: entry.thinkingLevel,
+          catalog: params.catalog,
+          agentRuntime: resolveEffectiveAgentRuntime({
+            cfg,
+            provider: model.provider,
+            modelId: model.model,
+            agentId,
+            sessionKey,
+            sessionEntry: entry,
+          }),
+        }
+      : undefined,
   });
 }
 
@@ -291,6 +319,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
   callerCanConsent?: boolean;
   expectedEntry?: SessionEntry;
   hydrateThinkingCatalog?: boolean;
+  prepareNativeCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   validateModelSelection?: () => ErrorShape | undefined;
 }): Promise<
   | { ok: true; validate?: () => ErrorShape | undefined; release?: () => void }
@@ -341,6 +370,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
         ...model,
         catalog: params.catalog ?? [],
         hydrateThinkingCatalog: params.hydrateThinkingCatalog,
+        prepareNativeCatalog: params.prepareNativeCatalog,
         rawRuntime:
           typeof params.patch.agentRuntime === "string" ? params.patch.agentRuntime : undefined,
         sessionEntry: {
@@ -354,6 +384,15 @@ export async function prepareSessionPatchRuntimeSelection(params: {
       applyModelRuntimeDirective(params.entry, choice.runtime);
       validateRuntime = choice.validateRuntimeSelection;
       const harness = choice.harness;
+      if (
+        choice.runtime.kind === "set" &&
+        choice.runtime.runtime !== "openclaw" &&
+        params.callerCanConsent === true &&
+        hasRememberedNativeRuntimeConsent(params.cfg, params.agentId, choice.runtime.runtime)
+      ) {
+        params.entry.permissionMode = "full";
+        params.entry.sandboxMode = "off";
+      }
       if (grantingConsent) {
         if (
           !harness ||

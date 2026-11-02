@@ -2,7 +2,7 @@ import type { ResponseCreateParamsStreaming } from "openai/resources/responses/r
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
 import type { Context, Model } from "../types.js";
-import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import { prepareSystemPrompt } from "../utils/system-prompt-cache-boundary.js";
 import type { RequestBody } from "./openai-chatgpt-responses-websocket-state.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
@@ -36,6 +36,7 @@ export function buildRequestBody(
     replayResponsesItemIds: false,
     sessionId: options?.sessionId,
     authProfileId: options?.authProfileId,
+    mutableInput: Boolean(options?.onPayload),
     replayMode,
     retainUserProvenance,
   });
@@ -45,7 +46,8 @@ export function buildRequestBody(
     store: false,
     stream: true,
     instructions:
-      stripSystemPromptCacheBoundary(context.systemPrompt ?? "") || "You are a helpful assistant.",
+      prepareSystemPrompt(context.systemPrompt ?? "", context.preparedSystemPrompt).stripped ||
+      "You are a helpful assistant.",
     input: messages,
     text: { verbosity: options?.textVerbosity || "low" },
     include: ["reasoning.encrypted_content"],
@@ -72,7 +74,10 @@ export function buildRequestBody(
 
   if (context.tools) {
     // Explicit false prevents the backend from normalizing optional properties into required ones.
-    const tools = convertResponsesToolPayload(context.tools, { strict: false });
+    const tools = convertResponsesToolPayload(context.tools, {
+      strict: false,
+      mutableParameters: Boolean(options?.onPayload),
+    });
     if (tools.length > 0) {
       body.tools = tools;
       body.tool_choice = "auto";
@@ -87,7 +92,9 @@ export function buildRequestBody(
   if (effort !== undefined) {
     body.reasoning = {
       effort,
-      ...(effort === "none" ? {} : { summary: options?.reasoningSummary ?? "auto" }),
+      ...(effort === "none"
+        ? {}
+        : { summary: options?.reasoningSummary === undefined ? "auto" : options.reasoningSummary }),
     };
   }
 

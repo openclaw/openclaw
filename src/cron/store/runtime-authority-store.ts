@@ -7,8 +7,9 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import type { EngineConnection } from "../../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
+import { ensureStatePostgresFragment } from "../../state/openclaw-state-db-engine.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
@@ -192,7 +193,11 @@ export function replaceCronRuntimeAuthorityRows(params: {
   if (!hasPersistedAuthority && !tableExists(params.db, CRON_RUNTIME_AUTHORITY_TABLE)) {
     return;
   }
-  ensureCronRuntimeAuthorityTable(params.db);
+  if (isPostgresSqlConnection(params.db)) {
+    ensureStatePostgresFragment(params.db, CRON_RUNTIME_AUTHORITY_TABLE);
+  } else {
+    ensureCronRuntimeAuthorityTable(params.db);
+  }
   const database = getCronAuthorityKysely(params.db);
   const existingRowsByJobId = params.preserveExistingForJobIds
     ? new Map(

@@ -1,5 +1,6 @@
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
+import type { SessionCompactionPreparation } from "./session-history-read.types.js";
 import type { SessionTranscriptHydrationWorkerRequest } from "./session-transcript-hydration.types.js";
 import type { SessionEntryWorkerInput } from "./session-transcript-worker-read.types.js";
 import {
@@ -14,9 +15,12 @@ export async function readSessionEntrySnapshotRequest(
     await import("./session-accessor.sqlite-read.js");
   const { projectSessionEntryRecord } =
     await import("../../../packages/memory-host-sdk/src/host/session-entry-projection.js");
+  const { prepareAssistantTranscriptText } = await import("../../shared/chat-message-content.js");
   return {
     snapshot: readTranscriptExportSnapshotReadOnlySync(request.options, {
-      projectEvent: request.includeOriginalMessages ? undefined : projectSessionEntryRecord,
+      projectEvent: request.includeOriginalMessages
+        ? undefined
+        : (event) => projectSessionEntryRecord(event, prepareAssistantTranscriptText),
     }),
   };
 }
@@ -76,7 +80,7 @@ export async function readSessionTranscriptHydrationRequest(
   }
   const { readSessionTranscriptBoundedActiveContextCore } =
     await import("./session-accessor.sqlite-active-context.js");
-  const { streamSessionTranscriptHydration } =
+  const { readSessionCompactionPreparation, streamSessionTranscriptHydration } =
     await import("./session-transcript-hydration.worker.js");
   if (request.limits) {
     const selection = request.transcript;
@@ -96,17 +100,21 @@ export async function readSessionTranscriptHydrationRequest(
       { kind: "bounded" }
     >["transcript"];
     let residentRows: Array<{ rawSeq: number; serializedBytes: number }> | undefined;
+    let compaction: SessionCompactionPreparation | undefined;
     const snapshot = readSessionTranscriptBoundedActiveContextCore(request.target, {
       ...request.limits,
       readOnly: true,
       resolvedScope: request.resolvedScope,
-      onRead: (projection, rows) => {
+      onRead: (projection, rows, messagePresence) => {
         if (!projection.hasUnindexedPrefix) {
           residentRows = rows;
         }
         const { database, resolved } = projection;
         if (request.expectedIdentity) {
           assertOpenClawAgentDatabaseIdentity(database, request.expectedIdentity);
+        }
+        if (request.compaction) {
+          compaction = readSessionCompactionPreparation(database, request);
         }
         if (selection) {
           transcript = readSessionTranscriptAnchorFactsInDatabase(
@@ -116,6 +124,7 @@ export async function readSessionTranscriptHydrationRequest(
             undefined,
             projection,
             request.preparedEntry,
+            messagePresence,
           );
         }
       },
@@ -125,6 +134,7 @@ export async function readSessionTranscriptHydrationRequest(
       snapshot,
       residentRows,
       ...(selection ? { transcript } : {}),
+      ...(compaction ? { compaction } : {}),
     };
   }
   if (!channel) {

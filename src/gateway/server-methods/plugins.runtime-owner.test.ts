@@ -14,6 +14,7 @@ import { createPluginServiceHealthReporter } from "../../plugins/service-health.
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { pluginRequest } from "./plugins.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const catalogRead = vi.hoisted(() =>
@@ -51,6 +52,8 @@ it.each([
       catalogRead.mockReset();
       catalogRead.mockReturnValueOnce(release.promise);
       const previous = captureActivePluginRegistrySnapshot();
+      await using cleanup = new AsyncDisposableStack();
+      cleanup.defer(() => restoreActivePluginRegistrySnapshot(previous));
       const requestRegistry = createEmptyPluginRegistry();
       requestRegistry.plugins.push(createPluginRecord({ id: "colliding-plugin" }));
       const service = {
@@ -66,76 +69,60 @@ it.each([
       const requestOwner = createPluginRegistryOwner(requestRegistry);
       const requestGeneration = getActivePluginRegistryVersion();
       const enterHandler = createDeferredCore();
-      const respond = vi.fn();
+      const options = pluginRequest("plugins.list", {}, {
+        getRuntimeConfig: () => ({}),
+      } as GatewayRequestContext);
+      const { respond } = options;
       const handler = expectDefined(pluginsHandlers["plugins.list"], "plugins.list handler");
       const request = withPluginRuntimeGatewayRequestScope(
         { pluginRegistry: requestOwner.registry, isWebchatConnect: () => false },
         async () => {
           await enterHandler.promise;
-          return handler({
-            req: { type: "req", id: "runtime-owner", method: "plugins.list", params: {} },
-            params: {},
-            client: null,
-            isWebchatConnect: () => false,
-            context: { getRuntimeConfig: () => ({}) } as GatewayRequestContext,
-            respond,
-          });
+          return handler(options);
         },
       );
-      const failures: unknown[] = [];
-      try {
-        if (timing === "during catalog") {
-          enterHandler.resolve();
-          await vi.waitFor(() => expect(catalogRead).toHaveBeenCalledOnce());
-        }
-        const unrelatedRegistry = createEmptyPluginRegistry();
-        unrelatedRegistry.plugins.push(
-          createPluginRecord({ id: "colliding-plugin", enabled: false, status: "disabled" }),
-        );
-        setActivePluginRegistry(
-          publication === "same registry" ? requestRegistry : unrelatedRegistry,
-        );
-        requestOwner.publish(publication === "same registry" ? requestRegistry : unrelatedRegistry);
-        const nextGeneration = getActivePluginRegistryVersion();
-        expect(nextGeneration).toBeGreaterThan(requestGeneration);
-        enterHandler.resolve();
-        await vi.waitFor(() => expect(catalogRead).toHaveBeenCalledOnce());
-        reporter.health.reportFailure(new Error("late request-owner service failure"));
-        release.resolve(catalog);
-        await request;
-        expect(respond).toHaveBeenCalledExactlyOnceWith(
-          true,
-          expect.objectContaining({
-            generation: publication === "same registry" ? nextGeneration : requestGeneration,
-            plugins: [
-              expect.objectContaining({
-                id: "colliding-plugin",
-                runtime: {
-                  state: "service-failed",
-                  error: "request-service: late request-owner service failure",
-                },
-              }),
-            ],
-          }),
-          undefined,
-        );
-        expect(service.service.start).not.toHaveBeenCalled();
-      } catch (error) {
-        failures.push(error);
-      } finally {
+      cleanup.defer(async () => {
         enterHandler.resolve();
         release.resolve(catalog);
         await Promise.allSettled([request]);
         reporter.revoke();
-        const results = await Promise.allSettled([requestOwner.close()]);
-        restoreActivePluginRegistrySnapshot(previous);
-        failures.push(
-          ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
-        );
+        await requestOwner.close();
+      });
+      if (timing === "during catalog") {
+        enterHandler.resolve();
+        await vi.waitFor(() => expect(catalogRead).toHaveBeenCalledOnce());
       }
-      if (failures.length) {
-        throw new AggregateError(failures, "Plugin inventory assertion or registry cleanup failed");
-      }
+      const unrelatedRegistry = createEmptyPluginRegistry();
+      unrelatedRegistry.plugins.push(
+        createPluginRecord({ id: "colliding-plugin", enabled: false, status: "disabled" }),
+      );
+      const published = publication === "same registry" ? requestRegistry : unrelatedRegistry;
+      setActivePluginRegistry(published);
+      requestOwner.publish(published);
+      const nextGeneration = getActivePluginRegistryVersion();
+      expect(nextGeneration).toBeGreaterThan(requestGeneration);
+      enterHandler.resolve();
+      await vi.waitFor(() => expect(catalogRead).toHaveBeenCalledOnce());
+      reporter.health.reportFailure(new Error("late request-owner service failure"));
+      release.resolve(catalog);
+      await request;
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        true,
+        expect.objectContaining({
+          generation: publication === "same registry" ? nextGeneration : requestGeneration,
+          plugins: [
+            expect.objectContaining({
+              id: "colliding-plugin",
+              runtime: {
+                state: "service-failed",
+                error: "request-service: late request-owner service failure",
+              },
+            }),
+          ],
+        }),
+        undefined,
+      );
+      expect(service.service.start).not.toHaveBeenCalled();
     });
   },
 );

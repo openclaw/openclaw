@@ -83,28 +83,6 @@ export function createCliPathTextInput(params: {
 }
 
 /**
- * Creates delegated status resolvers backed by a lazily loaded setup wizard.
- */
-export function createDelegatedSetupWizardStatusResolvers(
-  loadWizard: () => Promise<ChannelSetupWizard>,
-): Pick<
-  ChannelSetupWizardStatus,
-  "resolveStatusLines" | "resolveSelectionHint" | "resolveQuickstartScore"
-> {
-  return {
-    async resolveStatusLines(params) {
-      return (await loadWizard()).status.resolveStatusLines?.(params) ?? [];
-    },
-    async resolveSelectionHint(params) {
-      return await (await loadWizard()).status.resolveSelectionHint?.(params);
-    },
-    async resolveQuickstartScore(params) {
-      return await (await loadWizard()).status.resolveQuickstartScore?.(params);
-    },
-  };
-}
-
-/**
  * Delegates a text input's `shouldPrompt` check to a lazily loaded setup wizard.
  */
 export function createDelegatedTextInputShouldPrompt(params: {

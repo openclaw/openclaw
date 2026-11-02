@@ -1,7 +1,7 @@
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
+import { choosePickerValue, openPicker, updatePickers } from "../../test-helpers/select-picker.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { SelectPicker } from "../select-picker.ts";
 import { DecisionModelPicker, type DecisionModelPickerParams } from "./decision-model-picker.tsx";
@@ -18,7 +18,7 @@ describe("Solid model picker interop", () => {
       options: [
         { value: "", label: "Automatic" },
         { value: "openai/other", label: "Other", provider: "openai", disabled: true },
-        { value: "openai/selected", label: "Selected", provider: "openai", detail: "API" },
+        { value: "openai/selected", label: "Selected", provider: "openai", description: "API" },
       ],
       onChange,
     });
@@ -29,8 +29,7 @@ describe("Solid model picker interop", () => {
     expect(trigger.textContent).toContain("Selected");
     expect(trigger.textContent).toContain("API");
     expect(trigger.querySelector('[data-provider-icon="codex"]')).not.toBeNull();
-    trigger.click();
-    await picker.updateComplete;
+    await openPicker(picker);
     const group = picker.querySelector('[role="group"][aria-label="OpenAI"]')!;
     expect(group.querySelector('[data-provider-icon="codex"]')).not.toBeNull();
     expect(
@@ -44,13 +43,16 @@ describe("Solid model picker interop", () => {
       ...current,
       value: "openai/new",
       disabled: true,
-      options: [{ value: "openai/new", label: "New model", provider: "openai" }],
+      options: [
+        { value: "openai/new", label: "New model", provider: "openai", description: "Updated API" },
+      ],
     }));
     flush();
     await updatePickers(view.container);
     expect(view.container.querySelector("openclaw-select-picker")).toBe(picker);
     expect(picker.querySelector<HTMLButtonElement>(".picker-select__trigger")?.disabled).toBe(true);
     expect(picker.textContent).toContain("New model");
+    expect(trigger.textContent).toContain("Updated API");
   });
 
   it("reveals a custom editor without publishing its sentinel and commits on the configured event", async () => {
@@ -67,6 +69,7 @@ describe("Solid model picker interop", () => {
     await updatePickers(view.container);
     const picker = view.container.querySelector<SelectPicker>("openclaw-select-picker")!;
     const input = view.container.querySelector<HTMLInputElement>(".model-picker__custom")!;
+    await openPicker(picker);
     const custom = [...picker.querySelectorAll<HTMLElement>('[role="option"]')].find(
       (row) => row.textContent?.trim() === "Custom model",
     )!;

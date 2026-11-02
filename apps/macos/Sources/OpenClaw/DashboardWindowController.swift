@@ -719,7 +719,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // A cancelled provisional navigation never commits, so the prior
         // document survives and stays command-capable; clearing live state
         // here would queue native commands forever with no reload to flush.
-        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
+        if self.documentHost.consumeDownloadPolicyInterruption(nsError) ||
+            (nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled)
+        {
             // A finish deferred for this successor belongs to the document that survives,
             // unless that is a failure page (about:blank HTML), which still needs a reload.
             if self.deferredFinishSourceID == self.notificationSourceID, !self.webView.isLoading,
@@ -1386,6 +1388,10 @@ extension DashboardWindowController {
     /// Clearing here covers page/WebKit-initiated main-frame navigations that
     /// never pass through `load(_:)`, so commands queue for the new document.
     func webView(_ webView: WKWebView, didCommit _: WKNavigation!) {
+        if self.nativeBrowser.owns(webView) {
+            self.nativeBrowser.navigationDidCommit(in: webView)
+            return
+        }
         guard webView === self.webView else { return }
         self.documentHost.committed()
         self.invalidateGatewayHealth()
@@ -1468,14 +1474,39 @@ extension DashboardWindowController {
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        if webView === self.webView {
-            self.finishDocumentLoad(.failure(URLError(.networkConnectionLost)))
-            self.documentHost.hasLiveContent = false
-            self.nativeCommandsReady = false
-            self.invalidateGatewayHealth()
+        if webView === self.webView, let page = self.signedOut {
+            // The signed-out page rejects the generic Reload, so redraw it with its own sign-in actions.
+            let progress = self.reconnectTask == nil ? nil : self.signInProgress
+            self.showFailureHTML(
+                DashboardFailurePage.html(
+                    signedOut: page,
+                    signingIn: progress != nil,
+                    browserAttempt: progress?.canOpenBrowser == true ? self.reconnectTask?.id : nil,
+                    error: progress?.error),
+                present: false)
+        } else if webView === self.webView {
+            // A failure page instead of reload: a crash that recurs on load would loop.
+            self.showDashboardFailure(
+                URLError(.networkConnectionLost),
+                message: String(localized: "The dashboard page stopped unexpectedly."),
+                detail: String(localized: "Choose Reload to try loading the dashboard again."))
         } else if self.nativeBrowser.owns(webView) {
             webView.reload()
         }
+    }
+
+    func webView(_ webView: WKWebView, navigationAction _: WKNavigationAction, didBecome download: WKDownload) {
+        guard webView === self.webView else { download.cancel { _ in }
+            return
+        }
+        self.documentHost.adoptDownload(download)
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse _: WKNavigationResponse, didBecome download: WKDownload) {
+        guard webView === self.webView else { download.cancel { _ in }
+            return
+        }
+        self.documentHost.adoptDownload(download)
     }
 
     func webView(
@@ -1483,6 +1514,10 @@ extension DashboardWindowController {
         decidePolicyFor navigationResponse: WKNavigationResponse,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void)
     {
+        if webView === self.webView, self.documentHost.shouldDownload(navigationResponse) {
+            decisionHandler(.download)
+            return
+        }
         if webView === self.webView,
            ControlUIDocumentHost.shouldShowDashboardResponseFailure(
                navigationResponse.response,

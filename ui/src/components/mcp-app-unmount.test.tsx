@@ -1,18 +1,21 @@
 import { createMemo, createSignal } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
-import { McpAppUnmountGate } from "./mcp-app-unmount.ts";
+import { createMcpAppUnmountGate, registerMcpAppUnmountTarget } from "./mcp-app-unmount.ts";
 
 const targetTag = "mcp-app-view";
 const teardown = vi.fn<() => Promise<void>>();
 
-type TestMcpAppUnmountTarget = HTMLElement & { restartCalls: number };
+type TestMcpAppUnmountTarget = HTMLElement & {
+  restartCalls: number;
+  restartAfterTeardown(): void;
+};
 
 function prepareTarget(element: Element | undefined) {
   if (element instanceof HTMLElement) {
-    Object.assign(element, {
+    const target = Object.assign(element, {
       restartCalls: 0,
       restartAfterTeardown() {
         this.restartCalls += 1;
@@ -20,6 +23,7 @@ function prepareTarget(element: Element | undefined) {
       // A registered App may also tear down on disconnect; the gate must act while connected.
       teardown: () => (element.isConnected ? teardown() : Promise.resolve()),
     });
+    onTestFinished(registerMcpAppUnmountTarget(target));
   }
 }
 
@@ -34,12 +38,12 @@ function mountGate(
   document.body.append(host);
   let key = "initial";
   let retainRenderedValue = false;
-  let requestUpdate = () => {};
-  const gate = new McpAppUnmountGate<Node[]>({ requestUpdate: () => requestUpdate() });
+  let invalidate = () => {};
+  const gate = createMcpAppUnmountGate<Node[]>(() => invalidate());
   mountSolid(
     () => {
       const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-      requestUpdate = () => setRevision((value) => value + 1);
+      invalidate = () => setRevision((value) => value + 1);
       const value = createMemo(() => {
         revision();
         return gate.render(key, renderValue, () => leavingRoots(root), { retainRenderedValue });
@@ -56,7 +60,7 @@ function mountGate(
     show(this: void, nextKey: string, retain = false) {
       key = nextKey;
       retainRenderedValue = retain;
-      requestUpdate();
+      invalidate();
     },
   };
 }
@@ -114,7 +118,74 @@ afterEach(() => {
   teardown.mockReset();
 });
 
-describe("McpAppUnmountGate", () => {
+describe("MCP App unmount gate", () => {
+  it("retires a registered root once when leaving roots overlap", async () => {
+    const target = Object.assign(document.createElement(targetTag), {
+      teardown: vi.fn(async () => {}),
+      restartAfterTeardown: vi.fn(),
+    });
+    const root = document.createElement("div");
+    root.append(target);
+    onTestFinished(registerMcpAppUnmountTarget(target));
+    const settled = createDeferred();
+    const gate = createMcpAppUnmountGate<string>(() => settled.resolve());
+    gate.render(
+      "initial",
+      () => "initial",
+      () => [],
+    );
+
+    expect(
+      gate.render(
+        "next",
+        () => "next",
+        () => [root, target],
+      ),
+    ).toBe("initial");
+    expect(target.teardown).toHaveBeenCalledOnce();
+    await settled.promise;
+    expect(
+      gate.render(
+        "next",
+        () => "next",
+        () => [root, target],
+      ),
+    ).toBe("next");
+  });
+
+  it("ignores retired registrations and Apps outside the leaving roots", () => {
+    const root = document.createElement("div");
+    const retired = Object.assign(document.createElement(targetTag), {
+      teardown: vi.fn(async () => {}),
+      restartAfterTeardown: vi.fn(),
+    });
+    const outside = Object.assign(document.createElement(targetTag), {
+      teardown: vi.fn(async () => {}),
+      restartAfterTeardown: vi.fn(),
+    });
+    root.append(retired);
+    const unregister = registerMcpAppUnmountTarget(retired);
+    onTestFinished(unregister);
+    onTestFinished(registerMcpAppUnmountTarget(outside));
+    unregister();
+    const gate = createMcpAppUnmountGate<string>();
+    gate.render(
+      "initial",
+      () => "initial",
+      () => [root],
+    );
+
+    expect(
+      gate.render(
+        "next",
+        () => "next",
+        () => [root],
+      ),
+    ).toBe("next");
+    expect(retired.teardown).not.toHaveBeenCalled();
+    expect(outside.teardown).not.toHaveBeenCalled();
+  });
+
   it("retains the current value for an unchanged explicit owner", async () => {
     const owner = mountOwner();
     await owner.updateComplete;
@@ -175,8 +246,11 @@ describe("McpAppUnmountGate", () => {
     await owner.updateComplete;
     expect(original.isConnected).toBe(true);
 
+    const reboundRestart = vi.fn();
+    original.restartAfterTeardown = reboundRestart;
     pending.resolve();
-    await expect.poll(() => original.restartCalls).toBe(1);
+    await expect.poll(() => reboundRestart).toHaveBeenCalledOnce();
+    expect(original.restartCalls).toBe(0);
     expect(owner.shadowRoot!.querySelector(targetTag)).toBe(original);
     expect(teardown).toHaveBeenCalledOnce();
   });

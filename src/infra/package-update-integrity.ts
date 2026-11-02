@@ -2,10 +2,11 @@ import { createHash } from "node:crypto";
 import { constants, lstatSync, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
+import { ignoreMissingPath } from "./errno.js";
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
+import { repairPackagePermissions } from "./package-update-activation-paths.js";
 import * as fileHashing from "./package-update-integrity-hasher.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
 
@@ -20,8 +21,6 @@ const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_LAUNCHER_BYTES = 1024 * 1024;
 const SETTLED_CTIME_MARGIN_MS = 5_000;
 const SETTLED_CTIME_MARGIN_NS = BigInt(SETTLED_CTIME_MARGIN_MS) * 1_000_000n;
-const log = createSubsystemLogger("update/package-integrity");
-let readerSequence = 0;
 
 export type PackageIntegrityFingerprint = { digest: string; identity: string; version: string };
 export type PackageDirectoryIdentity = Pick<PackageIntegrityFingerprint, "identity" | "version">;
@@ -29,10 +28,70 @@ export type PackageDirectoryIdentity = Pick<PackageIntegrityFingerprint, "identi
 type EntryObservation = { fields: Map<string, string>; retained: string; reusable: boolean };
 // Observations live only as long as their in-process fingerprint; journals stay compact.
 const observations = new WeakMap<PackageIntegrityFingerprint, Map<string, EntryObservation>>();
+const fullModeDigests = new WeakMap<PackageIntegrityFingerprint, string>();
+const permissionRepairs = new WeakMap<
+  PackageIntegrityFingerprint,
+  Array<{ file: string; stat: BigIntStats }>
+>();
 const settlementObservations = new WeakMap<
   PackageIntegrityFingerprint,
   Array<{ file: string; stat: BigIntStats }>
 >();
+
+/** Old receipts may have sealed npm's public modes; keep their exact digest valid. */
+export function packageIntegrityMatches(
+  expected: PackageIntegrityFingerprint,
+  actual: PackageIntegrityFingerprint,
+): boolean {
+  return (
+    expected.identity === actual.identity &&
+    expected.version === actual.version &&
+    (expected.digest === actual.digest || expected.digest === fullModeDigests.get(actual))
+  );
+}
+
+export function repairPackageIntegrityPermissions(
+  fingerprint: PackageIntegrityFingerprint,
+  assertCurrent: () => void,
+  onWarning: (message: string) => void,
+): void {
+  // Windows stat permission bits do not represent POSIX group/other access.
+  if (process.platform === "win32") {
+    return;
+  }
+  const entries = permissionRepairs.get(fingerprint) ?? [];
+  let repaired = 0;
+  const failures: string[] = [];
+  for (const { file, stat } of entries) {
+    assertCurrent();
+    try {
+      repairPackagePermissions(file, stat, Number(stat.mode & 0o7700n));
+      repaired++;
+    } catch (error) {
+      if (!["EACCES", "EPERM", "EROFS"].some((code) => hasErrnoCode(error, code))) {
+        throw error;
+      }
+      failures.push(file);
+    }
+  }
+  permissionRepairs.delete(fingerprint);
+  if (entries.length) {
+    const paths = entries
+      .slice(0, 3)
+      .map(({ file }) => JSON.stringify(file))
+      .join(", ");
+    onWarning(
+      `Repaired permissions on ${repaired} retained package objects: ${paths}. Group/other permissions and POSIX ACL access masks were cleared.${
+        failures.length
+          ? ` Could not tighten ${failures.length} objects (${failures
+              .slice(0, 3)
+              .map((file) => JSON.stringify(file))
+              .join(", ")}); package contents still verified.`
+          : ""
+      }`,
+    );
+  }
+}
 
 /** Revalidate the remount proof at the synchronous durable-settlement boundary. */
 export function assertPackageIntegritySettlementUnchanged(
@@ -105,12 +164,12 @@ export function packageLauncherDifferences(
   options?: { checkMode?: boolean },
 ): string[] {
   const symlink = expected.type === "symlink" && actual.type === "symlink";
-  // A copied launcher must restore the same bytes or link target; npm may
-  // recreate its metadata. Exact-object mutation authority is checked separately.
+  // Symlink modes vary with umask. Exact-object mutation authority is checked separately.
   return (["type", "mode", "contents"] as const)
     .filter(
       (field) =>
-        (field !== "mode" || options?.checkMode === true) && expected[field] !== actual[field],
+        (field !== "mode" || (!symlink && options?.checkMode === true)) &&
+        expected[field] !== actual[field],
     )
     .map((field) =>
       field === "contents" && symlink
@@ -188,72 +247,20 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
   const startedAtMonotonicMs = now();
   const budget = Number.isFinite(timeoutMs) ? Math.max(1, timeoutMs) : UPDATE_RUNNER_TIMEOUT_MS;
   const deadlineAtMonotonicMs = startedAtMonotonicMs + budget;
-  const timing = {
-    readerId: `${process.pid}:${++readerSequence}`,
-    timeOriginUnixMs: performance.timeOrigin,
-    startedAtMonotonicMs,
-    budgetMs: budget,
-    deadlineClock: "monotonic",
-    deadlineAtMonotonicMs,
-  };
-  let timeoutObservedAtMonotonicMs: number | undefined;
-  let pendingIo = 0;
-
-  async function trackIo<T>(operation: () => Promise<T>): Promise<T> {
-    pendingIo++;
-    try {
-      return await operation();
-    } finally {
-      pendingIo--;
-    }
-  }
-
-  async function observe<T>(
-    phase: "baseline" | "retained" | "restored" | "transaction",
-    operation: () => Promise<T>,
-  ): Promise<T> {
-    const emit = (event: string, facts?: Record<string, unknown>) => {
-      try {
-        log.debug(event, { ...timing, phase, event, ...facts });
-      } catch {
-        // A diagnostics sink must not replace the package result or primary error.
-      }
-    };
-    emit("reader-started");
-    let outcome = "failed";
-    try {
-      const result = await operation();
-      outcome = "completed";
-      return result;
-    } finally {
-      // Observe the completed scope, including its awaited cleanup, not merely
-      // the timeout notification. Uncancelable OS work can still be pending.
-      const settledAtMonotonicMs = performance.now();
-      emit("reader-settled", {
-        settledAtMonotonicMs,
-        elapsedMs: settledAtMonotonicMs - startedAtMonotonicMs,
-        outcome: timeoutObservedAtMonotonicMs === undefined ? outcome : "timed-out",
-        timeoutObservedAtMonotonicMs,
-        pendingIo,
-      });
-    }
-  }
-
   async function read<T>(operation: () => Promise<T>, closeLate?: (value: T) => Promise<void>) {
     let pending: Promise<T> | undefined;
     const value = await awaitWithinDeadline(
-      () => (pending = trackIo(operation)),
+      () => (pending = operation()),
       deadlineAtMonotonicMs,
       now,
     );
     if (value === ABSOLUTE_DEADLINE_EXPIRED) {
-      timeoutObservedAtMonotonicMs ??= performance.now();
       // An OS read cannot always be canceled. Close late descriptors and never
       // continue the walk after returning a timeout to the swap owner.
       if (pending && closeLate) {
         void pending
           .then(
-            (late) => trackIo(() => closeLate(late)),
+            (late) => closeLate(late),
             () => {},
           )
           .catch(() => {});
@@ -264,13 +271,8 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
   }
 
   async function close(resource: { close: () => Promise<void> }) {
-    const closing = trackIo(() => resource.close()).catch(() => {});
-    if (
-      (await awaitWithinDeadline(() => closing, deadlineAtMonotonicMs, now)) ===
-      ABSOLUTE_DEADLINE_EXPIRED
-    ) {
-      timeoutObservedAtMonotonicMs ??= performance.now();
-    }
+    const closing = resource.close().catch(() => {});
+    await awaitWithinDeadline(() => closing, deadlineAtMonotonicMs, now);
   }
 
   async function entries(directoryPath: string, limit = MAX_TREE_ENTRIES): Promise<string[]> {
@@ -296,12 +298,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     return children.toSorted();
   }
 
-  async function hashFile(
-    file: string,
-    stat: BigIntStats,
-    remainingBytes: number,
-    readBuffer?: Buffer,
-  ) {
+  async function hashFile(file: string, stat: BigIntStats, remainingBytes: number) {
     if (!stat.isFile()) {
       throw new Error("Package rollback verification byte limit exceeded");
     }
@@ -317,7 +314,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         throw new Error("Package rollback file changed before reading");
       }
       const hash = createHash("sha256");
-      const buffer = readBuffer ?? Buffer.allocUnsafe(64 * 1024);
+      const buffer = Buffer.allocUnsafe(64 * 1024);
       const size = Number(stat.size);
       let position = 0;
       // The final stat detects growth; an extra EOF read costs one OS call per file.
@@ -361,7 +358,10 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     };
     const prior = reuse ? observations.get(reuse) : undefined;
     const digest = createHash("sha256");
+    const fullModeDigest = createHash("sha256");
     const observed: Array<{ file: string; stat: BigIntStats }> = [];
+    // One chmod covers every alias; a second repair would use a pre-chmod stat.
+    const permissive = new Map<string, { file: string; stat: BigIntStats }>();
     const entriesObserved = new Map<string, EntryObservation>();
     let bytes = 0;
     let remainingEntries = MAX_TREE_ENTRIES - 1;
@@ -387,6 +387,9 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       const retainedEntry = JSON.stringify([relative, retained]);
       if (!legacy) {
         digest.update(retainedEntry);
+        fullModeDigest.update(
+          JSON.stringify([relative, [retained[0], fields.get("mode"), ...retained.slice(2)]]),
+        );
       }
       entriesObserved.set(relative, { fields, retained: retainedEntry, reusable });
     };
@@ -446,6 +449,9 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         rootIdentity = identity(stat);
       }
       observed.push({ file, stat });
+      if ((stat.isFile() || stat.isDirectory()) && (stat.mode & 0o077n) !== 0n) {
+        permissive.set(identity(stat), { file, stat });
+      }
       // npm's disposable hidden lockfile is a cache, not package content:
       // https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json#hidden-lockfiles
       // Keep the observation so a mid-scan substitution still refuses recovery.
@@ -459,9 +465,11 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       const info = metadata(stat);
       const fields = new Map(Object.entries(info));
       // npm bin repair chmods files; external hardlink removal changes nlink/ctime.
-      // Keep inode, permissions and hashes strict; directory clocks/size also
+      // Keep inode, owner permissions and hashes strict; directory clocks/size also
       // change when npm replaces its hidden cache. Within-read checks stay strict.
-      const retained = [digestIdentity(stat), info.mode, info.uid, info.gid];
+      // Symlink mode bits are not access grants and cannot be portably chmodded.
+      const mode = stat.isSymbolicLink() ? stat.mode : stat.mode & ~0o077n;
+      const retained = [digestIdentity(stat), String(mode), info.uid, info.gid];
       if (!stat.isDirectory()) {
         retained.push(info.size, info.mtimeNs);
       }
@@ -520,7 +528,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         const admittedAtNs = BigInt(Date.now()) * 1_000_000n;
         const reusable = stat.ctimeNs + SETTLED_CTIME_MARGIN_NS <= admittedAtNs;
         pending.push({
-          outcome: trackIo(() => hasher.hash(file, stat)).then(
+          outcome: hasher.hash(file, stat).then(
             (fileDigest) => {
               fields.set("sha256", fileDigest);
               retained.push("file", fileDigest);
@@ -568,14 +576,18 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       if (!version) {
         throw new Error("Package rollback version is unavailable");
       }
-      for (const entry of observed) {
-        if (
-          !packageStatUnchanged(
-            entry.stat,
-            await read(() => fs.lstat(entry.file, { bigint: true })),
-          )
-        ) {
-          throw new Error("Package rollback tree changed during verification");
+      for (let start = 0; start < observed.length; start += 32) {
+        const results = await Promise.allSettled(
+          observed.slice(start, start + 32).map(async ({ file, stat }) => {
+            if (!packageStatUnchanged(stat, await read(() => fs.lstat(file, { bigint: true })))) {
+              throw new Error("Package rollback tree changed during verification");
+            }
+          }),
+        );
+        // Preserve traversal-order refusals, even when a later read times out first.
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure) {
+          throw failure.reason;
         }
       }
       if (legacy) {
@@ -604,6 +616,10 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       }
       const fingerprint = { digest: digest.digest("hex"), identity: rootIdentity, version };
       observations.set(fingerprint, entriesObserved);
+      if (!legacy) {
+        fullModeDigests.set(fingerprint, fullModeDigest.digest("hex"));
+        permissionRepairs.set(fingerprint, [...permissive.values()]);
+      }
       if (historicalDevices) {
         settlementObservations.set(fingerprint, observed);
       }
@@ -686,10 +702,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       await read(() => fs.lstat(file));
       return true;
     } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return false;
-      }
-      throw error;
+      return ignoreMissingPath(error) ?? false;
     }
   }
 
@@ -723,5 +736,5 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     return copied;
   }
 
-  return { tree, copiedTree, rootEntry, directoryIdentity, launcher, exists, entries, observe };
+  return { tree, copiedTree, rootEntry, directoryIdentity, launcher, exists, entries };
 }

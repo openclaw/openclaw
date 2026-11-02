@@ -54,6 +54,7 @@ use `url`. If the Gateway is not ready or a browser handoff cannot be issued, th
 `{"ok":false,"error":{"type":"cli_error","message":"..."},"reason":"..."}` and exits non-zero.
 The dashboard-specific `reason` remains beside the shared error envelope. SecretRef-managed shared tokens are never included
 in `url`.
+Failures also print the error and a next-step diagnostic command to stderr; stdout remains one JSON object.
 
 For terminal HTTP failures, an unreadable repair diagnostic leaves the observed HTTP status
 in `reason` (for example, `HTTP 503`).

@@ -1,4 +1,4 @@
-import { createEffect, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
 import {
   normalizeSessionIconValue,
   SESSION_ICON_GLYPH_IDS,
@@ -8,9 +8,12 @@ import type {
   ControlUiAppearanceGlyphProps,
   ControlUiAppearancePickerProps,
 } from "../../../src/plugin-sdk/control-ui-components.js";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
-import { AppearancePicker as AppearanceGrid } from "./session-icon-picker-solid.tsx";
+import {
+  AppearancePicker as AppearanceGrid,
+  type AppearancePickerFocus,
+} from "./session-icon-picker-solid.tsx";
 import "../styles/sidebar-menus.css";
 import "../styles/appearance-picker.css";
 
@@ -21,10 +24,10 @@ export type AppearanceGlyph = SolidBridgeElement<GlyphProperties>;
 
 export const AppearancePicker = defineSolidBridge<PickerProperties>(
   "openclaw-appearance-picker",
-  (properties, host) => {
+  (properties) => {
     const [mode, setMode] = createSignal<"grid" | "custom">("grid");
     const [customIcon, setCustomIcon] = createSignal("");
-    const [focus, setFocus] = createSignal<"grid" | "custom">();
+    let focus: AppearancePickerFocus | undefined;
     const select = (icon: string | null, color: string | null) => {
       if (!properties.props.disabled) {
         properties.props.onChange({ icon, color });
@@ -33,22 +36,11 @@ export const AppearancePicker = defineSolidBridge<PickerProperties>(
     const showGrid = () => {
       setMode("grid");
       setCustomIcon("");
-      setFocus("grid");
+      focus?.("grid");
     };
-    createEffect(focus, (target) => {
-      if (host.isConnected && target) {
-        host
-          .querySelector<HTMLElement>(
-            target === "custom"
-              ? ".session-menu__icon-custom-input"
-              : ".session-menu__icon-choice--custom",
-          )
-          ?.focus();
-      }
-    });
     return (
       <AppearanceGrid
-        inline
+        ref={(handle) => (focus = handle)}
         clearable={properties.props.clearable}
         mode={mode()}
         currentIcon={properties.props.icon}
@@ -62,14 +54,10 @@ export const AppearancePicker = defineSolidBridge<PickerProperties>(
         onShowCustom={() => {
           setMode("custom");
           setCustomIcon("");
-          setFocus("custom");
+          focus?.("custom");
         }}
         onBack={showGrid}
-        onInput={(event) => {
-          if (event.currentTarget instanceof HTMLTextAreaElement) {
-            setCustomIcon(event.currentTarget.value);
-          }
-        }}
+        onInput={(event) => setCustomIcon(event.currentTarget.value)}
         onApply={() => {
           const icon = normalizeSessionIconValue(customIcon());
           if (icon && !properties.props.disabled) {

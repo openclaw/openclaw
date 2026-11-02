@@ -52,7 +52,7 @@ export function createGatewayWorkerPlacementChangePublisher(params: {
 
 export function subscribeGatewayWorkerPlacementMetadataChanges(params: {
   placements: Pick<WorkerSessionPlacementStore, "readChangeSnapshot" | "readProjection">;
-  environments: Pick<WorkerEnvironmentService, "subscribeMachineShapeChanged">;
+  environments: Pick<WorkerEnvironmentService, "machineShapeNotifications">;
   runnerAvailability: WorkerPlacementRunnerAvailabilityReader;
   getSessionChangeContext?: () => Parameters<typeof emitSessionsChanged>[0] | undefined;
   warn: (message: string) => void;
@@ -129,10 +129,10 @@ export function subscribeGatewayWorkerPlacementMetadataChanges(params: {
       }
     });
   };
-  const unsubscribe = params.environments.subscribeMachineShapeChanged((profileId) => {
+  params.environments.machineShapeNotifications.onChanged = (profileId) => {
     profiles.add(profileId);
     schedule();
-  });
+  };
   return {
     runnerChanged(nodeId: string) {
       if (stopped) {
@@ -145,7 +145,7 @@ export function subscribeGatewayWorkerPlacementMetadataChanges(params: {
       stopped = true;
       profiles.clear();
       nodes.clear();
-      unsubscribe();
+      params.environments.machineShapeNotifications.onChanged = () => {};
       await pending;
     },
   };

@@ -11,7 +11,6 @@ import {
   resolveInlineCommandMatch,
   resolvePowerShellInlineCommandMatch,
 } from "../infra/shell-inline-command.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveOomScoreWrappedCommand } from "./linux-oom-score.js";
 
@@ -19,7 +18,6 @@ const spawnCounts = resolveGlobalSingleton(Symbol.for("openclaw.childProcessSpaw
   counts: new Map<string, { family: string; operation: string; count: number }>(),
   sampledAt: performance.now(),
 }));
-let spawnLog: ReturnType<typeof createSubsystemLogger> | undefined;
 const COMMAND_FAMILIES =
   /^(node|bun|git|ps|pgrep|lsof|sh|bash|zsh|cmd|powershell|pwsh|npm|pnpm|python|python3|uv|ssh|openclaw)$/;
 const GIT_OPERATIONS = [
@@ -55,7 +53,17 @@ const gitOperation = resolveGlobalSingleton(
   Symbol.for("openclaw.gitSpawnOperation"),
   () => new AsyncLocalStorage<GitProcessOperation | "unknown">(),
 );
-const CHILD_OPERATIONS = ["agent.exec", "shell.snapshot", "service.relay"] as const;
+const CHILD_OPERATIONS = [
+  "agent.exec",
+  "agent.cli",
+  "agent.file-read",
+  "shell.snapshot",
+  "service.relay",
+  "service.manager",
+  "worktree.filesystem",
+  "worktree.cleanup",
+  "worktree.maintenance",
+] as const;
 type ChildProcessOperation = (typeof CHILD_OPERATIONS)[number];
 const childOperations: ReadonlySet<string> = new Set(CHILD_OPERATIONS);
 const childOperation = resolveGlobalSingleton(
@@ -221,9 +229,6 @@ export function emitChildProcessSpawnSample(): void {
       count,
       intervalMs,
     });
-    (spawnLog ??= createSubsystemLogger("gateway/diagnostics/process")).debug(
-      `child process spawns: family=${family} operation=${operation} count=${count} ratePerMinute=${((count * 60_000) / intervalMs).toFixed(2)}`,
-    );
   }
   spawnCounts.counts.clear();
   spawnCounts.sampledAt = now;

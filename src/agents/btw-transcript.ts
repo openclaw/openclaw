@@ -204,9 +204,9 @@ export async function readBtwTranscriptMessages(params: {
       const parentId = trailingId ? tree.byId.get(trailingId)?.parentId : null;
       branchEntries = parentId ? (buildSessionBranchEntries(tree, parentId) ?? []) : [];
     }
-    const sessionContext = buildSessionContext(branchEntries ?? sessionEntries);
-    return Array.isArray(sessionContext.messages) ? sessionContext.messages : [];
+    return buildSessionContext(branchEntries ?? sessionEntries).messages;
   } catch {
+    // Transcript context is optional; the caller uses the live prompt or reports no active context.
     return [];
   }
 }

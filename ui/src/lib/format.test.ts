@@ -1,6 +1,5 @@
 // @vitest-environment node
-// Control UI tests cover format behavior.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
 import {
@@ -25,28 +24,28 @@ import {
 import { stripThinkingTags } from "./strip-thinking-tags.ts";
 
 describe("formatAgo", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.UTC(2026, 0, 2) });
+  });
+
   afterEach(async () => {
+    vi.useRealTimers();
     await i18n.setLocale("en");
   });
 
-  it("formats timestamps less than 60s in the future", () => {
-    expect(formatRelativeTimestamp(Date.now() + 30_000)).toMatch(/^in (29|30)s$/);
-  });
-
-  it("preserves past seconds without a suffix", () => {
-    expect(formatRelativeTimestamp(Date.now() - 30_000, { suffix: false })).toMatch(/^(29|30)s$/);
-  });
-
-  it("returns 'Xm from now' for future timestamps", () => {
-    expect(formatRelativeTimestamp(Date.now() + 5 * 60_000)).toBe("in 5m");
-  });
-
-  it("returns a localized current-time label for recent past timestamps", () => {
-    expect(formatRelativeTimestamp(Date.now() - 10_000)).toBe("just now");
-  });
-
-  it("returns 'Xm ago' for past timestamps", () => {
-    expect(formatRelativeTimestamp(Date.now() - 5 * 60_000)).toBe("5m ago");
+  it.each([
+    ["formats timestamps less than 60s in the future", 30_000, undefined, "in 30s"],
+    ["preserves past seconds without a suffix", -30_000, { suffix: false }, "30s"],
+    ["returns 'Xm from now' for future timestamps", 5 * 60_000, undefined, "in 5m"],
+    [
+      "returns a localized current-time label for recent past timestamps",
+      -10_000,
+      undefined,
+      "just now",
+    ],
+    ["returns 'Xm ago' for past timestamps", -5 * 60_000, undefined, "5m ago"],
+  ])("%s", (_name, offsetMs, options, expected) => {
+    expect(formatRelativeTimestamp(Date.now() + offsetMs, options)).toBe(expected);
   });
 
   it("returns 'n/a' for null/undefined", () => {
@@ -70,13 +69,6 @@ describe("localized durations", () => {
     expect(formatDurationCompact(durationMs)).toBeUndefined();
     expect(formatDurationLong(durationMs)).toBeUndefined();
     expect(formatDurationHuman(durationMs, "unavailable")).toBe("unavailable");
-  });
-
-  it("keeps zero distinct from a positive duration rounded to zero", () => {
-    expect(formatDurationCompact(0)).toBeUndefined();
-    expect(formatDurationLong(0)).toBeUndefined();
-    expect(formatDurationCompact(0.1)).toBe("0ms");
-    expect(formatDurationHuman(0)).toBe("0ms");
   });
 
   it.each([
@@ -119,6 +111,8 @@ describe("localized durations", () => {
     expect(formatDurationCompact(3_630_000)).toBe(`${unit(1, "hour")} ${unit(30, "second")}`);
     expect(formatDurationCompact(86_460_000)).toBe(`${unit(1, "day")} ${unit(1, "minute")}`);
     expect(formatDurationCompact(0)).toBeUndefined();
+    expect(formatDurationLong(0)).toBeUndefined();
+    expect(formatDurationCompact(0.1)).toBe(unit(0, "millisecond"));
     expect(formatDurationHuman(0)).toBe(unit(0, "millisecond"));
     expect(formatDurationHuman(undefined, "missing")).toBe("missing");
     expect(formatDurationLong(123_000)).toBe(

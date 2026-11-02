@@ -1,5 +1,5 @@
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
@@ -9,10 +9,7 @@ import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
-import {
-  cloneSessionEntries,
-  createReplySessionInitializationRevision,
-} from "./session-accessor.entry-mutation.js";
+import { createReplySessionInitializationRevision } from "./session-accessor.entry-mutation.js";
 import { resolveSessionEntryFromStore } from "./session-accessor.entry.js";
 import type {
   SessionEntryLifecycleUpsert,
@@ -20,6 +17,7 @@ import type {
 } from "./session-accessor.lifecycle-types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
+import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
 import { withSessionEntryCreationPublication } from "./session-accessor.sqlite-entry-cache-publication.js";
 import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
@@ -35,10 +33,9 @@ import type {
   ReplySessionInitializationCommitContext,
   ReplySessionInitializationCommitResult,
 } from "./session-accessor.types.js";
-import { withSessionActorStorage } from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
-import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import { assertSessionEntryCohortScope } from "./session-entry-cohort-scope.js";
 import type { SessionEntryCreationCommit } from "./session-entry-creation.types.js";
 import type { SessionEntryCohortReader } from "./session-entry-read-runtime.types.js";
@@ -91,10 +88,9 @@ type ReplySessionInitializationSelection = {
 function loadReplySessionInitializationEntriesForMaintenance(
   params: ReplySessionInitializationSelection,
 ): Record<string, SessionEntry> {
-  assertSessionInitializationAgentScope(params.agentId, params.sessionKey);
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
-      runSqliteDeferredTransactionSync(database.db, () => {
+      runSqliteReadSnapshotSync(database.db, () => {
         assertCanonicalSqliteSessionKeysCurrent(database);
         const entries: Record<string, SessionEntry> = {};
         const currentKey = normalizeStoreSessionKey(params.sessionKey);
@@ -604,6 +600,8 @@ export async function commitReplySessionInitialization(params: {
   return {
     ok: true,
     sessionEntry: { ...committedSessionEntry },
-    sessionStoreView: cloneSessionEntries(store),
+    sessionStoreView: Object.fromEntries(
+      Object.entries(store).map(([key, entry]) => [key, { ...entry }]),
+    ),
   };
 }

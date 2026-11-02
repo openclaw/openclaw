@@ -13,9 +13,11 @@ async function runDoctorWorker(): Promise<void> {
   enableConsoleCapture();
   await withCliProcessScope(() =>
     withCliCommandCleanup(false, async (cleanup) => {
+      let exitCode: number;
       try {
-        const { doctorCommand } = await import("./doctor.js");
-        await doctorCommand(defaultRuntime, { nonInteractive: true });
+        // Hosted diagnosis has no repair approval; non-interactive Doctor still migrates state.
+        const { runDoctorLintCli } = await import("./doctor-lint.js");
+        exitCode = await runDoctorLintCli(defaultRuntime, {});
       } finally {
         await closeCliResources(cleanup);
         const resources = cleanup?.pluginResources;
@@ -23,7 +25,7 @@ async function runDoctorWorker(): Promise<void> {
           await runCliDisposer("plugin-registration-resources", () => resources.release());
         }
       }
-      exitCliAfterOutput(defaultRuntime, 0);
+      exitCliAfterOutput(defaultRuntime, exitCode);
     }),
   );
 }

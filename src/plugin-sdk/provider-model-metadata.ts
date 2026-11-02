@@ -1,4 +1,5 @@
 /** Model descriptors and prompt metadata without runtime discovery or credential policy. */
+export { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 export { resolveModelServiceTierContextTokens } from "@openclaw/model-catalog-core/model-catalog-types";
 export {
   findNormalizedProviderKey,

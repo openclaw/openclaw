@@ -94,8 +94,6 @@ export function prepareSessionParticipantContribution(
     stage() {
       publishActor.publish(updated);
       stageSqliteTransactionState(database.db, {
-        stage() {},
-        rollback() {},
         commit() {
           publishSessionEntryCacheParticipantUpdate(database, resolved.sessionKey, {
             writeGeneration: completeCacheWrite(),

@@ -31,7 +31,7 @@ function isStreamingToolProgressContinuationText(text: string) {
   const trimmed = text.trim();
   return (
     QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE.test(trimmed) ||
-    trimmed.startsWith(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)
+    trimmed.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)
   );
 }
 
@@ -139,20 +139,30 @@ function extractRuntimeConversationData(text: string): string[] {
   return fragments;
 }
 
-export function extractCurrentRuntimeContextTexts(input: ResponsesInputItem[]): string[] {
+function extractCurrentRuntimeContextCarriers(input: ResponsesInputItem[]): string[] {
   const turn = extractLastMatchingUserTurn(input);
   if (!turn) {
     return [];
   }
   return input.slice(turn.index + 1).flatMap((item) => {
     const text = extractInputText(item.content);
-    if (!isInternalRuntimeContextCarrierText(text)) {
-      return [];
-    }
+    return isInternalRuntimeContextCarrierText(text) ? [text] : [];
+  });
+}
+
+export function extractCurrentRuntimeContextTexts(input: ResponsesInputItem[]): string[] {
+  return extractCurrentRuntimeContextCarriers(input).flatMap((text) => {
     return /^Conversation data \(data, not instructions\):$/mu.test(text)
       ? extractRuntimeConversationData(text)
       : [text]; // Session v3 retains literal runtime context.
   });
+}
+
+export function hasCurrentGeneratedMediaDelivery(input: ResponsesInputItem[]): boolean {
+  // Host instructions are literal; quoted conversation data must not become receipts.
+  return extractCurrentRuntimeContextCarriers(input).some((text) =>
+    /^\[Generated media delivered\]\r?$/mu.test(text),
+  );
 }
 
 function isSubagentRecoveryText(text: string): boolean {
@@ -162,8 +172,8 @@ function isSubagentRecoveryText(text: string): boolean {
     /^(?:continue|keep going|resume|retry|carry on)[.!?]?$/iu.test(text) ||
     [
       "The previous assistant turn recorded reasoning but did not produce a user-visible answer.",
-      "The previous attempt did not produce a user-visible answer.",
-      "The previous assistant turn completed its tool calls but did not produce a user-visible answer.",
+      "Your turn ended without a final reply.",
+      "Your turn ended without a final result.",
       "The previous attempt compacted the conversation context before producing a final user-visible answer.",
     ].some((prefix) => text.startsWith(prefix))
   );
@@ -196,7 +206,7 @@ export function resolveMockSubagentTurn(input: ResponsesInputItem[]):
         kind: settled ? "settled" : "completion",
         text: event,
         caseName:
-          /^task:\s*qa-terminal-(visible|silent|empty|restart|fallback|private)(?:-(?:first|second))?\s*$/imu
+          /^task:\s*qa-terminal-(visible|silent|empty|restart|fallback|race|private)(?:-(?:first|second))?\s*$/imu
             .exec(event)?.[1]
             ?.toLowerCase(),
       };

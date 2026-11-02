@@ -1,11 +1,12 @@
 // Configures SQLite WAL and related pragmas for local stores.
-import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { GatewayScheduler, type GatewayScheduledJob } from "./gateway-scheduler.js";
+import { registerNodeSqliteDisposeGuard } from "./kysely-sync-cache-state.js";
 import {
   normalizeSqliteNonNegativeInteger,
   runWithSqliteBusyTimeout,
@@ -14,12 +15,14 @@ import {
 import {
   getSqliteDatabaseAdmission,
   onSqliteDatabaseWriteSettled,
+  peekSqliteDatabaseAdmissionForPath,
   publishSqliteDatabaseAdmission,
   readSqliteDatabaseWriteRevision,
   type SqliteDatabaseAdmissionKey,
 } from "./sqlite-database-admission.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
+import { schemaAdmission } from "./sqlite-schema-admission.js";
 import {
   createSqliteWalCheckpoint,
   type SqliteWalCheckpointMode,
@@ -92,10 +95,6 @@ function sharedCompletedCheckpoint(
   return shared ? new Int32Array(shared) : undefined;
 }
 
-// Gateway bootstrap loads the database owner before admitting turns. Long-lived
-// maintenance timers must not retain the context of a turn that opens a database.
-export const runInSqliteMaintenanceContext = AsyncLocalStorage.snapshot();
-
 export type SqliteWalMaintenance = {
   /** Last maintenance observation; reading it never checkpoints or probes storage. */
   readonly health?: SqliteWalHealth;
@@ -145,6 +144,14 @@ export function configureSqliteSnapshotPragmas(db: DatabaseSync): void {
 // auto_vacuum only takes effect when set before the first page is written.
 // Existing databases require an offline VACUUM owned by doctor/maintenance.
 function enableIncrementalAutoVacuumForFreshDatabase(db: DatabaseSync): void {
+  const location = db.location();
+  const schema = location
+    ? peekSqliteDatabaseAdmissionForPath(location, schemaAdmission)
+    : undefined;
+  // An admitted header or schema object already proves this file has allocated pages.
+  if (schema && (schema.userVersion > 0 || schema.tables.size > 0 || schema.views.size > 0)) {
+    return;
+  }
   const row = db.prepare("PRAGMA page_count").get() as { page_count?: unknown } | undefined;
   if (row?.page_count === 0) {
     db.exec("PRAGMA auto_vacuum = INCREMENTAL;");
@@ -206,8 +213,7 @@ function enableWalJournalMode(
   try {
     while (true) {
       try {
-        db.exec("PRAGMA journal_mode = WAL;");
-        const journalMode = readJournalModeResult(db.prepare("PRAGMA journal_mode;").get());
+        const journalMode = readJournalModeResult(db.prepare("PRAGMA journal_mode = WAL;").get());
         if (journalMode === "wal") {
           return true;
         }
@@ -321,6 +327,7 @@ export function configureSqliteWalMaintenance(
       ? fs.realpathSync.native(options.databasePath)
       : undefined;
   let invalidated = false;
+  let inspectingSidecars = false;
   let splitBrainDetectionEnabled = Boolean(tripwireDatabasePath);
   const checkpointOwner = createSqliteWalCheckpoint(
     db,
@@ -330,7 +337,7 @@ export function configureSqliteWalMaintenance(
   const runCheckpoint = checkpointOwner.checkpoint;
 
   const runMaintenance = (operation: () => boolean): boolean => {
-    if (invalidated) {
+    if (invalidated || inspectingSidecars) {
       return false;
     }
     try {
@@ -466,6 +473,7 @@ export function configureSqliteWalMaintenance(
       timerIntervalMs > 0 &&
       !scope.signal.aborted &&
       !invalidated &&
+      !inspectingSidecars &&
       !options.isScheduledMaintenanceSuspended?.()
         ? { maxPages, checkpointMode: periodicCheckpointMode, checkpoint: checkpointOwner.snapshot }
         : undefined,
@@ -479,7 +487,7 @@ export function configureSqliteWalMaintenance(
     () => stopCheckpointTick?.(),
   );
   const schedule = (phase: string, intervalMs: number, run: () => Promise<void>) =>
-    runInSqliteMaintenanceContext(() =>
+    runInDetachedAsyncContext(() =>
       scope.schedule({
         id: `${maintenanceId}:${phase}`,
         delayMs: intervalMs,
@@ -488,24 +496,39 @@ export function configureSqliteWalMaintenance(
       }),
     );
   if (timerIntervalMs > 0) {
-    schedule("periodic", timerIntervalMs, () => {
+    schedule("periodic", timerIntervalMs, async () => {
       // Inspect the published handle before identity admission or synchronous cleanup.
       if (tripwireDatabasePath && splitBrainDetectionEnabled) {
-        let splitBrain: SqliteWalSplitBrainEvent | undefined;
+        // Other due ticks and explicit maintenance must not overtake containment.
+        inspectingSidecars = true;
+        const releaseInspection = registerNodeSqliteDisposeGuard(db, () => {
+          throw new Error(
+            "SQLite WAL inspection is pending; await maintenance.stop() before close",
+          );
+        });
         try {
-          splitBrain = detectSqliteWalSplitBrain(tripwireDatabasePath);
-        } catch (error) {
-          splitBrainDetectionEnabled = false;
-          log.warn("SQLite WAL split-brain detection disabled", {
-            databaseLabel: options.databaseLabel,
-            databasePath: tripwireDatabasePath,
-            error: error instanceof Error ? error.message : String(error),
-          });
+          let splitBrain: SqliteWalSplitBrainEvent | undefined;
+          try {
+            splitBrain = await detectSqliteWalSplitBrain(tripwireDatabasePath);
+          } catch (error) {
+            splitBrainDetectionEnabled = false;
+            log.warn("SQLite WAL split-brain detection disabled", {
+              databaseLabel: options.databaseLabel,
+              databasePath: tripwireDatabasePath,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+          if (splitBrain) {
+            invalidated = true;
+            scope.beginClose();
+            terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
+          }
+        } finally {
+          releaseInspection();
+          inspectingSidecars = false;
         }
-        if (splitBrain) {
-          invalidated = true;
-          scope.beginClose();
-          terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
+        if (scope.signal.aborted) {
+          return;
         }
       }
       nextPageBudget = 512;
@@ -521,7 +544,7 @@ export function configureSqliteWalMaintenance(
     };
     const armTick = () => {
       if (!stopped && !tick && !scope.signal.aborted && !invalidated) {
-        tick = runInSqliteMaintenanceContext(() =>
+        tick = runInDetachedAsyncContext(() =>
           scope.schedule({
             id: `${maintenanceId}:tick`,
             delayMs: checkpointTickMs,
@@ -563,7 +586,7 @@ export function configureSqliteWalMaintenance(
 
   const beginClose = () => {
     stopCheckpointTick?.();
-    runInSqliteMaintenanceContext(() => scope.beginClose());
+    runInDetachedAsyncContext(() => scope.beginClose());
     return cancelSqliteWalWriteAdmission(db);
   };
 
@@ -579,7 +602,7 @@ export function configureSqliteWalMaintenance(
       try {
         await beginClose();
       } finally {
-        await runInSqliteMaintenanceContext(() => scope.stop());
+        await runInDetachedAsyncContext(() => scope.stop());
       }
     },
     close: (closeOptions) => {
@@ -594,7 +617,7 @@ export function configureSqliteWalMaintenance(
   };
 }
 
-type SqliteExitRegistration = { close: () => void; fired: boolean };
+type SqliteExitRegistration = { close: () => void };
 type SqliteExitGroup = {
   pending: Set<SqliteExitRegistration>;
   dispatch: () => void;
@@ -617,7 +640,7 @@ function detachEmptySqliteExitGroup(group: SqliteExitGroup): void {
  * runtime shutdowns do not accumulate listeners on shared worker processes.
  */
 export function registerSqliteCacheExitClose(closeAll: () => void): () => void {
-  const registration = { close: closeAll, fired: false };
+  const registration = { close: closeAll };
   let group = lastSqliteExitGroup;
   // Preserve intervening owners, such as capture finalization before database close.
   if (!group || process.listeners("exit").at(-1) !== group.dispatch) {
@@ -627,13 +650,9 @@ export function registerSqliteCacheExitClose(closeAll: () => void): () => void {
       dispatch: () => {
         // Snapshot this batch before callbacks; disposal cannot skip an admitted close.
         const snapshot = [...pending];
+        pending.clear();
+        detachEmptySqliteExitGroup(created);
         for (const entry of snapshot) {
-          if (entry.fired) {
-            continue;
-          }
-          entry.fired = true;
-          pending.delete(entry);
-          detachEmptySqliteExitGroup(created);
           try {
             entry.close();
           } catch {
@@ -642,7 +661,6 @@ export function registerSqliteCacheExitClose(closeAll: () => void): () => void {
         }
       },
     };
-    // Keep the dispatcher until the last callback starts, including nested emissions.
     process.on("exit", created.dispatch);
     lastSqliteExitGroup = group = created;
   } else {

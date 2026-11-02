@@ -5,12 +5,9 @@ import { fetchClaudeUsage } from "./provider-usage.fetch.claude.js";
 const scopeMessage = "missing scope requirement user:profile";
 const scopeError = `HTTP 403: ${scopeMessage}`;
 const scopeResponse = () => makeResponse(403, { error: { message: scopeMessage } });
+const run = (fetch: typeof globalThis.fetch) => fetchClaudeUsage("token", 5000, fetch);
 const fetchUsage = (payload: unknown) =>
-  fetchClaudeUsage(
-    "token",
-    5000,
-    createProviderUsageFetch(async () => makeResponse(200, payload)),
-  );
+  run(createProviderUsageFetch(async () => makeResponse(200, payload)));
 
 function fallbackFetch(org: Response, usage: Response) {
   return createProviderUsageFetch(async (url, init) => {
@@ -25,31 +22,31 @@ function fallbackFetch(org: Response, usage: Response) {
 describe("fetchClaudeUsage", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("normalizes quota windows, scoped model limits, and extra-usage billing", async () => {
+  it.each([Number, String])("normalizes %s usage windows and billing", async (numeric) => {
     const reset = "2026-01-12T00:00:00Z";
+    const fable = { scope: { model: { display_name: " ", id: " Fable " } }, resets_at: reset };
     const result = await fetchUsage({
-      five_hour: { utilization: -5, resets_at: "not-a-date" },
-      seven_day: { utilization: 140, resets_at: reset },
-      seven_day_sonnet: { utilization: 67 },
-      seven_day_opus: { utilization: 90 },
+      five_hour: { utilization: numeric(-5), resets_at: "not-a-date" },
+      seven_day: { utilization: numeric(140), resets_at: reset },
+      seven_day_sonnet: { utilization: numeric(67) },
+      seven_day_opus: { utilization: numeric(90) },
       limits: [
         null,
         [],
         "malformed",
         { percent: 50, scope: [] },
         { percent: 60, scope: { model: [] } },
-        { percent: "80", scope: { model: { id: "Numeric" } } },
         { percent: 80, is_active: false, scope: { model: { id: "Inactive" } } },
         { percent: 80, scope: { model: { display_name: " sonnet " } } },
-        { percent: 27, scope: { model: { display_name: " ", id: " Fable " } }, resets_at: reset },
+        { percent: numeric(27), ...fable },
         { percent: 90, scope: { model: { display_name: "FABLE" } } },
-        { percent: 0, is_active: null, scope: { model: { id: "Zero" } } },
+        { percent: numeric(0), is_active: null, scope: { model: { id: "Zero" } } },
       ],
       extra_usage: {
         is_enabled: true,
-        monthly_limit: 100000,
-        used_credits: 4132,
-        utilization: 4.132,
+        monthly_limit: numeric(100000),
+        used_credits: numeric(4132),
+        utilization: numeric(4.132),
         currency: "usd",
       },
     });
@@ -67,7 +64,7 @@ describe("fetchClaudeUsage", () => {
 
   it("preserves Opus when sibling windows and activity flags are malformed", async () => {
     const result = await fetchUsage({
-      five_hour: { utilization: "18" },
+      five_hour: { utilization: "not-a-number" },
       seven_day: null,
       seven_day_sonnet: {},
       seven_day_opus: { utilization: 44 },
@@ -103,23 +100,13 @@ describe("fetchClaudeUsage", () => {
     const cancel = vi.fn();
     const response = new Response(
       new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (pulls === 64) {
-            controller.close();
-            return;
-          }
-          pulls++;
-          controller.enqueue(new Uint8Array(1024 * 1024));
-        },
+        pull: (controller) =>
+          pulls++ < 64 ? controller.enqueue(new Uint8Array(1024 * 1024)) : controller.close(),
         cancel,
       }),
       { status: 502 },
     );
-    const result = await fetchClaudeUsage(
-      "token",
-      5000,
-      createProviderUsageFetch(async () => response),
-    );
+    const result = await run(createProviderUsageFetch(async () => response));
     expect(result.error).toBe("HTTP 502");
     expect(result.windows).toEqual([]);
     expect(cancel).toHaveBeenCalledOnce();
@@ -132,8 +119,11 @@ describe("fetchClaudeUsage", () => {
     expect(result.windows).toEqual([]);
   });
 
-  it("falls back to web usage for missing OAuth scope", async () => {
-    vi.stubEnv("CLAUDE_AI_SESSION_KEY", "sk-ant-session");
+  it.each([
+    ["CLAUDE_AI_SESSION_KEY", "sk-ant-session"],
+    ["CLAUDE_WEB_COOKIE", "Cookie: foo=bar; sessionKey=sk-ant-session"],
+  ])("falls back to web usage with %s", async (name, value) => {
+    vi.stubEnv(name, value);
     const fetch = fallbackFetch(
       makeResponse(200, [{ uuid: "org-a" }]),
       makeResponse(200, {
@@ -142,7 +132,7 @@ describe("fetchClaudeUsage", () => {
         extra_usage: { is_enabled: true, utilization: 25, used_credits: 25, monthly_limit: 100 },
       }),
     );
-    const result = await fetchClaudeUsage("token", 5000, fetch);
+    const result = await run(fetch);
     expect(result.error).toBeUndefined();
     expect(result.windows).toEqual([
       { label: "5h", usedPercent: 12, resetAt: undefined },
@@ -150,17 +140,6 @@ describe("fetchClaudeUsage", () => {
       { label: "Extra usage", usedPercent: 25 },
     ]);
     expect(result.billing).toBeUndefined();
-  });
-
-  it("extracts a session key from a Cookie-prefixed header", async () => {
-    vi.stubEnv("CLAUDE_WEB_COOKIE", "Cookie: foo=bar; sessionKey=sk-ant-session");
-    const fetch = fallbackFetch(
-      makeResponse(200, [{ uuid: "org-a" }]),
-      makeResponse(200, { five_hour: { utilization: 9 } }),
-    );
-    expect((await fetchClaudeUsage("token", 5000, fetch)).windows).toEqual([
-      { label: "5h", usedPercent: 9, resetAt: undefined },
-    ]);
     expect(fetch).toHaveBeenCalledTimes(3);
   });
 
@@ -169,7 +148,7 @@ describe("fetchClaudeUsage", () => {
     vi.stubEnv("CLAUDE_WEB_SESSION_KEY", "invalid");
     vi.stubEnv("CLAUDE_WEB_COOKIE", "foo=bar");
     const fetch = createProviderUsageFetch(async () => scopeResponse());
-    expect((await fetchClaudeUsage("token", 5000, fetch)).error).toBe(scopeError);
+    expect((await run(fetch)).error).toBe(scopeError);
     expect(fetch).toHaveBeenCalledOnce();
   });
 
@@ -182,9 +161,7 @@ describe("fetchClaudeUsage", () => {
     "preserves the OAuth error when fallback has %s",
     async (_name, orgStatus, org, usageStatus, usage) => {
       vi.stubEnv("CLAUDE_AI_SESSION_KEY", "sk-ant-session");
-      const result = await fetchClaudeUsage(
-        "token",
-        5000,
+      const result = await run(
         fallbackFetch(makeResponse(orgStatus, org), makeResponse(usageStatus, usage)),
       );
       expect(result.error).toBe(scopeError);

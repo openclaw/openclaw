@@ -1,11 +1,17 @@
 // Imported by agent.test.ts to keep its mocked suite in one Vitest module graph.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";
+import { summarizeOutboundPayloadForTransport } from "../../infra/outbound/payloads.js";
+import { defaultRuntime } from "../../runtime.js";
+import { getRpcSource, type RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
 import * as participantRecording from "../../sessions/session-participant-recording.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { registerAgentResetAuthorityTests } from "./agent.reset-authority.test-support.js";
 import {
   REAL_PNG,
@@ -69,12 +75,11 @@ describe("gateway agent handler", () => {
         },
         ...(kind !== "profileless"
           ? {
-              authenticatedUserProfile: {
-                profileId: profile.id,
-                displayName: profile.displayName,
-                hasAvatar: false,
-                updatedAt: profile.updatedAt,
-              },
+              authenticatedUserProfile: gatewayProfile(
+                profile.id,
+                profile.displayName,
+                profile.updatedAt,
+              ),
             }
           : {}),
         ...(kind === "synthetic" ? { internal: { syntheticClient: true } } : {}),
@@ -134,24 +139,39 @@ describe("gateway agent handler", () => {
       canonicalKey: "agent:main:voice",
     });
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockReturnValue(new Promise(() => {}));
-    const respond = vi.fn();
-    await invokeAgent(
-      {
-        message: "do thing",
-        sessionKey: "main",
-        voiceWakeTrigger: "robot wake",
-        idempotencyKey: "test-voice-route",
-      },
-      {
-        respond,
-        context: makeContext(),
-        reqId: "voice-1",
-      },
-    );
+    const finishRun = createDeferred();
+    const runId = "test-voice-route";
+    let acceptedSource: RpcSourceRef | undefined;
+    let ownerSettlement: Promise<void> | undefined;
+    mocks.agentCommand.mockImplementation(async () => {
+      acceptedSource = getRpcSource(runId);
+      ownerSettlement = acceptedSource?.input.claim?.operation?.ownerSettlement;
+      await finishRun.promise;
+      return { payloads: [{ text: "ok" }], meta: { durationMs: 1 } };
+    });
 
-    const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
-    expect(callArgs.sessionKey).toBe("agent:main:voice");
+    try {
+      const respond = vi.fn();
+      await invokeAgent(
+        {
+          message: "do thing",
+          sessionKey: "main",
+          voiceWakeTrigger: "robot wake",
+          idempotencyKey: runId,
+        },
+        {
+          respond,
+          context: makeContext(),
+          reqId: "voice-1",
+        },
+      );
+
+      const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
+      expect(callArgs.sessionKey).toBe("agent:main:voice");
+    } finally {
+      finishRun.resolve();
+      await Promise.all([acceptedSource?.input.settlement.promise, ownerSettlement]);
+    }
   });
 
   it("ignores voice wake session route targeting unknown agent", async () => {
@@ -173,25 +193,39 @@ describe("gateway agent handler", () => {
       canonicalKey: "agent:main:main",
     });
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockReturnValue(new Promise(() => {}));
+    const finishRun = createDeferred();
+    const runId = "test-voice-route-unknown";
+    let acceptedSource: RpcSourceRef | undefined;
+    let ownerSettlement: Promise<void> | undefined;
+    mocks.agentCommand.mockImplementation(async () => {
+      acceptedSource = getRpcSource(runId);
+      ownerSettlement = acceptedSource?.input.claim?.operation?.ownerSettlement;
+      await finishRun.promise;
+      return { payloads: [{ text: "ok" }], meta: { durationMs: 1 } };
+    });
 
-    const respond = vi.fn();
-    await invokeAgent(
-      {
-        message: "do thing",
-        sessionKey: "main",
-        voiceWakeTrigger: "robot wake",
-        idempotencyKey: "test-voice-route-unknown",
-      },
-      {
-        respond,
-        context: makeContext(),
-        reqId: "voice-2",
-      },
-    );
+    try {
+      const respond = vi.fn();
+      await invokeAgent(
+        {
+          message: "do thing",
+          sessionKey: "main",
+          voiceWakeTrigger: "robot wake",
+          idempotencyKey: runId,
+        },
+        {
+          respond,
+          context: makeContext(),
+          reqId: "voice-2",
+        },
+      );
 
-    const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
-    expect(callArgs.sessionKey).toBe("agent:main:main");
+      const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
+      expect(callArgs.sessionKey).toBe("agent:main:main");
+    } finally {
+      finishRun.resolve();
+      await Promise.all([acceptedSource?.input.settlement.promise, ownerSettlement]);
+    }
   });
 
   it("applies default voice wake route when trigger field is present but empty", async () => {
@@ -633,6 +667,14 @@ describe("gateway agent handler", () => {
   });
 
   it("uses the selected session target for bare /reset delivery when to is an agent session key", async () => {
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const stdout = vi.spyOn(defaultRuntime, "writeStdout").mockImplementation(() => {});
+    const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    onTestFinished(() => {
+      log.mockRestore();
+      stdout.mockRestore();
+      json.mockRestore();
+    });
     const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
     mockSessionResetSuccess({ reason: "reset", key: sessionKey, sessionId: "wechat-session-id" });
     mocks.loadSessionEntry.mockImplementation((key: string) => ({
@@ -663,11 +705,14 @@ describe("gateway agent handler", () => {
           }
         : undefined,
     );
-    mocks.sendDurableMessageBatch.mockResolvedValue({
-      status: "sent",
-      results: [],
-      receipt: {},
-    });
+    mocks.sendDurableMessageBatch.mockImplementation(
+      async (params: Parameters<typeof sendDurableMessageBatchCore>[0]) => {
+        for (const payload of params.payloads) {
+          params.onPayload?.(summarizeOutboundPayloadForTransport(payload));
+        }
+        return { status: "sent", results: [], receipt: {} };
+      },
+    );
     mocks.performGatewaySessionReset.mockClear();
     mocks.agentCommand.mockClear();
 
@@ -698,10 +743,14 @@ describe("gateway agent handler", () => {
       status: "sent",
       succeeded: true,
     });
+    expect(JSON.stringify([log.mock.calls, stdout.mock.calls, json.mock.calls])).not.toContain(
+      "✅ Session reset.",
+    );
     expect(mocks.sendDurableMessageBatch).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "openclaw-weixin",
         to: "o9cq802hhmfc@im.wechat",
+        payloads: [expect.objectContaining({ text: "✅ Session reset." })],
       }),
     );
   });

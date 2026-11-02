@@ -1,33 +1,35 @@
+import { listen } from "../reactive/listener.ts";
+
 const DATABASE_NAME = "openclaw-control-ui";
 const DATABASE_VERSION = 2;
 const STORE_NAME = "composerDrafts";
 const OWNER_INDEX = "ownerKey";
 let databasePromise: Promise<IDBDatabase> | null = null;
+const once = { once: true };
 
+// Callers may observe the same handle independently; listeners stay additive.
 export function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
-    request.addEventListener("success", () => resolve(request.result), { once: true });
-    request.addEventListener(
+    listen(request, "success", () => resolve(request.result), once);
+    listen(
+      request,
       "error",
       () => reject(request.error ?? new Error("IndexedDB request failed")),
-      { once: true },
+      once,
     );
   });
 }
 
 export function transactionComplete(transaction: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
-    transaction.addEventListener("complete", () => resolve(), { once: true });
-    transaction.addEventListener(
-      "abort",
-      () => reject(transaction.error ?? new Error("IndexedDB transaction aborted")),
-      { once: true },
-    );
-    transaction.addEventListener(
-      "error",
-      () => reject(transaction.error ?? new Error("IndexedDB transaction failed")),
-      { once: true },
-    );
+    listen(transaction, "complete", () => resolve(), once);
+    const failed = (event: Event) =>
+      reject(
+        transaction.error ??
+          new Error(`IndexedDB transaction ${event.type === "abort" ? "aborted" : "failed"}`),
+      );
+    listen(transaction, "abort", failed, once);
+    listen(transaction, "error", failed, once);
   });
 }
 
@@ -35,18 +37,18 @@ export function openControlUiDatabase(): Promise<IDBDatabase> {
   if (databasePromise) {
     return databasePromise;
   }
+  if (typeof indexedDB === "undefined") {
+    return Promise.reject(new Error("IndexedDB is unavailable"));
+  }
   const opening = new Promise<IDBDatabase>((resolve, reject) => {
     const release = () => {
       if (databasePromise === opening) {
         databasePromise = null;
       }
     };
-    if (typeof indexedDB === "undefined") {
-      reject(new Error("IndexedDB is unavailable"));
-      return;
-    }
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-    request.addEventListener(
+    listen(
+      request,
       "upgradeneeded",
       () => {
         const database = request.result;
@@ -60,10 +62,11 @@ export function openControlUiDatabase(): Promise<IDBDatabase> {
           store.createIndex(OWNER_INDEX, OWNER_INDEX, { unique: false });
         }
       },
-      { once: true },
+      once,
     );
     let blocked = false;
-    request.addEventListener(
+    listen(
+      request,
       "success",
       () => {
         const database = request.result;
@@ -73,24 +76,26 @@ export function openControlUiDatabase(): Promise<IDBDatabase> {
           return;
         }
         // Browser-forced closure does not emit versionchange; never reuse its dead handle.
-        database.addEventListener("close", release, { once: true });
-        database.addEventListener("versionchange", () => {
+        listen(database, "close", release, once);
+        listen(database, "versionchange", () => {
           database.close();
           release();
         });
         resolve(database);
       },
-      { once: true },
+      once,
     );
-    request.addEventListener(
+    listen(
+      request,
       "error",
       () => {
         release();
         reject(request.error ?? new Error("IndexedDB open failed"));
       },
-      { once: true },
+      once,
     );
-    request.addEventListener(
+    listen(
+      request,
       "blocked",
       () => {
         // Keep the rejected promise until this open finishes. A second open
@@ -98,7 +103,7 @@ export function openControlUiDatabase(): Promise<IDBDatabase> {
         blocked = true;
         reject(new Error("IndexedDB upgrade was blocked"));
       },
-      { once: true },
+      once,
     );
   });
   databasePromise = opening;

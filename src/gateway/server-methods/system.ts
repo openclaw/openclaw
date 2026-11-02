@@ -5,9 +5,9 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
-  errorShape,
   type SystemInfoResult,
   validateSystemInfoParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -20,6 +20,10 @@ import { listAgentIds } from "../../agents/agent-scope.js";
 import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.js";
 import { readUtilityModelSetting } from "../../agents/utility-model-setting.js";
 import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
+import {
+  captureSessionEventTargetForHost,
+  enqueueSessionEventForHost,
+} from "../../auto-reply/reply/session-event-handoff.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
 import { resolveSystemMainSessionTarget } from "../../config/sessions.js";
@@ -28,8 +32,8 @@ import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { publicKeyRawBase64UrlFromPem } from "../../infra/device-identity.js";
 import { tryReadDiskSpace } from "../../infra/disk-space.js";
+import { setLegacyHeartbeatsEnabled } from "../../infra/heartbeat-compat.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
-import { requestHeartbeat, setHeartbeatsEnabled } from "../../infra/heartbeat-wake.js";
 import { readHostFreeMemoryBytes } from "../../infra/host-memory.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
@@ -45,13 +49,16 @@ import {
 } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { acceptsPresenceDeltas, createPresenceReset } from "../presence-delivery.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { readPreparedCatalog } from "../server-model-catalog-auth.js";
+import { getPresenceVersion } from "../server/health-state.js";
 import { readGatewayProcessVitals } from "../server/process-vitals.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
+import { respondError } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayMethod } from "./validation.js";
@@ -120,6 +127,7 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
             ? resolveUtilityModelRefForAgent({
                 cfg: prepared.config,
                 agentId: soleAgentId,
+                catalog: prepared,
                 metadataSnapshot: prepared.metadataSnapshot,
               })
             : undefined;
@@ -203,21 +211,29 @@ export const systemHandlers: GatewayRequestHandlers = {
   "last-heartbeat": ({ respond }) => {
     respond(true, getLastHeartbeatEvent(), undefined);
   },
-  "set-heartbeats": ({ params, respond }) => {
+  "set-heartbeats": async (options) => {
+    const { params, respond, context } = options;
     const enabled = params.enabled;
     if (typeof enabled !== "boolean") {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "invalid set-heartbeats params: enabled (boolean) required",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "invalid set-heartbeats params: enabled (boolean) required",
       );
       return;
     }
-    setHeartbeatsEnabled(enabled);
-    respond(true, { ok: true, enabled }, undefined);
+    try {
+      const authority = readGatewayRequestMutationAuthority(options);
+      await setLegacyHeartbeatsEnabled(
+        context.getRuntimeConfig(),
+        context.cron,
+        enabled,
+        authority.assertCurrent,
+      );
+      respond(true, { ok: true, enabled }, undefined);
+    } catch (error) {
+      respondError(respond, ErrorCodes.INVALID_REQUEST, String(error));
+    }
   },
   "presence.activity": defineValidatedGatewayMethod(
     "presence.activity",
@@ -228,18 +244,25 @@ export const systemHandlers: GatewayRequestHandlers = {
     },
   ),
   "system-presence": async (options) => {
-    const { respond, client, context } = options;
+    const { respond, client, context, params } = options;
     const projection = getSessionRowProjection(context);
     while (projection?.needsMembershipPreparation()) {
       await projection.prepareMembership();
       readGatewayRequestMutationAuthority(options).assertCurrent();
     }
+    const source = listSystemPresence();
     const presence = createPresenceRecipientProjection({
       cfg: context.getRuntimeConfig(),
-      presence: listSystemPresence(),
+      presence: source,
       projection,
     })(client);
-    respond(true, presence, undefined);
+    if (client && params.snapshot === true && acceptsPresenceDeltas(client)) {
+      // The RPC supplies a new client base; the next event must establish its own sent base.
+      client.presenceSnapshot = undefined;
+      respond(true, createPresenceReset(source, presence, getPresenceVersion()), undefined);
+    } else {
+      respond(true, presence, undefined);
+    }
   },
   "system.info": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSystemInfoParams, "system.info", respond)) {
@@ -248,7 +271,7 @@ export const systemHandlers: GatewayRequestHandlers = {
     respond(true, await collectSystemInfo(context), undefined);
   },
   "system-event": async (options) => {
-    const { params, respond, context } = options;
+    const { params, respond, context, client } = options;
     if (!assertValidParams(params, validateSystemEventParams, "system-event", respond)) {
       return;
     }
@@ -256,7 +279,7 @@ export const systemHandlers: GatewayRequestHandlers = {
     // Payload classification below selects behavior and is never an authorization boundary.
     const text = normalizeOptionalString(params.text) ?? "";
     if (!text) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "text required"));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "text required");
       return;
     }
     const requestedSessionKey = normalizeOptionalString(params.sessionKey);
@@ -273,12 +296,13 @@ export const systemHandlers: GatewayRequestHandlers = {
       : resolveSystemMainSessionTarget(cfg);
     const { agentId: eventOwnerAgentId, sessionKey } = systemTarget;
     const wake = params.wake === true;
+    const authority = readGatewayRequestMutationAuthority(options);
     const isNodePresenceLine = text.startsWith("Node:");
     if (wake && isNodePresenceLine) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "wake is not supported for node presence events"),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "wake is not supported for node presence events",
       );
       return;
     }
@@ -288,16 +312,11 @@ export const systemHandlers: GatewayRequestHandlers = {
       );
       const configuredAgentIds = listAgentIds(cfg).map(normalizeAgentId);
       if (!configuredAgentIds.includes(requestedAgentId)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${requestedAgentId}"`),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, `Unknown agent id "${requestedAgentId}"`);
         return;
       }
       // A targeted wake starts a model run. Require a live session
       // so malformed keys cannot create phantom work under agent defaults.
-      const authority = readGatewayRequestMutationAuthority(options);
       const memory = captureSessionActorStorageOwner(
         { agentId: requestedAgentId, sessionKey: requestedSessionKey },
         { assertCurrent: authority.assertCurrent, authorize: authority.assertCurrent },
@@ -314,24 +333,39 @@ export const systemHandlers: GatewayRequestHandlers = {
             })
           ).entry;
       if (!targetSession || targetSession.archivedAt !== undefined) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `Unknown or archived session "${requestedSessionKey}"`,
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `Unknown or archived session "${requestedSessionKey}"`,
         );
         return;
       }
     }
+    const assertAcceptanceCurrent = () => {
+      authority.assertCurrent();
+      if (cfg !== context.getRuntimeConfig()) {
+        throw new Error("System event configuration changed during admission; retry the request");
+      }
+    };
+    const eventTarget =
+      wake && eventOwnerAgentId
+        ? await captureSessionEventTargetForHost(eventOwnerAgentId, sessionKey, {
+            assertCaptureCurrent: assertAcceptanceCurrent,
+          })
+        : undefined;
+    assertAcceptanceCurrent();
     const reason = params.reason;
     const lastInputSeconds = params.tags?.includes(SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG)
       ? null
       : params.lastInputSeconds;
     const presenceUpdate = updateSystemPresence({
       text,
-      deviceId: params.deviceId,
+      // Native Mac beacons omit deviceId; use their authenticated connection identity.
+      deviceId:
+        params.deviceId ??
+        (isNodePresenceLine && client?.connect.client.id === GATEWAY_CLIENT_IDS.MACOS_APP
+          ? client.connect.device?.id
+          : undefined),
       instanceId: params.instanceId,
       host: params.host,
       ip: params.ip,
@@ -398,26 +432,25 @@ export const systemHandlers: GatewayRequestHandlers = {
           );
         }
       }
+    } else if (wake && eventOwnerAgentId && eventTarget) {
+      const receipt = enqueueSessionEventForHost(text, {
+        source: "session",
+        agentId: eventOwnerAgentId,
+        sessionKey,
+        expectedTarget: eventTarget,
+        createIfMissing: requestedSessionKey ? undefined : true,
+        assertAcceptanceCurrent,
+      });
+      const accepted = await receipt.accepted;
+      if (!accepted.ok) {
+        throw new Error(accepted.error);
+      }
     } else {
       const eventOptions = { sessionKey };
       enqueueSystemEventWithReceipt(
         text,
         eventOwnerAgentId ? withSystemEventOwner(eventOptions, eventOwnerAgentId) : eventOptions,
       );
-      if (wake) {
-        // Targeted admin events may need a proactive response. Carry the exact
-        // session through the wake so its delivery context, not main, wins.
-        requestHeartbeat({
-          source: "notifications-event",
-          intent: "immediate",
-          // The dispatcher recognizes "wake" as a payload-bearing run, so an
-          // empty monitor scratch cannot suppress this queued system event.
-          reason: "wake",
-          ...(!requestedSessionKey && eventOwnerAgentId ? { agentId: eventOwnerAgentId } : {}),
-          sessionKey,
-          heartbeat: { target: "last" },
-        });
-      }
     }
     // Presence changes are observable even when noisy node heartbeat text is
     // suppressed from the transcript-style system event queue.

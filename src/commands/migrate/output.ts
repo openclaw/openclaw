@@ -1,6 +1,7 @@
 import { log } from "@clack/prompts";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { redactMigrationPlan } from "../../plugin-sdk/migration.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import type { MigrationApplyResult, MigrationItem, MigrationPlan } from "../../plugins/types.js";
 import { writeRuntimeJson } from "../../runtime.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -23,11 +24,44 @@ function formatPlan(plan: MigrationPlan, mode: FormatMode): string[] {
       formatCount(plan.summary.sensitive, "sensitive item"),
     ].join(", "),
   );
-  return [
-    ...lines,
-    ...formatPlanItems(plan, mode),
-    ...formatPlanWarnings(plan, mode === "result" ? plan.nextSteps : undefined),
-  ];
+  const buckets = groupRecords(plan.items, (item) =>
+    KNOWN_KINDS.has(item.kind) ? item.kind : "other",
+  );
+  for (const group of [...ITEM_GROUPS, { kind: "other", heading: "Other:" }]) {
+    const items = buckets.get(group.kind);
+    if (!items || items.length === 0) {
+      continue;
+    }
+    lines.push("");
+    lines.push(theme.heading(group.heading));
+    for (const item of items) {
+      const name = item.id.replace(/^[^:]+:/, "").replace(/:\d+$/, "");
+      const message = formatItemMessage(item, mode);
+      const messageSuffix = message ? ` ${theme.muted(`(${message})`)}` : "";
+      const sensitive = item.sensitive ? " [sensitive]" : "";
+      let prefix = "• ";
+      if (item.kind === "manual") {
+        prefix = "🔍 ";
+      } else if (item.kind === "archive") {
+        prefix = "📖 ";
+      } else {
+        const glyph = RESULT_STATUS_GLYPHS[item.status];
+        if (glyph) {
+          prefix = `${glyph} `;
+        }
+      }
+      lines.push(`${prefix}${name}${sensitive}${messageSuffix}`);
+    }
+  }
+  const visibleElsewhere = mode === "result" ? (plan.nextSteps ?? []) : [];
+  const warnings = plan.warnings?.filter((warning) => !visibleElsewhere.includes(warning));
+  if (warnings && warnings.length > 0) {
+    lines.push("", theme.warn("Warnings:"));
+    for (const warning of warnings) {
+      lines.push(`⚠️  ${warning}`);
+    }
+  }
+  return lines;
 }
 
 const ITEM_GROUPS = [
@@ -44,44 +78,6 @@ const ITEM_GROUPS = [
 const KNOWN_KINDS = new Set(ITEM_GROUPS.map((group) => group.kind));
 
 type FormatMode = "preview" | "result";
-
-function formatPlanItems(plan: MigrationPlan, mode: FormatMode): string[] {
-  const lines: string[] = [];
-  const buckets = new Map<string, MigrationItem[]>();
-  for (const item of plan.items) {
-    const kind = KNOWN_KINDS.has(item.kind) ? item.kind : "other";
-    const items = buckets.get(kind) ?? [];
-    items.push(item);
-    buckets.set(kind, items);
-  }
-  for (const group of [...ITEM_GROUPS, { kind: "other", heading: "Other:" }]) {
-    const items = buckets.get(group.kind);
-    if (!items || items.length === 0) {
-      continue;
-    }
-    lines.push("");
-    lines.push(theme.heading(group.heading));
-    for (const item of items) {
-      lines.push(formatMigrationItem(item, mode));
-    }
-  }
-  return lines;
-}
-
-function formatPlanWarnings(
-  plan: MigrationPlan,
-  visibleElsewhere: readonly string[] = [],
-): string[] {
-  const warnings = plan.warnings?.filter((warning) => !visibleElsewhere.includes(warning));
-  if (!warnings || warnings.length === 0) {
-    return [];
-  }
-  const lines = ["", theme.warn("Warnings:")];
-  for (const warning of warnings) {
-    lines.push(`⚠️  ${warning}`);
-  }
-  return lines;
-}
 
 /** Formats a redaction-safe migration preview for terminal output. */
 export function formatMigrationPreview(plan: MigrationPlan): string[] {
@@ -101,10 +97,6 @@ export function formatMigrationResult(plan: MigrationPlan): string[] {
     }
   }
   return lines;
-}
-
-function formatItemDisplayName(item: MigrationItem): string {
-  return item.id.replace(/^[^:]+:/, "").replace(/:\d+$/, "");
 }
 
 const REASON_CODE_MESSAGES: Record<string, string> = {
@@ -179,29 +171,6 @@ const RESULT_STATUS_GLYPHS: Record<string, string> = {
   skipped: "⏭️ ",
   conflict: "⚠️ ",
 };
-
-function formatItemPrefix(item: MigrationItem): string {
-  if (item.kind === "manual") {
-    return "🔍 ";
-  }
-  if (item.kind === "archive") {
-    return "📖 ";
-  }
-  const glyph = RESULT_STATUS_GLYPHS[item.status];
-  if (glyph) {
-    return `${glyph} `;
-  }
-  return "• ";
-}
-
-function formatMigrationItem(item: MigrationItem, mode: FormatMode): string {
-  const name = formatItemDisplayName(item);
-  const message = formatItemMessage(item, mode);
-  const messageSuffix = message ? ` ${theme.muted(`(${message})`)}` : "";
-  const sensitive = item.sensitive ? " [sensitive]" : "";
-  const prefix = formatItemPrefix(item);
-  return `${prefix}${name}${sensitive}${messageSuffix}`;
-}
 
 /** Throws when a plan still contains conflicts that require explicit overwrite. */
 export function assertConflictFreePlan(plan: MigrationPlan, providerId: string): void {

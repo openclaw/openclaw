@@ -45,7 +45,7 @@ export function normalizeSlackRouteBindingConfig(cfg: OpenClawConfig): OpenClawC
   if (cached && cached.bindingsRef === bindings) {
     return cached.normalizedCfg;
   }
-  if (!Array.isArray(bindings)) {
+  if (!bindings) {
     return cfg;
   }
 

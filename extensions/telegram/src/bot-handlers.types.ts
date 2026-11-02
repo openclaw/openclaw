@@ -5,7 +5,6 @@ import type {
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { TelegramBotDeps } from "./bot-deps.js";
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
 import type {
   TelegramMessageProcessingResult,
@@ -52,10 +51,6 @@ type ProcessTelegramMessage = (
   options: ProcessTelegramMessageOptions,
 ) => Promise<TelegramMessageProcessingResult>;
 
-export type TelegramResolvedGroupConfig = ReturnType<
-  BuildTelegramMessageContextParams["resolveTelegramGroupConfig"]
->;
-
 export type TelegramNativeCommandCallbackDispatcher = (params: {
   botUser: Context["me"];
   callbackQuery: NonNullable<Context["callbackQuery"]>;
@@ -78,7 +73,6 @@ export type RegisterTelegramHandlerParams = {
   telegramTransport?: TelegramTransport;
   runtime: RuntimeEnv;
   telegramCfg: TelegramAccountConfig;
-  telegramDeps: TelegramBotDeps;
   resolveGroupPolicy: (chatId: string | number, cfg: OpenClawConfig) => ChannelGroupPolicy;
   resolveGroupActivation: BuildTelegramMessageContextParams["resolveGroupActivation"];
   resolveGroupRequireMention: BuildTelegramMessageContextParams["resolveGroupRequireMention"];

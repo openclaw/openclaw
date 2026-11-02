@@ -335,8 +335,6 @@ export abstract class MatrixClientBase {
         client: this.client,
         verificationManager: this.verificationManager,
         recoveryKeyStore: this.recoveryKeyStore,
-        isRoomEncrypted: async (roomId) =>
-          (await this.getMessageWireEventType(roomId)) === "m.room.encrypted",
         downloadContent: (mxcUrl, opts) => this.downloadContent(mxcUrl, opts),
       });
     }
@@ -416,11 +414,9 @@ export abstract class MatrixClientBase {
       throwIfMatrixStartupAborted(signal);
       await this.ensureCryptoSupportInitialized();
       checkActive();
-      throwIfMatrixStartupAborted(signal);
       this.registerBridge();
       await this.withClientCryptoWork(() => this.initializeCryptoIfNeeded(signal), signal);
       checkActive();
-      throwIfMatrixStartupAborted(signal);
 
       await this.withClientCryptoWork(() =>
         this.client.startClient({
@@ -438,7 +434,6 @@ export abstract class MatrixClientBase {
         timeoutMs: opts.readyTimeoutMs,
       });
       checkActive();
-      throwIfMatrixStartupAborted(signal);
       if (this.encryptionEnabled && this.cryptoInitialized) {
         const { reconcileJoinedRoomEncryption } = await import("./joined-room-encryption.js");
         checkActive();
@@ -515,12 +510,6 @@ export abstract class MatrixClientBase {
         fromCache: this.currentSyncFromCache,
       }),
     });
-  }
-
-  hasPersistedSyncState(): boolean {
-    // Only trust restart replay when the previous process completed a final
-    // sync-store persist. A stale cursor can make Matrix re-surface old events.
-    return this.syncStore?.hasSavedSyncFromCleanShutdown() === true;
   }
 
   protected async ensureStartedForCryptoControlPlane(): Promise<void> {
@@ -732,6 +721,7 @@ export abstract class MatrixClientBase {
             abortSignal: abortController.signal,
             stateRuntime: this.stateRuntime,
           })
+            // Persistence already reports failures; later intervals remain free to retry.
             .catch(noop)
             .finally(() => {
               this.idbPersistPromise = null;

@@ -175,7 +175,7 @@ described [above](/start/wizard-cli-reference#what-the-wizard-does).
     - Native Windows: Scheduled Task first
       - If task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately.
       - Scheduled Tasks remain preferred because they provide better supervisor status.
-    - Runtime selection: Node is the primary, default, and recommended runtime. Bun 1.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in.
+    - Runtime selection: Node is the primary, default, and recommended runtime. Bun 1.4.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in.
       QuickStart reports the runtime selected by the install plan, including Bun when no supported Node is available on a Bun-only first install.
     - A SecretRef-managed `gateway.auth.token` is validated without copying its
       resolved plaintext value into supervisor service metadata. An unresolved
@@ -183,6 +183,8 @@ described [above](/start/wizard-cli-reference#what-the-wizard-does).
     - If both `gateway.auth.token` and `gateway.auth.password` exist while
       `gateway.auth.mode` is unset, daemon installation blocks until you choose
       a mode explicitly.
+    - If restarting an installed service fails, setup reports the failure reason
+      and recovery commands instead of claiming the service restarted.
 
   </Step>
   <Step title="Health check">
@@ -352,16 +354,22 @@ on a different release.
     - **Paste API key now** (plaintext)
     - **Use secret reference** (env ref or configured provider ref, with preflight validation)
 
+    For OpenAI-compatible and OpenAI Responses-compatible endpoints, setup queries the base URL's `/models` endpoint (usually `/v1/models`) with the supplied API key. Pick a discovered model or enter a model ID manually. The selected model is saved. If discovery fails, times out, or returns no usable models, setup falls back to manual entry.
+
     Onboarding infers image support for common vision model IDs (GPT-4o/4.1/5.x, Claude 3/4, Gemini, Qwen-VL, LLaVA, Pixtral, and similar) and only asks when the model name is unknown.
 
     Non-interactive flags:
     - `--auth-choice custom-api-key`
     - `--custom-base-url`
-    - `--custom-model-id`
+    - `--custom-model-id` (optional for `openai` / `openai-responses`; required for `anthropic`)
     - `--custom-api-key` (optional; falls back to `CUSTOM_API_KEY`)
     - `--custom-provider-id` (optional)
     - `--custom-compatibility <openai|openai-responses|anthropic>` (optional; default `openai`)
     - `--custom-image-input` / `--custom-text-input` (optional; override inferred model input capability)
+
+    Without `--custom-model-id`, non-interactive OpenAI-compatible setup saves the discovered list and selects its first model as the default. An explicit ID skips discovery. If discovery fails or returns no usable models, rerun with an explicit ID.
+
+    When reusing a provider ID and endpoint, discovery can use the provider's configured API key, environment-variable marker, or secret reference without changing how it is stored. The provider's saved `auth: none` policy also applies to discovery unless you supply a replacement key. Reset rejects discovery when its only credential would be removed with the old configuration: supply `--custom-api-key` or `CUSTOM_API_KEY`, or rerun without `--reset`.
 
   </Accordion>
   <Accordion title="Skip">
@@ -379,6 +387,10 @@ Model behavior:
 - If that preferred-provider filter would be empty, the picker falls back to
   the full catalog instead of showing no models.
 - Wizard runs a model check and warns if the configured model is unknown or missing auth.
+
+When replacing an existing sign-in, setup verifies it before asking you to activate it.
+Activation preserves your provider models and plugin settings. If another edit changes
+the same connection during setup, review the newer settings before retrying.
 
 Credential and profile paths:
 

@@ -277,15 +277,33 @@ struct WatchSessionActivationGateTests {
     }
     #endif
 
-    @Test func `iPhone observes watch pairing and install changes`() throws {
-        let sourceURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/Services/WatchConnectivityTransport.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+    @Test @MainActor
+    func `iPhone observes watch pairing and install changes`() async throws {
+        let session = WCSession.default
+        let previousDelegate = session.delegate
+        let transport = WatchConnectivityTransport()
+        // Drive this callback directly without replacing the app's active Watch delegate.
+        session.delegate = previousDelegate
 
-        #expect(source.contains("func sessionWatchStateDidChange(_ session: WCSession)"))
-        #expect(source.contains("paired=\\(session.isPaired) installed=\\(session.isWatchAppInstalled)"))
+        let isActivated = session.activationState == .activated
+        let expectedPaired = isActivated && session.isPaired
+        let expectedInstalled = isActivated && session.isWatchAppInstalled
+        let snapshots = Mutex<[WatchMessagingStatus]>([])
+        let changed = XCTestExpectation(description: "Watch state change delivered")
+        transport.setStatusUpdateHandler { snapshot in
+            snapshots.withLock { $0.append(snapshot) }
+            changed.fulfill()
+        }
+        defer { transport.setStatusUpdateHandler(nil) }
+
+        transport.sessionWatchStateDidChange(session)
+        let result = await XCTWaiter.fulfillment(of: [changed], timeout: 5)
+        try #require(result == .completed)
+        let received = snapshots.withLock { $0 }
+        #expect(received.count == 1)
+        let snapshot = try #require(received.first)
+        #expect(snapshot.paired == expectedPaired)
+        #expect(snapshot.appInstalled == expectedInstalled)
     }
 
     @Test func `concurrent waiters share one activation`() async throws {

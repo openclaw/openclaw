@@ -64,6 +64,19 @@ Client replies with `connect`:
 }
 ```
 
+Clients may send small requests immediately after `connect` when their parameters
+do not depend on `hello-ok`. The Gateway queues up to 15 following frames, each at
+most 64 KiB, until hello delivery completes. It then dispatches them in receipt
+order under the connection's current authorization; responses may complete out of
+order. Authentication rejection closes the connection and discards queued frames.
+Clients must retire pending requests with that connection and wait for an accepted
+hello before enabling authenticated UI actions.
+
+This queue is existing protocol behavior. Using it changes neither the wire schema
+nor protocol version 4; clients that wait for hello continue to work. Protocol
+changes remain additive first, with an explicit version decision required for an
+incompatible change.
+
 Gateway responds with `hello-ok`:
 
 The default connect deadline is 30 seconds, allowing authentication and profile
@@ -110,6 +123,34 @@ checks.
 reports the negotiated role and the current socket's effective authorization
 scopes even when no device token is issued (shape above). `deviceToken`, when
 present, is the primary reusable credential for the same device and role.
+
+`server.commit` and `server.builtAt` optionally identify the running Gateway
+artifact. They are captured at process startup, not read from a checkout each
+time a client connects. Missing build provenance is omitted rather than replaced
+with the current time. Authenticated members receive these fields alongside
+`server.version` without requiring diagnostic or update scopes. The Control UI
+shows them on **Settings → About**, separately from its frontend build details;
+`system.info` and `update.status` retain their existing access requirements.
+
+Clients that do not use health details at connection time can advertise
+`hello-health-on-demand` in `connect.caps`, as the Control UI does. The Gateway
+then sends `snapshot.health: {}` instead of the cached health details. The
+required snapshot fields and version counters remain present; health RPCs and
+health events are unchanged. Clients without this capability retain the full
+cached health snapshot, and older Gateways ignore the capability.
+
+Clients can independently advertise `health-summary` to omit `agents` and
+`sessions` from health events and cached hello health. Channel status, errors,
+and other health fields remain present. The `health` RPC always retains the
+full diagnostic snapshot, including heartbeat configuration and recent sessions.
+
+The Control UI also advertises `hello-presence-self`: hello contains only the
+connecting client's presence row, preserving its profile bootstrap. The existing
+presence event stream supplies the full roster after hello, including the initial
+reset for `presence-deltas` clients. Clients without this capability keep the full
+hello roster. This avoids sending that roster twice during reconnects without
+caching presence across connections or authorization changes.
+
 `controlUiUrl` optionally advertises the Gateway's configured public Control UI
 origin and base path for shareable links, independent of the client's tunnel or
 development-server address. It is omitted when `gateway.publicOrigin` is unset
@@ -174,10 +215,13 @@ should preserve the selected model and retry after application or restart finish
 Standalone CLI verification still tests saved configuration without requiring a
 running Gateway.
 
-While the gateway is still finishing startup sidecars, `connect` can return a
+While the Gateway is preparing authentication and request state, `connect` can return a
 retryable `UNAVAILABLE` error with `details.reason: "startup-sidecars"` and
 `retryAfterMs`. Retry within your connection budget instead of treating it as
-a terminal handshake failure.
+a terminal handshake failure. Once that state is ready, authenticated clients can
+connect and read available sessions while background recovery continues. Writes
+retain their startup and per-agent recovery gates; node enrollment retains its
+startup-specific admission checks.
 
 When a device token is issued, `hello-ok.auth` adds it:
 
@@ -276,6 +320,8 @@ Operator clients may advertise optional capabilities in `connect.params.caps`:
 
 - `tool-events`: accepts structured tool lifecycle events.
 - `inline-widgets`: can render hosted inline widget tool results.
+- `no-question-input`: cannot collect structured question answers. The ACP bridge
+  advertises this capability so its turns omit `ask_user` and ask in ordinary text.
 - `ultrafast`: accepts the explicit `"ultrafast"` fast-mode value in session metadata.
   Without it, session responses and events present that value as Fast (`true`)
   for released native decoders that only accept booleans and `"auto"`. This is a
@@ -284,8 +330,11 @@ Operator clients may advertise optional capabilities in `connect.params.caps`:
   remove the legacy projection only when those released clients are no longer supported.
 - `chat-only-assistant-text`: renders assistant text from `chat` and omits the
   redundant assistant-text `agent` stream. See [event families](/gateway/protocol/rpc-bootstrap-and-events#common-event-families).
+- `chat-queue-status`: presents queued input from authoritative pending-input receipts.
+  Successful queue acknowledgments are omitted for this recipient; refusals, drops,
+  and errors remain visible. Clients without it retain a transient textual acknowledgment.
 
-Client capabilities describe the connected client, not authorization. Agent tools may declare required capabilities; the Gateway omits those tools unless every requirement appears in the originating client's `caps`. Channel-originated runs have no Gateway client capabilities, so capability-gated tools are unavailable even when tool policy explicitly allows them.
+Client capabilities describe the connected client, not authorization. Agent tools may declare required capabilities. The session metadata owner records the operator client's declaration for tool listing and replaces it on the next operator turn; an empty declaration or a channel-originated turn clears it. Internal wakes, including post-restart resume inputs, retain that session fact, so they list the same tools even without a current client. Session reset or deletion removes it. Existing sessions acquire it on their next operator turn. Calls still require current client capabilities, and attached-client tools check that their bound recipient is connected at execution. For example, `screen` refuses a call without its requesting Control UI and asks the model to retry from the open Control UI.
 
 ### Node connect example
 

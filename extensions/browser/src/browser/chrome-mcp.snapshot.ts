@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SnapshotAriaNode } from "./client.types.js";
 import type { RoleRefMap, RoleSnapshotOptions } from "./pw-role-snapshot.js";
 import { ROLE_SNAPSHOT_MAX_DEPTH } from "./snapshot-depth-limit.js";
@@ -13,16 +12,12 @@ export type ChromeMcpSnapshotNode = {
   children?: ChromeMcpSnapshotNode[];
 };
 
-function normalizeSnapshotString(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return value.trim() || undefined;
-  }
-  return typeof value === "number" || typeof value === "boolean" ? String(value) : undefined;
+function normalizeSnapshotString(value: ChromeMcpSnapshotNode["value"]): string | undefined {
+  return value === undefined ? undefined : String(value).trim() || undefined;
 }
 
 function normalizeRole(node: ChromeMcpSnapshotNode): string {
-  const role = normalizeLowercaseStringOrEmpty(node.role);
-  return role || "generic";
+  return node.role?.trim().toLowerCase() || "generic";
 }
 
 /** Build ARIA nodes while preserving whether a traversal ceiling omitted input. */

@@ -1,11 +1,26 @@
 import { spawnSync } from "node:child_process";
-import { constants as fsConstants, cpSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  constants as fsConstants,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { expect } from "vitest";
 import type { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = process.cwd();
 type PublisherTempDirs = ReturnType<typeof useAutoCleanupTempDirTracker>;
+
+function artifactFiles(directory: string) {
+  return {
+    read: (name: string) => readFileSync(join(directory, name), "utf8"),
+    write: (name: string, text: string) => writeFileSync(join(directory, name), text),
+    exists: (name: string) => existsSync(join(directory, name)),
+  };
+}
 
 function sanitizedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
@@ -23,8 +38,22 @@ export function runGatesBash(
     env?: NodeJS.ProcessEnv;
     sourcePrepareCore?: boolean;
     sourcePush?: boolean;
+    gatesOnly?: boolean;
   } = {},
 ) {
+  const sources = [
+    "common",
+    "gates",
+    ...(options.gatesOnly ? [] : ["review"]),
+    ...(options.sourcePush ? ["worktree", "push"] : []),
+    ...(options.sourcePrepareCore ? ["prepare-core"] : []),
+  ];
+  const setup = options.gatesOnly
+    ? []
+    : ["mark_pr_operation_side_effects_started() { :; }", "require_prepared_review() { :; }"];
+  if (!options.sourcePrepareCore && !options.gatesOnly) {
+    setup.push("refresh_prep_branch_for_reviewed_head() { :; }");
+  }
   return spawnSync(
     process.platform === "darwin" ? "/bin/bash" : "bash",
     [
@@ -32,28 +61,12 @@ export function runGatesBash(
       [
         "set -euo pipefail",
         `script_parent_dir='${repoRoot}/scripts'`,
-        `source '${repoRoot}/scripts/pr-lib/common.sh'`,
-        `source '${repoRoot}/scripts/pr-lib/gates.sh'`,
-        `source '${repoRoot}/scripts/pr-lib/review.sh'`,
-        "mark_pr_operation_side_effects_started() { :; }",
-        "require_prepared_review() { :; }",
-        ...(options.sourcePush
-          ? [
-              `source '${repoRoot}/scripts/pr-lib/worktree.sh'`,
-              `source '${repoRoot}/scripts/pr-lib/push.sh'`,
-            ]
-          : []),
-        ...(options.sourcePrepareCore
-          ? [`source '${repoRoot}/scripts/pr-lib/prepare-core.sh'`]
-          : ["refresh_prep_branch_for_reviewed_head() { :; }"]),
+        ...sources.map((name) => `source '${repoRoot}/scripts/pr-lib/${name}.sh'`),
+        ...setup,
         script,
       ].join("\n"),
     ],
-    {
-      cwd: options.cwd ?? repoRoot,
-      encoding: "utf8",
-      env: sanitizedEnv(options.env),
-    },
+    { cwd: options.cwd ?? repoRoot, encoding: "utf8", env: sanitizedEnv(options.env) },
   );
 }
 
@@ -86,20 +99,21 @@ function createPublisherRepo(tempDirs: PublisherTempDirs) {
   git("init", "-q", "-b", "prep");
   git("config", "user.name", "Fixture");
   git("config", "user.email", "fixture@example.invalid");
-  git("commit", "-qm", "base", "--allow-empty");
-  const base = git("rev-parse", "HEAD");
-  writeFileSync(join(repoDir, "reviewed.txt"), "reviewed\n");
-  git("add", ".");
-  git("commit", "-qm", "reviewed");
-  const source = git("rev-parse", "HEAD");
-  writeFileSync(join(repoDir, "fixup.txt"), "fixup\n");
-  git("add", ".");
-  git("commit", "-qm", "fixup");
-  const candidate = git("rev-parse", "HEAD");
+  function commit(name: string, empty = false) {
+    if (!empty) {
+      writeFileSync(join(repoDir, `${name}.txt`), `${name}\n`);
+      git("add", ".");
+    }
+    git("commit", "-qm", name, ...(empty ? ["--allow-empty"] : []));
+    return git("rev-parse", "HEAD");
+  }
+  const base = commit("base", true);
+  const source = commit("reviewed");
+  const candidate = commit("fixup");
   const sameTree = git("commit-tree", `${candidate}^{tree}`, "-p", source, "-m", "foreign");
   const advance = git("commit-tree", `${source}^{tree}`, "-p", source, "-m", "foreign advance");
   git("init", "-q", "--bare", remote);
-  git("remote", "add", "origin", remote);
+  git("remote", "add", "origin", "../remote.git");
   git("push", "-q", "origin", `${candidate}:refs/heads/objects`, `${source}:refs/heads/topic`);
   git("--git-dir", remote, "symbolic-ref", "refs/pull/4242/head", "refs/heads/topic");
   const local = join(repoDir, ".local");
@@ -121,24 +135,20 @@ function createPublisherRepo(tempDirs: PublisherTempDirs) {
     headRepositoryOwner: { login: "fixture" },
     isCrossRepository: false,
   };
-  writeFileSync(join(local, "pr-meta.json"), JSON.stringify(observation));
-  writeFileSync(join(local, "remote-observation.json"), JSON.stringify(observation));
-  writeFileSync(join(local, "github-reads"), "");
-  writeFileSync(
-    join(local, "pr-meta.env"),
-    `PR_NUMBER=4242\nPR_AUTHOR=fixture\nPR_HEAD=topic\nPR_HEAD_SHA=${source}\n`,
-  );
-  writeFileSync(
-    join(local, "prep-context.env"),
+  const { write } = artifactFiles(local);
+  write("pr-meta.json", JSON.stringify(observation));
+  write("remote-observation.json", JSON.stringify(observation));
+  write("github-reads", "");
+  write("pr-meta.env", `PR_NUMBER=4242\nPR_AUTHOR=fixture\nPR_HEAD=topic\nPR_HEAD_SHA=${source}\n`);
+  write(
+    "prep-context.env",
     `PR_NUMBER=4242\nPR_HEAD=topic\nPR_HEAD_SHA_BEFORE=${source}\nPREP_BRANCH=prep\nPREP_STARTED_AT=2026-09-07T00:00:00Z\n`,
   );
-  writeFileSync(
-    join(local, "gates.env"),
-    `PR_NUMBER=4242\nGATES_MODE=full\nLAST_VERIFIED_HEAD_SHA=${candidate}\n`,
-  );
-  writeFileSync(join(local, "prep.md"), "# Prepare\n");
-  writeFileSync(join(local, "events"), "");
+  write("gates.env", `PR_NUMBER=4242\nGATES_MODE=full\nLAST_VERIFIED_HEAD_SHA=${candidate}\n`);
+  write("prep.md", "# Prepare\n");
+  write("events", "");
   return {
+    ...artifactFiles(local),
     repoDir,
     remote,
     local,
@@ -164,22 +174,18 @@ export function createPublisherRepoFactory(dirs: {
     const repoDir = join(root, "repo");
     const remote = join(root, "remote.git");
     const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
-    // Each case owns complete refs, indexes and object stores, without alternates or hardlinks.
+    // The sibling-relative origin follows the copy; Git state is never shared.
     cpSync(template.repoDir, repoDir, copyOptions);
     cpSync(template.remote, remote, copyOptions);
     const { env, git } = createPublisherGit(repoDir);
-    git("remote", "set-url", "origin", remote);
     return {
+      ...template,
+      ...artifactFiles(join(repoDir, ".local")),
       repoDir,
       remote,
       local: join(repoDir, ".local"),
       env,
       git,
-      base: template.base,
-      source: template.source,
-      candidate: template.candidate,
-      sameTree: template.sameTree,
-      advance: template.advance,
       observation: structuredClone(template.observation),
     };
   };
@@ -210,17 +216,15 @@ export function runPublisher(
       "run_prepare_push_retry_gates() { echo retry-gates >> .local/events; }",
       "pr_git() {",
       '  case "$1" in',
-      "    push) echo push >> .local/events;;",
-      "    rebase) echo rebase >> .local/events;;",
+      '    push|rebase) echo "$1" >> .local/events;;',
       "  esac",
       '  command git "$@"',
       "}",
       "pr_gh_plain() {",
       "  echo graphql >> .local/events",
-      "  local payload expected hosted",
+      "  local expected hosted",
       '  test "$4" != "-" && test -f "$4" || return 1',
-      '  payload=$(cat "$4") || return $?',
-      "  expected=$(printf '%s' \"$payload\" | jq -r .variables.input.expectedHeadOid)",
+      '  expected=$(jq -r .variables.input.expectedHeadOid "$4") || return $?',
       '  test "$expected" = "$(remote_head)" || return 75',
       '  hosted=$(command git commit-tree HEAD^{tree} -p "$expected" -m "Hosted verified commit")',
       '  command git push -q "$remote" "$hosted:refs/heads/topic" || return $?',

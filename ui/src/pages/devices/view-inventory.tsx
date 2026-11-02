@@ -1,6 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
+import {
+  resolvePendingDeviceApprovalState,
+  type DevicePairingAccessSummary,
+  type PendingDeviceApprovalKind,
+} from "../../../../src/shared/device-pairing-access.js";
 import type { PresenceEntry } from "../../api/types.ts";
 import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -15,7 +20,7 @@ import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { formatList, formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import { macFamilyLabel } from "../../lib/mac-form-factor.ts";
-import type { DeviceTokenSummary } from "../../lib/nodes/index.ts";
+import type { DeviceTokenSummary, PairedDevice, PendingDevice } from "../../lib/nodes/index.ts";
 import {
   buildDeviceInventory,
   findGatewayPresence,
@@ -29,9 +34,12 @@ import type { InventoryRemovalRequest } from "../../lib/nodes/page-operations.ts
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { CapabilityChips } from "./capability-chips.tsx";
-import { deviceDesktopEnvironment, DeviceEntryMenu } from "./entry-menu.tsx";
+import {
+  deviceDesktopEnvironment,
+  DeviceEntryMenu,
+  PendingDeviceDecisions,
+} from "./entry-menu.tsx";
 import { HostStats } from "./host-stats.tsx";
-import { PendingDeviceRows } from "./view-pending-devices.tsx";
 import { deviceIcon, DeviceTile, DeviceIdentityFacts } from "./view-shared.tsx";
 import type { DevicesProps } from "./view.types.ts";
 
@@ -63,23 +71,29 @@ function inventorySummary(
   return parts.join(" · ");
 }
 
-export function DeviceInventory(props: DevicesProps) {
-  const pending = () => props.devicesList?.pending ?? [];
-  const paired = () => props.devicesList?.paired ?? [];
+export function DeviceInventoryContent(props: DevicesProps & { pending: boolean }) {
+  // Inventory reads replace their snapshots; config and approval drafts publish independently.
+  const pending = createMemo(() => props.devicesList?.pending ?? []);
+  const paired = createMemo(() => props.devicesList?.paired ?? []);
+  const nodes = createMemo(() => props.nodes);
+  const presenceSnapshot = createMemo(() => props.presence);
   const groups = createMemo(() =>
-    buildDeviceInventory({ paired: paired(), nodes: props.nodes, presence: props.presence }),
+    buildDeviceInventory({ paired: paired(), nodes: nodes(), presence: presenceSnapshot() }),
   );
-  const gatewayPresence = createMemo(() => findGatewayPresence(props.presence));
-  const unpairedPresence = createMemo(() => listUnpairedPresence(props.presence, groups()));
+  const gatewayPresence = createMemo(() => findGatewayPresence(presenceSnapshot()));
+  const unpairedPresence = createMemo(() => listUnpairedPresence(presenceSnapshot(), groups()));
   const stale = createMemo(() => listStaleInventoryEntries(groups()));
-  const loading = createMemo(() => props.loading || props.devicesLoading);
+  // Mutation owners can also start internal reloads after their write settles.
+  const loading = () => props.pending || props.loading || props.devicesLoading;
   const actions = (
     <>
       {stale().length > 0 ? (
         <button
           class="btn btn--sm danger"
-          title={props.canManagePairing ? "" : t("devices.readOnly.pairingRequired")}
-          disabled={!props.canManagePairing}
+          title={
+            props.connected && !props.canManagePairing ? t("devices.readOnly.pairingRequired") : ""
+          }
+          disabled={props.inventorySaving || !props.connected || !props.canManagePairing}
           onClick={() => props.onInventoryCleanup(stale().map(toRemovalRequest))}
         >
           <Icon name="trash" />{" "}
@@ -88,8 +102,8 @@ export function DeviceInventory(props: DevicesProps) {
       ) : undefined}
       <button
         class="btn"
-        title={props.canPairDevice ? "" : t("devices.pairing.adminRequired")}
-        disabled={!props.canPairDevice}
+        title={props.connected && !props.canPairDevice ? t("devices.pairing.adminRequired") : ""}
+        disabled={!props.connected || !props.canPairDevice}
         onClick={() => props.onDevicePairSetupOpen()}
       >
         <Icon name="plus" /> {t("devices.pairing.button")}
@@ -98,7 +112,12 @@ export function DeviceInventory(props: DevicesProps) {
   );
   // Pending requests and unpaired presence render in their own sections, so
   // this section's empty state depends only on its own rows.
-  const empty = createMemo(() => groups().length === 0 && !gatewayPresence());
+  const empty = () => groups().length === 0 && !gatewayPresence();
+  const groupedRows = (
+    <For each={groups()} keyed={(group) => group.key}>
+      {(group) => <InventoryGroup group={group()} devices={props} />}
+    </For>
+  );
   const deviceRows = (
     <>
       <Show when={gatewayPresence()}>
@@ -108,22 +127,18 @@ export function DeviceInventory(props: DevicesProps) {
       </Show>
       {loading() && groups().length === 0 ? (
         <SettingsLoadingSkeleton />
-      ) : empty() ? (
+      ) : empty() && (props.connected || props.devicesList) ? (
         <SettingsEmpty message={t("devices.inventory.empty")} />
       ) : (
-        <For each={groups()} keyed={(group) => group.key}>
-          {(group) => <InventoryGroup group={group()} devices={props} />}
-        </For>
+        groupedRows
       )}
     </>
   );
   return (
     <>
-      {props.devicesError ? <div class="callout danger">{props.devicesError}</div> : undefined}
-      {props.lastError ? <div class="callout danger">{props.lastError}</div> : undefined}
       {pending().length > 0 ? (
         <SettingsSection title={t("devices.inventory.pendingApproval")} count={pending().length}>
-          <PendingDeviceRows pending={pending()} paired={paired()} devices={props} />
+          <PendingDeviceRows {...props} />
         </SettingsSection>
       ) : undefined}
       <SettingsSection
@@ -287,15 +302,14 @@ function entryMetaLine(entry: DeviceInventoryEntry): string {
 const COMMAND_LINE_LIMIT = 16;
 
 function CommandLine(props: { values: string[] }) {
-  const visible = createMemo(() => props.values.slice(0, COMMAND_LINE_LIMIT));
-  const overflow = createMemo(() => props.values.length - visible().length);
-  const suffix = createMemo(() => (overflow() > 0 ? ` +${overflow()}` : ""));
+  const visible = () => props.values.slice(0, COMMAND_LINE_LIMIT);
+  const overflow = () => props.values.length - visible().length;
   return (
     <Show when={props.values.length > 0}>
       <dt class="settings-row__desc">{t("devices.inventory.commands")}</dt>
       <dd class="settings-row__value settings-row__value--mono">
         {formatList(visible())}
-        {suffix()}
+        {overflow() > 0 ? ` +${overflow()}` : ""}
       </dd>
     </Show>
   );
@@ -368,16 +382,15 @@ function InventoryEntry(props: { entry: DeviceInventoryEntry; devices: DevicesPr
       unavailable: props.entry.node?.connected !== true || !isApprovedNodeEntry(props.entry),
     }),
   );
-  const pendingRequestId = createMemo(() =>
+  const pendingRequestId = () =>
     props.entry.node?.approvalState === "pending-approval" ||
     props.entry.node?.approvalState === "pending-reapproval"
       ? props.entry.node.pendingRequestId
-      : undefined,
-  );
+      : undefined;
   const desktopEnvironment = createMemo(() =>
     deviceDesktopEnvironment(props.devices, `node:${props.entry.id}`),
   );
-  const rowConnected = createMemo(() => props.entry.node?.connected ?? props.entry.connected);
+  const rowConnected = () => props.entry.node?.connected ?? props.entry.connected;
   const connectionStatus = (
     <SettingsStatus
       kind={rowConnected() ? "ok" : "muted"}
@@ -547,9 +560,10 @@ function TokenRow(props: {
   tokenSummary: DeviceTokenSummary;
   devices: DevicesProps;
 }) {
-  const status = createMemo(() =>
-    props.tokenSummary.revokedAtMs ? t("devices.inventory.revoked") : t("devices.inventory.active"),
-  );
+  const disabled = () =>
+    props.devices.inventorySaving || !props.devices.connected || !props.devices.canManagePairing;
+  const status = () =>
+    props.tokenSummary.revokedAtMs ? t("devices.inventory.revoked") : t("devices.inventory.active");
   const scopes = createMemo(() => formatList(props.tokenSummary.scopes));
   const when = createMemo(() =>
     formatRelativeTimestamp(
@@ -569,7 +583,7 @@ function TokenRow(props: {
         <div class="device-entry__token-actions">
           <button
             class="btn btn--sm"
-            disabled={!props.devices.canManagePairing}
+            disabled={disabled()}
             onClick={() =>
               props.devices.onDeviceRotate(
                 props.device,
@@ -583,7 +597,7 @@ function TokenRow(props: {
           {props.tokenSummary.revokedAtMs ? undefined : (
             <button
               class="btn btn--sm danger"
-              disabled={!props.devices.canManagePairing}
+              disabled={disabled()}
               onClick={() => props.devices.onDeviceRevoke(props.device.id, props.tokenSummary.role)}
             >
               {t("devices.inventory.revoke")}
@@ -592,5 +606,118 @@ function TokenRow(props: {
         </div>
       </td>
     </tr>
+  );
+}
+
+function PendingDeviceRows(props: DevicesProps) {
+  const pairedByDeviceId = createMemo(
+    () =>
+      new Map(
+        (props.devicesList?.paired ?? [])
+          .map((device) => [normalizeOptionalString(device.deviceId), device] as const)
+          .filter((entry): entry is [string, PairedDevice] => Boolean(entry[0])),
+      ),
+  );
+  return (
+    <For each={props.devicesList?.pending ?? []} keyed={(req) => req.requestId}>
+      {(req) => (
+        <PendingDevice
+          req={req()}
+          devices={props}
+          paired={lookupPairedDevice(pairedByDeviceId(), req())}
+        />
+      )}
+    </For>
+  );
+}
+
+function lookupPairedDevice(
+  pairedByDeviceId: ReadonlyMap<string, PairedDevice>,
+  request: Pick<PendingDevice, "deviceId" | "publicKey">,
+): PairedDevice | undefined {
+  const paired = pairedByDeviceId.get(normalizeOptionalString(request.deviceId) ?? "");
+  if (!paired) {
+    return undefined;
+  }
+  const requestPublicKey = normalizeOptionalString(request.publicKey);
+  const pairedPublicKey = normalizeOptionalString(paired.publicKey);
+  if (requestPublicKey && pairedPublicKey && requestPublicKey !== pairedPublicKey) {
+    return undefined;
+  }
+  return paired;
+}
+
+function formatAccessSummary(access: DevicePairingAccessSummary | null): string {
+  if (!access) {
+    return t("devices.inventory.none");
+  }
+  return t("devices.inventory.rolesAndScopes", {
+    roles: formatList(access.roles),
+    scopes: formatList(access.scopes),
+  });
+}
+
+const PENDING_APPROVAL_LABELS: Record<PendingDeviceApprovalKind, string> = {
+  "scope-upgrade": "devices.inventory.scopeUpgrade",
+  "role-upgrade": "devices.inventory.roleUpgrade",
+  "re-approval": "devices.inventory.reapproval",
+  "new-pairing": "devices.inventory.newPairing",
+};
+
+function PendingDevice(props: {
+  req: PendingDevice;
+  devices: DevicesProps;
+  paired?: PairedDevice;
+}) {
+  const name = () => normalizeOptionalString(props.req.displayName) || props.req.deviceId;
+  const age = createMemo(() =>
+    props.req.ts === undefined ? t("common.na") : formatRelativeTimestamp(props.req.ts),
+  );
+  const approval = createMemo(() => resolvePendingDeviceApprovalState(props.req, props.paired));
+  const repair = () => (props.req.isRepair ? ` · ${t("devices.inventory.repair")}` : "");
+  return (
+    <div class="settings-row device-entry">
+      <DeviceTile icon={<Icon name="monitorSmartphone" />} />
+      <div class="device-entry__body">
+        <div class="device-entry__heading">
+          <span class="settings-row__title">{name()}</span>
+          <span class="device-entry__status">
+            <SettingsStatus kind={"warn"} label={t("devices.inventory.pendingApproval")} />
+          </span>
+        </div>
+        <span class="settings-row__desc">
+          {t("devices.inventory.requestedAt", {
+            note: t(PENDING_APPROVAL_LABELS[approval().kind]),
+            time: age(),
+          })}
+          {repair()}
+        </span>
+      </div>
+      <div class="settings-row__control">
+        <PendingDeviceDecisions
+          devices={props.devices}
+          requestId={props.req.requestId}
+          name={name()}
+        />
+        <DeviceEntryMenu
+          devices={props.devices}
+          entry={{ name: name(), deviceId: props.req.deviceId }}
+        />
+      </div>
+      <details class="device-entry__details">
+        <summary>{t("devices.inventory.details")}</summary>
+        <dl class="device-entry__facts">
+          <DeviceIdentityFacts id={props.req.deviceId} remoteIp={props.req.remoteIp} />
+          <dt class="settings-row__desc">{t("devices.inventory.requestedAccessLabel")}</dt>
+          <dd class="settings-row__value">{formatAccessSummary(approval().requested)}</dd>
+          {approval().approved ? (
+            <>
+              <dt class="settings-row__desc">{t("devices.inventory.approvedAccessLabel")}</dt>
+              <dd class="settings-row__value">{formatAccessSummary(approval().approved)}</dd>
+            </>
+          ) : undefined}
+        </dl>
+      </details>
+    </div>
   );
 }

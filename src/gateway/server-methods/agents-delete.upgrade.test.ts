@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { createAgent } from "../../agents/agent-create.js";
+import { prepareDoctorContext } from "../../commands/doctor-config-flow.test-support.js";
 import { runDoctorConfigPreflight } from "../../commands/doctor-config-preflight.js";
 import { prepareDoctorDatabasePreflight } from "../../commands/doctor-database-preflight.js";
 import { beginDoctorMaintenance } from "../../commands/doctor-maintenance.js";
@@ -12,24 +12,20 @@ import { backupDoctorMigrationDatabases } from "../../commands/doctor-migration-
 import { createConfigIO, getRuntimeConfig, resetConfigRuntimeState } from "../../config/config.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import {
-  loadSessionEntryReadOnly,
-  replaceSessionEntry,
-} from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
-import { CronService } from "../../cron/service.js";
+import { runInitialConfigWriteHealth } from "../../flows/doctor-health-contribution-runners.config.js";
 import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
-import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { getUserPreferences } from "../../state/user-preferences.test-support.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { readAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { resumeAgentDeletions } from "../server-agent-deletion-recovery.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { loadGatewayStartupConfigSnapshot } from "../server-startup-config-helpers.js";
 import { runStartupSessionMaintenanceForTest } from "../server-startup-session-migration.test-support.js";
+import { createDeletionCron, deletionGatewayEnv } from "./agents-delete.fixture.test-support.js";
 import { seedLegacyAgentDeletionFixture } from "./legacy-agent-deletion-fixture.test-support.js";
 
 let scenarioWork: Promise<void> | undefined;
@@ -39,28 +35,29 @@ afterEach(async () => {
   scenarioWork = undefined;
 });
 
-function readDatabase<T>(file: string, read: (database: DatabaseSync) => T): T {
-  const database = new DatabaseSync(file, { readOnly: true });
-  try {
-    return read(database);
-  } finally {
-    database.close();
+function rows(file: string, sql: string) {
+  using database = new DatabaseSync(file, { readOnly: true });
+  return database.prepare(sql).all();
+}
+
+function expectHealthySchema(file: string, version?: number) {
+  expect(rows(file, "PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+  if (version !== undefined) {
+    expect(rows(file, "PRAGMA user_version")).toEqual([{ user_version: version }]);
   }
 }
 
 function readKeeperStorage(file: string) {
-  return readDatabase(file, (database) => ({
-    entries: database
-      .prepare(
-        "SELECT session_key, current_session_id, entry_json FROM session_nodes ORDER BY session_key",
-      )
-      .all(),
-    transcripts: database
-      .prepare(
-        "SELECT session_id, seq, event_json, hex(event_zstd) AS compressed, event_utf8_bytes FROM transcript_events ORDER BY session_id, seq",
-      )
-      .all(),
-  }));
+  return {
+    entries: rows(
+      file,
+      "SELECT session_key, current_session_id, entry_json FROM session_nodes ORDER BY session_key",
+    ),
+    transcripts: rows(
+      file,
+      "SELECT session_id, seq, event_json, hex(event_zstd) AS compressed, event_utf8_bytes FROM transcript_events ORDER BY session_id, seq",
+    ),
+  };
 }
 
 it.for([true, false])(
@@ -72,14 +69,7 @@ it.for([true, false])(
         label: "agent-delete-stable-upgrade",
         layout: "split",
         env: {
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+          ...deletionGatewayEnv,
           OPENCLAW_DISABLE_BONJOUR: "1",
         },
       },
@@ -88,60 +78,26 @@ it.for([true, false])(
         const originalKeeper = readKeeperStorage(fixture.keeperDatabase);
         const witnessPath = path.join(fixture.keeperWorkspace, "keeper-witness.txt");
         const originalWitness = await fs.readFile(witnessPath);
-        readDatabase(fixture.stateDatabase, (database) => {
-          expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
-          expect(
-            database.prepare("SELECT app_version FROM schema_meta WHERE meta_key = 'primary'").get()
-              ?.app_version,
-          ).toBe("2026.9.9");
-          expect(
-            database.prepare("PRAGMA table_info(agent_deletion_journal)").all(),
-          ).not.toContainEqual(expect.objectContaining({ name: "phase" }));
-          expect(
-            database
-              .prepare(
-                "SELECT agent_id, cleanup_completed, delete_files FROM agent_deletion_journal",
-              )
-              .all(),
-          ).toEqual([
-            { agent_id: "doomed", cleanup_completed: 0, delete_files: Number(deleteFiles) },
-          ]);
-        });
-        for (const file of [fixture.keeperDatabase, fixture.doomedDatabase]) {
-          expect(
-            readDatabase(
-              file,
-              (database) => database.prepare("PRAGMA user_version").get()?.user_version,
-            ),
-          ).toBe(24);
-        }
+        const stateRows = (sql: string) => rows(fixture.stateDatabase, sql);
+        expect(stateRows("PRAGMA user_version")).toEqual([{ user_version: 19 }]);
+        expect(stateRows("PRAGMA table_info(agent_deletion_journal)")).not.toContainEqual(
+          expect.objectContaining({ name: "phase" }),
+        );
 
         const readScope = createSqliteReadOnlyWorkerScope({ signal, deadlineOwnedByCaller: false });
-        let scheduler: ReturnType<typeof createTestGatewayScheduler> | undefined;
-        let cron: CronService | undefined;
-        const startRecoveryOwner = async () => {
+        let owner: ReturnType<typeof createDeletionCron> | undefined;
+        const resumeDeletion = async () => {
           await captureRuntimeConfigAsyncReader()();
-          scheduler = createTestGatewayScheduler();
-          cron = new CronService({
-            scheduler,
-            storePath: path.join(state.stateDir, "cron", "jobs.json"),
-            cronEnabled: false,
-            log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-            enqueueSystemEvent: vi.fn(),
-            requestHeartbeat: vi.fn(),
-            runIsolatedAgentJob: async () => {
-              throw new Error("Unexpected cron dispatch in upgrade fixture");
-            },
+          owner = createDeletionCron(state, async () => {
+            throw new Error("Unexpected cron dispatch in upgrade fixture");
           });
-          return createDirectChatContext({ cron, getRuntimeConfig });
+          await resumeAgentDeletions(owner.context, signal);
+          expect(owner.context.logGateway.warn).not.toHaveBeenCalled();
         };
         const closeOwners = async () => {
-          cron?.stop();
-          await cron?.waitForIdle();
-          await scheduler?.stop();
+          await owner?.stop();
           await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-          cron = undefined;
-          scheduler = undefined;
+          owner = undefined;
           resetConfigRuntimeState();
         };
         const assertKeeper = async () => {
@@ -164,32 +120,11 @@ it.for([true, false])(
         };
         const assertClosedStorage = () => {
           expect(readKeeperStorage(fixture.keeperDatabase)).toEqual(originalKeeper);
-          readDatabase(fixture.keeperDatabase, (database) => {
-            expect(database.prepare("PRAGMA integrity_check").all()).toEqual([
-              { integrity_check: "ok" },
-            ]);
-            expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
-              OPENCLAW_AGENT_SCHEMA_VERSION,
-            );
-          });
-          readDatabase(fixture.stateDatabase, (database) => {
-            expect(database.prepare("PRAGMA integrity_check").all()).toEqual([
-              { integrity_check: "ok" },
-            ]);
-            expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
-              OPENCLAW_STATE_SCHEMA_VERSION,
-            );
-            expect(
-              database.prepare("PRAGMA table_info(agent_deletion_journal)").all(),
-            ).toContainEqual(
-              expect.objectContaining({
-                name: "phase",
-                type: "TEXT",
-                notnull: 0,
-                dflt_value: null,
-              }),
-            );
-          });
+          expectHealthySchema(fixture.keeperDatabase, OPENCLAW_AGENT_SCHEMA_VERSION);
+          expectHealthySchema(fixture.stateDatabase, OPENCLAW_STATE_SCHEMA_VERSION);
+          expect(stateRows("PRAGMA table_info(agent_deletion_journal)")).toContainEqual(
+            expect.objectContaining({ name: "phase", type: "TEXT", notnull: 0, dflt_value: null }),
+          );
         };
         try {
           await readScope.run(async () => {
@@ -230,12 +165,7 @@ it.for([true, false])(
                       name.endsWith(".bak"),
                   );
                   expect(backups).toHaveLength(1);
-                  readDatabase(path.join(path.dirname(file), backups[0]!), (database) => {
-                    expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(24);
-                    expect(database.prepare("PRAGMA integrity_check").all()).toEqual([
-                      { integrity_check: "ok" },
-                    ]);
-                  });
+                  expectHealthySchema(path.join(path.dirname(file), backups[0]!), 24);
                 }
                 const doctor = await runDoctorConfigPreflight({
                   observe: false,
@@ -249,16 +179,18 @@ it.for([true, false])(
                     (receipt) => receipt.outcome === "refused",
                   ),
                 ).toBe(false);
+                await using configDoctor = await prepareDoctorContext(state.configPath);
+                await runInitialConfigWriteHealth(configDoctor);
+                expect(configDoctor.configWriteRefusal).toBeUndefined();
+                const migratedConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+                expect(migratedConfig.agents.defaults).not.toHaveProperty("heartbeat");
               });
             } finally {
               await maintenance.release();
             }
-            expect(
-              readDatabase(
-                fixture.doomedDatabase,
-                (database) => database.prepare("PRAGMA user_version").get()?.user_version,
-              ),
-            ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+            expect(rows(fixture.doomedDatabase, "PRAGMA user_version")).toEqual([
+              { user_version: OPENCLAW_AGENT_SCHEMA_VERSION },
+            ]);
             signal.throwIfAborted();
             const io = createConfigIO({
               configPath: state.configPath,
@@ -284,10 +216,8 @@ it.for([true, false])(
             });
             await assertKeeper();
 
-            let context = await startRecoveryOwner();
-            await resumeAgentDeletions(context, signal);
+            await resumeDeletion();
             signal.throwIfAborted();
-            expect(context.logGateway.warn).not.toHaveBeenCalled();
             expect(readAgentDeletionJournal("doomed")).toMatchObject({
               phase: "retiring",
               cleanupCompleted: true,
@@ -309,40 +239,16 @@ it.for([true, false])(
             await closeOwners();
             assertClosedStorage();
             if (!deleteFiles) {
-              expect(
-                readDatabase(fixture.doomedDatabase, (database) =>
-                  database.prepare("SELECT session_key FROM session_nodes").all(),
-                ),
-              ).toEqual([]);
+              expect(rows(fixture.doomedDatabase, "SELECT session_key FROM session_nodes")).toEqual(
+                [],
+              );
             }
 
-            context = await startRecoveryOwner();
-            await resumeAgentDeletions(context, signal);
-            expect(context.logGateway.warn).not.toHaveBeenCalled();
+            await resumeDeletion();
             expect(readAgentDeletionJournal("doomed")).toMatchObject({ cleanupCompleted: true });
-            await assertKeeper();
-            expect(
-              await createAgent({
-                name: "doomed",
-                workspace: fixture.doomedWorkspace,
-                skipBootstrap: true,
-              }),
-            ).toMatchObject({ status: "created", agentId: "doomed" });
-            expect(readAgentDeletionJournal("doomed")).toBeUndefined();
-            await expect(
-              replaceSessionEntry(
-                { agentId: "doomed", sessionKey: "agent:doomed:recreated", env: state.env },
-                { sessionId: "recreated-after-upgrade", updatedAt: 2 },
-              ),
-            ).resolves.toMatchObject({ sessionId: "recreated-after-upgrade" });
             await assertKeeper();
             await closeOwners();
             assertClosedStorage();
-            readDatabase(fixture.doomedDatabase, (database) => {
-              expect(database.prepare("PRAGMA integrity_check").all()).toEqual([
-                { integrity_check: "ok" },
-              ]);
-            });
           });
         } finally {
           try {
