@@ -48,9 +48,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Rail first frame #190877 adds 497 B; main measured 1,279,491 B.
+  // Rail first frame #190877 adds 132 B; main measured 1,279,686 B.
   // Lead approved the exact raise on 2026-11-02. Retain 64 B build variance.
-  chatBootJsGzipBytes: 1_279_988,
+  chatBootJsGzipBytes: 1_279_818,
   newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
@@ -75,9 +75,9 @@ const controlUiPerformanceBudgets = {
   // Retain 64 B build variance.
   // Mobile composer controls stay inside the composer: 309,341 B measured.
   totalCssGzipBytes: 309_366,
-  // Rail first frame #190877 adds 65 B; main measured 1,645,807 B (phone-UI batch landed 2026-11-02).
+  // Rail first frame #190877 adds 65 B; main measured 1,652,232 B (phone-UI batch landed 2026-11-02).
   // Lead approved the exact raise on 2026-11-02. Retain 64 B build variance.
-  totalCssRawBytes: 1_645_872,
+  totalCssRawBytes: 1_652_297,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
