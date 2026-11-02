@@ -337,16 +337,6 @@ export function AgentTools(
   }
 
   function Catalog(props: { catalog: ToolsCatalogResult | null }) {
-    // Only ordering uses the retained answer; availability is read in the leaf boundaries below.
-    const availableTools = createMemo(
-      () =>
-        new Map(
-          (params.effectivePreview?.groups ?? [])
-            .flatMap((group) => group.tools)
-            .filter((tool) => !tool.deniedBySession)
-            .map((tool) => [normalizeToolPolicyName(tool.id), tool] as const),
-        ),
-    );
     const toolSections = createMemo(() => {
       i18nRevision();
       return resolveToolSections(props.catalog);
@@ -379,21 +369,10 @@ export function AgentTools(
                 });
                 return () => toolGroups.delete(group);
               });
-              const sortedTools = createMemo(() => {
-                const ranked = section().tools.map((tool) => ({
-                  tool,
-                  active: availableTools().has(normalizeToolPolicyName(tool.id)),
-                  enabled: resolveAllowed(tool.id).allowed,
-                }));
-                return ranked
-                  .toSorted(
-                    (left, right) =>
-                      Number(right.active) - Number(left.active) ||
-                      Number(right.enabled) - Number(left.enabled) ||
-                      left.tool.label.localeCompare(right.tool.label),
-                  )
-                  .map((entry) => entry.tool);
-              });
+              // Name order, so a row never moves when its toggle or the preview changes.
+              const sortedTools = createMemo(() =>
+                section().tools.toSorted((left, right) => left.label.localeCompare(right.label)),
+              );
               const enabledSectionCount = createMemo(
                 () => section().tools.filter((tool) => resolveAllowed(tool.id).allowed).length,
               );

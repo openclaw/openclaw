@@ -644,4 +644,33 @@ describe("agents tools panel (browser)", () => {
       ),
     ).toEqual(expected);
   });
+
+  it("keeps tools in name order when a toggle or the preview changes", async () => {
+    const params = createBaseParams({ catalog: policyCatalog(["zeta", "alpha", "mid"]) });
+    const view = mountSolid(AgentTools, params);
+    openToolGroups(view.container);
+    const names = () => texts(view.container, ".agent-tool-title");
+    const alphaSwitch = () =>
+      view.container.querySelector<HTMLInputElement>(
+        "#agent-tool-alpha input.settings-toggle__input",
+      );
+    expect(names()).toEqual(["alpha", "mid", "zeta"]);
+    expect(alphaSwitch()?.checked).toBe(true);
+
+    const preview: ToolsEffectiveResult = {
+      ...toolPreview,
+      groups: [{ ...toolPreview.groups[0]!, tools: [previewTool("zeta")] }],
+    };
+    view.update({
+      ...params,
+      configForm: {
+        agents: { entries: { main: { tools: { profile: "full", deny: ["alpha"] } } } },
+      },
+      effective: preview,
+      effectivePreview: preview,
+    });
+
+    await waitForSolid(() => expect(alphaSwitch()?.checked).toBe(false));
+    expect(names()).toEqual(["alpha", "mid", "zeta"]);
+  });
 });
