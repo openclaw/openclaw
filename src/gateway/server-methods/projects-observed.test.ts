@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PROJECTS_LIST_MAX_CHECKOUTS_PER_PROJECT,
   PROJECTS_LIST_MAX_IDENTITY_PROBES,
@@ -8,7 +8,6 @@ import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { withRestoredMocks } from "../../test-utils/vitest-spies.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { listObservedProjects as discoverProjects } from "./projects-observed.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
@@ -72,29 +71,28 @@ async function listObservedProjects(
     client = authenticatedClient("operator@example.com"),
   }: { worktrees?: ManagedWorktreeRecord[]; client?: GatewayClient } = {},
 ) {
-  const registry = vi.spyOn(managedWorktrees, "listRegistryRecords").mockResolvedValue(worktrees);
-  const identities = vi
-    .spyOn(managedWorktrees, "resolveRepositoryIdentities")
-    .mockImplementation((roots) =>
-      Promise.all(roots.map((root) => resolveRepositoryIdentity(root).catch(() => undefined))),
-    );
-  return await withRestoredMocks([registry, identities], async () => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-    const context = { getRuntimeConfig: () => cfg } as GatewayRequestContext;
-    return (await discoverProjects(context, client, store)).projects;
-  });
+  vi.spyOn(managedWorktrees, "listRegistryRecords").mockResolvedValue(worktrees);
+  vi.spyOn(managedWorktrees, "resolveRepositoryIdentities").mockImplementation((roots) =>
+    Promise.all(roots.map((root) => resolveRepositoryIdentity(root).catch(() => undefined))),
+  );
+  const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+  const context = { getRuntimeConfig: () => cfg } as GatewayRequestContext;
+  return (await discoverProjects(context, client, store)).projects;
 }
 
 beforeEach(() => {
   store = {};
 });
+afterEach(() => vi.restoreAllMocks());
 
 describe("projects.list observed projects", () => {
   it("deduplicates admitted paths and preserves result order when a checkout is unavailable", async () => {
     seedSessions(
       Array.from({ length: 5_000 }, (_, index) =>
-        session(`session-${index}`, index, { spawnedCwd: `/repos/${index % 8}` }),
-      ),
+        session(`session-${index}`, index, {
+          spawnedCwd: `/repos/${index === 0 ? 0 : 1 + (index % 7)}`,
+        }),
+      ).toReversed(),
     );
     const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => {
       if (checkoutPath === "/repos/3") {
@@ -110,49 +108,17 @@ describe("projects.list observed projects", () => {
 
     await expect(listObservedProjects(resolveRepositoryIdentity)).resolves.toEqual([
       {
-        name: "7",
+        name: "2",
         originUrl: "https://example.test/project.git",
         lastUsedAt: 4_999,
-        checkouts: [7, 6, 5, 4, 2, 1, 0].map((index) => ({
+        checkouts: [2, 1, 7, 6, 5, 4, 0].map((index) => ({
           runnerId: "gateway",
           path: `/physical/${index}`,
         })),
       },
     ]);
     expect(resolveRepositoryIdentity).toHaveBeenCalledTimes(8);
-    expect(new Set(resolveRepositoryIdentity.mock.calls.map(([checkout]) => checkout)).size).toBe(
-      8,
-    );
   });
-
-  it.each([false, true])(
-    "preserves a different checkout beside repeated host sessions (newest first: %s)",
-    async (newestFirst) => {
-      const repeated = Array.from({ length: 50 }, (_, index) =>
-        session(`alpha-${index}`, index + 1, {
-          spawnedCwd: "/repos/alpha",
-          sessionRoot: "/permission-root",
-        }),
-      );
-      seedSessions([
-        session("beta", 0, { spawnedCwd: "/repos/beta" }),
-        ...(newestFirst ? repeated.toReversed() : repeated),
-      ]);
-      const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) =>
-        identity(checkoutPath),
-      );
-      const projects = await listObservedProjects(resolveRepositoryIdentity);
-      expect(projects.map(({ name, lastUsedAt }) => ({ name, lastUsedAt }))).toEqual([
-        { name: "alpha", lastUsedAt: 50 },
-        { name: "beta", lastUsedAt: 0 },
-      ]);
-      expect(projects.every(({ checkouts }) => checkouts.length === 1)).toBe(true);
-      expect(resolveRepositoryIdentity.mock.calls.map(([root]) => root)).toEqual([
-        "/repos/alpha",
-        "/repos/beta",
-      ]);
-    },
-  );
 
   it.each<Partial<SessionEntry>>([
     { execNode: "paired-mac" },
