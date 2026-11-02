@@ -232,3 +232,57 @@ it("does not pin old durable commentary just because its run is still active", (
   expect(state.messages).not.toContain(commentary);
   expect(state.runs.active?.message).toBe(active);
 });
+
+it.each(["pending", "live", "unsequenced", "unknown local", "gap"] as const)(
+  "does not start-place a local output ahead of an existing %s predecessor",
+  (kind) => {
+    let state = projection();
+    const prior = { role: "user", content: "prior" };
+    if (kind === "pending") {
+      state = reduceSessionProjection(state, {
+        type: "sendPending",
+        runId: "pending",
+        message: prior,
+      });
+    }
+    if (kind === "live") {
+      state = delta(state, "live", { role: "assistant", content: "live" });
+    }
+    if (kind === "unsequenced") {
+      state = reduceSessionProjection(state, { type: "snapshotLoaded", messages: [prior] });
+    }
+    if (kind === "unknown local") {
+      state = reduceSessionProjection(state, { type: "localOutput", message: prior });
+    }
+    if (kind === "gap") {
+      state = reduceSessionProjection(state, { type: "transportGap" });
+    }
+    const output = { role: "system", content: "later command" };
+    state = reduceSessionProjection(state, {
+      type: "localOutput",
+      message: output,
+      sourceEmpty: true,
+    });
+    expect(state.entries.find((entry) => entry.message === output)?.atHistoryStart).toBeUndefined();
+  },
+);
+
+it("preserves consecutive authorized local outputs before later source without inventing sequence zero", () => {
+  const first = { role: "system", content: "first" };
+  const second = { role: "system", content: "second" };
+  let state = projection();
+  for (const message of [first, second]) {
+    state = reduceSessionProjection(state, { type: "localOutput", message, sourceEmpty: true });
+  }
+  const user = savedUser("later", "later", 1);
+  state = reduceSessionProjection(state, { type: "snapshotLoaded", messages: [user] });
+  expect(state.messages).toEqual([first, second, user]);
+  expect(
+    state.entries
+      .slice(0, 2)
+      .every(
+        (entry) =>
+          entry.identity?.sequence == null && entry.afterSequence == null && entry.atHistoryStart,
+      ),
+  ).toBe(true);
+});

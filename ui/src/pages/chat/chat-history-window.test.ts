@@ -2,12 +2,14 @@ import { createSessionProjection, reduceSessionProjection } from "@openclaw/gate
 import { expect, it } from "vitest";
 import { t } from "../../i18n/index.ts";
 import { nativeHistoryMessageSourceIdentity } from "../../lib/chat/history-message-identity.ts";
+import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   admitChatHistoryPages,
   prepareChatHistoryPages,
   resolveChatHistoryPagination,
+  reopenChatHistoryBoundary,
 } from "./chat-history-snapshot.ts";
 import {
   extendChatHistoryWindow,
@@ -279,7 +281,7 @@ it("keeps only the original bounded unkeyed reader packet beside local output", 
   const output = { role: "system", content: "local result" };
   const admitted = selectChatHistoryResidency(
     [...messages, output],
-    { ...pagination, segments: [packet] },
+    { ...pagination, hasNewer: true, newerCursor: "opaque-after", segments: [packet] },
     "tail",
     "seq:2",
     [output],
@@ -844,5 +846,193 @@ it.each(["older", "newer"] as const)(
       olderCursor: "opaque-before-reader",
       newerCursor: "opaque-after-reader",
     });
+  },
+);
+
+it.each(
+  (["older", "newer"] as const).flatMap((direction) =>
+    (["empty", "filtered", "overlap"] as const).flatMap((mode) =>
+      [false, true].map((exhausted) => ({ direction, mode, exhausted })),
+    ),
+  ),
+)(
+  "preserves bounded reader packet through $mode $direction admission (exhausted=$exhausted)",
+  ({ direction, mode, exhausted }) => {
+    const readerRows = Array.from({ length: 401 }, (_, index) => ({
+      role: "assistant",
+      content: `fragment-${index}`,
+      __openclaw: { seq: index < 200 ? 100 : 101 },
+    }));
+    const packet = prepareChatHistoryPacket(
+      readerRows,
+      { hasMore: true, olderCursor: "opaque-before-reader" },
+      "opaque-after-reader",
+    );
+    expect(packet.boundedPacket).toBe(true);
+    const host = makeChatHost({
+      readTranscriptReaderSnapshot: () => ({
+        anchor: "seq:101",
+        visibleSources: ["seq:100", "seq:101"],
+      }),
+    });
+    expect(
+      admitChatHistoryPages(
+        host,
+        [
+          {
+            messages: readerRows,
+            hasMore: true,
+            olderCursor: "opaque-before-reader",
+            newerCursor: "opaque-after-reader",
+            packet,
+          },
+        ],
+        "around",
+      ),
+    ).toBe("messages");
+    expect(host.chatMessages).toEqual(readerRows);
+    expect(host.chatMessages.every((message, index) => message === readerRows[index])).toBe(true);
+    expect(host.chatHistoryPagination.segments).toEqual([packet]);
+    const incoming =
+      mode === "overlap"
+        ? readerRows
+        : mode === "filtered"
+          ? visibleChatHistoryMessages([{ role: "assistant", content: "HEARTBEAT_OK" }])
+          : [];
+    if (mode !== "overlap") {
+      expect(incoming).toEqual([]);
+    }
+    const result =
+      direction === "older"
+        ? {
+            messages: incoming,
+            totalMessages: 900,
+            hasMore: !exhausted,
+            olderCursor: exhausted ? undefined : "advanced-older",
+          }
+        : {
+            messages: incoming,
+            totalMessages: 900,
+            hasMore: true,
+            newerCursor: exhausted ? undefined : "advanced-newer",
+          };
+    const prepared = prepareChatHistoryPages(host, [result], direction);
+    expect(prepared.messages).toEqual(readerRows);
+    expect([...prepared.requiredSources]).toEqual(["seq:100", "seq:101"]);
+    expect(host.chatHistoryPagination.segments).toEqual([packet]);
+    expect(prepared.fits).toBe(true);
+    expect(prepared.pagination.segments).toEqual([packet]);
+    expect(prepared.pagination.totalMessages).toBe(900);
+    const navigation =
+      direction === "older"
+        ? {
+            hasMore: !exhausted,
+            olderCursor: exhausted ? undefined : "advanced-older",
+            hasNewer: true,
+            newerCursor: "opaque-after-reader",
+          }
+        : {
+            hasMore: true,
+            olderCursor: "opaque-before-reader",
+            hasNewer: exhausted ? undefined : true,
+            newerCursor: exhausted ? undefined : "advanced-newer",
+          };
+    expect(prepared.pagination.hasMore).toBe(navigation.hasMore);
+    expect(prepared.pagination.hasMore ? prepared.pagination.olderCursor : undefined).toBe(
+      navigation.olderCursor,
+    );
+    expect(prepared.pagination.hasNewer).toBe(navigation.hasNewer);
+    expect(prepared.pagination.newerCursor).toBe(navigation.newerCursor);
+    const warm = selectChatHistoryResidency(
+      prepared.messages,
+      prepared.pagination,
+      "tail",
+      "seq:101",
+    );
+    expect(warm.withinBudget).toBe(true);
+    expect(warm.pagination).toEqual(prepared.pagination);
+    host.chatHistoryPagination = prepared.pagination;
+    const next = durable(direction === "older" ? 99 : 102);
+    const actual = prepareChatHistoryPages(
+      host,
+      [{ messages: [next], hasMore: true, olderCursor: "next-older", newerCursor: "next-newer" }],
+      direction,
+    );
+    expect(actual.fits).toBe(true);
+    expect(actual.messages).toEqual(
+      direction === "older" ? [next, ...readerRows] : [...readerRows, next],
+    );
+    expect(actual.pagination.segments).toContainEqual(packet);
+  },
+);
+
+it.each(["older", "newer"] as const)(
+  "reopens only the %s navigation edge without rewriting a held packet",
+  (direction) => {
+    const rows = [durable(100), durable(101)];
+    const packet = prepareChatHistoryPacket(
+      rows,
+      { hasMore: true, olderCursor: "original-older" },
+      "original-newer",
+    );
+    const host = makeChatHost();
+    admitChatHistoryPages(
+      host,
+      [
+        {
+          messages: rows,
+          hasMore: true,
+          olderCursor: "original-older",
+          newerCursor: "original-newer",
+          packet,
+        },
+      ],
+      "around",
+    );
+    reopenChatHistoryBoundary(
+      host,
+      direction === "older" ? "id:source-100" : "id:source-101",
+      direction === "older"
+        ? { hasMore: true, olderCursor: "reopened-older" }
+        : { hasMore: true, hasNewer: true, newerCursor: "reopened-newer" },
+      direction,
+    );
+    expect(host.chatHistoryPagination.segments).toEqual([packet]);
+    const warm = selectChatHistoryResidency(host.chatMessages, host.chatHistoryPagination);
+    expect(warm.pagination).toMatchObject(
+      direction === "older"
+        ? { olderCursor: "reopened-older", newerCursor: "original-newer" }
+        : { olderCursor: "original-older", newerCursor: "reopened-newer" },
+    );
+  },
+);
+
+it.each([false, true])(
+  "retires complete snapshot authority on older traversal (exhausted=%s)",
+  (exhausted) => {
+    const rows = [durable(100), durable(101)];
+    const packet = prepareChatHistoryPacket(rows, { hasMore: false });
+    const previous = { hasMore: false, completeSnapshot: true, segments: [packet] } as const;
+    const next = extendChatHistoryWindow(
+      previous,
+      rows,
+      [],
+      exhausted ? { hasMore: false } : { hasMore: true, olderCursor: "advanced-older" },
+      undefined,
+      "older",
+    );
+    expect(next).not.toHaveProperty("completeSnapshot");
+    expect(next).toMatchObject(
+      exhausted ? { hasMore: false } : { hasMore: true, olderCursor: "advanced-older" },
+    );
+    expect(previous).toEqual({ hasMore: false, completeSnapshot: true, segments: [packet] });
+    expect(next.segments?.[0]).toBe(packet);
+    expect(packet.boundedPacket).toBe(true);
+    expect(packet).toMatchObject({ hasOlder: false, hasNewer: false });
+    const warm = selectChatHistoryResidency(rows, next);
+    expect(warm.withinBudget).toBe(true);
+    expect(warm.messages).toEqual(rows);
+    expect(warm.messages.every((message, index) => message === rows[index])).toBe(true);
+    expect(warm.pagination).not.toHaveProperty("completeSnapshot");
   },
 );

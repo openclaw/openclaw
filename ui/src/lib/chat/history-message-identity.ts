@@ -161,23 +161,28 @@ export function prependUniqueNativeMessages(
     // Only recorded local occurrences move earlier across a newly filled gap.
     // Keep already-correct placement among unsequenced live/pending rows; the
     // predecessor may be retired, but its cut survives in the entry.
-    const cuts = new Map<unknown, number[]>();
+    const cuts = new Map<unknown, SessionProjectionEntry[]>();
     for (const entry of localEntries) {
-      if (entry.localOutput && entry.afterSequence != null) {
+      if (entry.localOutput && (entry.atHistoryStart || entry.afterSequence != null)) {
         const queue = cuts.get(entry.message) ?? [];
-        queue.push(entry.afterSequence);
+        queue.push(entry);
         cuts.set(entry.message, queue);
       }
     }
+    // Start-placed outputs keep their insertion order before newly admitted sources.
+    let startOutputs = 0;
     for (let index = 0; index < merged.length; index += 1) {
       const message = merged[index];
-      const cut = cuts.get(message)?.shift();
-      if (cut == null) {
+      const entry = cuts.get(message)?.shift();
+      if (!entry) {
         continue;
       }
-      const boundary = merged.findIndex(
-        (candidate) => (readSessionMessageSequence(candidate) ?? -1) > cut,
-      );
+      const cut = entry.afterSequence;
+      const boundary = entry.atHistoryStart
+        ? startOutputs++
+        : cut == null
+          ? -1
+          : merged.findIndex((candidate) => (readSessionMessageSequence(candidate) ?? -1) > cut);
       if (boundary >= 0 && boundary < index) {
         merged.splice(index, 1);
         merged.splice(boundary, 0, message);

@@ -30,6 +30,7 @@ import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
 import { buildMessageItems } from "./chat-thread-items.ts";
+import type { ChatHistoryStartCapability } from "./history-merge.ts";
 import { beginChatScrollIntent, resetChatScroll, scheduleChatScroll } from "./scroll.ts";
 import type { ChatReadingBookmark, ChatScrollHost } from "./scroll.ts";
 import { readChatHistoryCursor, readChatHistoryState } from "./session-message-cache.ts";
@@ -229,6 +230,7 @@ export async function loadChatHistory(
     inFlight.refresh = refresh;
     return refresh.promise;
   }
+  const sourceReceipt: { emptySource?: ChatHistoryStartCapability } = {};
   const promise = hydrateChatHistory(
     state,
     client,
@@ -239,6 +241,7 @@ export async function loadChatHistory(
     method,
     inputRunIds,
     requestKeyPrefix,
+    sourceReceipt,
   ).then((result) => {
     const current = requests.historyLoad;
     if (current.phase === "in-flight" && current.request === promise) {
@@ -260,6 +263,7 @@ export async function loadChatHistory(
           sessionKey,
           requestAgentId,
           sessionInfo: result.sessionInfo,
+          emptySource: sourceReceipt.emptySource,
           // A read begun during creation cannot prove that its provisional key expired.
           sessionId: historySessionId(result) ?? (creationPending ? undefined : null),
         });

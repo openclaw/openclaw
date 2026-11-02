@@ -66,3 +66,41 @@ export function trimmedChatHistoryPagination(
     ...(pagination.totalMessages !== undefined ? { totalMessages: pagination.totalMessages } : {}),
   };
 }
+
+/** Traversal changes navigation, not the original held packet's body certificate. */
+export function advanceChatHistoryNavigation(
+  previous: ChatHistoryPagination,
+  next: ChatHistoryPagination,
+  direction: "older" | "newer",
+): ChatHistoryPagination {
+  if (direction === "older") {
+    const navigation = { ...previous };
+    // Older traversal retires a prior complete-snapshot claim.
+    if (navigation.hasMore) {
+      delete navigation.olderCursor;
+      delete navigation.needsBoundary;
+      delete navigation.nextOffset;
+    } else {
+      delete navigation.completeSnapshot;
+    }
+    return {
+      ...navigation,
+      ...(next.hasMore
+        ? {
+            hasMore: true as const,
+            olderCursor: next.olderCursor,
+            needsBoundary: next.needsBoundary,
+            nextOffset: next.nextOffset,
+          }
+        : { hasMore: false as const }),
+      totalMessages: next.totalMessages ?? previous.totalMessages,
+    };
+  }
+  return {
+    ...previous,
+    totalMessages: next.totalMessages ?? previous.totalMessages,
+    hasNewer: next.hasNewer,
+    newerCursor: next.hasNewer ? next.newerCursor : undefined,
+    needsNewerBoundary: next.hasNewer ? next.needsNewerBoundary : undefined,
+  };
+}

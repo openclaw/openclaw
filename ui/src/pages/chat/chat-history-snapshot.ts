@@ -25,7 +25,11 @@ import {
   isUiSelectedGlobalSessionKey,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
-import type { ChatHistoryPagination, ChatHistorySegment } from "./chat-history-pagination.ts";
+import {
+  advanceChatHistoryNavigation,
+  type ChatHistoryPagination,
+  type ChatHistorySegment,
+} from "./chat-history-pagination.ts";
 import {
   chatHistoryWindowBoundary,
   invalidateChatHistoryPacketSources,
@@ -295,41 +299,8 @@ export function reopenChatHistoryBoundary(
     throw new Error(t("chat.thread.earlierInterrupted"));
   }
   const previous = state.chatHistoryPagination;
-  const segments = previous.segments?.map((segment, index, all) =>
-    direction === "older" && index === 0
-      ? {
-          ...segment,
-          boundedPacket: undefined,
-          hasOlder: pagination.hasMore,
-          olderCursor: pagination.hasMore ? pagination.olderCursor : undefined,
-        }
-      : direction === "newer" && index === all.length - 1
-        ? {
-            ...segment,
-            boundedPacket: undefined,
-            hasNewer: Boolean(pagination.hasNewer),
-            newerCursor: pagination.newerCursor,
-          }
-        : segment,
-  );
-  // Boundary probes replace navigation edges, not the held source's admitted exemption.
-  state.chatHistoryPagination =
-    direction === "older"
-      ? {
-          ...pagination,
-          intrinsicSource: previous.intrinsicSource,
-          segments,
-          newerCursor: previous.newerCursor,
-          hasNewer: previous.hasNewer,
-          needsNewerBoundary: previous.needsNewerBoundary,
-        }
-      : {
-          ...previous,
-          segments,
-          newerCursor: pagination.newerCursor,
-          hasNewer: pagination.hasNewer,
-          needsNewerBoundary: undefined,
-        };
+  // Reopening advances the traversal edge without changing the held wire packet.
+  state.chatHistoryPagination = advanceChatHistoryNavigation(previous, pagination, direction);
   commitCurrentChatHistorySnapshot(state);
 }
 

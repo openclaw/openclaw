@@ -21,14 +21,16 @@ import {
   createSessionProjectionEntry as createEntry,
   isLocallyOptimisticSessionMessage,
   sameTranscriptIdentity,
-  readSessionMessageSequence,
   normalizeSessionProjectionRunId,
   sameAssistantPersistenceReceipt,
   type SessionMessageEnvelope,
   type SessionMessageIdentity,
   type SessionProjectionEntry,
 } from "./session-projection-message-identity.js";
-import { insertSessionProjectionEntry as insertEntry } from "./session-projection-order.js";
+import {
+  insertSessionProjectionEntry as insertEntry,
+  localOutputPlacement,
+} from "./session-projection-order.js";
 import { retainSessionProjectionRuns } from "./session-projection-run-retention.js";
 export {
   hasSessionProjectionAcceptedFinal,
@@ -124,7 +126,7 @@ export type SessionProjectionEvent = ScopedSessionProjectionEvent &
         options?: SessionProjectionSnapshotOptions;
       }
     | { type: "residencyChanged"; messages: readonly unknown[]; pinnedRunIds?: readonly string[] }
-    | { type: "localOutput"; message: unknown }
+    | { type: "localOutput"; message: unknown; sourceEmpty?: true }
     | ({
         type: "messagePersisted";
         message: unknown;
@@ -562,16 +564,10 @@ export function reduceSessionProjection(
   }
   switch (event.type) {
     case "localOutput": {
-      // Retain placement, not a fabricated durable sequence, across refreshes.
-      const previous = state.entries.findLast(
-        (entry) => (entry.identity?.sequence ?? readSessionMessageSequence(entry.message)) != null,
-      );
-      const afterSequence = previous
-        ? (previous.identity?.sequence ?? readSessionMessageSequence(previous.message))
-        : undefined;
+      const placement = localOutputPlacement(state, event.sourceEmpty);
       return withEntries(state, [
         ...state.entries,
-        { ...createEntry(event.message), localOutput: true, afterSequence },
+        { ...createEntry(event.message), localOutput: true, ...placement },
       ]);
     }
     case "residencyChanged": {

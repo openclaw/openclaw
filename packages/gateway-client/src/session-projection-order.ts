@@ -3,7 +3,7 @@ import {
   readSessionMessageSequence,
   type SessionProjectionEntry,
 } from "./session-projection-message-identity.js";
-import type { SessionProjectionRun } from "./session-projection.js";
+import type { SessionProjectionRun, SessionProjectionState } from "./session-projection.js";
 
 export function insertSessionProjectionEntry(
   entries: readonly SessionProjectionEntry[],
@@ -20,6 +20,9 @@ export function insertSessionProjectionEntry(
         });
   if (sequence !== undefined && sequence !== null && nextIndex < 0) {
     nextIndex = entries.length;
+  }
+  if (incoming.localOutput && incoming.atHistoryStart) {
+    nextIndex = entries.findIndex((entry) => !entry.localOutput || !entry.atHistoryStart);
   }
   if (incoming.localOutput && incoming.afterSequence != null) {
     const after = incoming.afterSequence;
@@ -58,4 +61,26 @@ export function insertSessionProjectionEntry(
   return nextIndex < 0
     ? [...entries, incoming]
     : [...entries.slice(0, nextIndex), incoming, ...entries.slice(nextIndex)];
+}
+
+export function localOutputPlacement(
+  state: SessionProjectionState,
+  sourceEmpty?: true,
+): Pick<SessionProjectionEntry, "afterSequence" | "atHistoryStart"> {
+  // Retain placement, not a fabricated durable sequence, across refreshes.
+  const previous = state.entries.findLast(
+    (entry) => (entry.identity?.sequence ?? readSessionMessageSequence(entry.message)) != null,
+  );
+  const afterSequence = previous
+    ? (previous.identity?.sequence ?? readSessionMessageSequence(previous.message))
+    : undefined;
+  const atHistoryStart =
+    sourceEmpty &&
+    !previous &&
+    !state.hasTransportGap &&
+    state.entries.every((entry) => entry.localOutput && entry.atHistoryStart) &&
+    !Object.values(state.runs).some((run) => run.status === "streaming")
+      ? (true as const)
+      : undefined;
+  return { afterSequence, atHistoryStart };
 }

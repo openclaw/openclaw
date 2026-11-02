@@ -265,3 +265,35 @@ it.each([false, true])(
     expect(merged.currentExpandedSources.size).toBe(0);
   },
 );
+
+it.each(["older", "newer"] as const)(
+  "preserves authorized start occurrences and insertion order across a %s page",
+  (direction) => {
+    const [first, second, third] = [1, 2, 3].map((seq) => nativeHistoryMessage(seq));
+    const firstOutput = { role: "system", content: "First local result" };
+    const secondOutput = { role: "system", content: "Second local result" };
+    let state = createSessionProjection({});
+    for (const message of [firstOutput, secondOutput]) {
+      state = reduceSessionProjection(state, { type: "localOutput", message, sourceEmpty: true });
+    }
+    state = reduceSessionProjection(state, { type: "snapshotLoaded", messages: [second] });
+    const entries = state.entries.filter((entry) => entry.localOutput);
+    expect(entries.every((entry) => entry.atHistoryStart)).toBe(true);
+    const held = [...state.messages, firstOutput];
+    const page = [first, { ...second }, third];
+    const merged =
+      direction === "older"
+        ? prependUniqueNativeMessages(page, held, entries)
+        : prependUniqueNativeMessages(held, page, entries);
+    expect(merged.messages).toEqual(
+      direction === "older"
+        ? [firstOutput, secondOutput, first, second, third, firstOutput]
+        : [firstOutput, secondOutput, ...page.slice(0, 2), firstOutput, third],
+    );
+    expect(merged.messages[0]).toBe(firstOutput);
+    expect(merged.messages[1]).toBe(secondOutput);
+    expect(merged.messages.filter((message) => message === firstOutput)).toHaveLength(2);
+    expect(merged.incomingExpandedSources.size).toBe(0);
+    expect(merged.currentExpandedSources.size).toBe(0);
+  },
+);

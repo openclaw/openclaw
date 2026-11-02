@@ -53,6 +53,8 @@ import { isChatRunRecoveryStatus, reconcileChatRunStartup } from "./chat-run-sta
 import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import {
   getChatSessionProjection,
+  readChatSessionPublication,
+  type ChatHistoryStartCapability,
   readChatLocalOutputEntries,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
@@ -86,6 +88,7 @@ export async function hydrateChatHistory(
   method: "chat.history" | "chat.startup",
   inputRunIds: string[],
   requestKeyPrefix: string,
+  sourceReceipt?: { emptySource?: ChatHistoryStartCapability },
 ): Promise<ObservedChatHistoryResult | undefined> {
   const requests = chatHistoryRequests(state);
   requests.historyRead?.abort();
@@ -200,6 +203,7 @@ export async function hydrateChatHistory(
           ownsReader: () => boolean;
         }
       | undefined;
+    const beforeRead = readChatSessionPublication(state);
     let response = await request(priorCursor);
     if (!isCurrent()) {
       return undefined;
@@ -355,6 +359,17 @@ export async function hydrateChatHistory(
       throw new Error("chat history page request returned a cursor reset");
     }
     const res = response;
+    const sourceEmpty =
+      res.totalMessages === 0 &&
+      !res.inFlightRun &&
+      !res.pendingInputs?.total &&
+      !res.pendingInputs?.items.length &&
+      readChatSessionPublication(state) === beforeRead;
+    const publicationReceipt: {
+      publication?: symbol;
+      previousPublication?: symbol;
+      uninterrupted?: boolean;
+    } = {};
     // Fence concurrent run lifecycle before applying the response. A remount
     // may replace the map itself, so compare its canonical run entries.
     const runProjectionsBeforeApply = readRunProjections(state, sessionKey, requestAgentId);
@@ -438,6 +453,7 @@ export async function hydrateChatHistory(
       },
       {
         scope,
+        publicationReceipt,
         localOutputScope: continuousRead?.scope,
         runActive:
           res.sessionInfo &&
@@ -563,6 +579,18 @@ export async function hydrateChatHistory(
       resetStream,
     });
 
+    if (
+      sourceReceipt &&
+      sourceEmpty &&
+      publicationReceipt.publication &&
+      publicationReceipt.previousPublication === beforeRead &&
+      publicationReceipt.uninterrupted
+    ) {
+      sourceReceipt.emptySource = {
+        publication: publicationReceipt.publication,
+        scope: historyProjection.scope,
+      };
+    }
     return res;
   } catch (err) {
     if (!isCurrent()) {

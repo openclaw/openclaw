@@ -15,6 +15,7 @@ import {
   intrinsicGroup,
   prepareChatHistoryPinCost,
 } from "./chat-history-cost.ts";
+import { advanceChatHistoryNavigation } from "./chat-history-pagination.ts";
 import type {
   ChatHistoryCursor,
   ChatHistoryPagination,
@@ -234,21 +235,6 @@ export function extendChatHistoryWindow(
   if (direction !== "tail" && page.sources.every((source) => known.has(source))) {
     // Hidden/overlap-only traversal advances a raw edge, not a new body page.
     segments = [...held];
-    if (direction === "older") {
-      segments[0] = {
-        ...held[0]!,
-        hasOlder: page.hasOlder,
-        olderCursor: page.olderCursor,
-        boundedPacket: undefined,
-      };
-    } else {
-      segments[segments.length - 1] = {
-        ...held.at(-1)!,
-        boundedPacket: undefined,
-        hasNewer: page.hasNewer,
-        newerCursor: page.newerCursor,
-      };
-    }
   } else if (direction === "tail" && retainedCoverage) {
     const incomingSources = new Set(page.sources);
     const prefix = held
@@ -309,20 +295,18 @@ export function extendChatHistoryWindow(
   const intrinsicSource =
     [...sourceGroups(incoming)].findLast(([, group]) => intrinsicGroup(group))?.[0] ??
     (direction !== "tail" || retainedCoverage ? previous.intrinsicSource : undefined);
-  return {
-    ...(retainedCoverage ?? pagination),
+  const coverage = {
+    ...(direction === "tail" ? (retainedCoverage ?? pagination) : previous),
     ...(intrinsicSource ? { intrinsicSource } : {}),
     segments,
-    ...(direction === "older" && previous.hasNewer
-      ? {
-          hasNewer: true as const,
-          newerCursor: previous.newerCursor,
-          needsNewerBoundary: previous.needsNewerBoundary,
-        }
-      : direction === "newer" && newerCursor
-        ? { hasNewer: true as const, newerCursor }
-        : {}),
   };
+  return direction === "tail"
+    ? coverage
+    : advanceChatHistoryNavigation(
+        coverage,
+        { ...pagination, ...(newerCursor ? { hasNewer: true as const, newerCursor } : {}) },
+        direction,
+      );
 }
 
 /** Only a real source ID can reopen an interior cut. A bounded original packet
@@ -602,13 +586,32 @@ export function selectChatHistoryResidency(
     const source = nativeHistoryMessageSourceIdentity(message);
     return admittedOutputs.has(message) || (source !== null && retained.has(source));
   });
+  // Retain traversed edges only while their original outer source boundary survives.
+  // A real cut/eviction instead reopens the surviving packet's own boundary.
+  const older =
+    firstRange === 0 && ranges[0]!.start === 0
+      ? pagination
+      : first.hasOlder
+        ? {
+            hasMore: true as const,
+            olderCursor: first.olderCursor,
+            needsBoundary: first.olderCursor ? undefined : (true as const),
+          }
+        : { hasMore: false as const };
+  const newer =
+    lastRange === pages.length - 1 && ranges[lastRange]!.end === pages[lastRange]!.sources.length
+      ? pagination
+      : {
+          hasNewer: last.hasNewer ? (true as const) : undefined,
+          newerCursor: last.newerCursor,
+          needsNewerBoundary: last.hasNewer && !last.newerCursor ? (true as const) : undefined,
+        };
   const nextPagination: ChatHistoryPagination = {
-    ...(first.hasOlder
+    ...(older.hasMore
       ? {
           hasMore: true as const,
-          ...(first.olderCursor
-            ? { olderCursor: first.olderCursor }
-            : { needsBoundary: true as const }),
+          olderCursor: older.olderCursor,
+          needsBoundary: older.needsBoundary,
         }
       : { hasMore: false as const }),
     ...(pagination.totalMessages !== undefined ? { totalMessages: pagination.totalMessages } : {}),
@@ -622,12 +625,11 @@ export function selectChatHistoryResidency(
     ...(!trimmed && pagination.hasMore && pagination.nextOffset !== undefined
       ? { nextOffset: pagination.nextOffset }
       : {}),
-    ...(last.hasNewer
+    ...(newer.hasNewer
       ? {
           hasNewer: true as const,
-          ...(last.newerCursor
-            ? { newerCursor: last.newerCursor }
-            : { needsNewerBoundary: true as const }),
+          newerCursor: newer.newerCursor,
+          needsNewerBoundary: newer.needsNewerBoundary,
         }
       : {}),
     ...(intrinsicSource && retained.has(intrinsicSource) ? { intrinsicSource } : {}),

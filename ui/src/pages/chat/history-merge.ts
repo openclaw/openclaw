@@ -2,9 +2,9 @@ import {
   createSessionProjection,
   readSessionMessageIdentity,
   reduceSessionProjection,
-  type SessionMessageIdentity,
   type SessionProjectionEvent,
   type SessionMessageEnvelope,
+  type SessionMessageIdentity,
   type SessionProjectionEntry,
   type SessionProjectionScope,
   type SessionProjectionState,
@@ -23,7 +23,7 @@ import {
   findChatSubmissionMessage,
   nativeHistoryMessageSourceIdentity,
 } from "../../lib/chat/history-message-identity.ts";
-import { chatOutboxDeliveryKey, type ChatComposerScope } from "../../lib/chat/outbox-store.ts";
+import type { ChatComposerScope } from "../../lib/chat/outbox-store.ts";
 import { retainPairingQrEntries } from "../../lib/chat/pairing-qr.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import { prepareChatHistoryRequestBudget } from "./chat-history-cost.ts";
@@ -47,6 +47,10 @@ import {
   readChatSessionProjectionScope,
 } from "./chat-projection-scope.ts";
 import { reconcileChatReasoning, type ChatReasoningHost } from "./chat-reasoning.ts";
+import {
+  isInitialSubmissionReceipt,
+  readChatSubmissionBatch,
+} from "./chat-submission-projection.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import type { CompactionStatus, ProviderPolicyNotice } from "./tool-stream-contract.ts";
 
@@ -58,8 +62,26 @@ const chatSessionProjections = new WeakMap<
     projection?: SessionProjectionState;
     runId?: string;
     readerSource?: string | null;
+    publication?: symbol;
   }
 >();
+/** Opaque source custody contains scalar scope facts only, never retained transcript bodies. */
+export type ChatHistoryStartCapability = { publication: symbol; scope: SessionProjectionScope };
+
+export function readChatSessionPublication(owner: object): symbol {
+  const current = chatSessionProjections.get(owner);
+  if (current?.publication) {
+    return current.publication;
+  }
+  const publication = Symbol("chat source publication");
+  chatSessionProjections.set(owner, { ...current, publication });
+  return publication;
+}
+
+function sameProjectionScope(left: SessionProjectionScope, right: SessionProjectionScope): boolean {
+  return CHAT_PROJECTION_SCOPE_KEYS.every((key) => left[key] === right[key]);
+}
+
 type ChatSessionProjectionOwner = ChatHistoryResidencyOwner &
   ChatComposerScope &
   ChatReasoningHost & {
@@ -79,101 +101,6 @@ function resetCompactionProjection(owner: ChatSessionProjectionOwner): void {
     owner.compactionClearTimer = null;
   }
   owner.compactionStatus = null;
-}
-
-function isInitialSubmissionReceipt(
-  submission: RetainedChatSubmission | null | undefined,
-  identity: SessionMessageIdentity | null,
-): boolean {
-  return (
-    submission?.kind === "initial" &&
-    identity?.role === "user" &&
-    !identity.isImported &&
-    (identity.id !== null || identity.sequence !== null) &&
-    (identity.idempotencyKey === submission.pendingRunId ||
-      identity.idempotencyKey === `${submission.pendingRunId}:user`)
-  );
-}
-
-function readChatSubmissionBatch(owner: ChatSessionProjectionOwner, scope: SessionProjectionScope) {
-  const submissions = owner.chatSubmissions;
-  if (!submissions) {
-    return undefined;
-  }
-  const sessionKey = scope.sessionKey ?? owner.sessionKey;
-  const client = owner.client;
-  const handoff = submissions.readInitial(sessionKey, client ?? null, scope.sessionId);
-  // The pane captures one client and delivery key for the synchronous receipt batch.
-  const key = chatOutboxDeliveryKey(owner, {
-    sessionKey,
-    agentId: scope.agentId ?? resolveUiSelectedSessionAgentId(owner),
-  });
-  const deliveredInScope = (runId: string) => {
-    const entry = submissions.readDelivered(key + runId, client ?? owner);
-    return entry?.kind === "delivered" &&
-      (!entry.sessionId || !scope.sessionId || entry.sessionId === scope.sessionId)
-      ? entry
-      : undefined;
-  };
-  const retire = (runId: string, awaitTranscriptReceipt = false) => {
-    const entry = deliveredInScope(runId);
-    if (entry && !(awaitTranscriptReceipt && persistedSteerTargetRunId(entry.message))) {
-      entry.pending = false;
-    }
-  };
-  return {
-    initial: handoff,
-    accept: (runIds: ReadonlySet<string>, awaitTranscriptReceipt = false) => {
-      runIds.forEach((runId) => retire(runId, awaitTranscriptReceipt));
-      if (handoff && runIds.has(handoff.pendingRunId)) {
-        retireInitialChatSubmission(handoff);
-      }
-    },
-    ownsPendingSteer: (identity: SessionMessageIdentity | null) => {
-      const runId = identity?.idempotencyKey?.replace(/:user$/u, "");
-      const entry = runId ? deliveredInScope(runId) : undefined;
-      return Boolean(
-        identity?.role === "user" &&
-        !identity.isImported &&
-        identity.id === null &&
-        identity.sequence === null &&
-        entry?.pending &&
-        persistedSteerTargetRunId(entry.message),
-      );
-    },
-    receive: (message: unknown, identity: SessionMessageIdentity | null, persisted = false) => {
-      const runId = identity?.idempotencyKey?.replace(/:user$/u, "");
-      if (handoff && isInitialSubmissionReceipt(handoff, identity)) {
-        if (runId) {
-          retire(runId);
-        }
-        retireInitialChatSubmission(handoff);
-        return message;
-      }
-      if (identity?.role !== "user" || !runId) {
-        return message;
-      }
-      const receipt = persisted || identity.id !== null || identity.sequence !== null;
-      if (receipt) {
-        retire(runId);
-      }
-      const delivered = deliveredInScope(runId);
-      if (!receipt && !identity.isImported && delivered && !delivered.pending) {
-        return undefined;
-      }
-      if (!handoff || identity.isImported || runId !== handoff.pendingRunId) {
-        return message;
-      }
-      // Cached bytes for this retained submission are not a receipt. Omit
-      // that snapshot copy; the pane admits the recorded local owner through
-      // sendPending, preserving provenance even with sender/reply metadata.
-      if (!receipt) {
-        return undefined;
-      }
-      retireInitialChatSubmission(handoff);
-      return message;
-    },
-  };
 }
 
 function admitRetainedSteerProjection(
@@ -200,6 +127,7 @@ function admitRetainedSteerProjection(
 export function getChatSessionProjection(
   owner: ChatSessionProjectionOwner,
   scope: SessionProjectionScope = readChatSessionProjectionScope(owner),
+  publicationReceipt?: { publication?: symbol },
 ): SessionProjectionState {
   const current = chatSessionProjections.get(owner)?.projection;
   const scopeChanged = current !== undefined && chatProjectionScopeChanged(current.scope, scope);
@@ -213,7 +141,10 @@ export function getChatSessionProjection(
       owner,
       createSessionProjection(scope, owner.chatMessages),
     );
-    publishChatSessionProjection(owner, projection);
+    const publication = publishChatSessionProjection(owner, projection);
+    if (publicationReceipt) {
+      publicationReceipt.publication = publication;
+    }
     return projection;
   }
 
@@ -227,7 +158,10 @@ export function getChatSessionProjection(
     ? { ...current, scope: { ...current.scope, ...scope } }
     : current;
   if (scopedProjection !== current) {
-    publishChatSessionProjection(owner, scopedProjection);
+    const publication = publishChatSessionProjection(owner, scopedProjection);
+    if (publicationReceipt) {
+      publicationReceipt.publication = publication;
+    }
   }
   return scopedProjection;
 }
@@ -246,9 +180,7 @@ export function ownsChatSessionProjectionScope(
   scope: SessionProjectionScope,
 ): boolean {
   const current = chatSessionProjections.get(owner)?.projection;
-  return Boolean(
-    current && CHAT_PROJECTION_SCOPE_KEYS.every((key) => current.scope[key] === scope[key]),
-  );
+  return Boolean(current && sameProjectionScope(current.scope, scope));
 }
 
 /** Read existing custody without initializing or publishing during tentative admission. */
@@ -343,8 +275,26 @@ export function publishChatSessionProjection(
     retainPairingQr?: boolean;
     acceptedRunIds?: ReadonlySet<string>;
     awaitTranscriptReceipt?: boolean;
+    localOutput?: boolean;
+    sourceObserved?: boolean;
+    custodyOnly?: boolean;
   } = {},
-): void {
+): symbol {
+  const current = chatSessionProjections.get(owner);
+  const preservesSource =
+    !options.sourceObserved &&
+    !options.acceptedRunIds?.size &&
+    (incomingProjection === current?.projection ||
+      (options.localOutput &&
+        current?.projection &&
+        sameProjectionScope(current.projection.scope, incomingProjection.scope)));
+  const publication =
+    preservesSource && current?.publication
+      ? current.publication
+      : Symbol("chat source publication");
+  // Revoke before producer callbacks or residency can hide newly observed source facts.
+  // Nested publication owns its newer token; the outer receipt retains only this token.
+  chatSessionProjections.set(owner, { ...current, publication });
   let projection = incomingProjection;
   if (options.acceptedRunIds?.size) {
     // Accept producer custody before filtering resident bodies, but retire its
@@ -356,7 +306,9 @@ export function publishChatSessionProjection(
       options.awaitTranscriptReceipt,
     );
   }
-  const current = chatSessionProjections.get(owner);
+  if (options.custodyOnly) {
+    return publication;
+  }
   const previous = current?.projection;
   if (
     options.retainPairingQr !== false &&
@@ -434,14 +386,15 @@ export function publishChatSessionProjection(
     projection,
     runId: retainedRunId,
     readerSource,
+    publication: chatSessionProjections.get(owner)?.publication ?? publication,
   });
   reconcileChatReasoning(owner, projection, current?.projection?.messages);
   // Run-only transitions share the transcript array. Preserve their ownership
   // updates above without traversing or republishing every displayed row.
-  if (current?.projection?.messages === projection.messages) {
-    return;
+  if (current?.projection?.messages !== projection.messages) {
+    publishResidentChatMessages(owner, previous, projection);
   }
-  publishResidentChatMessages(owner, previous, projection);
+  return publication;
 }
 
 /** A retired connection cannot lend pairing credentials to its replacement's history. */
@@ -513,7 +466,12 @@ export function reconcileChatInputCustody(
       .map((item) => item.runId)
       .filter((runId) => typeof runId === "string"),
   );
-  retireChatSubmissionDisplay(owner, acceptedRunIds, { awaitTranscriptReceipt: true });
+  // Display correlation may be omitted at the wire cap; positive custody still
+  // revokes an earlier empty-source receipt before its last body can disappear.
+  retireChatSubmissionDisplay(owner, acceptedRunIds, {
+    awaitTranscriptReceipt: true,
+    sourceObserved: Boolean(page?.total || page?.items.length || receipts.length),
+  });
   // Deferred custody supersedes optimistic steering; acceptance alone does not.
   const retiredDisplayRunIds = new Set(
     [
@@ -536,24 +494,24 @@ export function reconcileChatInputCustody(
 export function retireChatSubmissionDisplay(
   owner: ChatSessionProjectionOwner,
   acceptedRunIds: ReadonlySet<string>,
-  options: { awaitTranscriptReceipt?: boolean } = {},
+  options: { awaitTranscriptReceipt?: boolean; sourceObserved?: boolean } = {},
 ): void {
-  if (!acceptedRunIds.size) {
+  if (!acceptedRunIds.size && !options.sourceObserved) {
     return;
   }
   const scope = readChatSessionProjectionScope(owner, {
     agentId: resolveUiSelectedSessionAgentId(owner),
   });
+  const current = chatSessionProjections.get(owner)?.projection;
   const projection = getChatSessionProjection(owner, scope);
-  const retired = acceptChatSubmissionProjection(
-    owner,
-    projection,
+  publishChatSessionProjection(owner, projection, {
     acceptedRunIds,
-    options.awaitTranscriptReceipt,
-  );
-  if (retired !== projection) {
-    publishChatSessionProjection(owner, retired);
-  }
+    awaitTranscriptReceipt: options.awaitTranscriptReceipt,
+    sourceObserved: options.sourceObserved,
+    // get() returns a tentative projection on scope change. Custody acceptance
+    // must not replace held display before an authoritative snapshot commits it.
+    custodyOnly: current !== undefined && chatProjectionScopeChanged(current.scope, scope),
+  });
 }
 
 function acceptChatSubmissionProjection(
@@ -664,13 +622,22 @@ export function reduceChatSessionProjection(
     scope?: SessionProjectionScope;
     runActive?: boolean;
     messageReceipt?: { accepted: boolean };
+    publicationReceipt?: {
+      publication?: symbol;
+      previousPublication?: symbol;
+      uninterrupted?: boolean;
+    };
+    emptySource?: ChatHistoryStartCapability;
     /** Caller proved append continuity using the same read that supplies the new snapshot. */
     localOutputScope?: SessionProjectionScope;
   } = {},
 ): SessionProjectionState {
   const scope = options.scope ?? readChatSessionProjectionScope(owner);
   const previous = chatSessionProjections.get(owner)?.projection;
-  let current = getChatSessionProjection(owner, scope);
+  const previousPublication = readChatSessionPublication(owner);
+  const bindingReceipt: { publication?: symbol } = {};
+  let current = getChatSessionProjection(owner, scope, bindingReceipt);
+  const inputPublication = bindingReceipt.publication ?? previousPublication;
   if (
     event.type === "snapshotLoaded" &&
     options.localOutputScope &&
@@ -718,7 +685,19 @@ export function reduceChatSessionProjection(
       scope,
     });
   }
-  projection = reduceSessionProjection(projection, { ...preparedEvent, scope });
+  const admittedEvent =
+    preparedEvent.type === "localOutput"
+      ? {
+          ...preparedEvent,
+          sourceEmpty:
+            options.emptySource &&
+            options.emptySource.publication === readChatSessionPublication(owner) &&
+            sameProjectionScope(options.emptySource.scope, projection.scope)
+              ? (true as const)
+              : undefined,
+        }
+      : preparedEvent;
+  projection = reduceSessionProjection(projection, { ...admittedEvent, scope });
   if (options.messageReceipt && preparedEvent.type === "messagePersisted") {
     // Persistence acceptance precedes residency filtering. Stream cleanup must
     // not depend on whether the accepted durable row remains on screen.
@@ -768,6 +747,12 @@ export function reduceChatSessionProjection(
       projection = { ...projection, entries, messages: entries.map((entry) => entry.message) };
     }
   }
-  publishChatSessionProjection(owner, projection);
+  const uninterrupted = inputPublication === readChatSessionPublication(owner);
+  const publication = publishChatSessionProjection(owner, projection, {
+    localOutput: event.type === "localOutput",
+  });
+  if (options.publicationReceipt) {
+    Object.assign(options.publicationReceipt, { publication, previousPublication, uninterrupted });
+  }
   return projection;
 }
