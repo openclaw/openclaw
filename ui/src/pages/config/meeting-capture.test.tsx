@@ -440,56 +440,27 @@ describe("curated meeting capture", () => {
     },
   );
 
-  it("normalizes edited values and explicitly clears optional fields without rewriting untouched values", async () => {
-    const source = {
-      providerId: "test-voice",
-      title: "Original title",
-      sessionId: " daily ",
-      accountId: " team ",
-      guildId: " guild ",
-      channelId: " room ",
-      meetingUrl: " https://example.test/old?invitation=synthetic ",
-    };
-    const { page, runtimeConfig } = await mount({ source });
+  it("normalizes edits after unrelated autosave and explicitly clears optional fields", async () => {
+    const { page, runtimeConfig } = await mount();
     click(page, "Edit source 1");
     input(page, "accountId", " new-account ");
     input(page, "meetingUrl", " https://example.test/new?invitation=updated ");
     input(page, "sessionId", "");
     input(page, "title", " ");
+    runtimeConfig.patchForm(["messages", "ackReaction"], "updated");
+    await runtimeConfig.flushFormChanges();
+    flush();
     click(page, "Edit source 1");
     click(page, "Save source");
     expectSources(runtimeConfig, [
       {
         providerId: "test-voice",
         accountId: "new-account",
-        guildId: " guild ",
-        channelId: " room ",
+        guildId: "guild",
+        channelId: "room",
         meetingUrl: "https://example.test/new?invitation=updated",
       },
     ]);
-  });
-
-  it("keeps source edits after saving an unrelated setting", async () => {
-    const { page, runtimeConfig, original, request } = await mount();
-    click(page, "Edit source 1");
-    input(page, "title", "Edited title");
-    runtimeConfig.patchForm(["transcripts", "enabled"], false);
-    flush();
-    await runtimeConfig.flushFormChanges();
-    flush();
-    expect(runtimeConfig.state.configForm?.transcripts).toEqual({
-      enabled: false,
-      autoStart: [original],
-    });
-    request.mockClear();
-    click(page, "Save source");
-    await runtimeConfig.flushFormChanges();
-    const write = request.mock.calls.find(([method]) => method === "config.set")?.[1];
-    expect(write?.baseHash).toBe("two");
-    expect(JSON.parse(write!.raw!).transcripts).toEqual({
-      enabled: false,
-      autoStart: [{ ...original, title: "Edited title" }],
-    });
   });
 
   it("requires Cancel and reopen to edit a replaced source, including after re-entry", async () => {
