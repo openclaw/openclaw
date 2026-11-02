@@ -19,7 +19,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it("adopts a peer process publication on the next cached borrow", async () => {
+it("adopts a peer process publication on a retained connection", async () => {
   const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("state-peer-publication-") } };
   const { db } = openOpenClawStateDatabase(options);
   const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
@@ -47,6 +47,8 @@ it("adopts a peer process publication on the next cached borrow", async () => {
   } finally {
     peer.close();
   }
+
+  expect(() => assertCurrentStateRuntimeSchema(opened.db, opened.path)).not.toThrow();
 
   // The updater's other read connections admit the published header.
   const reader = openNodeSqliteDatabase(opened.path, { readOnly: true });
