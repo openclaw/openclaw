@@ -1,72 +1,16 @@
-// Synthetic warm-reload attribution only; never records widget or message contents.
+// Synthetic warm-reload panel metrics; never records widget or message contents.
 (() => {
   if (window !== window.top) {
     return;
   }
-  const events = [];
-  const frames = new WeakMap();
-  let nextFrame = 0;
-  let previous = "";
   let previousAt = 0;
   let skeletonCount = 0;
   let skeletonMs = 0;
   let allWidgetsVisibleMs = null;
   let cachedBoardLayoutMs = null;
-  const frameId = (frame) => {
-    if (!frames.has(frame)) {
-      frames.set(frame, ++nextFrame);
-    }
-    return frames.get(frame);
-  };
-  const record = (kind, detail) => events.push({ atMs: performance.now(), kind, ...detail });
-  const originalFetch = window.fetch;
-  window.fetch = async function (input, options) {
-    const url = new URL(input instanceof Request ? input.url : input, location.href);
-    if (!url.pathname.startsWith("/__openclaw__/board/")) {
-      return originalFetch.call(this, input, options);
-    }
-    record("document-fetch", { path: url.pathname, cache: options?.cache ?? "default" });
-    try {
-      const response = await originalFetch.call(this, input, options);
-      record("document-response", { path: url.pathname, status: response.status });
-      return response;
-    } catch (error) {
-      record("document-error", { path: url.pathname, name: error.name });
-      throw error;
-    }
-  };
-  window.addEventListener("message", (event) => {
-    const frame = [...document.querySelectorAll("iframe")].find(
-      (candidate) => candidate.contentWindow === event.source,
-    );
-    if (!frame?.closest("openclaw-board-view")) {
-      return;
-    }
-    const method = event.data?.method ?? event.data?.type;
-    if (typeof method === "string" && /sandbox|widget/u.test(method)) {
-      record("message", { frame: frameId(frame), method });
-    }
-  });
-  const observer = new MutationObserver(() => {
-    for (const frame of document.querySelectorAll("openclaw-board-view iframe")) {
-      if (frames.has(frame)) {
-        continue;
-      }
-      record("iframe-created", {
-        frame: frameId(frame),
-        path: new URL(frame.src, location.href).pathname,
-      });
-      frame.addEventListener("load", () => record("iframe-load", { frame: frameId(frame) }));
-    }
-  });
-  observer.observe(document, { childList: true, subtree: true });
   function sample() {
     const proof = Reflect.get(window, "__warmReloadProof");
-    if (proof) {
-      proof.boardWidgetTimeline = events;
-    }
     if (proof?.stopped) {
-      observer.disconnect();
       return;
     }
     const skeletons = [...document.querySelectorAll("openclaw-panel-loading-skeleton")].map(
@@ -104,10 +48,7 @@
     const boards = [...document.querySelectorAll("openclaw-board-view")].map((board) => ({
       loading: board.hasAttribute("data-initial-loading"),
       frames: [...board.querySelectorAll("iframe")].map((frame) => ({
-        frame: frameId(frame),
         inert: frame.inert,
-        opacity: getComputedStyle(frame).opacity,
-        visible: frame.checkVisibility({ checkOpacity: true, visibilityProperty: true }),
       })),
     }));
     const now = performance.now();
@@ -139,11 +80,6 @@
       proof.boardWidgetSkeletonMs = skeletonMs;
       proof.allBoardWidgetsVisibleMs = allWidgetsVisibleMs;
       proof.cachedBoardLayoutMs = cachedBoardLayoutMs;
-    }
-    const state = JSON.stringify({ skeletons, boards });
-    if (state !== previous) {
-      record("presentation", { skeletons, boards });
-      previous = state;
     }
     requestAnimationFrame(sample);
   }
