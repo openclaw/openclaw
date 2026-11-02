@@ -527,6 +527,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       formatNativeDependencyHint: core.system.formatNativeDependencyHint,
       runDetachedTask: monitorTaskRunner.runDetachedTask,
       resolveLiveVerificationAuthorization: async () => {
+        // SAFETY: config.current() returns the validated runtime config for this process.
         const liveCfg = core.config.current() as CoreConfig;
         return {
           cfg: liveCfg,
