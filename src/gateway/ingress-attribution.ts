@@ -1,5 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import type { TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { firstHeaderValue } from "./http-header-value.js";
@@ -262,6 +263,7 @@ function resolveManagedTailscaleIngress(params: {
 function resolveGatewayIngressAttribution(params: {
   req: IncomingMessage;
   trustedProxies?: string[];
+  trustedProxy?: Pick<GatewayTrustedProxyConfig, "userHeader" | "requiredHeaders">;
   allowRealIpFallback?: boolean;
   tailscaleWhois?: TailscaleWhoisLookup;
 }): GatewayIngressAttribution {
@@ -312,7 +314,22 @@ function resolveGatewayIngressAttribution(params: {
 
   const hasProxyHeaders = hasForwardedRequestHeaders(req);
   const hasTailscaleHeaders = hasTailscaleOwnedHeaders(req);
-  if (isLoopbackAddress(remoteAddress) && !hasProxyHeaders && !hasTailscaleHeaders) {
+  // Identity evidence also disqualifies locality, even when a proxy omitted its
+  // client-address headers. Header presence can deny locality, never establish it.
+  const hasIdentityHeaders = [
+    "cf-access-authenticated-user-email",
+    "cf-access-jwt-assertion",
+    "remote-user",
+    "x-remote-user",
+    params.trustedProxy?.userHeader,
+    ...(params.trustedProxy?.requiredHeaders ?? []),
+  ].some((name) => name && req.headers[name.trim().toLowerCase()] !== undefined);
+  if (
+    isLoopbackAddress(remoteAddress) &&
+    !hasProxyHeaders &&
+    !hasTailscaleHeaders &&
+    !hasIdentityHeaders
+  ) {
     return attributed("direct-local", remoteAddress);
   }
   if (isTrustedProxyAddress(remoteAddress, params.trustedProxies)) {
@@ -333,7 +350,7 @@ function resolveGatewayIngressAttribution(params: {
   }
   // Tailscale-owned headers grant managed semantics only on the dedicated listener.
   // An explicitly trusted ordinary proxy remains generic; every other source fails closed.
-  if (hasProxyHeaders || hasTailscaleHeaders) {
+  if (hasProxyHeaders || hasTailscaleHeaders || hasIdentityHeaders) {
     return unattributableProxy(remoteAddress);
   }
   return attributed("direct-remote", remoteAddress);

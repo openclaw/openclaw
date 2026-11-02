@@ -5,18 +5,26 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
 import { syntheticPeerAddress } from "../../../packages/openclaw-id-protocol/src/index.js";
+import {
+  authorizeHttpGatewayConnect,
+  authorizeWsControlUiGatewayConnect,
+  type GatewayAuthResult,
+} from "../auth.js";
 import { prepareGatewayIngressAttribution } from "../ingress-attribution.js";
 import { isLocalDirectRequest } from "../net.js";
 import {
   startOpenClawIdIngressListener,
   type OpenClawIdIngressListener,
 } from "./ingress-listener.js";
+import { upstreamHeaders } from "./tunnel-child/headers.js";
+import { setOpenClawIdTunnelPrincipalResolver } from "./tunnel-principal.js";
 
 const PEER_KEY = `iroh:${"ab".repeat(32)}`;
 
 type Seen = {
   req: IncomingMessage;
   attribution: ReturnType<typeof prepareGatewayIngressAttribution>;
+  auth?: GatewayAuthResult;
 };
 
 let dir: string | undefined;
@@ -24,6 +32,7 @@ let started: OpenClawIdIngressListener | undefined;
 let gateway: http.Server | undefined;
 
 afterEach(async () => {
+  setOpenClawIdTunnelPrincipalResolver(undefined);
   await started?.close();
   gateway?.close();
   if (dir) {
@@ -34,17 +43,47 @@ afterEach(async () => {
 
 // A stand-in for the Gateway's primary listener: records how the ingress
 // attribution owner classifies each request it receives.
-async function setup() {
+async function setup(authenticate = false) {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "ocid-ingress-"));
   const seen: Seen[] = [];
+  const observe = async (req: IncomingMessage, ws = false) => {
+    const auth = {
+      mode: "trusted-proxy" as const,
+      allowTailscale: true,
+      trustedProxy: {
+        userHeader: "custom-user",
+        requiredHeaders: ["custom-proof"],
+        allowLoopback: true,
+      },
+    };
+    const attribution = prepareGatewayIngressAttribution({
+      req,
+      trustedProxies: ["127.0.0.1"],
+      trustedProxy: auth.trustedProxy,
+    });
+    seen.push({
+      req,
+      attribution,
+      ...(authenticate
+        ? {
+            auth: await (ws ? authorizeWsControlUiGatewayConnect : authorizeHttpGatewayConnect)({
+              req,
+              auth,
+              ingressAttribution: attribution,
+              trustedProxies: ["127.0.0.1"],
+            }),
+          }
+        : {}),
+    });
+  };
   gateway = http.createServer((req, res) => {
-    seen.push({ req, attribution: prepareGatewayIngressAttribution({ req }) });
-    res.end("gateway");
+    void observe(req).then(() => res.end("gateway"));
   });
   const wss = new WebSocketServer({ noServer: true });
   gateway.on("upgrade", (req, socket, head) => {
-    seen.push({ req, attribution: prepareGatewayIngressAttribution({ req }) });
-    wss.handleUpgrade(req, socket, head, (ws) => ws.close(1000, "ok"));
+    void observe(req, true).then(() => {
+      wss.handleUpgrade(req, socket, head, (ws) => ws.close(1000, "ok"));
+    });
   });
   const log = { warn: vi.fn() };
   started = await startOpenClawIdIngressListener({
@@ -68,6 +107,57 @@ function request(socketPath: string, headers: Record<string, string>) {
 }
 
 describe("OpenClaw ID ingress listener", () => {
+  it("ignores proxy identity on real HTTP and WS ingress in trusted-proxy mode", async () => {
+    const { seen, listener } = await setup(true);
+    setOpenClawIdTunnelPrincipalResolver(async (peerKey) => ({
+      kind: "member",
+      peerKey,
+      accountId: "viewer-account",
+      role: "viewer",
+    }));
+    for (const kind of ["http", "ws"] as const) {
+      const headers = upstreamHeaders(
+        [
+          ["CF-Access-Authenticated-User-Email", "admin@example.test"],
+          ["CF-Access-JWT-Assertion", "forged"],
+          ["Tailscale-User-Login", "admin@example.test"],
+          ["X-Forwarded-For", "127.0.0.1"],
+          ["custom-user", "admin@example.test"],
+          ["custom-proof", "forged"],
+        ],
+        {
+          peerKey: PEER_KEY,
+          proxyToken: listener.proxyToken,
+          peerAddress: await syntheticPeerAddress(PEER_KEY),
+          forwardedProto: "https",
+        },
+        kind,
+      );
+      if (kind === "http") {
+        expect((await request(listener.socketPath, headers as Record<string, string>)).status).toBe(
+          200,
+        );
+      } else {
+        const ws = new WebSocket(`ws+unix:${listener.socketPath}:/`, { headers });
+        await new Promise<void>((resolve, reject) => {
+          ws.on("close", () => resolve());
+          ws.on("error", reject);
+        });
+      }
+      const received = seen.at(-1)!;
+      expect(received.attribution.kind).toBe("openclaw-id-tunnel");
+      expect(received.auth).toMatchObject({
+        ok: true,
+        method: "trusted-proxy",
+        user: "openclaw-id:viewer-account",
+        openclawId: { kind: "member", role: "viewer" },
+      });
+      expect(received.req.headers["cf-access-jwt-assertion"]).toBeUndefined();
+      expect(received.req.headers["tailscale-user-login"]).toBeUndefined();
+      expect(received.req.headers["custom-user"]).toBe("admin@example.test");
+    }
+  });
+
   it("listens on a socket only the Gateway user can open", async () => {
     const { listener } = await setup();
     if (process.platform !== "win32") {

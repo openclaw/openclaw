@@ -258,6 +258,7 @@ export function createGatewayHttpRequestHandler(
       const ingressAttribution = prepareGatewayIngressAttribution({
         req,
         trustedProxies,
+        trustedProxy: getResolvedAuth().trustedProxy,
         allowRealIpFallback,
         // HTTP authorization must observe Tailnet revocation on the next request.
         // WebSocket upgrades retain the ordinary cache because they authenticate once.

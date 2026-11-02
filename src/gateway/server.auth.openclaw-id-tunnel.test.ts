@@ -2,15 +2,18 @@ import { randomUUID } from "node:crypto";
 // End-to-end mapping of admitted OpenClaw ID tunnel devices onto Gateway auth
 // (OCF-225), against a token-mode Gateway. Relayed requests are marked the way
 // the private ingress listener marks them; a test-only header selects the peer.
+import { EventEmitter } from "node:events";
 import http, { type IncomingMessage } from "node:http";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { writeConfigFile } from "../config/config.js";
+import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 import {
   listDevicePairing,
   rejectDevicePairing,
   removePairedDevice,
 } from "../infra/device-pairing.js";
+import { CONTROL_UI_OWNER_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import {
   setOpenClawIdTunnelPrincipalResolver,
@@ -50,7 +53,6 @@ const PRINCIPALS: Record<string, OpenClawIdTunnelPrincipal> = {
 };
 
 let started: Awaited<ReturnType<typeof createGatewaySuiteHarness>> | undefined;
-const originalEmit = http.Server.prototype.emit;
 
 // Stands in for the ingress listener: marks the request relayed from the peer
 // named by the test header before the Gateway's listener sees it.
@@ -67,7 +69,7 @@ function markTunnelRequests(this: http.Server, event: string | symbol, ...args: 
       });
     }
   }
-  return originalEmit.call(this, event, ...args);
+  return EventEmitter.prototype.emit.call(this, event, ...args);
 }
 
 beforeAll(async () => {
@@ -99,7 +101,10 @@ beforeEach(async () => {
   }
 });
 
-async function connectTunnel(peerKey: string | undefined, options: { token?: string } = {}) {
+async function connectTunnel(
+  peerKey: string | undefined,
+  options: { token?: string; bootstrapToken?: string } = {},
+) {
   const ws: WebSocket = await openWs(started!.port, {
     origin: BROWSER_ORIGIN,
     ...(peerKey ? { [TEST_PEER_HEADER]: peerKey } : {}),
@@ -109,6 +114,7 @@ async function connectTunnel(peerKey: string | undefined, options: { token?: str
     scopes: CONTROL_UI_SCOPES,
     deviceIdentityPath: makeIdentityPath(`openclaw-tunnel-${randomUUID()}.sqlite`),
     ...(options.token ? { token: options.token } : { skipDefaultAuth: true }),
+    ...(options.bootstrapToken ? { bootstrapToken: options.bootstrapToken } : {}),
     browserOrigin: BROWSER_ORIGIN,
   });
   return { ws, res };
@@ -180,6 +186,19 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     try {
       expect(res.ok).toBe(true);
       expect(grantedScopes(res)).toEqual(["operator.read"]);
+    } finally {
+      ws.close();
+    }
+  });
+
+  test("a viewer cannot replace its tunnel role with a valid owner bootstrap credential", async () => {
+    const issued = await issueDeviceBootstrapToken({ profile: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE });
+    const { ws, res } = await connectTunnel(VIEWER_KEY, { bootstrapToken: issued.token });
+    try {
+      expect(res.ok).toBe(true);
+      expect(helloAuth(res)?.method).toBe("trusted-proxy");
+      expect(grantedScopes(res)).toEqual(["operator.read"]);
+      expect((await rpcReq(ws, "config.patch", {})).ok).toBe(false);
     } finally {
       ws.close();
     }

@@ -91,10 +91,10 @@ describe("OpenClaw ID tunnel principals", () => {
     const auth = { mode: "token" as const, token: "secret", allowTailscale: false };
     const owner = `iroh:${"1a".repeat(32)}`;
     const member = `iroh:${"1b".repeat(32)}`;
-    // While OpenClaw ID is off the configured mode decides, exactly as before.
+    // A tunnel whose authority is unavailable must not fall through to another door.
     expect(
       await authorizeHttpGatewayConnect({ auth, ingressAttribution: tunnelAttribution(owner) }),
-    ).toMatchObject({ ok: false, reason: "token_missing" });
+    ).toMatchObject({ ok: false, reason: "openclaw_id_not_admitted" });
 
     setOpenClawIdTunnelPrincipalResolver(async (peerKey) =>
       peerKey === owner
