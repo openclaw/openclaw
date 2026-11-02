@@ -153,6 +153,13 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   const preparedEnvironment = params.hostCapabilities.preparedEnvironment?.();
   const remoteExec = isCodexRemoteExecPlacementSandbox(sandbox);
+  // Only a stdio child launched here, outside sandbox and remote placement, is this host's process.
+  const ownsLocalProcess = (appServer: CodexAppServerRuntimeOptions) =>
+    !sandbox?.enabled &&
+    !remoteExec &&
+    appServer.start.transport === "stdio" &&
+    !isCodexAppServerProxyLaunch(appServer.start.args) &&
+    !appServer.remoteWorkspaceRoot;
   const assertLocalTargetSupported = (unsupported: boolean) => {
     if (preparedEnvironment?.localProcessEnv && unsupported) {
       throw new Error(
@@ -192,12 +199,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     );
     // Resolve placement before projecting host PATH; socket peers and remote workspaces
     // own their tool lookup even when their control connection runs on this machine.
-    const ownedLocalProcess =
-      !sandbox?.enabled &&
-      !remoteExec &&
-      appServer.start.transport === "stdio" &&
-      !isCodexAppServerProxyLaunch(appServer.start.args) &&
-      !appServer.remoteWorkspaceRoot;
+    const ownedLocalProcess = ownsLocalProcess(appServer);
     const localToolEnv = ownedLocalProcess ? preparedEnvironment?.localToolEnv : undefined;
     shellGitConfigParameters = ownedLocalProcess
       ? preparedEnvironment?.localGitConfigParameters
@@ -571,13 +573,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     }
     // Only local execution roots address Gateway settings; remote paths belong
     // to their executor. Prepare after permission admission and before tools/startup.
-    if (
-      !sandbox?.enabled &&
-      !remoteExec &&
-      appServer.start.transport === "stdio" &&
-      !isCodexAppServerProxyLaunch(appServer.start.args) &&
-      !appServer.remoteWorkspaceRoot
-    ) {
+    if (ownsLocalProcess(appServer)) {
       params.hostCapabilities.prepareContinuationRetryCount?.({ cwd: effectiveCwd });
     }
     const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
