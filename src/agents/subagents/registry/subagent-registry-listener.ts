@@ -28,18 +28,12 @@ export function createSubagentRegistryListener(config: {
   pendingLifecycle: ReturnType<typeof createPendingLifecycleScheduler>;
   resumeRequesterSettleWake: (runId: string, entry: SubagentRunRecord) => void;
   adoptPausedSubagentRunIntoSuccessor: (entry: SubagentRunRecord) => Promise<boolean>;
-  refreshFrozenResultFromSession: (sessionKey: string) => Promise<unknown>;
   completeSubagentRunWithRecovery: (
     params: SubagentCompletionRequest,
     source: string,
   ) => Promise<void>;
 }) {
-  const {
-    runs,
-    pendingLifecycle,
-    refreshFrozenResultFromSession,
-    completeSubagentRunWithRecovery,
-  } = config;
+  const { runs, pendingLifecycle, completeSubagentRunWithRecovery } = config;
   let listenerStop: (() => void) | null = null;
 
   function ensureListener() {
@@ -55,11 +49,6 @@ export function createSubagentRegistryListener(config: {
         const phase = evt.data?.phase;
         let entry = runs.get(evt.runId);
         if (!entry) {
-          if (phase === "end" && typeof evt.sessionKey === "string") {
-            const sessionKey = evt.sessionKey;
-            // A replacement generation can finish after its predecessor row is terminal.
-            await refreshFrozenResultFromSession(sessionKey);
-          }
           return;
         }
         const lifecycleGeneration = getAgentEventLifecycleGeneration();
