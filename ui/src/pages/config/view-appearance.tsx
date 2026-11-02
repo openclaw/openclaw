@@ -86,22 +86,32 @@ const ACCENT_PRESETS = [
    mirrored from the base.css theme blocks). The custom card only has real
    colors while active — its chips read the live CSS variables — so it falls
    back to the download icon otherwise. */
-function ThemeCardVisual(props: { id: ThemeName; activeTheme: ThemeName }) {
+function ThemeCardVisual(props: { id: ThemeName; activeTheme: ThemeName; selected: boolean }) {
   return (
-    <Show
-      when={(props.id !== "custom" && !props.id.includes("/")) || props.activeTheme === props.id}
-      fallback={
-        <span class="settings-theme-card__icon" aria-hidden="true">
-          <Icon name="download" />
+    <span class="settings-theme-card__swatch" aria-hidden="true">
+      <Show
+        when={(props.id !== "custom" && !props.id.includes("/")) || props.activeTheme === props.id}
+        fallback={
+          <span class="settings-theme-card__icon">
+            <Icon name="download" />
+          </span>
+        }
+      >
+        <span class="settings-theme-card__palette">
+          <span class="settings-theme-card__line" />
+          <span class="settings-theme-card__line settings-theme-card__line--short" />
+          <span class="settings-theme-card__chips">
+            <span class="settings-theme-card__chip settings-theme-card__chip--accent" />
+            <span class="settings-theme-card__chip settings-theme-card__chip--accent-2" />
+          </span>
         </span>
-      }
-    >
-      <span class="settings-theme-card__palette" aria-hidden="true">
-        <span class="settings-theme-card__chip settings-theme-card__chip--accent" />
-        <span class="settings-theme-card__chip settings-theme-card__chip--accent-2" />
-        <span class="settings-theme-card__chip settings-theme-card__chip--bg" />
-      </span>
-    </Show>
+      </Show>
+      <Show when={props.selected}>
+        <span class="settings-theme-card__check">
+          <Icon name="check" />
+        </span>
+      </Show>
+    </span>
   );
 }
 export function AppearanceSection(props: ConfigProps) {
@@ -349,7 +359,11 @@ export function AppearanceSection(props: ConfigProps) {
                       }
                     }}
                   >
-                    <ThemeCardVisual id={opt().id} activeTheme={presentedTheme().id} />
+                    <ThemeCardVisual
+                      id={opt().id}
+                      activeTheme={presentedTheme().id}
+                      selected={opt().id === presentedTheme().id}
+                    />
                     <span class="settings-theme-card__label">{opt().label}</span>
                   </button>
                 )}
@@ -362,33 +376,33 @@ export function AppearanceSection(props: ConfigProps) {
                 class="settings-theme-import"
                 onFocusIn={() => props.onCustomThemeImportFocus?.()}
               >
-                <div class="settings-theme-import__copy">
-                  <div class="settings-theme-import__title">
-                    {t("configView.appearance.importFromTweakcn")}
+                <div class="settings-theme-import__head">
+                  <div class="settings-row__text">
+                    <span class="settings-row__title">
+                      {t("configView.appearance.importFromTweakcn")}
+                    </span>
+                    <span class="settings-row__desc">
+                      {t("configView.appearance.tweakcnInstructions")}
+                    </span>
                   </div>
-                  <p class="settings-theme-import__hint">
-                    {t("configView.appearance.tweakcnInstructions")}
-                  </p>
+                  <a
+                    class="btn btn--sm settings-theme-import__external"
+                    href="https://tweakcn.com/editor/theme"
+                    target="_blank"
+                    rel="noreferrer noopener"
+                  >
+                    {t("configView.appearance.browseTweakcn")} <Icon name="externalLink" />
+                  </a>
                 </div>
-                <a
-                  class="settings-theme-import__external"
-                  href="https://tweakcn.com/editor/theme"
-                  target="_blank"
-                  rel="noreferrer noopener"
-                >
-                  {t("configView.appearance.browseTweakcn")} <Icon name="externalLink" />
-                </a>
                 <ConfigReadStatus config={props} />
-                <label class="settings-theme-import__field">
-                  <span class="settings-theme-import__label">
-                    {t("configView.appearance.themeLink")}
-                  </span>
+                <div class="settings-theme-import__field">
                   <input
                     ref={(input) => (customThemeImportInput = input)}
-                    class="settings-theme-import__input"
+                    class="settings-input settings-theme-import__input"
                     data-custom-theme-import-input
                     type="text"
                     spellcheck="false"
+                    aria-label={t("configView.appearance.themeLink")}
                     placeholder="https://tweakcn.com/editor/theme?theme=... or amethyst-haze"
                     value={props.customThemeImportUrl}
                     onInput={(event: Event) =>
@@ -398,8 +412,6 @@ export function AppearanceSection(props: ConfigProps) {
                       )
                     }
                   />
-                </label>
-                <div class="settings-theme-import__actions">
                   <button
                     class="btn btn--sm primary"
                     disabled={
@@ -417,22 +429,18 @@ export function AppearanceSection(props: ConfigProps) {
                           })
                         : t("configView.appearance.importTheme")}
                   </button>
-                  {props.hasCustomTheme ? (
+                </div>
+                {props.hasCustomTheme ? (
+                  <div class="settings-theme-import__meta">
+                    <span class="settings-row__desc settings-theme-import__meta-value">
+                      {t("configView.appearance.loaded")} · {importedName()} ·{" "}
+                      {props.customThemeSourceUrl ?? "tweakcn"}
+                    </span>
                     <button class="btn btn--sm danger" onClick={() => props.onClearCustomTheme()}>
                       {t("configView.appearance.clear", {
                         name: importedName(),
                       })}
                     </button>
-                  ) : undefined}
-                </div>
-                {props.hasCustomTheme ? (
-                  <div class="settings-theme-import__meta">
-                    <span class="settings-theme-import__meta-label">
-                      {t("configView.appearance.loaded")}
-                    </span>
-                    <span class="settings-theme-import__meta-value">
-                      {importedName()} · {props.customThemeSourceUrl ?? "tweakcn"}
-                    </span>
                   </div>
                 ) : undefined}
                 <Errored
@@ -468,7 +476,7 @@ export function AppearanceSection(props: ConfigProps) {
             <SettingsRow
               title={t("configView.appearance.accent")}
               description={<span id="settings-accent-status">{accentSelectionName()}</span>}
-              stacked={true}
+              stackedOnNarrow={true}
               control={
                 <div class="settings-accent-swatches">
                   <For each={ACCENT_PRESETS}>
