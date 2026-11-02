@@ -45,7 +45,7 @@ export async function backupSqliteCreateCommand(
     const database = await resolveSnapshotDatabase(options, config, globalPath);
     let postgres = false;
     try {
-      postgres = (await readBackupEngine(database.path)).engine === "postgres";
+      postgres = readBackupEngine(database.path).engine === "postgres";
     } catch (error) {
       if (!isSqliteCorruptionError(error)) {
         throw error;

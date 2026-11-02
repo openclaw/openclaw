@@ -27,23 +27,21 @@ serveWorkerTasks<BackupReply, BackupTask>((task, _channel, control) => {
     );
   }
   if (task.operation === "fingerprint" || task.operation === "family") {
-    return control.runNativeSection(async () => {
-      const anchor = await readBackupEngine(task.params.sourcePath, control.signal);
-      if (anchor.engine !== "postgres") {
-        throw new Error("PostgreSQL anchor disappeared.");
-      }
-      if (task.operation === "fingerprint") {
-        return withDatabasePortConnection(task.params.config, (client) =>
-          fingerprintPostgresDatabase({ client, anchor }),
-        );
-      }
-      return withDatabasePortPostgres(
-        task.params.config,
-        anchor,
-        (_client, descriptor) => Promise.resolve(descriptor.id),
-        task.params.pluginOwners,
+    const anchor = readBackupEngine(task.params.sourcePath);
+    if (anchor.engine !== "postgres") {
+      throw new Error("PostgreSQL anchor disappeared.");
+    }
+    if (task.operation === "fingerprint") {
+      return withDatabasePortConnection(task.params.config, (client) =>
+        fingerprintPostgresDatabase({ client, anchor }),
       );
-    });
+    }
+    return withDatabasePortPostgres(
+      task.params.config,
+      anchor,
+      (_client, descriptor) => Promise.resolve(descriptor.id),
+      task.params.pluginOwners,
+    );
   }
   return control.runNativeSection<BackupReply>(() =>
     task.operation === "capture"

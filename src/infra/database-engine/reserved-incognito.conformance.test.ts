@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Client } from "pg";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { doctorDatabasePort } from "../../commands/doctor-database-port.js";
 import { repairReservedIncognitoSessionKeys } from "../../commands/doctor-session-incognito-key-repair.js";
 import { sessionSqlFixture } from "../../commands/doctor-session-sqlite.sql.test-support.js";
@@ -20,14 +20,12 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { resolveQuarantineStorePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { databasePortManifestPath, type DatabasePortManifest } from "../database-port-recovery.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import type { EngineConnection } from "../sql-connection.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../sqlite-database-admission.js";
-import * as snapshotWorker from "../sqlite-readonly-worker.js";
 import { DoctorStateMigrationRefusalError } from "../state-migrations.messages.js";
 import { installDatabaseProcessRole, withEngineStoreAdmission } from "./admission-scope.js";
 import { agentPortProvider } from "./agent-port.js";
@@ -95,7 +93,7 @@ function readShared(db: EngineConnection) {
 async function sourceArtifacts(paths: string[]) {
   const entries = await Promise.all(
     paths
-      .flatMap((file) => [file, `${file}-wal`, `${file}-shm`, `${file}-journal`])
+      .flatMap((file) => [file, `${file}-wal`, `${file}-shm`])
       .map(async (file) => {
         if (!fs.existsSync(file)) {
           return [file, null] as const;
@@ -110,7 +108,6 @@ describe.skipIf(!mixedAgentConnection)("reserved-incognito adoption preflight", 
   it.each([
     "agent and shared",
     "shared only",
-    "SQLite state with PostgreSQL agents",
     "agent without shared",
     "JSON reference only",
     "v21 inline reference",
@@ -122,9 +119,6 @@ describe.skipIf(!mixedAgentConnection)("reserved-incognito adoption preflight", 
           database: {
             engine: "sqlite" as const,
             postgres: { connection: mixedAgentConnection! },
-            ...(scope === "SQLite state with PostgreSQL agents"
-              ? { families: { agent: { engine: "postgres" as const } } }
-              : {}),
           },
         };
         await state.writeConfig(cfg);
@@ -133,15 +127,12 @@ describe.skipIf(!mixedAgentConnection)("reserved-incognito adoption preflight", 
         const jsonOnly = scope === "JSON reference only";
         const historical = scope === "v21 inline reference";
         const withoutShared = scope === "agent without shared" || historical;
-        const postgresAgents = scope === "SQLite state with PostgreSQL agents";
         const sourceAgentKey =
           scope === "shared only" || jsonOnly || historical ? "agent:main:main" : oldKey;
         const expectedAgentKey = scope === "shared only" || jsonOnly ? sourceAgentKey : newKey;
-        const portOptions = postgresAgents
-          ? { family: "state" as const, to: "postgres" as const }
-          : withoutShared
-            ? { to: "postgres" as const }
-            : { family: "agent" as const, to: "postgres" as const };
+        const portOptions = withoutShared
+          ? { to: "postgres" as const }
+          : { family: "agent" as const, to: "postgres" as const };
         if (withoutShared) {
           fs.mkdirSync(path.dirname(agentPath), { recursive: true });
           using source = openNodeSqliteDatabase(agentPath);
@@ -174,15 +165,13 @@ describe.skipIf(!mixedAgentConnection)("reserved-incognito adoption preflight", 
           }
         } else {
           withEngineStoreAdmission(() => {
-            if (!postgresAgents) {
-              runOpenClawAgentWriteTransaction(
-                ({ db }) => seedAgent(db, sourceAgentKey, jsonOnly ? oldKey : undefined),
-                {
-                  agentId: "main",
-                  env: state.env,
-                },
-              );
-            }
+            runOpenClawAgentWriteTransaction(
+              ({ db }) => seedAgent(db, sourceAgentKey, jsonOnly ? oldKey : undefined),
+              {
+                agentId: "main",
+                env: state.env,
+              },
+            );
             if (jsonOnly) {
               openOpenClawStateDatabase({ env: state.env });
             } else {
@@ -192,38 +181,25 @@ describe.skipIf(!mixedAgentConnection)("reserved-incognito adoption preflight", 
         }
         await cleanupSessionStateForTest({ stateDir: state.stateDir });
         expect(fs.existsSync(sharedPath)).toBe(!withoutShared);
-        const sourcePaths = [
-          agentPath,
-          sharedPath,
-          state.configPath,
-          resolveQuarantineStorePath(state.env),
-        ];
-        const original = await sourceArtifacts(sourcePaths);
+        const original = await sourceArtifacts([agentPath, sharedPath, state.configPath]);
         const client = new Client({ connectionString: mixedAgentConnection });
         await client.connect();
         try {
-          const synchronousSnapshot = vi
-            .spyOn(snapshotWorker, "runSqliteReadOnlyWorkerSync")
-            .mockImplementation(() => {
-              throw new Error("Database port inspection must not block on a snapshot child");
-            });
-          let error: unknown;
-          try {
-            error = await doctorDatabasePort(portOptions).catch((caught: unknown) => caught);
-            expect(synchronousSnapshot).not.toHaveBeenCalled();
-          } finally {
-            synchronousSnapshot.mockRestore();
-          }
+          const error: unknown = await doctorDatabasePort(portOptions).catch(
+            (caught: unknown) => caught,
+          );
           expect(error).toBeInstanceOf(DatabasePortError);
           expect(error).toMatchObject({ code: "RESERVED_INCOGNITO_SESSION_KEYS" });
           expect(String(error)).toContain("openclaw doctor --fix");
-          expect(await sourceArtifacts(sourcePaths)).toEqual(original);
+          expect(await sourceArtifacts([agentPath, sharedPath, state.configPath])).toEqual(
+            original,
+          );
           expect(fs.existsSync(databasePortManifestPath(state.stateDir))).toBe(false);
           const recovery = state.statePath("recovery", "database-port");
           expect(fs.existsSync(recovery) ? await files(recovery) : []).toEqual([]);
 
-          // Missing deletion history and already-ported agents require separate repair owners.
-          if (withoutShared || postgresAgents) {
+          // Missing deletion history has its own Doctor safety hold; this case proves refusal only.
+          if (withoutShared) {
             return;
           }
 

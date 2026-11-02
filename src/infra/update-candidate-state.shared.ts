@@ -107,7 +107,7 @@ export async function readUpdateStoreSchemaVersion(
   );
   if (userVersion === 0) {
     const { readBackupEngine } = await import("./database-engine/physical-store.js");
-    if ((await readBackupEngine(file)).engine === "postgres") {
+    if (readBackupEngine(file).engine === "postgres") {
       const { readUpdatePostgresStoreVersion } =
         await import("./update-candidate-state.postgres.js");
       return { userVersion: await readUpdatePostgresStoreVersion(input, file) };

@@ -9,7 +9,6 @@ import {
   assertConfiguredWorkspaceStateReady,
   listWorkspaceStateDirs,
 } from "../agents/workspace-state-dirs.js";
-import { normalizeWorkspaceIdentityPath } from "../agents/workspace-state-identity.js";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import { readConfigHealthStateInDatabase } from "../config/io.health-state.kernel.js";
 import type { ConfigHealthFingerprint } from "../config/io.health-state.types.js";
@@ -67,12 +66,8 @@ import { inspectOpenClawStateOwnershipFromDatabase } from "../state/openclaw-sta
 import { readStateSchemaPublicationBlocker } from "../state/openclaw-state-schema-publication.js";
 
 function normalizeFixture(value: unknown, root: string): unknown {
-  // Workspace identities fold Windows path case; fixture config retains the native spelling.
-  const identityRoot = normalizeWorkspaceIdentityPath(root);
-  const replaceRoot = (text: string) =>
-    text.replaceAll(root, "<fixture>").replaceAll(identityRoot, "<fixture>");
   if (typeof value === "string") {
-    return replaceRoot(value).replace(/sk-qa-mock-[a-f0-9]+/gu, "<mock-key>");
+    return value.replaceAll(root, "<fixture>").replace(/sk-qa-mock-[a-f0-9]+/gu, "<mock-key>");
   }
   if (Array.isArray(value)) {
     return value.map((entry) => normalizeFixture(entry, root));
@@ -80,7 +75,7 @@ function normalizeFixture(value: unknown, root: string): unknown {
   if (value !== null && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value).map(([key, entry]) => [
-        replaceRoot(key),
+        key.replaceAll(root, "<fixture>"),
         normalizeFixture(entry, root),
       ]),
     );

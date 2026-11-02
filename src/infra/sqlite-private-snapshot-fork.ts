@@ -9,7 +9,6 @@ import {
 } from "./sqlite-readonly-location-cleanup.js";
 import { copySourceFile, SqliteSourceChangedError } from "./sqlite-readonly-location.js";
 import type { SqlitePrivateSnapshotFamily } from "./sqlite-readonly-location.types.js";
-import { assertSqliteSnapshotSpace } from "./sqlite-snapshot-policy.js";
 import {
   acquireSqliteSnapshotReadToken,
   createSqliteSnapshotStagingDirectorySync,
@@ -86,7 +85,6 @@ export async function forkSqlitePrivateSnapshotInProcess(
         throw new SqliteSourceChangedError("retained-snapshot-changed");
       }
       directory = createSqliteSnapshotStagingDirectorySync(stagingRoot);
-      assertSqliteSnapshotSpace(pathname, directory);
       const destination = path.join(directory, "database.sqlite.partial");
       for (const [suffix, expected] of [
         ["", family.main],

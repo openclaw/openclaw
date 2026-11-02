@@ -203,7 +203,7 @@ describe.skipIf(!connection)("mixed-engine update inventory", () => {
     "admits an older selected PostgreSQL agent and refuses a newer server version: %s",
     async (version) => {
       const fixture = fixtures.get("postgres-agents")!;
-      const anchor = await readBackupEngine(fixture.agent);
+      const anchor = readBackupEngine(fixture.agent);
       if (anchor.engine !== "postgres") {
         throw new Error("Expected the retained PostgreSQL agent fixture");
       }

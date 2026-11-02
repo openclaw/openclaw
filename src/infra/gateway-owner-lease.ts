@@ -46,8 +46,8 @@ import type { EngineConnection } from "./sql-connection.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { hasVerifiedLiveSqliteOwner } from "./sqlite-live-owner.js";
 import { retainSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
-import type { AsyncPreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
-import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
+import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
+import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
 import {
   runSqliteImmediateTransactionSync,
   runSqliteSingleStatementSync,
@@ -114,7 +114,7 @@ export async function assertGatewayOwnerLeaseStopped(
       owner.assertDatabaseAccess(pathname);
     },
   };
-  let prepared: AsyncPreparedSqliteReadOnlyLocation | undefined;
+  let prepared: PreparedSqliteReadOnlyLocation | undefined;
   let releaseSnapshot: (() => void) | undefined;
   let read: Promise<OpenClawStateReadOutcome> | undefined;
   let closing: Promise<void> | undefined;
@@ -143,11 +143,7 @@ export async function assertGatewayOwnerLeaseStopped(
   try {
     authority.assertCurrent();
     if (schemaMaintenance && !isStatePostgres()) {
-      prepared = await prepareSqliteReadOnlyLocation(pathname, {
-        signal,
-        preserveSourceArtifacts: true,
-      });
-      authority.assertCurrent();
+      prepared = prepareSqliteReadOnlyLocationSync(pathname);
       releaseSnapshot = retainSnapshotTempDirectory(
         prepared.cleanupRoot ?? path.dirname(prepared.location),
       );

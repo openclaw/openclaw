@@ -148,7 +148,7 @@ it.each(["default", "per-agent"])(
                   pluginId: "clawrouter",
                 }),
               );
-              expect(outcome, JSON.stringify(outcome)).toMatchObject({
+              expect(outcome).toMatchObject({
                 status: "ok",
                 result: {
                   model: "gpt-6-luna",

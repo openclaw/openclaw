@@ -106,7 +106,7 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
         expect(result.stores).toEqual([selectedPath]);
         expect(hash(otherPath)).toBe(untouched);
         if (family === "agent") {
-          expect((await readBackupEngine(shared)).engine).toBe("sqlite");
+          expect(readBackupEngine(shared).engine).toBe("sqlite");
         }
         expect(config().database).toMatchObject({
           engine: "sqlite",
@@ -117,14 +117,14 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
         });
         await port({ family, to: "sqlite" });
         expect(hash(otherPath)).toBe(untouched);
-        expect((await readBackupEngine(selectedPath)).engine).toBe("sqlite");
+        expect(readBackupEngine(selectedPath).engine).toBe("sqlite");
         expect(config().database?.families).toEqual({ [other]: { engine: "postgres" } });
         if (family === "agent") {
           using db = openNodeSqliteDatabase(agent, { readOnly: true });
           expect(
             db.prepare("SELECT value_json FROM cache_entries WHERE scope = 'retained'").get(),
           ).toEqual({ value_json: '"agent-data"' });
-          expect((await readBackupEngine(shared)).engine).toBe("sqlite");
+          expect(readBackupEngine(shared).engine).toBe("sqlite");
         }
       } finally {
         await port({ family: other, to: "sqlite" });
@@ -140,7 +140,7 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
     interruptPublication();
     await expect(port({ family: "agent", to: "postgres" })).rejects.toThrow();
     vi.restoreAllMocks();
-    expect((await readBackupEngine(agent)).engine).toBe("postgres");
+    expect(readBackupEngine(agent).engine).toBe("postgres");
     expect(() => assertDatabasePortStartupAllowed(state.stateDir)).toThrow();
     await port({ resume: databasePortManifestPath(state.stateDir) });
     expect(() => assertDatabasePortStartupAllowed(state.stateDir)).not.toThrow();
@@ -148,7 +148,7 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
       engine: "sqlite",
       families: { agent: { engine: "postgres" } },
     });
-    expect((await readBackupEngine(shared)).engine).toBe("sqlite");
+    expect(readBackupEngine(shared).engine).toBe("sqlite");
     const backup = await capturePostgresBackup({
       sourcePath: agent,
       directory: state.path("agent-backup"),
@@ -159,7 +159,7 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
     expect(backup.source.owner).toBe("agent");
     await port({ family: "agent", to: "sqlite" });
     expect(config().database?.families).toBeUndefined();
-    expect((await readBackupEngine(shared)).engine).toBe("sqlite");
+    expect(readBackupEngine(shared).engine).toBe("sqlite");
     expect(hash(workboard)).toBe(unrelated);
     using db = openNodeSqliteDatabase(agent, { readOnly: true });
     const row = db.prepare("SELECT value_json FROM cache_entries WHERE scope = 'retained'").get();
@@ -185,7 +185,7 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
         );
         expect(failure).toBeInstanceOf(Error);
         vi.restoreAllMocks();
-        expect((await readBackupEngine(workboard)).engine, String(failure)).toBe("postgres");
+        expect(readBackupEngine(workboard).engine, String(failure)).toBe("postgres");
         expect(() => assertDatabasePortStartupAllowed(state.stateDir)).toThrow();
         const active = databasePortManifestPath(state.stateDir);
         await port({ [action]: active });
@@ -195,7 +195,7 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
           ...(action === "resume" ? { workboard: { engine: "postgres" } } : {}),
         });
         expect(hash(shared)).toBe(other);
-        expect((await readBackupEngine(workboard)).engine).toBe(
+        expect(readBackupEngine(workboard).engine).toBe(
           action === "resume" ? "postgres" : "sqlite",
         );
         if (action === "resume") {

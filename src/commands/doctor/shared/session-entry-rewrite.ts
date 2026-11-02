@@ -33,7 +33,10 @@ import type { SessionEntry } from "../../../config/sessions/types.js";
 import { withEngineStoreAdmission } from "../../../infra/database-engine/admission-scope.js";
 import { executeSqliteQuerySync, iterateSqliteQuerySync } from "../../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../../infra/sql-connection.js";
-import { startSqliteReadOnlyLocationAsync } from "../../../infra/sqlite-snapshot-source.js";
+import {
+  prepareArtifactPreservingSqliteRead,
+  startSqliteReadOnlyLocationAsync,
+} from "../../../infra/sqlite-snapshot-source.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -43,10 +46,7 @@ import { hasUpdateDoctorMigrationCapture } from "../../../infra/update-doctor-mi
 import { agentEngineInput } from "../../../state/openclaw-agent-db-engine.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../../state/openclaw-agent-db-identity.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../../state/openclaw-agent-db-readonly-open.js";
-import {
-  prepareOpenClawAgentDatabaseReadOnly,
-  withOpenClawAgentDatabaseReadOnly,
-} from "../../../state/openclaw-agent-db-readonly.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../../state/openclaw-agent-db-readonly.js";
 import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
@@ -154,7 +154,7 @@ export async function scanDoctorSessionEntryRecords(
     );
   const read = async () => {
     if (!captured) {
-      await prepareOpenClawAgentDatabaseReadOnly(scope.storePath);
+      await prepareArtifactPreservingSqliteRead(scope.storePath);
       return scan(databaseOptions, expectedIdentity);
     }
     assertSourceCurrent();

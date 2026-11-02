@@ -22,7 +22,7 @@ import {
   refuse,
 } from "./doctor-database-port-context.js";
 
-export async function assertLocalCredentialPortCompanion(
+export function assertLocalCredentialPortCompanion(
   ctx: Context,
   file: string,
   sharedPath: string,
@@ -30,13 +30,11 @@ export async function assertLocalCredentialPortCompanion(
 ) {
   ctx.target = file;
   privatePaths(ctx, [file]);
-  const physical = await readBackupEngine(file, ctx.signal);
-  ctx.assertCurrent();
   const sourceFile = readClientCredentialFileIdentity(sharedPath);
   const env = resolveStateClientCredentialEnvironment({ path: sharedPath, env: ctx.env });
   if (
     sharedFamily !== "state" ||
-    physical.engine !== "sqlite" ||
+    readBackupEngine(file).engine !== "sqlite" ||
     !sourceFile ||
     !env ||
     !capturePortClientCredentialBinding({ env, sourcePath: sharedPath, sourceFile })
@@ -58,7 +56,7 @@ export async function withDatabasePortStateOwner<T>(
   const shared = path.join(ctx.stateDir, "state", "openclaw.sqlite");
   // Interrupted publication can leave config on the old engine. Custody follows the physical store.
   const engine = fs.existsSync(shared)
-    ? (await readBackupEngine(shared, ctx.signal)).engine
+    ? readBackupEngine(shared).engine
     : resolveDatabaseFamilyEngines(config).state;
   await selectDatabasePortEngine(ctx, config, engine);
   return withDatabaseEngineSelection(ctx.engineSelection, () =>

@@ -12,9 +12,9 @@ import {
   resolveConfiguredAgentDatabaseTargets,
 } from "../../../config/sessions/targets.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { prepareArtifactPreservingSqliteRead } from "../../../infra/sqlite-snapshot-source.js";
 import { createRetainedAgentDatabaseMatcher } from "../../../state/agent-deletion-discovery.js";
 import { isArtifactPreservingStateRead } from "../../../state/artifact-preserving-state-reads.js";
-import { prepareOpenClawAgentDatabaseReadOnly } from "../../../state/openclaw-agent-db-readonly.js";
 import { getActiveOpenClawStateDatabaseReadSnapshotAsync } from "../../../state/openclaw-state-db-readonly.js";
 import { readCronStoreSelectionForDoctor } from "../cron/default-store-selection.js";
 import { loadLegacyCronRepairState } from "../cron/legacy-repair.js";
@@ -88,7 +88,7 @@ export async function inspectDoctorModelReferences(params: {
           env,
         });
         if (existsSync(sqlite.path)) {
-          await prepareOpenClawAgentDatabaseReadOnly(sqlite.path);
+          await prepareArtifactPreservingSqliteRead(sqlite.path);
         }
       }
       scanDoctorSessionEntriesTolerant({ ...target, env }, ({ entry, sessionKey }) => {

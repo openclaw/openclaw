@@ -28,6 +28,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { readDeferredPluginMigrations } from "../../../infra/deferred-plugin-migrations.js";
 import { preserveDeferredPluginSessionSource } from "../../../infra/deferred-plugin-session-sources.js";
 import { loadJsonFileThroughSymlink } from "../../../infra/json-file.js";
+import { prepareArtifactPreservingSqliteRead } from "../../../infra/sqlite-snapshot-source.js";
 import {
   loadLegacySessionStore,
   updateLegacySessionStore,
@@ -36,7 +37,6 @@ import { isValidAgentHarnessSessionStoreEntry } from "../../../sessions/agent-ha
 import { isModelSelectionLocked } from "../../../sessions/model-overrides.js";
 import { createRetainedAgentDatabaseMatcher } from "../../../state/agent-deletion-discovery.js";
 import { isArtifactPreservingStateRead } from "../../../state/artifact-preserving-state-reads.js";
-import { prepareOpenClawAgentDatabaseReadOnly } from "../../../state/openclaw-agent-db-readonly.js";
 import { getActiveOpenClawStateDatabaseReadSnapshotAsync } from "../../../state/openclaw-state-db-readonly.js";
 import { resolveLegacyAuthProfilesPath } from "../../doctor-auth-legacy-paths.js";
 import {
@@ -523,7 +523,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
         env,
       });
       if (fs.existsSync(sqlite.path)) {
-        await prepareOpenClawAgentDatabaseReadOnly(sqlite.path);
+        await prepareArtifactPreservingSqliteRead(sqlite.path);
       }
     }
   }

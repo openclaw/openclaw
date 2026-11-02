@@ -584,7 +584,7 @@ export async function snapshotUpdateCandidateState(
       await import("../snapshot/database-backup.js");
     const { userVersion } = await inspectSqliteSchemaHeaderInProcess(file, input.targetStateDir);
     // PostgreSQL anchors have header version zero; versioned SQLite uses online backup directly.
-    const engine = userVersion === 0 ? await readBackupEngine(file) : undefined;
+    const engine = userVersion === 0 ? readBackupEngine(file) : undefined;
     if (engine?.engine === "postgres") {
       const directory = `${target}.postgres`;
       await capturePostgresBackup({

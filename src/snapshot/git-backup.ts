@@ -311,7 +311,7 @@ export async function createGitBackup(params: {
     for (const file of discovery.paths) {
       if (
         !databases.some((database) => database.path === file) &&
-        (await readBackupEngine(file)).engine === "postgres"
+        readBackupEngine(file).engine === "postgres"
       ) {
         const family = await readPostgresBackupFamily(file, config);
         const resource = discovery.resources
@@ -362,7 +362,7 @@ export async function createGitBackup(params: {
       await fs.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
       const copyPath = staging.path(`${database.identity.role}-${index}.sqlite`);
       try {
-        const postgres = (await readBackupEngine(database.path)).engine === "postgres";
+        const postgres = readBackupEngine(database.path).engine === "postgres";
         if (!postgres) {
           await createOpenClawSnapshotCopy({
             database: { ...database, path: await fs.realpath(database.path) },

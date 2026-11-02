@@ -1,6 +1,5 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
-  "src/commands/database-prepare-state.postgres.test.ts",
   "src/infra/backup-local-companion.test.ts",
   "src/commands/backup-verify-completeness.test.ts",
   "src/infra/state-migrations.plugin-doctor-context.postgres.test.ts",
@@ -174,7 +173,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/openclaw-tools.session-status.gateway-model.test.ts",
   "src/state/openclaw-state-db-cron-delivery-migration.test.ts",
   "src/state/openclaw-quarantine-store.test.ts",
-  "src/state/doctor-read-snapshot.test.ts",
   "src/state/openclaw-agent-db-readonly-scope.test.ts",
   "src/state/openclaw-agent-db-schema-refresh.test.ts",
   "src/state/openclaw-agent-db-validation-cache.test.ts",

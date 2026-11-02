@@ -80,26 +80,6 @@ it.each(["auto", "off"] as const)("forks independent main/WAL bytes (native %s)"
   image.bytes().forEach((bytes, i) => assert(before[i]?.equals(bytes), `source ${i}`));
 });
 
-it.each(["auto", "off"] as const)(
-  "refuses an undersized private fork (native %s)",
-  async (mode) => {
-    const before = image.bytes();
-    configureFsSafeNative({ mode });
-    const space = fs.statfsSync(image.owned);
-    const capacity = vi.spyOn(fs, "statfsSync").mockImplementation((...args) => {
-      expect(fs.existsSync(path.join(String(args[0]), "database.sqlite.partial"))).toBe(false);
-      return Object.assign(space, { bsize: 1, bavail: 65573 });
-    });
-    await expect(image.fork()).rejects.toMatchObject({
-      code: "ENOSPC",
-      message: expect.stringMatching(/65686 bytes.*65573 bytes.*Free disk space/s),
-    });
-    expect(capacity).toHaveBeenCalledOnce();
-    image.bytes().forEach((bytes, i) => assert(before[i]?.equals(bytes), `source ${i}`));
-    image.empty();
-  },
-);
-
 it("preserves committed WAL rows in a separately writable image", async () => {
   const seedPath = path.join(directories.make("private-sqlite-wal-seed-"), "seed.sqlite");
   {

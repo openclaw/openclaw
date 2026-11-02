@@ -348,23 +348,23 @@ export async function createUpdateDatabaseBackupInProcess(
         >();
         // Reuse classification from the generation image; only a failed acquisition needs
         // an engine-only image. PostgreSQL access still waits for the inventory custody gate.
-        const engines = new Map<string, Awaited<ReturnType<typeof readBackupEngine>>>();
-        for (const file of inventory.present) {
-          if (stoppedSources.has(file)) {
-            continue;
-          }
-          const observation =
-            !input.stopped && !requestedOriginalSources.has(file)
-              ? readUpdatePhysicalDatabaseObservation(file, input.stagingRoot)
-              : undefined;
-          if (observation) {
-            observations.set(file, observation);
-            if (observation.preparedSource) {
-              heldImages.add(observation.preparedSource);
-            }
-          }
-          engines.set(file, observation?.engine ?? (await readBackupEngine(file)));
-        }
+        const engines = new Map(
+          inventory.present
+            .filter((file) => !stoppedSources.has(file))
+            .map((file) => {
+              const observation =
+                !input.stopped && !requestedOriginalSources.has(file)
+                  ? readUpdatePhysicalDatabaseObservation(file, input.stagingRoot)
+                  : undefined;
+              if (observation) {
+                observations.set(file, observation);
+                if (observation.preparedSource) {
+                  heldImages.add(observation.preparedSource);
+                }
+              }
+              return [file, observation?.engine ?? readBackupEngine(file)];
+            }),
+        );
         if (
           input.sourceEngine === "sqlite" &&
           [...engines.values()].some((engine) => engine.engine !== "sqlite")
@@ -643,14 +643,9 @@ export async function createUpdateDatabaseBackup({
         !openClawStateDatabaseCache.isOpenClawStateDatabaseOpen(shared);
       // Only maintenance admission consumes this classification. Other callers
       // let the backup worker inspect engines without another full source image.
-      const postgresPaths: string[] = [];
-      if (custody) {
-        for (const file of prepared.paths) {
-          if ((await readBackupEngine(file, signal)).engine === "postgres") {
-            postgresPaths.push(file);
-          }
-        }
-      }
+      const postgresPaths = custody
+        ? prepared.paths.filter((file) => readBackupEngine(file).engine === "postgres")
+        : [];
       const inspectionPlan =
         custody && maintenanceOwnerMayCopySourcesInProcess(scope, shared)
           ? await discoverUpdateStateSchemaInspectionInProcess({

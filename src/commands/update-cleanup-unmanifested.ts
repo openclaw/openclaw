@@ -14,12 +14,7 @@ import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-reade
 import { resolveSqliteDatabaseFilePaths, SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
 import { isUpdateRecoveryPending } from "../infra/update-run-recovery-schema.js";
 import { inspectUpdateRecoveries } from "../infra/update-run-recovery.js";
-import {
-  getActiveOpenClawStateDatabaseReadSnapshotAsync,
-  withArtifactPreservingStateReads,
-  withCurrentOpenClawStateReadScope,
-  withOpenClawStateDatabaseReadSnapshot,
-} from "../state/openclaw-state-db-readonly.js";
+import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import {
   summarizeRecoveryCleanup,
   type collectUpdateCleanupInventoryAsync,
@@ -144,12 +139,12 @@ function inspectSelection(
 }
 
 /** Selection consumes the inventory owner's known paths; it never discovers new deletion roots. */
-export async function selectUnmanifestedRecovery(params: {
+export function selectUnmanifestedRecovery(params: {
   inventory: Inventory;
   paths?: readonly string[];
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): Promise<UnmanifestedSelection> {
+}): UnmanifestedSelection {
   const selected: UnmanifestedSelection = new Map();
   if (!params.paths?.length) {
     return selected;
@@ -157,62 +152,57 @@ export async function selectUnmanifestedRecovery(params: {
   const { inventory } = params;
   const requested = [...new Set(params.paths.map((file) => path.resolve(file)))];
   // Refuse the entire explicit request before other cleanup effects when any path is unsafe.
-  await withCurrentOpenClawStateReadScope({ env: params.env }, () =>
-    withArtifactPreservingStateReads(() =>
-      withOpenClawStateDatabaseReadSnapshot(
-        async () => {
-          await getActiveOpenClawStateDatabaseReadSnapshotAsync({ env: params.env });
-          const pending = pendingRecoveryRoots(params.env);
-          const livePaths = activePaths(params.cfg, params.env, inventory);
-          for (const file of requested) {
-            const item = inventory.report.artifacts.find((artifact) => artifact.path === file);
-            if (
-              !item ||
-              item.outcome !== "protected" ||
-              ![
-                "unmanifested-recovery-original",
-                "orphan-update-capture",
-                "superseded-unsealed-capture",
-              ].includes(item.reason)
-            ) {
-              throw new Error(
-                `Cannot include unmanifested path ${file}: not an eligible known recovery original or orphan capture.`,
-              );
-            }
-            if (
-              inventory.report.artifacts.some((artifact) =>
-                ["unreadable-manifest", "manifest-directory-alias"].includes(artifact.reason),
-              )
-            ) {
-              throw new Error(
-                "Cannot include unmanifested recovery with unreadable recovery dependencies.",
-              );
-            }
-            if (
-              pending.some((root) => overlaps(file, root)) ||
-              [...inventory.references.values()].some((refs) =>
-                refs.some(({ move }) =>
-                  [
-                    move.sourcePath,
-                    move.archivePath,
-                    ...(move.artifact?.dependencies ?? []),
-                    ...(move.artifact?.disposal.state === "pending-disposal"
-                      ? [move.artifact.disposal.claimPath]
-                      : []),
-                  ].some((dependency) => overlaps(file, dependency)),
-                ),
-              )
-            ) {
-              throw new Error(
-                `Cannot include ${file}: pending or retained recovery references this path.`,
-              );
-            }
-            selected.set(file, inspectSelection(item, livePaths));
-          }
-        },
-        { env: params.env },
-      ),
-    ),
+  withSynchronousArtifactPreservingStateSnapshot(
+    () => {
+      const pending = pendingRecoveryRoots(params.env);
+      const livePaths = activePaths(params.cfg, params.env, inventory);
+      for (const file of requested) {
+        const item = inventory.report.artifacts.find((artifact) => artifact.path === file);
+        if (
+          !item ||
+          item.outcome !== "protected" ||
+          ![
+            "unmanifested-recovery-original",
+            "orphan-update-capture",
+            "superseded-unsealed-capture",
+          ].includes(item.reason)
+        ) {
+          throw new Error(
+            `Cannot include unmanifested path ${file}: not an eligible known recovery original or orphan capture.`,
+          );
+        }
+        if (
+          inventory.report.artifacts.some((artifact) =>
+            ["unreadable-manifest", "manifest-directory-alias"].includes(artifact.reason),
+          )
+        ) {
+          throw new Error(
+            "Cannot include unmanifested recovery with unreadable recovery dependencies.",
+          );
+        }
+        if (
+          pending.some((root) => overlaps(file, root)) ||
+          [...inventory.references.values()].some((refs) =>
+            refs.some(({ move }) =>
+              [
+                move.sourcePath,
+                move.archivePath,
+                ...(move.artifact?.dependencies ?? []),
+                ...(move.artifact?.disposal.state === "pending-disposal"
+                  ? [move.artifact.disposal.claimPath]
+                  : []),
+              ].some((dependency) => overlaps(file, dependency)),
+            ),
+          )
+        ) {
+          throw new Error(
+            `Cannot include ${file}: pending or retained recovery references this path.`,
+          );
+        }
+        selected.set(file, inspectSelection(item, livePaths));
+      }
+    },
+    { current: { env: params.env } },
   );
   for (const [file, identities] of selected) {
     const item = inventory.report.artifacts.find((artifact) => artifact.path === file)!;
