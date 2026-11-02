@@ -19,10 +19,13 @@ const RING_RADIUS = 6.5;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
 export function ContextNotice(props: ContextNoticeProps) {
-  const model = createMemo(
-    () =>
-      getContextNoticeViewModel(props.session) ??
-      getContextNoticeViewModel(undefined, props.contextUsage),
+  const model = createMemo(() =>
+    getContextNoticeViewModel(
+      props.session,
+      props.session?.totalTokens === undefined && props.session?.totalTokensFresh === undefined
+        ? props.contextUsage
+        : undefined,
+    ),
   );
   const currentGroup = createMemo(() => {
     const currentProvider = (

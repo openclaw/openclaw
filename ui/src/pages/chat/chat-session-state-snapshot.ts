@@ -41,11 +41,13 @@ export function projectChatSessionStateSnapshot(
   const used = asNonNegativeFiniteNumber(session.totalTokens);
   const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(session);
   return {
-    // Partial roster rows omit usage; retain the last admitted display.
+    // Omitted enrichment retains display; an unavailable measurement clears it.
     contextUsage:
-      used === undefined || !limit
-        ? previous?.contextUsage
-        : { used, limit, approximate: session.totalTokensFresh === false, fromLastPrompt },
+      used === undefined && session.totalTokensFresh === false
+        ? undefined
+        : used === undefined || !limit
+          ? previous?.contextUsage
+          : { used, limit, approximate: session.totalTokensFresh === false, fromLastPrompt },
     chrome: previous?.chrome,
     archived: session.archived,
     // Display only; the composer still requires current live mutation authority.
