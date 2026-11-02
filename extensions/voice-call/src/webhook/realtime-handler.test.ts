@@ -679,6 +679,49 @@ describe("RealtimeCallHandler path routing", () => {
     expect(markAcknowledged).toBe(false);
   });
 
+  it.each(["local", "provider"])(
+    "ignores playback echo while preserving %s barge-in",
+    async (source) => {
+      const { callbacks, processEvent, outboundMessages, sendAudio, ws } = await bargeInHarness({
+        providerCallId: "CA-echo-transcript",
+        handlesProviderBargeIn: source === "provider",
+      });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const startedAt = Date.now();
+      const words = "Hello, how can I help you today?";
+      callbacks.onTranscript?.("assistant", words, true);
+      callbacks.onAudio(Buffer.alloc(160, 0x80));
+      await expectFrame(outboundMessages, "media");
+      sendMedia(ws, Buffer.alloc(160, 0xfe));
+      await waitForCalls(sendAudio);
+      callbacks.onTranscript?.("user", words, false);
+      callbacks.onTranscript?.("user", words, true);
+      expect(transcripts(processEvent)).toEqual([]);
+
+      callbacks.onEvent?.({ direction: "server", type: "response.done" });
+      vi.setSystemTime(startedAt + 100);
+      callbacks.onTranscript?.("user", words, true);
+      expect(transcripts(processEvent)).toEqual([]);
+      vi.setSystemTime(startedAt + 421);
+      callbacks.onTranscript?.("user", "A real question after playback", true);
+      expect(transcripts(processEvent)).toEqual(["A real question after playback"]);
+
+      callbacks.onAudio(Buffer.alloc(160, 0x80));
+      if (source === "provider") {
+        callbacks.onClearAudio("barge-in");
+      } else {
+        sendMedia(ws, Buffer.alloc(160, 0x00));
+        sendMedia(ws, Buffer.alloc(160, 0x00));
+        await waitForCalls(sendAudio, 3);
+      }
+      callbacks.onTranscript?.("user", "Please stop", true);
+      expect(transcripts(processEvent)).toEqual(["A real question after playback", "Please stop"]);
+      callbacks.onAudio(Buffer.alloc(160, 0x80));
+      callbacks.onTranscript?.("user", words, true);
+      expect(transcripts(processEvent)).toEqual(["A real question after playback", "Please stop"]);
+    },
+  );
+
   it("lets a session bridge override provider-level barge-in capabilities", async () => {
     const { callbacks, call, handleBargeIn, outboundMessages, sendAudio, ws } =
       await bargeInHarness({
