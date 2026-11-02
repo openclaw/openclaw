@@ -407,11 +407,11 @@ describe("RealtimeCallHandler path routing", () => {
 
   it("normalizes Twilio outbound realtime directions", async () => {
     const triggerGreeting = vi.fn();
+    const call = makeCallRecord("CA-outbound", { direction: "outbound" });
+    call.metadata = { brief: { language: "cs" } };
     const { callbacks, handler, processEvent, createBridge } = makeCallHarness(
       { triggerGreeting },
-      {
-        call: makeCallRecord("CA-outbound", { direction: "outbound" }),
-      },
+      { call },
     );
     const server = await startRealtimeServer(
       handler,
@@ -423,7 +423,7 @@ describe("RealtimeCallHandler path routing", () => {
     );
     const ws = await connectWs(server.url);
     sendCarrierStart(ws, "MZ-outbound", "CA-outbound");
-    await waitFor(() => expect(createBridge).toHaveBeenCalled());
+    await waitFor(() => expect(createBridge.mock.calls[0]?.[0].language).toBe("cs"));
     expect(createBridge.mock.calls[0]?.[0].audioFormat).toEqual({
       encoding: "g711_ulaw",
       sampleRateHz: 8000,
