@@ -490,7 +490,7 @@ describe("release fast lane label", () => {
       .env.JOB_RESULTS.trim()
       .split("\n");
     for (const row of rows) {
-      const selected = row.slice(row.lastIndexOf("|") + 1);
+      const selected = expectDefined(row.match(/^[\w-]+=\$\{\{ .*? \}\}\|(.+)$/u)?.[1], row);
       expect(selected === "true" || selected.includes("needs.preflight.outputs."), row).toBe(true);
       expect(selected).not.toContain("release_fast_lane");
     }
