@@ -6,6 +6,7 @@ import { expressionBuilder, sql } from "kysely";
 import { admitStoreSearch } from "../../infra/database-engine/adapters.js";
 import { DatabaseSearchCapabilityUnavailableError } from "../../infra/database-engine/capability-unavailable.js";
 import { engineStringPosition } from "../../infra/database-engine/scalar.js";
+import { hasFullTextWordTokens } from "../../infra/database-engine/text-tokens.worker.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -234,7 +235,13 @@ export function searchSessionTranscriptsReadOnlySync(
               ...fullQuery,
               clauses: fullQuery.clauses.filter((clause) => !substringTerms.includes(clause.text)),
             };
-            const useFts = literalQuery.clauses.length > 0;
+            const useFts =
+              literalQuery.clauses.length > 0 &&
+              (substringTerms.length === 0 ||
+                hasFullTextWordTokens(
+                  database.db,
+                  literalQuery.clauses.map((clause) => clause.text).join(" "),
+                ));
             const ranking = fullText.rank(textIndex, literalQuery);
             const expression = expressionBuilder<DB, "session_transcript_fts">();
             const match = expression.and([

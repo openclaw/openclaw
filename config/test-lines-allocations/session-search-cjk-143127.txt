@@ -1,2 +1,2 @@
-# Interior CJK recall, matching excerpts, mixed-word semantics, and session scoping.
-21
+# CJK recall, excerpts, scope, native punctuation/symbol semantics, and PostgreSQL parser proof.
+36

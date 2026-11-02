@@ -153,6 +153,17 @@ describe("searchSessionTranscripts", () => {
     expect(search("会议 cat").hits).toEqual([expect.objectContaining({ sessionId: "match" })]);
     expect(search("会议 cat", { sessionKeys: ["agent:main:main"] }).hits).toEqual([]);
     expect(search("cat").hits).toEqual([expect.objectContaining({ sessionId: "match" })]);
+    for (const query of ["会议 -", "会议 →", "会议 🚀"]) {
+      expect(
+        search(query)
+          .hits.map((hit) => hit.sessionId)
+          .toSorted(),
+        query,
+      ).toEqual(["false-positive", "match"]);
+    }
+    expect(search("会议 🦞").hits).toEqual([]);
+    await appendUserMessage("symbol", "agent:main:symbol", "会议纪要 🦞");
+    expect(search("会议 🦞").hits).toEqual([expect.objectContaining({ sessionId: "symbol" })]);
   });
 
   it.each([false, true])(
