@@ -6,7 +6,7 @@ run-name: Native Llama ${{ inputs.platform }} - ${{ inputs.dispatch_id }}
       platform:
         description: Native screenshot producer to run
         type: choice
-        options: [mac, windows-w4, service]
+        options: [mac, windows-w4, service, windows-ollama-fixtures]
         default: mac
         required: true
       dispatch_id:
@@ -184,6 +184,75 @@ jobs:
         with:
           name: service-reachability-${{ github.run_id }}-${{ github.run_attempt }}
           path: .service-reachability-evidence/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  windows-ollama-fixtures:
+    if: inputs.platform == 'windows-ollama-fixtures'
+    permissions:
+      contents: read
+    runs-on: windows-2025
+    timeout-minutes: 65
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Keep canonical source bytes
+        run: git config --global core.autocrlf false
+      - name: Check out reviewed packet from this immutable workflow commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7, qualified route
+        with:
+          path: proof-harness
+          persist-credentials: false
+      - name: Check out Before W3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: openclaw/openclaw-windows-node
+          ref: d38ebb418c3aba6b24a4d6470def72b2bba4c4a8
+          path: source-before
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out After W3 (21 patch postimages, not HEAD alone)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: openclaw/openclaw-windows-node
+          ref: d38ebb418c3aba6b24a4d6470def72b2bba4c4a8
+          path: source-after
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up exact qualified SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: 10.0.403
+      - name: Admit frozen source and identical comparison overlay
+        id: prepare
+        run: |
+          ./proof-harness/harness/windows-ollama/Prepare-Source.ps1 -BeforeSource "$env:GITHUB_WORKSPACE/source-before" -AfterSource "$env:GITHUB_WORKSPACE/source-after" -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/windows-ollama"
+      - name: Establish current interactive owner and qualified runtime
+        id: runtime
+        run: |
+          ./proof-harness/harness/windows-ollama/Initialize-NativeRuntime.ps1 -BeforeSource "$env:GITHUB_WORKSPACE/source-before" -AfterSource "$env:GITHUB_WORKSPACE/source-after" -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/windows-ollama"
+      - name: Verify immutable public catalog data (not acquisition proof)
+        if: '!cancelled() && steps.prepare.outcome == ''success'' && steps.runtime.outcome == ''success'''
+        run: ./proof-harness/harness/windows-ollama/Test-CatalogManifest.ps1 -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/windows-ollama"
+      - name: Observe actual WinGet contract (no repair or output shim)
+        id: winget
+        if: '!cancelled() && steps.prepare.outcome == ''success'' && steps.runtime.outcome == ''success'''
+        run: ./proof-harness/harness/windows-ollama/Test-WinGetContract.ps1 -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/windows-ollama"
+      - name: Full build, Shared, Tray, SetupEngine, Connection and strict private UI
+        if: '!cancelled() && steps.prepare.outcome == ''success'' && steps.runtime.outcome == ''success'''
+        run: |
+          ./proof-harness/harness/windows-ollama/Invoke-RequiredGates.ps1 -BeforeSource "$env:GITHUB_WORKSPACE/source-before" -AfterSource "$env:GITHUB_WORKSPACE/source-after" -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/windows-ollama"
+      - name: Record fixture-only qualification, never feature completion
+        if: always()
+        run: ./proof-harness/harness/windows-ollama/Write-FinalReceipt.ps1 -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/windows-ollama"
+      - name: Retain exact receipts and failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-ollama-frozen-candidate
+          path: .artifacts/windows-ollama/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7

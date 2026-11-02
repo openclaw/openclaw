@@ -1,0 +1,2924 @@
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index 6c590e3e..7b0162c2 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -154,6 +154,8 @@ new attempt. This boundary does not change release signing or Windows policy.
+ | Setup completion authority across native runtime contracts | `GatewayDashboardBinding` includes the package family and non-null runtime contract; `NativeGatewaySetupSession` rechecks agent configuration without reading a host config for isolated sessions | authoritative |
+ | Native operator connection construction inside the classic wizard page | `WizardPage.ConnectNativeClientAsync` delegates to `NativeGatewaySetupConnection` | closed |
+ | Published native AI transport and restart verification | `GatewayAiSetupTransport.BorrowNativeAsync` + `GatewayConnectionManager.RequireNativeSetupClientAsync` + `SetupNativeCompletionVerifier` | authoritative |
++| Windows Ollama app inventory and trusted acquisition | `OllamaWindowsAppHost` reads supported registration/activity and reuses `OllamaInferenceBackend` for Windows-side read-only model facts. Its fixed catalog descriptor and named Ollama signer policy admit only reviewed installer bytes; any potentially affected foreign llama-server process blocks installation without signer assumptions. Gateway reachability remains `GatewayAiSetupClient`-owned | authoritative |
++| Reviewed Windows Ollama app setup and installer settlement | `SetupAccessDraft.OllamaIntent` and `OllamaWindowsSetup` bind one app action to the current Gateway/endpoint. `OllamaWindowsSetupDialog` renders native review and partial outcomes; `AiSetupPage`/`SetupWindow` compose the existing request drain, logger and setup lock. `CommandRunner.RunAdmittedInstallerAsync` drains only the direct installer and never terminates its external app tree. Provider/model activation stays with the existing Gateway controller | authoritative |
+ | Reviewed native Local AI installation continuation | `LocalAiInstallAndUseIntent` binds single-use consent to Gateway/endpoint/model/port; `LocalAiOnboardingUse` retains mutation outcome and drain ownership. `SetupWindow` transfers the intent after artifact acquisition; `AiSetupPage` applies progress and exact-model verification without provider rediscovery | authoritative |
+ | Native Local AI explicit running intent | `LocalAiNativeBindingStore` persists automatic-recovery intent separately from ownership; `LlamaServerRuntimeService` serializes explicit Start/Stop, guarded Resume, withdraw-only reconciliation and explicit release under its operation gate. `LocalAiGatewayLifecycle` never converts connection notifications into explicit Start; it drains recovery before shutdown withdraws through the still-authorized manager | authoritative |
+ | Existing-native Local AI Settings entry | `SetupAccessDraft.SelectExistingNativeGateway` binds the existing record and preserves Settings ownership; `WindowManager` initializes only a newly created setup window, and `SetupWindow` applies the native route without WSL finalization or unrelated settings writes | authoritative |
+diff --git a/docs/ONBOARDING_WIZARD.md b/docs/ONBOARDING_WIZARD.md
+index e60cab57..aacae466 100644
+--- a/docs/ONBOARDING_WIZARD.md
++++ b/docs/ONBOARDING_WIZARD.md
+@@ -122,6 +122,55 @@ entry from the original configuration; the generated template does not reproduce
+ that entry or its value. The bundled configuration leaves setup mode and search
+ provider unspecified so policy can choose among the actual offered values.
+ 
++### Ollama setup on this Windows PC
++
++When the selected Gateway advertises an Ollama setup action, choose **Set up**
++on its Ollama card. Companion checks the selected Gateway and this PC separately.
++It does not treat an empty model list or a failed connection as proof that an app
++is not installed.
++
++1. If the Gateway already finds an Ollama model, **Use detected model** continues
++   through the existing exact-model activation and verification flow. The review
++   displays the detected model before you choose it. No Windows app installation
++   or launch is needed.
++2. For a verified installed app that is not active, **Open Ollama** opens that app
++   without reinstalling it. An active app or service is never launched again by
++   this action. Unknown or conflicting installation/activity facts show details
++   and **Check again**, not a guessed install action.
++3. If no supported installation registration or active service is found, review
++   **Install and open Ollama**. The native review names the version, app storage
++   requirement, package license and Microsoft WinGet source information. Check
++   the download/installation consent before continuing. Acquisition is pinned to
++   the reviewed official package and requires matching hash and trusted Ollama
++   publisher verification before execution. It does not run a downloaded script,
++   repair trust policy or replace an existing installation. If a llama.cpp server
++   is present, installation is blocked: the upstream installer can terminate
++   `llama-server.exe`, including unrelated runtimes. Stop it through its existing
++   owner before installing; Companion never stops it for you. Keep other local
++   model servers stopped until installation finishes.
++4. App installation does not include a model or finish AI setup. A reachable app
++   without a usable local chat model remains **needs model**. Choose one in
++   Ollama, then **Check again**, or use **Connection setup** to enter the existing
++   Gateway-owned provider workflow. Model downloads require their own explicit
++   confirmation there; app consent does not authorize them.
++5. A Windows-side response does not prove that a native isolated, WSL or remote
++   Gateway can reach the same service. **Connection setup** retains that selected
++   Gateway's address/auth/model ownership. Companion does not change firewall,
++   proxy, WSL networking, app credentials or Ollama sharing permissions.
++
++Before installer admission, **Cancel** stops that action. After admission,
++**Cancel further setup** withdraws subsequent steps but waits for Windows
++installation to settle. Companion does not terminate the installer's launched
++app, uninstall partial/existing installations, delete models or automatically
++retry an uncertain outcome. Closing setup or quitting Companion retains the
++admitted operation and its log until cleanup finishes, before releasing the
++setup lock. A hung installer remains pending rather than being declared safely
++cancelled; inspect Windows installation state before a fresh reviewed retry.
++
++The external Ollama app keeps its own settings, model cache and lifetime. This
++flow adds no Windows node/MCP command and does not enable inference sharing.
++Llama.app, Companion-managed llama.cpp and model acquisition are separate owners.
++
+ ### Llama.app local model setup
+ 
+ Llama.app is the preferred **fresh** local-model handoff. Companion recommends
+diff --git a/src/OpenClaw.Connection/WindowsAuthenticodeVerifier.cs b/src/OpenClaw.Connection/WindowsAuthenticodeVerifier.cs
+index f2e190d3..fbe170db 100644
+--- a/src/OpenClaw.Connection/WindowsAuthenticodeVerifier.cs
++++ b/src/OpenClaw.Connection/WindowsAuthenticodeVerifier.cs
+@@ -18,39 +18,53 @@ internal static class WindowsAuthenticodeVerifier
+         try
+         {
+             using var stream = File.OpenRead(path);
++            return VerifySignedStream(stream, "Microsoft Corporation", "WSL relay");
++        }
++        catch
++        {
++            return AuthenticodeTrustResult.Rejected(
++                "WSL relay Authenticode verification could not complete.");
++        }
++    }
++
++    // Keep the verified file open through installer admission so its bytes cannot
++    // be replaced between hash/signature verification and process creation.
++    public static AuthenticodeTrustResult VerifyOllamaSignedFile(FileStream stream) =>
++        VerifySignedStream(stream, "Ollama Inc.", "Ollama");
++
++    private static AuthenticodeTrustResult VerifySignedStream(
++        FileStream stream, string organization, string product)
++    {
++        try
++        {
+             var signature = FileSignatureInfo.GetFromFileStream(stream);
+             using var signingCertificate = signature.SigningCertificate;
+             using var timestampCertificate = signature.TimestampCertificate;
+ 
+             if (signature.State != SignatureState.SignedAndTrusted)
+-            {
+                 return AuthenticodeTrustResult.Rejected(
+-                    $"WSL relay Authenticode verification failed ({signature.State}).");
+-            }
++                    $"{product} Authenticode verification failed ({signature.State}).");
+             if (signingCertificate is null)
+-            {
+                 return AuthenticodeTrustResult.Rejected(
+-                    "WSL relay Authenticode signer could not be read.");
+-            }
++                    $"{product} Authenticode signer could not be read.");
+ 
+-            return HasMicrosoftPublisherIdentity(signingCertificate.Subject)
++            return HasPublisherIdentity(signingCertificate.Subject, organization)
+                 ? AuthenticodeTrustResult.Trusted()
+                 : AuthenticodeTrustResult.Rejected(
+-                    "WSL relay Authenticode signer is not Microsoft Corporation.");
++                    $"{product} Authenticode signer is not {organization}.");
+         }
+         catch
+         {
+             return AuthenticodeTrustResult.Rejected(
+-                "WSL relay Authenticode verification could not complete.");
++                $"{product} Authenticode verification could not complete.");
+         }
+     }
+ 
+     internal static bool HasMicrosoftPublisherIdentity(string subject) =>
++        HasPublisherIdentity(subject, "Microsoft Corporation");
++
++    private static bool HasPublisherIdentity(string subject, string organization) =>
+         subject.Split(',')
+             .Select(part => part.Trim())
+-            .Any(part =>
+-                string.Equals(
+-                    part,
+-                    "O=Microsoft Corporation",
+-                    StringComparison.OrdinalIgnoreCase));
++            .Any(part => string.Equals(part, $"O={organization}", StringComparison.OrdinalIgnoreCase));
+ }
+diff --git a/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs b/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs
+index 074f0ad3..1fb6d635 100644
+--- a/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs
++++ b/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs
+@@ -26,7 +26,10 @@ public sealed record AiSetupPageArgs(
+     GatewayConnectionManager? ConnectionManager = null, string? ExpectedEndpointBinding = null,
+     LocalAiInstallAndUseIntent? InstallAndUse = null, GatewayAiPreparation? Preparation = null,
+     Action? CloseSetupWindow = null, SetupLoadingProgress? Loading = null,
+-    NativeAiPreparation? NativePreparation = null);
++    NativeAiPreparation? NativePreparation = null)
++{
++    internal Func<GatewayAiSetupClient, (OllamaWindowsSetup Setup, SetupLogger Logger)>? OllamaSetupFactory { get; init; }
++}
+ 
+ public sealed partial class AiSetupPage : Page, IAsyncDisposable
+ {
+@@ -68,6 +71,9 @@ public sealed partial class AiSetupPage : Page, IAsyncDisposable
+     private bool _submittingAnswer;
+     private bool _rendering;
+     private readonly ProviderSetupDialog _providerDialog = new();
++    private OllamaWindowsSetupDialog? _ollamaDialog;
++    private OllamaWindowsSetup? _ollamaSetup;
++    private SetupLogger? _ollamaLogger;
+     private AiSetupPresentationModel _presentation = new();
+     private bool _apiKeyFormRequested;
+     private bool _cancelling;
+@@ -274,6 +280,13 @@ public sealed partial class AiSetupPage : Page, IAsyncDisposable
+             _localActionBusy || _args?.InstallAndUse is { IsConsumed: false });
+         // Runtime cancellation may still be withdrawing a Gateway route. It owns
+         // the setup lock until rollback has really ended, unlike read-only RPCs.
++        if (_ollamaDialog is not null)
++        {
++            try { await _requestDrain.DrainAsync(_ollamaDialog.CloseOwnedAsync(), retainOwnership: true, ReportShutdownDelay); }
++            catch (Exception error) { Trace.TraceWarning("Ollama dialog cleanup failed ({0}).", error.GetType().Name); }
++        }
++        if (_ollamaSetup is not null)
++            await _requestDrain.DrainAsync(_ollamaSetup.DrainAsync(), retainOwnership: true, ReportShutdownDelay);
+         if (_localUse is not null)
+             await _requestDrain.DrainAsync(_localUse.DrainAsync(), retainOwnership: true, ReportShutdownDelay);
+         using var timeout = new CancellationTokenSource(CloseTimeout);
+@@ -297,6 +310,9 @@ public sealed partial class AiSetupPage : Page, IAsyncDisposable
+             }
+             finally
+             {
++                _ollamaLogger?.Dispose();
++                _ollamaLogger = null;
++                _ollamaSetup = null;
+                 _controller = null;
+                 _providerDialog.ContinueRequested -= ProviderContinueRequested;
+                 _providerDialog.RefreshRequested -= ProviderRefreshRequested;
+@@ -606,7 +622,9 @@ public sealed partial class AiSetupPage : Page, IAsyncDisposable
+                     _ => "OllamaDetail",
+                 }) : option.Hint ?? "",
+                 _artworkSession, BrandId: option.BrandId, Icon: option.Icon, ProviderKind: option.Kind,
+-                MetadataActionLabel: localService ? S("ManualConnect") : option.ActionLabel, Website: option.Website);
++                MetadataActionLabel: option.Id == "ollama" && kind == GatewayAiSetupChoiceKind.Prepare && _args?.OllamaSetupFactory is not null
++                    ? SetupLocalization.GetString("Onboarding_OllamaApp_SetUp")
++                    : localService ? S("ManualConnect") : option.ActionLabel, Website: option.Website);
+         }).ToArray();
+ 
+     private void ApiKeys_Click(object sender, RoutedEventArgs e)
+@@ -666,6 +684,8 @@ public sealed partial class AiSetupPage : Page, IAsyncDisposable
+ 
+     private Task StartChoiceAsync(ChoiceRow row, string? key = null, Control? returnFocus = null)
+     {
++        if (row.Kind == GatewayAiSetupChoiceKind.Prepare && row.Id == "ollama" && _args?.OllamaSetupFactory is not null)
++            return StartOllamaChoiceAsync(row, returnFocus);
+         if (_closed || _busy || _localActionBusy || BackdropLocked)
+             return Task.CompletedTask;
+         CaptureProviderBackdrop(returnFocus);
+@@ -681,6 +701,51 @@ public sealed partial class AiSetupPage : Page, IAsyncDisposable
+         });
+     }
+ 
++    private async Task StartOllamaChoiceAsync(ChoiceRow row, Control? returnFocus)
++    {
++        if (_closed || _busy || _localActionBusy || BackdropLocked)
++            return;
++        _localActionBusy = true;
++        try
++        {
++            await RunAsync(async ct =>
++            {
++                if (Client is null || XamlRoot is null || _args?.OllamaSetupFactory is not { } factory)
++                    throw new InvalidOperationException("The current Ollama setup owner is unavailable.");
++                if (_ollamaDialog is not null) await _ollamaDialog.CloseOwnedAsync();
++                if (_ollamaSetup is not null) await _ollamaSetup.DrainAsync();
++                _ollamaLogger?.Dispose();
++                var owned = factory(Client);
++                _ollamaSetup = owned.Setup;
++                _ollamaLogger = owned.Logger;
++                var dialog = new OllamaWindowsSetupDialog();
++                _ollamaDialog = dialog;
++                var result = await dialog.ShowOwnedAsync(XamlRoot, ActualTheme, owned.Setup, ct);
++                owned.Logger.Info("Ollama app setup ended", new
++                {
++                    outcome = result.Result?.Outcome.ToString() ?? "review-dismissed",
++                    installerExitCode = result.Result?.InstallerExitCode,
++                    diagnostic = result.Result?.Diagnostic,
++                    continued = result.ContinueConnection
++                });
++                if (_closed || ct.IsCancellationRequested) return;
++                if (Client.Detection is { } detection) ApplyDetection(detection);
++                if (!result.ContinueConnection) return;
++                CaptureProviderBackdrop(returnFocus);
++                _providerOperationActive = true;
++                _operationTitle = row.Label;
++                if (result.UseDetectedModel && result.Result?.ExistingGatewayCandidate is { } candidate)
++                    Client.SelectCandidate(candidate.Kind, candidate.ModelRef);
++                else
++                    SelectChoice(row);
++                var catalogPreference = _presentation.NativeSessionCatalogPreferenceRequired
++                    ? CatalogPreference.IsChecked == true : (bool?)null;
++                await _controller!.StartSelectedAsync(null, catalogPreference, Render, ct);
++            });
++        }
++        finally { _localActionBusy = false; Render(); }
++    }
++
+     private void ApiKeyFields_SizeChanged(object sender, SizeChangedEventArgs e)
+     {
+         var textScale = new Windows.UI.ViewManagement.UISettings().TextScaleFactor;
+diff --git a/src/OpenClaw.SetupEngine.UI/SetupWindow.xaml.cs b/src/OpenClaw.SetupEngine.UI/SetupWindow.xaml.cs
+index 0b131c6f..d05343e3 100644
+--- a/src/OpenClaw.SetupEngine.UI/SetupWindow.xaml.cs
++++ b/src/OpenClaw.SetupEngine.UI/SetupWindow.xaml.cs
+@@ -722,7 +722,18 @@ public sealed partial class SetupWindow : Window
+                 ConnectionManager: _connectionManager,
+                 CloseSetupWindow: Close,
+                 Loading: _loadingProgress,
+-                ExpectedEndpointBinding: _expectedConfiguredModelRef is null ? AccessDraft.NativeEndpointBinding : null);
++                ExpectedEndpointBinding: _expectedConfiguredModelRef is null ? AccessDraft.NativeEndpointBinding : null)
++        {
++            OllamaSetupFactory = CreateOllamaSetup
++        };
++
++    private (OllamaWindowsSetup Setup, SetupLogger Logger) CreateOllamaSetup(GatewayAiSetupClient client)
++    {
++        var logPath = Path.Combine(_dataDir, "Logs", "Setup", $"ollama-setup-{Guid.NewGuid():N}.jsonl");
++        var logger = new SetupLogger(logPath);
++        return (new OllamaWindowsSetup(
++            new OllamaWindowsAppHost(new CommandRunner(logger), _localDataDir), client, AccessDraft), logger);
++    }
+ 
+     public bool TryNavigateToLegacyWizard()
+     {
+diff --git a/src/OpenClaw.SetupEngine/CommandRunner.cs b/src/OpenClaw.SetupEngine/CommandRunner.cs
+index 08950e28..9c39674f 100644
+--- a/src/OpenClaw.SetupEngine/CommandRunner.cs
++++ b/src/OpenClaw.SetupEngine/CommandRunner.cs
+@@ -9,6 +9,11 @@ public sealed record CommandResult(int ExitCode, string Stdout, string Stderr, T
+ 
+ public interface ICommandRunner
+ {
++    /// <summary>Admission is cancellable; an admitted installer and its external app are never terminated.</summary>
++    Task<CommandResult> RunAdmittedInstallerAsync(
++        string executable, string[] arguments, CancellationToken admissionCancellation) =>
++        throw new NotSupportedException("This command runner cannot retain admitted installer ownership.");
++
+     Task<CommandResult> RunAsync(
+         string executable,
+         string[] arguments,
+@@ -144,6 +149,15 @@ public sealed class CommandRunner : ICommandRunner
+             stdinStream,
+             allowInheritedPipeHandleEscape: true);
+ 
++    /// <summary>
++    /// Waits for the direct installer, not its launched application. Callers retain setup
++    /// ownership until this task settles; cancelling further setup cannot kill deployment.
++    /// </summary>
++    public Task<CommandResult> RunAdmittedInstallerAsync(
++        string executable, string[] arguments, CancellationToken admissionCancellation) =>
++        RunAsyncCore(executable, arguments, Timeout.InfiniteTimeSpan, null, null, null,
++            admissionCancellation, null, allowInheritedPipeHandleEscape: true, admittedInstaller: true);
++
+     private async Task<CommandResult> RunAsyncCore(
+         string executable,
+         string[] arguments,
+@@ -153,7 +167,8 @@ public sealed class CommandRunner : ICommandRunner
+         string? stdinInput,
+         CancellationToken ct,
+         Stream? stdinStream,
+-        bool allowInheritedPipeHandleEscape)
++        bool allowInheritedPipeHandleEscape,
++        bool admittedInstaller = false)
+     {
+         ArgumentNullException.ThrowIfNull(executable);
+         ArgumentNullException.ThrowIfNull(arguments);
+@@ -211,6 +226,9 @@ public sealed class CommandRunner : ICommandRunner
+             else stderr.AppendLine(e.Data);
+         };
+ 
++        if (admittedInstaller)
++            ct.ThrowIfCancellationRequested();
++
+         try
+         {
+             process.Start();
+@@ -226,8 +244,13 @@ public sealed class CommandRunner : ICommandRunner
+         process.BeginOutputReadLine();
+         process.BeginErrorReadLine();
+ 
+-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+-        timeoutCts.CancelAfter(timeout);
++        // Inno can launch a user-owned desktop app before exiting. After admission,
++        // neither cancellation nor a presentation deadline may kill that process tree.
++        using var timeoutCts = admittedInstaller
++            ? new CancellationTokenSource()
++            : CancellationTokenSource.CreateLinkedTokenSource(ct);
++        if (!admittedInstaller)
++            timeoutCts.CancelAfter(timeout);
+ 
+         try
+         {
+@@ -272,11 +295,11 @@ public sealed class CommandRunner : ICommandRunner
+         var outputClosed = Task.WhenAll(stdoutClosed.Task, stderrClosed.Task);
+         await WaitForOutputDrainAsync(
+             outputClosed,
+-            timeout,
++            admittedInstaller ? sw.Elapsed + s_outputDrainCap : timeout,
+             sw.Elapsed,
+             timedOut,
+             allowInheritedPipeHandleEscape,
+-            ct).ConfigureAwait(false);
++            admittedInstaller ? CancellationToken.None : ct).ConfigureAwait(false);
+ 
+         sw.Stop();
+         var result = new CommandResult(
+diff --git a/src/OpenClaw.SetupEngine/OpenClaw.SetupEngine.csproj b/src/OpenClaw.SetupEngine/OpenClaw.SetupEngine.csproj
+index 61197e06..320e9c46 100644
+--- a/src/OpenClaw.SetupEngine/OpenClaw.SetupEngine.csproj
++++ b/src/OpenClaw.SetupEngine/OpenClaw.SetupEngine.csproj
+@@ -22,6 +22,7 @@
+                       LogicalName="OpenClaw.SetupEngine.GatewayCleanupHost.exe" />
+     <InternalsVisibleTo Include="OpenClaw.SetupEngine.Tests" />
+     <InternalsVisibleTo Include="OpenClaw.SetupEngine.UI" />
++    <InternalsVisibleTo Include="OpenClaw.Tray.UITests" />
+     <ProjectReference Include="..\OpenClaw.Connection\OpenClaw.Connection.csproj" />
+     <ProjectReference Include="..\OpenClaw.Shared\OpenClaw.Shared.csproj" />
+   </ItemGroup>
+diff --git a/src/OpenClaw.SetupEngine/SetupAccessDraft.cs b/src/OpenClaw.SetupEngine/SetupAccessDraft.cs
+index f9ccb747..54622a80 100644
+--- a/src/OpenClaw.SetupEngine/SetupAccessDraft.cs
++++ b/src/OpenClaw.SetupEngine/SetupAccessDraft.cs
+@@ -64,6 +64,12 @@ public static class SetupCapabilityProfiles
+ /// </summary>
+ public sealed class SetupAccessDraft
+ {
++    internal OllamaWindowsReviewedIntent? OllamaIntent { get; private set; }
++
++    internal OllamaWindowsReviewedIntent ReviewOllama(
++        OllamaWindowsSetupSnapshot snapshot, OllamaWindowsAction action) =>
++        OllamaIntent = new(snapshot, action);
++
+     public SetupConfig Config { get; }
+     public bool SkipWizardWithoutLocalAi { get; }
+     public SetupGatewayRoute Route { get; private set; } = SetupGatewayRoute.ManagedWsl;
+@@ -113,6 +119,7 @@ public sealed class SetupAccessDraft
+ 
+     public void SelectRoute(SetupGatewayRoute route, bool gatewayAvailable = false)
+     {
++        OllamaIntent = null;
+         IsExistingNativeLocalAi = false;
+         if (route == SetupGatewayRoute.ManagedWsl && Route != SetupGatewayRoute.ManagedWsl)
+             Config.GatewayUrl = _managedGatewayUrl;
+diff --git a/src/OpenClaw.Tray.WinUI/Strings/en-us/Resources.resw b/src/OpenClaw.Tray.WinUI/Strings/en-us/Resources.resw
+index b7f363b5..cb4aa8ab 100644
+--- a/src/OpenClaw.Tray.WinUI/Strings/en-us/Resources.resw
++++ b/src/OpenClaw.Tray.WinUI/Strings/en-us/Resources.resw
+@@ -8309,4 +8309,115 @@ After enrolling, return to Settings &gt; Windows Update and check for updates. I
+   <data name="Onboarding_AiSetup_GetLlamaApp" xml:space="preserve"><value>Get Llama.app</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppGuide" xml:space="preserve"><value>API setup guide</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppProviderDetail" xml:space="preserve"><value>Connect to the app-owned API. Existing models, providers and defaults are preserved until you explicitly choose a model.</value></data>
++  <data name="Onboarding_OllamaApp_Title" xml:space="preserve">
++    <value>Set up Ollama</value>
++  </data>
++  <data name="Onboarding_OllamaApp_SetUp" xml:space="preserve">
++    <value>Set up</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Consent" xml:space="preserve">
++    <value>Allow the app download and installation, including acceptance of the package and Microsoft WinGet source agreements.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_License" xml:space="preserve">
++    <value>Ollama package license</value>
++  </data>
++  <data name="Onboarding_OllamaApp_SourceInfo" xml:space="preserve">
++    <value>About Microsoft WinGet</value>
++  </data>
++  <data name="Onboarding_OllamaApp_DownloadDetails" xml:space="preserve">
++    <value>Download details</value>
++  </data>
++  <data name="Onboarding_OllamaApp_DownloadIdentity" xml:space="preserve">
++    <value>Version {0} from Microsoft WinGet, package {1}. The installer must match the reviewed hash and be signed by Ollama Inc.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ReviewInstall" xml:space="preserve">
++    <value>Download and install Ollama {0} on this PC (at least 4 GB). The installer adds shortcuts and a command, and starts Ollama. Models are not included. Keep other local model servers stopped until installation finishes.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ReviewOpen" xml:space="preserve">
++    <value>An installed Ollama app was verified on this PC, but it is not active at the checked local address. Open it, then check the selected Gateway. This does not reinstall the app or download models.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ReviewBeforeAction" xml:space="preserve">
++    <value>This review covers the app action only. It does not authorize model downloads or changes to Gateway connection settings.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Checking" xml:space="preserve">
++    <value>Checking the selected Gateway and this PC…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Downloading" xml:space="preserve">
++    <value>Downloading the reviewed Ollama installer…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Installing" xml:space="preserve">
++    <value>Windows is installing Ollama. Its app will start automatically.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Opening" xml:space="preserve">
++    <value>Opening the installed Ollama app…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_RecheckingGateway" xml:space="preserve">
++    <value>Checking again from the selected Gateway…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_UseDetected" xml:space="preserve">
++    <value>Use detected model</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Install" xml:space="preserve">
++    <value>Install and open Ollama</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Open" xml:space="preserve">
++    <value>Open Ollama</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CheckAgain" xml:space="preserve">
++    <value>Check again</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ConnectionSetup" xml:space="preserve">
++    <value>Connection setup</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CancelPendingButton" xml:space="preserve">
++    <value>Finishing current step</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CancelFurther" xml:space="preserve">
++    <value>Cancel further setup</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Cancel" xml:space="preserve">
++    <value>Cancel</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Close" xml:space="preserve">
++    <value>Close</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CancelPending" xml:space="preserve">
++    <value>Further setup is cancelled. Waiting for the current step to finish; any installed app and models will be kept.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_ReusedExistingService" xml:space="preserve">
++    <value>The selected Gateway found an existing Ollama model. You can use it without installing or starting an app.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_AppReadyNeedsModel" xml:space="preserve">
++    <value>Ollama is reachable on this PC, but no usable local chat model was found. Choose a model in Ollama or continue to connection setup. Model downloads require a separate confirmation.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_GatewayReadinessUnknown" xml:space="preserve">
++    <value>Ollama is reachable on this PC. The selected Gateway has not yet confirmed a usable model at its own address. Continue to connection setup or check again.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_WaitingForApp" xml:space="preserve">
++    <value>Ollama is not ready for connection yet. If it is already open, let it finish starting, then check again. This step will not launch another copy.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_InspectionRequired" xml:space="preserve">
++    <value>We could not confirm Ollama’s installation or activity on this PC. No install or app launch was attempted. Check the details or connect to an existing server.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_CancelledBeforeMutation" xml:space="preserve">
++    <value>Setup stopped before an app action was admitted.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_CancelledInstallationPresent" xml:space="preserve">
++    <value>Further setup was cancelled. Ollama is installed and has been kept. Check again when you want to connect it.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_InstallationOutcomeUnknown" xml:space="preserve">
++    <value>The installation did not finish with a verified result. Windows may have installed some or all of Ollama. Check again before retrying; nothing will be uninstalled.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_Failed" xml:space="preserve">
++    <value>This step could not finish. Review the details, then check again or use connection setup.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CheckDetails" xml:space="preserve">
++    <value>Check details</value>
++  </data>
++  <data name="Onboarding_OllamaApp_InstallerConflict" xml:space="preserve">
++    <value>A llama.cpp server is active or may still be running on this PC. The Ollama installer can stop it. Stop that runtime through its current owner before installing Ollama, then check again. Companion will not stop it for you.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_DetectedModel" xml:space="preserve">
++    <value>Detected model: {0}</value>
++  </data>
+ </root>
+diff --git a/src/OpenClaw.Tray.WinUI/Strings/fr-fr/Resources.resw b/src/OpenClaw.Tray.WinUI/Strings/fr-fr/Resources.resw
+index a5eca27e..ce77799b 100644
+--- a/src/OpenClaw.Tray.WinUI/Strings/fr-fr/Resources.resw
++++ b/src/OpenClaw.Tray.WinUI/Strings/fr-fr/Resources.resw
+@@ -8242,4 +8242,115 @@ Après votre inscription, revenez dans Paramètres &gt; Windows Update et recher
+   <data name="Onboarding_AiSetup_GetLlamaApp" xml:space="preserve"><value>Obtenir Llama.app</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppGuide" xml:space="preserve"><value>Guide de configuration API</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppProviderDetail" xml:space="preserve"><value>Connectez l’API gérée par l’application. Les modèles, fournisseurs et valeurs par défaut existants sont conservés jusqu’à votre choix explicite d’un modèle.</value></data>
++  <data name="Onboarding_OllamaApp_Title" xml:space="preserve">
++    <value>Configurer Ollama</value>
++  </data>
++  <data name="Onboarding_OllamaApp_SetUp" xml:space="preserve">
++    <value>Configurer</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Consent" xml:space="preserve">
++    <value>Autoriser le téléchargement et l’installation de l’application, y compris l’acceptation des accords du paquet et de la source Microsoft WinGet.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_License" xml:space="preserve">
++    <value>Licence du paquet Ollama</value>
++  </data>
++  <data name="Onboarding_OllamaApp_SourceInfo" xml:space="preserve">
++    <value>À propos de Microsoft WinGet</value>
++  </data>
++  <data name="Onboarding_OllamaApp_DownloadDetails" xml:space="preserve">
++    <value>Détails du téléchargement</value>
++  </data>
++  <data name="Onboarding_OllamaApp_DownloadIdentity" xml:space="preserve">
++    <value>Version {0} de Microsoft WinGet, paquet {1}. L’installateur doit correspondre à l’empreinte vérifiée et être signé par Ollama Inc.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ReviewInstall" xml:space="preserve">
++    <value>Télécharger et installer Ollama {0} sur ce PC (au moins 4 Go). L’installateur ajoute des raccourcis et une commande, puis démarre Ollama. Les modèles ne sont pas inclus. Gardez les autres serveurs de modèles locaux arrêtés jusqu’à la fin de l’installation.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ReviewOpen" xml:space="preserve">
++    <value>Une application Ollama installée a été vérifiée sur ce PC, mais elle n’est pas active à l’adresse locale vérifiée. Ouvrez-la, puis vérifiez la passerelle sélectionnée. Cela ne réinstalle pas l’application et ne télécharge aucun modèle.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ReviewBeforeAction" xml:space="preserve">
++    <value>Cette confirmation concerne uniquement l’application. Elle n’autorise ni téléchargement de modèles ni modification des paramètres de connexion de la passerelle.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Checking" xml:space="preserve">
++    <value>Vérification de la passerelle sélectionnée et de ce PC…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Downloading" xml:space="preserve">
++    <value>Téléchargement de l’installateur Ollama vérifié…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Installing" xml:space="preserve">
++    <value>Windows installe Ollama. L’application démarrera automatiquement.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Opening" xml:space="preserve">
++    <value>Ouverture de l’application Ollama installée…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_RecheckingGateway" xml:space="preserve">
++    <value>Nouvelle vérification depuis la passerelle sélectionnée…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_UseDetected" xml:space="preserve">
++    <value>Utiliser le modèle détecté</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Install" xml:space="preserve">
++    <value>Installer et ouvrir Ollama</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Open" xml:space="preserve">
++    <value>Ouvrir Ollama</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CheckAgain" xml:space="preserve">
++    <value>Vérifier à nouveau</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ConnectionSetup" xml:space="preserve">
++    <value>Configurer la connexion</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CancelPendingButton" xml:space="preserve">
++    <value>Fin de l’étape en cours</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CancelFurther" xml:space="preserve">
++    <value>Annuler la suite</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Cancel" xml:space="preserve">
++    <value>Annuler</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Close" xml:space="preserve">
++    <value>Fermer</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CancelPending" xml:space="preserve">
++    <value>La suite est annulée. Attente de la fin de l’étape en cours ; l’application installée et les modèles seront conservés.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_ReusedExistingService" xml:space="preserve">
++    <value>La passerelle sélectionnée a trouvé un modèle Ollama existant. Vous pouvez l’utiliser sans installer ni démarrer d’application.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_AppReadyNeedsModel" xml:space="preserve">
++    <value>Ollama est accessible sur ce PC, mais aucun modèle local de discussion utilisable n’a été trouvé. Choisissez un modèle dans Ollama ou configurez la connexion. Les téléchargements de modèles demandent une confirmation distincte.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_GatewayReadinessUnknown" xml:space="preserve">
++    <value>Ollama est accessible sur ce PC. La passerelle sélectionnée n’a pas encore confirmé de modèle utilisable à sa propre adresse. Configurez la connexion ou vérifiez à nouveau.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_WaitingForApp" xml:space="preserve">
++    <value>Ollama n’est pas encore prêt pour la connexion. S’il est déjà ouvert, attendez la fin du démarrage, puis vérifiez à nouveau. Cette étape ne lancera pas une autre instance.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_InspectionRequired" xml:space="preserve">
++    <value>L’installation ou l’activité d’Ollama sur ce PC n’a pas pu être confirmée. Aucune installation ni ouverture n’a été tentée. Consultez les détails ou connectez-vous à un serveur existant.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_CancelledBeforeMutation" xml:space="preserve">
++    <value>La configuration s’est arrêtée avant l’autorisation d’une action sur l’application.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_CancelledInstallationPresent" xml:space="preserve">
++    <value>La suite a été annulée. Ollama est installé et a été conservé. Vérifiez à nouveau lorsque vous souhaitez le connecter.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_InstallationOutcomeUnknown" xml:space="preserve">
++    <value>L’installation n’a pas produit de résultat vérifié. Windows a peut-être installé Ollama en partie ou en totalité. Vérifiez à nouveau avant de réessayer ; rien ne sera désinstallé.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_Failed" xml:space="preserve">
++    <value>Cette étape n’a pas pu aboutir. Consultez les détails, puis vérifiez à nouveau ou configurez la connexion.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CheckDetails" xml:space="preserve">
++    <value>Détails de la vérification</value>
++  </data>
++  <data name="Onboarding_OllamaApp_InstallerConflict" xml:space="preserve">
++    <value>Un serveur llama.cpp est actif ou peut encore fonctionner sur ce PC. L’installateur Ollama peut l’arrêter. Arrêtez-le depuis son gestionnaire actuel avant d’installer Ollama, puis vérifiez à nouveau. Companion ne l’arrêtera pas à votre place.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_DetectedModel" xml:space="preserve">
++    <value>Modèle détecté : {0}</value>
++  </data>
+ </root>
+diff --git a/src/OpenClaw.Tray.WinUI/Strings/nl-nl/Resources.resw b/src/OpenClaw.Tray.WinUI/Strings/nl-nl/Resources.resw
+index 890a7a81..80dda73d 100644
+--- a/src/OpenClaw.Tray.WinUI/Strings/nl-nl/Resources.resw
++++ b/src/OpenClaw.Tray.WinUI/Strings/nl-nl/Resources.resw
+@@ -8243,4 +8243,115 @@ Ga na inschrijving terug naar Instellingen &gt; Windows Update en controleer op
+   <data name="Onboarding_AiSetup_GetLlamaApp" xml:space="preserve"><value>Llama.app downloaden</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppGuide" xml:space="preserve"><value>API-configuratiegids</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppProviderDetail" xml:space="preserve"><value>Verbind met de API die de app beheert. Bestaande modellen, providers en standaardinstellingen blijven behouden totdat u expliciet een model kiest.</value></data>
++  <data name="Onboarding_OllamaApp_Title" xml:space="preserve">
++    <value>Ollama instellen</value>
++  </data>
++  <data name="Onboarding_OllamaApp_SetUp" xml:space="preserve">
++    <value>Instellen</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Consent" xml:space="preserve">
++    <value>Sta het downloaden en installeren van de app toe, inclusief de pakketovereenkomst en de bronovereenkomst van Microsoft WinGet.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_License" xml:space="preserve">
++    <value>Licentie van het Ollama-pakket</value>
++  </data>
++  <data name="Onboarding_OllamaApp_SourceInfo" xml:space="preserve">
++    <value>Over Microsoft WinGet</value>
++  </data>
++  <data name="Onboarding_OllamaApp_DownloadDetails" xml:space="preserve">
++    <value>Downloaddetails</value>
++  </data>
++  <data name="Onboarding_OllamaApp_DownloadIdentity" xml:space="preserve">
++    <value>Versie {0} uit Microsoft WinGet, pakket {1}. Het installatiebestand moet overeenkomen met de gecontroleerde hash en zijn ondertekend door Ollama Inc.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ReviewInstall" xml:space="preserve">
++    <value>Download en installeer Ollama {0} op deze pc (minimaal 4 GB). Het installatieprogramma voegt snelkoppelingen en een opdracht toe en start Ollama. Modellen zijn niet inbegrepen. Laat andere lokale modelservers uitgeschakeld totdat de installatie klaar is.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ReviewOpen" xml:space="preserve">
++    <value>Een geïnstalleerde Ollama-app is op deze pc geverifieerd, maar is niet actief op het gecontroleerde lokale adres. Open de app en controleer daarna de geselecteerde Gateway. Dit installeert de app niet opnieuw en downloadt geen modellen.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ReviewBeforeAction" xml:space="preserve">
++    <value>Deze bevestiging geldt alleen voor de app. Ze geeft geen toestemming voor modeldownloads of wijzigingen aan de Gateway-verbinding.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Checking" xml:space="preserve">
++    <value>De geselecteerde Gateway en deze pc controleren…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Downloading" xml:space="preserve">
++    <value>Het gecontroleerde Ollama-installatiebestand downloaden…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Installing" xml:space="preserve">
++    <value>Windows installeert Ollama. De app start automatisch.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Opening" xml:space="preserve">
++    <value>De geïnstalleerde Ollama-app openen…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_RecheckingGateway" xml:space="preserve">
++    <value>Opnieuw controleren vanuit de geselecteerde Gateway…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_UseDetected" xml:space="preserve">
++    <value>Gevonden model gebruiken</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Install" xml:space="preserve">
++    <value>Ollama installeren en openen</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Open" xml:space="preserve">
++    <value>Ollama openen</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CheckAgain" xml:space="preserve">
++    <value>Opnieuw controleren</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ConnectionSetup" xml:space="preserve">
++    <value>Verbinding instellen</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CancelPendingButton" xml:space="preserve">
++    <value>Huidige stap afronden</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CancelFurther" xml:space="preserve">
++    <value>Verdere installatie annuleren</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Cancel" xml:space="preserve">
++    <value>Annuleren</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Close" xml:space="preserve">
++    <value>Sluiten</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CancelPending" xml:space="preserve">
++    <value>Verdere stappen zijn geannuleerd. De huidige stap wordt afgerond; de geïnstalleerde app en modellen blijven behouden.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_ReusedExistingService" xml:space="preserve">
++    <value>De geselecteerde Gateway heeft een bestaand Ollama-model gevonden. U kunt het gebruiken zonder een app te installeren of te starten.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_AppReadyNeedsModel" xml:space="preserve">
++    <value>Ollama is bereikbaar op deze pc, maar er is geen bruikbaar lokaal chatmodel gevonden. Kies een model in Ollama of ga verder met het instellen van de verbinding. Modeldownloads vereisen aparte toestemming.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_GatewayReadinessUnknown" xml:space="preserve">
++    <value>Ollama is bereikbaar op deze pc. De geselecteerde Gateway heeft nog geen bruikbaar model op zijn eigen adres bevestigd. Stel de verbinding in of controleer opnieuw.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_WaitingForApp" xml:space="preserve">
++    <value>Ollama is nog niet klaar voor verbinding. Als de app al open is, wacht dan tot het opstarten klaar is en controleer opnieuw. Deze stap start geen tweede exemplaar.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_InspectionRequired" xml:space="preserve">
++    <value>De installatie of activiteit van Ollama op deze pc kon niet worden bevestigd. Er is geen installatie of appstart geprobeerd. Bekijk de details of verbind met een bestaande server.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_CancelledBeforeMutation" xml:space="preserve">
++    <value>De configuratie is gestopt voordat een appactie werd toegelaten.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_CancelledInstallationPresent" xml:space="preserve">
++    <value>Verdere stappen zijn geannuleerd. Ollama is geïnstalleerd en behouden. Controleer opnieuw wanneer u verbinding wilt maken.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_InstallationOutcomeUnknown" xml:space="preserve">
++    <value>De installatie heeft geen geverifieerd resultaat opgeleverd. Windows kan Ollama gedeeltelijk of volledig hebben geïnstalleerd. Controleer opnieuw voordat u opnieuw probeert; er wordt niets verwijderd.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_Failed" xml:space="preserve">
++    <value>Deze stap kon niet worden afgerond. Bekijk de details en controleer opnieuw of stel de verbinding in.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CheckDetails" xml:space="preserve">
++    <value>Controledetails</value>
++  </data>
++  <data name="Onboarding_OllamaApp_InstallerConflict" xml:space="preserve">
++    <value>Er is een llama.cpp-server actief of mogelijk nog actief op deze pc. Het Ollama-installatieprogramma kan deze stoppen. Stop die runtime via de huidige beheerder voordat u Ollama installeert en controleer daarna opnieuw. Companion stopt deze niet voor u.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_DetectedModel" xml:space="preserve">
++    <value>Gevonden model: {0}</value>
++  </data>
+ </root>
+diff --git a/src/OpenClaw.Tray.WinUI/Strings/pt-br/Resources.resw b/src/OpenClaw.Tray.WinUI/Strings/pt-br/Resources.resw
+index 5bac5438..901b8dbc 100644
+--- a/src/OpenClaw.Tray.WinUI/Strings/pt-br/Resources.resw
++++ b/src/OpenClaw.Tray.WinUI/Strings/pt-br/Resources.resw
+@@ -8294,4 +8294,115 @@ Após a inscrição, volte para Configurações &gt; Windows Update e verifique
+   <data name="Onboarding_AiSetup_GetLlamaApp" xml:space="preserve"><value>Obter Llama.app</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppGuide" xml:space="preserve"><value>Guia de configuração da API</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppProviderDetail" xml:space="preserve"><value>Conecte à API gerenciada pelo aplicativo. Modelos, provedores e padrões existentes são preservados até você escolher um modelo explicitamente.</value></data>
++  <data name="Onboarding_OllamaApp_Title" xml:space="preserve">
++    <value>Configurar o Ollama</value>
++  </data>
++  <data name="Onboarding_OllamaApp_SetUp" xml:space="preserve">
++    <value>Configurar</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Consent" xml:space="preserve">
++    <value>Permitir o download e a instalação do aplicativo, incluindo a aceitação dos contratos do pacote e da fonte Microsoft WinGet.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_License" xml:space="preserve">
++    <value>Licença do pacote Ollama</value>
++  </data>
++  <data name="Onboarding_OllamaApp_SourceInfo" xml:space="preserve">
++    <value>Sobre o Microsoft WinGet</value>
++  </data>
++  <data name="Onboarding_OllamaApp_DownloadDetails" xml:space="preserve">
++    <value>Detalhes do download</value>
++  </data>
++  <data name="Onboarding_OllamaApp_DownloadIdentity" xml:space="preserve">
++    <value>Versão {0} do Microsoft WinGet, pacote {1}. O instalador deve corresponder ao hash revisado e ser assinado pela Ollama Inc.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ReviewInstall" xml:space="preserve">
++    <value>Baixar e instalar o Ollama {0} neste computador (pelo menos 4 GB). O instalador adiciona atalhos e um comando e inicia o Ollama. Os modelos não estão incluídos. Mantenha os outros servidores de modelos locais parados até a instalação terminar.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ReviewOpen" xml:space="preserve">
++    <value>Um aplicativo Ollama instalado foi verificado neste computador, mas não está ativo no endereço local consultado. Abra-o e verifique o Gateway selecionado. Isso não reinstala o aplicativo nem baixa modelos.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ReviewBeforeAction" xml:space="preserve">
++    <value>Esta confirmação abrange apenas a ação do aplicativo. Ela não autoriza downloads de modelos nem alterações nas configurações de conexão do Gateway.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Checking" xml:space="preserve">
++    <value>Verificando o Gateway selecionado e este computador…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Downloading" xml:space="preserve">
++    <value>Baixando o instalador revisado do Ollama…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Installing" xml:space="preserve">
++    <value>O Windows está instalando o Ollama. O aplicativo será iniciado automaticamente.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Opening" xml:space="preserve">
++    <value>Abrindo o aplicativo Ollama instalado…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_RecheckingGateway" xml:space="preserve">
++    <value>Verificando novamente pelo Gateway selecionado…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_UseDetected" xml:space="preserve">
++    <value>Usar o modelo detectado</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Install" xml:space="preserve">
++    <value>Instalar e abrir o Ollama</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Open" xml:space="preserve">
++    <value>Abrir o Ollama</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CheckAgain" xml:space="preserve">
++    <value>Verificar novamente</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ConnectionSetup" xml:space="preserve">
++    <value>Configurar conexão</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CancelPendingButton" xml:space="preserve">
++    <value>Concluindo a etapa atual</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CancelFurther" xml:space="preserve">
++    <value>Cancelar as próximas etapas</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Cancel" xml:space="preserve">
++    <value>Cancelar</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Close" xml:space="preserve">
++    <value>Fechar</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CancelPending" xml:space="preserve">
++    <value>As próximas etapas foram canceladas. Aguardando a etapa atual terminar; o aplicativo instalado e os modelos serão mantidos.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_ReusedExistingService" xml:space="preserve">
++    <value>O Gateway selecionado encontrou um modelo Ollama existente. Você pode usá-lo sem instalar ou iniciar um aplicativo.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_AppReadyNeedsModel" xml:space="preserve">
++    <value>O Ollama está acessível neste computador, mas nenhum modelo local de conversa utilizável foi encontrado. Escolha um modelo no Ollama ou continue para a configuração da conexão. Downloads de modelos exigem outra confirmação.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_GatewayReadinessUnknown" xml:space="preserve">
++    <value>O Ollama está acessível neste computador. O Gateway selecionado ainda não confirmou um modelo utilizável no endereço dele. Continue para configurar a conexão ou verifique novamente.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_WaitingForApp" xml:space="preserve">
++    <value>O Ollama ainda não está pronto para conexão. Se já estiver aberto, aguarde a inicialização e verifique novamente. Esta etapa não iniciará outra cópia.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_InspectionRequired" xml:space="preserve">
++    <value>Não foi possível confirmar a instalação ou a atividade do Ollama neste computador. Nenhuma instalação ou abertura foi tentada. Consulte os detalhes ou conecte-se a um servidor existente.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_CancelledBeforeMutation" xml:space="preserve">
++    <value>A configuração parou antes de uma ação do aplicativo ser iniciada.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_CancelledInstallationPresent" xml:space="preserve">
++    <value>As próximas etapas foram canceladas. O Ollama está instalado e foi mantido. Verifique novamente quando quiser conectá-lo.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_InstallationOutcomeUnknown" xml:space="preserve">
++    <value>A instalação não terminou com um resultado verificado. O Windows pode ter instalado parte ou todo o Ollama. Verifique novamente antes de tentar de novo; nada será desinstalado.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_Failed" xml:space="preserve">
++    <value>Não foi possível concluir esta etapa. Consulte os detalhes e verifique novamente ou configure a conexão.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CheckDetails" xml:space="preserve">
++    <value>Detalhes da verificação</value>
++  </data>
++  <data name="Onboarding_OllamaApp_InstallerConflict" xml:space="preserve">
++    <value>Um servidor llama.cpp está ativo ou pode ainda estar em execução neste computador. O instalador do Ollama pode encerrá-lo. Pare esse ambiente pelo gerenciador atual antes de instalar o Ollama e verifique novamente. O Companion não o encerrará por você.</value>
++  </data>
++  <data name="Onboarding_OllamaApp_DetectedModel" xml:space="preserve">
++    <value>Modelo detectado: {0}</value>
++  </data>
+ </root>
+diff --git a/src/OpenClaw.Tray.WinUI/Strings/zh-cn/Resources.resw b/src/OpenClaw.Tray.WinUI/Strings/zh-cn/Resources.resw
+index f873e9cf..71b8b781 100644
+--- a/src/OpenClaw.Tray.WinUI/Strings/zh-cn/Resources.resw
++++ b/src/OpenClaw.Tray.WinUI/Strings/zh-cn/Resources.resw
+@@ -8242,4 +8242,115 @@
+   <data name="Onboarding_AiSetup_GetLlamaApp" xml:space="preserve"><value>获取 Llama.app</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppGuide" xml:space="preserve"><value>API 设置指南</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppProviderDetail" xml:space="preserve"><value>连接应用管理的 API。在您明确选择模型之前，现有模型、提供商和默认设置保持不变。</value></data>
++  <data name="Onboarding_OllamaApp_Title" xml:space="preserve">
++    <value>设置 Ollama</value>
++  </data>
++  <data name="Onboarding_OllamaApp_SetUp" xml:space="preserve">
++    <value>设置</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Consent" xml:space="preserve">
++    <value>允许下载和安装应用，并接受软件包及 Microsoft WinGet 源的相关协议。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_License" xml:space="preserve">
++    <value>Ollama 软件包许可证</value>
++  </data>
++  <data name="Onboarding_OllamaApp_SourceInfo" xml:space="preserve">
++    <value>关于 Microsoft WinGet</value>
++  </data>
++  <data name="Onboarding_OllamaApp_DownloadDetails" xml:space="preserve">
++    <value>下载详情</value>
++  </data>
++  <data name="Onboarding_OllamaApp_DownloadIdentity" xml:space="preserve">
++    <value>来自 Microsoft WinGet 的版本 {0}，软件包 {1}。安装程序必须匹配已审核的哈希值，并由 Ollama Inc. 签名。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ReviewInstall" xml:space="preserve">
++    <value>在此电脑上下载并安装 Ollama {0}（至少需要 4 GB）。安装程序会添加快捷方式和命令，并启动 Ollama。不包含模型。 安装完成前，请勿启动其他本地模型服务器。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ReviewOpen" xml:space="preserve">
++    <value>已验证此电脑上安装的 Ollama 应用，但它在所检查的本地地址上尚未运行。打开应用，然后检查所选网关。这不会重新安装应用或下载模型。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ReviewBeforeAction" xml:space="preserve">
++    <value>此确认仅适用于应用操作，不授权下载模型或更改网关连接设置。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Checking" xml:space="preserve">
++    <value>正在检查所选网关和此电脑…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Downloading" xml:space="preserve">
++    <value>正在下载已审核的 Ollama 安装程序…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Installing" xml:space="preserve">
++    <value>Windows 正在安装 Ollama。应用将自动启动。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Opening" xml:space="preserve">
++    <value>正在打开已安装的 Ollama 应用…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_RecheckingGateway" xml:space="preserve">
++    <value>正在从所选网关再次检查…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_UseDetected" xml:space="preserve">
++    <value>使用检测到的模型</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Install" xml:space="preserve">
++    <value>安装并打开 Ollama</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Open" xml:space="preserve">
++    <value>打开 Ollama</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CheckAgain" xml:space="preserve">
++    <value>再次检查</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ConnectionSetup" xml:space="preserve">
++    <value>连接设置</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CancelPendingButton" xml:space="preserve">
++    <value>正在完成当前步骤</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CancelFurther" xml:space="preserve">
++    <value>取消后续设置</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Cancel" xml:space="preserve">
++    <value>取消</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Close" xml:space="preserve">
++    <value>关闭</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CancelPending" xml:space="preserve">
++    <value>后续设置已取消。正在等待当前步骤完成；已安装的应用和模型将保留。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_ReusedExistingService" xml:space="preserve">
++    <value>所选网关找到了现有 Ollama 模型。无需安装或启动应用即可使用它。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_AppReadyNeedsModel" xml:space="preserve">
++    <value>此电脑上的 Ollama 可以连接，但未找到可用的本地聊天模型。请在 Ollama 中选择模型，或继续设置连接。下载模型需要单独确认。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_GatewayReadinessUnknown" xml:space="preserve">
++    <value>此电脑上的 Ollama 可以连接，但所选网关尚未在它使用的地址上确认可用模型。请继续设置连接或再次检查。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_WaitingForApp" xml:space="preserve">
++    <value>Ollama 尚未准备好连接。如果应用已经打开，请等待启动完成后再次检查。此步骤不会再启动一个实例。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_InspectionRequired" xml:space="preserve">
++    <value>无法确认此电脑上的 Ollama 安装或运行状态。尚未尝试安装或启动应用。请查看详情，或连接现有服务器。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_CancelledBeforeMutation" xml:space="preserve">
++    <value>设置已在应用操作获准执行前停止。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_CancelledInstallationPresent" xml:space="preserve">
++    <value>后续设置已取消。Ollama 已安装并保留。需要连接时请再次检查。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_InstallationOutcomeUnknown" xml:space="preserve">
++    <value>安装尚未得到已验证的结果。Windows 可能已安装部分或全部 Ollama。重试前请再次检查；不会卸载任何内容。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_Failed" xml:space="preserve">
++    <value>无法完成此步骤。请查看详情，然后再次检查或设置连接。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CheckDetails" xml:space="preserve">
++    <value>检查详情</value>
++  </data>
++  <data name="Onboarding_OllamaApp_InstallerConflict" xml:space="preserve">
++    <value>此电脑上的 llama.cpp 服务器正在运行或可能仍在运行。Ollama 安装程序可能会将其停止。请先通过该服务当前的管理程序停止它，再安装 Ollama，然后再次检查。Companion 不会替您停止该服务。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_DetectedModel" xml:space="preserve">
++    <value>检测到的模型：{0}</value>
++  </data>
+ </root>
+diff --git a/src/OpenClaw.Tray.WinUI/Strings/zh-tw/Resources.resw b/src/OpenClaw.Tray.WinUI/Strings/zh-tw/Resources.resw
+index af6a3399..7380ec59 100644
+--- a/src/OpenClaw.Tray.WinUI/Strings/zh-tw/Resources.resw
++++ b/src/OpenClaw.Tray.WinUI/Strings/zh-tw/Resources.resw
+@@ -8242,4 +8242,115 @@
+   <data name="Onboarding_AiSetup_GetLlamaApp" xml:space="preserve"><value>取得 Llama.app</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppGuide" xml:space="preserve"><value>API 設定指南</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppProviderDetail" xml:space="preserve"><value>連線至應用程式管理的 API。在您明確選擇模型之前，現有模型、提供者與預設設定保持不變。</value></data>
++  <data name="Onboarding_OllamaApp_Title" xml:space="preserve">
++    <value>設定 Ollama</value>
++  </data>
++  <data name="Onboarding_OllamaApp_SetUp" xml:space="preserve">
++    <value>設定</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Consent" xml:space="preserve">
++    <value>允許下載及安裝應用程式，並接受套件及 Microsoft WinGet 來源的相關合約。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_License" xml:space="preserve">
++    <value>Ollama 套件授權條款</value>
++  </data>
++  <data name="Onboarding_OllamaApp_SourceInfo" xml:space="preserve">
++    <value>關於 Microsoft WinGet</value>
++  </data>
++  <data name="Onboarding_OllamaApp_DownloadDetails" xml:space="preserve">
++    <value>下載詳細資料</value>
++  </data>
++  <data name="Onboarding_OllamaApp_DownloadIdentity" xml:space="preserve">
++    <value>來自 Microsoft WinGet 的版本 {0}，套件 {1}。安裝程式必須符合已審核的雜湊值，並由 Ollama Inc. 簽署。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ReviewInstall" xml:space="preserve">
++    <value>在這部電腦下載並安裝 Ollama {0}（至少需要 4 GB）。安裝程式會新增捷徑及命令，並啟動 Ollama。不包含模型。 安裝完成前，請勿啟動其他本機模型伺服器。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ReviewOpen" xml:space="preserve">
++    <value>已驗證這部電腦安裝的 Ollama 應用程式，但它在檢查的本機位址尚未執行。開啟應用程式，然後檢查所選 Gateway。這不會重新安裝應用程式或下載模型。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ReviewBeforeAction" xml:space="preserve">
++    <value>此確認僅適用於應用程式操作，不授權下載模型或變更 Gateway 連線設定。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Checking" xml:space="preserve">
++    <value>正在檢查所選 Gateway 與這部電腦…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Downloading" xml:space="preserve">
++    <value>正在下載已審核的 Ollama 安裝程式…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Installing" xml:space="preserve">
++    <value>Windows 正在安裝 Ollama。應用程式將自動啟動。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Opening" xml:space="preserve">
++    <value>正在開啟已安裝的 Ollama 應用程式…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_RecheckingGateway" xml:space="preserve">
++    <value>正在從所選 Gateway 再次檢查…</value>
++  </data>
++  <data name="Onboarding_OllamaApp_UseDetected" xml:space="preserve">
++    <value>使用偵測到的模型</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Install" xml:space="preserve">
++    <value>安裝並開啟 Ollama</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Open" xml:space="preserve">
++    <value>開啟 Ollama</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CheckAgain" xml:space="preserve">
++    <value>再次檢查</value>
++  </data>
++  <data name="Onboarding_OllamaApp_ConnectionSetup" xml:space="preserve">
++    <value>連線設定</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CancelPendingButton" xml:space="preserve">
++    <value>正在完成目前步驟</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CancelFurther" xml:space="preserve">
++    <value>取消後續設定</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Cancel" xml:space="preserve">
++    <value>取消</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Close" xml:space="preserve">
++    <value>關閉</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CancelPending" xml:space="preserve">
++    <value>後續設定已取消。正在等待目前步驟完成；已安裝的應用程式及模型會保留。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_ReusedExistingService" xml:space="preserve">
++    <value>所選 Gateway 找到了現有的 Ollama 模型。您不必安裝或啟動應用程式即可使用它。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_AppReadyNeedsModel" xml:space="preserve">
++    <value>這部電腦上的 Ollama 可以連線，但未找到可用的本機聊天模型。請在 Ollama 選擇模型，或繼續設定連線。下載模型需要另外確認。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_GatewayReadinessUnknown" xml:space="preserve">
++    <value>這部電腦上的 Ollama 可以連線，但所選 Gateway 尚未在它使用的位址確認可用模型。請繼續設定連線或再次檢查。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_WaitingForApp" xml:space="preserve">
++    <value>Ollama 尚未準備好連線。如果應用程式已開啟，請等待啟動完成後再次檢查。此步驟不會再啟動另一個執行個體。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_InspectionRequired" xml:space="preserve">
++    <value>無法確認這部電腦上的 Ollama 安裝或執行狀態。尚未嘗試安裝或啟動應用程式。請查看詳細資料，或連線至現有伺服器。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_CancelledBeforeMutation" xml:space="preserve">
++    <value>設定已在應用程式操作獲准執行前停止。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_CancelledInstallationPresent" xml:space="preserve">
++    <value>後續設定已取消。Ollama 已安裝並保留。需要連線時請再次檢查。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_InstallationOutcomeUnknown" xml:space="preserve">
++    <value>安裝尚未取得已驗證的結果。Windows 可能已安裝部分或全部 Ollama。重試前請再次檢查；不會解除安裝任何內容。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_Outcome_Failed" xml:space="preserve">
++    <value>無法完成此步驟。請查看詳細資料，然後再次檢查或設定連線。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_CheckDetails" xml:space="preserve">
++    <value>檢查詳細資料</value>
++  </data>
++  <data name="Onboarding_OllamaApp_InstallerConflict" xml:space="preserve">
++    <value>這部電腦上的 llama.cpp 伺服器正在執行或可能仍在執行。Ollama 安裝程式可能會將其停止。請先透過該服務目前的管理程式停止它，再安裝 Ollama，然後再次檢查。Companion 不會替您停止該服務。</value>
++  </data>
++  <data name="Onboarding_OllamaApp_DetectedModel" xml:space="preserve">
++    <value>偵測到的模型：{0}</value>
++  </data>
+ </root>
+diff --git a/tests/OpenClaw.SetupEngine.Tests/CommandRunnerTests.cs b/tests/OpenClaw.SetupEngine.Tests/CommandRunnerTests.cs
+index 92fe9829..1f7643dc 100644
+--- a/tests/OpenClaw.SetupEngine.Tests/CommandRunnerTests.cs
++++ b/tests/OpenClaw.SetupEngine.Tests/CommandRunnerTests.cs
+@@ -1,5 +1,7 @@
+ using System.ComponentModel;
+ using System.Diagnostics;
++using System.IO.Pipes;
++using System.Text.Json;
+ 
+ namespace OpenClaw.SetupEngine.Tests;
+ 
+@@ -45,6 +47,69 @@ public class CommandRunnerTests
+         }
+     }
+ 
++    [Fact]
++    public async Task AdmittedInstaller_CancellationDrainsRootWithoutKillingExternalApp()
++    {
++        var name = "openclaw-installer-" + Guid.NewGuid().ToString("N");
++        using var parentPipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1,
++            PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
++        using var appPipe = new NamedPipeServerStream(name + "-app", PipeDirection.InOut, 1,
++            PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
++        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
++        using var cancellation = new CancellationTokenSource();
++        var run = CreateRunner().RunAdmittedInstallerAsync(FindTestHost(),
++            ["--process-fixture", "admitted-installer", name], cancellation.Token);
++        Process? child = null;
++        StreamWriter? parentWriter = null;
++        StreamWriter? appWriter = null;
++        try
++        {
++            await parentPipe.WaitForConnectionAsync(deadline.Token);
++            using var reader = new StreamReader(parentPipe, leaveOpen: true);
++            using var identity = JsonDocument.Parse((await reader.ReadLineAsync(deadline.Token))!);
++            child = Process.GetProcessById(identity.RootElement.GetProperty("Child").GetInt32());
++            await appPipe.WaitForConnectionAsync(deadline.Token);
++            parentWriter = new StreamWriter(parentPipe, leaveOpen: true) { AutoFlush = true };
++            appWriter = new StreamWriter(appPipe, leaveOpen: true) { AutoFlush = true };
++            cancellation.Cancel();
++            Assert.False(run.IsCompleted);
++            Assert.False(child.HasExited);
++            await parentWriter.WriteLineAsync("release");
++            var result = await run.WaitAsync(deadline.Token);
++            Assert.Equal(0, result.ExitCode);
++            Assert.False(result.TimedOut);
++            Assert.Contains("installer-finished", result.Stdout);
++            // The direct installer exited and its output drain ended while this app still owns the pipes.
++            Assert.False(child.HasExited);
++        }
++        finally
++        {
++            if (parentWriter is not null && !run.IsCompleted)
++            {
++                try { await parentWriter.WriteLineAsync("release"); }
++                catch (IOException) { /* The fixture parent may already have exited. */ }
++            }
++            if (appWriter is not null) await appWriter.WriteLineAsync("release");
++            if (child is not null)
++            {
++                await child.WaitForExitAsync(deadline.Token);
++                child.Dispose();
++            }
++            await run.WaitAsync(deadline.Token);
++            parentWriter?.Dispose();
++            appWriter?.Dispose();
++        }
++    }
++
++    [Fact]
++    public async Task AdmittedInstaller_CancelledAdmissionNeverCreatesProcess()
++    {
++        using var cancellation = new CancellationTokenSource();
++        cancellation.Cancel();
++        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => CreateRunner().RunAdmittedInstallerAsync(
++            "an-executable-that-must-not-be-started", [], cancellation.Token));
++    }
++
+     [Theory]
+     [InlineData("wsl.exe")]
+     [InlineData(@"C:\Windows\System32\WSL.EXE")]
+diff --git a/tests/OpenClaw.Shared.TestHost/Program.cs b/tests/OpenClaw.Shared.TestHost/Program.cs
+index c9a814d1..12f50a80 100644
+--- a/tests/OpenClaw.Shared.TestHost/Program.cs
++++ b/tests/OpenClaw.Shared.TestHost/Program.cs
+@@ -2,6 +2,7 @@ using OpenClaw.Shared;
+ using OpenClaw.Shared.Capabilities;
+ using OpenClaw.TestSupport;
+ using System.Diagnostics;
++using System.IO.Pipes;
+ using System.Reflection;
+ using System.Text;
+ using System.Text.Json;
+@@ -129,6 +130,31 @@ static async Task<int> RunProcessFixtureAsync(string[] args)
+         return 0;
+     }
+ 
++    if (args is ["admitted-installer", var installerPipe])
++    {
++        using var installerConnection = new NamedPipeClientStream(".", installerPipe, PipeDirection.InOut, PipeOptions.Asynchronous);
++        await installerConnection.ConnectAsync(30_000);
++        using var child = StartSelf("--process-fixture", "admitted-app", installerPipe + "-app");
++        using var writer = new StreamWriter(installerConnection, leaveOpen: true) { AutoFlush = true };
++        using var reader = new StreamReader(installerConnection, leaveOpen: true);
++        await writer.WriteLineAsync(JsonSerializer.Serialize(new { Parent = Environment.ProcessId, Child = child.Id }));
++        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
++        var release = await reader.ReadLineAsync(deadline.Token);
++        Console.Out.WriteLine("installer-finished");
++        return release == "release" ? 0 : 1;
++    }
++
++    if (args is ["admitted-app", var appPipe])
++    {
++        using var appConnection = new NamedPipeClientStream(".", appPipe, PipeDirection.InOut, PipeOptions.Asynchronous);
++        await appConnection.ConnectAsync(30_000);
++        using var reader = new StreamReader(appConnection, leaveOpen: true);
++        Console.Out.WriteLine("external-app-started");
++        Console.Out.Flush();
++        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
++        return await reader.ReadLineAsync(deadline.Token) == "release" ? 0 : 1;
++    }
++
+     if (args is ["hold", var holdText] && int.TryParse(holdText, out var holdMs))
+     {
+         Console.Out.Write("holding-stdout");
+diff --git a/src/OpenClaw.SetupEngine.UI/Controls/OllamaWindowsSetupDialog.cs b/src/OpenClaw.SetupEngine.UI/Controls/OllamaWindowsSetupDialog.cs
+new file mode 100644
+index 00000000..8e98d3d0
+--- /dev/null
++++ b/src/OpenClaw.SetupEngine.UI/Controls/OllamaWindowsSetupDialog.cs
+@@ -0,0 +1,296 @@
++using System.Diagnostics;
++using OpenClaw.Shared;
++using Microsoft.UI.Xaml;
++using Microsoft.UI.Xaml.Automation;
++using Microsoft.UI.Xaml.Controls;
++
++namespace OpenClaw.SetupEngine.UI.Controls;
++
++internal sealed record OllamaWindowsDialogResult(OllamaWindowsSetupResult? Result,
++    bool ContinueConnection = false, bool UseDetectedModel = false);
++
++/// <summary>Native review and progress only. The setup owner admits every app action.</summary>
++internal sealed class OllamaWindowsSetupDialog : ContentDialog
++{
++    private enum PrimaryAction { Check, Run, UseDetected }
++    private readonly TextBlock _message = new() { Name = "OllamaAppMessage", TextWrapping = TextWrapping.Wrap };
++    private readonly TextBlock _status = new() { Name = "OllamaAppStatus", TextWrapping = TextWrapping.Wrap };
++    private readonly ProgressBar _progress = new() { IsIndeterminate = true, Visibility = Visibility.Collapsed };
++    private readonly CheckBox _consent = new() { Name = "OllamaAppInstallConsent" };
++    private readonly TextBlock _details = new() { TextWrapping = TextWrapping.Wrap };
++    private readonly TextBlock _diagnostics = new() { Name = "OllamaAppDiagnostics", TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
++    private readonly Expander _diagnosticDetails = new() { Visibility = Visibility.Collapsed };
++    private OllamaWindowsSetup? _setup;
++    private OllamaWindowsReviewedIntent? _intent;
++    private OllamaWindowsDialogResult _result = new(null);
++    private PrimaryAction _primary;
++    private CancellationToken _pageCancellation;
++    private CancellationTokenSource? _request;
++    private CancellationTokenRegistration _pageRegistration;
++    private Task _work = Task.CompletedTask;
++    private Task _show = Task.CompletedTask;
++    private bool _working;
++    private bool _closing;
++    private bool _cancelRequested;
++    private int _version;
++    private int _workVersion;
++
++    public OllamaWindowsSetupDialog()
++    {
++        Title = S("Title");
++        AutomationProperties.SetAutomationId(this, "OllamaWindowsSetupDialog");
++        AutomationProperties.SetAutomationId(_consent, _consent.Name);
++        AutomationProperties.SetName(_consent, S("Consent"));
++        AutomationProperties.SetAutomationId(_status, _status.Name);
++        AutomationProperties.SetLiveSetting(_status, AutomationLiveSetting.Polite);
++        AutomationProperties.SetAutomationId(_diagnostics, _diagnostics.Name);
++        _diagnosticDetails.Header = S("CheckDetails");
++        _diagnosticDetails.Content = _diagnostics;
++        _consent.Content = new TextBlock { Text = S("Consent"), TextWrapping = TextWrapping.Wrap };
++        _consent.Checked += (_, _) => UpdateButtons();
++        _consent.Unchecked += (_, _) => UpdateButtons();
++        var links = new StackPanel { Spacing = 4 };
++        links.Children.Add(new HyperlinkButton
++        {
++            Content = S("License"),
++            NavigateUri = new Uri("https://github.com/ollama/ollama/blob/v0.40.13/LICENSE")
++        });
++        links.Children.Add(new HyperlinkButton
++        {
++            Content = S("SourceInfo"),
++            NavigateUri = new Uri("https://learn.microsoft.com/windows/package-manager/winget/")
++        });
++        var downloadDetails = new StackPanel { Spacing = 8 };
++        downloadDetails.Children.Add(_details);
++        downloadDetails.Children.Add(links);
++        var content = new StackPanel { Spacing = 16, MaxWidth = 520 };
++        content.Children.Add(_message);
++        content.Children.Add(_status);
++        content.Children.Add(_diagnosticDetails);
++        content.Children.Add(_progress);
++        content.Children.Add(_consent);
++        content.Children.Add(new Expander { Header = S("DownloadDetails"), Content = downloadDetails });
++        Content = new ScrollViewer { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
++            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, MaxHeight = 460 };
++        PrimaryButtonClick += (_, args) =>
++        {
++            args.Cancel = _primary != PrimaryAction.UseDetected;
++            if (_working || _closing) { args.Cancel = true; return; }
++            if (_primary == PrimaryAction.UseDetected)
++                _result = _result with { ContinueConnection = true, UseDetectedModel = true };
++            else
++                AsyncEventHandlerGuard.Run(() => StartWorkAsync(_primary == PrimaryAction.Run ? RunReviewedAsync : CheckAsync),
++                    onError: ReportFailure);
++        };
++        SecondaryButtonClick += (_, args) =>
++        {
++            if (_working || _closing) { args.Cancel = true; return; }
++            _result = _result with { ContinueConnection = true, UseDetectedModel = false };
++        };
++        Closing += (_, args) =>
++        {
++            if (_working && !_closing)
++            {
++                args.Cancel = true;
++                CancelContinuation();
++            }
++        };
++    }
++
++    public async Task<OllamaWindowsDialogResult> ShowOwnedAsync(XamlRoot root, ElementTheme theme,
++        OllamaWindowsSetup setup, CancellationToken ct)
++    {
++        ct.ThrowIfCancellationRequested();
++        var version = ++_version;
++        _setup = setup;
++        _pageCancellation = ct;
++        _closing = false;
++        _result = new(null);
++        XamlRoot = root;
++        RequestedTheme = theme;
++        _details.Text = SetupLocalization.Format("Onboarding_OllamaApp_DownloadIdentity",
++            OllamaWindowsPackage.Version, OllamaWindowsPackage.Id);
++        _pageRegistration = ct.Register(() => DispatcherQueue.TryEnqueue(() =>
++        {
++            if (version != _version) return;
++            CancelContinuation();
++            if (ct.IsCancellationRequested) Hide();
++        }));
++        _show = ShowNativeAsync();
++        try
++        {
++            await StartWorkAsync(CheckAsync);
++            await _show;
++            await _work;
++            return _result;
++        }
++        finally
++        {
++            _closing = true;
++            if (!_show.IsCompletedSuccessfully) CancelContinuation();
++            try { await _work; }
++            finally
++            {
++                _pageRegistration.Dispose();
++                _request?.Dispose();
++                _request = null;
++            }
++        }
++    }
++
++    private async Task ShowNativeAsync() { await ShowAsync(); }
++
++    private Task StartWorkAsync(Func<CancellationToken, Task> action)
++    {
++        if (_working || _closing) return Task.CompletedTask;
++        _working = true;
++        ++_workVersion;
++        _cancelRequested = false;
++        _request?.Dispose();
++        _request = CancellationTokenSource.CreateLinkedTokenSource(_pageCancellation);
++        _progress.Visibility = Visibility.Visible;
++        UpdateButtons();
++        return _work = WorkCoreAsync(action, _request.Token);
++    }
++
++    private async Task WorkCoreAsync(Func<CancellationToken, Task> action, CancellationToken ct)
++    {
++        try { await action(ct); }
++        catch (OperationCanceledException) when (ct.IsCancellationRequested)
++        {
++            _result = new(new(OllamaWindowsSetupOutcome.CancelledBeforeMutation));
++            ShowResult();
++        }
++        catch (Exception error) { ReportFailure(error); }
++        finally
++        {
++            _working = false;
++            _progress.Visibility = Visibility.Collapsed;
++            UpdateButtons();
++        }
++    }
++
++    private async Task CheckAsync(CancellationToken ct)
++    {
++        _intent = null;
++        _consent.IsChecked = false;
++        _status.Text = S("Checking");
++        _diagnostics.Text = "";
++        _diagnosticDetails.Visibility = Visibility.Collapsed;
++        var snapshot = await _setup!.InspectAsync(ct);
++        ct.ThrowIfCancellationRequested();
++        if (_closing) return;
++        if (snapshot.ExistingGatewayCandidate is { } candidate)
++            _result = new(new(OllamaWindowsSetupOutcome.ReusedExistingService, snapshot.Windows, candidate));
++        else if (snapshot.Windows.ApiReachable)
++            _result = new(new(snapshot.Windows.LocalChatModelCount == 0
++                ? OllamaWindowsSetupOutcome.AppReadyNeedsModel : OllamaWindowsSetupOutcome.GatewayReadinessUnknown,
++                snapshot.Windows));
++        else if (snapshot.Windows.Activity == OllamaWindowsActivity.NotActive &&
++            snapshot.Windows.ApiState == OllamaWindowsApiState.NotListening &&
++            (snapshot.Windows.InstallationState == OllamaWindowsInstallationState.Verified ||
++                snapshot.Windows.InstallationState == OllamaWindowsInstallationState.NoSupportedRegistration &&
++                !snapshot.Windows.HasInstallationConflict))
++        {
++            var action = snapshot.Windows.InstallationState == OllamaWindowsInstallationState.Verified
++                ? OllamaWindowsAction.Open : OllamaWindowsAction.Install;
++            _intent = _setup.Review(snapshot, action);
++            _result = new(null);
++            _primary = PrimaryAction.Run;
++            _message.Text = action == OllamaWindowsAction.Install
++                ? SetupLocalization.Format("Onboarding_OllamaApp_ReviewInstall", OllamaWindowsPackage.Version)
++                : S("ReviewOpen");
++            _status.Text = S("ReviewBeforeAction");
++            return;
++        }
++        else
++            _result = new(new(snapshot.Windows.Activity == OllamaWindowsActivity.Active
++                ? OllamaWindowsSetupOutcome.WaitingForApp : OllamaWindowsSetupOutcome.InspectionRequired,
++                snapshot.Windows));
++        ShowResult();
++    }
++
++    private async Task RunReviewedAsync(CancellationToken ct)
++    {
++        if (_intent is null || _intent.Action == OllamaWindowsAction.Install && _consent.IsChecked != true)
++            throw new InvalidOperationException("Review and confirm the Ollama app download first.");
++        var version = _workVersion;
++        var progress = new Progress<OllamaWindowsSetupStage>(stage =>
++        {
++            if (!_closing && _working && version == _workVersion)
++            {
++                _status.Text = S(_cancelRequested ? "CancelPending" : stage.ToString());
++                UpdateButtons();
++            }
++        });
++        var result = await _setup!.RunAsync(_intent, ct, progress);
++        _intent = null;
++        _result = new(result);
++        if (!_closing) ShowResult();
++    }
++
++    private void ShowResult()
++    {
++        var outcome = _result.Result?.Outcome ?? OllamaWindowsSetupOutcome.InspectionRequired;
++        _primary = outcome == OllamaWindowsSetupOutcome.ReusedExistingService ? PrimaryAction.UseDetected : PrimaryAction.Check;
++        _message.Text = S(outcome == OllamaWindowsSetupOutcome.InspectionRequired &&
++            _result.Result?.Windows?.HasInstallationConflict == true ? "InstallerConflict" : "Outcome_" + outcome);
++        if (_result.Result?.ExistingGatewayCandidate is { } candidate)
++            _message.Text += Environment.NewLine + SetupLocalization.Format("Onboarding_OllamaApp_DetectedModel", candidate.ModelRef);
++        _status.Text = "";
++        _diagnostics.Text = _result.Result?.Diagnostic ?? "";
++        _diagnosticDetails.Visibility = string.IsNullOrWhiteSpace(_diagnostics.Text) ? Visibility.Collapsed : Visibility.Visible;
++        _diagnosticDetails.IsExpanded = _diagnosticDetails.Visibility == Visibility.Visible;
++        _consent.Visibility = Visibility.Collapsed;
++    }
++
++    private void UpdateButtons()
++    {
++        var install = _primary == PrimaryAction.Run && _intent?.Action == OllamaWindowsAction.Install;
++        _consent.Visibility = install ? Visibility.Visible : Visibility.Collapsed;
++        _consent.IsEnabled = !_working;
++        PrimaryButtonText = S(_primary switch
++        {
++            PrimaryAction.UseDetected => "UseDetected",
++            PrimaryAction.Run => install ? "Install" : "Open",
++            _ => "CheckAgain"
++        });
++        IsPrimaryButtonEnabled = !_working && !_closing && (!install || _consent.IsChecked == true);
++        SecondaryButtonText = S("ConnectionSetup");
++        IsSecondaryButtonEnabled = !_working && !_closing;
++        CloseButtonText = S(_working
++            ? _cancelRequested ? "CancelPendingButton" : _setup?.MutationInFlight == true ? "CancelFurther" : "Cancel"
++            : "Close");
++    }
++
++    private void CancelContinuation()
++    {
++        _cancelRequested = true;
++        try { _request?.Cancel(); }
++        catch (AggregateException error) { Trace.TraceWarning("Ollama cancellation callback failed ({0}).", error.GetType().Name); }
++        _status.Text = S("CancelPending");
++        UpdateButtons();
++    }
++
++    private void ReportFailure(Exception error)
++    {
++        Trace.TraceWarning("Ollama setup dialog failed ({0}).", error.GetType().Name);
++        _intent = null;
++        _result = new(new(OllamaWindowsSetupOutcome.Failed, Failure: SetupLogger.Sanitize(error.Message)));
++        if (!_closing) ShowResult();
++    }
++
++    public async Task CloseOwnedAsync()
++    {
++        _closing = true;
++        CancelContinuation();
++        try { Hide(); }
++        finally
++        {
++            try { await _work; }
++            finally { await _show; }
++        }
++    }
++
++    private static string S(string key) => SetupLocalization.GetString("Onboarding_OllamaApp_" + key);
++}
+diff --git a/src/OpenClaw.SetupEngine/OllamaWindowsAppHost.cs b/src/OpenClaw.SetupEngine/OllamaWindowsAppHost.cs
+new file mode 100644
+index 00000000..f71b4972
+--- /dev/null
++++ b/src/OpenClaw.SetupEngine/OllamaWindowsAppHost.cs
+@@ -0,0 +1,316 @@
++using System.ComponentModel;
++using System.Diagnostics;
++using System.Net.Sockets;
++using System.Runtime.InteropServices;
++using System.Runtime.Versioning;
++using System.Security.Cryptography;
++using System.Text.Json;
++using Microsoft.Win32;
++using OpenClaw.Connection;
++using OpenClaw.Shared.Inference;
++
++namespace OpenClaw.SetupEngine;
++
++/// <summary>Reviewed catalog bytes, not a mutable URL or executable supplied by a provider response.</summary>
++internal static class OllamaWindowsPackage
++{
++    public const string Id = "Ollama.Ollama";
++    public const string Version = "0.40.13";
++    public const string ProductCode = "{44E83376-CE68-45EB-8FC1-393500EB558C}_is1";
++    // microsoft/winget-pkgs fcb37e5558b7629d808ecc6210488848328afcb3,
++    // manifests/o/Ollama/Ollama/0.40.13/Ollama.Ollama.installer.yaml (x64 and ARM64).
++    public const string Sha256 = "9e3c76e54e7184c68e88a2378b909bf59bbe454f83c076cb4f4a717e946ae719";
++    public const string SourceArgument = "https://cdn.winget.microsoft.com/cache";
++    public const string SourceIdentifier = "Microsoft.Winget.Source_8wekyb3d8bbwe";
++    public static readonly TimeSpan AcquisitionTimeout = TimeSpan.FromMinutes(30);
++}
++
++internal sealed class OllamaWindowsInstaller(string directory, FileStream file) : IAsyncDisposable
++{
++    public string Directory { get; } = directory;
++    public FileStream File { get; } = file;
++
++    public async ValueTask DisposeAsync()
++    {
++        await File.DisposeAsync();
++        DeleteScratch(Directory);
++    }
++
++    internal static void DeleteScratch(string directory)
++    {
++        try
++        {
++            OllamaWindowsAppHost.RejectReparseAncestors(directory);
++            foreach (var entry in System.IO.Directory.EnumerateFileSystemEntries(directory))
++                if ((System.IO.File.GetAttributes(entry) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
++                    throw new IOException("Installer scratch contains an unexpected entry; it was preserved.");
++            System.IO.Directory.Delete(directory, recursive: true);
++        }
++        catch (Exception error)
++        {
++            Trace.TraceWarning("Ollama installer scratch was preserved ({0}).", error.GetType().Name);
++        }
++    }
++}
++
++/// <summary>Current-user Windows registration and app acquisition; never owns the external app's lifetime.</summary>
++internal sealed class OllamaWindowsAppHost(ICommandRunner commands, string localDataDirectory) : IOllamaWindowsAppHost
++{
++    private const string UninstallRoot = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\";
++    private string WinGetPath => Path.Combine(
++        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
++        "Microsoft", "WindowsApps", "winget.exe");
++
++    public async Task<OllamaWindowsObservation> ObserveAsync(CancellationToken ct)
++    {
++        if (!OperatingSystem.IsWindows())
++            throw new PlatformNotSupportedException("Ollama desktop installation requires Windows.");
++        var windows = await Task.Run(InspectWindows, ct);
++        ct.ThrowIfCancellationRequested();
++        using var backend = new OllamaInferenceBackend();
++        try
++        {
++            var models = await backend.ListModelsAsync(ct);
++            return windows with { ApiState = OllamaWindowsApiState.Reachable, LocalChatModelCount = models.Count };
++        }
++        catch (OllamaInferenceException error)
++        {
++            // Only the typed socket refusal establishes no listener at this probe.
++            // Authentication, invalid responses and timeouts must not become absence.
++            return windows with
++            {
++                ApiState = IsConnectionRefused(error) ? OllamaWindowsApiState.NotListening : OllamaWindowsApiState.Unknown,
++                Failure = windows.Failure ?? SetupLogger.Sanitize(error.Message)
++            };
++        }
++    }
++
++    [SupportedOSPlatform("windows")]
++    private static OllamaWindowsObservation InspectWindows()
++    {
++        try
++        {
++            var activity = InspectActivity();
++            var installationConflict = InspectInstallationConflict();
++            var registrations = new List<OllamaWindowsInstallation>();
++            foreach (var hive in new[] { RegistryHive.CurrentUser, RegistryHive.LocalMachine })
++            foreach (var view in new[] { RegistryView.Registry64, RegistryView.Registry32 })
++            {
++                using var root = RegistryKey.OpenBaseKey(hive, view);
++                using var key = root.OpenSubKey(UninstallRoot + OllamaWindowsPackage.ProductCode);
++                if (key is null) continue;
++                if (key.GetValue("InstallLocation") is not string location || string.IsNullOrWhiteSpace(location))
++                    throw new InvalidDataException("Ollama registration has no installation location.");
++                var directory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(location));
++                var installed = new OllamaWindowsInstallation(directory, key.GetValue("DisplayVersion") as string ?? "");
++                using var app = OpenTrustedOllamaFile(installed.AppPath);
++                using var cli = OpenTrustedOllamaFile(installed.CliPath);
++                registrations.Add(installed);
++            }
++            var matches = registrations.DistinctBy(value => value.Directory, StringComparer.OrdinalIgnoreCase).ToArray();
++            if (matches.Length > 1)
++                throw new InvalidDataException("Multiple Ollama installation locations need review.");
++            if (matches.Length == 1)
++                return new(OllamaWindowsInstallationState.Verified, activity, matches[0],
++                    OllamaWindowsApiState.Unknown, 0, HasInstallationConflict: installationConflict);
++
++            var defaultApp = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
++                "Programs", "Ollama", "ollama app.exe");
++            if (!DefinitelyAbsent(defaultApp))
++                throw new InvalidDataException("An unregistered Ollama app needs inspection before installation.");
++            foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
++            {
++                if (!string.IsNullOrWhiteSpace(directory) && !DefinitelyAbsent(Path.Combine(directory.Trim('"'), "ollama.exe")))
++                    throw new InvalidDataException("An existing Ollama CLI needs inspection before desktop installation.");
++            }
++            return new(OllamaWindowsInstallationState.NoSupportedRegistration, activity, null,
++                OllamaWindowsApiState.Unknown, 0, HasInstallationConflict: installationConflict);
++        }
++        catch (Exception error)
++        {
++            return new(OllamaWindowsInstallationState.Unknown, OllamaWindowsActivity.Unknown, null,
++                OllamaWindowsApiState.Unknown, 0, SetupLogger.Sanitize(error.Message));
++        }
++    }
++
++    private static OllamaWindowsActivity InspectActivity()
++    {
++        var unknown = false;
++        var active = false;
++        foreach (var name in new[] { "ollama", "ollama app", "OllamaSetup" })
++        foreach (var process in Process.GetProcessesByName(name))
++        using (process)
++        {
++            try
++            {
++                var image = process.MainModule?.FileName;
++                if (image is null) { unknown = true; continue; }
++                using var file = OpenTrustedOllamaFile(image);
++                active = true;
++            }
++            catch (InvalidOperationException) { /* A process that exited during enumeration is not active. */ }
++            catch (ArgumentException) { }
++            catch (Win32Exception) { unknown = true; }
++            catch (IOException) { unknown = true; }
++            catch (UnauthorizedAccessException) { unknown = true; }
++        }
++        return active ? OllamaWindowsActivity.Active : unknown ? OllamaWindowsActivity.Unknown : OllamaWindowsActivity.NotActive;
++    }
++
++    private static bool InspectInstallationConflict()
++    {
++        // The qualified Inno installer unconditionally taskkills llama-server.exe,
++        // including unrelated runtimes. Presence alone blocks installation: never
++        // require a foreign process to carry the Ollama signer or expose its path.
++        var processes = Process.GetProcessesByName("llama-server");
++        try { return processes.Length != 0; }
++        finally { foreach (var process in processes) process.Dispose(); }
++    }
++
++    public async Task<OllamaWindowsInstaller> AcquireAsync(CancellationToken ct, Action beforeDownload)
++    {
++        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
++        var architecture = RuntimeInformation.OSArchitecture switch
++        {
++            Architecture.X64 => "x64",
++            Architecture.Arm64 => "arm64",
++            _ => throw new PlatformNotSupportedException("The reviewed Ollama installer supports x64 and ARM64 Windows.")
++        };
++        ct.ThrowIfCancellationRequested();
++        var source = await commands.RunAsync(WinGetPath, ["source", "export", "winget"],
++            TimeSpan.FromSeconds(30), ct: ct);
++        if (source.TimedOut || source.ExitCode != 0)
++            throw new IOException("WinGet could not read its source. Update App Installer, then recheck Ollama setup.");
++        using (var json = JsonDocument.Parse(source.Stdout))
++        {
++            var value = json.RootElement;
++            if (value.GetProperty("Name").GetString() != "winget" ||
++                value.GetProperty("Arg").GetString() != OllamaWindowsPackage.SourceArgument ||
++                value.GetProperty("Type").GetString() != "Microsoft.PreIndexed.Package" ||
++                value.GetProperty("Identifier").GetString() != OllamaWindowsPackage.SourceIdentifier)
++                throw new InvalidDataException("The configured WinGet source is not the reviewed Microsoft catalog. No source settings were changed.");
++        }
++        ct.ThrowIfCancellationRequested();
++        beforeDownload();
++        var directory = Path.Combine(Path.GetFullPath(localDataDirectory), "OllamaSetup", Guid.NewGuid().ToString("N"));
++        RejectReparseAncestors(directory);
++        Directory.CreateDirectory(directory);
++        try
++        {
++            var result = await commands.RunAsync(WinGetPath,
++                ["download", "--id", OllamaWindowsPackage.Id, "--exact", "--source", "winget",
++                    "--version", OllamaWindowsPackage.Version, "--architecture", architecture,
++                    "--installer-type", "inno", "--download-directory", directory, "--skip-dependencies",
++                    "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"],
++                OllamaWindowsPackage.AcquisitionTimeout, ct: ct);
++            ct.ThrowIfCancellationRequested();
++            if (result.TimedOut || result.ExitCode != 0)
++                throw new IOException("WinGet could not download the reviewed Ollama installer. Recheck App Installer and catalog access before retrying.");
++            RejectReparseAncestors(directory);
++            var files = Directory.GetFiles(directory, "*.exe", SearchOption.TopDirectoryOnly);
++            if (files.Length != 1)
++                throw new InvalidDataException("WinGet returned an unexpected installer set.");
++            var file = new FileStream(files[0], FileMode.Open, FileAccess.Read, FileShare.Read);
++            try
++            {
++                await VerifyInstallerAsync(file, ct);
++                return new(directory, file);
++            }
++            catch { await file.DisposeAsync(); throw; }
++        }
++        catch
++        {
++            // Failed acquisition is not installation. Preserve unexpected/reparse scratch rather than following it.
++            OllamaWindowsInstaller.DeleteScratch(directory);
++            throw;
++        }
++    }
++
++    public async Task<CommandResult> InstallAsync(OllamaWindowsInstaller installer, CancellationToken admissionCancellation, Action beforeAdmission)
++    {
++        await VerifyInstallerAsync(installer.File, admissionCancellation);
++        var current = await ObserveAsync(admissionCancellation);
++        if (current.ApiState != OllamaWindowsApiState.NotListening ||
++            current.Activity != OllamaWindowsActivity.NotActive ||
++            current.InstallationState != OllamaWindowsInstallationState.NoSupportedRegistration ||
++            current.HasInstallationConflict)
++            throw new InvalidOperationException("Ollama appeared or its inspection changed before installation. Recheck the existing service.");
++        // Recheck the destructive upstream installer conflict at the last practical
++        // admission boundary, independently of any Ollama registration or signer.
++        if (await Task.Run(InspectInstallationConflict, admissionCancellation))
++            throw new InvalidOperationException("An existing llama-server.exe process must be stopped by its owner before Ollama installation.");
++        beforeAdmission();
++        admissionCancellation.ThrowIfCancellationRequested();
++        return await commands.RunAdmittedInstallerAsync(installer.File.Name,
++            ["/VERYSILENT", "/NORESTART", "/SUPPRESSMSGBOXES"], admissionCancellation);
++    }
++
++    public async Task OpenAsync(OllamaWindowsInstallation installation, CancellationToken ct, Action beforeOpen)
++    {
++        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
++        using var app = await Task.Run(() => OpenTrustedOllamaFile(installation.AppPath), ct);
++        if (await Task.Run(InspectActivity, ct) != OllamaWindowsActivity.NotActive)
++            throw new InvalidOperationException("An Ollama process is already present. Recheck it before opening the app.");
++        beforeOpen();
++        ct.ThrowIfCancellationRequested();
++        using var process = Process.Start(new ProcessStartInfo(installation.AppPath)
++        {
++            UseShellExecute = true,
++            WorkingDirectory = installation.Directory
++        }) ?? throw new IOException("Windows could not open the verified Ollama application.");
++        // Dispose only our handle. The external app is not a child-process lease or a rollback target.
++    }
++
++    private static async Task VerifyInstallerAsync(FileStream file, CancellationToken ct)
++    {
++        RejectReparseAncestors(file.Name);
++        file.Position = 0;
++        var hash = await SHA256.HashDataAsync(file, ct).ConfigureAwait(false);
++        if (!CryptographicOperations.FixedTimeEquals(hash, Convert.FromHexString(OllamaWindowsPackage.Sha256)))
++            throw new InvalidDataException("The Ollama installer does not match the reviewed catalog hash.");
++        file.Position = 0;
++        var signature = await Task.Run(() => WindowsAuthenticodeVerifier.VerifyOllamaSignedFile(file), ct).ConfigureAwait(false);
++        if (!signature.IsTrusted) throw new InvalidDataException(signature.Detail);
++    }
++
++    private static FileStream OpenTrustedOllamaFile(string path)
++    {
++        RejectReparseAncestors(path);
++        var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
++        try
++        {
++            var signature = WindowsAuthenticodeVerifier.VerifyOllamaSignedFile(file);
++            if (!signature.IsTrusted) throw new InvalidDataException(signature.Detail);
++            return file;
++        }
++        catch { file.Dispose(); throw; }
++    }
++
++    internal static void RejectReparseAncestors(string path)
++    {
++        for (string? current = Path.GetFullPath(path); current is not null; current = Path.GetDirectoryName(current))
++        {
++            try
++            {
++                if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
++                    throw new IOException("An Ollama installation or acquisition path contains a reparse point.");
++            }
++            catch (FileNotFoundException) { }
++            catch (DirectoryNotFoundException) { }
++        }
++    }
++
++    private static bool DefinitelyAbsent(string path)
++    {
++        try { _ = File.GetAttributes(path); return false; }
++        catch (FileNotFoundException) { return true; }
++        catch (DirectoryNotFoundException) { return true; }
++    }
++
++    private static bool IsConnectionRefused(Exception error)
++    {
++        for (Exception? current = error; current is not null; current = current.InnerException)
++            if (current is SocketException { SocketErrorCode: SocketError.ConnectionRefused }) return true;
++        return false;
++    }
++}
+diff --git a/src/OpenClaw.SetupEngine/OllamaWindowsSetup.cs b/src/OpenClaw.SetupEngine/OllamaWindowsSetup.cs
+new file mode 100644
+index 00000000..e6db7baa
+--- /dev/null
++++ b/src/OpenClaw.SetupEngine/OllamaWindowsSetup.cs
+@@ -0,0 +1,264 @@
++namespace OpenClaw.SetupEngine;
++
++internal enum OllamaWindowsInstallationState { Unknown, NoSupportedRegistration, Verified }
++internal enum OllamaWindowsActivity { Unknown, Active, NotActive }
++internal enum OllamaWindowsApiState { Unknown, NotListening, Reachable }
++internal enum OllamaWindowsAction { Install, Open }
++internal enum OllamaWindowsSetupStage { Checking, Downloading, Installing, Opening, RecheckingGateway }
++internal enum OllamaWindowsSetupOutcome
++{
++    ReusedExistingService, AppReadyNeedsModel, GatewayReadinessUnknown,
++    WaitingForApp, InspectionRequired, CancelledBeforeMutation, CancelledInstallationPresent,
++    InstallationOutcomeUnknown, Failed
++}
++
++internal sealed record OllamaWindowsInstallation(string Directory, string Version)
++{
++    public string AppPath => Path.Combine(Directory, "ollama app.exe");
++    public string CliPath => Path.Combine(Directory, "ollama.exe");
++}
++
++internal sealed record OllamaWindowsObservation(
++    OllamaWindowsInstallationState InstallationState, OllamaWindowsActivity Activity,
++    OllamaWindowsInstallation? Installation, OllamaWindowsApiState ApiState, int LocalChatModelCount,
++    string? Failure = null, bool HasInstallationConflict = false)
++{
++    public bool ApiReachable => ApiState == OllamaWindowsApiState.Reachable;
++}
++
++internal sealed record OllamaWindowsSetupSnapshot(
++    GatewayAiSetupRoute Route, long ConnectionGeneration, OllamaWindowsObservation Windows,
++    GatewayAiSetupCandidate? ExistingGatewayCandidate);
++
++internal sealed record OllamaWindowsSetupResult(
++    OllamaWindowsSetupOutcome Outcome, OllamaWindowsObservation? Windows = null,
++    GatewayAiSetupCandidate? ExistingGatewayCandidate = null, int? InstallerExitCode = null, string? Failure = null)
++{
++    public string? Diagnostic
++    {
++        get
++        {
++            var detail = string.IsNullOrWhiteSpace(Failure) ? Windows?.Failure : Failure;
++            if (string.IsNullOrWhiteSpace(detail) && Outcome == OllamaWindowsSetupOutcome.InspectionRequired &&
++                Windows?.HasInstallationConflict == true)
++                detail = "The Ollama installer may terminate an existing llama-server.exe process. Stop that runtime through its current owner before installing Ollama.";
++            if (string.IsNullOrWhiteSpace(detail)) return null;
++            var sanitized = SetupLogger.Sanitize(detail);
++            return sanitized[..Math.Min(sanitized.Length, 2048)];
++        }
++    }
++}
++
++/// <summary>Single-use app consent; model downloads and provider configuration are excluded.</summary>
++internal sealed class OllamaWindowsReviewedIntent(
++    OllamaWindowsSetupSnapshot reviewed, OllamaWindowsAction action)
++{
++    private int _consumed;
++    public OllamaWindowsSetupSnapshot Reviewed { get; } = reviewed;
++    public OllamaWindowsAction Action { get; } = action;
++    public bool IsConsumed => Volatile.Read(ref _consumed) != 0;
++    public void Consume()
++    {
++        if (Interlocked.Exchange(ref _consumed, 1) != 0)
++            throw new InvalidOperationException("Review Ollama again before repeating this action.");
++    }
++}
++
++/// <summary>Windows facts and side effects only. Gateway discovery stays with GatewayAiSetupClient.</summary>
++internal interface IOllamaWindowsAppHost
++{
++    Task<OllamaWindowsObservation> ObserveAsync(CancellationToken ct);
++    Task<OllamaWindowsInstaller> AcquireAsync(CancellationToken ct, Action beforeDownload);
++    Task<CommandResult> InstallAsync(OllamaWindowsInstaller installer, CancellationToken admissionCancellation, Action beforeAdmission);
++    Task OpenAsync(OllamaWindowsInstallation installation, CancellationToken ct, Action beforeOpen);
++}
++
++/// <summary>
++/// One setup-window operation. Its task is the existing page drain's mutation lease;
++/// cancellation withdraws continuation, never ownership of an admitted installer.
++/// </summary>
++internal sealed class OllamaWindowsSetup(
++    IOllamaWindowsAppHost host, GatewayAiSetupClient gateway, SetupAccessDraft draft)
++{
++    private Task<OllamaWindowsSetupResult>? _operation;
++    public bool MutationInFlight { get; private set; }
++
++    public async Task<OllamaWindowsSetupSnapshot> InspectAsync(CancellationToken ct)
++    {
++        RequireCurrentRoute();
++        var detection = await gateway.DetectAsync(ct);
++        var existing = detection?.Candidates.FirstOrDefault(candidate => candidate.ModelTarget is null &&
++            candidate.ModelRef.StartsWith("ollama/", StringComparison.Ordinal));
++        var windows = existing is not null
++            ? new OllamaWindowsObservation(OllamaWindowsInstallationState.Unknown, OllamaWindowsActivity.Unknown,
++                null, OllamaWindowsApiState.Unknown, 0)
++            : await host.ObserveAsync(ct);
++        RequireCurrentRoute();
++        if (!gateway.HasCurrentDiscovery)
++            throw new InvalidOperationException("Refresh the selected Gateway before setting up Ollama.");
++        return new(gateway.Route, gateway.ConnectionGeneration, windows, existing);
++    }
++
++    public OllamaWindowsReviewedIntent Review(OllamaWindowsSetupSnapshot snapshot, OllamaWindowsAction action)
++    {
++        RequireSnapshot(snapshot);
++        if (string.IsNullOrWhiteSpace(snapshot.Route.EndpointBinding))
++            throw new InvalidOperationException("Verify the selected Gateway endpoint before reviewing an Ollama app action.");
++        if (snapshot.ExistingGatewayCandidate is not null || snapshot.Windows.ApiReachable ||
++            snapshot.Windows.Activity != OllamaWindowsActivity.NotActive ||
++            snapshot.Windows.ApiState == OllamaWindowsApiState.Unknown ||
++            (action == OllamaWindowsAction.Install
++                ? snapshot.Windows.InstallationState != OllamaWindowsInstallationState.NoSupportedRegistration ||
++                    snapshot.Windows.HasInstallationConflict
++                : snapshot.Windows.InstallationState != OllamaWindowsInstallationState.Verified ||
++                    snapshot.Windows.Installation is null))
++            throw new InvalidOperationException("Recheck the existing Ollama service before choosing an installation action.");
++        return draft.ReviewOllama(snapshot, action);
++    }
++
++    public Task<OllamaWindowsSetupResult> RunAsync(OllamaWindowsReviewedIntent intent,
++        CancellationToken ct, IProgress<OllamaWindowsSetupStage>? progress = null)
++    {
++        if (_operation is { IsCompleted: false })
++            throw new InvalidOperationException("The previous Ollama action is still settling.");
++        if (!ReferenceEquals(draft.OllamaIntent, intent))
++            throw new InvalidOperationException("The reviewed Ollama action changed.");
++        ct.ThrowIfCancellationRequested();
++        RequireIntent(intent);
++        intent.Consume();
++        return _operation = RunCoreAsync(intent, ct, progress);
++    }
++
++    private async Task<OllamaWindowsSetupResult> RunCoreAsync(OllamaWindowsReviewedIntent intent,
++        CancellationToken ct, IProgress<OllamaWindowsSetupStage>? progress)
++    {
++        var admitted = false;
++        int? installerExit = null;
++        try
++        {
++            progress?.Report(OllamaWindowsSetupStage.Checking);
++            var current = await InspectAsync(ct);
++            RequireIntent(intent);
++            if (Reuse(current) is { } reuse)
++                return reuse;
++            if (current.Windows.Activity != OllamaWindowsActivity.NotActive ||
++                current.Windows.ApiState == OllamaWindowsApiState.Unknown)
++                return new(OllamaWindowsSetupOutcome.InspectionRequired, current.Windows);
++            if (intent.Action == OllamaWindowsAction.Install)
++            {
++                if (current.Windows.InstallationState != OllamaWindowsInstallationState.NoSupportedRegistration ||
++                    current.Windows.HasInstallationConflict)
++                    return new(OllamaWindowsSetupOutcome.InspectionRequired, current.Windows);
++                progress?.Report(OllamaWindowsSetupStage.Downloading);
++                await using var installer = await host.AcquireAsync(ct, () => RequireIntent(intent));
++                // Downloading can take minutes. Never install over an app/service that appeared meanwhile.
++                current = await InspectAsync(ct);
++                RequireIntent(intent);
++                if (Reuse(current) is { } lateReuse)
++                    return lateReuse;
++                if (current.Windows.Activity != OllamaWindowsActivity.NotActive ||
++                    current.Windows.ApiState == OllamaWindowsApiState.Unknown ||
++                    current.Windows.HasInstallationConflict ||
++                    current.Windows.InstallationState != OllamaWindowsInstallationState.NoSupportedRegistration)
++                    return new(OllamaWindowsSetupOutcome.InspectionRequired, current.Windows);
++                ct.ThrowIfCancellationRequested();
++                progress?.Report(OllamaWindowsSetupStage.Installing);
++                MutationInFlight = true;
++                var installed = await host.InstallAsync(installer, ct, () =>
++                {
++                    RequireIntent(intent);
++                    ct.ThrowIfCancellationRequested();
++                    admitted = true;
++                });
++                installerExit = installed.ExitCode;
++                // Cancellation after admission is not proof that Windows stopped deployment.
++                var observed = await host.ObserveAsync(CancellationToken.None);
++                if (ct.IsCancellationRequested)
++                    return Cancelled(observed, installerExit);
++                if (installed.TimedOut || installed.ExitCode != 0 ||
++                    observed.InstallationState != OllamaWindowsInstallationState.Verified)
++                    return new(OllamaWindowsSetupOutcome.InstallationOutcomeUnknown, observed,
++                        InstallerExitCode: installerExit);
++                // The installer starts its desktop app. Do not launch a second instance here.
++                current = current with { Windows = observed };
++            }
++            else
++            {
++                if (current.Windows.InstallationState != OllamaWindowsInstallationState.Verified ||
++                    current.Windows.Installation is not { } installation ||
++                    installation != intent.Reviewed.Windows.Installation)
++                    return new(OllamaWindowsSetupOutcome.InspectionRequired, current.Windows);
++                RequireIntent(intent);
++                ct.ThrowIfCancellationRequested();
++                progress?.Report(OllamaWindowsSetupStage.Opening);
++                MutationInFlight = true;
++                await host.OpenAsync(installation, ct, () =>
++                {
++                    RequireIntent(intent);
++                    ct.ThrowIfCancellationRequested();
++                    admitted = true;
++                });
++            }
++            if (ct.IsCancellationRequested)
++                return Cancelled(await host.ObserveAsync(CancellationToken.None), installerExit);
++            progress?.Report(OllamaWindowsSetupStage.RecheckingGateway);
++            var rechecked = await InspectAsync(ct);
++            return Reuse(rechecked) ?? new(OllamaWindowsSetupOutcome.WaitingForApp, rechecked.Windows,
++                InstallerExitCode: installerExit);
++        }
++        catch (OperationCanceledException) when (ct.IsCancellationRequested)
++        {
++            if (!admitted)
++                return new(OllamaWindowsSetupOutcome.CancelledBeforeMutation);
++            try { return Cancelled(await host.ObserveAsync(CancellationToken.None), installerExit); }
++            catch { return new(OllamaWindowsSetupOutcome.InstallationOutcomeUnknown, InstallerExitCode: installerExit); }
++        }
++        catch (Exception error)
++        {
++            return new(admitted ? OllamaWindowsSetupOutcome.InstallationOutcomeUnknown : OllamaWindowsSetupOutcome.Failed,
++                InstallerExitCode: installerExit, Failure: SetupLogger.Sanitize(error.Message));
++        }
++        finally { MutationInFlight = false; }
++    }
++
++    private static OllamaWindowsSetupResult Cancelled(OllamaWindowsObservation observed, int? exitCode) =>
++        new(observed.InstallationState == OllamaWindowsInstallationState.Verified
++                ? OllamaWindowsSetupOutcome.CancelledInstallationPresent
++                : OllamaWindowsSetupOutcome.InstallationOutcomeUnknown,
++            observed, InstallerExitCode: exitCode);
++
++    private static OllamaWindowsSetupResult? Reuse(OllamaWindowsSetupSnapshot snapshot)
++    {
++        if (snapshot.ExistingGatewayCandidate is { } candidate)
++            return new(OllamaWindowsSetupOutcome.ReusedExistingService, snapshot.Windows, candidate);
++        if (snapshot.Windows.ApiReachable)
++            return new(snapshot.Windows.LocalChatModelCount == 0
++                    ? OllamaWindowsSetupOutcome.AppReadyNeedsModel
++                    : OllamaWindowsSetupOutcome.GatewayReadinessUnknown,
++                snapshot.Windows);
++        return null;
++    }
++
++    private void RequireIntent(OllamaWindowsReviewedIntent intent)
++    {
++        if (!ReferenceEquals(draft.OllamaIntent, intent))
++            throw new InvalidOperationException("The reviewed Ollama action changed.");
++        RequireSnapshot(intent.Reviewed);
++    }
++
++    private void RequireCurrentRoute() => gateway.EnsureLocalAiCanStart(gateway.Route.GatewayId);
++
++    private void RequireSnapshot(OllamaWindowsSetupSnapshot snapshot)
++    {
++        RequireCurrentRoute();
++        if (gateway.Route != snapshot.Route || gateway.ConnectionGeneration != snapshot.ConnectionGeneration ||
++            !gateway.HasCurrentDiscovery)
++            throw new InvalidOperationException("The reviewed Gateway connection changed. Recheck Ollama first.");
++    }
++
++    public async Task DrainAsync()
++    {
++        if (_operation is { } operation)
++            await operation;
++    }
++}
+diff --git a/tests/OpenClaw.SetupEngine.Tests/OllamaWindowsSetupTests.cs b/tests/OpenClaw.SetupEngine.Tests/OllamaWindowsSetupTests.cs
+new file mode 100644
+index 00000000..437976fd
+--- /dev/null
++++ b/tests/OpenClaw.SetupEngine.Tests/OllamaWindowsSetupTests.cs
+@@ -0,0 +1,287 @@
++using System.Text.Json;
++using OpenClaw.TestSupport;
++
++namespace OpenClaw.SetupEngine.Tests;
++
++public sealed class OllamaWindowsSetupTests
++{
++    private static OllamaWindowsObservation Missing => new(
++        OllamaWindowsInstallationState.NoSupportedRegistration, OllamaWindowsActivity.NotActive,
++        null, OllamaWindowsApiState.NotListening, 0);
++    private static OllamaWindowsObservation Stopped => new(
++        OllamaWindowsInstallationState.Verified, OllamaWindowsActivity.NotActive,
++        new(Path.Combine(Path.GetTempPath(), "existing-ollama"), "existing-version"),
++        OllamaWindowsApiState.NotListening, 0);
++
++    [Fact]
++    public async Task ExistingGatewayModelAvoidsWindowsInventoryAndAllAppMutations()
++    {
++        var transport = new Transport { Model = "ollama/existing:tag" };
++        using var host = new Host();
++        var setup = Create(host, transport);
++        var snapshot = await setup.InspectAsync(CancellationToken.None);
++        Assert.Equal("ollama/existing:tag", snapshot.ExistingGatewayCandidate?.ModelRef);
++        Assert.Equal("existing-model", snapshot.ExistingGatewayCandidate?.Kind);
++        Assert.Equal(0, host.Observations);
++        Assert.Throws<InvalidOperationException>(() => setup.Review(snapshot, OllamaWindowsAction.Install));
++        Assert.Equal((0, 0, 0), (host.Acquisitions, host.Installations, host.Opens));
++        Assert.All(transport.MethodsCalled, method => Assert.Equal("openclaw.setup.detect", method));
++    }
++
++    [Theory]
++    [InlineData((int)OllamaWindowsInstallationState.Unknown, (int)OllamaWindowsActivity.NotActive, (int)OllamaWindowsApiState.NotListening)]
++    [InlineData((int)OllamaWindowsInstallationState.NoSupportedRegistration, (int)OllamaWindowsActivity.Unknown, (int)OllamaWindowsApiState.NotListening)]
++    [InlineData((int)OllamaWindowsInstallationState.NoSupportedRegistration, (int)OllamaWindowsActivity.NotActive, (int)OllamaWindowsApiState.Unknown)]
++    [InlineData((int)OllamaWindowsInstallationState.NoSupportedRegistration, (int)OllamaWindowsActivity.Active, (int)OllamaWindowsApiState.NotListening)]
++    public async Task UnknownOrActiveEvidenceCannotBecomeInstallConsent(
++        int installation, int activity, int api)
++    {
++        using var host = new Host { Current = new((OllamaWindowsInstallationState)installation,
++            (OllamaWindowsActivity)activity, null, (OllamaWindowsApiState)api, 0) };
++        var setup = Create(host, new Transport());
++        var snapshot = await setup.InspectAsync(CancellationToken.None);
++        Assert.Throws<InvalidOperationException>(() => setup.Review(snapshot, OllamaWindowsAction.Install));
++        Assert.Equal(0, host.Acquisitions);
++    }
++
++    [Fact]
++    public async Task UnboundGatewayMayBeInspectedButCannotAuthorizeAppInstallation()
++    {
++        using var host = new Host();
++        var transport = new Transport { Route = new("gateway", "agent", "authority") };
++        var setup = Create(host, transport);
++        var snapshot = await setup.InspectAsync(CancellationToken.None);
++        Assert.Throws<InvalidOperationException>(() => setup.Review(snapshot, OllamaWindowsAction.Install));
++        Assert.Equal(0, host.Acquisitions);
++    }
++
++    [Fact]
++    public async Task RegisteredStoppedApplicationIsOpenedWithoutReinstalling()
++    {
++        using var host = new Host { Current = Stopped, AfterOpen = Stopped with
++            { ApiState = OllamaWindowsApiState.Reachable, LocalChatModelCount = 0 } };
++        var transport = new Transport();
++        var setup = Create(host, transport);
++        var intent = setup.Review(await setup.InspectAsync(CancellationToken.None), OllamaWindowsAction.Open);
++        var result = await setup.RunAsync(intent, CancellationToken.None);
++        Assert.Equal(OllamaWindowsSetupOutcome.AppReadyNeedsModel, result.Outcome);
++        Assert.Equal((0, 0, 1), (host.Acquisitions, host.Installations, host.Opens));
++        Assert.All(transport.MethodsCalled, method => Assert.Equal("openclaw.setup.detect", method));
++    }
++
++    [Fact]
++    public async Task ServiceAppearingDuringDownloadIsReusedWithoutInstallationOrLaunch()
++    {
++        using var host = new Host();
++        host.DuringAcquire = () => host.Current = Missing with
++            { Activity = OllamaWindowsActivity.Active, ApiState = OllamaWindowsApiState.Reachable, LocalChatModelCount = 1 };
++        var transport = new Transport();
++        var setup = Create(host, transport);
++        var intent = setup.Review(await setup.InspectAsync(CancellationToken.None), OllamaWindowsAction.Install);
++        var result = await setup.RunAsync(intent, CancellationToken.None);
++        Assert.Equal(OllamaWindowsSetupOutcome.GatewayReadinessUnknown, result.Outcome);
++        Assert.Equal((1, 0, 0), (host.Acquisitions, host.Installations, host.Opens));
++        Assert.All(transport.MethodsCalled, method => Assert.Equal("openclaw.setup.detect", method));
++    }
++
++    [Fact]
++    public async Task RevokedGatewayAuthorityAfterDownloadCannotAdmitInstallation()
++    {
++        using var host = new Host();
++        var transport = new Transport();
++        host.DuringAcquire = () => transport.OperatorScopes = [];
++        var setup = Create(host, transport);
++        var intent = setup.Review(await setup.InspectAsync(CancellationToken.None), OllamaWindowsAction.Install);
++        var result = await setup.RunAsync(intent, CancellationToken.None);
++        Assert.Equal(OllamaWindowsSetupOutcome.Failed, result.Outcome);
++        Assert.Equal(0, host.Installations);
++    }
++
++    [Fact]
++    public async Task CancellationAfterAdmissionKeepsOperationOwnedUntilInstallationSettles()
++    {
++        using var host = new Host();
++        var installed = new TaskCompletionSource<CommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
++        host.PendingInstall = installed.Task;
++        var setup = Create(host, new Transport());
++        var intent = setup.Review(await setup.InspectAsync(CancellationToken.None), OllamaWindowsAction.Install);
++        using var cancellation = new CancellationTokenSource();
++        var run = setup.RunAsync(intent, cancellation.Token);
++        Task? drain = null;
++        try
++        {
++            await host.InstallStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
++            Assert.Equal(1, host.Installations);
++            cancellation.Cancel();
++            drain = setup.DrainAsync();
++            Assert.True(setup.MutationInFlight);
++            Assert.False(run.IsCompleted);
++            Assert.False(drain.IsCompleted);
++        }
++        finally
++        {
++            host.Current = Stopped;
++            installed.TrySetResult(new(0, "", "", TimeSpan.Zero, false));
++            await run.WaitAsync(TimeSpan.FromSeconds(10));
++        }
++        var result = await run.WaitAsync(TimeSpan.FromSeconds(10));
++        await drain!.WaitAsync(TimeSpan.FromSeconds(10));
++        Assert.Equal(OllamaWindowsSetupOutcome.CancelledInstallationPresent, result.Outcome);
++        Assert.False(setup.MutationInFlight);
++        Assert.Equal(0, host.Opens);
++        await Assert.ThrowsAsync<InvalidOperationException>(() => setup.RunAsync(intent, CancellationToken.None));
++    }
++
++    [Fact]
++    public async Task InstallerStartedAppNeedsModelWithoutAdditionalLaunchOrProviderMutation()
++    {
++        using var host = new Host { AfterInstall = Stopped with
++            { Activity = OllamaWindowsActivity.Active, ApiState = OllamaWindowsApiState.Reachable } };
++        var transport = new Transport();
++        var setup = Create(host, transport);
++        var result = await setup.RunAsync(
++            setup.Review(await setup.InspectAsync(CancellationToken.None), OllamaWindowsAction.Install),
++            CancellationToken.None);
++        Assert.Equal(OllamaWindowsSetupOutcome.AppReadyNeedsModel, result.Outcome);
++        Assert.Equal((1, 1, 0), (host.Acquisitions, host.Installations, host.Opens));
++        Assert.All(transport.MethodsCalled, method => Assert.Equal("openclaw.setup.detect", method));
++    }
++
++    [Fact]
++    public async Task ForeignLlamaServerBlocksInstallReviewAndLateInstallation()
++    {
++        using var host = new Host { Current = Missing with { HasInstallationConflict = true } };
++        var setup = Create(host, new Transport());
++        var conflicted = await setup.InspectAsync(CancellationToken.None);
++        Assert.Throws<InvalidOperationException>(() => setup.Review(conflicted, OllamaWindowsAction.Install));
++        Assert.Equal(0, host.Acquisitions);
++        host.Current = Missing;
++        var intent = setup.Review(await setup.InspectAsync(CancellationToken.None), OllamaWindowsAction.Install);
++        host.DuringAcquire = () => host.Current = Missing with { HasInstallationConflict = true };
++        var late = await setup.RunAsync(intent, CancellationToken.None);
++        Assert.Equal(OllamaWindowsSetupOutcome.InspectionRequired, late.Outcome);
++        Assert.Contains("llama-server.exe", Assert.IsType<string>(late.Diagnostic));
++        Assert.Equal(0, host.Installations);
++        Assert.Equal(0, host.Opens);
++    }
++
++    [Fact]
++    public async Task ForeignLlamaServerDoesNotPreventOpeningAnExistingVerifiedOllamaApp()
++    {
++        using var host = new Host { Current = Stopped with { HasInstallationConflict = true },
++            AfterOpen = Stopped with { ApiState = OllamaWindowsApiState.Reachable } };
++        var setup = Create(host, new Transport());
++        var intent = setup.Review(await setup.InspectAsync(CancellationToken.None), OllamaWindowsAction.Open);
++        var result = await setup.RunAsync(intent, CancellationToken.None);
++        Assert.Equal(OllamaWindowsSetupOutcome.AppReadyNeedsModel, result.Outcome);
++        Assert.Equal((0, 0, 1), (host.Acquisitions, host.Installations, host.Opens));
++    }
++
++    [Fact]
++    public async Task BlockedInstallerAdmissionIsFailureNotUncertainDeployment()
++    {
++        using var host = new Host { InstallAdmissionFailure = new InvalidDataException("Blocked installer trust.") };
++        var setup = Create(host, new Transport());
++        var intent = setup.Review(await setup.InspectAsync(CancellationToken.None), OllamaWindowsAction.Install);
++        var result = await setup.RunAsync(intent, CancellationToken.None);
++        Assert.Equal(OllamaWindowsSetupOutcome.Failed, result.Outcome);
++        Assert.Equal(0, host.Installations);
++        Assert.False(setup.MutationInFlight);
++    }
++
++    [Fact]
++    public async Task InstallerFailureWithRegistrationIsPartialCompletionNotRollbackOrRetry()
++    {
++        using var host = new Host { AfterInstall = Stopped, InstallExitCode = 7 };
++        var setup = Create(host, new Transport());
++        var intent = setup.Review(await setup.InspectAsync(CancellationToken.None), OllamaWindowsAction.Install);
++        var result = await setup.RunAsync(intent, CancellationToken.None);
++        Assert.Equal(OllamaWindowsSetupOutcome.InstallationOutcomeUnknown, result.Outcome);
++        Assert.Equal(7, result.InstallerExitCode);
++        Assert.Equal(Stopped.Installation, result.Windows!.Installation);
++        Assert.Equal(1, host.Installations);
++        Assert.Equal(0, host.Opens);
++    }
++
++    private static OllamaWindowsSetup Create(Host host, Transport transport) =>
++        new(host, new GatewayAiSetupClient(transport), new SetupAccessDraft(new SetupConfig()));
++
++    private sealed class Host : IOllamaWindowsAppHost, IDisposable
++    {
++        private readonly TempDirectory _temp = new();
++        public OllamaWindowsObservation Current { get; set; } = Missing;
++        public OllamaWindowsObservation? AfterInstall { get; init; }
++        public OllamaWindowsObservation? AfterOpen { get; init; }
++        public Action? DuringAcquire { get; set; }
++        public Task<CommandResult>? PendingInstall { get; set; }
++        public TaskCompletionSource InstallStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
++        public int InstallExitCode { get; init; }
++        public Exception? InstallAdmissionFailure { get; init; }
++        public int Observations { get; private set; }
++        public int Acquisitions { get; private set; }
++        public int Installations { get; private set; }
++        public int Opens { get; private set; }
++        public Task<OllamaWindowsObservation> ObserveAsync(CancellationToken ct)
++        {
++            ct.ThrowIfCancellationRequested();
++            Observations++;
++            return Task.FromResult(Current);
++        }
++        public Task<OllamaWindowsInstaller> AcquireAsync(CancellationToken ct, Action beforeDownload)
++        {
++            ct.ThrowIfCancellationRequested();
++            beforeDownload();
++            Acquisitions++;
++            var directory = _temp.Combine(Guid.NewGuid().ToString("N"));
++            Directory.CreateDirectory(directory);
++            var path = Path.Combine(directory, "synthetic-installer.bin");
++            File.WriteAllText(path, "Synthetic bytes. Never executed.");
++            DuringAcquire?.Invoke();
++            return Task.FromResult(new OllamaWindowsInstaller(directory,
++                new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read)));
++        }
++        public Task<CommandResult> InstallAsync(OllamaWindowsInstaller installer,
++            CancellationToken admissionCancellation, Action beforeAdmission)
++        {
++            admissionCancellation.ThrowIfCancellationRequested();
++            if (InstallAdmissionFailure is { } failure) throw failure;
++            beforeAdmission();
++            Installations++;
++            InstallStarted.TrySetResult();
++            if (AfterInstall is { } after) Current = after;
++            return PendingInstall ?? Task.FromResult(new CommandResult(InstallExitCode, "", "", TimeSpan.Zero, false));
++        }
++        public Task OpenAsync(OllamaWindowsInstallation installation, CancellationToken ct, Action beforeOpen)
++        {
++            ct.ThrowIfCancellationRequested();
++            beforeOpen();
++            Opens++;
++            if (AfterOpen is { } after) Current = after;
++            return Task.CompletedTask;
++        }
++        public void Dispose() => _temp.Dispose();
++    }
++
++    private sealed class Transport : IGatewayAiSetupTransport
++    {
++        public GatewayAiSetupRoute Route { get; init; } = new("gateway", "agent", "authority", new string('A', 64));
++        public long Generation => 1;
++        public bool IsConnected => true;
++        public IReadOnlyCollection<string> OperatorScopes { get; set; } = ["operator.admin"];
++        public IReadOnlyCollection<string> Methods => ["openclaw.setup.detect", "openclaw.setup.verify", "openclaw.setup.activate"];
++        public List<string> MethodsCalled { get; } = [];
++        public string? Model { get; init; }
++        public Task<JsonElement> RequestAsync(string method, object parameters, int timeoutMs, CancellationToken cancellationToken)
++        {
++            Assert.Equal("openclaw.setup.detect", method);
++            MethodsCalled.Add(method);
++            return Task.FromResult(JsonSerializer.SerializeToElement(new
++            {
++                candidates = Model is null ? Array.Empty<object>() :
++                    [new { kind = "existing-model", label = "Current model", detail = "Configured", modelRef = Model, recommended = false },
++                        new { kind = "provider-auto:ollama", label = "Ollama", detail = "Discovered", modelRef = Model, recommended = false }],
++                manualProviders = Array.Empty<object>(), workspace = "/synthetic", configuredModel = Model, setupComplete = Model is not null
++            }));
++        }
++    }
++}
+diff --git a/tests/OpenClaw.Tray.UITests/OnboardingOllamaPageTests.cs b/tests/OpenClaw.Tray.UITests/OnboardingOllamaPageTests.cs
+new file mode 100644
+index 00000000..9636ab48
+--- /dev/null
++++ b/tests/OpenClaw.Tray.UITests/OnboardingOllamaPageTests.cs
+@@ -0,0 +1,475 @@
++using System.Reflection;
++using System.Text.Json;
++using Microsoft.UI.Xaml;
++using Microsoft.UI.Xaml.Automation.Peers;
++using Microsoft.UI.Xaml.Automation.Provider;
++using Microsoft.UI.Xaml.Controls;
++using OpenClaw.SetupEngine;
++using OpenClaw.SetupEngine.UI;
++using OpenClaw.SetupEngine.UI.Pages;
++using OpenClaw.SetupEngine.UI.Controls;
++using OpenClaw.TestSupport;
++using OpenClawTray.Services;
++
++namespace OpenClaw.Tray.UITests;
++
++/// <summary>Mounted native flow with synthetic OS/Gateway inputs, not installed-binary or inference proof.</summary>
++[Collection(UICollection.Name)]
++public sealed class OnboardingOllamaPageTests(UIThreadFixture ui)
++{
++    private static readonly TimeSpan FixtureDeadline = TimeSpan.FromSeconds(10);
++    [Theory]
++    [InlineData(false)]
++    [InlineData(true)]
++    public async Task OllamaSetUpReviewsInstallOrOpenThenRequiresExplicitGatewayContinuation(bool installed)
++    {
++        await WithWindowAsync(async context =>
++        {
++            context.Host.Current = installed ? Verified : Missing;
++            await OpenOllamaAsync(context);
++            var dialog = await DialogAsync(context.Page);
++            var primary = Button(dialog, "PrimaryButton");
++            var consent = Assert.Single(TestSupport.FindDescendants<CheckBox>(dialog), item => item.Name == "OllamaAppInstallConsent");
++            Assert.Equal((0, 0, 0), (context.Host.Downloads, context.Host.Installs, context.Host.Opens));
++            if (installed)
++            {
++                Assert.Equal("Open Ollama", dialog.PrimaryButtonText);
++                Assert.Equal(Visibility.Collapsed, consent.Visibility);
++                Assert.True(primary.IsEnabled);
++            }
++            else
++            {
++                Assert.False(primary.IsEnabled);
++                var message = Named<TextBlock>(dialog, "OllamaAppMessage");
++                Assert.Contains("4 GB", message.Text);
++                Assert.Contains(OllamaWindowsPackage.Version, message.Text);
++                Assert.Contains("Models are not included", message.Text);
++                Assert.IsAssignableFrom<IToggleProvider>(FrameworkElementAutomationPeer.CreatePeerForElement(consent)
++                    .GetPattern(PatternInterface.Toggle)).Toggle();
++                Assert.True(primary.IsEnabled);
++            }
++            await MountedControlCapture.OptionalAsync(context.Window, installed ? "ollama-open-review" : "ollama-install-review");
++            Invoke(primary);
++            await TestSupport.WaitForRenderedConditionAsync(() =>
++                Named<TextBlock>(dialog, "OllamaAppMessage").Text.Contains("no usable local chat model"), "Ollama needs-model result");
++            Assert.Equal(installed ? (0, 0, 1) : (1, 1, 0),
++                (context.Host.Downloads, context.Host.Installs, context.Host.Opens));
++            Assert.Equal(0, context.Completed());
++            Assert.DoesNotContain("openclaw.setup.prepare.start", context.Transport.Calls);
++            Assert.All(context.Transport.Calls, method => Assert.Equal("openclaw.setup.detect", method));
++            await MountedControlCapture.OptionalAsync(context.Window, installed ? "ollama-open-needs-model" : "ollama-install-needs-model");
++            Invoke(Button(dialog, "SecondaryButton"));
++            await TestSupport.WaitForRenderedConditionAsync(() =>
++                context.Transport.Calls.Contains("openclaw.setup.prepare.start"), "explicit Ollama Gateway continuation");
++            Assert.Equal(1, context.Transport.Calls.Count(method => method == "openclaw.setup.prepare.start"));
++            var provider = Assert.IsType<ProviderSetupDialog>(typeof(AiSetupPage).GetField("_providerDialog",
++                BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(context.Page));
++            await TestSupport.WaitForRenderedConditionAsync(() => provider.IsLoaded &&
++                Assert.IsType<TextBox>(provider.FindName("TextInput")).IsEnabled, "Gateway address prompt");
++            Assert.IsType<TextBox>(provider.FindName("TextInput")).Text = "http://127.0.0.1:11434";
++            Invoke(Button(provider, "PrimaryButton"));
++            await TestSupport.WaitForRenderedConditionAsync(() =>
++                Assert.IsType<CheckBox>(provider.FindName("ConfirmInput")).Visibility == Visibility.Visible, "separate model download confirmation");
++            Assert.False(Assert.IsType<CheckBox>(provider.FindName("ConfirmInput")).IsChecked == true);
++            Assert.Equal(0, context.Transport.ModelDownloadAnswers);
++            Assert.Equal(0, context.Completed());
++        });
++    }
++
++    [Theory]
++    [InlineData(true)]
++    [InlineData(false)]
++    public async Task UnknownOrWindowsOnlyReadinessNeverBecomesAnInstallPrompt(bool unknown)
++    {
++        await WithWindowAsync(async context =>
++        {
++            context.Host.Current = unknown
++                ? new(OllamaWindowsInstallationState.Unknown, OllamaWindowsActivity.Unknown, null, OllamaWindowsApiState.Unknown, 0,
++                    "Synthetic conflicting registration. Authorization: Bearer synthetic-private-token")
++                : Missing with { ApiState = OllamaWindowsApiState.Reachable, LocalChatModelCount = 1 };
++            await OpenOllamaAsync(context);
++            var dialog = await DialogAsync(context.Page);
++            Assert.Equal("Check again", dialog.PrimaryButtonText);
++            Assert.Equal(Visibility.Collapsed, Named<CheckBox>(dialog, "OllamaAppInstallConsent").Visibility);
++            Assert.Contains(unknown ? "could not confirm" : "Gateway has not yet confirmed",
++                Named<TextBlock>(dialog, "OllamaAppMessage").Text);
++            Assert.Equal((0, 0, 0), (context.Host.Downloads, context.Host.Installs, context.Host.Opens));
++            Assert.All(context.Transport.Calls, method => Assert.Equal("openclaw.setup.detect", method));
++            Assert.Equal(0, context.Completed());
++            if (unknown)
++            {
++                var details = Named<TextBlock>(dialog, "OllamaAppDiagnostics").Text;
++                Assert.Contains("Synthetic conflicting registration", details);
++                Assert.DoesNotContain("synthetic-private-token", details);
++                Invoke(Button(dialog, "CloseButton"));
++                await TestSupport.WaitForRenderedConditionAsync(() =>
++                    Assert.IsType<Button>(context.Page.FindName("RefreshButton")).IsEnabled, "inspection dialog settled");
++                var log = await File.ReadAllTextAsync(context.LogPath);
++                Assert.Contains("Synthetic conflicting registration", log);
++                Assert.DoesNotContain("synthetic-private-token", log);
++            }
++        });
++    }
++
++    [Fact]
++    public async Task OllamaExistingGatewayModelUsesTheCanonicalExactModelPathWithoutWindowsActions()
++    {
++        await WithWindowAsync(async context =>
++        {
++            context.Transport.HasModel = true;
++            await OpenOllamaAsync(context);
++            var dialog = await DialogAsync(context.Page);
++            await TestSupport.WaitForRenderedConditionAsync(() => dialog.PrimaryButtonText == "Use detected model", "existing Ollama model action");
++            Assert.Equal(0, context.Host.Observations);
++            Assert.Contains(Transport.Model, Named<TextBlock>(dialog, "OllamaAppMessage").Text);
++            Invoke(Button(dialog, "PrimaryButton"));
++            await TestSupport.WaitForRenderedConditionAsync(() => context.Completed() == 1, "Ollama exact-model completion");
++            Assert.Equal(Transport.Model, context.Transport.ActivatedModel);
++            Assert.Equal("existing-model", context.Transport.ActivatedKind);
++            Assert.Contains("openclaw.setup.verify", context.Transport.Calls);
++            Assert.DoesNotContain("openclaw.setup.prepare.start", context.Transport.Calls);
++            Assert.Equal((0, 0, 0), (context.Host.Downloads, context.Host.Installs, context.Host.Opens));
++        });
++    }
++
++    [Theory]
++    [InlineData(false)]
++    [InlineData(true)]
++    public async Task MountedCloseOrQuitRetainsInstallerLoggerAndSetupLockUntilSettlement(bool quit)
++    {
++        await WithWindowAsync(async context =>
++        {
++            context.Host.HoldInstallation = true;
++            await OpenOllamaAsync(context);
++            var dialog = await DialogAsync(context.Page);
++            var consent = Named<CheckBox>(dialog, "OllamaAppInstallConsent");
++            Assert.IsAssignableFrom<IToggleProvider>(FrameworkElementAutomationPeer.CreatePeerForElement(consent)
++                .GetPattern(PatternInterface.Toggle)).Toggle();
++            Invoke(Button(dialog, "PrimaryButton"));
++            await context.Host.InstallStarted.Task.WaitAsync(FixtureDeadline);
++            var exited = false;
++            Task cleanup;
++            WindowManager? manager = null;
++            if (quit)
++            {
++                manager = CreateManager();
++                typeof(WindowManager).GetField("_setupWindow", BindingFlags.Instance | BindingFlags.NonPublic)!
++                    .SetValue(manager, context.Window);
++                // Use the actual shutdown coordinator, window manager, mounted page and setup lock.
++                // Suppress only final Application.Exit so the suite's shared WinUI process survives.
++                cleanup = new AppShutdownCoordinator().ShutdownAsync(new AppShutdownPlan(
++                    manager.BeginShutdown,
++                    [new("window manager", async () => await manager.CloseForShutdownAsync())],
++                    () => exited = true));
++            }
++            else
++            {
++                context.Window.Close();
++                cleanup = context.Window.CleanupCompleted;
++            }
++            try
++            {
++                await context.Host.CancellationSeen.Task.WaitAsync(FixtureDeadline);
++                Assert.False(cleanup.IsCompleted);
++                Assert.False(exited);
++                Assert.False(SetupRunLock.TryAcquire(context.DataDirectory, out var refused, out _));
++                Assert.Null(refused);
++                Assert.Throws<IOException>(() =>
++                {
++                    using var probe = File.Open(context.LogPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
++                });
++                Assert.Equal(0, context.Completed());
++            }
++            finally { context.Host.FinishInstallation(); }
++            await cleanup.WaitAsync(FixtureDeadline);
++            if (manager is not null) await manager.CloseForShutdownAsync().WaitAsync(FixtureDeadline);
++            Assert.Equal(quit, exited);
++            Assert.True(SetupRunLock.TryAcquire(context.DataDirectory, out var released, out _));
++            released!.Dispose();
++            using (File.Open(context.LogPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
++            Assert.Contains("CancelledInstallationPresent", await File.ReadAllTextAsync(context.LogPath));
++            Assert.Equal(1, context.Host.Installs);
++            Assert.Equal(0, context.Host.Opens);
++            Assert.DoesNotContain("openclaw.setup.verify", context.Transport.Calls);
++            Assert.Equal(0, context.Completed());
++        });
++    }
++
++    [Fact]
++    public async Task ForeignLlamaRuntimeShowsConflictWithoutAnInstallAction()
++    {
++        await WithWindowAsync(async context =>
++        {
++            context.Host.Current = Missing with { HasInstallationConflict = true };
++            await OpenOllamaAsync(context);
++            var dialog = await DialogAsync(context.Page);
++            Assert.Equal("Check again", dialog.PrimaryButtonText);
++            Assert.Contains("llama.cpp", Named<TextBlock>(dialog, "OllamaAppMessage").Text);
++            Assert.Contains("current owner", Named<TextBlock>(dialog, "OllamaAppMessage").Text);
++            Assert.Contains("llama-server.exe", Named<TextBlock>(dialog, "OllamaAppDiagnostics").Text);
++            Assert.Equal(Visibility.Collapsed, Named<CheckBox>(dialog, "OllamaAppInstallConsent").Visibility);
++            Assert.Equal((0, 0, 0), (context.Host.Downloads, context.Host.Installs, context.Host.Opens));
++        });
++    }
++
++    [Fact]
++    public async Task NativeCancelButtonRetainsAdmittedWorkThenReturnsToCloseAfterSettlement()
++    {
++        await WithWindowAsync(async context =>
++        {
++            context.Host.HoldInstallation = true;
++            await OpenOllamaAsync(context);
++            var dialog = await DialogAsync(context.Page);
++            var consent = Named<CheckBox>(dialog, "OllamaAppInstallConsent");
++            Assert.IsAssignableFrom<IToggleProvider>(FrameworkElementAutomationPeer.CreatePeerForElement(consent)
++                .GetPattern(PatternInterface.Toggle)).Toggle();
++            Invoke(Button(dialog, "PrimaryButton"));
++            try
++            {
++                await context.Host.InstallStarted.Task.WaitAsync(FixtureDeadline);
++                Invoke(Button(dialog, "CloseButton"));
++                await context.Host.CancellationSeen.Task.WaitAsync(FixtureDeadline);
++                Assert.True(dialog.IsLoaded);
++                Assert.Equal("Finishing current step", dialog.CloseButtonText);
++                Assert.Equal(1, context.Host.Installs);
++                Assert.DoesNotContain("openclaw.setup.prepare.start", context.Transport.Calls);
++            }
++            finally { context.Host.FinishInstallation(); }
++            await TestSupport.WaitForRenderedConditionAsync(() => dialog.CloseButtonText == "Close" &&
++                Named<TextBlock>(dialog, "OllamaAppMessage").Text.Contains("Further setup was cancelled"),
++                "settled cancellation keeps its partial outcome and Close action");
++            Invoke(Button(dialog, "CloseButton"));
++            await TestSupport.WaitForRenderedConditionAsync(() =>
++                Assert.IsType<Button>(context.Page.FindName("RefreshButton")).IsEnabled, "cancelled Ollama action settled");
++            Assert.Equal(0, context.Completed());
++            Assert.Equal(0, context.Host.Opens);
++        });
++    }
++
++    private async Task WithWindowAsync(Func<Context, Task> assertion)
++    {
++        OnboardingNativeProof.AssertIsolatedRoots();
++        using var temp = new TempDirectory("ollama-mounted-");
++        var configPath = temp.Combine("setup.json");
++        await File.WriteAllTextAsync(configPath, JsonSerializer.Serialize(new SetupConfig()));
++        await ui.RunOnUIAsync(async () =>
++        {
++            var resources = OnboardingWindowsFlowTests.LoadProgressResources(
++                Environment.GetEnvironmentVariable("OPENCLAW_REPO_ROOT")!);
++            Application.Current.Resources.MergedDictionaries.Add(resources);
++            SetupWindow? window = null;
++            Host? host = null;
++            try
++            {
++                var data = temp.Combine("data");
++                var local = temp.Combine("local");
++                window = OnboardingNativeProof.CreateWindow(() => new SetupWindow(configPath: configPath,
++                    dataDir: data, localDataDir: local, commandLineArgs: [], startupRegistrationAllowed: false));
++                var root = Assert.IsType<Grid>(window.Content);
++                var frame = Assert.IsType<Frame>(root.FindName("RootFrame"));
++                var transport = new Transport();
++                host = new Host(temp.Path);
++                var completed = 0;
++                var logPath = temp.Combine("ollama.jsonl");
++                var args = new AiSetupPageArgs(window.AccessDraft.Config, data, local,
++                    () => false, () => throw new InvalidOperationException("App readiness is not AI completion."),
++                    TransportFactory: () => transport,
++                    CompleteVerifiedSetup: proof =>
++                    {
++                        Assert.Equal(Transport.Model, proof.ModelRef);
++                        completed++;
++                        return Task.CompletedTask;
++                    })
++                {
++                    OllamaSetupFactory = client =>
++                        (new OllamaWindowsSetup(host, client, window.AccessDraft), new SetupLogger(logPath))
++                };
++                frame.Navigate(typeof(AiSetupPage), args);
++                var page = Assert.IsType<AiSetupPage>(frame.Content);
++                OnboardingNativeProof.ActivateOwned(window);
++                await TestSupport.WaitForRenderedConditionAsync(() =>
++                    page.IsLoaded && page.XamlRoot is not null &&
++                    TestSupport.FindDescendants<SetupActionCard>(Assert.IsType<ItemsControl>(page.FindName("PrepareChoices")))
++                        .Any(card => card.IsEnabled), "mounted Ollama setup entrypoint");
++                await assertion(new(window, page, host, transport, data, logPath, () => completed));
++            }
++            finally
++            {
++                host?.FinishInstallation();
++                if (window is not null)
++                {
++                    if (!window.IsClosed) window.Close();
++                    await window.CleanupCompleted.WaitAsync(FixtureDeadline);
++                }
++                Application.Current.Resources.MergedDictionaries.Remove(resources);
++            }
++        });
++    }
++
++    private async Task OpenOllamaAsync(Context context)
++    {
++        var choices = Assert.IsType<ItemsControl>(context.Page.FindName("PrepareChoices"));
++        var card = Assert.Single(TestSupport.FindDescendants<SetupActionCard>(choices));
++        Assert.Equal("Set up", Assert.Single(TestSupport.FindDescendants<TextBlock>(card),
++            text => text.Text == "Set up").Text);
++        Assert.IsAssignableFrom<IInvokeProvider>(FrameworkElementAutomationPeer.CreatePeerForElement(card)
++            .GetPattern(PatternInterface.Invoke)).Invoke();
++        await DialogAsync(context.Page);
++    }
++
++    private static async Task<ContentDialog> DialogAsync(AiSetupPage page)
++    {
++        ContentDialog? dialog = null;
++        await TestSupport.WaitForRenderedConditionAsync(() =>
++        {
++            dialog = typeof(AiSetupPage).GetField("_ollamaDialog", BindingFlags.NonPublic | BindingFlags.Instance)!
++                .GetValue(page) as ContentDialog;
++            return dialog is { IsLoaded: true } &&
++                TestSupport.FindDescendants<Button>(dialog).Any(button => button.Name == "PrimaryButton") &&
++                Named<TextBlock>(dialog, "OllamaAppStatus").Text != "Checking the selected Gateway and this PC…";
++        }, "native Ollama review dialog");
++        return dialog!;
++    }
++
++    private static T Named<T>(DependencyObject root, string name) where T : FrameworkElement =>
++        Assert.Single(TestSupport.FindDescendants<T>(root), element => element.Name == name);
++    private static Button Button(ContentDialog dialog, string name) => Named<Button>(dialog, name);
++    private static void Invoke(Button button)
++    {
++        Assert.True(button.IsEnabled);
++        Assert.IsAssignableFrom<IInvokeProvider>(new ButtonAutomationPeer(button).GetPattern(PatternInterface.Invoke)).Invoke();
++    }
++
++    private WindowManager CreateManager() => new(ui.Dispatcher, new WindowManagerCallbacks(
++        GetAppState: () => null, GetAppNotificationService: () => null, GetConnectionManager: () => null,
++        GetGatewayRegistry: () => null, GetSettings: () => null, GetGatewayDirectConnectService: () => null,
++        GetLocalAiRuntime: () => null, GetNodeService: () => null, GetPageActivator: () => null,
++        GetPendingChatSessionKey: () => null, GetStartupArgs: () => null, IsDeepLinkArg: _ => false,
++        RequiresSetup: () => false, Connect: () => { }, Disconnect: () => { }, SettingsSaved: (_, _) => { },
++        AdvancedSetupRequested: (_, _) => { }, SetupCompleted: (_, _) => { }, ApplyTheme: _ => { }));
++
++    private sealed record Context(SetupWindow Window, AiSetupPage Page, Host Host, Transport Transport,
++        string DataDirectory, string LogPath, Func<int> Completed);
++    private static OllamaWindowsObservation Missing => new(OllamaWindowsInstallationState.NoSupportedRegistration,
++        OllamaWindowsActivity.NotActive, null, OllamaWindowsApiState.NotListening, 0);
++    private static OllamaWindowsObservation Verified => new(OllamaWindowsInstallationState.Verified,
++        OllamaWindowsActivity.NotActive, new("synthetic-install", "synthetic-version"), OllamaWindowsApiState.NotListening, 0);
++
++    private sealed class Host(string directory) : IOllamaWindowsAppHost
++    {
++        public OllamaWindowsObservation Current { get; set; } = Missing;
++        public int Observations { get; private set; }
++        public int Downloads { get; private set; }
++        public int Installs { get; private set; }
++        public int Opens { get; private set; }
++        public bool HoldInstallation { get; set; }
++        public TaskCompletionSource InstallStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
++        public TaskCompletionSource CancellationSeen { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
++        private readonly TaskCompletionSource _finish = new(TaskCreationOptions.RunContinuationsAsynchronously);
++        public void FinishInstallation() => _finish.TrySetResult();
++        public Task<OllamaWindowsObservation> ObserveAsync(CancellationToken ct)
++        {
++            ct.ThrowIfCancellationRequested();
++            Observations++;
++            return Task.FromResult(Current);
++        }
++        public Task<OllamaWindowsInstaller> AcquireAsync(CancellationToken ct, Action beforeDownload)
++        {
++            ct.ThrowIfCancellationRequested();
++            beforeDownload();
++            Downloads++;
++            var scratch = Path.Combine(directory, "synthetic-download");
++            Directory.CreateDirectory(scratch);
++            var file = Path.Combine(scratch, "fixture.bin");
++            File.WriteAllText(file, "Synthetic fixture bytes. Never executed.");
++            return Task.FromResult(new OllamaWindowsInstaller(scratch,
++                new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read)));
++        }
++        public async Task<CommandResult> InstallAsync(OllamaWindowsInstaller installer, CancellationToken ct, Action beforeAdmission)
++        {
++            ct.ThrowIfCancellationRequested();
++            beforeAdmission();
++            Installs++;
++            using var registration = ct.Register(() => CancellationSeen.TrySetResult());
++            InstallStarted.TrySetResult();
++            if (HoldInstallation) await _finish.Task;
++            Current = Verified with { Activity = OllamaWindowsActivity.Active, ApiState = OllamaWindowsApiState.Reachable };
++            return new(0, "", "", TimeSpan.Zero, false);
++        }
++        public Task OpenAsync(OllamaWindowsInstallation installation, CancellationToken ct, Action beforeOpen)
++        {
++            ct.ThrowIfCancellationRequested();
++            beforeOpen();
++            Opens++;
++            Current = Verified with { Activity = OllamaWindowsActivity.Active, ApiState = OllamaWindowsApiState.Reachable };
++            return Task.CompletedTask;
++        }
++    }
++
++    private sealed class Transport : IGatewayAiSetupTransport
++    {
++        public const string Model = "ollama/synthetic:local";
++        public GatewayAiSetupRoute Route { get; } = new("ui-proof", "agent", "authority", new string('A', 64),
++            new string('B', 64), "agent:agent:main");
++        public long Generation => 1;
++        public bool IsConnected => true;
++        public IReadOnlyCollection<string> OperatorScopes => ["operator.admin"];
++        public IReadOnlyCollection<string> Methods => ["openclaw.setup.detect", "openclaw.setup.verify", "openclaw.setup.activate.start",
++            "openclaw.setup.prepare.start", "wizard.next", "wizard.cancel"];
++        public List<string> Calls { get; } = [];
++        public bool HasModel { get; set; }
++        public string? ActivatedModel { get; private set; }
++        public string? ActivatedKind { get; private set; }
++        private string? _session;
++        private bool _showModelConfirmation;
++        public int ModelDownloadAnswers { get; private set; }
++        public Task<JsonElement> RequestAsync(string method, object parameters, int timeoutMs, CancellationToken ct)
++        {
++            ct.ThrowIfCancellationRequested();
++            Calls.Add(method);
++            var args = JsonSerializer.SerializeToElement(parameters);
++            object result;
++            switch (method)
++            {
++                case "openclaw.setup.detect":
++                    result = new
++                    {
++                        candidates = HasModel ? new object[]
++                        {
++                            new { kind = "existing-model", label = "Current model", detail = "Configured", modelRef = Model, recommended = false },
++                            new { kind = "provider-auto:ollama", label = "Ollama", detail = "Discovered", modelRef = Model, recommended = false }
++                        } : [],
++                        manualProviders = Array.Empty<object>(), prepareOptions = new[] { new { id = "ollama", label = "Ollama", kind = "custom" } },
++                        workspace = "/synthetic", configuredModel = HasModel ? Model : ActivatedModel,
++                        setupComplete = HasModel || ActivatedModel is not null
++                    };
++                    break;
++                case "openclaw.setup.activate.start":
++                    ActivatedModel = args.GetProperty("modelRef").GetString();
++                    ActivatedKind = args.GetProperty("kind").GetString();
++                    Assert.Equal(Model, ActivatedModel);
++                    result = new { sessionId = args.GetProperty("sessionId").GetString(), done = true, status = "done", modelActivation = new { modelRef = ActivatedModel } };
++                    break;
++                case "openclaw.setup.prepare.start":
++                    Assert.Equal("ollama", args.GetProperty("authChoice").GetString());
++                    _session = args.GetProperty("sessionId").GetString();
++                    result = new { sessionId = _session, done = false, status = "running", step = new { id = "address", type = "text", title = "Existing Ollama connection", message = "Synthetic address prompt" } };
++                    break;
++                case "wizard.next":
++                    if (args.TryGetProperty("answer", out _))
++                    {
++                        if (_showModelConfirmation) ModelDownloadAnswers++;
++                        _showModelConfirmation = true;
++                    }
++                    result = _showModelConfirmation
++                        ? new { sessionId = _session, done = false, status = "running", step = (object)new { id = "model-download", type = "confirm", title = "Download a model?", message = "Synthetic separate model download confirmation", initialValue = false } }
++                        : new { sessionId = _session, done = false, status = "running", step = (object)new { id = "address", type = "text", title = "Existing Ollama connection", message = "Synthetic address prompt" } };
++                    break;
++                case "wizard.cancel": result = new { status = "cancelled" }; break;
++                case "openclaw.setup.verify": result = new { ok = true, modelRef = ActivatedModel, latencyMs = 1.0 }; break;
++                default: throw new InvalidOperationException("Unexpected fixture request: " + method);
++            }
++            return Task.FromResult(JsonSerializer.SerializeToElement(result));
++        }
++    }
++}

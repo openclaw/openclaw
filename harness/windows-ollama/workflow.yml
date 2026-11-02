@@ -1,0 +1,135 @@
+# Parent copies this workflow to an owned harness repository and the packet to
+# harness/windows-ollama at the SAME reviewed workflow commit. No dispatch here.
+name: Windows Ollama frozen qualification
+on:
+  workflow_dispatch:
+    inputs:
+      qualify_app:
+        description: 'Parent-reviewed release only: install fixed Ollama on two fresh hosted runners (no models)'
+        type: boolean
+        default: false
+        required: true
+permissions:
+  contents: read
+jobs:
+  windows-ollama-fixtures:
+    runs-on: windows-2025
+    timeout-minutes: 65
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Keep canonical source bytes
+        run: git config --global core.autocrlf false
+      - name: Check out reviewed packet from this immutable workflow commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7, qualified route
+        with:
+          path: proof-harness
+          persist-credentials: false
+      - name: Check out Before W3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: openclaw/openclaw-windows-node
+          ref: d38ebb418c3aba6b24a4d6470def72b2bba4c4a8
+          path: source-before
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out After W3 (21 patch postimages, not HEAD alone)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: openclaw/openclaw-windows-node
+          ref: d38ebb418c3aba6b24a4d6470def72b2bba4c4a8
+          path: source-after
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up exact qualified SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: 10.0.403
+      - name: Admit frozen source and identical comparison overlay
+        id: prepare
+        run: |
+          ./proof-harness/harness/windows-ollama/Prepare-Source.ps1 -BeforeSource "$env:GITHUB_WORKSPACE/source-before" -AfterSource "$env:GITHUB_WORKSPACE/source-after" -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/windows-ollama"
+      - name: Establish current interactive owner and qualified runtime
+        id: runtime
+        run: |
+          ./proof-harness/harness/windows-ollama/Initialize-NativeRuntime.ps1 -BeforeSource "$env:GITHUB_WORKSPACE/source-before" -AfterSource "$env:GITHUB_WORKSPACE/source-after" -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/windows-ollama"
+      - name: Verify immutable public catalog data (not acquisition proof)
+        if: '!cancelled() && steps.prepare.outcome == ''success'' && steps.runtime.outcome == ''success'''
+        run: ./proof-harness/harness/windows-ollama/Test-CatalogManifest.ps1 -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/windows-ollama"
+      - name: Observe actual WinGet contract (no repair or output shim)
+        id: winget
+        if: '!cancelled() && steps.prepare.outcome == ''success'' && steps.runtime.outcome == ''success'''
+        run: ./proof-harness/harness/windows-ollama/Test-WinGetContract.ps1 -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/windows-ollama"
+      - name: Full build, Shared, Tray, SetupEngine, Connection and strict private UI
+        if: '!cancelled() && steps.prepare.outcome == ''success'' && steps.runtime.outcome == ''success'''
+        run: |
+          ./proof-harness/harness/windows-ollama/Invoke-RequiredGates.ps1 -BeforeSource "$env:GITHUB_WORKSPACE/source-before" -AfterSource "$env:GITHUB_WORKSPACE/source-after" -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/windows-ollama"
+      - name: Record fixture-only qualification, never feature completion
+        if: always()
+        run: ./proof-harness/harness/windows-ollama/Write-FinalReceipt.ps1 -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/windows-ollama"
+      - name: Retain exact receipts and failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-ollama-frozen-candidate
+          path: .artifacts/windows-ollama/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  real-ollama-app:
+    needs: windows-ollama-fixtures
+    if: inputs.qualify_app == true
+    runs-on: windows-2025
+    timeout-minutes: 110
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [Normal, CancelCloseQuit]
+    env:
+      REAL_MODE: ${{ matrix.mode }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Keep canonical source bytes
+        run: git config --global core.autocrlf false
+      - name: Check out the same immutable reviewed packet
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: proof-harness
+          persist-credentials: false
+      - name: Fresh product source, no comparison overlays or other-mode installation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: openclaw/openclaw-windows-node
+          ref: d38ebb418c3aba6b24a4d6470def72b2bba4c4a8
+          path: source-real
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Exact qualified SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          dotnet-version: 10.0.403
+      - name: Admit immutable 21-file product
+        run: ./proof-harness/harness/windows-ollama/Prepare-RealSource.ps1 -Source "$env:GITHUB_WORKSPACE/source-real" -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/real-ollama"
+      - name: Current interactive owner, SDK and stable native runtime
+        run: ./proof-harness/harness/windows-ollama/Initialize-NativeRuntime.ps1 -BeforeSource "$env:GITHUB_WORKSPACE/source-real" -AfterSource "$env:GITHUB_WORKSPACE/source-real" -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/real-ollama"
+      - name: Actual WinGet contract, no prerequisite bootstrap or source mutation
+        run: ./proof-harness/harness/windows-ollama/Test-WinGetContract.ps1 -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/real-ollama"
+      - name: Actual Set up entrypoint, installer, settlement and app survival
+        run: |
+          $out = "$env:GITHUB_WORKSPACE/.artifacts/real-ollama/cell"
+          ./proof-harness/harness/windows-ollama/Invoke-RealAppQualification.ps1 -Source "$env:GITHUB_WORKSPACE/source-real" -Artifacts $out -Mode $env:REAL_MODE -AuthorizeRealInstall -DisposableFreshWindows
+          $result = Get-Content "$out/real-app-result.json" -Raw | ConvertFrom-Json
+          if ($result.status -cne 'selected-boundaries-qualified-other-rows-blocked' -or $result.mode -cne $env:REAL_MODE) { throw 'Real-app case did not qualify; inspect receipts, never retry this installation blindly.' }
+      - name: Retain exact real-app evidence, including partial and failed outcomes
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: windows-ollama-real-${{ matrix.mode }}
+          path: .artifacts/real-ollama/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7

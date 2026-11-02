@@ -10,3 +10,5 @@ Neither producer proves real installation, authentication, inference, activation
 Windows W4 follow-up: ten-file presentation candidate at d38 plus sealed patch7d9fe7d; actual seven new native frames/fifteen no-skip cases and required full build/Shared/Tray closeout. Retains exact old W3 Before references, not a repeated old capture. The old W3 executable job registration is retired in this new manual workflow.
 
 Service-availability follow-up: the isolated service selector runs only the registered synthetic HTTP-to-RPC boundary at base783 plus sealed patchc0d2d159, through source-owned gateway runtime preparation; no native jobs, proxy overrides, provider completion or product publication.
+
+Windows Ollama fixture qualification: the windows-ollama-fixtures selector admits d38 plus sealed21-filefd1d39 candidate, full build/docs/four suites and31 strict cases/nine frames. Only read-only OS/WinGet/catalog observation is registered. Actual app-installation cells are NOT registered or selectable in this workflow and remain unqualified. W4 is not silently stacked.

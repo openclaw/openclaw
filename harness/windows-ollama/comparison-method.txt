@@ -1,0 +1,23 @@
+    [Theory]
+    [InlineData(ElementTheme.Light)]
+    [InlineData(ElementTheme.Dark)]
+    [Trait("Category", "NativeOnboardingProof")]
+    public async Task NativeOllamaComparison_IdenticalAdvertisedNoModel(ElementTheme theme)
+    {
+        await WithPageAsync(async (page, transport, completed) =>
+        {
+            Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
+            Assert.Equal(0, completed());
+            var choices = Find<ItemsControl>(page, "PrepareChoices");
+            Assert.Single(TestSupport.FindDescendants<SetupActionCard>(choices));
+            using (await OnboardingNativeProof.CaptureAsync(ui.TestWindow,
+                $"ollama-identical-advertised-no-model-{theme}", output,
+                ["Set up your AI", "Ollama"], requiredContent: page)) { }
+        }, nativeProof: true, theme: theme,
+            configure: transport => transport.DetectionOverride = new()
+            {
+                Candidates = [], ManualProviders = [],
+                PrepareOptions = [new("ollama", "Ollama", Kind: "custom")],
+                Workspace = "/synthetic-workspace", SetupComplete = false,
+            });
+    }

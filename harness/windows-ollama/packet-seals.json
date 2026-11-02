@@ -1,0 +1,120 @@
+{
+  "qualification": "Unexecuted native qualification preparation packet",
+  "files": [
+    {
+      "path": "BootstrapProbe.csproj",
+      "sha256": "f7d88528ac41739f81684ff10c6a0842387105703b299b7a78dcfed19fc16591",
+      "bytes": 409
+    },
+    {
+      "path": "EXPECTED-MATRIX.json",
+      "sha256": "c4c99a8653aeb4cd0897f9f21556e0b33bed5027761a09c03aa9fc344a512025",
+      "bytes": 5065
+    },
+    {
+      "path": "Initialize-NativeRuntime.ps1",
+      "sha256": "aedb6ec6cd8b22ee2a3318fc2a67f823dfa7a52c9db1d89ed3faa209efe38e80",
+      "bytes": 6219
+    },
+    {
+      "path": "Invoke-RealAppQualification.ps1",
+      "sha256": "171b90689d6b648c4db2fff3cda968cb5f4583214b7637e5bcfa1971875cffba",
+      "bytes": 18641
+    },
+    {
+      "path": "Invoke-RequiredGates.ps1",
+      "sha256": "d8d589b819af9bbb054198ec5b692dd20b6d3e5a41fd1b9d72cc0a7ecff1cf5c",
+      "bytes": 7706
+    },
+    {
+      "path": "Invoke-UiStage.ps1",
+      "sha256": "1f143cf92adaa83cddf511d8967d65e5c15ad1f610b37712e05cb1271e8745be",
+      "bytes": 5448
+    },
+    {
+      "path": "NativeOllamaOsInspectionTests.cs",
+      "sha256": "4c3f2e03c94a7cb2de541c745e2f6ddff8fdf9981cb331b468a4f123a2d8d722",
+      "bytes": 6661
+    },
+    {
+      "path": "Prepare-RealSource.ps1",
+      "sha256": "36e6d3db38c5a0ebec228a0ae733ba3f532068e97900f986966b0782316c95ee",
+      "bytes": 1142
+    },
+    {
+      "path": "Prepare-Source.ps1",
+      "sha256": "4d9577a2cdb6e6a8f9879ae743c84a426169b6401fa3a394d488cb8b8610a53a",
+      "bytes": 2540
+    },
+    {
+      "path": "Program.cs",
+      "sha256": "d7337e908472033755a5c1c83046875523931ada52ad08f4f86ef736b9eb54a2",
+      "bytes": 1428
+    },
+    {
+      "path": "Proof.Common.ps1",
+      "sha256": "f10a5b23550708a0f07b0a07fccadc536fea59cf5d8dd7140b191c9918a0f303",
+      "bytes": 4604
+    },
+    {
+      "path": "README.md",
+      "sha256": "246e9ca47fa86b36193f6e5cc6752e4c0f8f34d9ef98f7abbf7ea5203c7ab98c",
+      "bytes": 14622
+    },
+    {
+      "path": "REAL-APP-BOUNDARY.md",
+      "sha256": "72aed38c1b990485764b19d176102f22827c541aa116b9a92fc3e15629870d86",
+      "bytes": 12170
+    },
+    {
+      "path": "RealOllamaAppQualificationTests.cs",
+      "sha256": "7b1b884d5416b537a9cfc7f2818e109b3cb462937d263934754285193c971df6",
+      "bytes": 32134
+    },
+    {
+      "path": "Test-CatalogManifest.ps1",
+      "sha256": "34a3ddba88cd40153ad137ca009128e01943f2d05c78c0c891f29b94e6730c93",
+      "bytes": 1636
+    },
+    {
+      "path": "Test-WinGetContract.ps1",
+      "sha256": "de1829e0d3b9015e8657ded970998eedb21c9383b42057af6e4d064cf2fa9cc5",
+      "bytes": 4298
+    },
+    {
+      "path": "Validate-Packet.ps1",
+      "sha256": "bc4be8928c9bba175e7596edb2f0c3c98772469c8b63984a46f7b985f4880a88",
+      "bytes": 3371
+    },
+    {
+      "path": "WINGET-CONTRACT.md",
+      "sha256": "80f429c3f9e4a29746fc5d20e119a84a03fc3c44bdab0256bd8305735349b4bf",
+      "bytes": 6530
+    },
+    {
+      "path": "Write-FinalReceipt.ps1",
+      "sha256": "e72e2b1751cb6d4fe3bcc5c81298d2f7b2b9cd1e392d4d2d488e97a775b036d9",
+      "bytes": 3659
+    },
+    {
+      "path": "comparison-method.txt",
+      "sha256": "4cfdd493c26e778003619f23e4422437feef397f5cf973b8745245b58b61bde6",
+      "bytes": 1159
+    },
+    {
+      "path": "composed-evidence.json",
+      "sha256": "99e3af73916a80c67cf9316acf6565531ca5ce6096906a93052225db1e46f5dc",
+      "bytes": 6830
+    },
+    {
+      "path": "ollama-windows-composed.patch",
+      "sha256": "fd1d39dfb6184ac07fa359990c4c42a2348b26954543f63d7e4e3794d5ec6a95",
+      "bytes": 165710
+    },
+    {
+      "path": "workflow.yml",
+      "sha256": "68e063968fe679a3c203766cbf8f2820bdd94c520720e7c114eded6c7fc58802",
+      "bytes": 7176
+    }
+  ]
+}
