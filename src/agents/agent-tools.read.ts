@@ -56,7 +56,7 @@ import { normalizePositiveLimit } from "./sessions/tools/limits.js";
 import { expandOsHomePrefix, resolveToCwd } from "./sessions/tools/path-utils.js";
 import {
   createBoundedReadTextPage,
-  formatReadContinuationNotice,
+  formatReadPageContinuationNotice,
 } from "./sessions/tools/read-page.js";
 import type { ReadToolContinuation } from "./sessions/tools/tool-contracts.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./sessions/tools/truncate.js";
@@ -284,7 +284,7 @@ async function executeReadWithAdaptivePaging(params: {
     const candidateBytes = aggregatedBytes + delimiter.length + Buffer.byteLength(pageText, "utf8");
     const candidateContent = `${aggregatedContent}${delimiter}${pageContent}`;
     const continuationNotice = pageContinuation
-      ? formatReadContinuationNotice(pageContinuation, params.maxBytes)
+      ? formatReadPageContinuationNotice(pageContinuation, params.maxBytes, truncation ?? undefined)
       : "";
 
     if (

@@ -118,6 +118,11 @@ export const readTruncationOutputSchema = Type.Object(
     firstLineExceedsLimit: Type.Boolean(),
     maxLines: Type.Integer({ minimum: 1 }),
     maxBytes: Type.Integer({ minimum: 1 }),
+    modelBudgetBound: Type.Optional(
+      Type.Boolean({
+        description: "True when the model context budget ended the page before maxBytes did.",
+      }),
+    ),
   },
   { additionalProperties: false },
 );

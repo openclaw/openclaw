@@ -4,7 +4,11 @@ import {
   sliceToolResultTextToBudget,
 } from "../../embedded-agent-runner/tool-result-text-budget.js";
 import { toolResultFitsBudget, type ToolResultBudget } from "../../tool-result-limits.js";
-import type { ReadToolContinuation, ReadToolDetails } from "./tool-contracts.js";
+import type {
+  ReadToolContinuation,
+  ReadToolDetails,
+  ReadToolTruncationDetails,
+} from "./tool-contracts.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.js";
 
 type BoundedReadTextPage = {
@@ -14,6 +18,19 @@ type BoundedReadTextPage = {
 
 /** Which limit actually ended the page; the notice must name the binding one. */
 export type ReadPageBindingLimit = "bytes" | "model-budget";
+
+/**
+ * Decide which limit binds once a caller knows the bytes and budget outcome.
+ * Shared with the adaptive paging wrapper, which rebuilds the footer per page.
+ */
+export function resolveReadPageBindingLimit(params: {
+  contentBytes: number;
+  maxBytes: number;
+  fitsModelBudget: boolean;
+}): ReadPageBindingLimit {
+  const withinByteCap = params.contentBytes <= params.maxBytes;
+  return withinByteCap && !params.fitsModelBudget ? "model-budget" : "bytes";
+}
 
 /** Format model-visible pagination guidance from its exact structured continuation. */
 export function formatReadContinuationNotice(
@@ -39,6 +56,20 @@ export function formatReadContinuationNotice(
       : `lines ${range.startLine}-${continuation.offset - 1} of ${range.totalLines}`;
   const action = continuation.kind === "cursor" ? "Use read with" : "Use";
   return `\n\n[Showing ${label} (${budgetLabel} limit). ${action} offset=${continuation.offset}${cursor}${limit} to continue.]`;
+}
+
+/** Format the aggregate footer from a page's own truncation facts. */
+export function formatReadPageContinuationNotice(
+  continuation: ReadToolContinuation,
+  maxBytes: number,
+  truncation: ReadToolTruncationDetails | undefined,
+): string {
+  return formatReadContinuationNotice(
+    continuation,
+    maxBytes,
+    undefined,
+    truncation?.modelBudgetBound ? "model-budget" : "bytes",
+  );
 }
 
 /** Bound a selected text page once; legacy injected readers reuse this owner decision. */
@@ -171,10 +202,11 @@ export function createBoundedReadTextPage(params: {
   }
   // Naming the model budget only when it actually cut the page keeps the notice honest
   // for the common byte-capped read.
-  const bindingLimit: ReadPageBindingLimit =
-    Buffer.byteLength(prefix, "utf8") < Buffer.byteLength(bytePrefix, "utf8")
-      ? "model-budget"
-      : "bytes";
+  const bindingLimit = resolveReadPageBindingLimit({
+    contentBytes: Buffer.byteLength(prefix, "utf8"),
+    maxBytes: Math.max(0, maxBytes - reservedBytes),
+    fitsModelBudget: prefix.length === bytePrefix.length,
+  });
   // Convert the fitted prefix back to a byte allowance for the existing line/cursor owner.
   // The cursor advances only over text that survives both model limits and its real footer.
   const contentBudgetBytes = Buffer.byteLength(prefix, "utf8");
@@ -243,6 +275,9 @@ export function createBoundedReadTextPage(params: {
         outputBytes: Buffer.byteLength(content, "utf8"),
         firstLineExceedsLimit: false,
         lastLinePartial: continuation.kind === "cursor",
+        // Carried only when true so the common byte-capped shape is unchanged;
+        // adaptive paging rebuilds the footer and needs this producer fact.
+        ...(bindingLimit === "model-budget" ? { modelBudgetBound: true } : {}),
         ...totals,
       },
       continuation,

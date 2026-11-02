@@ -1,24 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { createBoundedReadTextPage, formatReadContinuationNotice } from "./read-page.js";
+import { createBoundedReadTextPage, resolveReadPageBindingLimit } from "./read-page.js";
 
 const MAX_BYTES = 50 * 1024;
 
-describe("formatReadContinuationNotice", () => {
-  it("names the byte cap when bytes end the page", () => {
-    expect(formatReadContinuationNotice({ kind: "line", offset: 2 }, MAX_BYTES)).toContain(
-      "capped at 50KB",
-    );
-  });
-
-  it("names the model budget instead of the byte cap when that limit binds", () => {
-    const notice = formatReadContinuationNotice(
-      { kind: "line", offset: 2 },
-      MAX_BYTES,
-      undefined,
-      "model-budget",
-    );
-    expect(notice).toContain("model context budget");
-    expect(notice).not.toContain("50KB");
+describe("resolveReadPageBindingLimit", () => {
+  it("names the model budget only when it binds inside the byte cap", () => {
+    expect(
+      resolveReadPageBindingLimit({
+        contentBytes: 1_000,
+        maxBytes: 50_000,
+        fitsModelBudget: false,
+      }),
+    ).toBe("model-budget");
+    expect(
+      resolveReadPageBindingLimit({ contentBytes: 1_000, maxBytes: 50_000, fitsModelBudget: true }),
+    ).toBe("bytes");
+    expect(
+      resolveReadPageBindingLimit({
+        contentBytes: 60_000,
+        maxBytes: 50_000,
+        fitsModelBudget: false,
+      }),
+    ).toBe("bytes");
   });
 });
 
