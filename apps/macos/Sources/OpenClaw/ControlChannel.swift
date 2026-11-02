@@ -722,7 +722,9 @@ final class ControlChannel {
             guard let self, delivery.isCurrent else { return }
             do {
                 let data = try await self.gateway.request(
-                    method: "config.get", params: nil, timeoutMs: 8000,
+                    method: "config.get",
+                    params: nil,
+                    timeoutMs: 8000,
                     ifCurrentServerLease: delivery.serverLease)
                 let snapshot = try JSONDecoder().decode(ConfigSnapshot.self, from: data)
                 let ui = snapshot.config?["ui"]?.dictionaryValue
@@ -741,7 +743,9 @@ final class ControlChannel {
     /// connections, older gateways, and malformed values; explicit theme suppresses
     /// the Gateway fallback. Request directly so an older Gateway does not degrade
     /// the control channel when this optional method is unavailable.
-    private func fetchProfileAccent(serverLease: GatewayConnection.ServerLease) async -> GatewayUserPreferences.ProfileAccent {
+    private func fetchProfileAccent(
+        serverLease: GatewayConnection.ServerLease) async -> GatewayUserPreferences.ProfileAccent
+    {
         do {
             let data = try await self.gateway.request(
                 method: "users.prefs.get",

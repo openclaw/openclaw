@@ -195,7 +195,9 @@ extension GatewayConnectionControlTests {
     }
 
     @Test(arguments: ["profileless", "color", "theme"]) @MainActor
-    func `chat-only connection refreshes saved Gateway accent without overriding a profile`(profile: String) async throws {
+    func `chat-only connection refreshes saved Gateway accent without overriding a profile`(
+        profile: String) async throws
+    {
         try await TestIsolation.withIsolatedState {
             let profileless = profile == "profileless"
             let source = GatewayConnectionEndpointSource(endpoint: GatewayConnection.EndpointSnapshot(
