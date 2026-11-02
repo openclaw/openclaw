@@ -2285,6 +2285,66 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     expect(actionCheckoutIndex).toBeLessThan(setupIndex);
   });
 
+  it.each(["", "release-fixture"])(
+    "preserves SDK report capacity with runner group %s",
+    (releaseRunnerGroup) => {
+      const context = {
+        eventName: "workflow_dispatch",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerBackend: "blacksmith",
+        matrix: {
+          group: "plugin-sdk-api-diff",
+          runner: "blacksmith-32vcpu-ubuntu-2404",
+        },
+        preflightOutputs: { node_runner_backend: "github", ci_qualification: "false" },
+        dispatchId: "full-release-validation-sdk-routing",
+        releaseRunnerGroup,
+      } as const;
+      const cases: Array<{
+        name: string;
+        overrides: Partial<Parameters<typeof evaluateWorkflowExpression>[1]>;
+        expected: string;
+      }> = [
+        { name: "default dispatch", overrides: {}, expected: context.matrix.runner },
+        {
+          name: "configured GitHub backend",
+          overrides: { runnerBackend: "github" },
+          expected: "ubuntu-24.04",
+        },
+        ...(["hybrid", "runson"] as const).map((backend) => ({
+          name: `admitted ${backend} qualification`,
+          overrides: {
+            preflightOutputs: {
+              ci_qualification: "true",
+              qualification_runner_backend: "hybrid",
+              node_runner_backend: backend,
+            },
+          },
+          expected: context.matrix.runner,
+        })),
+        { name: "retry", overrides: { runAttempt: 2 }, expected: "ubuntu-24.04" },
+        {
+          name: "noncanonical repository",
+          overrides: { repository: "contributor/openclaw" },
+          expected: "ubuntu-24.04",
+        },
+        {
+          name: "unrelated additional check",
+          overrides: { matrix: { group: "boundaries", runner: "blacksmith-4vcpu-ubuntu-2404" } },
+          expected: "ubuntu-24.04",
+        },
+      ];
+      for (const { name, overrides, expected } of cases) {
+        expect(
+          ciValue("check-additional-shard", "runs-on", { ...context, ...overrides }),
+          name,
+        ).toEqual(releaseRunnerGroup ? { group: releaseRunnerGroup, labels: expected } : expected);
+      }
+      expect(ciValue("check-additional-shard", "timeout-minutes", context)).toBe(30);
+    },
+  );
+
   it("keeps tiny hybrid controls hosted without moving security or fork first attempts", () => {
     const context = {
       eventName: "pull_request",
