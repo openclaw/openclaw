@@ -12,14 +12,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { CronRunRecord } from "../../src/cron/store/run-history.types.js";
-import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -87,9 +86,7 @@ let sampledBytes: number | null = null;
 if (values.mode === "allocation") {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
   inspector.disconnect();
-  const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
-    node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
-  sampledBytes = sum(profile.head);
+  sampledBytes = sumSampledHeapBytes(profile.head);
 }
 const result = { reconciliations, summedNextSweepAtMs };
 const report = {
