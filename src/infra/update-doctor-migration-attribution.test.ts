@@ -476,6 +476,7 @@ async function withCapture(
   generations: ReturnType<typeof readUpdateDatabaseGenerations>,
   operation: () => Promise<void>,
   assertDatabaseAccess?: (requested: string) => void,
+  assertOwnerCurrent: () => void = () => {},
 ) {
   const warnings: string[] = [];
   const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
@@ -485,7 +486,7 @@ async function withCapture(
   })!;
   const scope = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
-    assertOwnerCurrent() {},
+    assertOwnerCurrent,
     assertDatabaseAccess: assertDatabaseAccess ?? (() => {}),
   });
   try {
