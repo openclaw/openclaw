@@ -490,14 +490,15 @@ openclaw-appearance-background .settings-background-preview .session-background_
   overflow-wrap: anywhere;
 }
 
-/* A phone gives the help the screen's width, whatever the row's "?" offset. */
+/* A phone gives the help the screen's width, whatever the row's "?" offset. Like everywhere,
+   it opens above the row so the setting's own text and control stay in view. */
 @media (max-width: 640px) {
   .oc-overlay[data-placement].config-field-help__popover {
     --oc-overlay-max-width: calc(100dvw - 32px);
 
     width: var(--oc-overlay-max-width);
     justify-self: center;
-    position-area: bottom span-all;
+    position-area: top span-all;
     position-try-fallbacks: flip-block;
   }
 }
