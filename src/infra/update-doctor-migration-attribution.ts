@@ -44,7 +44,6 @@ type DoctorMigrationFullBackup = { path: string; generation?: string };
 const captures = new AsyncLocalStorage<{
   capture?: UpdateDoctorMigrationCapture;
   source?: MigrationSource;
-  companions?: readonly MigrationSource[];
   assertMigrationCurrent?: () => void;
   backup?: DoctorMigrationBackup;
   fullBackups?: Map<string, DoctorMigrationFullBackup>;
@@ -114,7 +113,6 @@ function migrationAuthority(
     throw new Error("Database migration requires schema maintenance custody.");
   }
   return () => {
-    // This scope owns the operation; companion databases retain their own path custody.
     maintenance.assertAdmission();
     if (assertMigrationCurrent) {
       assertMigrationCurrent();
@@ -143,13 +141,8 @@ function readSqliteFiles(pathname: string) {
 
 /** A source proof exists only within its verified migration's lexical interval. */
 export function getUpdateDoctorMigrationSource(pathname: string) {
-  const context = captures.getStore();
-  const key = resolveUpdateSqlitePath(pathname);
-  const source =
-    context?.source?.path === key
-      ? context.source
-      : context?.companions?.find((entry) => entry.path === key);
-  if (!source) {
+  const source = captures.getStore()?.source;
+  if (!source || source.path !== resolveUpdateSqlitePath(pathname)) {
     return undefined;
   }
   const { generation, assertCurrent } = source;
@@ -160,13 +153,6 @@ export function getUpdateDoctorMigrationSource(pathname: string) {
 export function hasUpdateDoctorMigrationCapture(): boolean {
   return captures.getStore()?.capture !== undefined;
 }
-
-type SqliteMigrationOptions = {
-  retainExclusive?: boolean;
-  created?: boolean;
-  /** Already-open companion custody stays held through this synchronous native phase. */
-  companions?: readonly { database: DatabaseSync; path: string; created?: boolean }[];
-};
 
 type MigrationObservationStep = {
   read(): void;
@@ -217,24 +203,16 @@ function* updateSqliteMigrationSteps<T>(
   db: DatabaseSync,
   pathname: string,
   operation: () => T,
-  options?: SqliteMigrationOptions,
+  options?: { retainExclusive?: boolean; created?: boolean },
 ): Generator<MigrationObservationStep, T, void> {
   const context = captures.getStore();
   if (!context?.capture) {
     return operation();
   }
   const key = resolveUpdateSqlitePath(pathname);
-  const inherited = getUpdateDoctorMigrationSource(pathname);
-  if (inherited) {
-    inherited.assertCurrent();
-    const [companion, ...remaining] = options?.companions ?? [];
-    return companion
-      ? yield* updateSqliteMigrationSteps(companion.database, companion.path, operation, {
-          created: companion.created,
-          retainExclusive: true,
-          companions: remaining,
-        })
-      : operation();
+  if (context.source?.path === key) {
+    context.source.assertCurrent();
+    return operation();
   }
   const { capture } = context;
   const expected = capture.expected(key);
@@ -312,37 +290,10 @@ function* updateSqliteMigrationSteps<T>(
       assertCurrent();
       const source: MigrationSource | undefined =
         before === null ? undefined : { path: key, generation: before, assertCurrent };
-      const migrationContext = {
-        capture,
-        source,
-        companions: [...(context.companions ?? []), ...(context.source ? [context.source] : [])],
-        assertMigrationCurrent: assertCurrent,
-      };
-      let value: T;
-      const [companion, ...remaining] = options?.companions ?? [];
-      if (companion) {
-        const native = updateSqliteMigrationSteps(companion.database, companion.path, operation, {
-          created: companion.created,
-          retainExclusive: true,
-          companions: remaining,
-        });
-        const resume = (failure?: { error: unknown }) =>
-          captures.run(migrationContext, () =>
-            failure ? native.throw(failure.error) : native.next(),
-          );
-        let step = resume();
-        while (!step.done) {
-          try {
-            yield step.value;
-            step = resume();
-          } catch (error) {
-            step = resume({ error });
-          }
-        }
-        value = step.value;
-      } else {
-        value = captures.run(migrationContext, operation);
-      }
+      const value = captures.run(
+        { capture, source, assertMigrationCurrent: assertCurrent },
+        operation,
+      );
       if (isPromiseLike(value)) {
         throw new Error("Update migration callbacks must remain synchronous.");
       }
@@ -431,19 +382,6 @@ export function beginUpdateSqliteCompanion(db: DatabaseSync, pathname: string, c
   if (mode !== "exclusive") {
     throw new Error("Migration companion requires its exclusive native owner.");
   }
-  const prepared = getUpdateDoctorMigrationSource(pathname);
-  if (prepared) {
-    prepared.assertCurrent();
-    return {
-      complete() {
-        assertCurrent();
-        prepared.assertCurrent();
-        if (!db.isOpen || db.isTransaction) {
-          throw new Error("Migration companion publication requires its committed native owner.");
-        }
-      },
-    };
-  }
   const before = created && expected === null ? null : readSqliteGeneration(pathname);
   assertCurrent();
   // Session settlement owns the final postimage of paths this Doctor already opened.
@@ -497,15 +435,7 @@ export function beginUpdatePostgresMigration(
   let publish: (() => void) | undefined;
   return {
     run<T>(operation: () => T): T {
-      return captures.run(
-        {
-          ...context,
-          source,
-          companions: [...(context.companions ?? []), ...(context.source ? [context.source] : [])],
-          assertMigrationCurrent: assertCurrent,
-        },
-        operation,
-      );
+      return captures.run({ capture, source, assertMigrationCurrent: assertCurrent }, operation);
     },
     beforeCommit() {
       assertCurrent();

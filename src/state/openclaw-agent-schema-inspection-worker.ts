@@ -143,7 +143,7 @@ export function createAgentSchemaInspectionWorker() {
             await import("../infra/database-engine/physical-store.js");
           const physical = snapshotPath
             ? readBackupEngineImage(snapshotPath, input.pathname)
-            : await readBackupEngine(input.pathname, signal);
+            : readBackupEngine(input.pathname);
           signal?.throwIfAborted();
           if (physical.engine === "sqlite") {
             if (postgresAgent && !snapshotPath) {

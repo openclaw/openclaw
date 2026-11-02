@@ -16,11 +16,9 @@ import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { projectExistingAgentDatabaseTargets } from "../infra/session-sqlite-migration-readers.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { prepareArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
-import {
-  prepareOpenClawAgentDatabaseReadOnly,
-  withOpenClawAgentDatabaseReadOnly,
-} from "../state/openclaw-agent-db-readonly.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { Conversations } from "../state/openclaw-agent-db.generated.js";
 import {
   runOpenClawAgentWriteTransaction,
@@ -104,7 +102,7 @@ export async function detectTelegramGeneralTopicConversationRepairs(params: {
       agentId: scope.agentId,
       path: databaseOptions.path ?? storePath,
       run: async () => {
-        await prepareOpenClawAgentDatabaseReadOnly(databaseOptions.path ?? storePath, signal);
+        await prepareArtifactPreservingSqliteRead(databaseOptions.path ?? storePath, signal);
         return withOpenClawAgentDatabaseReadOnly(
           (database) => listLegacyRows(database.db).map(() => ({ agentId: scope.agentId })),
           databaseOptions,

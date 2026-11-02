@@ -17,6 +17,7 @@ import type { OpenClawModalDialog } from "../../components/modal-dialog.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsEmpty, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import "../../components/modal-dialog.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -238,9 +239,9 @@ export function AgentFiles(
           )
         }
         actions={
-          <AgentPanelAction
-            label={loading() ? t("common.loading") : t("common.refresh")}
-            disabled={loading()}
+          <RefreshButton
+            label={t("common.refresh")}
+            busy={loading()}
             onClick={() => params.onLoadFiles(params.agentId)}
           />
         }

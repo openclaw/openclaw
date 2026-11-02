@@ -310,7 +310,7 @@ describe.skipIf(!connection)("Git backup secret exclusion across engines", () =>
                   targetPath,
                   expectedIdentity: pgIdentity,
                 });
-                const restored = await readBackupEngine(targetPath);
+                const restored = readBackupEngine(targetPath);
                 assert(restored.engine === "postgres");
                 try {
                   expect(restored.storeId).toBe(storeId);

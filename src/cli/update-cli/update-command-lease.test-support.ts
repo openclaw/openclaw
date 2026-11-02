@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { registerHooks } from "node:module";
 import path from "node:path";
@@ -27,20 +26,6 @@ export type LeaseScenario = {
   runDoctorConfigFlow?: boolean;
   doctorWarningsByInvocation?: string[][];
 };
-
-let doctorPhaseFile: string | undefined;
-
-function recordDoctorPhase(phase: string): void {
-  if (!doctorPhaseFile) {
-    return;
-  }
-  try {
-    const pass = process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE === "1" ? "post" : "pre";
-    fsSync.writeFileSync(doctorPhaseFile, `${process.pid} ${pass} ${phase}\n`);
-  } catch {
-    // Diagnostic failure must not replace the operation error or interrupt its cleanup.
-  }
-}
 
 // A narrow child substitutes for the CLI, not for its cross-process lease.
 export async function runUpdateLeaseChild(): Promise<void> {
@@ -78,7 +63,6 @@ export async function runUpdateLeaseChild(): Promise<void> {
     // Match Doctor's custody lifetime, including its final worker joins.
     using custody = await retainUpdateDoctorProcesses();
     await withCommandProcessScope(runUpdateLeaseChildWithCleanup, undefined, custody);
-    recordDoctorPhase("command-scope:returned");
   } finally {
     observationHook?.deregister();
   }
@@ -89,16 +73,12 @@ async function runUpdateLeaseChildWithCleanup(): Promise<void> {
     await runUpdateLeaseScenario();
   } finally {
     // Fixture children bypass CLI cleanup and must join their database workers.
-    recordDoctorPhase("shared-state-close:starting");
     const { closeOpenClawStateDatabaseAsync } =
       await import("../../state/openclaw-state-db-cache.js");
     await closeOpenClawStateDatabaseAsync();
-    recordDoctorPhase("shared-state-close:returned");
-    recordDoctorPhase("native-worker-close:starting");
     const { closeDefaultRetainedNativeWorkerSource } =
       await import("../../infra/worker-native-lifecycle.js");
     await closeDefaultRetainedNativeWorkerSource();
-    recordDoctorPhase("native-worker-close:returned");
   }
 }
 
@@ -125,10 +105,6 @@ async function runUpdateLeaseScenario(): Promise<void> {
     await record("writer-committed");
   };
   const command = process.argv[2];
-  if (command === "doctor" && process.argv[3] !== "--lint" && scenario.runDoctorConfigFlow) {
-    doctorPhaseFile = path.join(stateDir, `doctor-phase-${process.pid}.txt`);
-    recordDoctorPhase("scenario:entered");
-  }
   if (scenario.runtimeRoot && (command === "doctor" || command === "runtime-proof")) {
     const runtimeRoot = path.join(scenario.runtimeRoot, "dist-runtime", "extensions", "demo");
     const runtime = await import(pathToFileURL(path.join(runtimeRoot, "index.js")).href);
@@ -285,7 +261,6 @@ async function runUpdateLeaseScenario(): Promise<void> {
       return;
     }
     if (scenario.runDoctorConfigFlow) {
-      recordDoctorPhase("config-flow:importing");
       const { loadAndMaybeMigrateDoctorConfig } =
         await import("../../commands/doctor-config-flow.js");
       const { createDoctorPrompter } = await import("../../commands/doctor-prompter.js");
@@ -296,20 +271,16 @@ async function runUpdateLeaseScenario(): Promise<void> {
       const options = { repair: true, nonInteractive: true, workspaceSuggestions: false };
       const prompter = createDoctorPrompter({ runtime, options });
       // One real maintenance owner serves every migration in this Doctor invocation.
-      recordDoctorPhase("maintenance:starting");
       const maintenance = await beginDoctorMaintenance({ root: null, options, runtime });
       assert.ok(maintenance);
       try {
         const config = await maintenance.run(async () => {
-          recordDoctorPhase("config-flow:loading");
           await using configResult = await loadAndMaybeMigrateDoctorConfig({
             options,
             prompter,
             runtime,
             confirm: (params) => prompter.confirm(params),
           });
-          recordDoctorPhase("config-flow:loaded");
-          recordDoctorPhase("initial-config-health:starting");
           await runInitialConfigWriteHealth({
             runtime,
             options,
@@ -323,17 +294,11 @@ async function runUpdateLeaseScenario(): Promise<void> {
             runWithPluginMetadataSnapshot: configResult.runWithPluginMetadataSnapshot,
             invalidatePluginMetadataSnapshot: configResult.invalidatePluginMetadataSnapshot,
           });
-          recordDoctorPhase("initial-config-health:returned");
           return configResult.cfg;
         });
-        recordDoctorPhase("config-flow:scope-returned");
-        recordDoctorPhase("maintenance-finish:starting");
         await maintenance.finish(config);
-        recordDoctorPhase("maintenance-finish:returned");
       } finally {
-        recordDoctorPhase("maintenance-release:starting");
         await maintenance.release();
-        recordDoctorPhase("maintenance-release:returned");
       }
     }
     if (scenario.doctorWarningsByInvocation) {

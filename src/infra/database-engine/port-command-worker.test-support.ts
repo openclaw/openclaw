@@ -37,7 +37,7 @@ vi.mock("../worker-task-pool.js", async (importOriginal) => {
             const sections = native.createWorkerNativeSectionState();
             let active = true;
             const cancel = () => native.cancelWorkerNativeSections(sections);
-            const control = native.createWorkerTaskControl(sections, () => active, options.signal);
+            const control = native.createWorkerTaskControl(sections, () => active);
             options.signal?.addEventListener("abort", cancel, { once: true });
             pending = native.withWorkerTaskNativeSectionScope(
               sections,

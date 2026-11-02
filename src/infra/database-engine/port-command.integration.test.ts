@@ -281,7 +281,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
       expect(preview).toMatchObject({ migrations: [shared] });
       expect(hash(shared)).toBe(original);
       const ported = await doctorDatabasePort({ to: "postgres" });
-      const anchor = await readBackupEngine(shared);
+      const anchor = readBackupEngine(shared);
       assert(anchor.engine === "postgres");
       {
         using credentials = openClientCredentialCustody(state.env);
@@ -333,7 +333,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
         const before = canonical(source);
         await doctorDatabasePort({ to: "postgres" });
         expect(proxy.dropped()).toBe(1);
-        const anchor = await readBackupEngine(source);
+        const anchor = readBackupEngine(source);
         assert(anchor.engine === "postgres");
         expect(await canonicalPostgres(client, anchor.namespace)).toEqual(before);
       }, true);
@@ -400,7 +400,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
       expect(hash(source)).toBe(original);
       expect(typeof migrationTime).toBe("bigint");
       await doctorDatabasePort({ resume: recovery.databasePortManifestPath(state.stateDir) });
-      const engine = await readBackupEngine(source);
+      const engine = readBackupEngine(source);
       assert(engine.engine === "postgres");
       expect(
         (
@@ -481,7 +481,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
       expect(interrupted).toBe(true);
       expect(hash(source)).toBe(before);
       await doctorDatabasePort({ resume: recovery.databasePortManifestPath(state.stateDir) });
-      const engine = await readBackupEngine(source);
+      const engine = readBackupEngine(source);
       assert(engine.engine === "postgres");
       expect(
         (await client.query(`SELECT title FROM "${engine.namespace}".workboard_cards`)).rows,
@@ -537,13 +537,10 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
         await expect(doctorDatabasePort({ to: "postgres" })).rejects.toThrow("Database port");
         publication.mockRestore();
         expect(replacements).toBe(2);
-        expect(
-          (
-            await Promise.all(
-              [source, second].map(async (file) => (await readBackupEngine(file)).engine),
-            )
-          ).toSorted(),
-        ).toEqual(["postgres", "sqlite"]);
+        expect([source, second].map((file) => readBackupEngine(file).engine).toSorted()).toEqual([
+          "postgres",
+          "sqlite",
+        ]);
         const saved = manifest(state);
         expect(saved.state).toBe("publishing");
         const shared = state.statePath("state", "openclaw.sqlite");
@@ -568,7 +565,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
           }
           const target = saved.targets[index];
           assert(target?.intended.engine === "postgres");
-          const engine = await readBackupEngine(file);
+          const engine = readBackupEngine(file);
           expect(engine).toEqual({
             engine: "postgres",
             namespace: target.intended.namespace,
@@ -577,9 +574,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
           assert(engine.engine === "postgres");
           expect(await canonicalPostgres(client, engine.namespace)).toEqual(original);
         }
-        expect((await readBackupEngine(shared)).engine).toBe(
-          action === "rollback" ? "sqlite" : "postgres",
-        );
+        expect(readBackupEngine(shared).engine).toBe(action === "rollback" ? "sqlite" : "postgres");
         expect(fs.existsSync(recovery.databasePortManifestPath(state.stateDir))).toBe(false);
       }, true);
     },
@@ -595,7 +590,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
         const expected = state.path("expected.sqlite");
         await fsp.copyFile(source, expected);
         await doctorDatabasePort({ to: "postgres" });
-        const original = await readBackupEngine(source);
+        const original = readBackupEngine(source);
         assert(original.engine === "postgres");
         await client.query(
           `UPDATE "${original.namespace}".workboard_cards SET title = 'written after port'`,
@@ -616,7 +611,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
         });
         await expect(doctorDatabasePort({ to: "sqlite" })).rejects.toThrow("switch config");
         vi.restoreAllMocks();
-        expect(await readBackupEngine(source)).toEqual({ engine: "sqlite" });
+        expect(readBackupEngine(source)).toEqual({ engine: "sqlite" });
         const shared = state.statePath("state", "openclaw.sqlite");
         {
           using later = openNodeSqliteDatabase(shared);
@@ -635,7 +630,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
           await client.query(`DROP SCHEMA "${original.namespace}" CASCADE`);
         }
         await doctorDatabasePort({ rollback: recovery.databasePortManifestPath(state.stateDir) });
-        const restored = await readBackupEngine(source);
+        const restored = readBackupEngine(source);
         assert(restored.engine === "postgres");
         expect(restored.storeId).toBe(original.storeId);
         expect(restored.namespace === original.namespace).toBe(!missingNamespace);
@@ -734,7 +729,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
         });
         await expect(doctorDatabasePort({ to: "postgres" })).rejects.toThrow("Database port");
         expect(mutated).toBe(true);
-        expect(await readBackupEngine(source)).toEqual({ engine: "sqlite" });
+        expect(readBackupEngine(source)).toEqual({ engine: "sqlite" });
         const saved = manifest(state);
         expect(saved.state).toBe("preparing");
         const target = saved.targets[0];

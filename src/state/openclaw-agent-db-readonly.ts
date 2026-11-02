@@ -1,7 +1,6 @@
 import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
 import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
-import { prepareArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
@@ -13,7 +12,6 @@ import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
-import { agentEngineInput } from "./openclaw-agent-db-engine.js";
 import {
   createOpenClawAgentDatabaseClaim,
   type OpenClawAgentDatabaseClaim,
@@ -41,16 +39,6 @@ const companions = resolveGlobalSingleton(
   Symbol.for("openclaw.agentDatabaseReadOnlyCompanions"),
   () => new WeakMap<EngineConnection, OpenClawAgentDatabaseReadOnlyScope>(),
 );
-
-/** PostgreSQL agent readers use their database owner rather than a private SQLite anchor. */
-export async function prepareOpenClawAgentDatabaseReadOnly(
-  pathname: string,
-  signal?: AbortSignal,
-): Promise<void> {
-  if (!agentEngineInput()) {
-    await prepareArtifactPreservingSqliteRead(pathname, signal);
-  }
-}
 
 export {
   openOpenClawAgentDatabaseReadOnly,

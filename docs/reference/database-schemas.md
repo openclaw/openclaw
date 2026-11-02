@@ -518,6 +518,23 @@ reader job. Open the page that matches your task and stay there.
 | [State schema history](/reference/database-schemas/state-schema-history)                       | Shared state database schema versions, their changes, and their first releases.                          |
 | [Integrity, troubleshooting, and recovery](/reference/database-schemas/integrity-and-recovery) | Integrity checks, common database errors, and the supported downgrade recovery path.                     |
 
+## Selective session dependency recovery
+
+Use `openclaw database restore-session-dependencies --input <directory> --sha256 <request-sha256>` only while the Gateway is stopped. The command acquires exclusive local state custody and refuses a serving owner. It repairs an existing session's selected skill revision and repository checkpoint without restoring the full database.
+
+The private input directory contains:
+
+- `request.json`: version 1, `sourceSha256`, current canonical `profileId`, `agentId`, `sessionKey`, exact `sessionId`, `skillId`, `skillRevision`, and `workspaceId`.
+- `shared.sqlite`: a closed single-file current-schema capture; no WAL, SHM, or journal companions.
+- `skill-revision/`: the selected immutable library tree, including `SKILL.md`.
+- `workspace.git/`: the selected checkpoint store with its original `refs/openclaw/worker-results/...` ref.
+
+The request checksum selects the request bytes; its source checksum selects the database capture. Skill and checkpoint content must match their recorded content hashes. Existing session IDs and dependency pins must still match. The current profile catalog must already resolve the historical skill owner to the selected canonical profile: the command never imports identities or merges profiles from history.
+
+This command accepts profile-owned, nonremoved skill entries and mirrored repository checkpoints. Team-owned skills, removed entries, historical fork formats, and retained-disk owners require their owning recovery workflow; they are not silently converted. It restores checkpoint contents, not optional GitHub publication companion metadata.
+
+Missing skills return as private, disabled entries. Existing permissions, current revisions, credentials, roles, and defaults are never restored or overwritten. Current profile and skill ownership are rechecked before artifact publication and inside the database transaction; a foreign or reassigned owner is refused without publishing new artifacts. Immutable artifacts publish before database pointers; a later database conflict may leave verified, unreachable artifacts, so the same request can be retried. Conflicting rows or checkpoint stores are refused rather than replaced. No setup script or worker is executed.
+
 ## Related
 
 - [Backups](/install/backups) — archives, per-database snapshots, scheduling, and offsite copies for the databases described here

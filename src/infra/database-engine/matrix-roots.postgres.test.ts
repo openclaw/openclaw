@@ -103,7 +103,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
       state: OpenClawTestState,
       files: string[],
       config: OpenClawConfig,
-      expectCredentials: () => Promise<void>,
+      expectCredentials: () => void,
     ) => Promise<void>,
   ) {
     await withOpenClawTestState({ scenario: "minimal", prefix: "matrix-port-" }, async (state) => {
@@ -170,10 +170,10 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
           };
         };
         const localCredentials = files.map(localSnapshot);
-        const expectCredentials = async () => {
+        const expectCredentials = () => {
           for (const [index, file] of files.entries()) {
             const original = localCredentials[index]!;
-            const physical = await readBackupEngine(file);
+            const physical = readBackupEngine(file);
             expect(localSnapshot(file)).toEqual({
               ...original,
               stored: {
@@ -194,9 +194,9 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
                 },
               },
             });
-            expect(
-              await readBackupEngine(resolveClientCredentialStorePath(credentialEnv(file))),
-            ).toEqual({ engine: "sqlite" });
+            expect(readBackupEngine(resolveClientCredentialStorePath(credentialEnv(file)))).toEqual(
+              { engine: "sqlite" },
+            );
           }
         };
         const preflight = () => port({ family: "state", to: "postgres", dryRun: true });
@@ -240,7 +240,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         expect(files.map(sqliteEntries)).toEqual(retainedEntries);
         await state.writeConfig(config);
         await run(state, files, config, expectCredentials);
-        await expectCredentials();
+        expectCredentials();
       } finally {
         vi.restoreAllMocks();
         await closeOpenClawStateDatabaseAsync();
@@ -279,7 +279,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
   }
 
   async function postgresEntries(file: string) {
-    const anchor = await readBackupEngine(file);
+    const anchor = readBackupEngine(file);
     assert(anchor.engine === "postgres");
     namespaces.add(anchor.namespace);
     const result = await client.query(
@@ -302,7 +302,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
       const expected = files.map(sqliteEntries);
       const forward = await port({ family: "state", to: "postgres" });
       expect(forward).toMatchObject({ engine: "postgres" });
-      await expectCredentials();
+      expectCredentials();
       const physical = await postgresRoots(files);
       for (const root of physical) {
         expect(root.anchor.namespace).toMatch(portNamespace);
@@ -325,7 +325,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         closeOpenClawAgentDatabasesForTest();
       });
       await closeOpenClawStateDatabaseAsync();
-      const globalAnchor = await readBackupEngine(state.statePath("state", "openclaw.sqlite"));
+      const globalAnchor = readBackupEngine(state.statePath("state", "openclaw.sqlite"));
       assert(globalAnchor.engine === "postgres");
       await client.query(
         `INSERT INTO "${globalAnchor.namespace}".agent_databases (agent_id, path, schema_version, last_seen_at) VALUES ('retained', $1, $2, 1)`,
@@ -451,11 +451,9 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         `DELETE FROM "${globalAnchor.namespace}".agent_databases WHERE agent_id = 'retained'`,
       );
       await port({ family: "state", to: "sqlite" });
-      expect(await Promise.all(files.map((file) => readBackupEngine(file)))).toEqual(
-        files.map(() => ({ engine: "sqlite" })),
-      );
+      expect(files.map(readBackupEngine)).toEqual(files.map(() => ({ engine: "sqlite" })));
       expect(files.map(sqliteEntries)).toEqual(expected);
-      expect(await readBackupEngine(agentPath)).toEqual({ engine: "sqlite" });
+      expect(readBackupEngine(agentPath)).toEqual({ engine: "sqlite" });
     });
   }, 650_000);
 
@@ -485,11 +483,9 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         const saved = await readManifest(manifestPath);
         expect(saved.state).toBe("publishing");
         expect(saved.targets).toHaveLength(files.length + 1);
-        expect(
-          new Set(
-            await Promise.all(files.map(async (file) => (await readBackupEngine(file)).engine)),
-          ),
-        ).toEqual(new Set(["sqlite", "postgres"]));
+        expect(new Set(files.map((file) => readBackupEngine(file).engine))).toEqual(
+          new Set(["sqlite", "postgres"]),
+        );
         expect(() => recovery.assertDatabasePortStartupAllowed(state.stateDir)).toThrow("--resume");
         expect(
           recovery.assertDatabasePortRecoveryAllowed(state.stateDir, {
@@ -499,7 +495,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
           }),
         ).toEqual(saved);
         await port({ [action]: manifestPath });
-        await expectCredentials();
+        expectCredentials();
         expect(() => recovery.assertDatabasePortStartupAllowed(state.stateDir)).not.toThrow();
         if (action === "resume") {
           expect((await postgresRoots(files)).map((root) => root.entries)).toEqual(expected);

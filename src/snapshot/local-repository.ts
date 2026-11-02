@@ -126,7 +126,7 @@ export function createLocalSnapshotProvider({
   };
   const provider = {
     async create(database: SnapshotDatabaseRef): Promise<EngineSnapshotResult> {
-      if ((await readBackupEngine(database.path)).engine === "sqlite") {
+      if (readBackupEngine(database.path).engine === "sqlite") {
         return native.create(database);
       }
       const trusted = await ensurePrivateSnapshotRepositoryRoot(repository);

@@ -88,7 +88,7 @@ it.each(["sqlite", "postgres"] as const)(
     const inspect = vi.fn().mockResolvedValue({ userVersion: 0 });
     const classify = vi
       .fn()
-      .mockResolvedValue(
+      .mockReturnValue(
         engine === "postgres"
           ? { engine, storeId: "fixture-store", namespace: "fixture_namespace" }
           : { engine },

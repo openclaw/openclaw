@@ -172,23 +172,7 @@ it("flushes a pending config draft before enabling and refreshes afterward", asy
   fixture.request.mockClear();
   const order = () => fixture.request.mock.calls.map(([method]) => method);
   runtimeConfig.patchForm(["pending"], true);
-  try {
-    await clickPluginAction(page, "Enable Workboard");
-  } catch (cause) {
-    throw new Error(
-      JSON.stringify({
-        methods: order(),
-        configError: runtimeConfig.state.lastError,
-        actions: [...page.querySelectorAll("button")].map((button) => ({
-          label: button.getAttribute("aria-label"),
-          text: button.textContent?.trim(),
-          disabled: button.disabled,
-        })),
-        text: page.textContent,
-      }),
-      { cause },
-    );
-  }
+  await clickPluginAction(page, "Enable Workboard");
   await waitForSolid(() => expect(order()).toContain("plugins.list"));
   expect(order().slice(0, 4)).toEqual([
     "config.set",

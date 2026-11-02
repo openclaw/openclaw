@@ -237,7 +237,7 @@ export async function retireOwnedSessionSqliteRecovery(
     current: true,
   });
   authority.assertCurrent();
-  const unmanifested = await selectUnmanifestedRecovery({
+  const unmanifested = selectUnmanifestedRecovery({
     inventory,
     cfg,
     env: params.env,
@@ -370,7 +370,7 @@ export async function retireOwnedSessionSqliteRecovery(
     current: true,
   });
   authority.assertCurrent();
-  const currentUnmanifested = await selectUnmanifestedRecovery({
+  const currentUnmanifested = selectUnmanifestedRecovery({
     inventory: rechecked,
     cfg: currentConfig,
     env: params.env,
@@ -465,7 +465,7 @@ export async function retireOwnedSessionSqliteRecovery(
         current: true,
       });
       authority.assertCurrent();
-      const selection = await selectUnmanifestedRecovery({
+      const selection = selectUnmanifestedRecovery({
         inventory: fresh,
         cfg: effectConfig,
         env: params.env,
