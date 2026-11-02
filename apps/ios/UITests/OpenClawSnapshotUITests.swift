@@ -2223,8 +2223,8 @@ extension OpenClawSnapshotUITests {
         {
             let directory = cache.appendingPathComponent("ax-diagnostic", isDirectory: true)
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            app.launchEnvironment["OPENCLAW_AX_PID_RECEIPT"] = directory
-                .appendingPathComponent("\(simulator.uppercased()).json").path
+            app.launchEnvironment["OPENCLAW_AX_METRICS_PATH"] = directory
+                .appendingPathComponent("\(simulator.uppercased()).app").path
         }
         app.launchArguments += [
             "--openclaw-initial-tab",

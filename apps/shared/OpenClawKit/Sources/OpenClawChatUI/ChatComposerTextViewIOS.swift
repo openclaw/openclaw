@@ -35,6 +35,10 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: ChatComposerUITextView, context: Context) {
+        #if DEBUG && targetEnvironment(simulator)
+        let diagnosticStart = ChatScreenshotDiagnostics.begin(.updateUIView)
+        defer { ChatScreenshotDiagnostics.end(.updateUIView, since: diagnosticStart) }
+        #endif
         context.coordinator.parent = self
         context.coordinator.scheduleInteractionUpdate(textView)
         self.configureInputHandlers(textView)
@@ -69,6 +73,10 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
         uiView: ChatComposerUITextView,
         context _: Context) -> CGSize?
     {
+        #if DEBUG && targetEnvironment(simulator)
+        let diagnosticStart = ChatScreenshotDiagnostics.begin(.sizeThatFits)
+        defer { ChatScreenshotDiagnostics.end(.sizeThatFits, since: diagnosticStart) }
+        #endif
         guard let width = proposal.width else { return nil }
         let fitting = uiView.sizeThatFits(
             CGSize(width: width, height: CGFloat.greatestFiniteMagnitude))
@@ -97,6 +105,10 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
             // spin in AttributeGraph. Apply UIKit state after the graph update,
             // reading the latest parent so a queued disable cannot outlive recovery.
             DispatchQueue.main.async { [weak self, weak textView] in
+                #if DEBUG && targetEnvironment(simulator)
+                let diagnosticStart = ChatScreenshotDiagnostics.begin(.interactionUpdate)
+                defer { ChatScreenshotDiagnostics.end(.interactionUpdate, since: diagnosticStart) }
+                #endif
                 guard let self else { return }
                 self.interactionUpdateScheduled = false
                 guard let textView else { return }
@@ -127,15 +139,27 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
+            #if DEBUG && targetEnvironment(simulator)
+            let diagnosticStart = ChatScreenshotDiagnostics.begin(.focusBegan)
+            defer { ChatScreenshotDiagnostics.end(.focusBegan, since: diagnosticStart) }
+            #endif
             self.parent.onFocusChange(true)
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
+            #if DEBUG && targetEnvironment(simulator)
+            let diagnosticStart = ChatScreenshotDiagnostics.begin(.focusEnded)
+            defer { ChatScreenshotDiagnostics.end(.focusEnded, since: diagnosticStart) }
+            #endif
             self.parent.onFocusChange(false)
         }
 
         func textViewDidChange(_ textView: UITextView) {
             guard !self.isProgrammaticUpdate, textView.isFirstResponder else { return }
+            #if DEBUG && targetEnvironment(simulator)
+            let diagnosticStart = ChatScreenshotDiagnostics.begin(.textDidChange)
+            defer { ChatScreenshotDiagnostics.end(.textDidChange, since: diagnosticStart) }
+            #endif
             self.isReportingTextChange = true
             defer { self.isReportingTextChange = false }
             self.lastReportedText = textView.text
@@ -150,6 +174,14 @@ final class ChatComposerUITextView: UITextView {
     var onHistoryUp: ((Bool) -> Bool)?
     var onHistoryDown: (() -> Bool)?
     var onPasteImageAttachment: ((_ data: Data, _ fileName: String, _ mimeType: String) -> Void)?
+
+    #if DEBUG && targetEnvironment(simulator)
+    override func layoutSubviews() {
+        let diagnosticStart = ChatScreenshotDiagnostics.begin(.layoutSubviews)
+        defer { ChatScreenshotDiagnostics.end(.layoutSubviews, since: diagnosticStart) }
+        super.layoutSubviews()
+    }
+    #endif
 
     override var accessibilityTraits: UIAccessibilityTraits {
         // Preserve UIKit's dynamic keyboard-focus traits when exposing disabled input.

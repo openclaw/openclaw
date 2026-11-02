@@ -1,5 +1,8 @@
 import BackgroundTasks
 import Foundation
+#if DEBUG && targetEnvironment(simulator)
+import OpenClawChatUI
+#endif
 import OpenClawKit
 import os
 import SwiftUI
@@ -611,14 +614,8 @@ struct OpenClawApp: App {
 
     init() {
         #if DEBUG && targetEnvironment(simulator)
-        if Self.screenshotModeEnabled,
-           let output = ProcessInfo.processInfo.environment["OPENCLAW_AX_PID_RECEIPT"],
-           let simulator = ProcessInfo.processInfo.environment["SIMULATOR_UDID"],
-           let data = try? JSONSerialization.data(withJSONObject: [
-               "role": "app", "pid": ProcessInfo.processInfo.processIdentifier, "simulator": simulator,
-           ])
-        {
-            try? data.write(to: URL(fileURLWithPath: output), options: .atomic)
+        if Self.screenshotModeEnabled {
+            ChatScreenshotDiagnostics.start()
         }
         #endif
         Self.installUncaughtExceptionLogger()

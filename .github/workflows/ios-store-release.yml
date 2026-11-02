@@ -117,32 +117,6 @@ jobs:
           OPENCLAW_SNAPSHOT_SKIP_WATCH: "1"
         run: |
           set -euo pipefail
-          node scripts/ios-ax-diagnostic.mjs \
-            --log-dir apps/ios/build/SnapshotLogs \
-            --receipt-dir "$HOME/Library/Caches/tools.fastlane/ax-diagnostic" \
-            --output "$RUNNER_TEMP/ios-ax-diagnostic.json" \
-            --private-dir "$RUNNER_TEMP/ios-ax-private" &
-          probe_pid=$!
-          finish_probe() {
-            kill -TERM "$probe_pid" 2>/dev/null || true
-            for _ in {1..10}; do
-              if ! kill -0 "$probe_pid" 2>/dev/null; then
-                wait "$probe_pid" || true
-                return
-              fi
-              sleep 0.5
-            done
-            kill -KILL "$probe_pid" 2>/dev/null || true
-            for _ in {1..4}; do
-              if ! kill -0 "$probe_pid" 2>/dev/null; then
-                wait "$probe_pid" || true
-                return
-              fi
-              sleep 0.5
-            done
-            printf '%s\n' 'Diagnostic observer did not exit; disposable runner cleanup owns remaining processes.'
-          }
-          trap finish_probe EXIT
           node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \
             pnpm ios:screenshots
 
@@ -172,7 +146,7 @@ jobs:
             apps/ios/build/screenshot-diagnostics.json
             ${{ runner.temp }}/ios-resource-timeline.jsonl
             ${{ runner.temp }}/ios-spotlight-probe.json
-            ${{ runner.temp }}/ios-ax-diagnostic.json
+            ~/Library/Caches/tools.fastlane/ax-diagnostic/*.app-*.jsonl
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
