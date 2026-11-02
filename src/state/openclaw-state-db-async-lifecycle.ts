@@ -88,12 +88,14 @@ export function createOpenClawDatabaseMaintenanceScope(
         sqliteIntegrityCheck?: "quick" | "full";
         assertOwnerCurrent?: (access?: "read") => void;
         assertDatabaseAccess?: (databasePath: string) => void;
+        runNativePhase?: <T>(operation: () => T) => Promise<Awaited<T>>;
       }
     | {
         schemaMaintenance: true;
         sqliteIntegrityCheck?: "quick" | "full";
         assertOwnerCurrent: (access?: "read") => void;
         assertDatabaseAccess?: (databasePath: string) => void;
+        runNativePhase?: <T>(operation: () => T) => Promise<Awaited<T>>;
       },
 ): OpenClawDatabaseMaintenanceScope {
   const parent = getOpenClawDatabaseMaintenanceScope();
@@ -158,12 +160,16 @@ export function createOpenClawDatabaseMaintenanceScope(
       scope.assertOwnerCurrent("read");
       assertAdmissionLifecycle();
     },
-    assertDatabaseAccess(databasePath) {
-      scope.assertAdmission();
+    assertDatabaseAccess(databasePath, access) {
+      if (access === "read") {
+        scope.assertReadAdmission();
+      } else {
+        scope.assertAdmission();
+      }
       if (assertDatabaseAccess) {
         assertDatabaseAccess(databasePath);
       } else if (parent) {
-        parent.assertDatabaseAccess(databasePath);
+        parent.assertDatabaseAccess(databasePath, access);
       } else {
         throw new Error("Database maintenance scope does not own this database");
       }
@@ -191,12 +197,22 @@ export function createOpenClawDatabaseMaintenanceScope(
         check(migration);
       }
     },
-    run(operation) {
+    run(operation, access) {
       assertAdmissionLifecycle();
       return runMaintenance(scope, () => {
-        scope.assertAdmission();
+        if (access === "read") {
+          scope.assertReadAdmission();
+        } else {
+          scope.assertAdmission();
+        }
         return operation();
       });
+    },
+    async runNativePhase(operation) {
+      assertAdmissionLifecycle();
+      const consume = () => scope.run(operation);
+      const prepare = options?.runNativePhase ?? parent?.runNativePhase;
+      return prepare ? await scope.run(() => prepare(consume), "read") : await consume();
     },
     track(operation) {
       assertOpen();

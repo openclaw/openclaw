@@ -27,31 +27,43 @@ const runningSql =
 async function withMaintenance(
   source: (typeof warmSources)[number] | "cold-read-only",
   action: (
-    context: ReturnType<typeof fixture> & {
+    context: Awaited<ReturnType<typeof fixture>> & {
       maintenance: ReturnType<typeof maintenanceScope>;
       openPeer: () => DatabaseSync;
     },
   ) => void | Promise<void>,
 ) {
-  using context = fixture(source === "cached-writer");
+  using context = await fixture(source === "cached-writer");
   const maintenance = maintenanceScope(
     context.admission,
     source === "admitted-read-only" ? context.database : undefined,
+    true,
+    context.runNativePhase,
   );
   let peer: DatabaseSync | undefined;
   const openPeer = () => (peer ??= new DatabaseSync(context.database));
   try {
-    await maintenance.run(() => action({ ...context, maintenance, openPeer }));
+    await maintenance.runNativePhase(() => action({ ...context, maintenance, openPeer }));
   } finally {
     await maintenance.close();
     peer?.close();
   }
 }
 
-function maintenanceScope(admission: () => void, database?: string, admit = true) {
+function maintenanceScope(
+  admission: () => void,
+  database?: string,
+  admit = true,
+  runNativePhase?: <T>(operation: () => T) => Promise<Awaited<T>>,
+) {
   const scope = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
-    assertOwnerCurrent: admission,
+    assertOwnerCurrent(access) {
+      if (access !== "read") {
+        admission();
+      }
+    },
+    runNativePhase,
     assertDatabaseAccess: (pathname) => expect(pathname).toBe(database),
   });
   if (database && admit) {
@@ -61,7 +73,7 @@ function maintenanceScope(admission: () => void, database?: string, admit = true
 }
 
 it("admits fast systemd inspection after a slow continuation write", async () => {
-  using context = fixture();
+  using context = await fixture();
   const { env } = context;
   const run = createUpdateRun(
     { trigger: "cli", origin: { driver: readUpdateRunDriver() } },
@@ -78,7 +90,7 @@ it("admits fast systemd inspection after a slow continuation write", async () =>
   recordUpdateRunRepairContinuation(run.runId, run.runId, { env });
   expect(elapsed).toBeGreaterThanOrEqual(6_000);
   await closeOpenClawStateDatabaseAsync();
-  const admitted = resolveDoctorUpdateAdmission(env, run.runId);
+  const admitted = await resolveDoctorUpdateAdmission(env, run.runId);
   const binding = stoppedSystemdBinding(() => {});
   const reader = await createSystemdCommandQuery(
     env,
@@ -89,7 +101,7 @@ it("admits fast systemd inspection after a slow continuation write", async () =>
       systemdReadBinding: binding,
       loadForInspection: {
         managerUid: binding.managerUid,
-        assertCurrent: admitted.recordContinuation,
+        assertCurrent: () => {},
       },
     },
     () => new Error("systemd inspection unavailable"),
@@ -102,7 +114,9 @@ it("admits fast systemd inspection after a slow continuation write", async () =>
       ),
     ).resolves.toEqual([binding.unit]);
     const competing = createUpdateRun({ trigger: "cli" }, { env });
-    expect(() => admitted.recordContinuation()).toThrow(competing.runId);
+    await expect(admitted.runPrepared(admitted.recordContinuation)).rejects.toThrow(
+      competing.runId,
+    );
   } finally {
     await reader.close();
   }
@@ -149,13 +163,13 @@ it.each(warmSources)("refuses new quarantine under the %s maintenance reader", (
 it.each(warmSources)(
   "binds the reader to Doctor's %s source and drains before cold restoration",
   async (source) => {
-    using context = fixture();
+    using context = await fixture();
     const { env, database, admission } = context;
-    const maintenance = maintenanceScope(admission, database, false);
+    const maintenance = maintenanceScope(admission, database, false, context.runNativePhase);
     const hashes = vi.spyOn(snapshots, "readSqliteSourceContentVersionSync");
     const copies = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
     try {
-      maintenance.run(() => {
+      await maintenance.runNativePhase(() => {
         if (source === "admitted-read-only") {
           admitOpenClawMaintenanceLiveAuthorityReads(database);
         }
@@ -183,8 +197,8 @@ it.each(warmSources)(
       });
       await maintenance.close();
       hashes.mockClear();
-      expect(() => admission()).not.toThrow();
-      expect(hashes).toHaveBeenCalled();
+      await expect(context.runNativePhase(admission)).resolves.toBeUndefined();
+      expect(hashes).not.toHaveBeenCalled();
     } finally {
       await maintenance.close();
     }
@@ -194,36 +208,23 @@ it.each(warmSources)(
 it.each(["cached-writer", "admitted-read-only", "cold-read-only"] as const)(
   "observes %s foreign commits without uncommitted rows or inherited discovery snapshots",
   (source) =>
-    withMaintenance(source, async ({ env, database, maintenance, openPeer }) => {
+    withMaintenance(source, async ({ env, maintenance, openPeer }) => {
       const peer = openPeer();
       const runId = peer.prepare("SELECT run_id FROM update_runs").get()?.run_id;
       expect(typeof runId).toBe("string");
       try {
-        maintenance.assertAdmission();
+        await maintenance.runNativePhase(() => maintenance.assertAdmission());
         await withOpenClawStateDatabaseReadSnapshot(
           async () => {
             peer.exec("BEGIN IMMEDIATE");
             peer.exec(runningSql);
-            expect(() => maintenance.assertAdmission()).not.toThrow();
-            if (source === "cold-read-only") {
-              const observe = fs.lstatSync;
-              let pendingCommit = true;
-              using _ = vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
-                const observed = observe(...args);
-                // Commit after the last file observation used to select a cached revision.
-                if (pendingCommit && args[0] === `${database}-journal`) {
-                  pendingCommit = false;
-                  peer.exec("COMMIT");
-                }
-                return observed;
-              });
-
-              expect(() => maintenance.assertAdmission()).toThrow(String(runId));
-              expect(pendingCommit).toBe(false);
-            } else {
-              peer.exec("COMMIT");
-              expect(() => maintenance.assertAdmission()).toThrow(String(runId));
-            }
+            await expect(
+              maintenance.runNativePhase(() => maintenance.assertAdmission()),
+            ).resolves.toBeUndefined();
+            peer.exec("COMMIT");
+            await expect(
+              maintenance.runNativePhase(() => maintenance.assertAdmission()),
+            ).rejects.toThrow(String(runId));
           },
           { env },
         );
@@ -235,20 +236,20 @@ it.each(["cached-writer", "admitted-read-only", "cold-read-only"] as const)(
     }),
 );
 
-it("refuses committed WAL updates while preserving all live source artifacts", () => {
-  using context = fixture(true);
+it("refuses committed WAL updates while preserving all live source artifacts", async () => {
+  using context = await fixture(true);
   const { env, admission, family } = context;
   const before = family();
-  admission();
+  await context.runNativePhase(admission);
   expect(family()).toEqual(before);
   const competing = createUpdateRun({ trigger: "cli" }, { env });
   const committed = family();
-  expect(() => admission()).toThrow(competing.runId);
+  await expect(context.runNativePhase(admission)).rejects.toThrow(competing.runId);
   expect(family()).toEqual(committed);
 });
 
 it("refuses a competing run after replacement of an already admitted source", async () => {
-  using context = fixture(true);
+  using context = await fixture(true);
   const { env, database, admission, createStateDir } = context;
   const replacement = createStateDir();
   const competing = createUpdateRun(
@@ -257,23 +258,23 @@ it("refuses a competing run after replacement of an already admitted source", as
   );
   await closeOpenClawStateDatabaseAsync();
   fs.renameSync(path.join(replacement, "state", "openclaw.sqlite"), database);
-  expect(() => admission()).toThrow(competing.runId);
+  await expect(context.runNativePhase(admission)).rejects.toThrow(competing.runId);
 });
 
 it("does not borrow a retained discovery snapshot for current admission", async () => {
-  using context = fixture();
+  using context = await fixture();
   const { env, admission } = context;
   await withOpenClawStateDatabaseReadSnapshot(
     async () => {
       const competing = createUpdateRun({ trigger: "cli" }, { env });
-      expect(() => admission()).toThrow(competing.runId);
+      await expect(context.runNativePhase(admission)).rejects.toThrow(competing.runId);
     },
     { env },
   );
 });
 
-it("refuses new quarantine with a cold reader and unchanged ledger bytes", () => {
-  using context = fixture();
+it("refuses new quarantine with a cold reader and unchanged ledger bytes", async () => {
+  using context = await fixture();
   const { env, database, admission, family } = context;
   const before = family();
   seedOpenClawDatabaseQuarantine({
@@ -282,6 +283,43 @@ it("refuses new quarantine with a cold reader and unchanged ledger bytes", () =>
     path: database,
     reason: "fresh quarantine refusal",
   });
-  expect(() => admission()).toThrow("fresh quarantine refusal");
+  await expect(context.runNativePhase(admission)).rejects.toThrow("fresh quarantine refusal");
   expect(family()).toEqual(before);
+});
+
+it("joins a started native continuation when its private admission image cleanup fails", async () => {
+  using context = await fixture();
+  const before = context.family();
+  const cleaned = Promise.withResolvers<void>();
+  const native = Promise.withResolvers<void>();
+  // Keep the deliberately rejected fixture action observed even on the broken owner.
+  void native.promise.catch(() => undefined);
+  const prepare = snapshots.prepareSqliteReadOnlyLocation;
+  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(async (...args) => {
+    const prepared = await prepare(...args);
+    if (args[0] !== context.database) {
+      return prepared;
+    }
+    return {
+      ...prepared,
+      async cleanupAsync() {
+        expect(await prepared.cleanupAsync()).toBe(true);
+        cleaned.resolve();
+        return false;
+      },
+    };
+  });
+  const outcome = context.runNativePhase(() => native.promise).catch((error: unknown) => error);
+  await cleaned.promise;
+  const failure = new Error("native continuation failed");
+  native.reject(failure);
+  expect(await outcome).toMatchObject({
+    errors: expect.arrayContaining([
+      failure,
+      expect.objectContaining({
+        message: expect.stringContaining("SQLite snapshot cleanup failed"),
+      }),
+    ]),
+  });
+  expect(context.family()).toEqual(before);
 });

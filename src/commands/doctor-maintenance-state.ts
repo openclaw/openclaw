@@ -34,6 +34,7 @@ export async function createDoctorMaintenanceState(options: {
   deadline: () => number | undefined;
   assertCurrent?: () => void;
   assertReadCurrent: () => void;
+  runNativePhase: <T>(operation: () => T) => Promise<Awaited<T>>;
   settle: <T>(operation: () => Promise<T>) => Promise<T>;
   warn: (message: string) => void;
 }) {
@@ -47,7 +48,7 @@ export async function createDoctorMaintenanceState(options: {
   // Post-repair work runs outside the checks callback. Its policy reads must
   // retain the repair scope's cached handles until that scope has drained.
   const runOwnerCheck = (check: () => void) =>
-    resources ? resources.run(check) : owner!.run(check);
+    resources ? resources.run(check, "read") : owner!.run(check);
   const setOwner = (next: typeof owner) => {
     owner = next;
     params.lendPolicyCustody?.(
@@ -173,15 +174,18 @@ export async function createDoctorMaintenanceState(options: {
         schemaMaintenance: true,
         sqliteIntegrityCheck: params.options.fullIntegrityCheck ? "full" : "quick",
         assertDatabaseAccess: acquired.assertDatabaseAccess,
+        runNativePhase: options.runNativePhase,
         assertOwnerCurrent: (access) => {
           acquired.assertCurrent(() => {
             options.assertCurrent?.();
-            options.assertReadCurrent();
+            if (access !== "read") {
+              options.assertReadCurrent();
+            }
           }, access);
         },
       });
       if (liveAuthorityReadsAdmitted) {
-        resources.run(() =>
+        await resources.runNativePhase(() =>
           admitOpenClawMaintenanceLiveAuthorityReads(resolveOpenClawStateSqlitePath(selectedEnv)),
         );
       }
@@ -196,7 +200,7 @@ export async function createDoctorMaintenanceState(options: {
       throw error;
     }
     if (capture && !captureAdmitted) {
-      await settle(() => resources!.run(() => capture.admit()));
+      await settle(() => resources!.run(() => capture.admit(), "read"));
       captureAdmitted = true;
     }
   };
@@ -221,9 +225,9 @@ export async function createDoctorMaintenanceState(options: {
     get receipt() {
       return owner ? undefined : capture?.receipt;
     },
-    run<T>(operation: () => T): T {
+    async run<T>(operation: () => T): Promise<Awaited<T>> {
       // Cancellation stops read-only inspections; admitted writers retain their resource scope.
-      return resources!.run(() =>
+      return resources!.runNativePhase(() =>
         inspections!.run(() =>
           runWithDoctorMigrationBackup(captureFreshDoctorMigrationTables, () =>
             capture ? capture.run(operation) : operation(),
@@ -258,16 +262,17 @@ export async function createDoctorMaintenanceState(options: {
       assertAdmission?.();
       const beforeStateMutation = params.beforeStateMutation;
       if (beforeStateMutation) {
-        await resources!.run(() =>
-          beforeStateMutation({ env: selectedEnv, signal: options.signal }),
+        await resources!.run(
+          () => beforeStateMutation({ env: selectedEnv, signal: options.signal }),
+          "read",
         );
         assertAdmission?.();
-        resources!.assertAdmission();
+        resources!.assertReadAdmission();
       }
       // An idle captured WAL must retain its commit header until native migration
       // custody. Current authority stays on fresh private snapshots before then.
       if (!capture || isStatePostgres()) {
-        resources!.run(() =>
+        await resources!.runNativePhase(() =>
           admitOpenClawMaintenanceLiveAuthorityReads(resolveOpenClawStateSqlitePath(selectedEnv)),
         );
         liveAuthorityReadsAdmitted = true;
@@ -352,7 +357,7 @@ export async function createDoctorMaintenanceState(options: {
         for (const agent of agents) {
           await closeOpenClawAgentDatabaseByPathAsync(agent.path, agent.agentId);
         }
-      });
+      }, "read");
       await closeResources(null);
       let operationError: Error | undefined;
       let result: { warnings: string[] } | undefined;

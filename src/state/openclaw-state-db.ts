@@ -475,7 +475,12 @@ function* openStateDatabaseSteps(
         return acquire(openUnpublishedStateDatabase);
       },
       runAsync() {
-        return acquire(openUnpublishedStateDatabaseAsync);
+        return acquire(async (params) => {
+          // Retain the result before the admission reader releases its private image.
+          // A failed reader cleanup must still let this owner close the native handle.
+          unpublished = await openUnpublishedStateDatabaseAsync(params);
+          return unpublished;
+        });
       },
     };
     resolveSqliteInspectionSignal(getAsyncWorkSignal())?.throwIfAborted();

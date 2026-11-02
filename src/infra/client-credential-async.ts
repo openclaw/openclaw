@@ -162,6 +162,7 @@ async function runClientCredentialTaskAsync(
           }
         });
         admission.bindDatabaseAuthority({
+          runNativePhase: maintenance?.runNativePhase,
           databasePath,
           assertRequest: assertCurrent,
           assertAccess,
@@ -190,7 +191,11 @@ async function runClientCredentialTaskAsync(
               transferList: (input) => [input.admission],
             },
           );
-          assertAccess();
+          if (maintenance) {
+            await maintenance.runNativePhase(assertAccess);
+          } else {
+            assertAccess();
+          }
           if (result.kind === "error") {
             const error = new Error("Client credential operation failed");
             retainOpenClawStateWorkerErrorPayload(error, result.error);
@@ -206,7 +211,7 @@ async function runClientCredentialTaskAsync(
       };
       const maintenance = getOpenClawDatabaseMaintenanceScope();
       if (maintenance?.ownsSchemaMaintenance) {
-        maintenance.assertAdmission();
+        maintenance.assertReadAdmission();
       } else {
         assertCurrent();
         const result = await requestClientCredentialsFromApp(

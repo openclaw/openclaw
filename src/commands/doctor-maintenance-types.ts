@@ -16,6 +16,7 @@ export type DoctorMaintenanceParams = {
   runtime: RuntimeEnv;
   runId?: string;
   assertCurrent?: () => void;
+  runNativePhase?: <T>(operation: () => T) => Promise<Awaited<T>>;
   lendPolicyCustody?: import("../infra/update-doctor-result.js").UpdateDoctorWriteAuthority["lendPolicyCustody"];
   databaseGenerations?: UpdateDatabaseGenerations;
   databasePluginOwners?: import("../infra/database-engine/port-descriptor.js").DatabasePortPluginOwners;

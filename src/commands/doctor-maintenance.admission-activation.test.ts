@@ -76,9 +76,13 @@ const identity: SystemdServiceIdentity = {
   serviceUser: "",
 };
 
-function activate(admission: () => void, current: () => void = () => {}) {
+function activate(
+  runNativePhase: <T>(operation: () => T) => Promise<Awaited<T>>,
+  admission: () => void,
+  current: () => void = () => {},
+) {
   return withGatewayServiceUpdateAuthority(
-    admission,
+    current,
     (assertCurrent) =>
       activateSystemdServiceIdentity({
         identity,
@@ -86,28 +90,35 @@ function activate(admission: () => void, current: () => void = () => {}) {
         assertCurrent,
         warn: () => {},
       }),
-    { updateOwned: false, assertRecoveryCurrent: current },
+    {
+      updateOwned: false,
+      assertRecoveryCurrent: current,
+      runNativePhase: (operation) =>
+        runNativePhase(() => {
+          admission();
+          current();
+          return operation();
+        }),
+    },
   );
 }
 
 it("restores within the native deadline when cold source observations cost two seconds", async () => {
-  using context = fixture();
+  using context = await fixture();
   const { admission, family } = context;
   const before = family();
   let elapsed = 0;
   vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-  const slow =
-    <T>(read: (pathname: string) => T) =>
-    (pathname: string) => {
-      const result = read(pathname);
+  const prepare = snapshots.prepareSqliteReadOnlyLocation;
+  const copies = vi
+    .spyOn(snapshots, "prepareSqliteReadOnlyLocation")
+    .mockImplementation(async (...args) => {
+      const prepared = await prepare(...args);
       elapsed += 2_000;
-      return result;
-    };
-  const observe = snapshots.readSqliteSourceContentVersionSync;
-  const prepare = snapshots.prepareSqliteReadOnlyLocationSync;
-  vi.spyOn(snapshots, "readSqliteSourceContentVersionSync").mockImplementation(slow(observe));
-  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync").mockImplementation(slow(prepare));
-  await activate(admission);
+      return prepared;
+    });
+  await activate(context.runNativePhase, admission);
+  expect(copies).toHaveBeenCalled();
   expect(family()).toEqual(before);
   expect([native.effects, native.closes]).toEqual([["ResetFailedUnit", "RestartUnit"], 1]);
 });
@@ -115,7 +126,7 @@ it("restores within the native deadline when cold source observations cost two s
 it.each(["new update", "revoked custody"] as const)(
   "refuses %s after the final restart ownership reply",
   async (reason) => {
-    using context = fixture();
+    using context = await fixture();
     const { env, admission, family } = context;
     const runId = "2c45c690-8265-498b-8504-d608ee2cda01";
     const message = reason === "new update" ? runId : "original native custody revoked";
@@ -130,7 +141,7 @@ it.each(["new update", "revoked custody"] as const)(
       }
     };
     await expect(
-      activate(admission, () => {
+      activate(context.runNativePhase, admission, () => {
         if (!current) {
           throw new Error(message);
         }

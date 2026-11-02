@@ -292,7 +292,7 @@ it.each([
   expect(admission).toMatchObject({ committed: undefined, settlement: undefined });
 });
 
-it.each(["grant", "preparation-fails", "closed", "revoked"] as const)(
+it.each(["grant", "preparation-fails", "admission-image-fails", "closed", "revoked"] as const)(
   "keeps asynchronous custody preparation pending until its final %s decision",
   async (ending) => {
     const prepared = createDeferredCore();
@@ -309,6 +309,11 @@ it.each(["grant", "preparation-fails", "closed", "revoked"] as const)(
       async () => {
         await prepared.promise;
       },
+      ending === "admission-image-fails"
+        ? async () => {
+            throw new Error("Current admission image unavailable");
+          }
+        : undefined,
     );
     const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
     admission.port.postMessage({ stage: "transaction", decision: decision.buffer }, []);
@@ -331,6 +336,11 @@ it.each(["grant", "preparation-fails", "closed", "revoked"] as const)(
       expect(effect).toHaveBeenCalledTimes(ending === "grant" ? 1 : 0);
       if (ending !== "grant") {
         expect(admission.failure).toBeInstanceOf(Error);
+      }
+      if (ending === "preparation-fails") {
+        expect(admission.failureSource).toBe("domain");
+      } else if (ending === "admission-image-fails") {
+        expect(admission.failureSource).toBe("authority");
       }
     } finally {
       prepared.resolve();

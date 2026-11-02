@@ -100,6 +100,11 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
   let staleReplacement: DoctorStaleGateway | undefined;
   let assertUpdateAdmissionReadCurrent: (() => void) | undefined;
   let assertUpdateAdmissionCurrent: (() => void) | undefined;
+  let runUpdateAdmission =
+    params.runNativePhase ??
+    (async <T>(operation: () => T): Promise<Awaited<T>> => await operation());
+  const assertPreparedUpdateAdmission = () =>
+    runUpdateAdmission(() => assertUpdateAdmissionCurrent?.());
   let authorityRefused = false;
   const assertAuthority = (assertion: () => void) => {
     try {
@@ -166,6 +171,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     assertCustody?: () => void,
     writeConfig?: DoctorConfigWriter,
     assertRestoreAdmission = assertUpdateAdmissionCurrent,
+    runRestoreNativePhase = runUpdateAdmission,
   ) => {
     assertCustody?.();
     const before = stopped;
@@ -226,6 +232,8 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
         assertCustody,
         assertRestoreAdmission,
         assertInstallationAdmission: assertUpdateAdmissionCurrent,
+        runNativePhase: runRestoreNativePhase,
+        runInstallationNativePhase: (operation) => runUpdateAdmission(operation),
       });
       if (!state) {
         return;
@@ -307,6 +315,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     assertCustody?: () => void,
     writeConfig?: DoctorConfigWriter,
     assertRestoreAdmission?: () => void,
+    runRestoreNativePhase = runUpdateAdmission,
   ) => {
     const { finishDoctorGatewayMaintenance } = await import("./doctor-maintenance-restoration.js");
     await finishDoctorGatewayMaintenance({
@@ -316,7 +325,13 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       assertCustody,
       release: releaseAndRestoreAutoStart,
       restore: (cfg, assertCurrent) =>
-        restoreGateway(cfg, assertCurrent, writeConfig, assertRestoreAdmission),
+        restoreGateway(
+          cfg,
+          assertCurrent,
+          writeConfig,
+          assertRestoreAdmission,
+          runRestoreNativePhase,
+        ),
       isCleanupUncertain: () => cleanupFailure !== undefined,
     });
   };
@@ -328,9 +343,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       state,
       wait: waitForMaintenance,
       acquire: () =>
-        acquireStoppedMaintenanceResources(assertDeadline).then(() =>
-          assertUpdateAdmissionCurrent?.(),
-        ),
+        acquireStoppedMaintenanceResources(assertDeadline).then(assertPreparedUpdateAdmission),
       assertCurrent: () => {
         assertCallerCurrent?.();
         assertDeadline?.();
@@ -368,6 +381,12 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
           assertStopCustody,
           undefined,
           assertStopCustody ?? assertUpdateAdmissionCurrent,
+          assertStopCustody
+            ? async (operation) => {
+                assertStopCustody();
+                return await operation();
+              }
+            : runUpdateAdmission,
         );
       } else {
         await release();
@@ -417,6 +436,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     deadline: () => stopDeadline,
     assertCurrent: assertCallerCurrent,
     assertReadCurrent: () => assertUpdateAdmissionReadCurrent?.(),
+    runNativePhase: (operation) => runUpdateAdmission(operation),
     settle,
     warn,
   });
@@ -459,14 +479,16 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
           warn(serviceVerdict.message);
         }
         if (inspection.serviceUpdateVerdict?.kind !== "absent" && inspection.offline !== true) {
-          assertAuthority(() => {
-            const admitted = resolveDoctorUpdateAdmission(env);
-            // Storage guards can run inside a transaction; receipts belong to service admission.
-            assertUpdateAdmissionReadCurrent = () => assertAuthority(admitted.assertCurrent);
-            const checkAndRecord = () => assertAuthority(admitted.recordContinuation);
-            assertUpdateAdmissionCurrent = () =>
-              state.resources ? state.run(checkAndRecord) : checkAndRecord();
-          });
+          const admitted = await resolveDoctorUpdateAdmission(env, undefined, exit.signal);
+          assertCallerCurrent?.();
+          runUpdateAdmission = (operation) =>
+            admitted.runPrepared(() => {
+              assertCallerCurrent?.();
+              return operation();
+            });
+          // Storage guards stay synchronous inside their admitted native frame.
+          assertUpdateAdmissionReadCurrent = () => assertAuthority(admitted.assertCurrent);
+          assertUpdateAdmissionCurrent = () => assertAuthority(admitted.recordContinuation);
         }
         if (inspection.serviceUpdateVerdict?.kind === "owned" && inspection.serviceEnv) {
           assertDoctorServiceSelection(env, inspection.serviceEnv);
@@ -475,7 +497,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
           root: params.root,
           env,
           before: inspection,
-          assertCurrent: assertUpdateAdmissionCurrent,
+          assertCurrent: assertPreparedUpdateAdmission,
         });
         if (
           parentActivation !== undefined &&
@@ -506,7 +528,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
               });
           observationSignal.throwIfAborted();
           assertCallerCurrent?.();
-          assertUpdateAdmissionReadCurrent?.();
+          await runUpdateAdmission(() => assertUpdateAdmissionReadCurrent?.());
           if (
             !inspection.running ||
             !(
@@ -533,7 +555,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
             await withGatewayServiceOperationLock(
               inspection.serviceEnv ?? env,
               async (assertStopCustody) => {
-                let assertServiceCurrent = assertUpdateAdmissionCurrent;
+                let assertServiceCurrent: (() => void) | undefined = assertCallerCurrent;
                 try {
                   await settle(async () => {
                     try {
@@ -548,6 +570,11 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
                           retainNativeIdentity: true,
                           timeoutMs: remainingServiceInspectionMs(),
                           assertCurrent: () => assertServiceCurrent?.(),
+                          runNativePhase: (operation) =>
+                            runUpdateAdmission(() => {
+                              assertUpdateAdmissionCurrent?.();
+                              return operation();
+                            }),
                           assertDeadline,
                           warn,
                           onStopped: (before) => {
@@ -556,7 +583,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
                         });
                       // The drain's auth probe borrows state custody acquired before stopping.
                       stopped = await (state.resources
-                        ? state.resources.run(stopService)
+                        ? state.resources.run(stopService, "read")
                         : stopService());
                       assertDoctorMaintenanceInspection(stopped, env);
                       if (stopped.serviceUpdateVerdict?.kind === "unavailable") {
@@ -566,7 +593,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
                         await assertStaleDoctorGatewayStopped({
                           stale: staleReplacement,
                           env: stopped.serviceEnv,
-                          assertCurrent: assertUpdateAdmissionCurrent,
+                          assertCurrent: assertPreparedUpdateAdmission,
                         });
                       }
                     } catch (error) {

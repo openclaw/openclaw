@@ -34,6 +34,7 @@ export class GatewayServiceAuthorityError extends Error {
 
 type ServiceAuthority = {
   assertCurrent: () => void;
+  runNativePhase: <T>(operation: () => T) => Promise<Awaited<T>>;
   compensate: <T>(operation: () => Promise<T>) => Promise<T>;
   updateOwned: boolean;
   originalRoot?: string;
@@ -67,6 +68,7 @@ export async function withGatewayServiceUpdateAuthority<T>(
     assertRecoveryCurrent?: () => void;
     originalRoot?: string;
     nativeCommand?: GatewayServiceNativeCommand;
+    runNativePhase?: <T>(operation: () => T) => Promise<Awaited<T>>;
   },
 ): Promise<T> {
   const parent = owners.getStore();
@@ -102,6 +104,27 @@ export async function withGatewayServiceUpdateAuthority<T>(
     }
   };
   const assertCurrent = () => assertScope();
+  const runNativePhase = async <R>(action: () => R): Promise<Awaited<R>> => {
+    const prepare = options?.runNativePhase ?? parent?.runNativePhase;
+    let entered = false;
+    const consume = () => {
+      assertCurrent();
+      entered = true;
+      return action();
+    };
+    try {
+      return prepare ? await prepare(consume) : await consume();
+    } catch (error) {
+      if (
+        !entered &&
+        !(error instanceof GatewayServiceAuthorityError) &&
+        !hasCommandProcessCleanupError(error)
+      ) {
+        throw new GatewayServiceAuthorityError(error);
+      }
+      throw error;
+    }
+  };
   try {
     assertCurrent();
   } catch (error) {
@@ -109,6 +132,7 @@ export async function withGatewayServiceUpdateAuthority<T>(
   }
   const owner: ServiceAuthority = {
     assertCurrent,
+    runNativePhase,
     updateOwned: parent?.updateOwned || (options?.updateOwned ?? true),
     originalRoot,
     compensate: (restore) =>
@@ -243,6 +267,12 @@ export function assertGatewayServiceUpdateCurrent(): boolean {
   const owner = owners.getStore();
   owner?.assertCurrent();
   return owner !== undefined;
+}
+
+/** Fresh Doctor ledger admission is consumed before effects in this native continuation. */
+export async function runGatewayServiceNativePhase<T>(operation: () => T): Promise<Awaited<T>> {
+  const owner = owners.getStore();
+  return owner ? await owner.runNativePhase(operation) : await operation();
 }
 
 export function isUpdateOwnedGatewayServiceCommand(): boolean {

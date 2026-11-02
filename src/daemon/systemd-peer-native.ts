@@ -16,7 +16,10 @@ import {
   ServiceOwnershipRefusalError,
   SystemdInspectionTimeout,
 } from "./service-inspection-error.js";
-import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  runGatewayServiceNativePhase,
+} from "./service-update-authority.js";
 import { createSystemdPeerQueue } from "./systemd-peer-queue.js";
 
 export type SystemdPeerIdentity = { uid: number; pid: number; startTime: number };
@@ -289,16 +292,22 @@ async function openSystemdConnection(
       throw unavailable();
     }
     const expectedSignature = signatures.length ? signature(signatures[0]) : undefined;
-    check();
-    beforeDispatch?.();
-    const callOptions = options();
-    if (mutationTimeoutMs !== undefined) {
-      callOptions.timeoutMs = Math.min(callOptions.timeoutMs, mutationTimeoutMs);
-      mutationDeadline = performance.now() + callOptions.timeoutMs;
-    }
     let reply: SystemdValue;
     try {
-      reply = await bus.call(target, methodArgs, callOptions);
+      const dispatch = () => {
+        check();
+        beforeDispatch?.();
+        const callOptions = options();
+        if (mutationTimeoutMs !== undefined) {
+          callOptions.timeoutMs = Math.min(callOptions.timeoutMs, mutationTimeoutMs);
+          mutationDeadline = performance.now() + callOptions.timeoutMs;
+        }
+        return bus.call(target, methodArgs, callOptions);
+      };
+      reply =
+        beforeDispatch || mutationTimeoutMs !== undefined
+          ? await runGatewayServiceNativePhase(dispatch)
+          : await dispatch();
     } catch (error) {
       check();
       const name = error instanceof ProcSafeError ? error.details?.dbusErrorName : undefined;

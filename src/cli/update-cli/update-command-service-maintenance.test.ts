@@ -168,13 +168,14 @@ it.each(["authority-lost", "ordinary"] as const)(
       let current = true;
       const lost = new Error("Doctor update admission changed during drain cleanup");
       const assertAdmission = () => assert.ok(current, lost);
-      vi.spyOn(doctorAdmission, "resolveDoctorUpdateAdmission").mockReturnValue({
+      vi.spyOn(doctorAdmission, "resolveDoctorUpdateAdmission").mockResolvedValue({
         assertCurrent: assertAdmission,
         readContinuation: () => {
           assertAdmission();
           return undefined;
         },
         recordContinuation: assertAdmission,
+        runPrepared: async (operation) => await operation(),
       });
       const service = mockMaintenanceService(home, { stop: vi.fn() });
       const refusal =

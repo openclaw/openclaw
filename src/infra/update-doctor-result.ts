@@ -7,6 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 import { formatErrorMessage } from "./errors.js";
 import {
@@ -361,9 +362,26 @@ export function createUpdateDoctorDatabaseWriteCapture(
 }
 
 const doctorConfigWrites = new AsyncLocalStorage<{
-  capture: DoctorConfigCapture;
+  capture?: DoctorConfigCapture;
   authority?: UpdateDoctorWriteAuthority;
+  runNativePhase?: <T>(operation: () => T) => Promise<Awaited<T>>;
 }>();
+
+/** Restoration retains its existing caller custody after database resources have drained. */
+export function withUpdateDoctorConfigPublication<T>(
+  runNativePhase: <R>(operation: () => R) => Promise<Awaited<R>>,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return doctorConfigWrites.run({ ...doctorConfigWrites.getStore(), runNativePhase }, operation);
+}
+
+/** Config's synchronous rotation and publication consume current rows in one native frame. */
+export async function runUpdateDoctorConfigPublication<T>(operation: () => T): Promise<Awaited<T>> {
+  const prepare =
+    doctorConfigWrites.getStore()?.runNativePhase ??
+    getOpenClawDatabaseMaintenanceScope()?.runNativePhase;
+  return prepare ? await prepare(operation) : await operation();
+}
 
 export function getUpdateDoctorConfigCapture(): DoctorConfigCapture | undefined {
   return doctorConfigWrites.getStore()?.capture;
@@ -414,7 +432,7 @@ export function getUpdateDoctorConfigWriteAuthority(
   const { capture, authority } = context;
   return {
     assertCurrent: authority.assertCurrent,
-    ...(capture.path === path.resolve(configPath)
+    ...(capture?.path === path.resolve(configPath)
       ? { inputHash: capture.hash === "unchanged" ? authority.inputHash : capture.hash }
       : {}),
   };
@@ -439,10 +457,13 @@ export async function runUpdateDoctorIncludeWrite<T>(
   if (!context?.authority) {
     return await run();
   }
-  context.authority.assertCurrent();
-  assertUpdateDoctorConfigInputHash(configPath, inputHash);
+  const authority = context.authority;
+  await runUpdateDoctorConfigPublication(() => {
+    authority.assertCurrent();
+    assertUpdateDoctorConfigInputHash(configPath, inputHash);
+  });
   const result = await run();
-  context.authority.assertCurrent();
+  await runUpdateDoctorConfigPublication(authority.assertCurrent);
   return result;
 }
 

@@ -52,7 +52,7 @@ async function readFailure(stdout: string, mode: SqliteReadOnlyWorkerMode, failu
 }
 
 type FailureOptions = {
-  mode?: "sync" | "async" | "staging-create" | "staging-create-legacy";
+  mode?: "sync" | "current" | "async" | "staging-create" | "staging-create-legacy";
   refused?: boolean;
   contention?: boolean;
   allocationRefused?: boolean;
@@ -71,7 +71,7 @@ async function expectWorkerFailure(
   if (mode === "async") {
     prepare.mockRejectedValueOnce(error);
   } else {
-    const producer = mode === "sync" ? prepareCopy : createToken;
+    const producer = mode === "sync" || mode === "current" ? prepareCopy : createToken;
     producer.mockImplementationOnce(() => {
       throw error;
     });
@@ -139,6 +139,7 @@ it.each<[unknown, string, FailureOptions?]>([
   ],
   [codedError({ code: "ENOENT" }), "failure (code=ENOENT)", { mode: "staging-create" }],
   [new SourceChangedError("source changed"), "source changed", { contention: true }],
+  [new SourceChangedError("WAL changed"), "WAL changed", { mode: "current", contention: true }],
   [cyclicFailure(), "disk I/O error (code=ERR_SQLITE_ERROR, errcode=778)"],
   [
     deepFailure(),

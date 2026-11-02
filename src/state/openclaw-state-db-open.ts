@@ -80,6 +80,7 @@ import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
+import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-maintenance-context.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import { advanceStateSchemaContentVersion } from "./openclaw-state-schema-publication.js";
 
@@ -159,13 +160,24 @@ export async function runStateOpenStepsAsync<Input>(
   operation: Generator<{ runAsync(): Promise<Input> }, OpenClawStateDatabase, Input>,
 ): Promise<OpenClawStateDatabase> {
   resolveSqliteInspectionSignal(getAsyncWorkSignal())?.throwIfAborted();
-  let step = withEngineStoreAdmission(() => operation.next());
+  const run = async <T>(next: () => T) => {
+    const scope = getOpenClawDatabaseMaintenanceScope();
+    const advance = () => withEngineStoreAdmission(next);
+    return scope ? await scope.runNativePhase(advance) : await advance();
+  };
+  // Unwind already-owned native resources even when another effect cannot be admitted.
+  const unwind = (error: unknown) => withEngineStoreAdmission(() => operation.throw(error));
+  let step = await run(() => operation.next()).catch(unwind);
   while (!step.done) {
     try {
-      const value = await step.value.runAsync();
-      step = withEngineStoreAdmission(() => operation.next(value));
+      const current = step.value;
+      const scope = getOpenClawDatabaseMaintenanceScope();
+      const value = await (scope
+        ? scope.runNativePhase(() => current.runAsync())
+        : current.runAsync());
+      step = await run(() => operation.next(value));
     } catch (error) {
-      step = withEngineStoreAdmission(() => operation.throw(error));
+      step = unwind(error);
     }
   }
   return step.value;
@@ -464,7 +476,7 @@ function* openNativeStateDatabase(
                   created: custody.created,
                   retainExclusive: true,
                 })
-              : open();
+              : await (getOpenClawDatabaseMaintenanceScope()?.runNativePhase(open) ?? open());
           } else {
             selected = await runUpdateSqliteMigrationAsync(
               db,

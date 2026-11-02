@@ -9,7 +9,10 @@ import {
 } from "../infra/deferred-plugin-migrations.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
-import { recordUpdateDoctorConfigFileWrite } from "../infra/update-doctor-result.js";
+import {
+  recordUpdateDoctorConfigFileWrite,
+  runUpdateDoctorConfigPublication,
+} from "../infra/update-doctor-result.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { prepareConfigFileWrite } from "./backup-rotation.js";
 import {
@@ -340,19 +343,21 @@ export async function writeRootBoundJsonFile(params: {
         hashConfigRaw(content),
       );
     };
-    if (params.databaseAccess === "none") {
-      publish();
-    } else {
-      withDeferredPluginMigrationsCurrent(
-        {
-          env: params.env,
-          configPath: params.configPath,
-          expectedPending: params.deferredPluginMigrations,
-          phase: "config include publication",
-        },
-        publish,
-      );
-    }
+    await runUpdateDoctorConfigPublication(() => {
+      if (params.databaseAccess === "none") {
+        publish();
+      } else {
+        withDeferredPluginMigrationsCurrent(
+          {
+            env: params.env,
+            configPath: params.configPath,
+            expectedPending: params.deferredPluginMigrations,
+            phase: "config include publication",
+          },
+          publish,
+        );
+      }
+    });
     await params.assertIncludeGraphForWrite(hashConfigIncludeRaw(content));
     writeGuard.assertCurrent();
     writeGuard.assertPublishedIdentity();

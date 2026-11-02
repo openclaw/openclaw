@@ -316,6 +316,7 @@ function* createStableReadOnlyCopyInTempDirectory(
     : resolvePrivateSqliteSnapshotStagingRoot(),
   expectedSourceIdentity?: DatabaseFileIdentity,
   expectedSourceContent?: SqliteFileContent,
+  intent?: "current",
 ): Generator<CopyRequest, PreparedSqliteReadOnlyLocation, void> {
   let tempDir = existingTempDir;
   try {
@@ -330,7 +331,9 @@ function* createStableReadOnlyCopyInTempDirectory(
     }
     const sidecars = readSourceSidecars(pathname);
     let copiedWalPrefix = false;
-    if (journalMode === "wal" && sidecars.wal && !sidecars.journal) {
+    // Discovery can accept a coherent historical prefix. Current authority must
+    // compare the entire WAL after the long main verification and retry appends.
+    if (intent !== "current" && journalMode === "wal" && sidecars.wal && !sidecars.journal) {
       const walPath = `${pathname}-wal`;
       const wal = openPinnedFile(walPath);
       try {
@@ -599,6 +602,7 @@ function* prepareArtifactPreservingCopy(
   stagingRoot?: SqliteSnapshotDestination,
   expectedSourceIdentity?: DatabaseFileIdentity,
   expectedSourceContent?: SqliteFileContent,
+  intent?: "current",
 ): Generator<CopyRequest, PreparedSqliteReadOnlyLocation, void> {
   const canonicalPath = fs.realpathSync.native(pathname);
   for (let attempt = 0; ; attempt += 1) {
@@ -613,6 +617,7 @@ function* prepareArtifactPreservingCopy(
         typeof stagingRoot === "string" ? stagingRoot : undefined,
         expectedSourceIdentity,
         expectedSourceContent,
+        intent,
       );
     } catch (error) {
       if (typeof stagingRoot === "object") {
@@ -653,9 +658,10 @@ export function prepareSqliteReadOnlyCopyInProcess(
   pathname: string,
   stagingRoot?: SqliteSnapshotDestination,
   expectedSourceIdentity?: DatabaseFileIdentity,
+  intent?: "current",
 ): Promise<PreparedSqliteReadOnlyLocation> {
   return copyPreparedLocation(
-    prepareArtifactPreservingCopy(pathname, stagingRoot, expectedSourceIdentity),
+    prepareArtifactPreservingCopy(pathname, stagingRoot, expectedSourceIdentity, undefined, intent),
   );
 }
 

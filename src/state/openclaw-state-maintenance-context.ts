@@ -26,13 +26,15 @@ export type OpenClawDatabaseMaintenanceScope = {
   /** SQLite admission coverage for this offline Doctor operation; absent at runtime. */
   readonly sqliteIntegrityCheck?: "quick" | "full";
   assertOwnerCurrent(this: void, access?: "read"): void;
-  assertDatabaseAccess(this: void, databasePath: string): void;
+  assertDatabaseAccess(this: void, databasePath: string, access?: "read"): void;
   assertCleanupDatabaseAccess(this: void, databasePath: string): void;
   assertAdmission(this: void): void;
   assertReadAdmission(this: void): void;
   addAgentSchemaMigrationCheck(check: (migration: AgentSchemaMigration) => void): void;
   assertAgentSchemaMigration(migration: AgentSchemaMigration): void;
-  run<T>(operation: () => T): T;
+  run<T>(operation: () => T, access?: "read"): T;
+  /** Await fresh authority, then consume it in one synchronous native continuation. */
+  runNativePhase<T>(this: void, operation: () => T): Promise<Awaited<T>>;
   track<T>(operation: Promise<T>): Promise<T>;
   own(
     resource: object,
@@ -187,7 +189,7 @@ export function captureOpenClawDatabaseMaintenanceResource(
 ) {
   const claim = maintenanceResources.claims.get(resource);
   const assertCurrent = () => {
-    expectedScope.assertOwnerCurrent();
+    expectedScope.assertOwnerCurrent("read");
     if (claim?.scope !== expectedScope || maintenanceResources.claims.get(resource) !== claim) {
       throw new Error("Database maintenance resource owner changed");
     }

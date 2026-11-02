@@ -5,7 +5,10 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
-import { retainSnapshotWork } from "../infra/sqlite-readonly-location-cleanup.js";
+import {
+  retainSnapshotWork,
+  withPreparedSqliteSnapshot,
+} from "../infra/sqlite-readonly-location-cleanup.js";
 import {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
@@ -24,7 +27,6 @@ import {
   captureOpenClawStateDatabaseReadAdmission,
   openClawStateDatabaseCache,
 } from "./openclaw-state-db-cache.js";
-import { readAdmittedStateContentVersion } from "./openclaw-state-db-content-version.js";
 import type {
   OpenClawStateDatabaseOptions,
   OpenClawStateSchemaReadAdmission,
@@ -702,16 +704,24 @@ export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
 export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
+  openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
+  signal?: AbortSignal,
 ): Promise<T | undefined> {
   return withArtifactPreservingStateReads(async () => {
+    const inheritedSignal = resolveStateReadCallerSignal();
+    const callerSignal =
+      signal && inheritedSignal
+        ? AbortSignal.any([signal, inheritedSignal])
+        : (signal ?? inheritedSignal);
+    callerSignal?.throwIfAborted();
     const pathname = resolveOpenClawStateReadPath(options);
     const env = options.env ?? process.env;
-    const quarantineRead = prepareOpenClawQuarantineRead(env, resolveStateReadCallerSignal());
+    const quarantineRead = prepareOpenClawQuarantineRead(env, callerSignal);
     if (quarantineRead) {
       await quarantineRead;
     }
     const snapshot = stateSnapshotReads.getStore();
-    if (snapshot?.path === pathname && snapshot.prepareSource) {
+    if (!openStateSchemaReadAdmission && snapshot?.path === pathname && snapshot.prepareSource) {
       return snapshot.work.track(async () => {
         await snapshot.prepareSource!();
         resolveStateReadCallerSignal()?.throwIfAborted();
@@ -721,9 +731,11 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
         return reused.reused ? reused.value : undefined;
       });
     }
-    const reused = withEngineStoreAdmission(() =>
-      withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname),
-    );
+    const reused = openStateSchemaReadAdmission
+      ? { reused: false as const }
+      : withEngineStoreAdmission(() =>
+          withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname),
+        );
     if (reused.reused) {
       return reused.value;
     }
@@ -733,13 +745,38 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
     openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
     if (!requiresArtifactPreservingSnapshot(pathname)) {
       return withEngineStoreAdmission(() =>
-        withOpenClawStateReadOnlyLocation(operation, pathname, pathname),
+        withOpenClawStateReadOnlyLocation(
+          operation,
+          pathname,
+          pathname,
+          openStateSchemaReadAdmission,
+        ),
       );
     }
     const prepared = await prepareSqliteReadOnlyLocation(pathname, {
       preserveSourceArtifacts: true,
+      signal: callerSignal,
+      current: openStateSchemaReadAdmission ? true : undefined,
+      shared: openStateSchemaReadAdmission ? false : undefined,
     });
+    if (openStateSchemaReadAdmission) {
+      // Current authority consumes only synchronous SQL; its private image is
+      // removed asynchronously after that native reader has closed.
+      return withPreparedSqliteSnapshot(prepared, (location) => {
+        callerSignal?.throwIfAborted();
+        openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
+        return withEngineStoreAdmission(() =>
+          withOpenClawStateReadOnlyLocation(
+            operation,
+            pathname,
+            location,
+            openStateSchemaReadAdmission,
+          ),
+        );
+      });
+    }
     try {
+      callerSignal?.throwIfAborted();
       // Verification can quarantine the live path while the snapshot child is running.
       openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
     } catch (error) {
@@ -747,17 +784,14 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
       throw error;
     }
     return withEngineStoreAdmission(() =>
-      withOpenClawStateReadOnlyLocation(operation, pathname, prepared),
+      withOpenClawStateReadOnlyLocation(
+        operation,
+        pathname,
+        prepared,
+        openStateSchemaReadAdmission,
+      ),
     );
   });
-}
-
-export function readCurrentOpenClawStateDatabaseContentVersion(
-  options: OpenClawStateDatabaseOptions = {},
-): string | undefined {
-  const pathname = resolveOpenClawStateReadPath(options);
-  const env = options.env ?? process.env;
-  return exitStateReadSnapshot(() => readAdmittedStateContentVersion(pathname, env));
 }
 
 /** Current guards leave discovery snapshots after validating their inherited read admission. */

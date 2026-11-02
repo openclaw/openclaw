@@ -30,6 +30,7 @@ import {
 import type { GatewayServiceEnv, GatewayServiceInstallArgs } from "./service-types.js";
 import {
   assertGatewayServiceUpdateCurrent,
+  runGatewayServiceNativePhase,
   withGatewayServiceInstallationRecovery,
 } from "./service-update-authority.js";
 
@@ -230,8 +231,10 @@ export async function publishScheduledTaskFiles(
   if (definitionTransaction) {
     await beforePublish?.();
     for (const file of files) {
-      assertGatewayServiceUpdateCurrent();
-      await fs.mkdir(path.dirname(file.path), { recursive: true });
+      await runGatewayServiceNativePhase(() => {
+        assertGatewayServiceUpdateCurrent();
+        return fs.mkdir(path.dirname(file.path), { recursive: true });
+      });
       await publishServiceFile({
         filePath: file.path,
         contents: file.contents,
@@ -308,8 +311,10 @@ export async function publishScheduledTaskFiles(
         await publish(file, file.original.contents, file.original.state.mode);
       } else {
         await assertPublished();
-        assertGatewayServiceUpdateCurrent();
-        await fs.unlink(file.path);
+        await runGatewayServiceNativePhase(() => {
+          assertGatewayServiceUpdateCurrent();
+          return fs.unlink(file.path);
+        });
         file.after = null;
       }
     }
@@ -320,8 +325,10 @@ export async function publishScheduledTaskFiles(
     await beforePublish?.({ restore, assertPublished });
     await assertPublished();
     for (const directory of new Set(files.map((file) => path.dirname(file.path)))) {
-      assertGatewayServiceUpdateCurrent();
-      await fs.mkdir(directory, { recursive: true });
+      await runGatewayServiceNativePhase(() => {
+        assertGatewayServiceUpdateCurrent();
+        return fs.mkdir(directory, { recursive: true });
+      });
     }
     for (const file of snapshots) {
       if (file.original) {

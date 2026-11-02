@@ -49,7 +49,10 @@ import {
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
 import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-types.js";
-import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  runGatewayServiceNativePhase,
+} from "./service-update-authority.js";
 import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
 
 const WINDOWS_FORCED_PROCESS_EXIT_TIMEOUT_MS = 15_000;
@@ -511,6 +514,7 @@ export async function terminateScheduledTaskGatewayListeners(
             allowLocalBackendAuthNone: true,
             requiredMethods: ["gateway.stop.request"],
             prepareDispatchCurrent: () => ownership.assertOwnerCurrent(target.pid),
+            runDispatchCurrent: runGatewayServiceNativePhase,
             assertDispatchCurrent: () => {
               assertGatewayServiceUpdateCurrent();
               assertCurrent?.();
@@ -656,12 +660,16 @@ export async function stopStalledGatewayStartup(
       await terminateGatewayProcessTree(stalled.pid, assertTarget, stalled.assertCurrent);
     } else {
       await stalled.assertCurrent();
-      assertTarget();
-      process.kill(stalled.pid, "SIGTERM");
+      await runGatewayServiceNativePhase(() => {
+        assertTarget();
+        process.kill(stalled.pid, "SIGTERM");
+      });
       if (!(await waitForProcessExit(stalled.pid, 300))) {
         await stalled.assertCurrent();
-        assertTarget();
-        process.kill(stalled.pid, "SIGKILL");
+        await runGatewayServiceNativePhase(() => {
+          assertTarget();
+          process.kill(stalled.pid, "SIGKILL");
+        });
       }
       if (!(await waitForProcessExit(stalled.pid, WINDOWS_FORCED_PROCESS_EXIT_TIMEOUT_MS))) {
         throw new Error(`Gateway startup pid ${stalled.pid} exit could not be confirmed`);
@@ -681,11 +689,13 @@ export async function terminateGatewayProcessTree(
   if (prepareCurrent) {
     await prepareCurrent();
   }
-  assertGatewayServiceUpdateCurrent();
-  assertCurrent?.();
   if (process.platform !== "win32") {
     // These PIDs come from argv/port ownership; leader verification avoids signaling our group.
-    killProcessTree(pid, { graceMs });
+    await runGatewayServiceNativePhase(() => {
+      assertGatewayServiceUpdateCurrent();
+      assertCurrent?.();
+      return killProcessTree(pid, { graceMs });
+    });
     return;
   }
   const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
@@ -696,7 +706,11 @@ export async function terminateGatewayProcessTree(
       timeout: 5_000,
       windowsHide: true,
     });
-  const graceful = taskkill(false);
+  const graceful = await runGatewayServiceNativePhase(() => {
+    assertGatewayServiceUpdateCurrent();
+    assertCurrent?.();
+    return taskkill(false);
+  });
   // Direct PID probes avoid signaling an exited owner despite a lagging CIM snapshot.
   if (await waitForProcessExit(pid, graceful.status === 0 && !graceful.error ? graceMs : 0)) {
     return;
@@ -705,9 +719,11 @@ export async function terminateGatewayProcessTree(
   if (prepareCurrent) {
     await prepareCurrent();
   }
-  assertGatewayServiceUpdateCurrent();
-  assertCurrent?.();
-  const forced = taskkill(true);
+  const forced = await runGatewayServiceNativePhase(() => {
+    assertGatewayServiceUpdateCurrent();
+    assertCurrent?.();
+    return taskkill(true);
+  });
   if (forced.error || forced.status !== 0) {
     if (probeProcessState(pid) === "missing") {
       return;

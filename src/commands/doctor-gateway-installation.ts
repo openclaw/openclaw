@@ -32,6 +32,7 @@ export type DoctorGatewayInstallationMaintenance = {
   assertCurrent: () => void;
   assertReadCurrent: () => void;
   beforeMutation?: () => Promise<void>;
+  runNativePhase?: <T>(operation: () => T) => Promise<Awaited<T>>;
 };
 
 type GatewayServiceInstallationRepair = {
@@ -91,6 +92,7 @@ export async function installDoctorGatewayService(
           assertCurrent,
           definitionTransaction,
           beforeMutation: params.maintenance?.beforeMutation ?? params.args.beforeMutation,
+          runNativePhase: params.maintenance?.runNativePhase ?? params.args.runNativePhase,
         });
       };
       if (params.repair.kind !== "installation" && params.repair.root) {

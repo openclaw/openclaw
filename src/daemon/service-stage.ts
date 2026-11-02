@@ -6,7 +6,10 @@ import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { z } from "zod";
 import { ignoreMissingPath } from "../infra/errno.js";
-import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  runGatewayServiceNativePhase,
+} from "./service-update-authority.js";
 
 // Numbers retain legacy provenance; only newly observed IDs become exact strings.
 const identityField = z.union([
@@ -119,10 +122,12 @@ export async function publishServiceFile(params: {
           await params.beforeRename?.();
           await hooks?.beforeWrite();
           await hooks?.filePrepared(params.filePath, String(temporary));
-          assertGatewayServiceUpdateCurrent();
-          hooks?.assertCurrent();
-          params.assertCurrent?.();
-          await fs.rename(temporary, target);
+          await runGatewayServiceNativePhase(() => {
+            assertGatewayServiceUpdateCurrent();
+            hooks?.assertCurrent();
+            params.assertCurrent?.();
+            return fs.rename(temporary, target);
+          });
         },
       },
     },

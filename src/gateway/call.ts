@@ -124,6 +124,8 @@ type CallGatewayBaseOptions = Pick<GatewayClientOptions, "caps"> &
     assertConnectionCurrent?: () => void;
     prepareDispatchCurrent?: () => Promise<void>;
     assertDispatchCurrent?: () => void;
+    /** Internal caller custody prepares policy, then consumes it at request -> ws.send. */
+    runDispatchCurrent?: <R>(operation: () => R) => Promise<Awaited<R>>;
     onAccepted?: GatewayClientRequestOptions["onAccepted"];
     onSignalAbort?: (request: GatewayRequestFunction) => Promise<void> | void;
     /** Continue a multi-request operation on this exact authenticated connection. */
@@ -804,19 +806,29 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
             if (opts.prepareDispatchCurrent) {
               await opts.prepareDispatchCurrent();
             }
-            if (settled || opts.signal?.aborted || dispatchGeneration !== connectionGeneration) {
+            const dispatch = () => {
+              if (settled || opts.signal?.aborted || dispatchGeneration !== connectionGeneration) {
+                return undefined;
+              }
+              // The final caller check stays synchronous with request -> ws.send.
+              opts.assertDispatchCurrent?.();
+              primaryRequestStarted = true;
+              return {
+                result: client.request<T>(opts.method, opts.params, {
+                  expectFinal: opts.expectFinal,
+                  timeoutMs: opts.timeoutMs,
+                  signal: opts.signal,
+                  onAccepted: opts.onAccepted,
+                }),
+              };
+            };
+            const submitted = opts.runDispatchCurrent
+              ? await opts.runDispatchCurrent(dispatch)
+              : dispatch();
+            if (!submitted) {
               return;
             }
-            // This check must stay synchronous with request -> ws.send. Moving
-            // an await into that chain requires moving enforcement to the send owner.
-            opts.assertDispatchCurrent?.();
-            primaryRequestStarted = true;
-            const result = await client.request<T>(opts.method, opts.params, {
-              expectFinal: opts.expectFinal,
-              timeoutMs: opts.timeoutMs,
-              signal: opts.signal,
-              onAccepted: opts.onAccepted,
-            });
+            const result = await submitted.result;
             if (opts.onResponse) {
               const onResponse = opts.onResponse;
               responseWork = Promise.resolve().then(() =>

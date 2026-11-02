@@ -385,6 +385,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                   });
                 };
                 metadata.bindDatabaseAuthority({
+                  runNativePhase: authority.maintenanceScope?.runNativePhase,
                   databasePath: authority.stateAccess.canonicalPath,
                   assertRequest: assertCreationCurrent,
                   assertAccess,

@@ -37,6 +37,7 @@ import {
 import type { GatewayServiceEnv, GatewayServiceInstallArgs } from "./service-types.js";
 import {
   assertGatewayServiceUpdateCurrent,
+  runGatewayServiceNativePhase,
   withGatewayServiceInstallationRecovery,
 } from "./service-update-authority.js";
 
@@ -408,8 +409,10 @@ export async function captureLaunchAgentInstallFiles(env: GatewayServiceEnv) {
           original.state = published.get(file)!;
         } else {
           await verify(file);
-          assertGatewayServiceUpdateCurrent();
-          await fs.unlink(file);
+          await runGatewayServiceNativePhase(() => {
+            assertGatewayServiceUpdateCurrent();
+            return fs.unlink(file);
+          });
           original.state = null;
         }
         published.delete(file);
@@ -439,19 +442,22 @@ async function ensureSecureDirectory(
   targetPath: string,
   dirMode = LAUNCH_AGENT_DIR_MODE,
 ): Promise<void> {
-  assertGatewayServiceUpdateCurrent();
-  await fs.mkdir(targetPath, { recursive: true, mode: dirMode });
-  try {
-    const stat = await fs.stat(targetPath);
+  await runGatewayServiceNativePhase(() => {
+    assertGatewayServiceUpdateCurrent();
+    return fs.mkdir(targetPath, { recursive: true, mode: dirMode });
+  });
+  // Filesystem hardening remains best effort; authority refusal must propagate.
+  const stat = await fs.stat(targetPath).catch(() => undefined);
+  if (stat) {
     const mode = stat.mode & 0o777;
     const forbiddenMode = dirMode === LAUNCH_AGENT_PRIVATE_DIR_MODE ? 0o077 : 0o022;
     const tightenedMode = mode & ~forbiddenMode;
     if (tightenedMode !== mode) {
-      assertGatewayServiceUpdateCurrent();
-      await fs.chmod(targetPath, tightenedMode);
+      await runGatewayServiceNativePhase(() => {
+        assertGatewayServiceUpdateCurrent();
+        return fs.chmod(targetPath, tightenedMode).catch(() => undefined);
+      });
     }
-  } catch {
-    // Best effort: keep install working even if chmod/stat is unavailable.
   }
 }
 
@@ -560,8 +566,10 @@ export async function rewriteLaunchAgentPlistForRestart({
     });
     const previousPlist = await fs.readFile(plistPath, "utf8").catch(() => "");
     if (previousPlist === plist) {
-      assertGatewayServiceUpdateCurrent();
-      await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
+      await runGatewayServiceNativePhase(() => {
+        assertGatewayServiceUpdateCurrent();
+        return fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
+      });
       return false;
     }
     await publishLaunchAgentPlist({ label, plistPath, contents: plist, definitionTransaction });

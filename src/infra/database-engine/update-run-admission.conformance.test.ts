@@ -41,11 +41,17 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         options,
         openDoctorStateSchemaReadAdmission,
       );
-      expect(read().find(({ runId }) => runId === run.runId)?.phase).toBe("requested");
+      expect((await read.runPrepared(read)).find(({ runId }) => runId === run.runId)?.phase).toBe(
+        "requested",
+      );
       await recordUpdateRunPhaseAsync(run.runId, "staging", {}, options);
-      expect(read().find(({ runId }) => runId === run.runId)?.phase).toBe("staging");
+      expect((await read.runPrepared(read)).find(({ runId }) => runId === run.runId)?.phase).toBe(
+        "staging",
+      );
       await recordUpdateRunPhaseAsync(run.runId, "validating", {}, options);
-      expect(read().find(({ runId }) => runId === run.runId)?.phase).toBe("validating");
+      expect((await read.runPrepared(read)).find(({ runId }) => runId === run.runId)?.phase).toBe(
+        "validating",
+      );
     });
 
     it("reads the current ledger inside Doctor schema maintenance", async () => {
@@ -63,7 +69,9 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         assertDatabaseAccess: (requested) => expect(requested).toBe(pathname),
       });
       try {
-        expect(scope.run(read).find(({ runId }) => runId === run.runId)).toMatchObject({
+        expect(
+          (await read.runPrepared(() => scope.run(read))).find(({ runId }) => runId === run.runId),
+        ).toMatchObject({
           phase: "requested",
           status: "running",
         });
@@ -92,7 +100,9 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             options,
             openDoctorStateSchemaReadAdmission,
           );
-          expect(read().find(({ runId }) => runId === admitted.runId)?.status).toBe("running");
+          expect(
+            (await read.runPrepared(read)).find(({ runId }) => runId === admitted.runId)?.status,
+          ).toBe("running");
           expect(send).not.toHaveBeenCalled();
         } finally {
           send.mockRestore();

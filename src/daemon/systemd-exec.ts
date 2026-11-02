@@ -15,6 +15,7 @@ import {
   SystemdInspectionTimeout,
 } from "./service-inspection-error.js";
 import type { GatewayServiceEnv } from "./service-types.js";
+import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 import {
   isSystemdManagerUid,
   readSystemdBusCall,
@@ -313,7 +314,14 @@ export async function disableSystemdUserUnitForRemoval(
   env: GatewayServiceEnv,
   unitName: string,
 ): Promise<void> {
-  const result = await execSystemctlUser(env, ["disable", "--now", unitName]);
+  const result = await execSystemctlUser(
+    env,
+    ["disable", "--now", unitName],
+    undefined,
+    undefined,
+    undefined,
+    assertGatewayServiceUpdateCurrent,
+  );
   if (result.code === 0) {
     return;
   }
@@ -329,7 +337,17 @@ export async function reloadSystemdUserManager(
   timeoutMs?: number,
   assertCurrent?: () => void,
 ): Promise<void> {
-  const result = await execSystemctlUser(env, ["daemon-reload"], timeoutMs, assertCurrent);
+  const result = await execSystemctlUser(
+    env,
+    ["daemon-reload"],
+    timeoutMs,
+    assertCurrent,
+    undefined,
+    () => {
+      assertCurrent?.();
+      assertGatewayServiceUpdateCurrent();
+    },
+  );
   if (result.code !== 0) {
     throw new Error(
       `systemctl daemon-reload failed: ${readSystemctlDetail(result) || "unknown error"}`,

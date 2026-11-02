@@ -459,10 +459,13 @@ export async function preflightUpdateDoctorCli(options: {
   if (pending) {
     // A candidate must repair before the updater rebinds the service. An inherited
     // phase marker alone is insufficient; use the recorded live driver admission.
-    const managedUpdate =
-      process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" &&
-      Boolean(process.env.OPENCLAW_UPDATE_RUN_ID?.trim()) &&
-      resolveDoctorUpdateAdmission(process.env).readContinuation() !== undefined;
+    const admission =
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" && process.env.OPENCLAW_UPDATE_RUN_ID?.trim()
+        ? await resolveDoctorUpdateAdmission(process.env)
+        : undefined;
+    const managedUpdate = admission
+      ? (await admission.runPrepared(admission.readContinuation)) !== undefined
+      : false;
     if (!managedUpdate) {
       assertGatewayServiceSchemaMigrationAllowed(
         resolveOpenClawStateSqlitePath(),

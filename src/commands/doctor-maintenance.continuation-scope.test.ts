@@ -47,7 +47,7 @@ const fixture = setupDoctorAdmissionFixture();
 it.each([true, false])(
   "keeps Doctor continuation with its repair scope (cached writer: %s)",
   async (keepWriter) => {
-    const { env, database, family, assertIsolation } = fixture(true);
+    const { env, database, family, assertIsolation } = await fixture(true);
     vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
     vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", undefined);
     vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);

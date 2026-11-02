@@ -5,6 +5,7 @@ import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 import { execFileUtf8, type ExecResult } from "./exec-file.js";
 import type { ServiceInspectionReason } from "./service-inspection-error.js";
 import type { GatewayServiceControlArgs } from "./service-types.js";
+import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 
 export type LaunchctlResult = ExecResult;
 
@@ -21,11 +22,12 @@ export async function execLaunchctl(
   const isWindows = process.platform === "win32";
   const file = isWindows ? getWindowsCmdExePath() : "launchctl";
   const fileArgs = isWindows ? ["/d", "/s", "/c", "launchctl", ...args] : args;
-  const result = await execFileUtf8(
-    file,
-    fileArgs,
-    timeoutMs && timeoutMs > 0 ? { timeout: timeoutMs, killSignal: "SIGKILL" } : {},
-  );
+  const result = await execFileUtf8(file, fileArgs, {
+    ...(!["print", "print-disabled", "list"].includes(args[0] ?? "")
+      ? { beforeEffect: assertGatewayServiceUpdateCurrent }
+      : {}),
+    ...(timeoutMs && timeoutMs > 0 ? { timeout: timeoutMs, killSignal: "SIGKILL" as const } : {}),
+  });
   deadline?.signal.throwIfAborted();
   return result;
 }

@@ -597,17 +597,21 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
 
         const ownerlessState = readGatewayOwnerLease({ env, current: true })?.state ?? "absent";
         expect(["absent", "dead"]).toContain(ownerlessState);
-        const doctorAdmission = resolveDoctorUpdateAdmission(env);
+        const doctorAdmission = await resolveDoctorUpdateAdmission(env);
         const ownerlessStopMutations: string[] = [];
         // Doctor's SQLite admission must remain usable while a Ready Task holds state exclusion.
         await service.stop({
           env,
           stdout,
-          assertCurrent: doctorAdmission.assertCurrent,
+          runNativePhase: (operation) =>
+            doctorAdmission.runPrepared(() => {
+              doctorAdmission.assertCurrent();
+              return operation();
+            }),
           onMutation: (mutation) => ownerlessStopMutations.push(mutation.mode),
         });
         expect(ownerlessStopMutations).toEqual([]);
-        doctorAdmission.assertCurrent();
+        await doctorAdmission.runPrepared(doctorAdmission.assertCurrent);
 
         const startMutations: string[] = [];
         await service.start({

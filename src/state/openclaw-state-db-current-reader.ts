@@ -39,19 +39,20 @@ import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.
 type CurrentWarmReadResult<T> = { available: false } | { available: true; value: T };
 
 /** Mutating maintenance can retain an independent current reader under its exact source lifetime. */
-export function createOpenClawStateCurrentWarmReader<T>(
-  operation: (database: OpenClawStateReadOnlyDatabase) => T,
+export function createOpenClawStateCurrentWarmReader(
   options: OpenClawStateDatabaseOptions,
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
-): () => CurrentWarmReadResult<T> {
+): <T>(operation: (database: OpenClawStateReadOnlyDatabase) => T) => CurrentWarmReadResult<T> {
   let bound:
     | {
         path: string;
         scope: ReturnType<typeof getOpenClawDatabaseMaintenanceScope>;
-        read(): CurrentWarmReadResult<T>;
+        read<T>(
+          operation: (database: OpenClawStateReadOnlyDatabase) => T,
+        ): CurrentWarmReadResult<T>;
       }
     | undefined;
-  return () => {
+  return (operation) => {
     return withCurrentOpenClawStateReadScope(options, (pathname) => {
       const scope = getOpenClawDatabaseMaintenanceScope();
       if (!scope?.ownsSchemaMaintenance || (bound && bound.scope !== scope)) {
@@ -147,13 +148,15 @@ export function createOpenClawStateCurrentWarmReader<T>(
         const reader = {
           path: pathname,
           scope,
-          read(): CurrentWarmReadResult<T> {
+          read<T>(
+            readOperation: (database: OpenClawStateReadOnlyDatabase) => T,
+          ): CurrentWarmReadResult<T> {
             if (!assertCurrent()) {
               return { available: false };
             }
             const result = runOpenClawStateCurrentReadConnection(
               connection,
-              operation,
+              readOperation,
               openStateSchemaReadAdmission,
             );
             retained?.observe();
@@ -177,7 +180,7 @@ export function createOpenClawStateCurrentWarmReader<T>(
         scope?.own(resource, "shared-resources", () => resource.close());
         bound = reader;
       }
-      return bound.read();
+      return bound.read(operation);
     });
   };
 }

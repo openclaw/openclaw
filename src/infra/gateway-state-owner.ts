@@ -545,6 +545,7 @@ function assertStateDatabaseReadAtOwnerPath(
       databasePath,
       prepared ?? resolveStateOwnerIdentity(databasePath),
       captured,
+      "read",
     );
     return;
   }
@@ -564,7 +565,7 @@ function assertStateDatabaseReadAtOwnerPath(
     (role !== "gateway" && role !== "agent-embedded")
   ) {
     // Maintenance/schema authority and foreign owners keep their existing fresh checks.
-    assertStateDatabaseAccessAtOwnerPath(databasePath, identity, captured);
+    assertStateDatabaseAccessAtOwnerPath(databasePath, identity, captured, "read");
     return;
   }
   if (
@@ -625,7 +626,7 @@ export async function captureStateDatabaseAccess(databasePath: string) {
         (role !== "gateway" && role !== "agent-embedded")
       ) {
         // Offline schema/bootstrap and native SDK owners retain their synchronous lease boundary.
-        assertStateDatabaseAccessAtOwnerPath(canonicalPath, identity, captured);
+        assertStateDatabaseAccessAtOwnerPath(canonicalPath, identity, captured, "read");
         return (current = captured) => {
           if (owner && owners.get(identity.key) !== owner) {
             throw createGatewayStateProcessOwnerRetiredError();
@@ -686,6 +687,7 @@ function assertStateDatabaseAccessAtOwnerPath(
   databasePath: string,
   identity: ReturnType<typeof resolveStateOwnerIdentity>,
   captured: Parameters<typeof assertStateDatabaseAccessAllowed>[1],
+  access?: "read",
 ): void {
   const assertMaintenance = () => {
     const schemaLease = captured ? captured.schemaLease : getStateDatabaseSchemaLease(databasePath);
@@ -697,7 +699,7 @@ function assertStateDatabaseAccessAtOwnerPath(
     if (!scope) {
       throw new StateDatabaseMaintenanceScopeError(databasePath);
     }
-    scope.assertDatabaseAccess(databasePath);
+    scope.assertDatabaseAccess(databasePath, access);
   };
   const local = owners.get(identity.key);
   if (local) {

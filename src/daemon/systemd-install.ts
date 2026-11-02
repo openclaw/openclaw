@@ -31,6 +31,7 @@ import {
   type GatewayServiceManageArgs,
 } from "./service-types.js";
 import {
+  assertGatewayServiceUpdateCurrent,
   isUpdateOwnedGatewayServiceCommand,
   withGatewayServiceInstallationRecovery,
 } from "./service-update-authority.js";
@@ -271,7 +272,14 @@ async function writeSystemdUnit(
                     }
                     const run = async (args: string[]) => {
                       await assertNoSystemGatewayOwnership(env);
-                      const result = await execSystemctlUser(env, args);
+                      const result = await execSystemctlUser(
+                        env,
+                        args,
+                        undefined,
+                        undefined,
+                        undefined,
+                        assertGatewayServiceUpdateCurrent,
+                      );
                       if (result.code !== 0) {
                         throw new Error(
                           `systemctl rollback ${args[0]} failed: ${readSystemctlDetail(result)}`,
@@ -550,7 +558,14 @@ export async function installSystemdService(
     ): Promise<void> => {
       const activationArgs = action === "daemon-reload" ? [action] : [action, unitName];
       beforeAction?.(action);
-      const result = await execSystemctlUser(env, activationArgs);
+      const result = await execSystemctlUser(
+        env,
+        activationArgs,
+        undefined,
+        undefined,
+        undefined,
+        assertGatewayServiceUpdateCurrent,
+      );
       if (result.code === 0) {
         return;
       }

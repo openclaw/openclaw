@@ -298,6 +298,7 @@ function guardGatewayServiceMutation<
     env?: GatewayServiceEnv;
     assertCurrent?: () => void;
     beforeMutation?: () => Promise<void>;
+    runNativePhase?: <T>(operation: () => T) => Promise<Awaited<T>>;
   },
   TResult,
 >(
@@ -349,6 +350,7 @@ function guardGatewayServiceMutation<
           updateOwned: false,
           assertRecoveryCurrent: assertNative,
           nativeCommand: getGatewayServiceUpdateNativeCommand(),
+          runNativePhase: args.runNativePhase,
         },
       );
     });

@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import * as databaseIdentity from "../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -21,6 +22,7 @@ import {
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStatePathAsyncResource,
 } from "./openclaw-state-db-cache.js";
+import { runStateOpenStepsAsync } from "./openclaw-state-db-open.js";
 import { openOpenClawStateReadConnection } from "./openclaw-state-db-read-connection.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
@@ -43,6 +45,44 @@ function databasePath(name = "state") {
 function expectOpen(open: boolean, ...handles: { readonly isOpen: boolean }[]) {
   expect(handles.map((handle) => handle.isOpen)).toEqual(handles.map(() => open));
 }
+
+it("closes an unpublished native opener when admission is revoked during preparation", async () => {
+  const failure = new Error("Opening authority was revoked");
+  let revoked = false;
+  let opened: ReturnType<typeof openNodeSqliteDatabase> | undefined;
+  const scope = createOpenClawDatabaseMaintenanceScope({
+    assertOwnerCurrent() {
+      if (revoked) {
+        throw failure;
+      }
+    },
+  });
+  function* open() {
+    const database = openNodeSqliteDatabase(":memory:");
+    opened = database;
+    try {
+      yield {
+        async runAsync() {
+          revoked = true;
+        },
+      };
+      return { db: database, path: ":memory:" };
+    } finally {
+      database.close();
+    }
+  }
+  try {
+    await expect(scope.run(() => runStateOpenStepsAsync(open()))).rejects.toBe(failure);
+    expect(revoked).toBe(true);
+    expect(opened?.isOpen).toBe(false);
+  } finally {
+    revoked = false;
+    if (opened?.isOpen) {
+      opened.close();
+    }
+    await scope.close();
+  }
+});
 
 function holdReader(
   reader: ReturnType<typeof openOpenClawStateReadConnection>,

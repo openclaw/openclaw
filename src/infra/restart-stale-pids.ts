@@ -312,6 +312,7 @@ type CleanStaleGatewayProcessesOptions = {
   env?: NodeJS.ProcessEnv;
   /** Reassert effect authority after blocking probes and before every signal. */
   assertCurrent?: () => void;
+  runNativePhase?: <T>(operation: () => T) => Promise<Awaited<T>>;
   protectedPid?: number;
   // Resolve only after listener enumeration so supervisor respawns captured by
   // that snapshot cannot be mistaken for stale processes. Throw to skip cleanup.
@@ -692,7 +693,9 @@ export async function cleanStaleGatewayProcesses(
         await sleep(next.value.ms, signal);
       }
       signal?.throwIfAborted();
-      next = operation.next(owner);
+      next = options?.runNativePhase
+        ? await options.runNativePhase(() => operation.next(owner))
+        : operation.next(owner);
     }
     return next.value;
   } catch (error) {

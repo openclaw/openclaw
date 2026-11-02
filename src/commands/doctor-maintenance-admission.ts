@@ -7,14 +7,16 @@ import { createUpdateRunAdmissionReader } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 
-export function resolveDoctorUpdateAdmission(
+export async function resolveDoctorUpdateAdmission(
   env: NodeJS.ProcessEnv,
   boundRunId?: string,
-): {
+  signal?: AbortSignal,
+): Promise<{
   assertCurrent: () => void;
   readContinuation: () => UpdateRunRecord | undefined;
   recordContinuation: () => void;
-} {
+  runPrepared: <T>(operation: () => T, signal?: AbortSignal) => Promise<Awaited<T>>;
+}> {
   const inheritedRunId = (boundRunId ?? env[UPDATE_RUN_ID_ENV])?.trim();
   const readRuns = createUpdateRunAdmissionReader(
     { active: true, limit: 100, includeRunId: inheritedRunId },
@@ -48,12 +50,13 @@ export function resolveDoctorUpdateAdmission(
     }
     return admission;
   };
-  const admission = readAdmission();
+  const admission = await readRuns.runPrepared(readAdmission, signal);
   const continuation =
     admission.kind === "continuation"
       ? admission.run
       : admission.runs.find((run) => run.runId === inheritedRunId);
   return {
+    runPrepared: readRuns.runPrepared,
     assertCurrent: () => {
       readAdmission();
     },
