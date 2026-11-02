@@ -724,6 +724,45 @@ describe("OpenAI Codex OAuth flow", () => {
     }
   });
 
+  it("asks for the redirect URL at once when the callback port is busy", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 302 })),
+    );
+    mockTokenResponse(tokenPayload("busy-port-account"));
+    const portHolder = createServer();
+    await new Promise<void>((resolve, reject) => {
+      portHolder.once("error", reject);
+      portHolder.listen(1455, resolveOpenAICallbackHost(), resolve);
+    });
+    const stop = vi.fn();
+    const onPrompt = vi.fn(async () => "manual-code");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const controller = new AbortController();
+    const login = loginOpenAICodexOAuth({
+      prompter: createTestWizardPrompter({ progress: () => ({ update: vi.fn(), stop }) }),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      oauth: { createVpsAwareHandlers: () => ({ onAuth: async () => {}, onPrompt }) },
+      isRemote: false,
+      openUrl: vi.fn(async () => undefined),
+      signal: controller.signal,
+    });
+    try {
+      // No fake time passes: nothing can arrive on the port, so nothing should wait for it.
+      await vi.waitFor(() => expect(onPrompt).toHaveBeenCalledOnce());
+      await expect(login).resolves.toMatchObject({ accountId: "busy-port-account" });
+      expect(stop).toHaveBeenCalledWith(
+        "OpenClaw could not use localhost:1455, so the browser cannot finish sign-in here. Sign in there, then paste the redirect URL from its address bar below.",
+      );
+      expect(stop.mock.calls.flat().join("\n")).not.toContain("Still waiting");
+    } finally {
+      controller.abort();
+      vi.useRealTimers();
+      await login.catch(() => undefined);
+      await closeServer(portHolder);
+    }
+  });
+
   it.each([
     ["/opt/homebrew/Cellar/node/26.12.1/bin/node", " /ignored-prefix ", "/opt/homebrew"],
     ["/usr/local/bin/node", " /custom-prefix ", "/custom-prefix"],

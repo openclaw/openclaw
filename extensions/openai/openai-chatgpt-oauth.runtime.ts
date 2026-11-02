@@ -12,6 +12,8 @@ const manualInputPromptMessage = "Paste the authorization code (or full redirect
 const callbackStillOpenMessage =
   "Still waiting for the browser. Finish signing in there, or paste the redirect URL below.";
 const openAICodexOAuthOriginator = "openclaw";
+const callbackUnavailableMessage =
+  "OpenClaw could not use localhost:1455, so the browser cannot finish sign-in here. Sign in there, then paste the redirect URL from its address bar below.";
 const localManualFallbackDelayMs = 15_000;
 const localManualFallbackGraceMs = 1_000;
 type OpenAICodexOAuthFailureCode = "callback_validation_failed" | "unsupported_region";
@@ -135,14 +137,16 @@ export async function loginOpenAICodexOAuth(params: {
       manualPromptSignal: manualPromptAbort.signal,
     });
     const promptForManualCode = () => onPrompt({ message: manualInputPromptMessage });
-    const offerManualEntry = async () => {
-      // The browser callback keeps racing this prompt, so sign-in may still finish on its own.
-      stopProgress(callbackStillOpenMessage);
+    const offerManualEntry = async (message: string) => {
+      stopProgress(message);
       manualEntryOffered = true;
       return await promptForManualCode();
     };
 
-    const runLocalManualFallback = async () => {
+    const runLocalManualFallback = async (callback: { listening: boolean }) => {
+      if (!callback.listening) {
+        return await offerManualEntry(callbackUnavailableMessage);
+      }
       for (const delayMs of [localManualFallbackDelayMs, localManualFallbackGraceMs]) {
         const outcome = await raceWithTimeout(
           waitForLoginToSettle.then(
@@ -156,7 +160,8 @@ export async function loginOpenAICodexOAuth(params: {
           return await new Promise<string>(() => {});
         }
       }
-      return await offerManualEntry();
+      // The browser callback keeps racing this prompt, so sign-in may still finish on its own.
+      return await offerManualEntry(callbackStillOpenMessage);
     };
     const creds = await loginOpenAICodex({
       onAuth,
