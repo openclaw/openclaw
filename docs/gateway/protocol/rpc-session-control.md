@@ -140,6 +140,28 @@ a terminal result no longer blocks a new request.
 
 - `sessions.create.surface` optionally accepts `"plugin-dock"` for an operator-created conversation owned by a plugin dock. It persists the immutable `createdSurface` marker; `createdVia`, the authenticated human creator, sharing, and sandbox policies retain their ordinary operator behavior. Omitting it keeps the existing creation behavior. Trusted spawn and other internal creation contracts cannot be replaced by this option. Adopting an existing session preserves its original creation surface and provenance.
 
+### Chat input reconciliation
+
+The `chat-input-custody-v1` server capability advertises `chat.send.queueMode`
+(`steer`, `followup`, `collect`, `interrupt`) and exact input receipts. It does not
+promise active-backend injection or mid-response model steering: input that
+cannot join an active run may wait for a later turn.
+
+Query `chat.history.inputRunIds` for the selected current session:
+
+| Result                                                              | Meaning                                                         |
+| ------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `inputReceipts: [{ runId, state: "pending", queued?, cancelled? }]` | Retained input not yet consumed.                                |
+| `inputReceipts: [{ runId, state: "consumed", consumedByEventId }]`  | Input consumed by the identified event.                         |
+| `inputConsumptions`                                                 | Consumed-only compatibility projection for existing v4 clients. |
+
+Pending display pages are separate from the transcript and exact receipt query.
+A `started` acknowledgment is not consumption. Keep uncertain input and its
+original idempotency key until reconciled; a missing receipt does not prove
+consumption or justify a new send identity. Idempotency retention is bounded.
+On RPC rejection, preserve the input and show the error rather than silently
+changing the requested queue policy.
+
 ### Existing folders on paired devices
 
 `sessions.create` accepts `deviceFolder: { deviceId, path }` with `operator.write`.
