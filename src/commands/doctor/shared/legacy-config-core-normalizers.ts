@@ -148,10 +148,16 @@ function retainPinnedLegacyCliProviders(
   const retained = new Set<string>();
   rewriteModelRefs(cfg, "config", [], (ref) => {
     const migrated = migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities);
-    const pin = migrated?.cli
-      ? pins.get(migrated.ref)?.find(({ runtime }) => runtime !== migrated.runtime)
-      : undefined;
-    if (migrated && pin && !retained.has(migrated.legacyProvider)) {
+    if (!migrated?.cli || retained.has(migrated.legacyProvider)) {
+      return null;
+    }
+    // A wildcard legacy ref also permits the CLI route for every concrete pinned model.
+    const prefix = migrated.ref.endsWith("/*") ? migrated.ref.slice(0, -1) : undefined;
+    const candidates = prefix
+      ? [...pins].filter(([key]) => key.startsWith(prefix)).flatMap(([, list]) => list)
+      : (pins.get(migrated.ref) ?? []);
+    const pin = candidates.find(({ runtime }) => runtime !== migrated.runtime);
+    if (pin) {
       retained.add(migrated.legacyProvider);
       warnings.push(
         `Kept legacy ${migrated.legacyProvider}/* model refs: ${pin.path} pins the ${sanitizeForLog(pin.runtime)} runtime, so moving ${sanitizeForLog(ref)} there would switch its route away from ${migrated.runtime}. Both routes keep working.`,

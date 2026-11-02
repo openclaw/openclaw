@@ -199,6 +199,17 @@ describe("canonical model-reference migration", () => {
     ]);
   });
 
+  it("keeps a wildcard Claude CLI allowlist that covers a model pinned to another runtime", () => {
+    const config = defaults({
+      models: { "anthropic/claude-opus-5": { agentRuntime: { id: "openclaw" } } },
+      modelPolicy: { allow: ["claude-cli/*"] },
+    });
+    const warnings: string[] = [];
+
+    expect(normalizeRefs(config, [], warnings)).toEqual(config);
+    expect(warnings).toEqual([expect.stringContaining("moving claude-cli/* there")]);
+  });
+
   it("still migrates other legacy CLI providers beside a retained Claude CLI route", () => {
     const config = defaults({
       model: selection("claude-cli/claude-opus-5", "google-gemini-cli/gemini-pro"),
