@@ -444,7 +444,7 @@ describe("preserved update activation with real version guards", () => {
         state: "live" as const,
         expired: false,
       };
-      vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockImplementation(() =>
+      vi.spyOn(gatewayOwner, "readGatewayOwnerLeaseAsync").mockImplementation(async () =>
         processIdentity.isPidAlive(orphanPid) ? owner : undefined,
       );
       let current = true;
