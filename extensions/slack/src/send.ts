@@ -10,14 +10,8 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import {
-  chunkMarkdownTextWithMode,
-  resolveChunkMode,
-  resolveTextChunkLimit,
-} from "openclaw/plugin-sdk/reply-chunking";
-import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -25,7 +19,6 @@ import {
   normalizeOptionalString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
 import type { SlackAuthoredTextPlacement } from "./authored-text.js";
@@ -33,6 +26,7 @@ import { buildSlackCompleteBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import {
   postSlackMessageBestEffort,
+  prepareSlackMessageTextChunks,
   rethrowSlackPermanentOutboundApiRejection,
   uploadSlackFile,
   withSlackDnsRequestRetry,
@@ -45,7 +39,6 @@ import {
 } from "./client.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { getSlackWebApiErrorData } from "./errors.js";
-import { chunkSlackMrkdwnText, markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES, SLACK_TEXT_LIMIT } from "./limits.js";
 import type { SlackEventScope } from "./monitor/event-scope.js";
 import { hasSlackNativeDataBlock, isSlackInvalidBlocksError } from "./native-data-blocks.js";
@@ -121,6 +114,8 @@ type SlackSendOpts = {
   textIsSlackMrkdwn?: boolean;
   /** Slack-private literal fallback text; disables mrkdwn parsing. */
   textIsSlackPlainText?: boolean;
+  /** Native literal display, including explicit mention tokens and disabled unfurls. */
+  literalText?: boolean;
   /** Producer-owned placement of authored text after final block compilation. */
   authoredTextPlacement?: SlackAuthoredTextPlacement;
   /** Slack-private authored text outside blocks; enables ordered plain accessibility text. */
@@ -834,7 +829,9 @@ export async function sendMessageSlack(
 ): Promise<SlackSendResult> {
   const normalizedMessage = normalizeOptionalString(message) ?? "";
   const trimmedMessage =
-    options.textIsSlackPlainText && normalizedMessage ? message : normalizedMessage;
+    (options.textIsSlackPlainText || options.literalText) && normalizedMessage
+      ? message
+      : normalizedMessage;
   const cfg = requireRuntimeConfig(options.cfg, "Slack send");
   const account = resolveSlackAccount({
     cfg,
@@ -952,6 +949,7 @@ export async function sendMessageSlack(
           identity: sendIdentity,
           unfurl,
           ...part,
+          ...(opts.literalText ? { literalText: true } : {}),
         });
         const { response } = posted;
         sendIdentity = posted.identity;
@@ -1024,32 +1022,15 @@ export async function sendMessageSlack(
       if (pendingBlockFallback) {
         messages = pendingBlockFallback.fallbackMessages;
       } else {
-        let resolvedChunks: string[];
-        if (opts.textIsSlackPlainText) {
-          resolvedChunks = trimmedMessage
-            ? chunkTextForOutbound(trimmedMessage, textChunkLimit, { preserveWhitespace: true })
-            : [];
-        } else if (opts.textIsSlackMrkdwn) {
-          resolvedChunks = resolveTextChunksWithFallback(
-            trimmedMessage,
-            chunkSlackMrkdwnText(trimmedMessage, textChunkLimit),
-          );
-        } else {
-          const tableMode = resolveMarkdownTableMode({
-            cfg,
-            channel: "slack",
-            ...(account.accountId ? { accountId: account.accountId } : {}),
-          });
-          const chunkMode = resolveChunkMode(cfg, "slack", account.accountId);
-          const markdownChunks =
-            chunkMode === "newline"
-              ? chunkMarkdownTextWithMode(trimmedMessage, textChunkLimit, chunkMode)
-              : [trimmedMessage];
-          const chunks = markdownChunks.flatMap((markdown) =>
-            markdownToSlackMrkdwnChunks(markdown, textChunkLimit, { tableMode }),
-          );
-          resolvedChunks = resolveTextChunksWithFallback(trimmedMessage, chunks);
-        }
+        const resolvedChunks = prepareSlackMessageTextChunks({
+          cfg,
+          accountId: account.accountId,
+          text: trimmedMessage,
+          textLimit: textChunkLimit,
+          textIsSlackPlainText: opts.textIsSlackPlainText,
+          textIsSlackMrkdwn: opts.textIsSlackMrkdwn,
+          literalText: opts.literalText,
+        });
         const mediaMaxBytes =
           opts.mediaMaxBytes ??
           (typeof account.config.mediaMaxMb === "number"
