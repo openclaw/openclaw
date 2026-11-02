@@ -53,7 +53,10 @@ function createTransport(
 }
 
 describe("local meeting realtime audio transport", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
 
   it("stops output after input spawn throws even when output spawn failed", () => {
     const output = createProcess({ stdin: createStdin(true, true) });
@@ -80,6 +83,36 @@ describe("local meeting realtime audio transport", () => {
     );
     expect(spawn).toHaveBeenCalledTimes(2);
     await transport.stop();
+  });
+
+  it.each([60_000, -60_000])("keeps cooldown after a %i ms wall-clock change", async (shiftMs) => {
+    vi.useFakeTimers();
+    const capture = createProcess({ stdout: new EventEmitter() });
+    const playback = createProcess({ stdin: createStdin(true, true) });
+    const microphone = createProcess({ stdout: new EventEmitter() });
+    const transport = createTransportWith({
+      bargeInInputCommand: ["microphone"],
+      bargeInCooldownMs: 1_000,
+      bargeInPeakThreshold: 1,
+      bargeInRmsThreshold: 1,
+      spawn: vi.fn((command) =>
+        command === "play" ? playback : command === "capture" ? capture : microphone,
+      ),
+    });
+    const onBargeIn = vi.fn(() => true);
+    transport.startBargeInMonitor?.(onBargeIn);
+    try {
+      microphone.stdout?.emit("data", Buffer.from([1, 0]));
+      expect(onBargeIn).toHaveBeenCalledOnce();
+      vi.setSystemTime(Date.now() + shiftMs);
+      microphone.stdout?.emit("data", Buffer.from([1, 0]));
+      expect(onBargeIn).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1_000);
+      microphone.stdout?.emit("data", Buffer.from([1, 0]));
+      expect(onBargeIn).toHaveBeenCalledTimes(2);
+    } finally {
+      await transport.stop();
+    }
   });
 
   it("releases a backpressured write on clear and ignores retired output failures", async () => {
