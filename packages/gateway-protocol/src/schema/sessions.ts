@@ -279,6 +279,8 @@ export const SessionsFilesGetResultSchema = closedObject({
   sessionKey: NonEmptyString,
   source: Type.Optional(SessionFileSourceSchema),
   root: Type.Optional(NonEmptyString),
+  /** The original file can be opened by an application on the Gateway host. */
+  canOpenInSystem: Type.Optional(Type.Boolean()),
   file: SessionFileEntrySchema,
 });
 
@@ -361,10 +363,13 @@ export const SessionsFilesSetParamsSchema = closedObject({
 
 export const SessionsFilesSetResultSchema = closedObject(SessionsFilesGetResultSchema.properties);
 
-/** Opens a session workspace on the Gateway host without accepting a client path. */
+/** Opens a session workspace or selected file on the Gateway host. */
 export const SessionsFilesRevealParamsSchema = closedObject({
   key: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  path: Type.Optional(NonEmptyString),
+  messageEntryId: Type.Optional(NonEmptyString),
+  expectedRoot: Type.Optional(NonEmptyString),
 });
 
 export const SessionsFilesRevealResultSchema = closedObject({

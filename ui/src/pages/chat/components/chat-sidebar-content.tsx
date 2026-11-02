@@ -38,6 +38,7 @@ import type { AttachmentDownload } from "./chat-attachment-download.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileViewControls } from "./chat-file-reader-controls.ts";
 import { FileSessionMenu } from "./chat-file-session-menu.tsx";
+import { FileSystemOpenButton } from "./chat-file-system-open-button.tsx";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import { openResolvedImage } from "./chat-image-presentation.ts";
 import { isPdfAttachment } from "./chat-pdf-preview.tsx";
@@ -257,6 +258,13 @@ export function SidebarPanel(props: SidebarPanelProps) {
           />
         </Show>
         <div class={["sidebar-content", { "sidebar-file-mobile__body": mobileMedia() }]}>
+          <Show when={props.content?.openInSystem} keyed>
+            {(open) => (
+              <div class="sidebar-file-view__actions">
+                <FileSystemOpenButton open={open} />
+              </div>
+            )}
+          </Show>
           <Show
             when={!props.error}
             fallback={
