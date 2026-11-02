@@ -1180,15 +1180,15 @@ textarea.settings-input {
 
 @media (pointer: coarse), (max-width: 640px) {
   :is(.shell--settings, openclaw-skills-page, openclaw-cron-page) {
-    --settings-control-height: 44px;
+    --settings-control-height: var(--settings-touch-control-height);
 
     /* The shell topbar keeps one size on every route; resizing it here shifts
        the page when navigation enters or leaves Settings. */
     :is(button, .btn, summary, .settings-toggle):where(
       :not([role="tab"], .topbar *, .settings-segmented__btn)
     ) {
-      min-width: 44px;
-      min-height: 44px;
+      min-width: var(--settings-touch-control-height);
+      min-height: var(--settings-touch-control-height);
     }
 
     .settings-segmented > .settings-segmented__btn {

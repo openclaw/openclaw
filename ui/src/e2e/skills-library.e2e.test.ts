@@ -108,6 +108,24 @@ async function expectSkillNameValidation(page: Page) {
 }
 
 suite.define(() => {
+  it("keeps the phone toolbar on one control height and refreshes through the shared button", async () => {
+    await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
+      const gateway = await libraryGateway(page, { "skills.library.read": own });
+      await openSkillSettings(page);
+      const search = page.locator('input[name="library-search"]');
+      const refresh = page.locator(".skill-library-search__action .refresh-button");
+      const menu = page.locator(".skill-library-search__action .skill-library-search__icon");
+      await refresh.waitFor();
+      for (const control of [search, refresh, menu]) {
+        expect((await control.boundingBox())?.height).toBe(38);
+      }
+      expect(await search.evaluate((input) => getComputedStyle(input).fontSize)).toBe("16px");
+      const before = (await gateway.getRequests("skills.library.list")).length;
+      await refresh.click();
+      await expectRequestCount(gateway, "skills.library.list", before + 1);
+    });
+  });
+
   it("saves and edits an operator's complete bundle, preserving a stale draft on a narrow viewport", async () => {
     await suite.withPage({ viewport: { width: 375, height: 844 } }, async ({ page }) => {
       const gateway = await libraryGateway(page, { "skills.library.read": own });

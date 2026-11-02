@@ -276,5 +276,82 @@ select.settings-select {
 @media (pointer: coarse), (max-width: 640px) {
   :root {
     --settings-control-height: 38px;
+    --settings-touch-control-height: 44px;
+  }
+}
+
+/* One height per control at phone width. Search, filter, segmented, refresh, select and page
+   actions share the field height; a row's action is one step down, on the composer's 32px. */
+@media (max-width: 640px) {
+  :root {
+    --settings-touch-control-height: var(--settings-control-height);
+    --logs-toolbar-height: var(--settings-control-height);
+    --row-action-size: 32px;
+  }
+
+  :root
+    :is(
+      .transcripts-filters__search,
+      .transcripts-filters__trigger,
+      .transcripts-page-menu__trigger
+    ) {
+    --settings-control-height: var(--settings-touch-control-height);
+  }
+
+  :root select.data-table-pagination__size {
+    --settings-control-height: var(--settings-touch-control-height);
+
+    height: var(--settings-control-height);
+  }
+
+  .data-table-pagination__controls button {
+    min-height: var(--settings-control-height);
+  }
+
+  :root .settings-segmented > .settings-segmented__btn {
+    min-height: calc(var(--settings-control-height) - 6px);
+  }
+
+  :root .btn.agents-page-menu__trigger {
+    width: var(--settings-control-height);
+    height: var(--settings-control-height);
+  }
+
+  :root .plugin-catalog-search input {
+    height: var(--settings-control-height);
+    min-height: var(--settings-control-height);
+  }
+
+  :root .usage-creator-select,
+  :root .settings-table--stacked .btn {
+    min-height: var(--settings-control-height);
+  }
+
+  :root .agent-scope-control .agent-select__trigger {
+    min-height: var(--settings-control-height);
+  }
+
+  /* Holds the chooser's height before it arrives, so the page doesn't shift. */
+  :root openclaw-sessions-page .hub-page-header__actions {
+    min-block-size: var(--settings-control-height);
+  }
+
+  :root .btn.refresh-button,
+  :root .settings-section .settings-section__actions .btn.btn--xs.btn--icon.channels-refresh,
+  :root .settings-section__actions .sessions-toolbar__icon.btn--icon.btn--xs {
+    width: var(--settings-control-height);
+    min-width: var(--settings-control-height);
+    height: var(--settings-control-height);
+    min-height: var(--settings-control-height);
+  }
+
+  :root .btn:is(.cron-job-menu__trigger, .device-entry__menu-trigger, .secrets-store__menu-trigger),
+  :root .plugin-editor__menu .btn.btn--icon,
+  :root openclaw-sessions-page td .icon-btn[aria-haspopup="menu"] {
+    width: var(--row-action-size);
+    min-width: var(--row-action-size);
+    height: var(--row-action-size);
+    min-height: var(--row-action-size);
+    padding: 0;
   }
 }
