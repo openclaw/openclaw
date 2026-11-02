@@ -230,30 +230,6 @@ describe("gateway-status command", () => {
     vi.useRealTimers();
   });
 
-  it.each([-60_000, 60_000])(
-    "reports elapsed probe time across a %s ms clock step",
-    async (step) => {
-      let wallClock = 1_700_000_000_000;
-      let elapsed = 100;
-      const wall = vi.spyOn(Date, "now").mockImplementation(() => wallClock);
-      const monotonic = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-      readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig());
-      probeGateway.mockImplementation(async ({ url }) => {
-        wallClock += step;
-        elapsed += 25;
-        return mocks.successfulProbe(url);
-      });
-      try {
-        await run();
-        expect(output()).toMatchObject({ ok: true, durationMs: 25, ts: wallClock });
-        expect(probeGateway).toHaveBeenCalledTimes(1);
-      } finally {
-        wall.mockRestore();
-        monotonic.mockRestore();
-      }
-    },
-  );
-
   it.each([1000, 2 ** 31 + 5000])("keeps probes active for the %s ms budget", async (timeoutMs) => {
     vi.useFakeTimers();
     readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig());

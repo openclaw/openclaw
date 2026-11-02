@@ -9,47 +9,19 @@ const fresh = <T>(value: T) => ({ value, stale: false });
 const stale = <T>(value: T) => ({ value, stale: true });
 
 let now = 1_000;
+let wall = 0;
 beforeEach(() => {
   now = 1_000;
+  wall = 0;
+  vi.spyOn(Date, "now").mockImplementation(() => now + wall);
   vi.spyOn(performance, "now").mockImplementation(() => now);
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.each([
-  ["value", 60_000],
-  ["value", -60_000],
-  ["error", 60_000],
-  ["error", -60_000],
-] as const)("keeps %s TTL elapsed across a %ims wall clock step", async (kind, wallStep) => {
-  let wall = 10_000;
-  vi.spyOn(Date, "now").mockImplementation(() => wall);
-  const ttl = kind === "value" ? 100 : 50;
-  const cache = cacheFor<string>({ errorTtlMs: () => ttl });
-  const error = new Error("offline");
-  const load = vi.fn(async () => {
-    if (kind === "error") {
-      throw error;
-    }
-    return "cached";
-  });
-  const read = () =>
-    cache.read("item", load, { allowStale: false }).catch((caught: unknown) => caught);
-  const expected = kind === "value" ? fresh("cached") : error;
-  expect(await read()).toEqual(expected);
-  wall += wallStep;
-  expect(await read()).toEqual(expected);
-  expect(load).toHaveBeenCalledOnce();
-  now += ttl - 1;
-  expect(await read()).toEqual(expected);
-  expect(load).toHaveBeenCalledOnce();
-  now += 1;
-  expect(await read()).toEqual(expected);
-  expect(load).toHaveBeenCalledTimes(2);
-});
-
 it.each([true, false])("coalesces stale refreshes (cacheable=%s)", async (cacheable) => {
   const cache = cacheFor<string>({ cacheable: (value) => value !== "uncacheable" });
   await expect(cache.read("item", async () => "first")).resolves.toEqual(fresh("first"));
+  wall += cacheable ? -60_000 : 60_000;
   const pending = createDeferredCore<string>();
   const refresh = vi.fn(() => pending.promise);
   await expect(cache.read("item", refresh)).resolves.toEqual(fresh("first"));
@@ -141,8 +113,10 @@ it("evicts failed stale data and honors error cooldown before retrying", async (
   failed.reject(new Error("offline"));
   await waiting;
   expect(onBackgroundError).toHaveBeenCalledOnce();
+  wall += 60_000;
   await expect(cache.read("item", replacement)).rejects.toThrow("offline");
   expect(replacement).not.toHaveBeenCalled();
+  wall -= 120_000;
   now += 50;
   await expect(cache.read("item", replacement)).resolves.toEqual(fresh("recovered"));
   expect(replacement).toHaveBeenCalledExactlyOnceWith(undefined);

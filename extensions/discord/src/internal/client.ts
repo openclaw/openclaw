@@ -467,8 +467,6 @@ export class Client {
   ): Promise<unknown> {
     const rest = this.rest;
     const timeoutMs = rest.options.timeout;
-    // Request duration annotates abort errors for diagnostics; the monotonic clock keeps
-    // it meaningful when the system clock steps mid-request.
     const startedAt = performance.now();
     try {
       return method === "get" || body === undefined

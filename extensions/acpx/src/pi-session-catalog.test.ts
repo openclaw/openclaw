@@ -61,9 +61,12 @@ const header = (id = "pi-session", version = 3) =>
 
 function usePiCandidateCacheClock(): () => void {
   let now = performance.now();
+  let wallClock = Date.now();
+  vi.spyOn(Date, "now").mockImplementation(() => wallClock);
   vi.spyOn(performance, "now").mockImplementation(() => now);
   return () => {
     now += 32_001;
+    wallClock -= 60_000;
   };
 }
 
@@ -73,26 +76,6 @@ afterEach(() => {
 });
 
 describe("Pi session catalog", () => {
-  it.each([-60_000, 60_000])(
-    "expires Pi candidates by elapsed time across a %s ms clock step",
-    async (step) => {
-      const directory = await createPiStore();
-      let wallClock = Date.now();
-      let elapsed = 100;
-      vi.spyOn(Date, "now").mockImplementation(() => wallClock);
-      vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-      expect((await listLocalPiSessionPage({ limit: 20 })).sessions).toHaveLength(1);
-      await fs.writeFile(path.join(directory, "new.jsonl"), piJsonl([header("pi-new-session")]));
-      wallClock += step;
-      elapsed += 31_999;
-      expect((await listLocalPiSessionPage({ limit: 20 })).sessions).toHaveLength(1);
-      elapsed += 2;
-      expect(
-        (await listLocalPiSessionPage({ limit: 20 })).sessions.map((session) => session.threadId),
-      ).toEqual(expect.arrayContaining(["pi-session", "pi-new-session"]));
-    },
-  );
-
   it("lists named sessions and reads the active JSONL branch", async () => {
     await createPiStore("hi", "Pi catalog session", { command: "pwd" }, true);
     await installFakePi();

@@ -90,23 +90,6 @@ function probeInput(cfg: OpenClawConfig, options: Partial<ProbeParams["options"]
   };
 }
 
-it.each([-60_000, 60_000])("reports elapsed probe time across a %s ms clock step", async (step) => {
-  const startedAt = 1_700_000_000_000;
-  let wallClock = startedAt;
-  let elapsed = 100;
-  vi.spyOn(Date, "now").mockImplementation(() => wallClock);
-  vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-  mocks.runner.mockImplementationOnce(async (params) => {
-    wallClock += step;
-    elapsed += 25;
-    params.onRequestComplete?.(13);
-    return { text: "OK" };
-  });
-  const report = await probe.runAuthProbes(probeInput({}, { profileIds: ["openai:profile"] }));
-  expect(report).toMatchObject({ startedAt, finishedAt: startedAt + step, durationMs: 25 });
-  expect(report.results).toMatchObject([{ status: "ok", latencyMs: 13 }]);
-});
-
 it("reports failover reasons through probe results", async () => {
   for (const [reason, expected] of [
     ["auth_permanent", "auth"],

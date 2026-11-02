@@ -14,58 +14,34 @@ describe("escapeHtml", () => {
 });
 
 describe("runChannelProbe", () => {
-  it.each([
-    { clockOffset: 60_000, succeeds: true },
-    { clockOffset: -60_000, succeeds: false },
-  ])("measures elapsed time across a wall-clock step: %j", async ({ clockOffset, succeeds }) => {
+  it.each([false, true])("times probes across wall steps (explicit=%s)", async (explicit) => {
     const epoch = 1_700_000_000_000;
     vi.spyOn(Date, "now")
       .mockReturnValueOnce(epoch)
-      .mockReturnValue(epoch + clockOffset);
-    vi.spyOn(performance, "now").mockReturnValueOnce(100).mockReturnValue(145);
-
-    const result = await runChannelProbe(
-      undefined,
-      async ({ startedAt }) => {
-        expect(startedAt).toBe(epoch);
-        if (!succeeds) {
-          throw new Error("probe failed");
-        }
-        return { ok: true };
-      },
-      (error) => ({ ok: false, error: String(error) }),
-    );
-
-    expect(result).toEqual(
-      succeeds
-        ? { ok: true, elapsedMs: 45 }
-        : { ok: false, error: "Error: probe failed", elapsedMs: 45 },
-    );
-  });
-
-  it("preserves an explicit timing snapshot", async () => {
-    vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValue(-59_900);
+      .mockReturnValue(epoch + (explicit ? -60_000 : 60_000));
     vi.spyOn(performance, "now")
       .mockReturnValueOnce(100)
-      .mockReturnValueOnce(120)
-      .mockReturnValue(145);
-
+      .mockReturnValue(explicit ? 120 : 145);
     await expect(
       runChannelProbe(
         undefined,
-        async ({ elapsedMs }) => ({ ok: true, elapsedMs: elapsedMs() }),
+        async ({ startedAt, elapsedMs }) => ({
+          ok: startedAt === epoch,
+          ...(explicit ? { elapsedMs: elapsedMs() } : {}),
+        }),
         (error) => ({ ok: false, error: String(error) }),
       ),
-    ).resolves.toEqual({ ok: true, elapsedMs: 20 });
+    ).resolves.toEqual({ ok: true, elapsedMs: explicit ? 20 : 45 });
   });
 
   it("applies the timeout before shaping the error result", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const resultPromise = runChannelProbe(
       50,
       async () => await new Promise<never>(() => {}),
       (error) => ({ ok: false, error: String(error) }),
     );
+    vi.setSystemTime(Date.now() - 60_000);
 
     await vi.advanceTimersByTimeAsync(50);
 

@@ -66,8 +66,7 @@ describe("fetch timeouts", () => {
   });
   beforeEach(() => {
     warn.mockClear();
-    vi.useFakeTimers();
-    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
   });
 
   afterEach(() => {
@@ -76,17 +75,25 @@ describe("fetch timeouts", () => {
     vi.useRealTimers();
   });
 
-  it.each([true, false])("logs timeout aborts with context=%s (#79195)", async (context) => {
-    const { signal } = timeout({
+  it.each([true, false])("logs refreshed aborts (context=%s)", async (context) => {
+    const { signal, refresh } = timeout({
       operation: context ? "unit-test" : undefined,
       url: context
         ? "https://user:pass@example.com/v1/responses?api-key=secret#fragment"
         : undefined,
     });
-    await vi.advanceTimersByTimeAsync(25);
+    await vi.advanceTimersByTimeAsync(20);
+    refresh();
+    vi.setSystemTime(Date.now() + (context ? -60_000 : 60_000));
+    await vi.advanceTimersByTimeAsync(24);
+    expect(signal?.aborted).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(warn).toHaveBeenCalledTimes(1);
     expect(signal).toMatchObject({ aborted: true, reason: timeoutError });
     const record = warn.mock.calls[0]?.[1];
     expect(record).toMatchObject({ timeoutMs: 25, elapsedMs: 25 });
+    expect(record).not.toHaveProperty("timerDelayMs");
     expect(record?.operation).toBe(context ? "unit-test" : undefined);
     expect(record?.url).toBe(context ? "https://example.com/v1/responses" : undefined);
     expect(record?.consoleMessage).toBe(
@@ -130,26 +137,6 @@ describe("fetch timeouts", () => {
     expect(record).toMatchObject({ timerDelayMs: 2000, eventLoopDelayHint: hint });
     expect(String(record.consoleMessage)).toContain(hint);
   });
-
-  it.each([-60_000, 60_000])(
-    "keeps refreshed timeout diagnostics independent of a %ims wall-clock step",
-    async (wallStepMs) => {
-      let elapsedMs = 0;
-      vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
-      const { signal, refresh } = timeout();
-      await vi.advanceTimersByTimeAsync(10);
-      elapsedMs = 10;
-      refresh();
-      vi.setSystemTime(Date.now() + wallStepMs);
-      elapsedMs = 35;
-      await vi.advanceTimersByTimeAsync(25);
-      expect(signal).toMatchObject({ aborted: true, reason: timeoutError });
-      const record = warn.mock.calls[0]?.[1];
-      expect(record).toMatchObject({ timeoutMs: 25, elapsedMs: 25 });
-      expect(record).not.toHaveProperty("timerDelayMs");
-      expect(record).not.toHaveProperty("eventLoopDelayHint");
-    },
-  );
 
   it.each(["https://api.telegram.org", ""])(
     "redacts Telegram tokens with URL prefix '%s'",
@@ -228,17 +215,5 @@ describe("fetch timeouts", () => {
     expect(signal).toMatchObject({ aborted: true, reason });
     expect(signal?.reason).toBe(reason);
     expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("refreshes its timeout when progress is observed", async () => {
-    const { signal, refresh } = timeout();
-    await vi.advanceTimersByTimeAsync(20);
-    refresh();
-    await vi.advanceTimersByTimeAsync(24);
-    expect(signal?.aborted).toBe(false);
-    expect(warn).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(signal?.aborted).toBe(true);
-    expect(warn).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,2 +1,0 @@
-20
-# Two clock-step regressions preserve the existing 32-second Pi candidate snapshot lifetime.
