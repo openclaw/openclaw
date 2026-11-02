@@ -191,6 +191,12 @@ available; browser-session support for those surfaces is separate. The share
 extension asks you to send from OpenClaw for an Access-protected Gateway. Access
 credentials are not exported to Apple Watch or cloud workers.
 
+The share extension reuses the connected Gateway's approved TLS certificate pin
+and saved custom service headers. Header values stay in the shared Keychain,
+not App Group preferences. Reconnect the app after upgrading to refresh the
+extension's saved connection. The extension cannot approve a new certificate or
+complete browser sign-in; open OpenClaw to review changed trust or use Access.
+
 ## Sessions
 
 Choose **All Sessions…** in the sidebar to browse **Active**, **Snoozed**,
