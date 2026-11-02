@@ -128,7 +128,6 @@ export function scanTranscriptRows(params: {
   pathname: string;
   writer: OpenClawAgentDatabase;
   legacyTextStorage: boolean;
-  beforeRewrite: () => void;
   onChangedSession?: (sessionId: string) => void;
 }): number {
   const { database, pathname, writer } = params;
@@ -184,7 +183,6 @@ export function scanTranscriptRows(params: {
         if (!sessionKey) {
           throw new Error(`${pathname}:${sessionId} has transcript rows without a session window`);
         }
-        params.beforeRewrite();
         rewriteSqliteTranscriptEventRowsInTransaction(
           writer,
           { agentId: writer.agentId, path: pathname, sessionId, sessionKey },
@@ -227,7 +225,6 @@ export function scanTrajectoryRows(params: {
   database: DatabaseSync;
   pathname: string;
   legacyTextStorage: boolean;
-  beforeRewrite: () => void;
 }): number {
   const { database, pathname } = params;
   const db = getNodeSqliteKysely<MediaMigrationDatabase>(database);
@@ -246,7 +243,6 @@ export function scanTrajectoryRows(params: {
           continue;
         }
         changedRows += 1;
-        params.beforeRewrite();
         executeSqliteQuerySync(
           database,
           db

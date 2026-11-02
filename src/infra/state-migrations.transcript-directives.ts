@@ -347,7 +347,7 @@ async function migrateTranscriptSessions(params: {
   pathname: string;
   resolveMaskedProvider: MaskedProviderResolver;
   start: Extract<MigrationCursor, { phase: "transcripts" }>;
-  backupBeforeDirectiveRewrite: () => void;
+  backupBeforeDirectiveRewrite: () => Promise<void>;
 }): Promise<number> {
   const { scope } = params.start;
   let rewrittenSessions = 0;
@@ -369,13 +369,13 @@ async function migrateTranscriptSessions(params: {
     const restoredSeqs = planned
       .filter((row) => row.maskedProvider === "restored")
       .map((row) => row.seq);
+    if (directivesChanged) {
+      await params.backupBeforeDirectiveRewrite();
+    }
     runSqliteImmediateTransactionSync(
       params.database,
       () => {
         assertAgentDatabaseMaintenanceAuthority();
-        if (directivesChanged) {
-          params.backupBeforeDirectiveRewrite();
-        }
         updateSqliteTranscriptEventJsonInTransaction(
           params.owner,
           sessionId,
@@ -482,9 +482,10 @@ async function migrateAgentDatabase(
     let preserved = false;
     // Directive edits keep the full pre-repair backup; provider restores are undone from
     // their recorded rows.
-    const backupBeforeDirectiveRewrite = () => {
+    const backupBeforeDirectiveRewrite = async () => {
       if (!preserved) {
-        const backup = backupDoctorSqliteRepair(params.pathname, "transcript-directives");
+        const backup = await backupDoctorSqliteRepair(params.pathname, "transcript-directives");
+        maintenance.assertOwned();
         preserved = true;
         params.changes.push(`Saved pre-repair SQLite backup: ${backup}`);
       }
@@ -511,11 +512,13 @@ async function migrateAgentDatabase(
             pathname: params.pathname,
             signal: maintenance.signal,
             start: archiveCursor,
+            prepareRewrite: async () => {
+              if (archiveObservations.directivesChanged) {
+                await backupBeforeDirectiveRewrite();
+              }
+            },
             // Runs inside each archive rewrite transaction, after its batch was planned.
             beforeRewrite: () => {
-              if (archiveObservations.directivesChanged) {
-                backupBeforeDirectiveRewrite();
-              }
               const lines = [...archiveObservations.unrecordedRestoredLines];
               if (lines.length > 0) {
                 recordRestoredProviders(database, params.agentId, (record) => {

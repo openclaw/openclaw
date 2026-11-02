@@ -3,12 +3,20 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as fileDescriptor from "./file-descriptor.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
-import { repairDoctorSqliteIndexCorruption as repairDoctor } from "./sqlite-index-recovery.js";
+import {
+  repairDoctorSqliteIndexCorruption as repairDoctor,
+  repairDoctorSqliteIndexCorruptionAsync as repairDoctorAsync,
+} from "./sqlite-index-recovery.js";
 import { repairSqliteIndexCorruption as repair } from "./sqlite-index-schema.js";
+import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 const rows = (db: DatabaseSync, sql: string) => db.prepare(sql).all();
 const image = (db: DatabaseSync) => ({
@@ -133,4 +141,80 @@ it("refuses structural damage mixed with an index finding without attempting rep
   );
   expect(backup).not.toHaveBeenCalled();
   expect(fs.readFileSync(pathname)).toEqual(bytes);
+});
+
+it("keeps the damaged image when authority is lost while its async backup is prepared", async () => {
+  using state = fixture();
+  const { pathname, db } = state;
+  const before = image(db);
+  const recoveries = () =>
+    fs
+      .readdirSync(path.dirname(pathname))
+      .filter((name) => name.startsWith("openclaw-index-recovery-"));
+  await expect(
+    repairDoctorAsync(db, pathname, {
+      label: "audit",
+      assertCurrent() {
+        if (recoveries().length > 0) {
+          throw new Error("maintenance authority lost during backup");
+        }
+      },
+    }),
+  ).rejects.toThrow("maintenance authority lost during backup");
+  expect(db.isTransaction).toBe(false);
+  expect(image(db)).toEqual(before);
+  expect(recoveries()).toHaveLength(1);
+  using backup = new DatabaseSync(
+    path.join(path.dirname(pathname), recoveries()[0]!, "database.sqlite"),
+    { readOnly: true },
+  );
+  expect(image(backup)).toEqual(before);
+});
+
+it("does not create a backup for a clean async index inspection", async () => {
+  const pathname = path.join(tempDirs.make("clean-index-inspection-"), "state.sqlite");
+  using db = new DatabaseSync(pathname);
+  db.exec("CREATE TABLE clean(value TEXT); INSERT INTO clean VALUES ('retained')");
+  await expect(
+    repairDoctorAsync(db, pathname, { label: "clean", assertCurrent() {} }),
+  ).resolves.toEqual([]);
+  expect(
+    fs
+      .readdirSync(path.dirname(pathname))
+      .filter((name) => name.startsWith("openclaw-index-recovery-")),
+  ).toEqual([]);
+  expect(db.prepare("SELECT value FROM clean").get()).toEqual({ value: "retained" });
+});
+
+it("removes incomplete recovery output when its copy is cancelled", async () => {
+  using state = fixture();
+  const { pathname, db } = state;
+  const before = image(db);
+  const cache = path.join(path.dirname(pathname), "cache");
+  vi.stubEnv("XDG_CACHE_HOME", cache);
+  const cancellation = new AbortController();
+  const failure = new Error("controlled recovery copy cancellation");
+  vi.spyOn(fileDescriptor, "copyFileHandle").mockImplementationOnce(async (_source, output) => {
+    await output.write("incomplete backup");
+    cancellation.abort(failure);
+    cancellation.signal.throwIfAborted();
+  });
+  await expect(
+    withSqliteReadOnlyWorkerScope(
+      () => repairDoctorAsync(db, pathname, { label: "audit", assertCurrent() {} }),
+      { signal: cancellation.signal, deadlineOwnedByCaller: true },
+    ),
+  ).rejects.toThrow("controlled recovery copy cancellation");
+  expect(image(db)).toEqual(before);
+  expect(db.isTransaction).toBe(false);
+  expect(
+    fs
+      .readdirSync(path.dirname(pathname))
+      .filter((name) => name.startsWith("openclaw-index-recovery-")),
+  ).toEqual([]);
+  expect(
+    fs
+      .readdirSync(path.join(cache, "openclaw"))
+      .filter((name) => name.startsWith("openclaw-sqlite-readonly-")),
+  ).toEqual([]);
 });
