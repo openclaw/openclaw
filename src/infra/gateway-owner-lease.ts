@@ -8,6 +8,7 @@ import { readAgentDatabaseLeaseProvenance } from "../state/openclaw-agent-db-lea
 import type { OpenClawStateSchemaReadAdmission } from "../state/openclaw-state-db-contract.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import {
+  isArtifactPreservingStateRead,
   withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
@@ -43,6 +44,7 @@ import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-s
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
+import { hasVerifiedLiveSqliteOwner } from "./sqlite-live-owner.js";
 import { retainSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
 import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
@@ -209,7 +211,17 @@ export function readGatewayOwnerLease(
   return params.current || params.openStateSchemaReadAdmission
     ? withExistingOpenClawStateDatabaseCurrentReadOnly(
         operation,
-        { env: params.env },
+        {
+          env: params.env,
+          // Synchronous lifecycle guards need one current row, not a copy of the live database.
+          allowNativeRead:
+            !isStatePostgres() &&
+            !params.openStateSchemaReadAdmission &&
+            !isArtifactPreservingStateRead() &&
+            hasVerifiedLiveSqliteOwner(resolveOpenClawStateSqlitePath(params.env))
+              ? true
+              : undefined,
+        },
         params.openStateSchemaReadAdmission,
       )
     : withExistingOpenClawStateDatabaseReadOnly(operation, { env: params.env });

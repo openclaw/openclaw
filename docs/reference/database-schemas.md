@@ -77,6 +77,10 @@ Gateway lease directly in a read-only worker instead of copying the shared
 database. Fresh or unverifiable owners still prevent startup; Doctor's schema
 repair admission keeps its private snapshot on SQLite. PostgreSQL maintenance
 inspects the lease through an admitted state reader without a file snapshot.
+Synchronous CLI startup diagnostics also read the current lease directly when
+the exact SQLite database has a verified live owner. This bounded read does not
+copy the database; artifact-preserving inspection and Doctor's schema repair
+admission still use private snapshots.
 
 Borrowed worker transactions obtain their initial host grant before `BEGIN
 IMMEDIATE`; writes with domain or publication facts still revalidate those facts
