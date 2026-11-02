@@ -230,6 +230,7 @@ function startSnapshotFlight(
       return;
     }
     if (closed || signal?.aborted) {
+      let failure = signal?.reason ?? new Error("SQLite snapshot preparation closed");
       if (!withdrew) {
         withdrew = true;
         selected.references--;
@@ -240,11 +241,21 @@ function startSnapshotFlight(
           flights.delete(key);
         }
         selected.settled.service();
-        if (selected.settled.read().status === "pending") {
+        const outcome = selected.settled.read();
+        if (outcome.status === "pending") {
           return;
         }
+        if (
+          outcome.status === "rejected" &&
+          (outcome.error instanceof SqliteSnapshotCleanupError ||
+            outcome.error instanceof AggregateError)
+        ) {
+          // Cancellation waits for disposal; failed disposal must remain visible
+          // instead of reporting only the reason the caller stopped waiting.
+          failure = outcome.error;
+        }
       }
-      retained.reject(signal?.reason ?? new Error("SQLite snapshot preparation closed"));
+      retained.reject(failure);
     } else {
       selected.production.service();
       const outcome = selected.production.read();

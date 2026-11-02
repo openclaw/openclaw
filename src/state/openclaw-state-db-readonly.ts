@@ -19,6 +19,7 @@ import {
   isArtifactPreservingStateRead,
   withArtifactPreservingStateReads,
 } from "./artifact-preserving-state-reads.js";
+import { prepareOpenClawQuarantineRead } from "./openclaw-quarantine-store.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   openClawStateDatabaseCache,
@@ -178,6 +179,12 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
     assertStateFileSnapshotAllowed();
   }
   const pathname = resolveOpenClawStateReadPath(options);
+  const env = options.env ?? process.env;
+  const quarantineRead = prepareOpenClawQuarantineRead(env, callerSignal);
+  if (quarantineRead) {
+    await quarantineRead;
+  }
+  callerSignal?.throwIfAborted();
   const current = stateSnapshotReads.getStore();
   const lazy = options.lazy === true && !postgres;
   if (
@@ -186,7 +193,6 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
   ) {
     return await operation();
   }
-  const env = options.env ?? process.env;
   const controller = new AbortController();
   let closeSnapshotWork: ((reason: unknown) => void) | undefined;
   const run = async () => {
@@ -699,6 +705,11 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
 ): Promise<T | undefined> {
   return withArtifactPreservingStateReads(async () => {
     const pathname = resolveOpenClawStateReadPath(options);
+    const env = options.env ?? process.env;
+    const quarantineRead = prepareOpenClawQuarantineRead(env, resolveStateReadCallerSignal());
+    if (quarantineRead) {
+      await quarantineRead;
+    }
     const snapshot = stateSnapshotReads.getStore();
     if (snapshot?.path === pathname && snapshot.prepareSource) {
       return snapshot.work.track(async () => {
@@ -719,7 +730,6 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
     if (existingPathOrUndefined(pathname) === undefined) {
       return undefined;
     }
-    const env = options.env ?? process.env;
     openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
     if (!requiresArtifactPreservingSnapshot(pathname)) {
       return withEngineStoreAdmission(() =>
