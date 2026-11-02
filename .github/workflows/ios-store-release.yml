@@ -145,6 +145,7 @@ jobs:
             apps/ios/build/screenshot-diagnostics.json
             ${{ runner.temp }}/ios-resource-timeline.jsonl
             ${{ runner.temp }}/ios-spotlight-probe.json
+            ~/Library/Caches/tools.fastlane/mermaid-diagnostic/*.app-*.jsonl
           if-no-files-found: error
           compression-level: 0
           retention-days: 14

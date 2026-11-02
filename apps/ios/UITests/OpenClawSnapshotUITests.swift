@@ -2217,6 +2217,19 @@ extension OpenClawSnapshotUITests {
     {
         let app = XCUIApplication()
         setupSnapshot(app)
+        if screenshotMode, target.initialDestination == "chat",
+           let cache = Snapshot.cacheDirectory,
+           let simulator = ProcessInfo.processInfo.environment["SIMULATOR_UDID"]
+        {
+            let directory = cache.appendingPathComponent("mermaid-diagnostic", isDirectory: true)
+            do {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                app.launchEnvironment["OPENCLAW_MERMAID_DIAGNOSTICS_PATH"] = directory
+                    .appendingPathComponent("\(simulator.uppercased()).app").path
+            } catch {
+                XCTFail("Could not prepare temporary Mermaid diagnostics")
+            }
+        }
         app.launchArguments += [
             "--openclaw-initial-tab",
             target.initialTab,
