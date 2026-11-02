@@ -359,16 +359,18 @@ export function trackChat(startup: "ready" | "delayed" | "rejected" = "ready") {
 /**
  * A reply whose preview card is rejected or backed off and whose second static card is
  * rejected. Prose longer than one card goes out as a block, or is only previewed, then a
- * table block and a tail block or a final. With "close throws" the prose block streams to a
- * preview whose close throws, so the partly sent card is its recovery. A final can also lose
- * its tail post and carry an image. Returns the chat in creation order, each message as
- * id:parts with "@" for the reader mention, and each call's receipt ids, "!" marking a
- * partial-delivery error and "~" the settled outcome of a streamed block.
+ * table block and a tail block, a final, or a tail block and a final after an idle close.
+ * With "close throws" the prose block streams to a preview whose close throws, so the
+ * partly sent card is its recovery. With "ready" the preview card keeps previewed prose.
+ * The tail post can also be rejected, and a final can carry an image. Returns the chat in
+ * creation order, each message as id:parts with "@" for the reader mention, and each
+ * call's receipt ids, "!" marking a partial-delivery error and "~" the settled outcome of a
+ * streamed block.
  */
 export async function settleWithoutPreviewCard(
-  startup: "rejected" | "backoff" | "close throws",
+  startup: "rejected" | "backoff" | "close throws" | "ready",
   prose: "block" | "preview",
-  settle: "tail" | "final",
+  settle: "tail" | "final" | "tail, final",
   tail: "sent" | "rejected" | "rejected, image" = "sent",
 ) {
   await useRealMarkdownChunker(200);
@@ -376,7 +378,7 @@ export async function settleWithoutPreviewCard(
   if (startup === "backoff") {
     streamingStartBackoffUntilByAccount.set("main", Date.now() + 60_000);
   }
-  const { cardEntry, visible } = trackChat(startup === "rejected" ? startup : "ready");
+  const { cardEntry, visible, watch } = trackChat(startup === "rejected" ? startup : "ready");
   const card = mocks.sendStructuredCardFeishu.getMockImplementation()!;
   mocks.sendStructuredCardFeishu
     .mockImplementationOnce(card)
@@ -417,6 +419,9 @@ export async function settleWithoutPreviewCard(
   };
   for (const [index, text] of parts.entries()) {
     result.replyOptions.onPartialReply?.({ text: parts.slice(0, index + 1).join("\n\n") });
+    if (startup === "ready" && index === 0) {
+      watch();
+    }
     if ((prose === "preview" && index === 0) || (settle === "final" && index === 2)) {
       continue;
     }
@@ -431,7 +436,10 @@ export async function settleWithoutPreviewCard(
       mocks.streamingStart.mockReturnValue(undefined);
     }
   }
-  if (settle === "final") {
+  if (settle !== "tail") {
+    if (settle === "tail, final") {
+      await Promise.resolve(options.onIdle?.()).catch(() => undefined);
+    }
     const media = tail === "rejected, image" ? { mediaUrl: image } : {};
     await settled(options.deliver({ text: parts.join("\n\n"), ...media }, { kind: "final" }));
   }

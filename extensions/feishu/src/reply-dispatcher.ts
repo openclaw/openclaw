@@ -540,7 +540,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             "final",
             mentionTargets?.length ? mentionTargets : undefined,
             {
-              blockAnswerText: answerText,
+              closeAnswerText: answerText,
               authoredText: authoredCloseText,
               supplementalReasoningText: leading
                 ? leading.supplementalReasoningText

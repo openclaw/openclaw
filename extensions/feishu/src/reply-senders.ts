@@ -246,12 +246,13 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
     infoKind?: string,
     firstChunkMentions?: MentionTarget[],
     options?: {
-      blockAnswerText?: string;
+      /** The close's answer without its reasoning. Only the close passes it. */
+      closeAnswerText?: string;
       authoredText?: string;
       supplementalReasoningText?: string;
     },
   ) => {
-    const blockAnswerText = options?.blockAnswerText ?? text;
+    const blockAnswerText = options?.closeAnswerText ?? text;
     // Receipts use rendered block text, separate from the reasoning added by close.
     const matchingBlocks =
       infoKind === "final" &&
@@ -323,13 +324,14 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
           deliveredFinalTexts.add(blockAnswerText);
         } catch (error: unknown) {
           const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
-          // A remainder rejected whole leaves every receipt above reusable, so its failure
-          // goes out bare and the close owns nothing: the matching final walks the same
-          // receipts and sends only that remainder. A send that accepted a chunk of its
-          // own would be replayed by that retry, and a failed reasoning supplement cannot
-          // reach the final at all, so those failures own the answer and carry the receipts.
-          // So does a walk past a partly sent fallback card, which owes that card's failure.
-          if (!partial && !answerComplete && fallbackFailure === undefined) {
+          // Only the close throws a remainder it rejected whole bare. Every receipt above
+          // stays reusable and the close then owns nothing, so the matching final walks the
+          // same receipts and sends only what is still missing. A partly sent card the walk
+          // passed already failed through its own block. A final owns nothing when it fails,
+          // so its error names the receipts and lets an attachment go out. So does a send
+          // that accepted a chunk of its own, which that retry would replay, and a failed
+          // reasoning supplement, which cannot reach the final at all.
+          if (!partial && !answerComplete && options?.closeAnswerText !== undefined) {
             throw error;
           }
           throw createFeishuPartialReplyDeliveryError(

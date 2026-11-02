@@ -476,6 +476,47 @@ describe("createFeishuReplyDispatcher markdown table modes", () => {
     },
   );
 
+  // A final whose tail post is rejected whole names what was shown and sends its image even
+  // when every earlier part was accepted whole. Only the close throws that failure bare, for
+  // the matching final (the reusable idle rows in reply-dispatcher.block-receipts.test.ts).
+  // That includes the close a final runs over preview prose, and a close past a partly sent
+  // card, whose tail block is then recovered and named by the final.
+  it.each([
+    ["rejected", "preview", "final", "rejected", "om-1:P+T@", "om-1 om-1!"],
+    [
+      "rejected",
+      "preview",
+      "final",
+      "rejected, image",
+      "om-1:P+T@ media-1:I",
+      "om-1 om-1,media-1!",
+    ],
+    [
+      "ready",
+      "preview",
+      "final",
+      "rejected",
+      "om_stream:P om-1:T@ om-2:S@",
+      "om-1 om_stream,om-1,om-2",
+    ],
+    [
+      "close throws",
+      "block",
+      "tail, final",
+      "rejected",
+      "om_stream:P oc-1:y200 om-1:T@ oc-2:S",
+      "~oc-1! om-1 ~oc-2! oc-1,om-1,oc-2!",
+    ],
+  ] as const)(
+    "%s start, %s prose, %s settles, tail %s",
+    async (startup, prose, settle, tail, chat, receipts) => {
+      expect(await settleWithoutPreviewCard(startup, prose, settle, tail)).toEqual({
+        chat,
+        receipts,
+      });
+    },
+  );
+
   it.each([
     { acceptance: "partial", accepted: true },
     { acceptance: "none", accepted: false },
