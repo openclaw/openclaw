@@ -384,7 +384,7 @@ suite.define(() => {
       },
     ));
 
-  it("moves filters and page actions into phone popovers without losing either", () =>
+  it("moves filters to a phone sheet and page actions to a menu without losing either", () =>
     suite.withPage({ viewport: { width: 390, height: 844 }, locale: "en-US" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
