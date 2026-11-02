@@ -54,7 +54,7 @@ describeControlUiE2e("Plugin overview", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
 
-  it("names the plugin in the phone header and goes back to Plugins", async () => {
+  it("names the plugin in the phone header and leaves the way back to it", async () => {
     const { page } = await setup({
       "plugins.list": inventory([calendarPlugin]),
       "plugins.inspect": calendarInspection,
@@ -62,12 +62,11 @@ describeControlUiE2e("Plugin overview", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(server.baseUrl + "settings/plugins/calendar-plus");
     await page.locator(".topbar-page-title").getByText("Calendar Plus", { exact: true }).waitFor();
-    const back = role(page.locator(".plugin-catalog-detail"), "link", "Plugins");
-    expect(new URL(await back.evaluate((link: HTMLAnchorElement) => link.href)).pathname).toBe(
-      "/settings/plugins",
-    );
+    const back = page.locator(".plugin-catalog-detail > .plugin-catalog-detail__back");
+    expect(await back.isVisible()).toBe(false);
+    await page.setViewportSize({ width: 1440, height: 900 });
     await back.click();
-    await page.locator(".topbar-page-title").getByText("Plugins", { exact: true }).waitFor();
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/plugins");
   });
 
   it("keeps the title where every settings page has it and lets long copy wrap", async () => {

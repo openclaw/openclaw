@@ -1018,6 +1018,19 @@ openclaw-plugins-page
   margin-top: 0;
 }
 
+/* The phone header's Back goes up a level on settings pages. The editor keeps its link:
+   nothing else there names the plugin. */
+.shell--settings.shell--floating-header .plugin-catalog-detail > .plugin-catalog-detail__back {
+  display: none;
+}
+
+.shell--settings.shell--floating-header
+  .plugin-catalog-detail
+  > .plugin-catalog-detail__back
+  + .content-header--settings {
+  margin-top: 0;
+}
+
 .plugin-editor__header > .plugin-catalog-detail__back {
   margin-bottom: var(--space-2);
 }
