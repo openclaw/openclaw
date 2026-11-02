@@ -2901,8 +2901,11 @@ async function createChatPickerScenario(
         gatewayUrl: "wss://gateway.example.test",
         qrDataUrl: devicePairQrDataUrl,
         setupCode: devicePairSetupCode,
+        setupId: "mock-pair-setup",
+        expiresAtMs: Date.now() + 86_400_000,
         urlSource: "mock",
       },
+      "device.pair.setupStatus": {},
       "node.list": {
         nodes: [
           createOfflineDeviceNode(),

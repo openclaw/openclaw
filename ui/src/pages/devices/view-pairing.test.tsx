@@ -107,7 +107,7 @@ describe("device pairing dialog", () => {
       choices: true,
       selectable: true,
     },
-    { lifecycle: { phase: "expired", access: "full" }, choices: true, selectable: false },
+    { lifecycle: { phase: "expired", access: "full" }, choices: false, selectable: false },
     {
       lifecycle: {
         phase: "error",
@@ -153,7 +153,7 @@ describe("device pairing dialog", () => {
       "Device capabilities plus complete Gateway controls, including settings and upgrades.",
     );
     expect(container.textContent).toContain("Connect a computer as a command and capability host.");
-    expect(container.querySelector<HTMLAnchorElement>(".device-pair-setup__footer a")?.href).toBe(
+    expect(container.querySelector<HTMLAnchorElement>(".device-pair-setup__links a")?.href).toBe(
       href,
     );
   });
@@ -173,14 +173,14 @@ describe("device pairing dialog", () => {
     });
 
     const { container } = view;
-    expect(container.querySelectorAll('input[name="device-pair-access"]')).toHaveLength(3);
+    expect(container.querySelectorAll('input[name="device-pair-access"]')).toHaveLength(0);
     expect(container.querySelector(".device-pair-setup__command code")?.textContent).toBe(
       'openclaw node run --pair "oc-pair://AbC_123"',
     );
     expect(container.querySelector('[role="timer"]')?.textContent?.trim()).toBe(
       "This setup link expires in 1:00.",
     );
-    expect(container.querySelector<HTMLAnchorElement>(".device-pair-setup__footer a")?.href).toBe(
+    expect(container.querySelector<HTMLAnchorElement>(".device-pair-setup__links a")?.href).toBe(
       "https://docs.openclaw.ai/gateway/pairing#one-paste-node-pairing",
     );
     const waiting = "Run the command on the device, then review its pairing request here.";

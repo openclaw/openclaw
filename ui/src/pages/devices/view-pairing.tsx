@@ -43,6 +43,14 @@ type PairingOutcomeLifecycle = Extract<
   { phase: "success" | "delivery-uncertain" | "expired" }
 >;
 
+function accessSummaryKey(access: DevicePairSetupAccess) {
+  return access === "limited"
+    ? "devices.pairing.limitedAccess"
+    : access === "node"
+      ? "devices.pairing.nodeAccessSummary"
+      : "devices.pairing.fullAccessSummary";
+}
+
 function PairingOutcome(props: { lifecycle: PairingOutcomeLifecycle; description: string }) {
   const success = () => props.lifecycle.phase === "success";
   const uncertain = () => props.lifecycle.phase === "delivery-uncertain";
@@ -72,13 +80,7 @@ function PairingOutcome(props: { lifecycle: PairingOutcomeLifecycle; description
           <Show when={deviceName()}>
             {props.description} <span aria-hidden="true">·</span>{" "}
           </Show>
-          {t(
-            props.lifecycle.access === "limited"
-              ? "devices.pairing.limitedAccess"
-              : props.lifecycle.access === "node"
-                ? "devices.pairing.nodeAccessSummary"
-                : "devices.pairing.fullAccessSummary",
-          )}
+          {t(accessSummaryKey(props.lifecycle.access))}
         </p>
       </Show>
     </div>
@@ -139,11 +141,9 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
             : "devices.pairing.subtitle",
     );
   const isNodeSetup = () => props.lifecycle.access === "node";
+  // A code is minted for one access level, so the choice only shows while it can still change.
   const showAccessChoices = () =>
-    props.lifecycle.phase !== "success" &&
-    props.lifecycle.phase !== "delivery-uncertain" &&
-    props.lifecycle.phase !== "reconciling" &&
-    error()?.source !== "status";
+    props.lifecycle.phase === "selection" || error()?.source === "create";
   const canSelectAccess = () =>
     !refreshing() && (props.lifecycle.phase === "selection" || error()?.source === "create");
   const copyLabel = () => t("devices.pairing.copySetupCode");
@@ -154,33 +154,46 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
         description={description()}
         onModal-cancel={() => props.onClose()}
       >
-        <section class="device-pair-setup">
-          <header class="device-pair-setup__header">
-            <div class="device-pair-setup__phone" aria-hidden="true">
-              <Icon name={isNodeSetup() ? "server" : "smartphone"} />
-            </div>
-            <div>
-              <h2>{t("devices.pairing.title")}</h2>
-              <p>{description()}</p>
-              <Show when={props.lifecycle.phase !== "success" && !isNodeSetup()}>
-                <p class="device-pair-setup__get-apps">
-                  {t("devices.pairing.noApp")}{" "}
-                  <button type="button" onClick={() => props.onGetApps()}>
-                    {t("devices.pairing.getApps")}
-                  </button>
-                </p>
-              </Show>
-            </div>
+        <section class="oc-dialog device-pair-setup">
+          <header class="oc-dialog__header">
+            <h2 class="oc-dialog__title">{t("devices.pairing.title")}</h2>
             <button
-              class="btn btn--icon btn--ghost device-pair-setup__close"
+              class="oc-dialog__close device-pair-setup__close"
               type="button"
               aria-label={t("common.dismiss")}
               onClick={() => props.onClose()}
             >
               <Icon name="x" />
             </button>
+            <div class="oc-dialog__description">
+              {/* A finished state says its result once, in the body. */}
+              <Show when={!outcome()}>
+                <p>{description()}</p>
+              </Show>
+              <p class="device-pair-setup__links">
+                <Show when={props.lifecycle.phase !== "success" && !isNodeSetup()}>
+                  <span>
+                    {t("devices.pairing.noApp")}{" "}
+                    <button type="button" onClick={() => props.onGetApps()}>
+                      {t("devices.pairing.getApps")}
+                    </button>
+                  </span>
+                </Show>
+                <a
+                  href={isNodeSetup() ? NODE_PAIRING_DOCS_URL : MOBILE_PAIRING_DOCS_URL}
+                  target={EXTERNAL_LINK_TARGET}
+                  rel={buildExternalLinkRel()}
+                  aria-label={t("devices.pairing.helpNewTab")}
+                >
+                  <span>{t("devices.pairing.help")}</span>
+                  <span class="device-pair-setup__external-icon" aria-hidden="true">
+                    <Icon name="externalLink" />
+                  </span>
+                </a>
+              </p>
+            </div>
           </header>
-          <div class="device-pair-setup__body">
+          <div class="oc-dialog__body device-pair-setup__body">
             <Show when={showAccessChoices()}>
               <fieldset class="device-pair-setup__access" disabled={!canSelectAccess()}>
                 <legend>{t("devices.pairing.accessTitle")}</legend>
@@ -285,37 +298,28 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                         </p>
                       </div>
                     </Show>
-                    <div class="device-pair-setup__meta">
-                      <span class="settings-status settings-status--accent">
-                        <span class="settings-status__dot" />
-                        {current().auth}
-                      </span>
-                      <div class="device-pair-setup__gateways">
-                        <For each={current().gatewayUrls ?? [current().gatewayUrl]}>
-                          {(url) => (
-                            <span class="device-pair-setup__gateway" title={url}>
-                              {url}
-                            </span>
-                          )}
-                        </For>
-                      </div>
-                    </div>
-                    <Show when={current().accessDowngraded}>
-                      <div class="callout warn device-pair-setup__access-warning" role="status">
-                        <strong>{t("devices.pairing.transportLimitedTitle")}</strong>
-                        <span>{t("devices.pairing.transportLimitedHint")}</span>
-                      </div>
-                    </Show>
-                    <details class="device-pair-setup__fallback">
-                      <summary>{t("devices.pairing.showSetupCode")}</summary>
-                      <code>{current().setupCode}</code>
-                    </details>
                     <Show when={props.pendingCount === 0}>
                       <p class="device-pair-setup__waiting">
                         {t(
                           isNodeSetup() ? "devices.pairing.nodeWaiting" : "devices.pairing.waiting",
                         )}
                       </p>
+                    </Show>
+                    <div class="device-pair-setup__meta">
+                      <span>{`${t(accessSummaryKey(props.lifecycle.access))} · ${current().auth}`}</span>
+                      <For each={current().gatewayUrls ?? [current().gatewayUrl]}>
+                        {(url) => (
+                          <span class="device-pair-setup__gateway" title={url}>
+                            {url}
+                          </span>
+                        )}
+                      </For>
+                    </div>
+                    <Show when={current().accessDowngraded}>
+                      <div class="callout warn device-pair-setup__access-warning" role="status">
+                        <strong>{t("devices.pairing.transportLimitedTitle")}</strong>
+                        <span>{t("devices.pairing.transportLimitedHint")}</span>
+                      </div>
                     </Show>
                     {/* Stays mounted while empty so the first request updates an existing live region. */}
                     <div
@@ -332,6 +336,20 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                         </span>
                       </Show>
                     </div>
+                    <div class="device-pair-setup__code">
+                      <details class="device-pair-setup__fallback">
+                        <summary>{t("devices.pairing.showSetupCode")}</summary>
+                        <code>{current().setupCode}</code>
+                      </details>
+                      <button
+                        class="btn btn--sm btn--ghost"
+                        type="button"
+                        disabled={refreshing()}
+                        onClick={() => void refresh()}
+                      >
+                        <Icon name="refresh" /> {t("devices.pairing.newCode")}
+                      </button>
+                    </div>
                   </>
                 );
               }}
@@ -344,18 +362,7 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
               )}
             </Show>
           </div>
-          <openclaw-modal-actions class="device-pair-setup__footer device-pair-setup__actions">
-            <a
-              href={isNodeSetup() ? NODE_PAIRING_DOCS_URL : MOBILE_PAIRING_DOCS_URL}
-              target={EXTERNAL_LINK_TARGET}
-              rel={buildExternalLinkRel()}
-              aria-label={t("devices.pairing.helpNewTab")}
-            >
-              <span>{t("devices.pairing.help")}</span>
-              <span class="device-pair-setup__external-icon" aria-hidden="true">
-                <Icon name="externalLink" />
-              </span>
-            </a>
+          <openclaw-modal-actions class="oc-dialog__footer device-pair-setup__footer device-pair-setup__actions">
             <button class="btn btn--ghost" type="button" onClick={() => props.onManageDevices()}>
               {t("devices.pairing.manageDevices")}
             </button>
@@ -366,7 +373,6 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                 disabled={refreshing()}
                 onClick={() => void refresh()}
               >
-                <Icon name={isNodeSetup() ? "server" : "smartphone"} />
                 {t("devices.pairing.generateCode")}
               </button>
             </Show>
@@ -392,14 +398,6 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                       {t("devices.pairing.review")}
                     </button>
                   </Show>
-                  <button
-                    class="btn"
-                    type="button"
-                    disabled={refreshing()}
-                    onClick={() => void refresh()}
-                  >
-                    <Icon name="refresh" /> {t("devices.pairing.newCode")}
-                  </button>
                   <Show when={!isNodeSetup()}>
                     <For each={[current().setupCode]}>
                       {(code) => {
