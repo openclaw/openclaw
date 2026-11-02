@@ -8,7 +8,11 @@ import { createXTestSpend } from "./test-support/spend.js";
 const mentionEvent = (payload: unknown) =>
   JSON.stringify({ data: { event_type: "post.mention.create", payload } });
 
-function streamFixture(options: Partial<Parameters<typeof runXEvents>[0]> = {}) {
+function streamFixture(
+  options: Partial<Parameters<typeof runXEvents>[0]> & {
+    source?: UnderlyingDefaultSource<Uint8Array>;
+  } = {},
+) {
   const abort = new AbortController();
   const admitted: XPostEnvelope[] = [];
   const statuses: XEventStatus[] = [];
@@ -25,11 +29,13 @@ function streamFixture(options: Partial<Parameters<typeof runXEvents>[0]> = {}) 
         }
         if (input.endsWith("/stream")) {
           return new Response(
-            new ReadableStream<Uint8Array>({
-              start: (value) => {
-                stream = value;
+            new ReadableStream<Uint8Array>(
+              options.source ?? {
+                start: (value) => {
+                  stream = value;
+                },
               },
-            }),
+            ),
           );
         }
         return Response.json({ data: [] });
@@ -44,6 +50,7 @@ function streamFixture(options: Partial<Parameters<typeof runXEvents>[0]> = {}) 
     setCursor: async () => {},
     onPost: async (envelope) => {
       admitted.push(envelope);
+      await options.onPost?.(envelope);
     },
     onStatus: (value) => {
       statuses.push(value);
@@ -58,6 +65,7 @@ function streamFixture(options: Partial<Parameters<typeof runXEvents>[0]> = {}) 
   return {
     connected: connected.promise,
     admitted,
+    run,
     statuses,
     warning,
     send: (line: string) => stream.enqueue(new TextEncoder().encode(`${line}\n`)),
@@ -588,6 +596,65 @@ describe("X event transport", () => {
             ? "X API network request failed; polling"
             : `X API /2/activity/${endpoint === "create" ? "subscriptions" : endpoint} failed (HTTP ${failure}): OauthAccessTokenRequired: OAuth user access token is required for this event type; polling`,
       });
+    },
+  );
+  it.each([
+    { label: "many small events", events: 180, text: "hello", maxReadsWhileHeld: 48 },
+    { label: "fewer large events", events: 24, text: "x".repeat(240_000), maxReadsWhileHeld: 12 },
+  ])(
+    "bounds queued $label while preserving FIFO delivery",
+    async ({ events, text, maxReadsWhileHeld }) => {
+      vi.useFakeTimers();
+      const held = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const finished = Promise.withResolvers<void>();
+      const admitted: string[] = [];
+      let reads = 0;
+      const encoder = new TextEncoder();
+      const test = streamFixture({
+        source: {
+          pull(controller) {
+            if (reads === events) {
+              controller.close();
+            } else {
+              controller.enqueue(
+                encoder.encode(`${mentionEvent({ ...post(String(++reads)), text })}\n`),
+              );
+            }
+          },
+        },
+        onPost: async ({ post: mention }) => {
+          if (!admitted.length) {
+            held.resolve();
+            await release.promise;
+          }
+          admitted.push(mention.id);
+          if (admitted.length === events) {
+            finished.resolve();
+          }
+        },
+      });
+      void test.run.catch((error: unknown) => {
+        held.reject(error);
+        finished.reject(error);
+      });
+      try {
+        await held.promise;
+        await vi.advanceTimersByTimeAsync(0);
+        const buffered = reads;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(admitted).toEqual([]);
+        expect(buffered).toBeGreaterThan(1);
+        expect(buffered).toBeLessThanOrEqual(maxReadsWhileHeld);
+        expect(reads).toBe(buffered);
+        release.resolve();
+        await finished.promise;
+        expect(admitted).toEqual(Array.from({ length: events }, (_, index) => String(index + 1)));
+        expect(reads).toBe(events);
+      } finally {
+        release.resolve();
+        await test.stop();
+      }
     },
   );
 });
