@@ -69,6 +69,70 @@ describe("telegram thread bindings", () => {
     createForumTopicMock.mockReset();
   });
 
+  it("approves, refreshes, reloads, and detaches an opaque plugin target without an agent owner", async () => {
+    const { createInteractiveConversationBindingHelpers } =
+      await import("openclaw/plugin-sdk/plugin-runtime");
+    const { resolvePluginConversationBindingApproval } =
+      await import("openclaw/plugin-sdk/conversation-runtime");
+    const cfg = { agents: { entries: { alpha: {}, beta: {} } } };
+    const accountId = "plugin-owner";
+    let manager = await createManager({ accountId, cfg });
+    const conversation = conversationFor(accountId, "-10042:topic:7");
+    const owner = { pluginId: "fixture-runtime", pluginRoot: "/plugins/fixture-runtime" };
+    const helpers = createInteractiveConversationBindingHelpers({
+      registration: owner,
+      senderId: "user-1",
+      conversation,
+    });
+    const requested = await helpers.requestConversationBinding({ data: { externalThread: "17" } });
+    expect(requested.status).toBe("pending");
+    if (requested.status !== "pending") {
+      throw new Error("Expected plugin binding approval");
+    }
+    await expect(
+      resolvePluginConversationBindingApproval({
+        approvalId: requested.approvalId,
+        decision: "allow-once",
+        senderId: "user-1",
+      }),
+    ).resolves.toMatchObject({ status: "approved", binding: owner });
+    const record = await getSessionBindingService().resolveByConversationAsync(conversation);
+    expect(record?.targetSessionKey).toMatch(/^plugin-binding:fixture-runtime:/);
+    expect(record?.metadata?.agentId).toBeUndefined();
+    expect(manager.listBindings()[0]?.targetKind).toBe("session");
+    await expect(helpers.requestConversationBinding()).resolves.toMatchObject({
+      status: "bound",
+      binding: owner,
+    });
+    await manager.stop();
+    manager = await createManager({ accountId, cfg });
+    await expect(helpers.getCurrentConversationBinding()).resolves.toMatchObject(owner);
+    expect(manager.listBindings()[0]?.agentId).toBeUndefined();
+    await expect(helpers.detachConversationBinding()).resolves.toEqual({ removed: true });
+    expect(manager.listBindings()).toEqual([]);
+  });
+
+  it.each([
+    undefined,
+    { pluginBindingOwner: "plugin" },
+    { pluginBindingOwner: "plugin", pluginId: "fixture-runtime" },
+  ])(
+    "does not infer ownership from an opaque prefix or incomplete plugin metadata: %j",
+    async (metadata) => {
+      const manager = await createManager({
+        accountId: "unowned",
+        cfg: { agents: { entries: { alpha: {}, beta: {} } } },
+      });
+      await expect(
+        bind("unowned", "plugin-binding:fixture-runtime:unowned", {
+          targetKind: "session",
+          metadata,
+        }),
+      ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
+      expect(manager.listBindings()).toEqual([]);
+    },
+  );
+
   it("joins concurrent startup across module instances before exposing hydrated bindings", async () => {
     const entered = createDeferred<void>();
     const release = createDeferred<void>();

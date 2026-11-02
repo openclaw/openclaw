@@ -1,5 +1,6 @@
 import { readAcpSessionEntryAsync } from "openclaw/plugin-sdk/acp-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isPluginOwnedSessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import {
   resolveThreadBindingLifecycle,
   unregisterSessionBindingAdapter,
@@ -315,7 +316,7 @@ async function initializeThreadBindingManager(
         if (targetKind === "session") {
           if (isAcpSessionKey(targetSessionKey)) {
             targetKind = "acp";
-          } else {
+          } else if (!isPluginOwnedSessionBindingRecord({ metadata })) {
             const session = await readAcpSessionEntryAsync({
               cfg: params.cfg,
               sessionKey: targetSessionKey,

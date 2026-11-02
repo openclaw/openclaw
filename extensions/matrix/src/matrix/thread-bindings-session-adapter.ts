@@ -1,5 +1,6 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isPluginOwnedSessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { isAcpSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -37,7 +38,9 @@ function buildMatrixBindingIntroText(params: {
   const label = normalizeOptionalString(params.metadata?.label);
   const agentId =
     normalizeOptionalString(params.metadata?.agentId) ||
-    resolveAgentIdFromSessionKey(params.targetSessionKey);
+    (isPluginOwnedSessionBindingRecord(params)
+      ? undefined
+      : resolveAgentIdFromSessionKey(params.targetSessionKey));
   const base = label || agentId || "session";
   return `⚙️ ${base} session active. Messages here go directly to this session.`;
 }
@@ -162,7 +165,7 @@ export function createMatrixSessionBindingAdapter(
       if (targetKind === "session") {
         if (isAcpSessionKey(targetSessionKey)) {
           targetKind = "acp";
-        } else {
+        } else if (!isPluginOwnedSessionBindingRecord(input)) {
           const { readAcpSessionEntryAsync } = await import("openclaw/plugin-sdk/acp-runtime");
           const session = await readAcpSessionEntryAsync({
             cfg: params.cfg,
@@ -219,13 +222,16 @@ export function createMatrixSessionBindingAdapter(
         targetSessionKey,
         agentId:
           normalizeOptionalString(input.metadata?.agentId) ??
-          resolveSessionAgentIdStrict({ config: params.cfg, sessionKey: targetSessionKey }),
+          (isPluginOwnedSessionBindingRecord(input)
+            ? undefined
+            : resolveSessionAgentIdStrict({ config: params.cfg, sessionKey: targetSessionKey })),
         label: normalizeOptionalString(input.metadata?.label) || undefined,
         boundBy: normalizeOptionalString(input.metadata?.boundBy) || "system",
         boundAt: now,
         lastActivityAt: now,
         idleTimeoutMs: defaults.idleTimeoutMs,
         maxAgeMs: defaults.maxAgeMs,
+        metadata: input.metadata ? { ...input.metadata } : undefined,
       };
       await mutateBindings(
         (current) => [

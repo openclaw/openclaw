@@ -123,6 +123,55 @@ it.each([false, true])(
   },
 );
 
+it("keeps approved opaque plugin ownership through refresh and persistent reload", async () => {
+  const { createInteractiveConversationBindingHelpers } =
+    await import("openclaw/plugin-sdk/plugin-runtime");
+  const { resolvePluginConversationBindingApproval } =
+    await import("openclaw/plugin-sdk/conversation-runtime");
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
+    "openclaw/plugin-sdk/acp-runtime",
+  );
+  hoisted.readAcpSessionEntryAsync.mockImplementation(actual.readAcpSessionEntryAsync);
+  const cfg = { agents: { entries: { alpha: {}, beta: {} } } };
+  let manager = await createTestThreadBindingManager({ cfg, persist: true });
+  const owner = { pluginId: "fixture-runtime", pluginRoot: "/plugins/fixture-runtime" };
+  const helpers = createInteractiveConversationBindingHelpers({
+    registration: owner,
+    senderId: "user-1",
+    conversation,
+  });
+  const requested = await helpers.requestConversationBinding();
+  expect(requested.status).toBe("pending");
+  if (requested.status !== "pending") {
+    throw new Error("Expected plugin binding approval");
+  }
+  await expect(
+    resolvePluginConversationBindingApproval({
+      approvalId: requested.approvalId,
+      decision: "allow-once",
+      senderId: "user-1",
+    }),
+  ).resolves.toMatchObject({ status: "approved", binding: owner });
+  expect(manager.getByThreadId(conversation.conversationId)).toMatchObject({
+    targetKind: "session",
+    targetSessionKey: expect.stringMatching(/^plugin-binding:fixture-runtime:/),
+  });
+  expect(
+    (await service.resolveByConversationAsync(conversation))?.metadata?.agentId,
+  ).toBeUndefined();
+  await expect(helpers.requestConversationBinding()).resolves.toMatchObject({
+    status: "bound",
+    binding: owner,
+  });
+  await resetThreadBindingsForTests();
+  manager = await createTestThreadBindingManager({ cfg, persist: true });
+  expect(manager.getByThreadId(conversation.conversationId)?.agentId).toBeUndefined();
+  await expect(helpers.getCurrentConversationBinding()).resolves.toMatchObject(owner);
+  await expect(helpers.detachConversationBinding()).resolves.toEqual({ removed: true });
+  expect(manager.listBindings()).toEqual([]);
+  await manager.stop();
+});
+
 it.each([
   ["agent:main:fork:ordinary", "session"],
   ["agent:main:discord:channel:acp:ordinary", "session"],

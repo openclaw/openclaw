@@ -6,7 +6,7 @@ export type ThreadBindingRecord = {
   threadId: string;
   targetKind: ThreadBindingTargetKind;
   targetSessionKey: string;
-  agentId: string;
+  agentId?: string;
   label?: string;
   webhookId?: string;
   webhookToken?: string;

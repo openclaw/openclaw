@@ -1,4 +1,5 @@
 import { readAcpSessionEntryAsync } from "openclaw/plugin-sdk/acp-runtime";
+import { isPluginOwnedSessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { isAcpSessionKey, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -81,7 +82,7 @@ export function createThreadBindingSessionAdapter(params: {
       if (targetKind === "session") {
         if (isAcpSessionKey(targetSessionKey)) {
           targetKind = "acp";
-        } else {
+        } else if (!isPluginOwnedSessionBindingRecord({ metadata })) {
           // ACP can also own main/global aliases; key spelling alone cannot classify them.
           const session = await readAcpSessionEntryAsync({
             cfg: params.resolveCurrentCfg(),

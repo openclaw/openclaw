@@ -1,4 +1,5 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { isPluginOwnedSessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import {
   resolveThreadBindingFarewellText,
   resolveThreadBindingThreadName,
@@ -378,7 +379,9 @@ function createLoadedThreadBindingManager(
           if (!channelId) {
             return null;
           }
-          agentId ??= resolveSessionAgentIdStrict({ config: cfg, sessionKey: targetSessionKey });
+          if (!isPluginOwnedSessionBindingRecord(bindParams)) {
+            agentId ??= resolveSessionAgentIdStrict({ config: cfg, sessionKey: targetSessionKey });
+          }
           const threadName = resolveThreadBindingThreadName({
             agentId: bindParams.agentId,
             label: bindParams.label,
@@ -424,9 +427,12 @@ function createLoadedThreadBindingManager(
           (existingValue.targetKind === "subagent") === (targetKind === "subagent")
             ? existingValue
             : undefined;
+        const metadata = { ...previous?.metadata, ...bindParams.metadata };
         agentId ??=
           normalizeOptionalString(previous?.agentId) ??
-          resolveSessionAgentIdStrict({ config: cfg, sessionKey: targetSessionKey });
+          (isPluginOwnedSessionBindingRecord({ metadata })
+            ? undefined
+            : resolveSessionAgentIdStrict({ config: cfg, sessionKey: targetSessionKey }));
         let webhookId =
           normalizeOptionalString(bindParams.webhookId) ??
           normalizeOptionalString(existingValue?.webhookId) ??
@@ -476,7 +482,7 @@ function createLoadedThreadBindingManager(
               ? existingValue.idleTimeoutMs
               : idleTimeoutMs,
           maxAgeMs: typeof existingValue?.maxAgeMs === "number" ? existingValue.maxAgeMs : maxAgeMs,
-          metadata: { ...previous?.metadata, ...bindParams.metadata },
+          metadata,
         };
 
         // A confirmed native create must be published even if its initiator was revoked in flight.

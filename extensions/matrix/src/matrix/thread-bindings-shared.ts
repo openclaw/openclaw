@@ -13,6 +13,7 @@ export type MatrixThreadBindingRecord =
     parentConversationId?: string;
     idleTimeoutMs?: number;
     maxAgeMs?: number;
+    metadata?: Record<string, unknown>;
   };
 
 type MatrixThreadBindingManager = {
@@ -93,6 +94,7 @@ export function toSessionBindingRecord(
     bindingId: resolveBindingKey(record),
     targetKind: record.targetKind === "subagent" ? "subagent" : "session",
     lifecycle: { ...lifecycle, idleTimeoutMs, maxAgeMs },
+    metadata: (lifecycleMetadata) => ({ ...lifecycleMetadata, ...record.metadata }),
   });
 }
 
