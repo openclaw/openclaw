@@ -499,7 +499,7 @@ it("reports a boundary emoji whole when shortening a failed activation", async (
   const fullError = `${"x".repeat(511)}😀tail`;
   vi.stubGlobal("isSecureContext", true);
   vi.mocked(controlUiLoader.initializeControlUiPlugin).mockRejectedValue(new Error(fullError));
-  const request = vi.fn(async (method: string) =>
+  const request = vi.fn(async (method: string, _params: unknown) =>
     method === "plugins.controlUi.list"
       ? catalog([pluginDescriptor("one", `${assetPath("one")}index.js`)])
       : { ok: true },
