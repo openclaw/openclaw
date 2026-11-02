@@ -122,7 +122,7 @@ it.each([
     }),
 );
 
-it.each(["missing", "empty", "oversized", "traversal", "symlink", "conflict"])(
+it.each(["missing", "empty", "invalid-utf8", "oversized", "traversal", "symlink", "conflict"])(
   "rejects %s prompt files before inference",
   async (scenario) =>
     withOpenClawTestState({}, async (state) => {
@@ -130,7 +130,11 @@ it.each(["missing", "empty", "oversized", "traversal", "symlink", "conflict"])(
       await fs.mkdir(dir);
       await fs.writeFile(state.path("private.txt"), "outside private prompt");
       const content =
-        scenario === "empty" ? " \n" : "x".repeat(scenario === "oversized" ? 1_048_577 : 1);
+        scenario === "invalid-utf8"
+          ? Buffer.from([0xc3, 0x28])
+          : scenario === "empty"
+            ? " \n"
+            : "x".repeat(scenario === "oversized" ? 1_048_577 : 1);
       if (scenario === "symlink") {
         await fs.symlink(state.root, path.join(dir, "alias"), "junction");
       } else if (scenario !== "missing") {
@@ -156,6 +160,11 @@ it.each(["missing", "empty", "oversized", "traversal", "symlink", "conflict"])(
       expect(mocks.acquire).not.toHaveBeenCalled();
       expect(mocks.callGateway).not.toHaveBeenCalled();
       expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+      if (scenario === "invalid-utf8") {
+        expect(mocks.runtime.error.mock.calls.flat().join(" ")).toContain(
+          "--prompt-file must be valid UTF-8",
+        );
+      }
     }),
 );
 
