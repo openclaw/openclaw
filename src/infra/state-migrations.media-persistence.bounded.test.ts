@@ -361,16 +361,13 @@ it("keeps unrelated legacy content and planner maintenance outside a version mig
     changes: [
       `Upgraded agent database schema in ${pathname}: v25 -> v${OPENCLAW_AGENT_SCHEMA_VERSION}.`,
       expect.stringMatching(
-        /^Saved pre-repair SQLite backup: .*openclaw-media-persistence-recovery-/,
-      ),
-      expect.stringMatching(
         /^Saved pre-repair SQLite backup: .*openclaw-transcript-directives-recovery-/,
       ),
       `Repaired historical transcripts in ${currentPath}: 1 active session(s), 0 archived transcript(s).`,
     ],
     warnings: [],
   });
-  for (const notice of result.changes.slice(1, 3)) {
+  for (const notice of result.changes.slice(1, 2)) {
     using backup = openNodeSqliteDatabase(notice.slice("Saved pre-repair SQLite backup: ".length), {
       readOnly: true,
     });
@@ -379,6 +376,13 @@ it("keeps unrelated legacy content and planner maintenance outside a version mig
         String(backup.prepare("SELECT event_json FROM transcript_events").get()?.event_json),
       ),
     ).toEqual(currentEvent);
+  }
+  for (const databasePath of [pathname, currentPath]) {
+    expect(
+      fs
+        .readdirSync(path.dirname(databasePath))
+        .filter((name) => name.startsWith("openclaw-media-persistence-recovery-")),
+    ).toEqual([]);
   }
   expect(fs.readFileSync(archivePath)).toEqual(archive);
   expect(readState(pathname)).toEqual({

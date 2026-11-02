@@ -294,6 +294,13 @@ async function runManagedRepair(
           }),
         });
         expect(approvals.warnings.length > 0, JSON.stringify(approvals)).toBe(approvalsBlocked);
+        if (approvalsBlocked) {
+          expect(approvals.warnings.join("\n")).toContain(
+            outcome === "approvals-malformed"
+              ? "Invalid legacy exec approvals"
+              : "Conflicting legacy exec approvals remain",
+          );
+        }
         await collectSecurityWarnings(ctx.cfg, state.env);
       }
       if (is("ready", "interactive-ready", "store-close-failed")) {

@@ -283,7 +283,12 @@ export async function preparePostgresClientCredentials(
   runtime: RuntimeEnv,
   rebindMissing = false,
 ) {
-  const [preflight, { prepareDoctorDatabaseMigrations }, state, credentials] = await Promise.all([
+  const [
+    preflight,
+    { prepareDoctorDatabaseMigrations },
+    state,
+    { prepareClientCredentialRecoveryCustody, recoverClientCredentialStore },
+  ] = await Promise.all([
     import("../state/openclaw-database-preflight.js"),
     import("./doctor-schema-migrations.js"),
     import("../state/openclaw-state-db.js"),
@@ -313,7 +318,7 @@ export async function preparePostgresClientCredentials(
     }
   }
   const source = withEngineStoreAdmission(() => state.openOpenClawStateDatabase({ env }));
-  const prepared = await credentials.prepareClientCredentialRecoveryCustody({
+  const prepared = await prepareClientCredentialRecoveryCustody({
     env,
     path: source.path,
     rebindMissing,
@@ -321,7 +326,7 @@ export async function preparePostgresClientCredentials(
   try {
     const recover = () =>
       withEngineStoreAdmission(() =>
-        credentials.recoverClientCredentialStore(source.db, {
+        recoverClientCredentialStore(source.db, {
           env,
           path: source.path,
           rebindMissing,

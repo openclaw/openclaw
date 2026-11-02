@@ -55,7 +55,10 @@ const MIGRATION_KIND = "legacy-exec-approvals-json";
 const TARGET_TABLE = "exec_approvals_config";
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
-type LegacySourceSnapshot = Omit<LegacyMigrationSourceSnapshot, "raw"> & { raw: string | null };
+type LegacySourceSnapshot = Omit<LegacyMigrationSourceSnapshot, "raw"> & {
+  raw: string | null;
+  legacy: ReturnType<typeof parseLegacyExecApprovals>;
+};
 
 // Only the observed policy-free stub may omit its version. Unknown fields or
 // nonempty policy are not proof that a legacy file is safe to retire.
@@ -166,7 +169,11 @@ function decodeLegacySourceSnapshot(snapshot: LegacyMigrationSourceSnapshot): Le
   } catch {
     // Invalid UTF-8 is malformed input that must stay available for recovery.
   }
-  return { ...snapshot, raw };
+  const legacy =
+    raw === null
+      ? err<never, string>("invalid UTF-8 encoding")
+      : parseLegacyExecApprovals(normalizeLegacyNullableUsageMetadata(raw));
+  return { ...snapshot, raw, legacy };
 }
 
 function emptyLegacyFile(snapshot: LegacySourceSnapshot): ExecApprovalsFile | undefined {
@@ -186,9 +193,7 @@ function decideLegacyExecApprovals(
 ) {
   const legacy = params.emptyStub
     ? ok<ExecApprovalsFile, string>(params.emptyStub)
-    : params.snapshot.raw === null
-      ? err<never, string>("invalid UTF-8 encoding")
-      : parseLegacyExecApprovals(normalizeLegacyNullableUsageMetadata(params.snapshot.raw));
+    : params.snapshot.legacy;
   const legacyFile = legacy.ok ? legacy.value : null;
   const canonicalPolicy = params.canonical
     ? parseLegacyExecApprovals(params.canonical.raw_json)
@@ -320,10 +325,12 @@ async function decideAndRecordMigration(params: {
   emptyStub?: ArchivedEmptyLegacy;
 }): Promise<{ message: string; removeSource: boolean; sourceKey: string }> {
   const source = await openOpenClawStateDatabaseForDoctor({ env: params.env });
-  using credentials = await openClientCredentialCustodyAsync(params.env, { createIfMissing: true });
-  if (!credentials) {
-    throw new Error("Local client credential custody is unavailable.");
-  }
+  const capturedLegacyFile =
+    params.emptyStub?.file ?? (params.snapshot.legacy.ok ? params.snapshot.legacy.value : null);
+  using credentials =
+    capturedLegacyFile?.socket?.path || capturedLegacyFile?.socket?.token
+      ? await openClientCredentialCustodyAsync(params.env, { createIfMissing: true })
+      : undefined;
   const sourceKey = resolveLegacyMigrationSourceKey("exec-approvals-json", params.sourcePath);
   const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
   const now = Date.now();
@@ -343,6 +350,9 @@ async function decideAndRecordMigration(params: {
         ) {
           // First-writer-wins preserves a socket issued during an interrupted import.
           if (legacyFile.socket?.path || legacyFile.socket?.token) {
+            if (!credentials) {
+              throw new Error("Local client credential custody is unavailable.");
+            }
             credentials.run({
               kind: "socket.ensure",
               fallback: {
@@ -402,13 +412,16 @@ async function decideAndRecordMigration(params: {
       { env: params.env },
       { operationLabel: "state-migration.exec-approvals" },
     );
-  return await (isPostgresSqlConnection(source.db)
-    ? runUpdateSqliteMigrationAsync(credentials.database, credentials.path, write, {
-        retainExclusive: true,
-      })
-    : runUpdateSqliteMigrationAsync(source.db, source.path, write, {
-        companions: [credentials],
-      }));
+  if (isPostgresSqlConnection(source.db)) {
+    return credentials
+      ? await runUpdateSqliteMigrationAsync(credentials.database, credentials.path, write, {
+          retainExclusive: true,
+        })
+      : write();
+  }
+  return await runUpdateSqliteMigrationAsync(source.db, source.path, write, {
+    companions: credentials ? [credentials] : [],
+  });
 }
 
 const decisionMessages: Record<MigrationDecision, string> = {
