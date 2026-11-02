@@ -1,7 +1,7 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { TerminalStates, type CallRecord, type EndReason } from "../types.js";
 import type { CallManagerContext } from "./context.js";
-import { copyCallRecord, transitionState } from "./state.js";
+import { type CallPlaybackOutcome, copyCallRecord, markCallEnded } from "./state.js";
 import { persistCallRecord } from "./store.js";
 import { clearMaxDurationTimer, rejectTranscriptWaiter } from "./timers.js";
 
@@ -24,6 +24,7 @@ export async function finalizeCall(params: {
   preparedCall?: CallRecord;
   endReason: EndReason;
   endedAt?: number;
+  playbackOutcome?: CallPlaybackOutcome;
   transcriptRejectReason?: string;
 }): Promise<void> {
   const { ctx, call, endReason } = params;
@@ -32,9 +33,10 @@ export async function finalizeCall(params: {
   }
   if (!TerminalStates.has(call.state)) {
     const next = copyCallRecord(params.preparedCall ?? call);
-    next.endedAt = params.endedAt ?? Date.now();
-    next.endReason = endReason;
-    transitionState(next, endReason);
+    markCallEnded(next, endReason, {
+      endedAt: params.endedAt,
+      playbackOutcome: params.playbackOutcome,
+    });
     await persistCallRecord(ctx.storePath, next, ctx.stateRuntime);
     Object.assign(call, next);
     log.info(

@@ -158,6 +158,13 @@ export async function initiateCall(
     },
   };
 
+  if (mode === "notify" && initialMessage && ctx.provider.name === "twilio" && !pendingNotifyAmd) {
+    // Twilio owns inline Say/Hangup playback. Consume the message before dialing
+    // so an answered callback racing the create-call response cannot replay it.
+    callRecord.metadata = { ...callRecord.metadata, pendingInlineNotifyMessage: initialMessage };
+    delete callRecord.metadata.initialMessage;
+  }
+
   ctx.pendingCallAdmissions.add(callId);
   try {
     await ctx.mutationQueue.enqueue("state", async () => {
@@ -601,13 +608,9 @@ export function endCall(
         console.warn(`[voice-call] Failed to drain call ${callId}: ${formatErrorMessage(error)}`);
       }
 
-      await ctx.mutationQueue.enqueue("state", () => {
-        const preparedCall = copyCallRecord(call);
-        if (reason === "voicemail" && preparedCall.metadata?.voicemailStatus === "playing") {
-          preparedCall.metadata = { ...preparedCall.metadata, voicemailStatus: "left" };
-        }
-        return finalizeCall({ ctx, call, preparedCall, endReason: reason });
-      });
+      await ctx.mutationQueue.enqueue("state", () =>
+        finalizeCall({ ctx, call, endReason: reason }),
+      );
 
       return { success: true };
     } catch (err) {

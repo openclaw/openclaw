@@ -17,7 +17,7 @@ import { findCall } from "./lookup.js";
 import { updateCall } from "./mutations.js";
 import { endCall } from "./outbound.js";
 import { appendCallReplayKey, rememberManagerReplayKey } from "./replay-keys.js";
-import { addTranscriptEntry, copyCallRecord, transitionState } from "./state.js";
+import { addTranscriptEntry, copyCallRecord, markCallEnded, transitionState } from "./state.js";
 import { findCallInStore, persistCallRecord } from "./store.js";
 import { resolveTranscriptWaiter, startMaxDurationTimer } from "./timers.js";
 
@@ -252,25 +252,21 @@ async function processEventInQueue(
       }
       const callId = event.callId ?? pid;
       const now = Date.now();
-      await persistCallRecord(
-        ctx.storePath,
-        {
-          callId: event.callId || pid,
-          providerCallId: pid,
-          provider: ctx.provider.name,
-          direction: "inbound",
-          state: "hangup-bot",
-          from: event.from || "unknown",
-          to: event.to || ctx.config.fromNumber || "unknown",
-          startedAt: event.timestamp || now,
-          endedAt: now,
-          endReason: "hangup-bot",
-          transcript: [],
-          processedEventIds: [dedupeKey],
-          metadata: { rejectionReason: "inbound-policy" },
-        },
-        ctx.stateRuntime,
-      );
+      const rejectedCall: CallRecord = {
+        callId: event.callId || pid,
+        providerCallId: pid,
+        provider: ctx.provider.name,
+        direction: "inbound",
+        state: "hangup-bot",
+        from: event.from || "unknown",
+        to: event.to || ctx.config.fromNumber || "unknown",
+        startedAt: event.timestamp || now,
+        transcript: [],
+        processedEventIds: [dedupeKey],
+        metadata: { rejectionReason: "inbound-policy" },
+      };
+      markCallEnded(rejectedCall, "hangup-bot", { endedAt: now });
+      await persistCallRecord(ctx.storePath, rejectedCall, ctx.stateRuntime);
       if (ctx.isStopping()) {
         return { kind: "processed" };
       }
@@ -429,12 +425,6 @@ async function processEventInQueue(
       effects.push(() => ctx.trackCallWork(endDetectedCall(ctx, detectedCall.callId, "failed")));
     }
   }
-  const carrierStatusKey =
-    activeCall.metadata?.voicemailStatus === "playing"
-      ? "voicemailStatus"
-      : activeCall.metadata?.notifyStatus === "playing"
-        ? "notifyStatus"
-        : undefined;
 
   switch (event.type) {
     case "call.initiated": {
@@ -483,6 +473,12 @@ async function processEventInQueue(
     case "call.answered":
       activeCall.answeredAt = event.timestamp;
       transitionState(activeCall, "answered");
+      if (typeof activeCall.metadata?.pendingInlineNotifyMessage === "string") {
+        // Inline TwiML owns playback, but speech is recorded only after carrier answer.
+        addTranscriptEntry(activeCall, "bot", activeCall.metadata.pendingInlineNotifyMessage);
+        activeCall.metadata.notifyStatus = "playing";
+        delete activeCall.metadata.pendingInlineNotifyMessage;
+      }
       effects.push(startDurationTimer, () => ctx.onCallAnswered?.(call));
       break;
 
@@ -549,15 +545,6 @@ async function processEventInQueue(
         result = { kind: "processed", replayable: true };
         break;
       }
-      if (carrierStatusKey) {
-        const errorKey = carrierStatusKey === "voicemailStatus" ? "voicemailError" : "notifyError";
-        activeCall.metadata = {
-          ...activeCall.metadata,
-          [carrierStatusKey]:
-            event.type === "call.ended" && event.reason === "completed" ? "left" : "failed",
-          ...(event.type === "call.error" ? { [errorKey]: event.error } : {}),
-        };
-      }
       await finalizeCall({
         ctx,
         call,
@@ -565,10 +552,15 @@ async function processEventInQueue(
         endReason:
           event.type === "call.error"
             ? "error"
-            : event.reason === "completed" && carrierStatusKey === "voicemailStatus"
+            : event.reason === "completed" && activeCall.metadata?.voicemailStatus === "playing"
               ? "voicemail"
               : event.reason,
         endedAt: event.timestamp,
+        playbackOutcome: {
+          kind: "provider",
+          status: event.type === "call.error" ? "error" : event.reason,
+          ...(event.type === "call.error" ? { error: event.error } : {}),
+        },
         transcriptRejectReason:
           event.type === "call.error" ? `Call error: ${event.error}` : undefined,
       });

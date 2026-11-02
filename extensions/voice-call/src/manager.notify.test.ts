@@ -124,6 +124,139 @@ async function expectNotifyHangup(manager: HarnessManager, provider: FakeProvide
 }
 
 describe("CallManager notify and mapping", () => {
+  it.each([false, true])(
+    "lets Twilio finish inline notify playback (answer before dial response: %s)",
+    async (answerBeforeDialResponse) => {
+      useNotifyClock();
+      const { manager, provider } = await createManagerHarness({}, new FakeProvider("twilio"));
+      vi.spyOn(provider, "initiateCall").mockImplementationOnce(async ({ callId }) => {
+        expect(requireCall(manager, callId).transcript).toEqual([]);
+        expect(requireCall(manager, callId).metadata).not.toHaveProperty("notifyStatus");
+        if (answerBeforeDialResponse) {
+          await answerCall(manager, callId, "answered", "request-uuid");
+        }
+        return { providerCallId: "request-uuid", status: "initiated" };
+      });
+      const message = "This synthetic notification takes longer than three seconds to play.";
+      const callId = await initiateCallWithMessage(manager, message, "notify");
+      if (!answerBeforeDialResponse) {
+        await answerCall(manager, callId, "answered", "request-uuid");
+      }
+      expect(provider.playTtsCalls).toEqual([]);
+      expect(requireCall(manager, callId).metadata).toMatchObject({ notifyStatus: "playing" });
+      expect(requireCall(manager, callId).metadata).not.toHaveProperty("initialMessage");
+      expect(requireCall(manager, callId).metadata).not.toHaveProperty(
+        "pendingInlineNotifyMessage",
+      );
+      expect(requireCall(manager, callId).transcript).toEqual([
+        expect.objectContaining({ speaker: "bot", text: message }),
+      ]);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(provider.hangupCalls).toEqual([]);
+      expect(await manager.getCallForStream(callId)).toBeDefined();
+      await answerCall(manager, callId, "answered-again", "request-uuid");
+      await manager.processEvent({
+        id: "completed",
+        type: "call.ended",
+        callId,
+        timestamp: Date.now(),
+        reason: "completed",
+      });
+      expect(await manager.getCallFromMemoryOrStore(callId)).toMatchObject({
+        metadata: { notifyStatus: "left" },
+        transcript: [expect.objectContaining({ text: message })],
+      });
+    },
+  );
+
+  it.each(["hangup-bot", "timeout"] as const)(
+    "settles inline notify status when ended locally: %s",
+    async (reason) => {
+      useNotifyClock();
+      const { manager, provider, callId } = await answered(
+        { maxDurationSeconds: 1 },
+        new FakeProvider("twilio"),
+        "Synthetic notification",
+        "notify",
+      );
+      expect(requireCall(manager, callId).metadata).toMatchObject({ notifyStatus: "playing" });
+      if (reason === "timeout") {
+        await vi.advanceTimersByTimeAsync(1_000);
+      } else {
+        expect(await manager.endCall(callId)).toEqual({ success: true });
+      }
+      expect(await manager.getCallForStream(callId)).toBeUndefined();
+      expect(provider.hangupCalls).toEqual([{ callId, providerCallId: "call-uuid", reason }]);
+      const terminalCall = await manager.getCallFromMemoryOrStore(callId);
+      expect(terminalCall).toMatchObject({
+        state: reason,
+        endReason: reason,
+        metadata: {
+          notifyStatus: "failed",
+          notifyError: `Call ended before notification completed: ${reason}`,
+        },
+      });
+      await manager.processEvent({
+        id: "late-completed",
+        type: "call.ended",
+        callId,
+        timestamp: Date.now(),
+        reason: "completed",
+      });
+      expect(await manager.getCallFromMemoryOrStore(callId)).toEqual(terminalCall);
+      expect(provider.playTtsCalls).toEqual([]);
+    },
+  );
+
+  it("does not record inline notify speech when Twilio rejects creation", async () => {
+    const { manager, provider } = await createManagerHarness({}, new FakeProvider("twilio"));
+    vi.spyOn(provider, "initiateCall").mockRejectedValueOnce(new Error("synthetic rejection"));
+    const { callId, success } = await manager.initiateCall("+15550000001", undefined, {
+      message: "Synthetic notification",
+      mode: "notify",
+    });
+    expect(success).toBe(false);
+    const call = await manager.getCallFromMemoryOrStore(callId);
+    expect(call).toMatchObject({ state: "failed", endReason: "failed", transcript: [] });
+    expect(call?.metadata).not.toHaveProperty("notifyStatus");
+    expect(provider.playTtsCalls).toEqual([]);
+  });
+
+  it.each(["busy", "no-answer", "failed"] as const)(
+    "does not record inline notify speech when Twilio ends unanswered: %s",
+    async (reason) => {
+      const { manager, provider } = await createManagerHarness({}, new FakeProvider("twilio"));
+      const callId = await initiateCallWithMessage(manager, "Synthetic notification", "notify");
+      await manager.processEvent({
+        id: "ended",
+        type: "call.ended",
+        callId,
+        timestamp: Date.now(),
+        reason,
+      });
+      const call = await manager.getCallFromMemoryOrStore(callId);
+      expect(call).toMatchObject({ state: reason, endReason: reason, transcript: [] });
+      expect(call?.metadata).not.toHaveProperty("notifyStatus");
+      expect(provider.playTtsCalls).toEqual([]);
+    },
+  );
+
+  it.each(["plivo", "telnyx"] as const)(
+    "speaks notify messages on answer when %s ignores inline TwiML",
+    async (name) => {
+      useNotifyClock();
+      const { manager, provider, callId } = await answered(
+        {},
+        new FakeProvider(name),
+        "Synthetic notification",
+        "notify",
+      );
+      expectFirstPlayTtsText(provider, "Synthetic notification");
+      expect(requireCall(manager, callId).metadata).not.toHaveProperty("notifyStatus");
+      await expectNotifyHangup(manager, provider, callId);
+    },
+  );
+
   it("logs a failed notify auto-hangup and leaves the call active for retry", async () => {
     useNotifyClock();
     const warn = captureWarning();
