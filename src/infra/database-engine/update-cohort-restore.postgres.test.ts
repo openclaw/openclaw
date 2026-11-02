@@ -14,6 +14,7 @@ import {
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../../state/config-machine-state.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -37,16 +38,31 @@ const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.
 const connection = typeof configured === "string" ? configured : undefined;
 
 describe.skipIf(!connection)("PostgreSQL plugin cohort backup restoration", () => {
-  const client = new Client({ connectionString: connection });
-  const namespaces = new Set<string>();
-  beforeAll(() => client.connect());
+  // Catalog equality must detect empty leaked schemas without observing other suites.
+  const database = `cohort_restore_${randomUUID().replaceAll("-", "")}`;
+  const fixtureConnection = new URL(connection ?? "postgresql://localhost/postgres");
+  fixtureConnection.pathname = `/${database}`;
+  const admin = new Client({ connectionString: connection });
+  const client = new Client({ connectionString: fixtureConnection.href });
+  let databaseCreated = false;
+  beforeAll(async () => {
+    await admin.connect();
+    await admin.query(`CREATE DATABASE "${database}"`);
+    databaseCreated = true;
+    await client.connect();
+    await client.query(
+      "CREATE EXTENSION unaccent; CREATE EXTENSION pg_trgm; CREATE EXTENSION vector",
+    );
+  });
   afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
     try {
-      for (const namespace of namespaces) {
-        await client.query(`DROP SCHEMA IF EXISTS "${namespace}" CASCADE`);
+      await client.end();
+      if (databaseCreated) {
+        await admin.query(`DROP DATABASE "${database}"`);
       }
     } finally {
-      await client.end();
+      await admin.end();
     }
   });
 
@@ -56,11 +72,14 @@ describe.skipIf(!connection)("PostgreSQL plugin cohort backup restoration", () =
     }
     const config = {
       plugins: { enabled: false },
-      database: { engine: "postgres" as const, postgres: { connection } },
+      database: {
+        engine: "postgres" as const,
+        postgres: { connection: fixtureConnection.href },
+      },
     };
     const selection = {
       effectiveEngines: resolveDatabaseFamilyEngines(config),
-      postgres: { connection, schemaPrefix: "cohort_restore" },
+      postgres: { connection: fixtureConnection.href, schemaPrefix: "cohort_restore" },
     };
     await withOpenClawTestState({ label: "cohort-postgres-restore" }, async (state) => {
       await state.writeConfig(config);
@@ -74,7 +93,6 @@ describe.skipIf(!connection)("PostgreSQL plugin cohort backup restoration", () =
         if (!facts) {
           throw new Error("Fixture did not open the canonical PostgreSQL state owner");
         }
-        namespaces.add(facts.namespace);
         try {
           const { runId } = admitted(() => createUpdateRun({ trigger: "cli" }, { env: state.env }));
           await seedInstalledPluginIndex(
@@ -219,7 +237,6 @@ describe.skipIf(!connection)("PostgreSQL plugin cohort backup restoration", () =
           };
           for (const name of ["first-restore", "repeated-restore"]) {
             const restored = await restore(name);
-            namespaces.add(restored.result.namespace);
             opened.add(restored.anchorPath);
             expect(readBackupEngineImage(restored.anchorPath, restored.anchorPath)).toEqual({
               engine: "postgres",
@@ -264,17 +281,6 @@ describe.skipIf(!connection)("PostgreSQL plugin cohort backup restoration", () =
               "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
             )
           ).rows;
-          for (const { nspname } of afterRefusal) {
-            if (beforeRefusal.some((entry) => entry.nspname === nspname)) {
-              continue;
-            }
-            const metadata = await client.query<{ store_id: string }>(
-              `SELECT store_id FROM "${nspname}".openclaw_schema_meta`,
-            );
-            if (metadata.rows.some((row) => row.store_id === facts.storeId)) {
-              namespaces.add(nspname);
-            }
-          }
           expect(afterRefusal).toEqual(beforeRefusal);
           expect(
             admitted(() => readConfigMachineState("cohort.fixture", { env: state.env })),
