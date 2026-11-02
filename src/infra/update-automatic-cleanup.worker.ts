@@ -54,7 +54,14 @@ serveWorkerTasks<UpdateStepResult | RecoveryCleanupReport | undefined, Automatic
         return input.dryRun
           ? preview
           : retireOwnedSessionSqliteRecovery(
-              { env: input.env, preview, readConfig, confirm: async () => true },
+              {
+                env: input.env,
+                preview,
+                readConfig,
+                confirm: async () => true,
+                // Manual retirement shares the serving owner's ordinary destination writes.
+                allowOwnedDestinationMutation: true,
+              },
               { assertCurrent },
             );
       });

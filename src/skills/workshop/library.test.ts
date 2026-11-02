@@ -12,6 +12,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { workshopPluginConfig } from "./config.test-support.js";
 import * as lib from "./library.js";
 import { registerSkillUsageTracking } from "./skill-usage.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
@@ -361,10 +362,7 @@ describe("archiveUnusedWorkshopSkills", () => {
         stopTracking = undefined;
       }
       if (guard === "learning") {
-        setRuntimeConfigSnapshot({
-          ...config,
-          skills: { workshop: { autonomous: { mode: "off" } } },
-        });
+        setRuntimeConfigSnapshot(workshopPluginConfig({ autonomous: { mode: "off" } }, config));
       }
       expect(await archiveUnused(cfg)).toEqual([]);
       expect(await liveNames()).toEqual(["stale"]);
