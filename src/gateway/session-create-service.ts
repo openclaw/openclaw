@@ -47,10 +47,7 @@ import {
   isAgentHarnessSessionKeyOwnedBy,
 } from "../sessions/agent-harness-session-key.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
-import {
-  isSessionControllerWorkActive,
-  runSessionMutation,
-} from "../sessions/session-controller.lifecycle.js";
+import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { recordSessionCreated } from "../sessions/session-created.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
@@ -63,6 +60,7 @@ import {
   createSessionAccessProgramValidation,
   refreshSessionPatchQueuedSelection,
 } from "./server-methods/sessions-patch-model-selection.js";
+import { resolveActiveParentSessionCreate } from "./session-create-active-parent.js";
 import { completeGatewaySessionCreation } from "./session-create-completion.js";
 import {
   buildSessionCreateSettingsPatch,
@@ -418,6 +416,7 @@ async function createGatewaySessionInScope(
     }
     onPhase?.("entry");
     let currentParentSessionEntry = parentSessionEntry;
+    let emitParentResetHooks = params.emitCommandHooks === true;
     if (canonicalParentSessionKey && parentSessionTarget && holdParentLifecycle) {
       const currentParent = await loadGatewaySessionEntryReadOnlyInWorker({
         cfg: params.cfg,
@@ -451,25 +450,21 @@ async function createGatewaySessionInScope(
       ) {
         return invalidSessionRequest(MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
       }
-      const parentHasActiveWork =
-        (params.emitCommandHooks === true || params.fork === true) &&
-        isSessionControllerWorkActive(
-          parentSessionTarget.storePath,
-          [canonicalParentSessionKey, currentParentEntry.sessionId],
-          parentSessionTarget.agentId,
-        );
-      if (
-        parentHasActiveWork &&
-        (params.emitCommandHooks === true ||
-          (params.forkFrom !== "last-completed" && !params.activeParentFork))
-      ) {
+      const activeParent = resolveActiveParentSessionCreate(params, {
+        storePath: parentSessionTarget.storePath,
+        sessionKey: canonicalParentSessionKey,
+        sessionId: currentParentEntry.sessionId,
+        agentId: parentSessionTarget.agentId,
+      });
+      emitParentResetHooks = activeParent.emitParentResetHooks;
+      if (activeParent.blocked) {
         return unavailableSessionRequest(
           `Parent session ${parentSessionKey} is still active; try again in a moment.`,
         );
       }
     }
 
-    if (canonicalParentSessionKey && parentSessionTarget && params.emitCommandHooks === true) {
+    if (canonicalParentSessionKey && parentSessionTarget && emitParentResetHooks) {
       const parentEntry = currentParentSessionEntry;
       const parentAgentId = normalizeAgentId(
         parentSelectedAgentId ?? resolveAgentIdFromSessionKey(canonicalParentSessionKey) ?? agentId,
