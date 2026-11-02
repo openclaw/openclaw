@@ -21,7 +21,7 @@ The [File Transfer plugin](/plugins/reference/file-transfer) provides independen
 selectable directory-listing, fetch, and write tools. Allowing one tool does not
 make the others available; node-command and path policies still apply.
 
-Tool paths preserve literal filename whitespace. On POSIX nodes, `x ` and `x`
+Tool paths preserve literal filename whitespace. On POSIX nodes, `"x "` and `"x"`
 are different targets; include the trailing space when selecting the former.
 The same node-command, path-policy, and approval checks apply to the exact path.
 
