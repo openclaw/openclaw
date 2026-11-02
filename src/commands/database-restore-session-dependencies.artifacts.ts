@@ -24,6 +24,9 @@ import type { readSessionDependencyInput } from "./database-restore-session-depe
 type Input = Awaited<ReturnType<typeof readSessionDependencyInput>>;
 async function checkCheckpoint(root: string, input: Input) {
   const row = input.rows.workspace;
+  if (row.checkpoint_ref === null) {
+    return;
+  }
   const snapshot = await readStagedWorkerWorkspaceResult(root, row.checkpoint_ref);
   if (
     snapshot.base.baseCommit !== row.base_commit ||
@@ -90,6 +93,9 @@ export async function publishSessionDependencyArtifacts(
     await staged.publish();
   } finally {
     await staged.cleanup();
+  }
+  if (input.rows.workspace.checkpoint_ref === null) {
+    return;
   }
   const store = createSessionRepositoryWorkspaceStore({ path: statePath, env });
   const destination = store.artifactPath(input.request.workspaceId);
