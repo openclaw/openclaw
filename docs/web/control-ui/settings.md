@@ -29,6 +29,10 @@ change the selected provider, machine, or project.
 
 Model menus with more than eight choices include search. Filter by model name or provider/model reference, then choose a result to apply it. Typing or dismissing the menu leaves the current selection unchanged. Short menus stay compact, and custom model entry remains available where the setting supports it.
 
+Custom model text stays in the field while background data refreshes, without
+saving before the field's normal commit event. A newly committed model value
+still replaces the displayed value.
+
 When the Gateway rejects an invalid setting, **Settings not applied** keeps your draft and offers **Show reason**, **Retry**, and **Discard draft and reload**. Discard removes all unsaved configuration edits and reloads the saved settings. Edits entered while Discard waits for an earlier save remain pending; newer Form edits resume autosaving, and newer Raw edits remain available to save. Clearing a text field is an edit, not a discard: settings that accept an empty string keep that explicit value.
 
 Typing in Form fields copies the edited path instead of cloning and formatting the full configuration on every keystroke. Full JSON formatting happens when saving or opening **Advanced → Raw**. The Raw editor still shows the current draft, including newer edits made while an earlier save is in flight.
