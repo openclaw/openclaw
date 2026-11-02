@@ -40,6 +40,7 @@ import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
 import { prepareSubagentSessionListReadCache } from "../subagents/registry/subagent-registry-state.js";
 import { registerSubagentRun } from "../subagents/registry/subagent-registry.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "../subagents/spawn/subagent-depth.js";
+import { resolveSpawnBillingRoute } from "../subagents/spawn/subagent-spawn-billing-route.js";
 import { terminateAcceptedCollectorRun } from "../subagents/spawn/subagent-spawn-cleanup.js";
 import {
   callNativeSubagentGateway,
@@ -370,6 +371,18 @@ export async function maybeSpawnVisibleSession(params: {
   const resolvedModelRef = authProfileOverride
     ? `${resolvedModel}@${authProfileOverride}`
     : resolvedModel;
+  // A cloud-placed child runs on its worker's credentials, which this Gateway cannot see.
+  const billingRoute = placement
+    ? undefined
+    : await resolveSpawnBillingRoute({
+        cfg,
+        agentId: targetAgentId,
+        workspaceDir: spawnedWorkspaceDir,
+        provider: modelPlan.modelRef.provider,
+        model: modelPlan.modelRef.model,
+        authProfileId: authProfileOverride,
+      });
+  assertActive();
   const spawnModelAutoSelection =
     initialSessionPatch.modelOverrideSource === "auto"
       ? {
@@ -693,6 +706,7 @@ export async function maybeSpawnVisibleSession(params: {
       ...(response.placement ? { placement: response.placement } : {}),
       ...(sessionUrl ? { sessionUrl } : {}),
       publicRead: response.publicRead === true,
+      ...billingRoute,
       ...(cyberAccessProgram !== undefined ? { cyberAccessProgram } : {}),
       ...(params.label ? { label: params.label } : {}),
       owner: resolveVisibleSessionOwner(response.entry, requesterAgentId, ownerLabel, cfg),

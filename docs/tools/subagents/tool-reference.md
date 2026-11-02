@@ -98,7 +98,17 @@ model response, such as completed tool output, and respects compaction and reset
 boundaries. An oversized fork starts isolated with an explanatory note. Spawns
 also include resolved child model metadata:
 `resolvedModel` contains the applied model ref and `resolvedProvider` contains
-the provider prefix when the ref has one.
+the provider prefix when the ref has one. Native subagent and visible-session
+spawns also report `resolvedRuntime`, the runtime the child resolves to (for
+example `openclaw` or `claude-cli`), and `resolvedAuth`, the credential kind:
+`api-key`, `oauth`, `token`, `native` for the runtime's own login, `unavailable`
+when the selected route has no credential, or `unknown`. `resolvedAuthProfile`
+names the auth profile that supplies the credential (`personal account` for
+personal account profiles). Together they show whether the child bills through
+an API key or a subscription login. They describe the primary model at spawn
+time; the run re-resolves credentials when it starts and may use a configured
+fallback. Cloud-placed visible sessions omit them because the worker's
+credentials are not visible to the Gateway.
 
 ### Cloud placement
 

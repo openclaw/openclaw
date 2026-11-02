@@ -3,6 +3,7 @@ import type { SessionSourceAssertion } from "../../../config/sessions/session-so
 import type { FastMode } from "../../../shared/fast-mode.js";
 import type { SpawnRequesterConversationSource } from "../../spawn-requester-origin.js";
 import type { SpawnedToolContext } from "../../spawned-context.js";
+import type { SpawnResolvedAuth } from "./subagent-spawn-billing-route.js";
 import type {
   SpawnSubagentContextMode,
   SpawnSubagentMode,
@@ -93,6 +94,10 @@ export type SpawnSubagentResult = {
   resolvedModel?: string;
   /** Provider prefix parsed from resolvedModel when the ref includes one. */
   resolvedProvider?: string;
+  /** Runtime and credential the child resolves to; together they name its billing route. */
+  resolvedRuntime?: string;
+  resolvedAuth?: SpawnResolvedAuth;
+  resolvedAuthProfile?: string;
   modelApplied?: boolean;
   /** Session Access applied to the child; omitted when the child uses its model default. */
   cyberAccessProgram?: CyberAccessProgram;
