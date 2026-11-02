@@ -227,6 +227,16 @@ openclaw-modal-dialog {
   padding: 0 var(--overlay-modal-padding) var(--overlay-modal-padding);
 }
 
+/* Step actions rendered inside the body stay reachable while a long step scrolls. */
+.oc-dialog__body openclaw-modal-actions {
+  position: sticky;
+  z-index: 1;
+  inset-block-end: 0;
+  margin-block-end: calc(-1 * var(--overlay-modal-padding));
+  padding-block: var(--space-3) var(--overlay-modal-padding);
+  background: var(--overlay-modal-surface);
+}
+
 openclaw-modal-dialog.fullscreen {
   --openclaw-modal-height-limit: calc(100dvh - 20px);
 }
