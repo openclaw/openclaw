@@ -28,6 +28,7 @@ import {
 import type { PendingFinalDeliverySettlementInput } from "../../config/sessions/session-pending-final-settlement.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   isSameOpenClawAgentDatabasePath,
@@ -52,6 +53,8 @@ import {
   type DeliveryPlacementEvidence,
 } from "./delivery-placement-evidence.js";
 import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
+
+const log = createSubsystemLogger("outbound/delivery-completion");
 
 /** In-process locator captured before delivery preparation; never queue payload data. */
 export type ConversationDeliveryTarget = Pick<
@@ -310,6 +313,27 @@ function readPlatformMessageId(result: OutboundDeliveryResult): string | undefin
   return receiptId ?? (result.messageId.trim() || undefined);
 }
 
+/**
+ * A plugin notice has no owner record to update; its owner is the posting plugin, which must
+ * still be loaded and enabled in this process. Restart recovery refuses the replay otherwise.
+ */
+async function pluginNoticeOwnerState(
+  completion: Extract<DurableDeliveryCompletion, { kind: "plugin-notice" }>,
+): Promise<DurableDeliveryCompletionResult> {
+  const [{ getActivePluginRegistry }, { isPluginRecordActive }] = await Promise.all([
+    import("../../plugins/runtime.js"),
+    import("../../plugins/registry-lifecycle.js"),
+  ]);
+  const registry = getActivePluginRegistry();
+  const record = registry?.plugins.find((plugin) => plugin.id === completion.pluginId);
+  if (registry && record && isPluginRecordActive(registry, record)) {
+    return { state: "queued" };
+  }
+  const rejectionError = `plugin "${completion.pluginId}" that posted this notice is no longer active`;
+  log.warn(`Refusing a queued plugin notice: ${rejectionError}`);
+  return { state: "rejected", rejectionError };
+}
+
 /** Records queue ownership before either the live sender or recovery crosses platform I/O. */
 export async function markDurableDeliveryQueued(
   completion: DurableDeliveryCompletion,
@@ -319,6 +343,9 @@ export async function markDurableDeliveryQueued(
   stateContext?: DeliveryQueueStateContext,
   target?: ConversationDeliveryTarget,
 ): Promise<DurableDeliveryCompletionResult> {
+  if (completion.kind === "plugin-notice") {
+    return await pluginNoticeOwnerState(completion);
+  }
   return completion.kind === "pending-final"
     ? // The reply dispatcher may have claimed direct custody ("queued") before the
       // durable enqueue; both states still belong to this send attempt.
@@ -370,6 +397,10 @@ export async function settleDurableDelivery(
       : "platformSendStarted" in evidence && evidence.platformSendStarted
         ? "unknown"
         : "suppressed";
+  if (completion.kind === "plugin-notice") {
+    // The posting plugin keeps no delivery record; the queue row is the only state.
+    return { state };
+  }
   return completion.kind === "pending-final"
     ? await settlePendingFinalDelivery(completion, state, undefined, {
         stateDir,

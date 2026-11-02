@@ -45,6 +45,6 @@ export async function postPluginSessionNotice(params: PostSessionNoticeParams) {
     ...(deliver !== undefined ? { deliver } : {}),
     config: readRuntimeConfig(),
     pluginId: scope.pluginId,
-    ...(assertCurrent ? { assertCurrent } : {}),
+    pluginOwner: assertCurrent ? { assertCurrent } : {},
   });
 }

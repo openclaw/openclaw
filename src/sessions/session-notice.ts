@@ -102,8 +102,12 @@ export async function postSessionNotice(
   params: PostSessionNoticeParams & {
     config: OpenClawConfig;
     pluginId: string;
-    /** Host-owned live check of the posting owner; it runs before each effect and its failure is thrown. */
-    assertCurrent?: () => void;
+    /**
+     * Present when a loaded plugin posts through its runtime. `assertCurrent` is the host-owned
+     * live check of that plugin; it runs before each effect and its failure is thrown. A queued
+     * channel send also names the plugin so restart recovery replays it only while it is loaded.
+     */
+    pluginOwner?: { assertCurrent?: () => void };
   },
 ): Promise<PostSessionNoticeResult> {
   const { config, generation, notice, idempotencyKey } = params;
@@ -111,7 +115,7 @@ export async function postSessionNotice(
   let revoked: { error: unknown } | undefined;
   const assertCurrent = () => {
     try {
-      params.assertCurrent?.();
+      params.pluginOwner?.assertCurrent?.();
     } catch (error) {
       revoked ??= { error };
       throw error;
@@ -176,6 +180,9 @@ export async function postSessionNotice(
           deliveryIntentId: `${SESSION_NOTICE_COMPLETION_RETENTION.idPrefix}${params.pluginId}:${idempotencyKey}`,
           reusePendingDeliveryIntent: true,
           completionRetention: SESSION_NOTICE_COMPLETION_RETENTION,
+          ...(params.pluginOwner
+            ? { deliveryCompletion: { kind: "plugin-notice" as const, pluginId: params.pluginId } }
+            : {}),
           bestEffort: true,
           // Rechecked by delivery right before provider I/O.
           assertDirectAdapterHandoff: assertCurrent,

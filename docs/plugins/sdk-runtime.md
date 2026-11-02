@@ -734,6 +734,9 @@ const result = await api.runtime.system.postSessionNotice({
   event, right before the channel send, and before the transcript commit. If the
   plugin was unloaded, the call throws and makes no further change. A channel
   message that was already sent stays sent.
+- A channel send still queued when the Gateway restarts is sent after the restart
+  only if the plugin is still loaded and enabled; otherwise it is dropped with a
+  logged reason.
 
 `cleanupSessionLifecycleArtifacts` from `openclaw/plugin-sdk/session-store-runtime`
 joins the selected database owner's pending startup preparation before capturing
