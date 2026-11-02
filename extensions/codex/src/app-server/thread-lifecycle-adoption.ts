@@ -309,6 +309,7 @@ export async function prepareCodexThreadResume(
   params: CodexStartOrResumeThreadParams,
   binding: CodexAppServerThreadBinding,
   context: Pick<CodexThreadRequestContext, "lifecycleTiming" | "throwIfAborted">,
+  requireTerminalReceipt = false,
 ): Promise<CodexThreadResumePreparation> {
   const assertCurrent = captureCodexThreadResumeAuthority(
     params,
@@ -319,7 +320,13 @@ export async function prepareCodexThreadResume(
   let thread: CodexThread;
   try {
     thread = await readCodexThreadForResume(params, binding.threadId, context, assertCurrent);
-    thread = await settleCodexOrphanTurn(params, binding, thread, assertCurrent);
+    thread = await settleCodexOrphanTurn(
+      params,
+      binding,
+      thread,
+      assertCurrent,
+      requireTerminalReceipt,
+    );
   } finally {
     // A failed read cannot authorize recovery after its physical or host owner closes.
     assertCurrent();

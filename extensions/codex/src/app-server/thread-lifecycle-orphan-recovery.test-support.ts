@@ -8,6 +8,7 @@ import {
   createCodexManagedThreadStore,
   type StoredCodexManagedThread,
 } from "./managed-thread-store.js";
+import { buildCodexAppServerRuntimeFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import { isJsonObject, type RpcRequest } from "./protocol.js";
 import { tempDir, threadStartResult } from "./run-attempt-test-harness.js";
@@ -26,6 +27,16 @@ import {
 export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixtures) {
   it.each([
     "accepted",
+    "completed executor upgrade",
+    "interrupted executor upgrade",
+    "completed executor upgrade with changed credential",
+    "completed executor upgrade with no credential",
+    "completed executor upgrade reversed",
+    "completed executor upgrade with unseen later turn",
+    "completed executor upgrade from system",
+    "active executor upgrade",
+    "completed executor upgrade with handoff",
+    "completed executor upgrade with different endpoint",
     "failed receipt",
     "completed receipt",
     "automatic continuation",
@@ -57,7 +68,10 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
       scenario === "notice unconfirmed" || scenario === "plugin input refresh notice unconfirmed";
     const completedReceipt = scenario.startsWith("completed") || idle;
     const expectsInterrupt =
-      !completedReceipt && !scenario.startsWith("settling") && scenario !== "failed receipt";
+      !completedReceipt &&
+      scenario !== "interrupted executor upgrade" &&
+      !scenario.startsWith("settling") &&
+      scenario !== "failed receipt";
     const sessionFile = path.join(tempDir, "orphan-restart.jsonl");
     const cwd = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
@@ -157,6 +171,27 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
     const appServer = fixtures.createThreadLifecycleAppServerOptions();
     appServer.start = { ...appServer.start, transport: "websocket", url: "ws://127.0.0.1:8123" };
     const params = { ...fixtures.createParams(sessionFile, cwd), agentDir };
+    const upgraded = scenario.includes("executor upgrade");
+    function runtimeFingerprint(version: string) {
+      return buildCodexAppServerRuntimeFingerprint({
+        appServer,
+        runtimeIdentity: {
+          serverVersion: version,
+          userAgent: `OpenClaw/${version} (Linux; x86_64)`,
+          codexHome: "/home/dev-user/.codex",
+          platformFamily: "unix",
+          platformOs: "linux",
+        },
+      });
+    }
+    if (upgraded) {
+      appServer.connectionClass = "remote";
+      if (!scenario.endsWith("no credential")) {
+        appServer.start.authToken = "test-stable-token";
+      }
+      params.trigger = "user";
+      params.inputProvenance = { kind: "external_user" };
+    }
     const pluginPolicy = { apps: {}, pluginAppIds: {} };
     const policyContext = {
       ...pluginPolicy,
@@ -219,6 +254,7 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
         }
       },
       params,
+      appServerRuntimeFingerprint: upgraded ? runtimeFingerprint("0.153.4") : undefined,
       cwd,
       dynamicTools: [],
       appServer,
@@ -231,6 +267,7 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
       await fixtures.writeCodexAppServerBinding(
         sessionFile,
         Object.assign({}, started, {
+          ...(scenario.endsWith("with handoff") ? { dynamicToolHandoff: { retained: true } } : {}),
           clientId: warm ? started.clientId : "client-before-gateway-restart",
           ...(idle || ["legacy", "legacy tool rotation", "missing receipt"].includes(scenario)
             ? {}
@@ -248,6 +285,23 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
           source.thread.id,
           undefined,
           started.liveThreadConfigFingerprint,
+        );
+      }
+      if (upgraded) {
+        if (scenario.endsWith("different endpoint")) {
+          appServer.start = { ...appServer.start, url: "ws://another-claw:8123" };
+        }
+        if (scenario.endsWith("changed credential")) {
+          appServer.start.authToken = "replaced-test-token";
+        }
+        if (scenario.endsWith("from system")) {
+          params.inputProvenance = { kind: "internal_system" };
+        }
+        if (scenario.endsWith("unseen later turn")) {
+          turns.push({ ...turns[0]!, id: "later", status: "completed" });
+        }
+        common.appServerRuntimeFingerprint = runtimeFingerprint(
+          scenario.endsWith("reversed") ? "0.150.0" : "0.163.0",
         );
       }
       active = expectsInterrupt;
@@ -280,6 +334,10 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
       }
       if (completedReceipt) {
         turns[0]!.status = "completed";
+      }
+      if (scenario === "interrupted executor upgrade") {
+        unloaded = true;
+        turns[0]!.status = "interrupted";
       }
       if (scenario === "failed receipt") {
         turns[0]!.status = "failed";
@@ -346,6 +404,14 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
       }
       if (
         [
+          "active executor upgrade",
+          "completed executor upgrade with changed credential",
+          "completed executor upgrade with no credential",
+          "completed executor upgrade reversed",
+          "completed executor upgrade with unseen later turn",
+          "completed executor upgrade from system",
+          "completed executor upgrade with handoff",
+          "completed executor upgrade with different endpoint",
           "foreign turn",
           "missing receipt",
           "unmanaged",
@@ -408,6 +474,11 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
       }
       const resumed = await fixtures.startOrResumeThread(common);
       expect(resumed.threadId).toBe(source.thread.id);
+      if (upgraded) {
+        expect((await readCodexAppServerBinding(sessionFile))?.appServerRuntimeFingerprint).toBe(
+          common.appServerRuntimeFingerprint,
+        );
+      }
       expect(requests.filter((request) => request.method === "turn/interrupt")).toHaveLength(
         expectsInterrupt ? 1 : 0,
       );
@@ -424,6 +495,19 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
         );
       }
       expect(await readCodexAppServerBinding(sessionFile)).not.toHaveProperty("turnRecovery");
+      if (scenario === "interrupted executor upgrade") {
+        const notices = () =>
+          requests.filter(
+            (request) =>
+              request.method === "thread/inject_items" &&
+              JSON.stringify(request.params).includes("uncertain"),
+          );
+        expect(notices()).toHaveLength(1);
+        expect((await fixtures.startOrResumeThread(common)).threadId).toBe(source.thread.id);
+        expect(notices()).toHaveLength(1);
+        expect(requests.filter((request) => request.method === "thread/start")).toHaveLength(1);
+        expect(requests.some((request) => request.method === "turn/interrupt")).toBe(false);
+      }
     } finally {
       testCodexAppServerBindingStore.managedThreads = previous;
       wire.client.close();
