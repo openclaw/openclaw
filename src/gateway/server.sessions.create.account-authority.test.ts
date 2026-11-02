@@ -619,3 +619,22 @@ test.each(["human", "agent"] as const)(
       },
     ),
 );
+
+test.each([
+  { configured: "workspace", explicit: undefined, origin: "human", expected: "workspace" },
+  { configured: "full", explicit: "guarded", origin: "human", expected: "guarded" },
+  { configured: "full", explicit: undefined, origin: "human", expected: "forbidden" },
+  { configured: "full", explicit: undefined, origin: "agent", expected: undefined },
+] as const)("attended permission default $configured ($origin, explicit=$explicit)", (row) =>
+  withFixture(["operator.write", false, row.origin], async (fixture) => {
+    const cfg = fixture.context.getRuntimeConfig();
+    cfg.agents = { ...cfg.agents, entries: { main: { newSessionPermissionMode: row.configured } } };
+    await fixture.send(row.explicit ? { permissionMode: row.explicit } : {});
+    if (row.expected === "forbidden") {
+      fixture.expectRejected("FORBIDDEN", { message: "missing scope: operator.admin" });
+    } else {
+      expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
+      expect(fixture.entry()?.permissionMode).toBe(row.expected);
+    }
+  }),
+);

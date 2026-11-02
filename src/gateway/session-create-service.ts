@@ -9,7 +9,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveAgentConfig, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import {
   resolveDefaultModelForAgent,
@@ -147,6 +147,7 @@ async function createGatewaySessionInScope(
   let assertPreparedTargetCurrent: (() => void) | undefined;
   let creationOperation: SessionEntryCreationOperation | undefined;
   let createdTargetCommitted = false;
+  let assertPermissionDefaultCurrent: (() => void) | undefined;
   let bindPreparedCreation: SessionEntryCreateWithTranscriptOptions["bindCreation"];
   const modelInputError = resolveSessionCreateModelInputError(params);
   if (modelInputError) {
@@ -164,6 +165,9 @@ async function createGatewaySessionInScope(
   });
   const commitGuard = () => {
     assertCreationCurrent?.();
+    if (!createdTargetCommitted) {
+      assertPermissionDefaultCurrent?.();
+    }
     // Creation restrictions end at commit; a later policy change cannot block this chat's turn.
     const error = !createdTargetCommitted && validateVisibility?.();
     if (error) {
@@ -524,6 +528,47 @@ async function createGatewaySessionInScope(
     if (!visibilityAdmission.ok) {
       return visibilityAdmission;
     }
+    let permissionMode = params.permissionMode;
+    if (
+      !currentTargetEntry &&
+      permissionMode === undefined &&
+      params.applyAgentPermissionDefault &&
+      creation?.via === "operator" &&
+      params.fork !== true &&
+      !params.initialEntry &&
+      !params.catalogTarget &&
+      !params.authorizedPluginId &&
+      operatorAuthority
+    ) {
+      const configuredMode = resolveAgentConfig(
+        params.cfg,
+        target.agentId,
+      )?.newSessionPermissionMode;
+      if (configuredMode) {
+        const authority = operatorAuthority;
+        authority.assertCurrent();
+        if (configuredMode === "full" && !authority.scopes.includes(ADMIN_SCOPE)) {
+          return {
+            ok: false,
+            error: missingScopeErrorShape({
+              missingScope: ADMIN_SCOPE,
+              requiredScopes: [ADMIN_SCOPE],
+            }),
+          };
+        }
+        permissionMode = configuredMode;
+        assertPermissionDefaultCurrent = () => {
+          authority.assertCurrent();
+          if (
+            resolveAgentConfig(params.getCurrentConfig?.() ?? params.cfg, target.agentId)
+              ?.newSessionPermissionMode !== configuredMode
+          ) {
+            throw new Error("New-session permission default changed; retry creation.");
+          }
+        };
+        assertPermissionDefaultCurrent();
+      }
+    }
     // Delegated isolation survives changes to the creator's current role.
     const creationSandbox =
       creation?.sandbox ?? (creation ? resolveCreatorSandbox(params.cfg, creation) : undefined);
@@ -724,14 +769,17 @@ async function createGatewaySessionInScope(
           agentId: target.agentId,
           preparedSessionRoot: sessionRoot,
           preparedAgentRuntime: catalogAgentRuntime,
-          patch: buildSessionCreateSettingsPatch(params, {
-            key: target.canonicalKey,
-            label,
-            model: catalogModel ?? requestedModel,
-            contextWindow: requestedContextWindow,
-            thinkingLevel: requestedThinkingLevel,
-            fastMode: requestedFastMode,
-          }),
+          patch: buildSessionCreateSettingsPatch(
+            { ...params, permissionMode },
+            {
+              key: target.canonicalKey,
+              label,
+              model: catalogModel ?? requestedModel,
+              contextWindow: requestedContextWindow,
+              thinkingLevel: requestedThinkingLevel,
+              fastMode: requestedFastMode,
+            },
+          ),
           loadGatewayModelCatalogSnapshot: loadModelCatalog
             ? async () => {
                 preparedModelCatalog = await loadModelCatalog();
