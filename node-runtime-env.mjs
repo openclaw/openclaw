@@ -44,6 +44,12 @@ function isNodeStartupHook(arg) {
   );
 }
 
+/** Preloads can install module hooks and start an independent compiler/reaper. */
+export function hasNodeStartupHooks(execArgv, nodeOptions) {
+  const envArgs = parseNodeOptionsEnvVar(nodeOptions);
+  return envArgs === null || [...execArgv, ...envArgs].some(isNodeStartupHook);
+}
+
 /** Dedicated process owners must not inherit the caller's instrumentation loaders. */
 export function stripNodeStartupHooks(nodeOptions) {
   const args = parseNodeOptionsEnvVar(nodeOptions);

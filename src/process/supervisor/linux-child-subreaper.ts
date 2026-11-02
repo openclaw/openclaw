@@ -6,6 +6,7 @@ import {
   isChildSubreaper,
   reapChild,
 } from "@openclaw/proc-safe/reaper";
+import { hasNodeStartupHooks } from "../../../node-runtime-env.mjs";
 import { hasErrnoCode } from "../../infra/errno.js";
 
 function childPids(): number[] {
@@ -36,10 +37,10 @@ export function acquireLinuxChildSubreaper() {
   if (process.platform !== "linux" || process.versions.bun) {
     throw new Error("Linux child ownership requires the Node runtime");
   }
-  if (/\.[cm]?ts$/u.test(new URL(import.meta.url).pathname)) {
-    throw new Error(
-      "Linux child ownership requires the built process owner, without a source loader",
-    );
+  // Startup hooks can own a separate compiler/reaper; a .ts filename under native
+  // type stripping cannot. Owners are launched with hooks stripped (service-child-relay).
+  if (hasNodeStartupHooks(process.execArgv, process.env.NODE_OPTIONS)) {
+    throw new Error("Linux child ownership requires a process owner without source-loader hooks");
   }
   becomeChildSubreaper();
   if (!isChildSubreaper()) {
