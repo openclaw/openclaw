@@ -360,6 +360,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/tools-invoke-http.test.ts",
   "src/gateway/tui-session-description-wire.test.ts",
   "src/gateway/update-recovery-cleanup.authority.integration.test.ts",
+  "src/gateway/update-recovery-cleanup.destinations.integration.test.ts",
   "src/gateway/update-run-notice-target.test.ts",
   "src/gateway/update-run-notice.test.ts",
   "src/gateway/user-profiles-http.auth.test.ts",
