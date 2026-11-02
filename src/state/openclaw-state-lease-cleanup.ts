@@ -1,9 +1,27 @@
+import { isStateDatabaseMaintenanceContention } from "../infra/gateway-state-owner-record.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import type { OpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
+
+const CONTENDED_CLEANUP_RETRY_INITIAL_MS = 250;
+const CONTENDED_CLEANUP_RETRY_MAX_MS = 5_000;
+
+function isMaintenanceContention(error: unknown, depth = 0): boolean {
+  if (depth > 8) {
+    return false;
+  }
+  if (error instanceof AggregateError && error.errors.length > 0) {
+    return error.errors.every((entry) => isMaintenanceContention(entry, depth + 1));
+  }
+  return (
+    isStateDatabaseMaintenanceContention(error) ||
+    (error instanceof Error && isMaintenanceContention(error.cause, depth + 1))
+  );
+}
 
 /** Keep unfinished lease disposal with its original resource owner. */
 export function createOpenClawStateLeaseCleanup(params: {
@@ -12,6 +30,8 @@ export function createOpenClawStateLeaseCleanup(params: {
   nativeIdentity?(): DatabasePathIdentity | undefined;
   revoke(): void;
   finish(): Promise<void>;
+  /** Epoch ms after which the stored lease no longer blocks other owners. */
+  retryDeadline?(): number | undefined;
   workerOwner():
     | {
         drain(): Promise<void>;
@@ -24,6 +44,7 @@ export function createOpenClawStateLeaseCleanup(params: {
   let attempt: Promise<void> | undefined;
   let unregister: (() => void) | undefined;
   let databaseIdentity = params.context?.admission.identity;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
   const finish = (): Promise<void> => {
     if (complete) {
       return Promise.resolve();
@@ -32,12 +53,37 @@ export function createOpenClawStateLeaseCleanup(params: {
       .then(() => params.finish())
       .then(() => {
         complete = true;
+        clearTimeout(retryTimer);
         unregister?.();
       })
       .catch((error: unknown) => {
         attempt = undefined;
         throw error;
       }));
+  };
+  // Another process's offline maintenance is brief; an unreleased lease would otherwise
+  // block every later acquirer, including this process, until its stored expiry.
+  // finish() is idempotent, and release still targets only this owner's lease row.
+  const retryContendedCleanup = (error: unknown, retries: number) => {
+    const deadline = params.retryDeadline?.();
+    if (complete || deadline === undefined || Date.now() >= deadline) {
+      return;
+    }
+    if (!isMaintenanceContention(error)) {
+      return;
+    }
+    const delayMs = Math.min(
+      CONTENDED_CLEANUP_RETRY_MAX_MS,
+      CONTENDED_CLEANUP_RETRY_INITIAL_MS * 2 ** retries,
+    );
+    clearTimeout(retryTimer);
+    retryTimer = runInDetachedAsyncContext(() =>
+      setTimeout(() => {
+        retryTimer = undefined;
+        finish().catch((next: unknown) => retryContendedCleanup(next, retries + 1));
+      }, delayMs),
+    );
+    retryTimer.unref?.();
   };
   const resource = {
     async close(identity?: DatabasePathIdentity): Promise<void> {
@@ -81,6 +127,7 @@ export function createOpenClawStateLeaseCleanup(params: {
         try {
           await finish();
         } catch (cleanupError) {
+          retryContendedCleanup(cleanupError, 0);
           const combined =
             !outcome.ok && outcome.error !== cleanupError
               ? createSqliteLifecycleAggregateError(

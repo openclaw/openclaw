@@ -243,6 +243,7 @@ async function runStateLeaseOwnerInScope<T>(
     context: invocation.kind === "worker" ? invocation.context : undefined,
     nativeIdentity: () => nativeLeaseSource?.identity,
     workerOwner: () => workerOperations,
+    retryDeadline: () => confirmedExpiresAt,
     revoke() {
       closed = true;
       abortLost(new Error("State lease resource owner is closing"));
