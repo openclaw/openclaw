@@ -31,6 +31,7 @@ import {
 import {
   createServiceChildCleanupExpiryError,
   createServiceChildRelayRetirement,
+  joinStartupFailureCleanup,
   stopServiceChildOwner,
 } from "./service-child-relay-retirement.js";
 import type { AwaitedStdoutConsumer, ProcessAdapterStartup } from "./types.js";
@@ -629,11 +630,9 @@ export async function createServiceChildRelayAdapter(
         secretDeliveryResult.status === "rejected" ? secretDeliveryResult.reason : undefined;
       // Preserve admission failure over the secret pipe it closes as a consequence.
       if (startupError !== undefined || secretDeliveryError !== undefined) {
-        if (startupError !== undefined) {
-          await startupErrorAckDelivery;
-          await cleanup.promise;
-        }
-        throw startupError ?? secretDeliveryError;
+        throw startupError !== undefined
+          ? await joinStartupFailureCleanup(startupError, startupErrorAckDelivery, cleanup.promise)
+          : secretDeliveryError;
       }
       if (params.input !== undefined && params.prepareInput) {
         await params.prepareInput();

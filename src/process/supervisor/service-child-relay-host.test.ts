@@ -105,6 +105,51 @@ it("retires a certified Linux stdio owner after channel closure", async () => {
   expect(groupProbe).not.toHaveBeenCalled();
 });
 
+it("reports a Linux startup failure ahead of its unconfirmed cleanup", async () => {
+  platformMock = mockProcessPlatform("linux");
+  const stub = createWritableRelayChild();
+  mocks.spawn.mockReturnValue(stub.child);
+  const starting = createServiceChildRelayAdapter({
+    command: "synthetic-command",
+    args: [],
+    stdinMode: "pipe-closed",
+    oomScoreWrapperSelected: false,
+  });
+  void starting.catch(() => {});
+  const start = firstMockArg(stub.sendMock, "service start");
+  if (!isRecord(start) || typeof start.generation !== "string") {
+    throw new Error("Expected an admitted Linux service generation");
+  }
+  const generation = start.generation;
+  let sequence = 0;
+  const emit = (payload: ServiceChildAnchorPayload) => {
+    stub.control.push(
+      Buffer.from(encodeServiceChildMessage({ ...payload, generation, sequence: ++sequence })),
+    );
+  };
+  emit({ type: "startup-error", anchorPid: 1235, error: "spawn synthetic-command ENOENT" });
+  // A closing receipt without native extinction cannot certify cleanup.
+  emit({ type: "closing", reason: "lineage-lost" });
+  stub.control.destroy();
+  stub.lineage.end();
+  stub.disconnectMock();
+  stub.emitExit(1);
+  const error = await starting.then(
+    () => {
+      throw new Error("Expected startup to fail");
+    },
+    (failure: unknown) => failure,
+  );
+  expect(error).toBeInstanceOf(AggregateError);
+  expect((error as AggregateError).message).toBe("spawn synthetic-command ENOENT");
+  expect((error as AggregateError).errors).toEqual([
+    expect.objectContaining({ message: "spawn synthetic-command ENOENT" }),
+    expect.objectContaining({
+      message: expect.stringContaining("service child cleanup identity lost"),
+    }),
+  ]);
+});
+
 it.each(["before", "after"] as const)(
   "checks launch policy %s relay start dispatch",
   async (timing) => {

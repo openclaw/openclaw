@@ -139,3 +139,23 @@ export function createServiceChildCleanupExpiryError(
     { cause: ownerError },
   );
 }
+
+/** Join startup cleanup without letting its failure replace the anchor's startup failure. */
+export async function joinStartupFailureCleanup(
+  startupError: unknown,
+  acknowledgement: Promise<void> | undefined,
+  cleanup: Promise<void>,
+): Promise<unknown> {
+  // A failed acknowledgement already loses identity, so the cleanup result reports it.
+  await acknowledgement?.catch(() => {});
+  const cleanupError = await cleanup.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  return cleanupError === undefined || cleanupError === startupError
+    ? startupError
+    : new AggregateError(
+        [startupError, cleanupError],
+        toErrorObject(startupError, "service child startup failed").message,
+      );
+}
