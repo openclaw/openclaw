@@ -12,7 +12,10 @@ function menuProps() {
     defaultLabel: "Set Default",
     defaultDisabled: false,
     pinLabel: "Pin",
-    showRefresh: false,
+    showPhoneActions: false,
+    createLabel: "New agent",
+    createDisabled: false,
+    onCreate: vi.fn(),
     refreshLabel: "Refresh",
     refreshDisabled: false,
     onSetDefault: vi.fn(),
@@ -45,13 +48,64 @@ it("copies the agent ID from the page menu and confirms with a toast", async () 
   }
 });
 
-it("offers Refresh only where the visible icon is hidden", async () => {
+it("leads with New agent and adds Refresh on the phone", async () => {
+  const onCreate = vi.fn();
   const container = document.body.appendChild(document.createElement("div"));
-  const view = mountSolid(AgentsPageMenu, { ...menuProps(), showRefresh: true }, container);
+  const view = mountSolid(
+    AgentsPageMenu,
+    { ...menuProps(), showPhoneActions: true, onCreate },
+    container,
+  );
   try {
     await vi.waitFor(() => {
       const labels = openItems(container).map((item) => item.textContent?.trim());
+      expect(labels[0]).toBe("New agent");
       expect(labels).toContain("Refresh");
+    });
+    document.querySelector<HTMLElement>('[role="menuitem"]')!.click();
+    await vi.waitFor(() => expect(onCreate).toHaveBeenCalledOnce());
+  } finally {
+    view.dispose();
+    container.remove();
+  }
+});
+
+it("keeps the recovery reason on a denied New agent", async () => {
+  const onCreate = vi.fn();
+  const container = document.body.appendChild(document.createElement("div"));
+  const view = mountSolid(
+    AgentsPageMenu,
+    {
+      ...menuProps(),
+      showPhoneActions: true,
+      createDisabled: true,
+      createDisabledReason: "Reconnect with operator.admin",
+      onCreate,
+    },
+    container,
+  );
+  try {
+    await vi.waitFor(() => {
+      const first = openItems(container)[0];
+      expect(first?.textContent).toContain("Reconnect with operator.admin");
+    });
+    document.querySelector<HTMLElement>('[role="menuitem"]')!.click();
+    expect(onCreate).not.toHaveBeenCalled();
+  } finally {
+    view.dispose();
+    container.remove();
+  }
+});
+
+it("leaves New agent and Refresh out of the desktop menu", async () => {
+  const container = document.body.appendChild(document.createElement("div"));
+  const view = mountSolid(AgentsPageMenu, menuProps(), container);
+  try {
+    await vi.waitFor(() => {
+      const labels = openItems(container).map((item) => item.textContent?.trim());
+      expect(labels.length).toBeGreaterThan(0);
+      expect(labels).not.toContain("New agent");
+      expect(labels).not.toContain("Refresh");
     });
   } finally {
     view.dispose();

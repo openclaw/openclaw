@@ -46,7 +46,7 @@ registerRouteSubtitlesEnglish();
 registerEnglishCatalog(registerSettingsEnglish);
 registerEnglishCatalog(registerPluginManagementEnglish);
 
-// Matches the phone rules in agents.css, where the visible Refresh gives way to the menu.
+// Matches the phone rules in agents.css, where New agent and Refresh move into the menu.
 const PHONE_WIDTH_QUERY = "(max-width: 640px)";
 const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
 const AgentMemoryPanel = lazy(() => import("./memory/memory-panel.tsx"), {
@@ -159,7 +159,13 @@ export function Agents(props: AgentsProps) {
           ? "agents.unpinFromSwitcher"
           : "agents.pinToSwitcher",
       )}
-      showRefresh={phone()}
+      showPhoneActions={phone()}
+      createLabel={t("custodian.newAgent")}
+      createDisabled={rosterPending() || !props.access.canCreateAgent}
+      createDisabledReason={
+        !props.access.canCreateAgent ? t("custodian.accessRequired") : undefined
+      }
+      onCreate={props.onCreateAgent}
       refreshLabel={t(rosterPending() ? "common.loading" : "common.refresh")}
       refreshDisabled={rosterPending()}
       onSetDefault={setDefault}
@@ -175,18 +181,20 @@ export function Agents(props: AgentsProps) {
         busy={rosterPending()}
         onClick={() => props.onRefresh()}
       />
-      <ReasonedDisabledControl
-        reason={!props.access.canCreateAgent ? t("custodian.accessRequired") : undefined}
-      >
-        <button
-          class="btn btn--sm agents-create-btn"
-          disabled={rosterPending() || !props.access.canCreateAgent}
-          title={!props.access.canCreateAgent ? t("custodian.accessRequired") : undefined}
-          onClick={() => props.onCreateAgent()}
+      <Show when={!phone()}>
+        <ReasonedDisabledControl
+          reason={!props.access.canCreateAgent ? t("custodian.accessRequired") : undefined}
         >
-          {t("custodian.newAgent")}
-        </button>
-      </ReasonedDisabledControl>
+          <button
+            class="btn btn--sm agents-create-btn"
+            disabled={rosterPending() || !props.access.canCreateAgent}
+            title={!props.access.canCreateAgent ? t("custodian.accessRequired") : undefined}
+            onClick={() => props.onCreateAgent()}
+          >
+            {t("custodian.newAgent")}
+          </button>
+        </ReasonedDisabledControl>
+      </Show>
       <Show when={selectedAgent() || phone()}>
         <FloatingHeaderActions fallback={pageMenu()}>{pageMenu()}</FloatingHeaderActions>
       </Show>

@@ -1228,26 +1228,14 @@
     min-width: 0;
   }
 
-  .agents-toolbar-actions {
-    justify-content: space-between;
-  }
-
   .btn.agents-page-menu__trigger {
     width: 44px;
     height: 44px;
   }
 
-  /* With the menu in the floating header, New agent has the row to itself. */
-  .shell--floating-header .page-header-actions:has(> .agents-toolbar-actions),
-  .shell--floating-header .agents-toolbar-actions {
-    flex: 1 1 100%;
-    width: 100%;
-  }
-
-  .shell--floating-header .agents-toolbar-actions > :has(.agents-create-btn),
-  .shell--floating-header .agents-toolbar-actions .agents-create-btn {
-    flex: 1;
-    width: 100%;
+  /* With the menu in the floating header, no row is left above the tabs. */
+  .page-header-actions:has(> .agents-toolbar-actions):not(:has(.agents-page-menu)) {
+    display: none;
   }
 }
 
