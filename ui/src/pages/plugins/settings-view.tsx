@@ -6,6 +6,8 @@ import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
   SettingsPage,
+  SettingsSection,
+  SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
@@ -221,7 +223,9 @@ export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
     <>
       {!props.connected && !props.result ? (
         <SettingsPage carapace={true}>
-          <SettingsEmpty message={t("pluginsPage.connectToManage")} carapace={true} />
+          <SettingsSection carapace={true}>
+            <SettingsUnavailable message={t("pluginsPage.connectToManage")} carapace={true} />
+          </SettingsSection>
         </SettingsPage>
       ) : props.error && !props.result ? (
         <SettingsPage carapace={true}>

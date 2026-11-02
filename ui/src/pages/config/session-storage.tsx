@@ -24,6 +24,7 @@ import {
   SettingsStatus,
   SettingsToggleRow,
   SettingsValue,
+  SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -402,15 +403,17 @@ export function SessionStorageSettings(props: SettingsProps) {
                 <Show
                   when={readStatus()?.status}
                   fallback={
-                    <SettingsEmpty
-                      message={t(
-                        client()
-                          ? "common.loading"
-                          : context.gateway.snapshot.phase === "connected"
+                    client() ? (
+                      <SettingsEmpty message={t("common.loading")} />
+                    ) : (
+                      <SettingsUnavailable
+                        message={t(
+                          context.gateway.snapshot.phase === "connected"
                             ? "configView.sessionStorage.adminRequired"
                             : "configView.sessionStorage.disconnected",
-                      )}
-                    />
+                        )}
+                      />
+                    )
                   }
                 >
                   {(currentStatus) => <StorageInventory status={currentStatus()} />}

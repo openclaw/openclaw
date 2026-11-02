@@ -39,6 +39,7 @@ import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { createTimeout } from "../../lib/reactive/timers.ts";
 import { showToast } from "../../lib/toast.ts";
+import { CloudEnvironmentsAdminRequired } from "./cloud-worker-admin-required.tsx";
 import {
   cloudEnvironments,
   environmentState,
@@ -570,11 +571,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       <SettingsPage>
         <Show
           when={canCall("environments.list") || view.inventory !== null}
-          fallback={
-            gateway.connected ? (
-              <SettingsEmpty message={t("cloudWorkersPage.environments.adminRequired")} />
-            ) : undefined
-          }
+          fallback={gateway.connected ? <CloudEnvironmentsAdminRequired /> : undefined}
         >
           <Loading on={feedback()}>
             <Errored

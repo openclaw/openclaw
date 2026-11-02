@@ -7,6 +7,7 @@ import {
   SettingsLoadingSkeleton,
   SettingsPage,
   SettingsPageHeader,
+  SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
@@ -43,7 +44,7 @@ function InstalledInventory(props: InventoryProps): JSX.Element {
       fallback={
         <div class="settings-group oc-settings-group">
           {!props.connected ? (
-            <SettingsEmpty message={t("pluginsPage.connectToManage")} carapace />
+            <SettingsUnavailable message={t("pluginsPage.connectToManage")} carapace />
           ) : props.loading ? (
             <SettingsLoadingSkeleton rows={4} carapace />
           ) : props.error ? (

@@ -623,6 +623,22 @@ export function SettingsEmpty(props: { message: JSX.Element; carapace?: boolean 
   );
 }
 
+/** Says why a surface can't be used here, as a row on the page's own column. */
+export function SettingsUnavailable(props: {
+  message: JSX.Element;
+  action?: JSX.Element;
+  carapace?: boolean;
+}) {
+  return (
+    <SettingsRow
+      role="status"
+      title={props.message}
+      control={props.action}
+      carapace={props.carapace}
+    />
+  );
+}
+
 export function SettingsLoadingSkeleton(props: {
   label?: string;
   rows?: number;
