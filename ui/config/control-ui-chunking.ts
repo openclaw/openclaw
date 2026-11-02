@@ -169,7 +169,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/reactive/application-native.ts":
     case "ui/src/lib/reactive/visible-poll.ts":
     case "ui/src/lib/chat/follow-up-mode.ts":
-    case "ui/src/lib/sessions/context-budget.ts":
     case "ui/src/lib/sessions/session-archive-reason.ts":
     case "ui/src/lib/sessions/session-message-subscriptions.runtime.ts":
     case "packages/gateway-client/src/session-subscriptions.ts":

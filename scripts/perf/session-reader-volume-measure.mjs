@@ -15,6 +15,9 @@
  * results, less work and no material regression; physical reads may remain unchanged
  * when both queries use the same pages. Report CPU/time against A/A spread and any
  * >20% regression. These are owner measurements, not Gateway/RPC latency.
+ * --flow repeat --actor absent|retained --label A1 exercises the public async readers
+ * in this source checkout. Run pinned baseline/candidate checkouts separately; the
+ * kernel baseline hooks below do not propagate to the public readers' child workers.
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -32,6 +35,10 @@ const { values } = parseArgs({
   options: {
     root: { type: "string" },
     operation: { type: "string", default: "identity" },
+    flow: { type: "string", default: "kernel" },
+    actor: { type: "string", default: "absent" },
+    label: { type: "string", default: "candidate" },
+    concurrency: { type: "string", default: "4" },
     revision: { type: "string" },
     "baseline-file": { type: "string" },
     "baseline-sha256": { type: "string" },
@@ -85,7 +92,13 @@ const ownerFiles = {
   ],
 }[values.operation];
 
-if (isMainThread) {
+if (values.flow === "repeat") {
+  assert(isMainThread && !values.revision && !values["baseline-file"]);
+  assert(["hydration", "accounting"].includes(values.operation));
+  const { measureRepeatedSessionReaders } = await import("./session-reader-repeat-measure.mjs");
+  await measureRepeatedSessionReaders({ values, root, fixture, samples, selected, target });
+} else if (isMainThread) {
+  assert.equal(values.flow, "kernel");
   if (values["prepare-identity"]) {
     const { runOpenClawAgentWriteTransaction, closeOpenClawAgentDatabasesAsync } =
       await import("../../src/state/openclaw-agent-db.js");

@@ -445,7 +445,7 @@ async function detectLegacyStateMigrationsInReadSnapshot(
   const managedOutgoingImages = detectDoctorOwnedState(detectLegacyManagedOutgoingImages);
   const apns = detectDoctorOwnedState(detectLegacyApnsRegistrations);
   const deviceAuth = detectDoctorOwnedState(detectLegacyDeviceAuth);
-  const sharedAuthStore = detectSharedAuthStoreMigration({
+  const sharedAuthStore = await detectSharedAuthStoreMigration({
     stateDir,
     env,
     config: params.sourceConfigBeforeMigrations ?? params.cfg,
