@@ -57,12 +57,17 @@ const cliReply = (model: string) => ({
   meta: { agentMeta: { provider: "claude-cli", model } },
 });
 
-const makeAuthJob = (overrides: Partial<CronStoredJob> = {}): CronStoredJob =>
+const makeAuthJob = (
+  overrides: Omit<Partial<CronStoredJob>, "inferenceBinding"> & {
+    inferenceBinding?: CronStoredJob["inferenceBinding"] | null;
+  } = {},
+): CronStoredJob =>
   makeIsolatedAgentJobFixture({
     agentId: "main",
     delivery: { mode: "none" },
     payload: { kind: "agentTurn", message: "check status" },
     ...overrides,
+    inferenceBinding: overrides.inferenceBinding ?? undefined,
   });
 
 function runWithConfig(cfg: OpenClawConfig, job = makeAuthJob(), trigger?: "cron" | "event") {
@@ -449,7 +454,11 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     async (kind) => {
       const cfg = await claudeCliConfig();
       const binding = await capture(cfg);
-      const inference = await prepareCronRunInference({ binding, cfg, agentDir: state.agentDir() });
+      const inference = await prepareCronRunInference({
+        binding: binding ?? undefined,
+        cfg,
+        agentDir: state.agentDir(),
+      });
       if (!inference) {
         throw new Error("Expected the captured account's run authorization");
       }
@@ -504,7 +513,11 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     async (kind) => {
       const cfg = await claudeCliConfig();
       const binding = await capture(cfg);
-      const inference = await prepareCronRunInference({ binding, cfg, agentDir: state.agentDir() });
+      const inference = await prepareCronRunInference({
+        binding: binding ?? undefined,
+        cfg,
+        agentDir: state.agentDir(),
+      });
       if (!inference) {
         throw new Error("Expected the captured account's run authorization");
       }
@@ -563,18 +576,22 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
   it("leaves a native Claude CLI login unbound and rejects a missing explicit account", async () => {
     const cfg = await claudeCliConfig();
 
-    await expect(capture(cfg, `${claudeRef}@anthropic:claude-cli`)).resolves.toBeUndefined();
+    await expect(capture(cfg, `${claudeRef}@anthropic:claude-cli`)).resolves.toBeNull();
     await expect(capture(cfg, `${claudeRef}@anthropic:missing`)).rejects.toThrow(
       /No credentials found for profile "anthropic:missing"/,
     );
   });
 
-  it("binds an unbound Claude CLI job from an explicit model@profile update", async () => {
+  it("adopts a stored Claude account and explicitly switches to native-only CLI execution", async () => {
     const cfg = await claudeCliConfig();
-    const update = async (model: string) => {
+    const { resolveEffectiveAgentRuntime } = await vi.importActual<
+      typeof import("../agents/thinking-runtime.js")
+    >("../agents/thinking-runtime.js");
+    h.resolveEffectiveAgentRuntimeMock.mockImplementation(resolveEffectiveAgentRuntime);
+    const update = async (model: string, inferenceBinding?: CronStoredJob["inferenceBinding"]) => {
       const payload = { kind: "agentTurn" as const, message: "check status", model };
       return await captureCronUpdatedInferenceBinding(
-        makeAuthJob({ payload }),
+        makeAuthJob({ payload, inferenceBinding }),
         { payload },
         cfg,
         {} as Parameters<typeof captureCronUpdatedInferenceBinding>[3],
@@ -592,8 +609,31 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     } finally {
       selected?.disposeInferenceAuthorization?.();
     }
-    // The native login stays the CLI's own and leaves the job unbound.
-    await expect(update(`${claudeRef}@anthropic:claude-cli`)).resolves.toBeUndefined();
+    const model = `${claudeRef}@anthropic:claude-cli`;
+    const adopted = await update(model, selected?.inferenceBinding ?? undefined);
+    expect(adopted?.inferenceBinding).toBeNull();
+    const { resolveSessionAuthSelection } = await vi.importActual<
+      typeof import("../agents/auth-profiles/session-override.js")
+    >("../agents/auth-profiles/session-override.js");
+    h.resolveSessionAuthSelectionMock.mockImplementation(resolveSessionAuthSelection);
+    h.runCliAgentMock.mockResolvedValue(cliReply(claudeModel));
+    const result = await runWithConfig(
+      cfg,
+      makeAuthJob({
+        inferenceBinding: adopted?.inferenceBinding,
+        payload: { kind: "agentTurn", message: "check status", model, toolsAllow: ["read"] },
+      }),
+    );
+    expect(result.status, result.error).toBe("ok");
+    expect(h.runCliAgentMock.mock.lastCall?.[0]).toMatchObject({
+      provider: "claude-cli",
+      model: claudeModel,
+      nativeAuthOnly: true,
+      toolsAllow: ["read"],
+    });
+    expect(h.runCliAgentMock.mock.lastCall?.[0].authProfileId).toBeUndefined();
+    expect(h.resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
+    expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it("keeps the recorded runtime when an edit selects a different account", async () => {
@@ -626,6 +666,46 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     } finally {
       edited?.disposeInferenceAuthorization?.();
     }
+  });
+
+  it("keeps a session account pin above an unavailable configured stored profile", async () => {
+    const cfg = await claudeCliConfig();
+    const { resolveSessionAuthSelection } = await vi.importActual<
+      typeof import("../agents/auth-profiles/session-override.js")
+    >("../agents/auth-profiles/session-override.js");
+    h.resolveSessionAuthSelectionMock.mockImplementation(resolveSessionAuthSelection);
+    const { resolveCronAuthSelection } = await import("./isolated-agent/run-prepare-runtime.js");
+    const sessionKey = "agent:main:cron:account-pin";
+    const sessionEntry: SessionEntry = {
+      sessionId: "account-pin-session",
+      updatedAt: 1,
+      lifecycleRevision: "account-pin-revision",
+      authProfileOverride: claudeProfile,
+      authProfileOverrideSource: "user",
+    };
+    const selection = await resolveCronAuthSelection({
+      cfg,
+      agentId: "main",
+      agentDir: state.agentDir(),
+      provider: "anthropic",
+      modelId: claudeModel,
+      agentRuntime: "claude-cli",
+      configuredProfileId: "anthropic:missing",
+      cronSession: {
+        sessionEntry,
+        store: { [sessionKey]: sessionEntry },
+        storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+        lifecycleRevision: "account-pin-revision",
+        systemSent: false,
+        isNewSession: false,
+        previousSessionId: undefined,
+        resetBoundaryPending: undefined,
+        initialSessionEntry: sessionEntry,
+      },
+      sessionKey,
+      isNewSession: false,
+    });
+    expect(selection).toMatchObject({ profileId: claudeProfile, source: "user" });
   });
 
   it("rejects an account edit that would move the job off its unavailable recorded runtime", async () => {

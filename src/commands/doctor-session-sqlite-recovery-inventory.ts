@@ -27,7 +27,12 @@ import {
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
-import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
+import {
+  withArtifactPreservingStateReads,
+  withOpenClawStateDatabaseReadSnapshot,
+  getActiveOpenClawStateDatabaseReadSnapshotAsync,
+  withSynchronousArtifactPreservingStateSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
 import type { RecoveryInventoryScan } from "./recovery-inventory-scan.js";
 import {
   collectUpdateCaptureInventory,
@@ -497,33 +502,55 @@ export function summarizeRecoveryCleanup(
 }
 
 /** Update cleanup also reviews original-state captures; Doctor's session repair does not. */
-export function collectUpdateCleanupInventory(params: {
+function readUpdateCleanupInventory(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   scan?: RecoveryInventoryScan;
   readHistory?: boolean;
 }) {
-  return withSynchronousArtifactPreservingStateSnapshot(
-    () => {
-      const inventory = collectRecoveryInventory(params);
-      const captures = collectUpdateCaptureInventory({
-        stateDir: inventory.report.stateDir,
-        env: params.env,
-        scan: params.scan,
-        readHistory: params.readHistory,
-      });
-      return {
-        ...inventory,
-        captureIdentities: captures.identities,
-        report: summarizeRecoveryCleanup(
-          inventory.report.stateDir,
-          [...inventory.report.artifacts, ...captures.artifacts],
-          "preview",
-          inventory.report.missingOriginals,
-        ),
-      };
-    },
-    { current: { env: params.env } },
+  const inventory = collectRecoveryInventory(params);
+  const captures = collectUpdateCaptureInventory({
+    stateDir: inventory.report.stateDir,
+    env: params.env,
+    scan: params.scan,
+    readHistory: params.readHistory,
+  });
+  return {
+    ...inventory,
+    captureIdentities: captures.identities,
+    report: summarizeRecoveryCleanup(
+      inventory.report.stateDir,
+      [...inventory.report.artifacts, ...captures.artifacts],
+      "preview",
+      inventory.report.missingOriginals,
+    ),
+  };
+}
+
+/** Cleanup effect guards need current rows, outside an inherited report snapshot. */
+export function collectUpdateCleanupInventory(
+  params: Parameters<typeof readUpdateCleanupInventory>[0],
+) {
+  return withSynchronousArtifactPreservingStateSnapshot(() => readUpdateCleanupInventory(params), {
+    current: { env: params.env },
+  });
+}
+
+/** Descriptive Doctor/status inventory awaits its image and reuses the enclosing report. */
+export async function collectUpdateCleanupInventoryAsync(
+  params: Parameters<typeof readUpdateCleanupInventory>[0],
+) {
+  if (params.readHistory === false) {
+    return readUpdateCleanupInventory(params);
+  }
+  return withArtifactPreservingStateReads(() =>
+    withOpenClawStateDatabaseReadSnapshot(
+      async () => {
+        await getActiveOpenClawStateDatabaseReadSnapshotAsync({ env: params.env });
+        return readUpdateCleanupInventory(params);
+      },
+      { env: params.env },
+    ),
   );
 }
 

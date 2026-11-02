@@ -5,6 +5,7 @@ import { normalizeWindowsPathForComparison } from "@openclaw/fs-safe/path";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { AsyncContext } from "../shared/async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { sqliteReaderCounter } from "./sqlite-reader-metrics.js";
 import { readThreadDiskReadBytes } from "./thread-disk-io.js";
 
 const HEAVY_READ_BYTES = 64 * 1024 * 1024;
@@ -106,6 +107,7 @@ export function withSqliteReaderOwner<T>(
   logger?: Pick<SubsystemLogger, "warn">,
 ): T | Promise<T> {
   const parent = readerOwners.getStore();
+  const operationName = boundedOperation(owner.operation);
   const before =
     logger && !parent && !isMainThread && owner.ownerKind === "worker"
       ? readThreadDiskReadBytes()
@@ -113,10 +115,11 @@ export function withSqliteReaderOwner<T>(
   const diskRead: { context?: SqliteOperationHoldContext } | undefined =
     parent?.timing.diskRead ?? (before === undefined ? undefined : {});
   const startedAtMs = Date.now();
+  const counter = before === undefined ? undefined : sqliteReaderCounter(operationName);
   return readerOwners.run(
     {
       ...owner,
-      operation: boundedOperation(owner.operation),
+      operation: operationName,
       timing: {
         preparedAtMs: startedAtMs,
         hostAdmissionWaitMs: 0,
@@ -133,17 +136,24 @@ export function withSqliteReaderOwner<T>(
       const finish = () => {
         try {
           const after = readThreadDiskReadBytes();
-          if (after === undefined || after - before < HEAVY_READ_BYTES) {
+          if (after === undefined || after < before) {
+            return;
+          }
+          if (counter) {
+            Atomics.add(counter.values, 0, 1n);
+            Atomics.add(counter.values, 1, BigInt(after - before));
+          }
+          if (after - before < HEAVY_READ_BYTES) {
             return;
           }
           logger.warn("heavy SQLite reader operation", {
-            operation: boundedOperation(owner.operation),
+            operation: operationName,
             readBytes: after - before,
             elapsedMs: Date.now() - startedAtMs,
             context: {
               ...diskRead.context,
               ...holdContext,
-              readerOperation: boundedOperation(owner.operation),
+              readerOperation: operationName,
             },
             pid: process.pid,
             threadId,

@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi, type MockInstance } from "vitest";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { hasPersistedOpenClawAgentCanonicalValidation } from "../../state/openclaw-agent-canonical-validation-receipt.js";
-import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../../state/openclaw-agent-db-lease.js";
+import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../../state/openclaw-agent-db-lease-inspection.js";
 import * as lifecycle from "../../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { hasOpenClawAgentCanonicalValidation } from "../../state/openclaw-agent-db-validation-cache.js";
@@ -122,7 +122,7 @@ function seedFleet(state: OpenClawTestState, invalidFirst = false) {
       runSessionStartupMigration({ cfg, env, log, agentIds: ids && new Set(ids), handoffDatabase }),
     closeShared: () => closeOpenClawStateDatabaseByPathAsync(shared.path),
     assertNoLeases: () =>
-      expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env })).not.toThrow(),
+      expect(assertNoOpenClawAgentDatabaseLeasesReadOnly({ env })).resolves.toBeUndefined(),
   };
 }
 
@@ -156,7 +156,7 @@ it("preserves native lock classification after canonical worker cleanup", () =>
     });
     await expect(state.start([agentId])).rejects.toMatchObject({ errcode: 5 });
     expect([...observer.workers].every((worker) => worker.threadId === -1)).toBe(true);
-    state.assertNoLeases();
+    await state.assertNoLeases();
   }));
 
 function observeRetirement(
@@ -342,7 +342,7 @@ it("reuses two workers while closing each database task before runtime handoff",
       expect(consumed.toSorted()).toEqual(agentIds);
       expect(state.log.warn).not.toHaveBeenCalled();
       expect([...observer.workers].every((worker) => worker.threadId === -1)).toBe(true);
-      state.assertNoLeases();
+      await state.assertNoLeases();
     } finally {
       handoffWaves.forEach((wave) => wave.resolve());
       gate.releaseAll();
@@ -379,7 +379,7 @@ it("drains sibling startup work and the worker pool before closing cold database
           .toSorted()
           .map((agentId) => [resolveOpenClawAgentSqlitePath({ agentId, env: state.env }), true]),
       );
-      state.assertNoLeases();
+      await state.assertNoLeases();
     } finally {
       gate.releaseAll();
       await startup.catch(() => {});
@@ -425,7 +425,7 @@ it("stops fleet admission on refusal and drains an already-started sibling befor
       expect(consumed).toEqual([agentIds[1]]);
       expect(close).toHaveBeenCalledOnce();
       expect([...observer.workers].every((worker) => worker.threadId === -1)).toBe(true);
-      state.assertNoLeases();
+      await state.assertNoLeases();
     } finally {
       gate.releaseAll();
       await outcome;
@@ -448,7 +448,7 @@ it("retains the idle pool's cleanup owner until shared-state retirement joins na
       await expect(start(agentIds.slice(0, 1))).rejects.toBe(primaryFailure);
       expect(retirement.worker?.threadId).toBeGreaterThan(0);
       expect(retirement.mock?.mock.calls.length).toBe(1);
-      state.assertNoLeases();
+      await state.assertNoLeases();
       const exitHooks = () =>
         process.rawListeners("beforeExit").filter((hook) => !previousExitHooks.has(hook));
       expect(exitHooks()).toHaveLength(1);
@@ -503,7 +503,7 @@ it("retries failed native retirement while shared-state drainage already owns th
       expect(await drainageOutcome?.outcome).toBe(true);
       expect([retirement.worker?.threadId, retirement.mock?.mock.calls.length]).toEqual([-1, 2]);
       await state.closeShared();
-      state.assertNoLeases();
+      await state.assertNoLeases();
     } finally {
       releaseRetirement.resolve();
       await retirement.terminate?.();
@@ -575,7 +575,7 @@ it("drains the database owner before terminating a worker whose lease receipt is
       expect(await outcome).toBeInstanceOf(Error);
       expect(await drainage.outcome).toBe(true);
       expect(retirement.worker?.threadId).toBe(-1);
-      state.assertNoLeases();
+      await state.assertNoLeases();
     } finally {
       releaseLeaseReceipt();
       Atomics.notify(gate, 0);
