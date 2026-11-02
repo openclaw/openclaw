@@ -93,7 +93,7 @@ export type GatewayWorkerPlacementRuntimeParams = {
 
 export function createGatewayGitHubPublicationRuntime(params: {
   placements: WorkerSessionPlacementStore;
-  environments?: Pick<WorkerEnvironmentService, "get" | "startTunnel">;
+  environments?: Pick<WorkerEnvironmentService, "get" | "startTunnel" | "ensureRetainedRunning">;
   getCommittedRuntimeConfig: () => OpenClawConfig;
   warn: (message: string) => void;
 }) {

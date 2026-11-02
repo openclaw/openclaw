@@ -146,7 +146,7 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}chat`);
           const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
           const composer = pane.locator(".agent-chat__composer-combobox textarea");
-          const stop = pane.getByRole("button", { name: "Stop generating" });
+          const stop = pane.getByRole("button", { name: "Stop", exact: true });
           const steer = pane.getByRole("button", {
             name: "Steer into the active run",
             exact: true,

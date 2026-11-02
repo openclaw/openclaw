@@ -111,12 +111,11 @@ serveOwnedWorkerTasks(
           control,
           async (database, read) => {
             closed.delete(JSON.stringify(database));
-            const result = await withHistoryDatabase(database, request.kind, read);
-            if (result.closedHistoryDatabase) {
-              closed.set(
-                JSON.stringify(result.closedHistoryDatabase),
-                result.closedHistoryDatabase,
-              );
+            const operation = `usage.${request.operation.kind}`;
+            const result = await withHistoryDatabase(database, operation, read);
+            const retired = result.closedHistoryDatabase;
+            if (retired) {
+              closed.set(JSON.stringify(retired), retired);
             }
             return result.value;
           },
@@ -344,10 +343,10 @@ serveOwnedWorkerTasks(
         return { kind: request.kind, result: readSessionRetirementInWorker(request) };
       }
       if (request.kind === "session-exact-entries") {
-        const { readExactSessionEntriesWithLifecycle } =
+        const { readExactSessionEntriesWithLifecycleAsync } =
           await import("./session-entry-read.worker.js");
         request.env = cloneEnvWithPlatformSemantics(request.env);
-        return readExactSessionEntriesWithLifecycle(request);
+        return readExactSessionEntriesWithLifecycleAsync(request, control.signal);
       }
       if (request.kind === "session-row-facts") {
         const { readSessionRowDatabaseFacts } = await import("./session-entry-read.worker.js");

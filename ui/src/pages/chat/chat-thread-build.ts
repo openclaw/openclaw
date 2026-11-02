@@ -1,7 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
-import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
 import { readModelFallbackNotice } from "../../../../src/shared/model-fallback-notice.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { t } from "../../i18n/index.ts";
@@ -15,10 +14,7 @@ import {
   trimAccumulatedStreamPrefix,
   type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
-import {
-  isAssistantHeartbeatAckForDisplay,
-  stripHeartbeatTokenForDisplay,
-} from "../../lib/chat/heartbeat-display.ts";
+import { stripHeartbeatTokenForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import {
@@ -53,6 +49,7 @@ import {
   collectCanvasTurns,
   reconcileLiveCanvasPreviews,
 } from "./chat-thread-canvas.ts";
+import { displayChatHistory, type ChatItemsFacts } from "./chat-thread-facts.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import {
   placeChatInputs,
@@ -83,11 +80,9 @@ import {
   findCurrentTurnBounds,
   createRunTurnLookup,
   createToolCallLookup,
-  isKeyedAssistantStreamFallbackMessage,
   optionalBoundaryIdentity,
   optionalRunIdentity,
   resolveRunInsertionBounds,
-  transcriptRunId,
 } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
@@ -132,6 +127,7 @@ export function buildChatItems(
   props: BuildChatItemsProps,
   inputOrder: ChatInputOrderState = { keys: [] },
   mode: "transcript" | "history" = "transcript",
+  facts?: ChatItemsFacts,
 ): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
   const inlineInvocations = new Set<string>();
@@ -175,16 +171,10 @@ export function buildChatItems(
     mode !== "history" && props.persistCommentary === false && (props.runWorking || props.runActive)
       ? normalizeOptionalString(resolveProgress().runId)
       : undefined;
-  const history = composeTranscriptDisplay(
-    props.messages.filter(
-      (message) =>
-        !isAssistantHeartbeatAckForDisplay(message) &&
-        (props.persistCommentary !== false ||
-          !isKeyedAssistantStreamFallbackMessage(message) ||
-          (activeCommentaryRunId !== undefined &&
-            transcriptRunId(message) === activeCommentaryRunId)),
-    ),
-  );
+  const history = displayChatHistory(props, activeCommentaryRunId);
+  if (facts) {
+    facts.history = history;
+  }
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
   const matchesSearch = createChatSearchMatcher(
     searchFiltering ? (props.searchQuery ?? "") : "",
@@ -215,6 +205,9 @@ export function buildChatItems(
     const itemKey = item.key;
     const raw = asRecord(msg) ?? {};
     const marker = asRecord(raw["__openclaw"]);
+    if (facts && msg === facts.probe) {
+      facts.modelBefore = projectSubmittedModel.state();
+    }
     const modelNotice = projectSubmittedModel(item);
     if (modelNotice) {
       items.push(modelNotice);
@@ -249,6 +242,9 @@ export function buildChatItems(
         rawMessageTimestamp(msg) ?? Date.now(),
         i,
       );
+      if (typeof marker?.id !== "string") {
+        facts?.indexedDividers.push(msg);
+      }
       items.push({
         ...divider,
         compactionId: divider.key,
@@ -262,6 +258,9 @@ export function buildChatItems(
       continue;
     }
     if (marker && marker.kind === "reset") {
+      if (typeof marker.id !== "string") {
+        facts?.indexedDividers.push(msg);
+      }
       items.push(buildResetDividerItem(marker, normalized.timestamp ?? Date.now(), i));
       continue;
     }
@@ -276,6 +275,7 @@ export function buildChatItems(
     }
 
     for (const inline of pluginInlineViewItems(item, inlineInvocations)) {
+      facts?.firsts.set(inline.key, msg);
       hideSearchMiss(inline);
       items.push(inline);
     }
@@ -287,6 +287,9 @@ export function buildChatItems(
       if (identity) {
         duplicatePersistedCanvas = canvasIdentities.has(identity);
         canvasIdentities.add(identity);
+        if (!duplicatePersistedCanvas) {
+          facts?.firsts.set(`canvas:${identity}`, msg);
+        }
       }
     }
     const matchingCanvas =
@@ -347,7 +350,7 @@ export function buildChatItems(
     const complete = hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined;
     return groupMessages(
       projectYields(coalesceToolActivityMessages(items, hidden), complete),
-      { items: complete, people: props.replyPeople, localPerson: props.replyLocalPerson },
+      { items: complete, people: props.replyPeople, localPerson: props.replyLocalPerson, facts },
       props.showReasoning ? props.reasoning : undefined,
       props.showReasoning,
     );

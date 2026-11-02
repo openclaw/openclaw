@@ -127,11 +127,16 @@ async function normalizeRow(
           ) {
             return false;
           }
+          // Shipped owners may omit revisions on both sides. The exact session
+          // and connection checks above still fence that legacy identity.
+          if (assignment.owner.lifecycleRevision === current.entry.lifecycleRevision) {
+            return true;
+          }
           if (!assignment.owner.lifecycleRevision || !current.entry.lifecycleRevision) {
             unknownLifecycle = true;
             return true;
           }
-          return assignment.owner.lifecycleRevision === current.entry.lifecycleRevision;
+          return false;
         });
         if (unknownLifecycle) {
           warnings.push(

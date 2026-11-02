@@ -435,7 +435,7 @@ describe("agents tools panel (browser)", () => {
     await Promise.resolve();
 
     expect(container.textContent).toContain(
-      "Full selects tools; it does not grant Full Access execution permissions.",
+      "Full selects tools; it does not grant Full access execution permissions.",
     );
     const toggle = toolSwitch(container, "openclaw");
     expect(toggle.checked).toBe(false);

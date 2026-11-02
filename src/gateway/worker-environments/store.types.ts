@@ -1,4 +1,8 @@
 import type { WorkerResourceReceipt } from "../../plugins/capability-provider.types.js";
+import type {
+  WorkerRetentionOperation,
+  WorkerRetentionObservation,
+} from "../../plugins/worker-retention.types.js";
 import type { WorkerCredentialRecord } from "./credential.js";
 import type {
   WorkerEnvironmentIntentInput,
@@ -41,6 +45,25 @@ export type WorkerEnvironmentMutationMethods = {
     environmentId: string;
     provisionOperationId: string;
     receipt: WorkerResourceReceipt;
+    assertCurrent: () => void;
+  }): WorkerEnvironmentRecord;
+  beginRetentionOperation(input: {
+    environmentId: string;
+    expectedOwnerEpoch: number;
+    operation: WorkerRetentionOperation;
+    assertCurrent?: () => void;
+  }): WorkerEnvironmentRecord;
+  recordRetentionObservation(input: {
+    environmentId: string;
+    expectedOwnerEpoch: number;
+    observation: WorkerRetentionObservation;
+    assertCurrent?: () => void;
+  }): WorkerEnvironmentRecord;
+  setRetentionRuntimeAdmission(input: {
+    ready: boolean;
+    environmentId: string;
+    expectedOwnerEpoch: number;
+    expectedClaimRevision: string;
     assertCurrent: () => void;
   }): WorkerEnvironmentRecord;
   ensureNodeEnrollment(environmentId: string): WorkerEnvironmentRecord;

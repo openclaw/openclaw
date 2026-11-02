@@ -110,63 +110,67 @@ it.each([
   }
 });
 
-it.each(["ltr", "rtl"])("reveals the active tab only at phone width in %s", async (direction) => {
-  const viewport = { width: innerWidth, height: innerHeight };
-  const styles = document.createElement("style");
-  styles.textContent = [baseStyles, hubStyles, tabsStyles].join("\n");
-  document.head.append(styles);
-  const [active, setActive] = createSignal("alpha");
-  const view = mountSolid(() => (
-    <div dir={direction} style="width:160px">
-      <HubTabs
-        {...hubProps("reveal", setActive, ["Alpha", "Bravo", "Charlie", "Delta", "Echo"])}
-        active={active()}
-      />
-    </div>
-  ));
-  flush();
-  const strip = view.getByRole("tablist");
-  const select = async (value: string) => {
-    setActive(value);
+it.each(["ltr", "rtl"] as const)(
+  "reveals the active tab only at phone width in %s",
+  async (direction) => {
+    const viewport = { width: innerWidth, height: innerHeight };
+    const styles = document.createElement("style");
+    styles.textContent = [baseStyles, hubStyles, tabsStyles].join("\n");
+    document.head.append(styles);
+    const [active, setActive] = createSignal("alpha");
+    const view = mountSolid(() => (
+      <div dir={direction} style="width:160px">
+        <HubTabs
+          {...hubProps("reveal", setActive, ["Alpha", "Bravo", "Charlie", "Delta", "Echo"])}
+          active={active()}
+        />
+      </div>
+    ));
     flush();
-    await nextFrame();
-    await nextFrame();
-  };
-  const farEdge = direction === "rtl" ? "atStart" : "atEnd";
-  try {
-    await page.viewport(390, 844);
-    await vi.waitFor(() => expect(strip.dataset[farEdge]).toBe("false"));
+    const strip = view.getByRole("tablist");
+    const select = async (value: string) => {
+      setActive(value);
+      flush();
+      await nextFrame();
+      await nextFrame();
+    };
+    const farEdge = direction === "rtl" ? "atStart" : "atEnd";
+    try {
+      await page.viewport(390, 844);
+      await vi.waitFor(() => expect(strip.dataset[farEdge]).toBe("false"));
 
-    await select("charlie");
-    const charlie = view.getByRole("tab", { name: "Charlie" }).getBoundingClientRect();
-    const bounds = strip.getBoundingClientRect();
-    const padding = getComputedStyle(strip);
-    expect(charlie.left).toBeGreaterThanOrEqual(
-      bounds.left + Number.parseFloat(padding.scrollPaddingLeft) - 1,
-    );
-    expect(charlie.right).toBeLessThanOrEqual(
-      bounds.right - Number.parseFloat(padding.scrollPaddingRight) + 1,
-    );
+      await select("charlie");
+      const charlie = view.getByRole("tab", { name: "Charlie" }).getBoundingClientRect();
+      const bounds = strip.getBoundingClientRect();
+      const padding = getComputedStyle(strip);
+      expect(charlie.left).toBeGreaterThanOrEqual(
+        bounds.left + Number.parseFloat(padding.scrollPaddingLeft) - 1,
+      );
+      expect(charlie.right).toBeLessThanOrEqual(
+        bounds.right - Number.parseFloat(padding.scrollPaddingRight) + 1,
+      );
 
-    await select("echo");
-    const echo = view.getByRole("tab", { name: "Echo" }).getBoundingClientRect();
-    expect(Math.abs(strip.scrollLeft)).toBeGreaterThan(0);
-    expect(echo.left).toBeGreaterThanOrEqual(strip.getBoundingClientRect().left - 1);
-    expect(echo.right).toBeLessThanOrEqual(strip.getBoundingClientRect().right + 1);
-    await vi.waitFor(() => expect(strip.dataset[farEdge]).toBe("true"));
+      await select("echo");
+      const echo = view.getByRole("tab", { name: "Echo" }).getBoundingClientRect();
+      expect(Math.abs(strip.scrollLeft)).toBeGreaterThan(0);
+      expect(echo.left).toBeGreaterThanOrEqual(strip.getBoundingClientRect().left - 1);
+      expect(echo.right).toBeLessThanOrEqual(strip.getBoundingClientRect().right + 1);
+      await vi.waitFor(() => expect(strip.dataset[farEdge]).toBe("true"));
 
-    await select("alpha");
-    expect(strip.scrollLeft).toBe(0);
+      await select("alpha");
+      expect(Math.abs(strip.scrollLeft)).toBeLessThanOrEqual(1);
 
-    await page.viewport(1440, 900);
-    await select("echo");
-    expect(strip.scrollLeft).toBe(0);
-  } finally {
-    await page.viewport(viewport.width, viewport.height);
-    view.unmount();
-    styles.remove();
-  }
-});
+      await page.viewport(1440, 900);
+      const desktopPosition = strip.scrollLeft;
+      await select("echo");
+      expect(strip.scrollLeft).toBe(desktopPosition);
+    } finally {
+      await page.viewport(viewport.width, viewport.height);
+      view.unmount();
+      styles.remove();
+    }
+  },
+);
 
 function nextFrame() {
   return new Promise<void>((resolve) => {

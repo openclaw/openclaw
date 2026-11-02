@@ -152,7 +152,7 @@ describe("chat permission failure ownership", () => {
         recoveryUnavailable = recovery !== "immediate";
         pending.reject(new Error("saved mode could not be applied to the active run"));
         await selection;
-        expect(state.chatError).toContain("Failed to update permissions");
+        expect(state.chatError).toContain("Couldn't change permissions");
         expect(state.chatError).toContain("saved mode could not be applied to the active run");
         expect(state.lastError).toBe(state.chatError);
         if (recovery !== "immediate") {

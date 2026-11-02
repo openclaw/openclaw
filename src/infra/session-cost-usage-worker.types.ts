@@ -54,7 +54,6 @@ export type UsageCostWorkerOperation =
   | {
       kind: "inventory";
       minMtimeMs?: number;
-      sessionFiles?: string[];
     }
   | ({ kind: "summary"; pricingFingerprint: string } & UsageCostWorkerRange)
   | {
