@@ -397,6 +397,15 @@
   background: var(--field-bg);
 }
 
+/* An unchecked toggle draws no check; its slot stays so the label doesn't move. */
+.oc-sheet .session-filter-check__input:not(:checked) + .session-filter-check__mark svg {
+  visibility: hidden;
+}
+
+.oc-sheet .session-filter-check__input:focus-visible + .session-filter-check__mark {
+  opacity: 1;
+}
+
 .oc-sheet .sessions-filter-popover__panel .session-filter-check__label {
   overflow: hidden;
   font-size: 16px;
