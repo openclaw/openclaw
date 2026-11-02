@@ -639,24 +639,41 @@ export async function runMatrixQaE2eeCorruptCryptoIdbSnapshotScenario(
       });
       const initial = await restore("initial-restore-before-corruption", setup.encodedRecoveryKey);
       assertMatrixQaCliBackupRestoreSucceeded(initial.payload, "corrupt-idb initial restore");
-      const corruptedPath = await corruptMatrixQaCliIdbSnapshot({
+      const corrupted = await corruptMatrixQaCliIdbSnapshot({
         deviceId: device.deviceId,
         runtime: cli,
         userId: device.userId,
       });
-      const repaired = await restore("restore-after-idb-corruption", setup.encodedRecoveryKey);
-      assertMatrixQaCliBackupRestoreSucceeded(repaired.payload, "corrupt-idb recovery");
+      // A corrupt canonical snapshot is an error, not a new account: crypto
+      // ownership refuses before touching it and points the operator at Doctor.
+      const refused = await restore("restore-after-idb-corruption", setup.encodedRecoveryKey, {
+        allowNonZero: true,
+      });
+      if (
+        refused.result.exitCode === 0 ||
+        refused.payload.success !== false ||
+        !refused.payload.error?.includes("openclaw matrix doctor inspect")
+      ) {
+        throw new Error(
+          `Matrix corrupt crypto snapshot was not refused with Doctor guidance: ${refused.payload.error ?? "no error"}`,
+        );
+      }
+      if (corrupted.readGeneration() !== "corrupt") {
+        throw new Error("Matrix corrupt crypto snapshot was replaced after a refused restore");
+      }
       return {
         artifacts: {
-          corruptedPath,
+          corruptedPath: corrupted.path,
           recoveryDeviceId: device.deviceId,
-          restoreImported: repaired.payload.imported,
-          restoreTotal: repaired.payload.total,
+          restoreError: refused.payload.error,
+          restoreExitCode: refused.result.exitCode,
         },
         details: [
-          "corrupted Matrix IDB snapshot state was repaired by explicit backup restore",
-          `corrupted state: ${corruptedPath}`,
-          `restore imported/total: ${repaired.payload.imported ?? 0}/${repaired.payload.total ?? 0}`,
+          "corrupted Matrix IDB snapshot failed closed and was preserved for inspection",
+          `corrupted state: ${corrupted.path}`,
+          `restore exit code: ${refused.result.exitCode}`,
+          `restore error: ${refused.payload.error}`,
+          `restore stdout: ${refused.artifacts.stdoutPath}`,
         ].join("\n"),
       };
     },

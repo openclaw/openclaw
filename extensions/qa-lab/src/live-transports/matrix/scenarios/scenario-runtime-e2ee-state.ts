@@ -118,7 +118,8 @@ export async function corruptMatrixQaCliIdbSnapshot(params: {
 }) {
   const accountRoot = await findMatrixQaCliAccountRoot(params);
   const matrixRuntime = await loadMatrixQaE2eeRuntime();
-  withMatrixQaStateStore(matrixRuntime.openMatrixIdbSnapshotStoreOptions(accountRoot), (store) =>
+  const snapshotStoreOptions = matrixRuntime.openMatrixIdbSnapshotStoreOptions(accountRoot);
+  withMatrixQaStateStore(snapshotStoreOptions, (store) =>
     store.register("current:meta", {
       kind: "meta",
       version: 1,
@@ -129,7 +130,16 @@ export async function corruptMatrixQaCliIdbSnapshot(params: {
       persistedAt: new Date().toISOString(),
     }),
   );
-  return "matrix/idb-snapshot/current:meta";
+  return {
+    path: "matrix/idb-snapshot/current:meta",
+    readGeneration: () =>
+      withMatrixQaStateStore(snapshotStoreOptions, (store) => {
+        const meta = store.lookup("current:meta");
+        return meta && typeof meta === "object" && "generation" in meta
+          ? meta.generation
+          : undefined;
+      }),
+  };
 }
 
 export async function deleteMatrixQaServerRoomKeyBackup(params: {
