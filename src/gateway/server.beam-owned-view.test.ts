@@ -1,12 +1,12 @@
-import { fileURLToPath } from "node:url";
 import { createPluginStateKeyedStoreV2ForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { registerTestPlugin } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { expect, test } from "vitest";
-import beamPlugin from "../../extensions/beam/index.js";
 import type {
   SessionsCatalogListResult,
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { loadOpenClawPluginsAsync } from "../plugins/loader.js";
+import { projectPluginContributions } from "../plugins/registry-contributions.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
@@ -51,8 +51,9 @@ test("HTTP Visitor publications are privately readable by their initial publishe
     },
   };
   await configureBrowserAuth(browserProxyAuth(), { roles });
-  for (const role of ["staff", "reader"])
+  for (const role of ["staff", "reader"]) {
     setUserProfileRole(ensureProfileForEmail(role + "@example.test").id, role);
+  }
   const grants = new Map(
     ["alice", "bob"].map((name) => [name + "@example.test", new AbortController()]),
   );
@@ -70,8 +71,12 @@ test("HTTP Visitor publications are privately readable by their initial publishe
       api.registerGatewayAccessPolicy({
         authorize({ requiredByRole, profile }) {
           const grant = grants.get(profile.emails[0] ?? "");
-          if (!requiredByRole) return undefined;
-          if (!grant) throw new Error("No synthetic Visitor invitation");
+          if (!requiredByRole) {
+            return undefined;
+          }
+          if (!grant) {
+            throw new Error("No synthetic Visitor invitation");
+          }
           grant.signal.throwIfAborted();
           return {
             grantId: "synthetic-" + profile.profileId,
@@ -84,17 +89,21 @@ test("HTTP Visitor publications are privately readable by their initial publishe
       });
     },
   });
-  registerTestPlugin({
-    ...fixture,
-    record: createPluginRecord({
-      id: "beam",
-      origin: "bundled",
-      source: fileURLToPath(new URL("../../extensions/beam/index.ts", import.meta.url)),
-      rootDir: fileURLToPath(new URL("../../extensions/beam/", import.meta.url)),
-    }),
-    register: beamPlugin.register,
+  // The real loader captures the operation module source together with its instance.
+  // A direct registration fixture has a lifetime, but no admitted operation-code owner.
+  const registry = await loadOpenClawPluginsAsync({
+    config: fixture.config,
+    onlyPluginIds: ["beam"],
+    preferBuiltPluginArtifacts: false,
+    activate: false,
+    cache: false,
+    throwOnLoadError: true,
   });
-  setTestPluginRegistry(fixture.registry.registry);
+  for (const record of fixture.registry.registry.plugins) {
+    registry.plugins.push(record);
+    projectPluginContributions(fixture.registry.registry, record, registry);
+  }
+  setTestPluginRegistry(registry);
   await withGatewayServer(async ({ port }) => {
     const connect = async (name: string) => {
       const ws = await openWs(port, {
@@ -234,7 +243,9 @@ test("HTTP Visitor publications are privately readable by their initial publishe
       ] as const) {
         const denied = await rpcReq(ws, "beam.owned.read", { ...request, threadId: id });
         expect(denied.ok).toBe(false);
-        if (ws !== reader) expect(denied.error?.code).toBe("FORBIDDEN");
+        if (ws !== reader) {
+          expect(denied.error?.code).toBe("FORBIDDEN");
+        }
         expect(JSON.stringify(denied)).not.toContain("Private");
       }
       expect(
@@ -254,7 +265,9 @@ test("HTTP Visitor publications are privately readable by their initial publishe
         ).ok,
       ).toBe(true);
     } finally {
-      for (const ws of [alice, bob, staff, reader]) ws.close();
+      for (const ws of [alice, bob, staff, reader]) {
+        ws.close();
+      }
     }
   });
 });
