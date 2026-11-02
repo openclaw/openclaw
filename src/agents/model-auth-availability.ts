@@ -831,7 +831,12 @@ export function createModelAuthAvailabilityResolver(
     const target = prepareAuthTarget(provider, ref);
     const profileLock = ref.requiredProfileId?.trim();
     if (invalidProfilePin(provider, ref)) {
-      return { availability: false, unavailableReason: "auth-failed", evidence: "profile" };
+      return {
+        availability: false,
+        unavailableReason: "auth-failed",
+        selectedProfileId: ref.pinnedProfileId?.trim(),
+        evidence: "profile",
+      };
     }
     const policy = directPolicy(provider, target);
     if (!profileLock && policy.binding.kind === "profile-incompatible") {
@@ -889,21 +894,13 @@ export function createModelAuthAvailabilityResolver(
         ...(available ? { runtimeAuth: { id: "codex", source: "native" } as const } : {}),
       };
     }
-    if (isPluginAuthProvider(provider)) {
+    const pluginAuth = isPluginAuthProvider(provider);
+    if (pluginAuth || provider !== OPENAI_PROVIDER_ID || invalidProfilePin(provider, ref)) {
       return {
         ...resolveProviderEvaluation(provider, ref),
         routeResolution: null,
-        availabilityAuthoritative: true,
+        ...(pluginAuth ? { availabilityAuthoritative: true as const } : {}),
       };
-    }
-    if (provider !== OPENAI_PROVIDER_ID) {
-      return {
-        ...resolveProviderEvaluation(provider, ref),
-        routeResolution: null,
-      };
-    }
-    if (invalidProfilePin(provider, ref)) {
-      return { availability: false, unavailableReason: "auth-failed", routeResolution: null };
     }
     const modelLock = ref.requiredProfileId?.trim();
     const configuredAuthMode = ref.pinnedProfileId

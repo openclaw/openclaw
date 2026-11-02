@@ -33,6 +33,7 @@ import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ReasonedDisabledControl } from "../plugins/reasoned-disabled-control.tsx";
+import { AgentsPageMenu } from "./agents-page-menu.tsx";
 import type { AgentsPageView } from "./agents-page-state.ts";
 import { AgentFiles } from "./panels-files.tsx";
 import { AgentOverview } from "./panels-overview.tsx";
@@ -175,7 +176,7 @@ export function Agents(props: AgentsProps) {
                         <>
                           <button
                             type="button"
-                            class="btn btn--sm btn--ghost"
+                            class="btn btn--sm btn--ghost agents-toolbar-secondary"
                             onClick={(event) =>
                               void handleCopyButton(event, id, t("agents.copyId"), {
                                 label,
@@ -198,7 +199,7 @@ export function Agents(props: AgentsProps) {
                   </Show>
                   <button
                     type="button"
-                    class="btn btn--sm btn--ghost"
+                    class="btn btn--sm btn--ghost agents-toolbar-secondary"
                     disabled={
                       !props.access.canUpdateConfig ||
                       settingDefault() ||
@@ -214,7 +215,7 @@ export function Agents(props: AgentsProps) {
                   </button>
                   <button
                     type="button"
-                    class="btn btn--sm btn--ghost"
+                    class="btn btn--sm btn--ghost agents-toolbar-secondary"
                     onClick={() => props.onTogglePinnedAgent(agent().id)}
                   >
                     {t(
@@ -231,6 +232,31 @@ export function Agents(props: AgentsProps) {
               label={t("common.refresh")}
               busy={rosterPending()}
               onClick={() => props.onRefresh()}
+            />
+            <AgentsPageMenu
+              agentId={selectedAgent()?.id ?? null}
+              defaultLabel={
+                settingDefault()
+                  ? t("common.saving")
+                  : selectedAgent()?.id === defaultId()
+                    ? t("agents.default")
+                    : t("agents.setDefault")
+              }
+              defaultDisabled={
+                !props.access.canUpdateConfig ||
+                settingDefault() ||
+                selectedAgent()?.id === defaultId()
+              }
+              pinLabel={t(
+                props.pinnedAgentIds.includes(selectedAgent()?.id ?? "")
+                  ? "agents.unpinFromSwitcher"
+                  : "agents.pinToSwitcher",
+              )}
+              refreshLabel={t(rosterPending() ? "common.loading" : "common.refresh")}
+              refreshDisabled={rosterPending()}
+              onSetDefault={setDefault}
+              onTogglePinned={props.onTogglePinnedAgent}
+              onRefresh={props.onRefresh}
             />
           </div>
         </div>

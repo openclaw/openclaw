@@ -241,7 +241,9 @@ describe("postWorkshopChangeNotice", () => {
           },
         ],
         session: expect.objectContaining({ key: sessionKey }),
-        deliveryIntentId: expect.stringMatching(/^skill-workshop-notice:/),
+        deliveryIntentId: expect.stringMatching(
+          /^plugin-notice:skill-workshop:skill-workshop-notice:/,
+        ),
       }),
       undefined,
       undefined,
@@ -308,7 +310,7 @@ describe("postWorkshopChangeNotice", () => {
       mocks.entry.mockReturnValueOnce({ ...sessionEntry, lifecycleRevision: "reset-revision" });
       return { deliveryContext: { channel: "telegram", to: "42" } };
     });
-    await post([change({})]);
+    await post([change({})], undefined, channelNotices);
     expectNoNotice();
   });
 
