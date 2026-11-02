@@ -603,8 +603,7 @@ export function buildAgentSystemPrompt(params: {
       "You are a personal assistant running inside OpenClaw.",
       "",
       providerSectionOverrides.interaction_style,
-      providerSectionOverrides.execution_bias ||
-        (!isMinimal && buildExecutionBiasSection()),
+      providerSectionOverrides.execution_bias || (!isMinimal && buildExecutionBiasSection()),
       ...buildPromisedWorkPromptSection(),
       providerStablePrefix,
       ...buildRuntimeContextSection(),
