@@ -8,9 +8,11 @@ import ai.openclaw.app.chat.ChatMessageProvenance
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatToolActivity
 import ai.openclaw.app.chat.ChatTranscriptMarker
 import ai.openclaw.app.chat.OUTBOX_OWNER_CHANGED_ERROR
+import ai.openclaw.app.gateway.QuestionRecord
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
@@ -639,6 +641,125 @@ class ChatTimelineTest {
 
     assertEquals(initial.items.map(::chatTimelineItemKey), updated.items.map(::chatTimelineItemKey))
     assertTrue(initial.latestContentVersion != updated.latestContentVersion)
+  }
+
+  @Test
+  fun terminalQuestionPlaysBesideNewerMessagesInsteadOfDocking() {
+    val messages =
+      listOf(
+        ChatMessage("user-old", "user", listOf(ChatMessageContent(type = "text", text = "before")), 100),
+        ChatMessage("assistant-new", "assistant", listOf(ChatMessageContent(type = "text", text = "after")), 300),
+      )
+    val answered =
+      ChatQuestionPrompt(
+        QuestionRecord(
+          id = "ask-1",
+          questions = emptyList(),
+          createdAtMs = 200,
+          expiresAtMs = 1_000,
+          status = "answered",
+        ),
+      )
+    val pending =
+      ChatQuestionPrompt(
+        QuestionRecord(
+          id = "ask-live",
+          questions = emptyList(),
+          createdAtMs = 50,
+          expiresAtMs = Long.MAX_VALUE,
+          status = "pending",
+        ),
+      )
+
+    val timeline =
+      prepareChatHistory(messages, "agent:main:main", mainSessionKey = "agent:main:main")
+        .buildTimeline(
+          pendingRunCount = 0,
+          pendingToolCalls = emptyList(),
+          streamingAssistantText = null,
+          questions = listOf(answered, pending),
+        )
+
+    assertEquals(
+      listOf(
+        "question:ask-live",
+        "message:assistant-new",
+        "question:ask-1",
+        "message:user-old",
+      ),
+      timeline.items.map(::chatTimelineItemKey),
+    )
+    // Terminal summary stays in the transcript; only the live prompt owns the dock edge.
+    assertEquals(2, timeline.items.filterIsInstance<ChatTimelineItem.QuestionPrompt>().size)
+    assertTrue((timeline.items.first() as ChatTimelineItem.QuestionPrompt).prompt.isLiveDockPrompt())
+    val terminalIndex = timeline.items.indexOfFirst { chatTimelineItemKey(it) == "question:ask-1" }
+    val newerIndex = timeline.items.indexOfFirst { chatTimelineItemKey(it) == "message:assistant-new" }
+    val olderIndex = timeline.items.indexOfFirst { chatTimelineItemKey(it) == "message:user-old" }
+    assertTrue(terminalIndex in (newerIndex + 1) until olderIndex)
+  }
+
+  @Test
+  fun sessionResetLeavesAnsweredSummaryAboveDividerNotInDock() {
+    val messages =
+      listOf(
+        ChatMessage("user-before", "user", listOf(ChatMessageContent(type = "text", text = "old")), 100),
+        ChatMessage(
+          "reset",
+          "system",
+          emptyList(),
+          200,
+          transcriptMarker = ChatTranscriptMarker("reset", "reset-1", null, null),
+        ),
+        ChatMessage("user-after", "user", listOf(ChatMessageContent(type = "text", text = "new")), 300),
+      )
+    val preResetAnswered =
+      ChatQuestionPrompt(
+        QuestionRecord(
+          id = "ask-pre",
+          questions = emptyList(),
+          createdAtMs = 150,
+          expiresAtMs = 1_000,
+          status = "answered",
+        ),
+      )
+    val stillPending =
+      ChatQuestionPrompt(
+        QuestionRecord(
+          id = "ask-live",
+          questions = emptyList(),
+          createdAtMs = 400,
+          expiresAtMs = Long.MAX_VALUE,
+          status = "pending",
+        ),
+      )
+
+    val timeline =
+      prepareChatHistory(messages, "agent:main:main", mainSessionKey = "agent:main:main")
+        .buildTimeline(
+          pendingRunCount = 0,
+          pendingToolCalls = emptyList(),
+          streamingAssistantText = null,
+          questions = listOf(preResetAnswered, stillPending),
+        )
+
+    val keys = timeline.items.map(::chatTimelineItemKey)
+    assertEquals(
+      listOf(
+        "question:ask-live",
+        "message:user-after",
+        "divider:reset:reset-1",
+        "question:ask-pre",
+        "message:user-before",
+      ),
+      keys,
+    )
+    val dockEdge = timeline.items.first() as ChatTimelineItem.QuestionPrompt
+    assertTrue(dockEdge.prompt.isLiveDockPrompt())
+    assertEquals("ask-live", dockEdge.prompt.record.id)
+    // Retained summary remains after reset, on the older side of the divider.
+    val dividerIndex = keys.indexOf("divider:reset:reset-1")
+    val summaryIndex = keys.indexOf("question:ask-pre")
+    assertTrue(summaryIndex > dividerIndex)
   }
 
   private fun textMessage(

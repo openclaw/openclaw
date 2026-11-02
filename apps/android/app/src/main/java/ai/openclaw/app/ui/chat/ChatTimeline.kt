@@ -79,6 +79,8 @@ internal sealed class ChatTimelineItem {
     val label: String,
     val metric: String? = null,
     val secondary: String? = null,
+    /** Source message time so terminal rows can place themselves relative to a reset. */
+    val timestampMs: Long? = null,
   ) : ChatTimelineItem()
 
   object Thinking : ChatTimelineItem()
@@ -158,10 +160,37 @@ internal fun PreparedChatHistory.buildTimeline(
 ): ChatTimeline {
   val stream = streamingAssistantText?.trim()?.takeIf { it.isNotEmpty() }
   val latestTurnLive = pendingRunCount > 0 || pendingToolCalls.any { !it.isComplete } || stream != null
+  // reverseLayout: index 0 renders bottom-most. Only live prompts stay docked at the
+  // composer edge; answered/expired/cancelled summaries walk into the transcript by createdAtMs.
+  val (liveQuestions, terminalQuestions) = questions.partition(ChatQuestionPrompt::isLiveDockPrompt)
+  val terminalByNewest =
+    ArrayDeque(
+      terminalQuestions
+        .sortedByDescending { it.record.createdAtMs }
+        .map(ChatTimelineItem::QuestionPrompt),
+    )
   val sourceItems =
     buildList {
-      // reverseLayout: index 0 renders bottom-most; queued commands are the newest user input.
-      questions.asReversed().forEach { prompt -> add(ChatTimelineItem.QuestionPrompt(prompt)) }
+      fun flushTerminalBefore(row: ChatTimelineItem) {
+        val rowTs =
+          when (row) {
+            is ChatTimelineItem.Message -> row.message.timestampMs
+            is ChatTimelineItem.SystemDivider -> row.timestampMs
+            else -> null
+          } ?: return
+        while (terminalByNewest.isNotEmpty()) {
+          val prompt = terminalByNewest.first().prompt
+          if (prompt.record.createdAtMs <= rowTs) break
+          add(terminalByNewest.removeFirst())
+        }
+      }
+
+      fun addRow(row: ChatTimelineItem) {
+        flushTerminalBefore(row)
+        add(row)
+      }
+
+      liveQuestions.asReversed().forEach { prompt -> add(ChatTimelineItem.QuestionPrompt(prompt)) }
       outboxItems.asReversed().forEach { item -> add(ChatTimelineItem.OutboxCommand(item)) }
       recoveryOutboxItems.asReversed().forEach { item -> add(ChatTimelineItem.RecoveryOutboxCommand(item)) }
       if (recoveryOutboxItems.isNotEmpty()) add(ChatTimelineItem.OutboxRecoveryHeader(recoveryOutboxItems.size))
@@ -176,18 +205,20 @@ internal fun PreparedChatHistory.buildTimeline(
             (span.inLatestTurn && latestTurnLive) || (span.inLatestRunChain && pendingRunCount > 0) ||
               activeRunId?.let { (span.runLastTurnIndexes[it] ?: -1) >= span.turnIndex } == true
           if (live) {
-            for (index in rowIndex downTo span.start) add(rows[index])
+            for (index in rowIndex downTo span.start) addRow(rows[index])
           } else {
-            span.preservedRowIndexes.asReversed().forEach { add(rows[it]) }
-            if (span.key in expandedWorkKeys) span.workRowIndexes.asReversed().forEach { add(rows[it]) }
+            span.preservedRowIndexes.asReversed().forEach { addRow(rows[it]) }
+            if (span.key in expandedWorkKeys) span.workRowIndexes.asReversed().forEach { addRow(rows[it]) }
             add(ChatTimelineItem.WorkedSummary(span.key, span.durationMs, span.key in expandedWorkKeys, span.outcomes))
           }
           rowIndex = span.start - 1
           spanIndex--
         } else {
-          add(rows[rowIndex--])
+          addRow(rows[rowIndex--])
         }
       }
+      // Older than every timestamped row: keep summaries above the transcript, never in the live dock.
+      terminalByNewest.forEach { add(it) }
     }
   val items = projectToolActivity(sourceItems, rows, pendingToolCalls, toolScope, toolScopesByRun)
   val latestUserIndex = items.indexOfFirst { it is ChatTimelineItem.Message && it.message.id == latestUserMessageId }.takeIf { it >= 0 }
@@ -497,6 +528,7 @@ private fun classifyTranscriptMessage(
           kind = SystemDividerKind.Compaction,
           label = nativeString("Compacted history"),
           metric = saved?.let { nativeString("saved \$count tokens", formatCompactTokenCount(it)) },
+          timestampMs = message.timestampMs,
         )
       }
 
@@ -506,6 +538,7 @@ private fun classifyTranscriptMessage(
           kind = SystemDividerKind.Reset,
           label = nativeString("Session reset"),
           secondary = nativeString("The earlier conversation was cleared."),
+          timestampMs = message.timestampMs,
         )
       }
 
