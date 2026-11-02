@@ -239,7 +239,12 @@ describe("SQLite transcript archive worker", () => {
       });
       const archivePath = path.join(path.dirname(storePath), archive?.archive_name ?? "");
       expect(sha256(fs.readFileSync(archivePath))).toBe(archive?.archive_sha256);
-      expect(readSessionArchiveContentSync(archivePath)).toBe(jsonl([session.event]));
+      const content = jsonl([session.event]);
+      expect(
+        zstdDecompressSync(fs.readFileSync(archivePath), {
+          maxOutputLength: Buffer.byteLength(content),
+        }).toString("utf8"),
+      ).toBe(content);
     }
   });
 

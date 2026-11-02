@@ -84,7 +84,7 @@ function queueOwner(
 ) {
   const started = createDeferred();
   const stopped = createDeferred();
-  const exitOwner = (code: number, signal: NodeJS.Signals | null) => {
+  const exitOwner = (code: number | null, signal: NodeJS.Signals | null) => {
     owner.emit("exit", code, signal);
     owner.emit("close", code, signal);
   };
@@ -241,6 +241,38 @@ describe("private Tailscale Serve claims", () => {
     await claim.stop();
   });
 
+  it.each([
+    ["serve", 42, null, "worker code 1; CLI code 42"],
+    ["funnel", undefined, "SIGKILL", "worker signal SIGKILL"],
+  ] as const)("explains lost %s ingress before recovery", async (mode, cliCode, signal, reason) => {
+    vi.useFakeTimers();
+    const { owner, exit } = queueOwner();
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const cleanup = await startExposure(mode, log);
+    try {
+      if (cliCode !== undefined) {
+        owner.emit("message", {
+          type: "failed",
+          code: cliCode,
+          signal: null,
+          stdout: "synthetic-auth-key",
+          stderr: "synthetic-token",
+        });
+      }
+      exit(signal ? null : 1, signal);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(log.warn).toHaveBeenCalledWith(
+        `${mode} route claim exited (${reason}); recovering managed Tailscale ingress`,
+      );
+      expect(log.warn.mock.calls.flat().join("\n")).not.toMatch(
+        /synthetic-auth-key|synthetic-token/,
+      );
+      expect(getTailscalePublishedOrigin()).toBeUndefined();
+    } finally {
+      await cleanup?.();
+    }
+  });
+
   it("joins a cancelled Gateway claim even when readiness races shutdown", async () => {
     const pending = queueOwner({ ready: false });
     const controller = new AbortController();
@@ -378,7 +410,7 @@ describe("private Tailscale Serve claims", () => {
       } else {
         exit(1, null);
       }
-      await expect(claim.exited).resolves.toBeUndefined();
+      await expect(claim.exited).resolves.toBe(`worker code ${ending === "stop" ? 0 : 1}`);
       expect(claim.isActive()).toBe(false);
       expect(runExecMock).toHaveBeenCalledTimes(2);
     },

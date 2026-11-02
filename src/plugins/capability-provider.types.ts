@@ -52,7 +52,7 @@ import type {
   SpeechSynthesisStreamResult,
   SpeechTelephonySynthesisResult,
 } from "../tts/tts-runtime-types.js";
-import type { VideoGenerationProvider } from "../video-generation/types.js";
+import type { VideoGenerationProvider } from "../video-generation/provider-types.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 import type {
   WorkerRetentionObservation,

@@ -13,7 +13,7 @@ const Content = lazy(() => import("./image-lightbox-content.tsx"), {
   export: "ImageLightboxContent",
 });
 
-export const ImageLightbox = defineSolidBridge<ImageLightboxProps>(
+const ImageLightbox = defineSolidBridge<ImageLightboxProps>(
   "openclaw-image-lightbox",
   (props, host) => (
     <ImageLightboxHost value={host}>
