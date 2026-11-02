@@ -549,7 +549,10 @@ test("dispatches agent hooks when the process clock is outside the Date range", 
         clock.mockRestore();
         return { status: "ok", summary: "done" };
       });
-      await post("agent", { message: "Bad clock", wakeMode: "next-heartbeat" });
+      await postWithDeferredHookWake(post, "agent", {
+        message: "Bad clock",
+        wakeMode: "next-heartbeat",
+      });
     }
     await waitForSystemEvent();
 

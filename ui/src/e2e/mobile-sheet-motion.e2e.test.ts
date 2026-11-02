@@ -78,14 +78,21 @@ async function sampleSheetTransition(
   time: number,
   action: () => Promise<void>,
   inspect: (
-    state: Awaited<ReturnType<typeof shellState>> & { launcherVisible: boolean },
+    state: Awaited<ReturnType<typeof shellState>> & {
+      launcherVisible: boolean;
+      contentVisible?: boolean;
+    },
   ) => void | Promise<void>,
+  options: { contentSelector?: string; clickSelector?: string } = {},
 ) {
   const sample = await page.locator(".chat-mobile-host").evaluateHandle(
-    (shell, sampleTime) => ({
+    (shell, { sampleTime, contentSelector, clickSelector }) => ({
       started: new Promise<{
         animations: CSSTransition[];
-        state: Awaited<ReturnType<typeof shellState>> & { launcherVisible: boolean };
+        state: Awaited<ReturnType<typeof shellState>> & {
+          launcherVisible: boolean;
+          contentVisible?: boolean;
+        };
       }>((resolve, reject) => {
         const onTransition = (event: Event) => {
           if (
@@ -111,27 +118,46 @@ async function sampleSheetTransition(
           const style = getComputedStyle(shell);
           const bounds = shell.getBoundingClientRect();
           const region = shell.parentElement!.getBoundingClientRect();
-          resolve({
-            animations,
-            state: {
-              hidden: shell.hasAttribute("hidden"),
-              visibility: style.visibility,
-              mode: shell.getAttribute("data-mode"),
-              height: bounds.height,
-              top: bounds.top,
-              regionHeight: region.height,
-              regionBottom: region.bottom,
-              easing: style.transitionTimingFunction,
-              launcherVisible:
-                (shell.querySelector(".chat-panel-launcher-mobile")?.getClientRects().length ?? 0) >
-                0,
-            },
-          });
+          const content = contentSelector ? document.querySelector(contentSelector) : undefined;
+          const contentBounds = content?.getBoundingClientRect();
+          const state = {
+            hidden: shell.hasAttribute("hidden"),
+            visibility: style.visibility,
+            mode: shell.getAttribute("data-mode"),
+            height: bounds.height,
+            top: bounds.top,
+            regionHeight: region.height,
+            regionBottom: region.bottom,
+            easing: style.transitionTimingFunction,
+            launcherVisible:
+              (shell.querySelector(".chat-panel-launcher-mobile")?.getClientRects().length ?? 0) >
+              0,
+            contentVisible: contentSelector
+              ? Boolean(
+                  content?.checkVisibility({ visibilityProperty: true }) &&
+                  contentBounds &&
+                  contentBounds.width > 0 &&
+                  contentBounds.height > 0,
+                )
+              : undefined,
+          };
+          if (clickSelector) {
+            const button = [...document.querySelectorAll<HTMLButtonElement>(clickSelector)].find(
+              (entry) => !entry.disabled && entry.checkVisibility({ visibilityProperty: true }),
+            );
+            if (!button) {
+              reject(new Error(`Missing visible transition action: ${clickSelector}`));
+              return;
+            }
+            // Invoke the real handler before the independent exit timer can remove this page.
+            button.click();
+          }
+          resolve({ animations, state });
         };
         shell.addEventListener("transitionrun", onTransition);
       }),
     }),
-    time,
+    { sampleTime: time, ...options },
   );
   await action();
   const state = await sample.evaluate(({ started }) => started.then((value) => value.state));
@@ -140,7 +166,10 @@ async function sampleSheetTransition(
   } finally {
     await sample.evaluate(async ({ started }) => {
       for (const animation of (await started).animations) {
-        animation.play();
+        // Reopening can cancel the sampled exit; never restart its superseded transition.
+        if (animation.playState === "paused") {
+          animation.play();
+        }
       }
     });
     await sample.dispose();
@@ -420,36 +449,58 @@ suite.define(() => {
         .locator(".chat-mobile-host__header")
         .getByRole("button", { name: "Close", exact: true });
       await shell.getByRole("button", { name: "Files", exact: true }).click();
-      const files = page.locator('[data-panel-slot="workspace"]');
+      const filesSelector = '[data-panel-slot="workspace"]';
+      const files = page.locator(filesSelector);
       await files.waitFor();
       await settle(page);
 
-      await close.click();
-      await page.waitForTimeout(60);
-      expect((await shellState(page)).hidden).toBe(true);
-      // Closed for focus and accessibility, but the panel slides out with the sheet.
-      expect(await files.isVisible()).toBe(true);
+      await sampleSheetTransition(
+        page,
+        60,
+        () => close.click(),
+        (leaving) => {
+          expect(leaving.hidden).toBe(true);
+          // Closed for focus and accessibility, but the panel slides out with the sheet.
+          expect(leaving.contentVisible).toBe(true);
+        },
+        { contentSelector: filesSelector },
+      );
       await settle(page);
       expect(await files.isVisible()).toBe(false);
 
       await openPanels(page);
       await shell.getByRole("button", { name: "Details", exact: true }).click();
       await shell.getByRole("button", { name: /^Outputs/ }).click();
-      const outputs = shell.locator('.chat-mobile-details-page[data-details-page="outputs"]');
+      const outputsSelector = '.chat-mobile-details-page[data-details-page="outputs"]';
+      const outputs = shell.locator(outputsSelector);
       await outputs.waitFor();
       await settle(page);
-      await close.click();
-      await page.waitForTimeout(60);
-      expect(await outputs.isVisible()).toBe(true);
+      await sampleSheetTransition(
+        page,
+        60,
+        () => close.click(),
+        (leaving) => {
+          expect(leaving.hidden).toBe(true);
+          expect(leaving.contentVisible).toBe(true);
+        },
+        { contentSelector: outputsSelector },
+      );
       await settle(page);
       expect(await outputs.isVisible()).toBe(false);
 
       // Reopening mid-exit cancels the pending close instead of hiding the page later.
       await page.getByRole("button", { name: "Panels", exact: true }).first().click();
       await outputs.waitFor();
-      await close.click();
-      await page.waitForTimeout(60);
-      await page.getByRole("button", { name: "Panels", exact: true }).first().click();
+      await sampleSheetTransition(
+        page,
+        60,
+        () => close.click(),
+        (leaving) => {
+          expect(leaving.hidden).toBe(true);
+          expect(leaving.contentVisible).toBe(true);
+        },
+        { contentSelector: outputsSelector, clickSelector: 'button[aria-label="Panels"]' },
+      );
       await settle(page);
       expect((await shellState(page)).hidden).toBe(false);
       expect(await outputs.isVisible()).toBe(true);
