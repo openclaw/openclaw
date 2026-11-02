@@ -145,6 +145,9 @@ describe("active-memory escalation", () => {
     "Parlavo italiano con mia madre.",
     "Ho dei bei ricordi della vacanza.",
     "Il libro che leggevo ieri era bello.",
+    "Ti ricordi di chiamare il medico la prossima settimana?",
+    "Quale cavo devo comprare?",
+    "Il prossimo mese parliamo del contratto.",
   ])("does not mistake ordinary or future-facing %j for recall intent", (message) => {
     expect(hasRecallIntent(message)).toBe(false);
   });
