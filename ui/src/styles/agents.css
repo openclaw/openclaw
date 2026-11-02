@@ -957,7 +957,6 @@
 
 .agent-tool-details {
   padding: 0 12px 12px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
 
 .agent-tool-card:not([open]) .agent-tool-details {
@@ -1140,12 +1139,6 @@
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
   min-width: 0;
-}
-
-.agents-panel-body + .agents-panel-body,
-.settings-kv + .agents-panel-body,
-.agents-panel-body + .settings-kv {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
 .agent-profile-tree,
