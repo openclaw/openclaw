@@ -1,6 +1,7 @@
 import path from "node:path";
 import { z } from "zod";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveUserPath } from "../infra/home-dir.js";
 import {
   parseUpdateStateInspectionWorker,
   runUpdateStateInspectionWorker,
@@ -18,6 +19,7 @@ export async function createDatabaseMigrationFilesystemBackup(params: {
     input: {
       mode: "migration-filesystem-backup",
       output: params.output,
+      userPathBaseDirectory: resolveUserPath("."),
       stateDir: params.stateDir,
       config: params.config,
     },

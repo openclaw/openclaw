@@ -50,7 +50,7 @@ type UpdateStateInspectionInput = { resultPath?: string } & (
   | (Parameters<
       typeof import("./update-database-restore-source.js").prepareUpdateDatabaseRestoreSourceInProcess
     >[0] & { mode: "database-restore-preparation" })
-  | { mode: "migration-filesystem-backup"; output: string }
+  | { mode: "migration-filesystem-backup"; output: string; userPathBaseDirectory: string }
   | {
       mode: "database-generations";
       paths: string[];
@@ -68,12 +68,15 @@ async function inspectCandidateState(input: UpdateStateInspectionInput): Promise
   if (input.mode === "migration-filesystem-backup") {
     const { createBackupArchive } = await import("./backup-create.js");
     const { verifyBackupArchive } = await import("../commands/backup-verify.js");
+    const { withUserPathBaseDirectory } = await import("./home-dir.js");
     // The parent renews the suspension and joins this child before releasing custody.
     // Archive creation preserves source artifacts, including during config discovery.
-    const archive = await createBackupArchive({
-      output: input.output,
-      preserveSourceArtifacts: true,
-    });
+    const archive = await withUserPathBaseDirectory(input.userPathBaseDirectory, () =>
+      createBackupArchive({
+        output: input.output,
+        preserveSourceArtifacts: true,
+      }),
+    );
     await verifyBackupArchive(archive.archivePath);
     // Keep the private result bounded instead of returning the complete inventory.
     return { archivePath: archive.archivePath, verified: true };

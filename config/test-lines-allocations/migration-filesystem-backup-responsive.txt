@@ -1,2 +1,2 @@
-# Joined archive child keeps suspension renewal responsive and settles cancellation; real archive inventory verification.
-114
+# Joined archive child preserves caller-relative workspace contents, renewal, cancellation, and archive inventory.
+133
