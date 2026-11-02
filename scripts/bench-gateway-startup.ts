@@ -125,6 +125,7 @@ type GatewaySample = {
   gatewayReadyLogMs: number | null;
   healthz: InitialProbeResult;
   heapProfilePath?: string;
+  snapshotCounts?: { directories: number; files: number; bytes: number; processes: number };
   httpListenLogLine: string | null;
   httpListenLogMs: number | null;
   hostLoadBefore: number[];
@@ -162,6 +163,7 @@ type CliOptions = GatewayBenchRuntimeOptions & {
   warmup: number;
   fixtureRoot?: string;
   seedOnly: boolean;
+  snapshotCounts: boolean;
   agentDatabaseMib: number;
   agentGateDelayMs: number;
   startAt?: number;
@@ -182,6 +184,7 @@ const BOOLEAN_FLAGS = new Set([
   "--installed-cpu-diagnostic",
   "--seed-only",
   "--team-scale",
+  "--snapshot-counts",
 ]);
 const VALUE_FLAGS = new Set([
   "--case",
@@ -589,6 +592,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     warmup: parseNonNegativeInt(flags.get("--warmup")?.[0], DEFAULT_WARMUP, "--warmup"),
     fixtureRoot: flags.get("--fixture-root")?.[0],
     seedOnly: flags.has("--seed-only"),
+    snapshotCounts: flags.has("--snapshot-counts"),
     agentDatabaseMib: parseNonNegativeInt(
       flags.get("--agent-database-mib")?.[0],
       512,
@@ -628,6 +632,7 @@ Options:
   --json               Emit machine-readable JSON
   --help, -h           Show this text
   --fixture-root <path> Prepared teamBoot or slowAgentDatabase fixture (requires --runs 1 --warmup 0)
+  --snapshot-counts   Count private SQLite staging directories/bytes and retain full Gateway output
   --seed-only         Create a new --fixture-root without launching a Gateway
   --bundled-plugin-fixture <path> Synthetic plugins/models/tools/channels config for teamBoot
   --plugin-migration-fixture <status> Seed a pending or deferred config-only teamBoot obligation
@@ -1919,6 +1924,7 @@ async function runGatewaySample(
     cpuProfDir?: string;
     entry: string;
     heapProfDir?: string;
+    snapshotCounts?: boolean;
     sampleIndex: number;
     timeoutMs: number;
     fixtureRoot?: string;
@@ -1970,6 +1976,17 @@ async function runGatewaySample(
     }
     if (preload) {
       env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ""} --import=${preload}`.trim();
+    }
+    const snapshotCountPath = options.snapshotCounts
+      ? path.join(root, "snapshot-counts.jsonl")
+      : undefined;
+    if (snapshotCountPath) {
+      writeFileSync(snapshotCountPath, "");
+      env.OPENCLAW_BENCH_SNAPSHOT_COUNTS = snapshotCountPath;
+      const observer = fileURLToPath(
+        new URL("./lib/gateway-startup-snapshot-counts.mjs", import.meta.url),
+      );
+      env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ""} --import=${observer}`.trim();
     }
     const agentRecoveryMs: Record<string, number> = {};
     const integrityGateMs: Record<string, number> = {};
@@ -2085,7 +2102,7 @@ async function runGatewaySample(
         }
         const text = chunk.toString("utf8");
         output.push(text);
-        if (output.length > 20) {
+        if (!options.snapshotCounts && output.length > 20) {
           output.splice(0, output.length - 20);
         }
         const parsed = collectOutputLines(outputBuffers[stream], text);
@@ -2221,7 +2238,33 @@ async function runGatewaySample(
       child = undefined;
       flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt);
 
+      const snapshotEvents: Array<{
+        kind: string;
+        pathname?: string;
+        bytes?: number;
+        pid: number;
+      }> = snapshotCountPath
+        ? readFileSync(snapshotCountPath, "utf8")
+            .trim()
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line))
+        : [];
       return {
+        ...(snapshotCountPath
+          ? {
+              snapshotCounts: {
+                directories: new Set(
+                  snapshotEvents
+                    .filter((event) => event.kind === "directory")
+                    .map((event) => event.pathname),
+                ).size,
+                files: snapshotEvents.filter((event) => event.kind === "publication").length,
+                bytes: snapshotEvents.reduce((bytes, event) => bytes + (event.bytes ?? 0), 0),
+                processes: new Set(snapshotEvents.map((event) => event.pid)).size,
+              },
+            }
+          : {}),
         ...(options.benchCase.id === "teamBoot"
           ? {
               pluginMigration: {
@@ -2257,7 +2300,9 @@ async function runGatewaySample(
         hostLoadBefore,
         hostLoadAfter: loadavg(),
         maxRssMb,
-        outputTail: output.join("").split(/\r?\n/u).slice(-20).join("\n"),
+        outputTail: options.snapshotCounts
+          ? output.join("")
+          : output.join("").split(/\r?\n/u).slice(-20).join("\n"),
         readyz,
         shutdownForced,
         shutdownMs,
@@ -2280,6 +2325,7 @@ async function runCase(
     cpuProfDir?: string;
     entry: string;
     heapProfDir?: string;
+    snapshotCounts?: boolean;
     runs: number;
     timeoutMs: number;
     warmup: number;

@@ -4,6 +4,7 @@ import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { isLiveStateRead } from "../state/artifact-preserving-state-reads.js";
 import { readAgentDatabaseLeaseProvenance } from "../state/openclaw-agent-db-lease-provenance.js";
 import type { OpenClawStateSchemaReadAdmission } from "../state/openclaw-state-db-contract.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
@@ -145,7 +146,7 @@ export async function assertGatewayOwnerLeaseStopped(
   let outcome: OpenClawStateReadOutcome | undefined;
   try {
     authority.assertCurrent();
-    if (schemaMaintenance && !isStatePostgres()) {
+    if (schemaMaintenance && !isStatePostgres() && !isLiveStateRead()) {
       prepared = await prepareSqliteReadOnlyLocation(pathname, {
         signal,
         preserveSourceArtifacts: true,
@@ -158,7 +159,7 @@ export async function assertGatewayOwnerLeaseStopped(
     read = transport.startRead(
       {
         context,
-        // Offline custody permits a direct worker read; only repair needs a private snapshot.
+        // Gateway credential preparation uses live reads; offline repair preserves artifacts.
         location: prepared?.location ?? pathname,
         snapshotRoot: prepared?.cleanupRoot,
         checkFreshAdmission: false,
