@@ -76,9 +76,11 @@ CI=true pnpm install --frozen-lockfile --prefer-offline --optional \
   > "$output/dependencies.log" 2>&1
 # These three exact provider/Gateway source files and real wire schemas own fixture qualification.
 # Core checkout shares the admitted immutable asset dependency closure; no core install or config writes.
-node "$packet/validate-fixtures.mjs" "$work" > "$output/fixture-validation.json"
+node "$packet/validate-fixtures.mjs" "$work" "$work" "$core" > "$output/fixture-validation.json"
 # Validate the admitted producer TS source, using the same source-pinned TypeBox/esbuild dependency closure.
-node "$packet/validate-fixtures.mjs" "$core" "$work" > "$output/core-fixture-validation.json"
+node "$packet/validate-fixtures.mjs" "$core" "$work" "$core" > "$output/core-fixture-validation.json"
+# Independently admit the After wire consumer against the same pinned producer.
+node "$packet/validate-fixtures.mjs" "$after" "$work" "$core" > "$output/after-fixture-validation.json"
 node scripts/prepare-apple-mermaid.mjs > "$output/mermaid-assets.log" 2>&1
 node scripts/prepare-native-protocol.mjs --language swift > "$output/protocol-assets.log" 2>&1
 test_file=apps/macos/Tests/OpenClawIPCTests/OnboardingAISetupTests.swift
