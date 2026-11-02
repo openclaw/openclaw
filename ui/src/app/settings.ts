@@ -548,6 +548,11 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
 
 export function saveSettings(
   next: UiSettings,
+  options: { selectGateway?: boolean; navigationPatch: Partial<UiSettings> },
+): Partial<UiSettings>;
+export function saveSettings(next: UiSettings, options?: { selectGateway?: boolean }): void;
+export function saveSettings(
+  next: UiSettings,
   options: {
     selectGateway?: boolean;
     navigationPatch?: Partial<UiSettings>;
