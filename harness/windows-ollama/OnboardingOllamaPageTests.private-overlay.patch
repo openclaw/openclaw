@@ -1,0 +1,14 @@
+--- a/tests/OpenClaw.Tray.UITests/OnboardingOllamaPageTests.cs
++++ b/tests/OpenClaw.Tray.UITests/OnboardingOllamaPageTests.cs
+@@ -299,7 +299,10 @@
+                 };
+                 frame.Navigate(typeof(AiSetupPage), args);
+                 var page = Assert.IsType<AiSetupPage>(frame.Content);
+-                OnboardingNativeProof.ActivateOwned(window);
++                if (OllamaPrivateMountedPresentation.IsRequested)
++                    await OllamaPrivateMountedPresentation.PresentAsync(window);
++                else
++                    OnboardingNativeProof.ActivateOwned(window);
+                 await TestSupport.WaitForRenderedConditionAsync(() =>
+                     page.IsLoaded && page.XamlRoot is not null &&
+                     TestSupport.FindDescendants<SetupActionCard>(Assert.IsType<ItemsControl>(page.FindName("PrepareChoices")))

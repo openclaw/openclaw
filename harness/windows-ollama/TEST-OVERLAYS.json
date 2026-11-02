@@ -1,0 +1,33 @@
+{
+  "schema": "ollama-private-test-overlays-v2",
+  "base": "d38ebb418c3aba6b24a4d6470def72b2bba4c4a8",
+  "productPatchSha256": "f25cff6b71801078260e2f5080e2d8d9c32584829ad7d7dfb9c59d79e254961d",
+  "common": [
+    {
+      "path": "tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
+      "inputSha256": "aa528db0ad099c5f8c4f76f44489d55e63883a139c2e023b4f20833f1860a5d7",
+      "packetPostimage": "OnboardingAiPageTests.private-postimage.txt",
+      "sha256": "9466d360c479fc3b2205064fc62cea2642cd0355ec36b6afcd1e71dfa43e4991"
+    },
+    {
+      "path": "tests/OpenClaw.Tray.UITests/OllamaPrivateMountedPresentation.cs",
+      "input": "absent",
+      "packetPostimage": "OllamaPrivateMountedPresentation.cs",
+      "sha256": "2e1f46e76e8303de77d4f73fb962924ff41cb15ee8642e617b5e5b648bdb2eda"
+    }
+  ],
+  "afterOnly": [
+    {
+      "path": "tests/OpenClaw.Tray.UITests/OnboardingOllamaPageTests.cs",
+      "inputSha256": "36e55db282974627f2d0fbfa46bdebb18557ac0602e6fc0028dde8999137d945",
+      "packetPostimage": "OnboardingOllamaPageTests.private-postimage.txt",
+      "sha256": "83d6cd7cb49b3b9164a61e60b8f8b11d4c62b91ecbfbcb90621c2d74f5f6f024"
+    },
+    {
+      "path": "tests/OpenClaw.Tray.UITests/NativeOllamaOsInspectionTests.cs",
+      "input": "absent",
+      "packetPostimage": "NativeOllamaOsInspectionTests.cs",
+      "sha256": "b4d5c36f06e2fa4a448203573458e750281e6f6e55a17deb13ac11ae96fd70ab"
+    }
+  ]
+}

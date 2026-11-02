@@ -1,0 +1,497 @@
+using System.Reflection;
+using System.Text.Json;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation.Peers;
+using Microsoft.UI.Xaml.Automation.Provider;
+using Microsoft.UI.Xaml.Controls;
+using OpenClaw.SetupEngine;
+using OpenClaw.SetupEngine.UI;
+using OpenClaw.SetupEngine.UI.Pages;
+using OpenClaw.SetupEngine.UI.Controls;
+using OpenClaw.TestSupport;
+using OpenClawTray.Services;
+
+namespace OpenClaw.Tray.UITests;
+
+/// <summary>Mounted native flow with synthetic OS/Gateway inputs, not installed-binary or inference proof.</summary>
+[Collection(UICollection.Name)]
+public sealed class OnboardingOllamaPageTests(UIThreadFixture ui)
+{
+    private static readonly TimeSpan FixtureDeadline = TimeSpan.FromSeconds(10);
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OllamaSetUpReviewsInstallOrOpenThenRequiresExplicitGatewayContinuation(bool installed)
+    {
+        await WithWindowAsync(async context =>
+        {
+            context.Host.Current = installed ? Verified : Missing;
+            var choices = Assert.IsType<ItemsControl>(context.Page.FindName("PrepareChoices"));
+            await TestSupport.WaitForRenderedConditionAsync(() => TestSupport.FindDescendants<SetupActionCard>(choices)
+                .Any(card => TestSupport.FindDescendants<TextBlock>(card).Any(text => text.Text == "Metadata probe")), "metadata provider card");
+            var metadataCard = Assert.Single(TestSupport.FindDescendants<SetupActionCard>(choices),
+                card => TestSupport.FindDescendants<TextBlock>(card).Any(text => text.Text == "Metadata probe"));
+            Assert.Contains(TestSupport.FindDescendants<TextBlock>(metadataCard), text => text.Text == Transport.MetadataAction);
+            var metadataArtwork = Assert.Single(TestSupport.FindDescendants<ProviderArtwork>(metadataCard));
+            Assert.Equal("ProviderIcon-codex.svg", metadataArtwork.Descriptor!.BundledFileName);
+            var artworkClosed = false;
+            var artworkSession = Assert.IsType<ProviderArtworkSession>(metadataArtwork.Session);
+            artworkSession.Closed += () => artworkClosed = true;
+            await OpenOllamaAsync(context);
+            var dialog = await DialogAsync(context.Page);
+            var primary = Button(dialog, "PrimaryButton");
+            var consent = Assert.Single(TestSupport.FindDescendants<CheckBox>(dialog), item => item.Name == "OllamaAppInstallConsent");
+            Assert.Equal((0, 0, 0), (context.Host.Downloads, context.Host.Installs, context.Host.Opens));
+            if (installed)
+            {
+                Assert.Equal("Open Ollama", dialog.PrimaryButtonText);
+                Assert.Equal(Visibility.Collapsed, consent.Visibility);
+                Assert.True(primary.IsEnabled);
+            }
+            else
+            {
+                Assert.False(primary.IsEnabled);
+                var message = Named<TextBlock>(dialog, "OllamaAppMessage");
+                Assert.Contains("4 GB", message.Text);
+                Assert.Contains(OllamaWindowsPackage.Version, message.Text);
+                Assert.Contains("Models are not included", message.Text);
+                Assert.IsAssignableFrom<IToggleProvider>(FrameworkElementAutomationPeer.CreatePeerForElement(consent)
+                    .GetPattern(PatternInterface.Toggle)).Toggle();
+                Assert.True(primary.IsEnabled);
+            }
+            await MountedControlCapture.OptionalAsync(context.Window, installed ? "ollama-open-review" : "ollama-install-review");
+            Invoke(primary);
+            await TestSupport.WaitForRenderedConditionAsync(() =>
+                Named<TextBlock>(dialog, "OllamaAppMessage").Text.Contains("no usable local chat model"), "Ollama needs-model result");
+            Assert.Equal(installed ? (0, 0, 1) : (1, 1, 0),
+                (context.Host.Downloads, context.Host.Installs, context.Host.Opens));
+            Assert.Equal(0, context.Completed());
+            Assert.DoesNotContain("openclaw.setup.prepare.start", context.Transport.Calls);
+            Assert.All(context.Transport.Calls, method => Assert.Equal("openclaw.setup.detect", method));
+            await MountedControlCapture.OptionalAsync(context.Window, installed ? "ollama-open-needs-model" : "ollama-install-needs-model");
+            Invoke(Button(dialog, "SecondaryButton"));
+            await TestSupport.WaitForRenderedConditionAsync(() =>
+                context.Transport.Calls.Contains("openclaw.setup.prepare.start"), "explicit Ollama Gateway continuation");
+            Assert.Equal(1, context.Transport.Calls.Count(method => method == "openclaw.setup.prepare.start"));
+            var provider = Assert.IsType<ProviderSetupDialog>(typeof(AiSetupPage).GetField("_providerDialog",
+                BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(context.Page));
+            await TestSupport.WaitForRenderedConditionAsync(() => provider.IsLoaded &&
+                Assert.IsType<TextBox>(provider.FindName("TextInput")).IsEnabled, "Gateway address prompt");
+            Assert.IsType<TextBox>(provider.FindName("TextInput")).Text = "http://127.0.0.1:11434";
+            Invoke(Button(provider, "PrimaryButton"));
+            await TestSupport.WaitForRenderedConditionAsync(() =>
+                Assert.IsType<CheckBox>(provider.FindName("ConfirmInput")).Visibility == Visibility.Visible, "separate model download confirmation");
+            Assert.False(Assert.IsType<CheckBox>(provider.FindName("ConfirmInput")).IsChecked == true);
+            Assert.Equal(0, context.Transport.ModelDownloadAnswers);
+            Assert.Equal(0, context.Completed());
+            await context.Page.CloseAsync();
+            Assert.True(artworkClosed);
+        }, includeMetadataProbe: true);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task UnknownOrWindowsOnlyReadinessNeverBecomesAnInstallPrompt(bool unknown)
+    {
+        await WithWindowAsync(async context =>
+        {
+            context.Host.Current = unknown
+                ? new(OllamaWindowsInstallationState.Unknown, OllamaWindowsActivity.Unknown, null, OllamaWindowsApiState.Unknown, 0,
+                    "Synthetic conflicting registration. Authorization: Bearer synthetic-private-token")
+                : Missing with { ApiState = OllamaWindowsApiState.Reachable, LocalChatModelCount = 1 };
+            await OpenOllamaAsync(context);
+            var dialog = await DialogAsync(context.Page);
+            Assert.Equal("Check again", dialog.PrimaryButtonText);
+            Assert.Equal(Visibility.Collapsed, Named<CheckBox>(dialog, "OllamaAppInstallConsent").Visibility);
+            Assert.Contains(unknown ? "could not confirm" : "Gateway has not yet confirmed",
+                Named<TextBlock>(dialog, "OllamaAppMessage").Text);
+            Assert.Equal((0, 0, 0), (context.Host.Downloads, context.Host.Installs, context.Host.Opens));
+            Assert.All(context.Transport.Calls, method => Assert.Equal("openclaw.setup.detect", method));
+            Assert.Equal(0, context.Completed());
+            if (unknown)
+            {
+                var details = Named<TextBlock>(dialog, "OllamaAppDiagnostics").Text;
+                Assert.Contains("Synthetic conflicting registration", details);
+                Assert.DoesNotContain("synthetic-private-token", details);
+                Invoke(Button(dialog, "CloseButton"));
+                await TestSupport.WaitForRenderedConditionAsync(() =>
+                    Assert.IsType<Button>(context.Page.FindName("RefreshButton")).IsEnabled, "inspection dialog settled");
+                var log = await File.ReadAllTextAsync(context.LogPath);
+                Assert.Contains("Synthetic conflicting registration", log);
+                Assert.DoesNotContain("synthetic-private-token", log);
+            }
+        });
+    }
+
+    [Fact]
+    public async Task OllamaExistingGatewayModelUsesTheCanonicalExactModelPathWithoutWindowsActions()
+    {
+        await WithWindowAsync(async context =>
+        {
+            context.Transport.HasModel = true;
+            await OpenOllamaAsync(context);
+            var dialog = await DialogAsync(context.Page);
+            await TestSupport.WaitForRenderedConditionAsync(() => dialog.PrimaryButtonText == "Use detected model", "existing Ollama model action");
+            Assert.Equal(0, context.Host.Observations);
+            Assert.Contains(Transport.Model, Named<TextBlock>(dialog, "OllamaAppMessage").Text);
+            Invoke(Button(dialog, "PrimaryButton"));
+            await TestSupport.WaitForRenderedConditionAsync(() => context.Completed() == 1, "Ollama exact-model completion");
+            Assert.Equal(Transport.Model, context.Transport.ActivatedModel);
+            Assert.Equal("existing-model", context.Transport.ActivatedKind);
+            Assert.Contains("openclaw.setup.verify", context.Transport.Calls);
+            Assert.DoesNotContain("openclaw.setup.prepare.start", context.Transport.Calls);
+            Assert.Equal((0, 0, 0), (context.Host.Downloads, context.Host.Installs, context.Host.Opens));
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MountedCloseOrQuitRetainsInstallerLoggerAndSetupLockUntilSettlement(bool quit)
+    {
+        await WithWindowAsync(async context =>
+        {
+            context.Host.HoldInstallation = true;
+            await OpenOllamaAsync(context);
+            var dialog = await DialogAsync(context.Page);
+            var consent = Named<CheckBox>(dialog, "OllamaAppInstallConsent");
+            Assert.IsAssignableFrom<IToggleProvider>(FrameworkElementAutomationPeer.CreatePeerForElement(consent)
+                .GetPattern(PatternInterface.Toggle)).Toggle();
+            Invoke(Button(dialog, "PrimaryButton"));
+            await context.Host.InstallStarted.Task.WaitAsync(FixtureDeadline);
+            var exited = false;
+            Task cleanup;
+            WindowManager? manager = null;
+            if (quit)
+            {
+                manager = CreateManager();
+                typeof(WindowManager).GetField("_setupWindow", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .SetValue(manager, context.Window);
+                // Use the actual shutdown coordinator, window manager, mounted page and setup lock.
+                // Suppress only final Application.Exit so the suite's shared WinUI process survives.
+                cleanup = new AppShutdownCoordinator().ShutdownAsync(new AppShutdownPlan(
+                    manager.BeginShutdown,
+                    [new("window manager", async () => await manager.CloseForShutdownAsync())],
+                    () => exited = true));
+            }
+            else
+            {
+                context.Window.Close();
+                cleanup = context.Window.CleanupCompleted;
+            }
+            try
+            {
+                await context.Host.CancellationSeen.Task.WaitAsync(FixtureDeadline);
+                Assert.False(cleanup.IsCompleted);
+                Assert.False(exited);
+                Assert.False(SetupRunLock.TryAcquire(context.DataDirectory, out var refused, out _));
+                Assert.Null(refused);
+                Assert.Throws<IOException>(() =>
+                {
+                    using var probe = File.Open(context.LogPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                });
+                Assert.Equal(0, context.Completed());
+            }
+            finally { context.Host.FinishInstallation(); }
+            await cleanup.WaitAsync(FixtureDeadline);
+            if (manager is not null) await manager.CloseForShutdownAsync().WaitAsync(FixtureDeadline);
+            Assert.Equal(quit, exited);
+            Assert.True(SetupRunLock.TryAcquire(context.DataDirectory, out var released, out _));
+            released!.Dispose();
+            using (File.Open(context.LogPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
+            Assert.Contains("CancelledInstallationPresent", await File.ReadAllTextAsync(context.LogPath));
+            Assert.Equal(1, context.Host.Installs);
+            Assert.Equal(0, context.Host.Opens);
+            Assert.DoesNotContain("openclaw.setup.verify", context.Transport.Calls);
+            Assert.Equal(0, context.Completed());
+        });
+    }
+
+    [Fact]
+    public async Task ForeignLlamaRuntimeShowsConflictWithoutAnInstallAction()
+    {
+        await WithWindowAsync(async context =>
+        {
+            context.Host.Current = Missing with { HasInstallationConflict = true };
+            await OpenOllamaAsync(context);
+            var dialog = await DialogAsync(context.Page);
+            Assert.Equal("Check again", dialog.PrimaryButtonText);
+            Assert.Contains("llama.cpp", Named<TextBlock>(dialog, "OllamaAppMessage").Text);
+            Assert.Contains("current owner", Named<TextBlock>(dialog, "OllamaAppMessage").Text);
+            Assert.Contains("llama-server.exe", Named<TextBlock>(dialog, "OllamaAppDiagnostics").Text);
+            Assert.Equal(Visibility.Collapsed, Named<CheckBox>(dialog, "OllamaAppInstallConsent").Visibility);
+            Assert.Equal((0, 0, 0), (context.Host.Downloads, context.Host.Installs, context.Host.Opens));
+        });
+    }
+
+    [Fact]
+    public async Task NativeCancelButtonRetainsAdmittedWorkThenReturnsToCloseAfterSettlement()
+    {
+        await WithWindowAsync(async context =>
+        {
+            context.Host.HoldInstallation = true;
+            await OpenOllamaAsync(context);
+            var dialog = await DialogAsync(context.Page);
+            var consent = Named<CheckBox>(dialog, "OllamaAppInstallConsent");
+            Assert.IsAssignableFrom<IToggleProvider>(FrameworkElementAutomationPeer.CreatePeerForElement(consent)
+                .GetPattern(PatternInterface.Toggle)).Toggle();
+            Invoke(Button(dialog, "PrimaryButton"));
+            try
+            {
+                await context.Host.InstallStarted.Task.WaitAsync(FixtureDeadline);
+                Invoke(Button(dialog, "CloseButton"));
+                await context.Host.CancellationSeen.Task.WaitAsync(FixtureDeadline);
+                Assert.True(dialog.IsLoaded);
+                Assert.Equal("Finishing current step", dialog.CloseButtonText);
+                Assert.Equal(1, context.Host.Installs);
+                Assert.DoesNotContain("openclaw.setup.prepare.start", context.Transport.Calls);
+            }
+            finally { context.Host.FinishInstallation(); }
+            await TestSupport.WaitForRenderedConditionAsync(() => dialog.CloseButtonText == "Close" &&
+                Named<TextBlock>(dialog, "OllamaAppMessage").Text.Contains("Further setup was cancelled"),
+                "settled cancellation keeps its partial outcome and Close action");
+            Invoke(Button(dialog, "CloseButton"));
+            await TestSupport.WaitForRenderedConditionAsync(() =>
+                Assert.IsType<Button>(context.Page.FindName("RefreshButton")).IsEnabled, "cancelled Ollama action settled");
+            Assert.Equal(0, context.Completed());
+            Assert.Equal(0, context.Host.Opens);
+        });
+    }
+
+    private async Task WithWindowAsync(Func<Context, Task> assertion, bool includeMetadataProbe = false)
+    {
+        OnboardingNativeProof.AssertIsolatedRoots();
+        using var temp = new TempDirectory("ollama-mounted-");
+        var configPath = temp.Combine("setup.json");
+        await File.WriteAllTextAsync(configPath, JsonSerializer.Serialize(new SetupConfig()));
+        await ui.RunOnUIAsync(async () =>
+        {
+            var resources = OnboardingWindowsFlowTests.LoadProgressResources(
+                Environment.GetEnvironmentVariable("OPENCLAW_REPO_ROOT")!);
+            Application.Current.Resources.MergedDictionaries.Add(resources);
+            SetupWindow? window = null;
+            Host? host = null;
+            try
+            {
+                var data = temp.Combine("data");
+                var local = temp.Combine("local");
+                window = OnboardingNativeProof.CreateWindow(() => new SetupWindow(configPath: configPath,
+                    dataDir: data, localDataDir: local, commandLineArgs: [], startupRegistrationAllowed: false));
+                var root = Assert.IsType<Grid>(window.Content);
+                var frame = Assert.IsType<Frame>(root.FindName("RootFrame"));
+                var transport = new Transport { IncludeMetadataProbe = includeMetadataProbe };
+                host = new Host(temp.Path);
+                var completed = 0;
+                var logPath = temp.Combine("ollama.jsonl");
+                var args = new AiSetupPageArgs(window.AccessDraft.Config, data, local,
+                    () => false, () => throw new InvalidOperationException("App readiness is not AI completion."),
+                    TransportFactory: () => transport,
+                    CompleteVerifiedSetup: proof =>
+                    {
+                        Assert.Equal(Transport.Model, proof.ModelRef);
+                        completed++;
+                        return Task.CompletedTask;
+                    })
+                {
+                    OllamaSetupFactory = client =>
+                        (new OllamaWindowsSetup(host, client, window.AccessDraft), new SetupLogger(logPath))
+                };
+                frame.Navigate(typeof(AiSetupPage), args);
+                var page = Assert.IsType<AiSetupPage>(frame.Content);
+                OnboardingNativeProof.ActivateOwned(window);
+                await TestSupport.WaitForRenderedConditionAsync(() =>
+                    page.IsLoaded && page.XamlRoot is not null &&
+                    TestSupport.FindDescendants<SetupActionCard>(Assert.IsType<ItemsControl>(page.FindName("PrepareChoices")))
+                        .Any(card => card.IsEnabled), "mounted Ollama setup entrypoint");
+                await assertion(new(window, page, host, transport, data, logPath, () => completed));
+            }
+            finally
+            {
+                host?.FinishInstallation();
+                if (window is not null)
+                {
+                    if (!window.IsClosed) window.Close();
+                    await window.CleanupCompleted.WaitAsync(FixtureDeadline);
+                }
+                Application.Current.Resources.MergedDictionaries.Remove(resources);
+            }
+        });
+    }
+
+    private async Task OpenOllamaAsync(Context context)
+    {
+        var choices = Assert.IsType<ItemsControl>(context.Page.FindName("PrepareChoices"));
+        var card = Assert.Single(TestSupport.FindDescendants<SetupActionCard>(choices),
+            item => TestSupport.FindDescendants<TextBlock>(item).Any(text => text.Text == "Ollama"));
+        Assert.Equal("Set up", Assert.Single(TestSupport.FindDescendants<TextBlock>(card),
+            text => text.Text == "Set up").Text);
+        Assert.IsAssignableFrom<IInvokeProvider>(FrameworkElementAutomationPeer.CreatePeerForElement(card)
+            .GetPattern(PatternInterface.Invoke)).Invoke();
+        await DialogAsync(context.Page);
+    }
+
+    private static async Task<ContentDialog> DialogAsync(AiSetupPage page)
+    {
+        ContentDialog? dialog = null;
+        await TestSupport.WaitForRenderedConditionAsync(() =>
+        {
+            dialog = typeof(AiSetupPage).GetField("_ollamaDialog", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .GetValue(page) as ContentDialog;
+            return dialog is { IsLoaded: true } &&
+                TestSupport.FindDescendants<Button>(dialog).Any(button => button.Name == "PrimaryButton") &&
+                Named<TextBlock>(dialog, "OllamaAppStatus").Text != "Checking the selected Gateway and this PC…";
+        }, "native Ollama review dialog");
+        return dialog!;
+    }
+
+    private static T Named<T>(DependencyObject root, string name) where T : FrameworkElement =>
+        Assert.Single(TestSupport.FindDescendants<T>(root), element => element.Name == name);
+    private static Button Button(ContentDialog dialog, string name) => Named<Button>(dialog, name);
+    private static void Invoke(Button button)
+    {
+        Assert.True(button.IsEnabled);
+        Assert.IsAssignableFrom<IInvokeProvider>(new ButtonAutomationPeer(button).GetPattern(PatternInterface.Invoke)).Invoke();
+    }
+
+    private WindowManager CreateManager() => new(ui.Dispatcher, new WindowManagerCallbacks(
+        GetAppState: () => null, GetAppNotificationService: () => null, GetConnectionManager: () => null,
+        GetGatewayRegistry: () => null, GetSettings: () => null, GetGatewayDirectConnectService: () => null,
+        GetLocalAiRuntime: () => null, GetNodeService: () => null, GetPageActivator: () => null,
+        GetPendingChatSessionKey: () => null, GetStartupArgs: () => null, IsDeepLinkArg: _ => false,
+        RequiresSetup: () => false, Connect: () => { }, Disconnect: () => { }, SettingsSaved: (_, _) => { },
+        AdvancedSetupRequested: (_, _) => { }, SetupCompleted: (_, _) => { }, ApplyTheme: _ => { }));
+
+    private sealed record Context(SetupWindow Window, AiSetupPage Page, Host Host, Transport Transport,
+        string DataDirectory, string LogPath, Func<int> Completed);
+    private static OllamaWindowsObservation Missing => new(OllamaWindowsInstallationState.NoSupportedRegistration,
+        OllamaWindowsActivity.NotActive, null, OllamaWindowsApiState.NotListening, 0);
+    private static OllamaWindowsObservation Verified => new(OllamaWindowsInstallationState.Verified,
+        OllamaWindowsActivity.NotActive, new("synthetic-install", "synthetic-version"), OllamaWindowsApiState.NotListening, 0);
+
+    private sealed class Host(string directory) : IOllamaWindowsAppHost
+    {
+        public OllamaWindowsObservation Current { get; set; } = Missing;
+        public int Observations { get; private set; }
+        public int Downloads { get; private set; }
+        public int Installs { get; private set; }
+        public int Opens { get; private set; }
+        public bool HoldInstallation { get; set; }
+        public TaskCompletionSource InstallStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource CancellationSeen { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _finish = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public void FinishInstallation() => _finish.TrySetResult();
+        public Task<OllamaWindowsObservation> ObserveAsync(CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Observations++;
+            return Task.FromResult(Current);
+        }
+        public Task<OllamaWindowsInstaller> AcquireAsync(CancellationToken ct, Action beforeDownload)
+        {
+            ct.ThrowIfCancellationRequested();
+            beforeDownload();
+            Downloads++;
+            var scratch = Path.Combine(directory, "synthetic-download");
+            Directory.CreateDirectory(scratch);
+            var file = Path.Combine(scratch, "fixture.bin");
+            File.WriteAllText(file, "Synthetic fixture bytes. Never executed.");
+            return Task.FromResult(new OllamaWindowsInstaller(scratch,
+                new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read)));
+        }
+        public async Task<CommandResult> InstallAsync(OllamaWindowsInstaller installer, CancellationToken ct, Action beforeAdmission)
+        {
+            ct.ThrowIfCancellationRequested();
+            beforeAdmission();
+            Installs++;
+            using var registration = ct.Register(() => CancellationSeen.TrySetResult());
+            InstallStarted.TrySetResult();
+            if (HoldInstallation) await _finish.Task;
+            Current = Verified with { Activity = OllamaWindowsActivity.Active, ApiState = OllamaWindowsApiState.Reachable };
+            return new(0, "", "", TimeSpan.Zero, false);
+        }
+        public Task OpenAsync(OllamaWindowsInstallation installation, CancellationToken ct, Action beforeOpen)
+        {
+            ct.ThrowIfCancellationRequested();
+            beforeOpen();
+            Opens++;
+            Current = Verified with { Activity = OllamaWindowsActivity.Active, ApiState = OllamaWindowsApiState.Reachable };
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class Transport : IGatewayAiSetupTransport
+    {
+        public const string Model = "ollama/synthetic:local";
+        public const string MetadataAction = "Metadata provider action";
+        public bool IncludeMetadataProbe { get; init; }
+        public GatewayAiSetupRoute Route { get; } = new("ui-proof", "agent", "authority", new string('A', 64),
+            new string('B', 64), "agent:agent:main");
+        public long Generation => 1;
+        public bool IsConnected => true;
+        public IReadOnlyCollection<string> OperatorScopes => ["operator.admin"];
+        public IReadOnlyCollection<string> Methods => ["openclaw.setup.detect", "openclaw.setup.verify", "openclaw.setup.activate.start",
+            "openclaw.setup.prepare.start", "wizard.next", "wizard.cancel"];
+        public List<string> Calls { get; } = [];
+        public bool HasModel { get; set; }
+        public string? ActivatedModel { get; private set; }
+        public string? ActivatedKind { get; private set; }
+        private string? _session;
+        private bool _showModelConfirmation;
+        public int ModelDownloadAnswers { get; private set; }
+        public Task<JsonElement> RequestAsync(string method, object parameters, int timeoutMs, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Calls.Add(method);
+            var args = JsonSerializer.SerializeToElement(parameters);
+            object result;
+            switch (method)
+            {
+                case "openclaw.setup.detect":
+                    result = new
+                    {
+                        candidates = HasModel ? new object[]
+                        {
+                            new { kind = "existing-model", label = "Current model", detail = "Configured", modelRef = Model, recommended = false },
+                            new { kind = "provider-auto:ollama", label = "Ollama", detail = "Discovered", modelRef = Model, recommended = false }
+                        } : [],
+                        manualProviders = Array.Empty<object>(), prepareOptions = new object[]
+                        {
+                            new { id = "ollama", label = "Ollama", kind = "custom", brandId = "ollama", actionLabel = "Gateway-supplied action" },
+                        }.Concat(IncludeMetadataProbe ? new object[]
+                        {
+                            new { id = "metadata-probe", label = "Metadata probe", kind = "custom", brandId = "codex", actionLabel = MetadataAction },
+                        } : Array.Empty<object>()),
+                        workspace = "/synthetic", configuredModel = HasModel ? Model : ActivatedModel,
+                        setupComplete = HasModel || ActivatedModel is not null
+                    };
+                    break;
+                case "openclaw.setup.activate.start":
+                    ActivatedModel = args.GetProperty("modelRef").GetString();
+                    ActivatedKind = args.GetProperty("kind").GetString();
+                    Assert.Equal(Model, ActivatedModel);
+                    result = new { sessionId = args.GetProperty("sessionId").GetString(), done = true, status = "done", modelActivation = new { modelRef = ActivatedModel } };
+                    break;
+                case "openclaw.setup.prepare.start":
+                    Assert.Equal("ollama", args.GetProperty("authChoice").GetString());
+                    _session = args.GetProperty("sessionId").GetString();
+                    result = new { sessionId = _session, done = false, status = "running", step = new { id = "address", type = "text", title = "Existing Ollama connection", message = "Synthetic address prompt" } };
+                    break;
+                case "wizard.next":
+                    if (args.TryGetProperty("answer", out _))
+                    {
+                        if (_showModelConfirmation) ModelDownloadAnswers++;
+                        _showModelConfirmation = true;
+                    }
+                    result = _showModelConfirmation
+                        ? new { sessionId = _session, done = false, status = "running", step = (object)new { id = "model-download", type = "confirm", title = "Download a model?", message = "Synthetic separate model download confirmation", initialValue = false } }
+                        : new { sessionId = _session, done = false, status = "running", step = (object)new { id = "address", type = "text", title = "Existing Ollama connection", message = "Synthetic address prompt" } };
+                    break;
+                case "wizard.cancel": result = new { status = "cancelled" }; break;
+                case "openclaw.setup.verify": result = new { ok = true, modelRef = ActivatedModel, latencyMs = 1.0 }; break;
+                default: throw new InvalidOperationException("Unexpected fixture request: " + method);
+            }
+            return Task.FromResult(JsonSerializer.SerializeToElement(result));
+        }
+    }
+}

@@ -194,9 +194,7 @@ jobs:
           retention-days: 7
 
   windows-ollama-fixtures:
-    if: inputs.platform == 'windows-ollama-fixtures'
-    permissions:
-      contents: read
+    if: inputs.platform == 'windows-ollama-fixtures' && github.ref == 'refs/heads/roboclaw/local-ai-native-followups-20261102'
     runs-on: windows-2025
     timeout-minutes: 65
     defaults:
@@ -218,7 +216,7 @@ jobs:
           path: source-before
           fetch-depth: 0
           persist-credentials: false
-      - name: Check out After W3 (21 patch postimages, not HEAD alone)
+      - name: Check out After W3 (22 patch postimages, not HEAD alone)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: openclaw/openclaw-windows-node
@@ -245,7 +243,7 @@ jobs:
         id: winget
         if: '!cancelled() && steps.prepare.outcome == ''success'' && steps.runtime.outcome == ''success'''
         run: ./proof-harness/harness/windows-ollama/Test-WinGetContract.ps1 -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/windows-ollama"
-      - name: Full build, Shared, Tray, SetupEngine, Connection and strict private UI
+      - name: Scoped failed-owner repair, retained proof and strict private UI
         if: '!cancelled() && steps.prepare.outcome == ''success'' && steps.runtime.outcome == ''success'''
         run: |
           ./proof-harness/harness/windows-ollama/Invoke-RequiredGates.ps1 -BeforeSource "$env:GITHUB_WORKSPACE/source-before" -AfterSource "$env:GITHUB_WORKSPACE/source-after" -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/windows-ollama"
@@ -256,14 +254,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: windows-ollama-frozen-candidate
+          name: windows-ollama-fixture-repair-v2
           path: .artifacts/windows-ollama/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
 
-  # Parent-only insertion into the existing manual proof branch/workflow.
-  # Root workflow_dispatch must define string input platform. No pull_request/push trigger.
   mac-native-plain-copy:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/roboclaw/local-ai-native-followups-20261102' && inputs.platform == 'mac-copy'
     permissions:

@@ -2,6 +2,9 @@
 param([Parameter(Mandatory)][string]$BeforeSource,[Parameter(Mandatory)][string]$AfterSource,[Parameter(Mandatory)][string]$Artifacts)
 . (Join-Path $PSScriptRoot 'Proof.Common.ps1')
 Assert-Packet
+$BeforeSource = Resolve-ExistingDirectory $BeforeSource
+$AfterSource = Resolve-ExistingDirectory $AfterSource
+$Artifacts = Resolve-ExistingDirectory $Artifacts
 if (!$IsWindows -or $env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Only the authorized disposable GitHub-hosted Windows runner is supported.' }
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $session = (Get-Process -Id $PID).SessionId

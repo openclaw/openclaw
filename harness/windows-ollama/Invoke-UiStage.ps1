@@ -2,6 +2,8 @@
 param([Parameter(Mandatory)][string]$Source,[Parameter(Mandatory)][ValidateSet('Before','After')][string]$Stage,[Parameter(Mandatory)][string]$Artifacts)
 . (Join-Path $PSScriptRoot 'Proof.Common.ps1')
 Assert-Packet
+$Source = Resolve-ExistingDirectory $Source
+$Artifacts = Resolve-ExistingDirectory $Artifacts
 $out = Join-Path $Artifacts $Stage
 $freeze = Join-Path $Artifacts "freeze-$Stage"
 if ((Test-Path $out) -or (Test-Path $freeze)) { throw 'Refuse stale UI proof.' }
@@ -13,6 +15,7 @@ $env:OPENCLAW_TRAY_APPDATA_DIR = Join-Path $env:RUNNER_TEMP "ollama-$Stage-roami
 $env:OPENCLAW_UI_PROOF_DIR = $out
 $env:OPENCLAW_UI_PROOF_FREEZE_DIR = $freeze
 $env:OPENCLAW_MOUNTED_CONTROL_CAPTURE_DIR = $out
+$env:OPENCLAW_OLLAMA_PRIVATE_CAPTURE_JOB = 'fixture-v1'
 $env:OPENCLAW_MOUNTED_CONTROL_CAPTURE_HEAD = 'd38ebb418c3aba6b24a4d6470def72b2bba4c4a8'
 $files = @(Source-Manifest $Source)
 foreach ($file in $files) { $file.sha256 = $file.sha256.ToUpperInvariant() }
@@ -45,19 +48,35 @@ try {
     Assert-StrictTrx $invocation.report $expected $invocation.startedUtc
     $images = @(Get-ChildItem -LiteralPath $out -Filter '*.png' -File)
     if ($images.Count -ne $nativeFrames.Count + $mountedFrames.Count) { throw 'Unexpected native image inventory.' }
-    foreach ($name in $nativeFrames) {
-        $receipt = Get-Content -LiteralPath (Join-Path $out "$name.json") -Raw | ConvertFrom-Json
-        if ((Hash (Join-Path $out "$name.png")) -cne $receipt.sha256.ToLowerInvariant() -or
-            $receipt.head -cne $env:OPENCLAW_MOUNTED_CONTROL_CAPTURE_HEAD -or
-            $receipt.method -cne 'PrintWindow(PW_RENDERFULLCONTENT), no fallback') { throw "Native image binding failed: $name" }
-    }
-    foreach ($name in $mountedFrames) {
+    foreach ($name in @($nativeFrames) + @($mountedFrames)) {
         $receipt = Get-Content -LiteralPath (Join-Path $out "$name.json") -Raw | ConvertFrom-Json
         if ((Hash (Join-Path $out "$name.png")) -cne $receipt.imageSha256.ToLowerInvariant() -or
             $receipt.head -cne $env:OPENCLAW_MOUNTED_CONTROL_CAPTURE_HEAD -or
             $receipt.assemblySha256.ToLowerInvariant() -cne (Hash (Join-Path $bin 'OpenClaw.Tray.UITests.dll')) -or
             $receipt.method -cne 'PrintWindow(PW_RENDERFULLCONTENT); no fallback' -or
             $receipt.qualification -cne 'Synthetic dependencies; private owned production window. Not native compositor, keyboard, installed-app, or live Gateway proof.') { throw "Mounted image binding failed: $name" }
+    }
+    foreach ($name in $nativeFrames) {
+        $required = Get-Content -LiteralPath (Join-Path $out "$name.required.json") -Raw | ConvertFrom-Json
+        $labels = if ($name -ceq 'ollama-real-windows-inspection') { @('Ollama') } else { @('Set up your AI','Ollama') }
+        if ($required.schema -cne 'ollama-private-mounted-required-v1' -or $required.state -cne $name -or
+            $required.head -cne $env:OPENCLAW_MOUNTED_CONTROL_CAPTURE_HEAD -or
+            $required.freezeManifestSha256 -cne $env:OPENCLAW_UI_PROOF_MANIFEST_SHA256 -or
+            $required.assemblySha256.ToLowerInvariant() -cne (Hash (Join-Path $bin 'OpenClaw.Tray.UITests.dll')) -or
+            $required.imageSha256.ToLowerInvariant() -cne (Hash (Join-Path $out "$name.png")) -or
+            $required.method -cne 'PrintWindow(PW_RENDERFULLCONTENT); no fallback') { throw 'Required private-frame binding differs.' }
+        if (@(Compare-Object ($labels|Sort-Object) (@($required.requiredLabels)|Sort-Object)).Count -ne 0 -or
+            $required.nativeLabels.Count -ne $labels.Count -or $required.geometry.Hwnd -eq 0 -or
+            $required.geometry.Desktop -ieq 'Default' -or $required.requiredContentBounds.Width -le 0 -or $required.requiredContentBounds.Height -le 0) { throw 'Required private content/label geometry differs.' }
+        foreach ($label in $labels) {
+            $node=@($required.nativeLabels|Where-Object {$_.Expected -ceq $label -and $_.ActualName -ceq $label})
+            if ($node.Count -ne 1 -or $node[0].Width -le 0 -or $node[0].Height -le 0 -or
+                $node[0].Left -lt $required.geometry.Left -or $node[0].Top -lt $required.geometry.Top -or
+                $node[0].Left+$node[0].Width -gt $required.geometry.Right -or $node[0].Top+$node[0].Height -gt $required.geometry.Bottom) { throw 'Required owned-HWND native label is missing or clipped.' }
+        }
+        # OCR exceptions are solely the unchanged source-owner policy invoked by the
+        # consumer. Preserve original PNG and explicit human-review qualification.
+        if (@($required.ocr.MissingLabels|Where-Object {$_ -cne 'Set up your AI'}).Count -ne 0) { throw 'A non-exempt required OCR label is missing.' }
     }
     if ((Invoke-Git $Source @('rev-parse','HEAD')).Trim() -cne $env:OPENCLAW_MOUNTED_CONTROL_CAPTURE_HEAD) { throw 'UI execution changed the pinned HEAD.' }
     & git -C $Source diff --cached --quiet
@@ -66,5 +85,5 @@ try {
     Assert-Files $bin $binaries 'build\ui-tests\'
     $currentFiles = @(Source-Manifest $Source)
     if (@(Compare-Object ($files.path | Sort-Object) ($currentFiles.path | Sort-Object)).Count -ne 0) { throw 'Frozen source inventory changed.' }
-    Save-Json @{stage=$Stage;status='selected-tests-passed-human-image-review-required';executed=$expected;passed=$expected;skipped=0;nativeFrames=$nativeFrames;mountedSyntheticFrames=$mountedFrames;installerExecuted=$false;modelAcquired=$false;liveGateway=$false;freezeManifestSha256=$env:OPENCLAW_UI_PROOF_MANIFEST_SHA256} (Join-Path $out 'result.json')
+    Save-Json @{stage=$Stage;status='private-mounted-tests-passed-human-original-image-review-required';executed=$expected;passed=$expected;skipped=0;requiredPrivateFrames=$nativeFrames;mountedSyntheticFrames=$mountedFrames;foregroundProven=$false;keyboardProven=$false;compositorProven=$false;installerExecuted=$false;modelAcquired=$false;liveGateway=$false;freezeManifestSha256=$env:OPENCLAW_UI_PROOF_MANIFEST_SHA256} (Join-Path $out 'result.json')
 } finally { Pop-Location }

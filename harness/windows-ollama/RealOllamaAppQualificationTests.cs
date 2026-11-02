@@ -416,7 +416,7 @@ public static class RealOllamaAppQualificationTests
         var path = Required("OPENCLAW_REAL_APP_FREEZE");
         Assert.Equal(Required("OPENCLAW_REAL_APP_FREEZE_SHA256"), Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))));
         using var freeze = JsonDocument.Parse(File.ReadAllText(path));
-        Assert.Equal("fd1d39dfb6184ac07fa359990c4c42a2348b26954543f63d7e4e3794d5ec6a95", freeze.RootElement.GetProperty("productPatchSha256").GetString());
+        Assert.Equal("f25cff6b71801078260e2f5080e2d8d9c32584829ad7d7dfb9c59d79e254961d", freeze.RootElement.GetProperty("productPatchSha256").GetString());
         foreach (var item in freeze.RootElement.GetProperty("files").EnumerateArray())
             Assert.Equal(item.GetProperty("sha256").GetString(), Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(item.GetProperty("path").GetString()!))));
         var binaries = freeze.RootElement.GetProperty("binaries").EnumerateArray().ToDictionary(item =>

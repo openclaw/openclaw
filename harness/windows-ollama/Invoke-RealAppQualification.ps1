@@ -59,8 +59,8 @@ try {
         throw 'App Installer WinGet executable does not have valid current Microsoft publisher trust.'
     }
     $version = (& $winget --version | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or $version -cne 'v1.29.380') {
-        throw "Blocked: reviewed first-party WinGet v1.29.380 required; observed '$version'. Qualify another version separately, do not install one here."
+    if ($LASTEXITCODE -ne 0 -or $version -cne 'v1.11.510') {
+        throw "Blocked: actual observed/source-qualified first-party WinGet v1.11.510 required; observed '$version'. Qualify another version separately, do not install one here."
     }
     Save-Json @{version=$version;package=$appInstaller[0].PackageFullName;signatureKind=$appInstaller[0].SignatureKind.ToString();signature=$wingetSignature.Status.ToString();sid=$identity.User.Value;sessionId=$session;existingOllamaState=$ollamaStatePresent;ollamaEnvironmentPresent=$ollamaEnvironmentPresent;alias=$winget;changes=$false} (Join-Path $Artifacts 'winget-prerequisite.json')
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'RealOllamaAppQualificationTests.cs') -Destination (Join-Path $Source $overlay)
@@ -99,7 +99,7 @@ internal static class Program
     private static int Main() => OpenClaw.Tray.UITests.RealOllamaAppQualificationTests.RunStandaloneAsync().GetAwaiter().GetResult();
 }
 '@ | Set-Content -LiteralPath (Join-Path $hostProject 'Program.cs') -Encoding utf8NoBOM
-    Invoke-Checked 'dotnet' @('build',(Join-Path $hostProject 'RealAppHost.csproj'),'-c','Debug','-r','win-x64')
+    Invoke-Checked 'dotnet' @('build',(Join-Path $hostProject 'RealAppHost.csproj'),'-c','Debug','-r','win-x64','-p:WriteVersionInfoToBuildLog=false')
     $bin = Join-Path $hostProject 'bin/Debug/net10.0-windows10.0.22621.0/win-x64'
     $uiBin = Join-Path $Source 'tests/OpenClaw.Tray.UITests/bin/Debug/net10.0-windows10.0.22621.0/win-x64'
     # ProjectReference does not transitively copy compiled XBF/PRI. Copy the exact
@@ -118,7 +118,7 @@ internal static class Program
     $freezeFiles += @(Get-ChildItem -LiteralPath $hostProject -File | ForEach-Object { @{path=$_.FullName;sha256=(Hash $_.FullName).ToUpperInvariant()} })
     $binaries = @(Get-ChildItem -LiteralPath $bin -File -Recurse | Sort-Object FullName | ForEach-Object { @{path=$_.FullName;sha256=(Hash $_.FullName).ToUpperInvariant()} })
     $freezePath = Join-Path $Artifacts 'real-app-freeze.json'
-    Save-Json @{base=$evidence.base;productPatchSha256='fd1d39dfb6184ac07fa359990c4c42a2348b26954543f63d7e4e3794d5ec6a95';
+    Save-Json @{base=$evidence.base;productPatchSha256='f25cff6b71801078260e2f5080e2d8d9c32584829ad7d7dfb9c59d79e254961d';
         overlay=@{path=$overlay;sha256=(Hash (Join-Path $Source $overlay))};files=$freezeFiles;binaries=$binaries} $freezePath
     $env:OPENCLAW_REAL_APP_FREEZE = $freezePath
     $env:OPENCLAW_REAL_APP_FREEZE_SHA256 = (Hash $freezePath).ToUpperInvariant()

@@ -4,20 +4,62 @@
     [Trait("Category", "NativeOnboardingProof")]
     public async Task NativeOllamaComparison_IdenticalAdvertisedNoModel(ElementTheme theme)
     {
-        await WithPageAsync(async (page, transport, completed) =>
+        // Identical test-only presentation in both source states. Do not use WithPageAsync's
+        // foreground/input proof mode or mutate its shared one-pixel fixture window.
+        await ui.RunOnUIAsync(async () =>
         {
-            Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
-            Assert.Equal(0, completed());
-            var choices = Find<ItemsControl>(page, "PrepareChoices");
-            Assert.Single(TestSupport.FindDescendants<SetupActionCard>(choices));
-            using (await OnboardingNativeProof.CaptureAsync(ui.TestWindow,
-                $"ollama-identical-advertised-no-model-{theme}", output,
-                ["Set up your AI", "Ollama"], requiredContent: page)) { }
-        }, nativeProof: true, theme: theme,
-            configure: transport => transport.DetectionOverride = new()
+            var transport = new PageTransport(true)
             {
-                Candidates = [], ManualProviders = [],
-                PrepareOptions = [new("ollama", "Ollama", Kind: "custom")],
-                Workspace = "/synthetic-workspace", SetupComplete = false,
+                DetectionOverride = new()
+                {
+                    Candidates = [], ManualProviders = [],
+                    PrepareOptions = [new("ollama", "Ollama", Kind: "custom")],
+                    Workspace = "/synthetic-workspace", SetupComplete = false,
+                },
+            };
+            var completed = 0;
+            var root = new Grid();
+            var frame = new Frame();
+            root.Children.Add(frame);
+            var window = OnboardingNativeProof.CreateWindow(() => new Window
+            {
+                Title = "OpenClaw Ollama comparison",
+                Content = root,
             });
+            AiSetupPage? page = null;
+            try
+            {
+                var scale = ui.Container.XamlRoot.RasterizationScale;
+                window.AppWindow.Resize(new Windows.Graphics.SizeInt32(
+                    NativeProofLayout.PhysicalPixels(720, scale), NativeProofLayout.PhysicalPixels(820, scale)));
+                await OllamaPrivateMountedPresentation.PresentAsync(window);
+                await OnboardingNativeProof.ApplyThemeSurfaceAsync(root, theme);
+                var data = Environment.GetEnvironmentVariable("OPENCLAW_TRAY_DATA_DIR")!;
+                var args = new AiSetupPageArgs(new SetupConfig(), data, data,
+                    () => true, () => { completed++; return Task.CompletedTask; },
+                    TransportFactory: () => transport);
+                Assert.True(frame.Navigate(typeof(AiSetupPage), args,
+                    new Microsoft.UI.Xaml.Media.Animation.SuppressNavigationTransitionInfo()));
+                page = Assert.IsType<AiSetupPage>(frame.Content);
+                await TestSupport.WaitForRenderedConditionAsync(() => page.IsLoaded &&
+                    Find<StackPanel>(page, "ChoicePanel").Visibility == Visibility.Visible,
+                    "identical advertised Ollama no-model page");
+                root.UpdateLayout();
+                await ui.YieldToRenderAsync();
+                Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
+                Assert.Equal(0, completed);
+                var choices = Find<ItemsControl>(page, "PrepareChoices");
+                Assert.Single(TestSupport.FindDescendants<SetupActionCard>(choices));
+                await OllamaPrivateMountedPresentation.CaptureRequiredAsync(window,
+                    $"ollama-identical-advertised-no-model-{theme}", output,
+                    ["Set up your AI", "Ollama"], page);
+                Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
+                Assert.Equal(0, completed);
+            }
+            finally
+            {
+                try { if (page is not null) await page.CloseAsync(); }
+                finally { window.Close(); }
+            }
+        });
     }

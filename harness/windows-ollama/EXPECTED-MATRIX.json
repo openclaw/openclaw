@@ -1,24 +1,19 @@
 {
-  "qualification": "Expected future observations only. Native executions/tests/installs/frames obtained during preparation: zero.",
+  "qualification": "Expected repaired current observations plus explicitly reused prior actual evidence, not a new native pass.",
   "source": {
     "base": "d38ebb418c3aba6b24a4d6470def72b2bba4c4a8",
-    "patchSha256": "fd1d39dfb6184ac07fa359990c4c42a2348b26954543f63d7e4e3794d5ec6a95",
-    "productPostimages": 21,
+    "patchSha256": "f25cff6b71801078260e2f5080e2d8d9c32584829ad7d7dfb9c59d79e254961d",
+    "productPostimages": 22,
     "seals": "composed-evidence.json",
     "w4": "Not silently stacked. Parent must supply the exact accepted composition and reseal affected source/build closure before qualifying that different source."
   },
   "requiredFixtureStages": [
+    "retained-proof-admission",
     "full-build",
-    "canonical-native-docs",
     "Shared-build",
     "Shared-full-tests",
-    "Connection-build",
-    "Connection-full-tests",
-    "Tray-build",
-    "Tray-full-tests",
     "SetupEngine-build",
-    "SetupEngine-full-tests",
-    "strict-ollama-owner-and-admitted-runner-17-cases",
+    "SetupEngine-artwork-owner-repair-3-cases",
     "After-UI-build",
     "After-private-native-UI",
     "Before-UI-build",
@@ -40,7 +35,8 @@
       "id": "owner-and-runner",
       "cases": 17,
       "detail": "11 backend Facts + four InlineData cases + two admitted-installer runner Facts",
-      "skipsAllowed": 0
+      "skipsAllowed": 0,
+      "execution": "REUSED actual prior17pass/0skip, unchanged owner closure; not rerun"
     },
     {
       "id": "Before-UI",
@@ -71,56 +67,8 @@
       "ollama-open-needs-model"
     ]
   },
-  "realAppCells": [
-    {
-      "mode": "Normal",
-      "host": "Fresh independent GitHub-hosted windows-2025 VM/user",
-      "checks": [
-        "fresh-inventory",
-        "unchecked-consent",
-        "real-installer-admission",
-        "settlement-releases-lock-and-logger",
-        "app-created",
-        "final-freeze",
-        "actual-application-exit",
-        "app-survives-actual-host-exit",
-        "install-needs-model",
-        "reuse-running-service"
-      ],
-      "expectedSelectedCheckCount": 10,
-      "expectedFrames": [
-        "real-app-unchecked-review",
-        "real-app-installed-needs-model"
-      ],
-      "status": "not-executed",
-      "notXunitTests": true
-    },
-    {
-      "mode": "CancelCloseQuit",
-      "host": "Different fresh GitHub-hosted windows-2025 VM/user; never uninstall/reinstall the first cell",
-      "checks": [
-        "fresh-inventory",
-        "unchecked-consent",
-        "real-installer-admission",
-        "settlement-releases-lock-and-logger",
-        "app-created",
-        "final-freeze",
-        "actual-application-exit",
-        "app-survives-actual-host-exit",
-        "cancel-live",
-        "close-live",
-        "quit-live",
-        "cancelled-installation-present"
-      ],
-      "expectedSelectedCheckCount": 12,
-      "expectedFrames": [
-        "real-app-unchecked-review"
-      ],
-      "status": "not-executed",
-      "notXunitTests": true
-    }
-  ],
-  "expectedFramesAcrossJobs": 12,
+  "realAppCells": [],
+  "expectedFramesAcrossJobs": 9,
   "blockedRequiredBoundary": {
     "id": "stopped-installed-app-open",
     "reason": "No qualified graceful app shutdown fixture on the private desktop; no forced stop/uninstall/reinstall. Existing backend and mounted tests are not native qualification."
@@ -132,11 +80,20 @@
     "survival across CI VM destruction"
   ],
   "nativePrerequisites": [
-    "Parent-reviewed execution release; qualify_app input true explicitly admits the fixed app only.",
+    "Parent review/release required for a noninstalling fixture run; no app job or qualify_app input exists.",
     "Current interactive SID/session owns explorer.exe on disposable GitHub-hosted Windows.",
     "Exact .NET10.0.403, WindowsSDK26100 and trusted current-user Microsoft.WindowsAppRuntime.2 X64 framework, minimum2.6.4.0, stable Bootstrap0x20006 empty tag.",
-    "Actual current-user Microsoft App Installer/alias/trust and v1.29.380 for the real-app cell; no automatic repair/bootstrap.",
+    "Actual current-user Microsoft App Installer/alias/trust and v1.11.510 for the real-app cell; no automatic repair/bootstrap.",
     "No existing Ollama environment overrides or .ollama state; real product inventory must independently authorize fresh install.",
     "No foreign llama-server conflict; installation refuses unknown/active evidence."
-  ]
+  ],
+  "priorFailedRun": {
+    "runId": 41495507649,
+    "status": "FAILED",
+    "png": 0,
+    "evidence": "RETAINED-EVIDENCE.json"
+  },
+  "freshAdditionalOwnerCases": 3,
+  "freshSelectedUiCases": 14,
+  "realAppJobs": "DORMANT / UNREGISTERED. No installation job exists in workflow."
 }

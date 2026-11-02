@@ -1,0 +1,31 @@
+{
+  "mountedOverlayInput": "Repaired candidate preimage, not a possibly changing shared worktree.",
+  "qualification": "Static PowerShell AST and C# syntax/postimage checks only. No semantic compilation, tests, native execution, UI capture, install, CI, VM, commit or push.",
+  "powershell": "7.6.0",
+  "csharp": [
+    {
+      "path": "OnboardingAiPageTests.private-postimage.txt",
+      "syntaxErrors": 0,
+      "sha256": "9466d360c479fc3b2205064fc62cea2642cd0355ec36b6afcd1e71dfa43e4991"
+    },
+    {
+      "path": "OnboardingOllamaPageTests.private-postimage.txt",
+      "syntaxErrors": 0,
+      "sha256": "83d6cd7cb49b3b9164a61e60b8f8b11d4c62b91ecbfbcb90621c2d74f5f6f024"
+    },
+    {
+      "path": "NativeOllamaOsInspectionTests.cs",
+      "syntaxErrors": 0,
+      "sha256": "b4d5c36f06e2fa4a448203573458e750281e6f6e55a17deb13ac11ae96fd70ab"
+    },
+    {
+      "path": "OllamaPrivateMountedPresentation.cs",
+      "syntaxErrors": 0,
+      "sha256": "2e1f46e76e8303de77d4f73fb962924ff41cb15ee8642e617b5e5b648bdb2eda"
+    }
+  ],
+  "errors": [],
+  "roslyn": "5.0.0.0",
+  "comparisonInsertionExact": true,
+  "mountedPresentationOnlyExact": true
+}

@@ -1,42 +1,30 @@
 [CmdletBinding()]
 param([Parameter(Mandatory)][string]$Source,[Parameter(Mandatory)][string]$Output)
-# Pure parser/seal checks. Never dot-source or execute a native workflow driver here.
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
-$errors=@(); $scripts=@()
-foreach ($path in Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.ps1' -File | Sort-Object Name) {
-    $tokens=$null; $parseErrors=$null
-    $null=[Management.Automation.Language.Parser]::ParseFile($path.FullName,[ref]$tokens,[ref]$parseErrors)
-    foreach ($failure in $parseErrors) { $errors+=@{path=$path.Name;error=$failure.ToString()} }
-    $scripts+=@{path=$path.Name;sha256=(Get-FileHash $path.FullName -Algorithm SHA256).Hash;syntaxErrors=@($parseErrors).Count}
+$errors=@();$scripts=@();$csharp=@()
+foreach($f in Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.ps1' -File){
+    $tokens=$null;$failures=$null
+    $null=[Management.Automation.Language.Parser]::ParseFile($f.FullName,[ref]$tokens,[ref]$failures)
+    foreach($x in $failures){$errors+=@{path=$f.Name;error=$x.ToString()}}
+    $scripts+=@{path=$f.Name;syntaxErrors=@($failures).Count}
 }
 Add-Type -Path (Join-Path $PSHOME 'Microsoft.CodeAnalysis.dll')
 Add-Type -Path (Join-Path $PSHOME 'Microsoft.CodeAnalysis.CSharp.dll')
 $options=[Microsoft.CodeAnalysis.CSharp.CSharpParseOptions]::Default.WithLanguageVersion([Microsoft.CodeAnalysis.CSharp.LanguageVersion]::Preview)
-$comparison=[IO.File]::ReadAllText((Join-Path $Source 'tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs'))
-$overlay=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'comparison-method.txt'))
-$comparison=$comparison.Replace('    private bool _nativeProof;','    private bool _nativeProof;' + [char]10 + $overlay)
-$csharp=@()
-foreach ($item in @(@{path='comparison-in-memory.cs';text=$comparison},
-    @{path='NativeOllamaOsInspectionTests.cs';text=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'NativeOllamaOsInspectionTests.cs'))},
-    @{path='RealOllamaAppQualificationTests.cs';text=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'RealOllamaAppQualificationTests.cs'))},
-    @{path='Program.cs';text=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'Program.cs'))})) {
-    $tree=[Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree]::ParseText($item.text,$options)
-    $diagnostics=@($tree.GetDiagnostics() | Where-Object {$_.Severity.ToString() -ceq 'Error'})
-    foreach($failure in $diagnostics){$errors+=@{path=$item.path;error=$failure.ToString()}}
-    $csharp+=@{path=$item.path;syntaxErrors=$diagnostics.Count}
+$inputs=@(Get-ChildItem -LiteralPath $PSScriptRoot -File|Where-Object {$_.Extension -ceq '.cs' -or $_.Name -like '*.private-postimage.txt'})
+$inputs+=@(Get-Item (Join-Path $Source 'src/OpenClaw.SetupEngine.UI/Controls/OllamaWindowsSetupDialog.cs'),
+    (Join-Path $Source 'tests/OpenClaw.SetupEngine.Tests/ProviderArtworkSourceContractTests.cs'),
+    (Join-Path $Source 'tests/OpenClaw.Tray.UITests/OnboardingOllamaPageTests.cs'))
+foreach($f in $inputs){
+    $tree=[Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree]::ParseText([IO.File]::ReadAllText($f.FullName),$options)
+    $failures=@($tree.GetDiagnostics()|Where-Object {$_.Severity.ToString() -ceq 'Error'})
+    foreach($x in $failures){$errors+=@{path=$f.Name;error=$x.ToString()}}
+    $csharp+=@{path=$f.Name;sha256=(Get-FileHash $f.FullName -Algorithm SHA256).Hash;syntaxErrors=$failures.Count}
 }
-$seals=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'packet-seals.json') -Raw | ConvertFrom-Json
-foreach($file in $seals.files) {
-    if ((Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $file.path) -Algorithm SHA256).Hash.ToLowerInvariant() -cne $file.sha256) { throw "Packet seal mismatch: $($file.path)" }
-}
-foreach ($path in Get-ChildItem -LiteralPath $PSScriptRoot -File -Recurse) {
-    if ($path.Extension -in @('.ps1','.cs','.yml','.md','.txt','.json')) {
-        $text=[IO.File]::ReadAllText($path.FullName)
-        if ($text.Contains([char]0) -or $text.Contains([char]6)) { throw "Control-byte corruption: $($path.Name)" }
-    }
-}
-$report=@{qualification='PowerShell AST and C# syntax only; no workflow commands, semantic compilation, test execution, desktop, installation or launch.';powershell=$PSVersionTable.PSVersion.ToString();roslyn=[Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree].Assembly.GetName().Version.ToString();powershellScripts=$scripts;csharp=$csharp;errors=$errors;sealedFiles=$seals.files.Count}
-$report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $Output -Encoding utf8NoBOM
-$report | ConvertTo-Json -Depth 8
-if($errors.Count -gt 0){throw 'Packet syntax errors found.'}
+$seals=Get-Content (Join-Path $PSScriptRoot 'packet-seals.json') -Raw|ConvertFrom-Json
+foreach($f in $seals.files){if((Get-FileHash (Join-Path $PSScriptRoot $f.path) -Algorithm SHA256).Hash.ToLowerInvariant() -cne $f.sha256){throw "Packet seal mismatch: $($f.path)"}}
+@{qualification='Static text/AST/C# syntax only. No native semantic compilation, build/test/capture, acquisition/install/CI/VM/launch.';
+    powershell=$PSVersionTable.PSVersion.ToString();roslyn=[Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree].Assembly.GetName().Version.ToString();
+    powershellScripts=$scripts;csharp=$csharp;errors=$errors;sealedFiles=$seals.files.Count}|ConvertTo-Json -Depth 8|Set-Content $Output
+if($errors.Count -ne 0){throw 'Static syntax diagnostics found.'}

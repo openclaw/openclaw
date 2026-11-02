@@ -5,6 +5,13 @@ function Save-Json($Value, [string]$Path) {
     ConvertTo-Json -InputObject $Value -Depth 16 | Set-Content -LiteralPath $Path -Encoding utf8NoBOM
 }
 function Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
+function Resolve-ExistingDirectory([string]$Path) {
+    $resolved = Resolve-Path -LiteralPath $Path
+    if ($resolved.Provider.Name -cne 'FileSystem') { throw 'A filesystem directory is required.' }
+    $item = Get-Item -LiteralPath $resolved.ProviderPath
+    if (!$item.PSIsContainer) { throw 'An existing directory is required.' }
+    $item.FullName
+}
 function Invoke-Git([string]$Source, [string[]]$Arguments) {
     $value = & git -C $Source @Arguments
     if ($LASTEXITCODE -ne 0) { throw "Git query failed: $Source" }
@@ -41,20 +48,28 @@ function Assert-Files([string]$Base, $Entries, [string]$Prefix = '') {
 }
 function Assert-Product([string]$Source, [switch]$WithComparison) {
     $evidence = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'composed-evidence.json') -Raw | ConvertFrom-Json
-    if ((Hash (Join-Path $PSScriptRoot 'ollama-windows-composed.patch')) -cne 'fd1d39dfb6184ac07fa359990c4c42a2348b26954543f63d7e4e3794d5ec6a95') { throw 'Reviewed patch differs.' }
+    if ((Hash (Join-Path $PSScriptRoot 'ollama-windows-composed.patch')) -cne $evidence.patch.sha256) { throw 'Reviewed patch differs.' }
     if ((Invoke-Git $Source @('rev-parse','HEAD')).Trim() -cne $evidence.base) { throw 'Product base differs.' }
-    Assert-Files $Source $evidence.files
+    $overlays = Get-Content (Join-Path $PSScriptRoot 'TEST-OVERLAYS.json') -Raw | ConvertFrom-Json
+    foreach ($file in $evidence.files) {
+        $expectedHash = $file.sha256
+        if ($WithComparison) {
+            $testOverlay = @($overlays.afterOnly | Where-Object {$_.path -ceq $file.path})
+            if ($testOverlay.Count -eq 1) { $expectedHash = $testOverlay[0].sha256 }
+        }
+        if ((Hash (Join-Path $Source $file.path)) -cne $expectedHash) { throw "Product/test postimage differs: $($file.path)" }
+    }
     & git -C $Source diff --cached --quiet
     if ($LASTEXITCODE -ne 0) { throw 'Proof must not stage product changes.' }
     $expected = @($evidence.files.path)
-    if ($WithComparison) { $expected += 'tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs' }
-    if (Test-Path (Join-Path $Source 'tests/OpenClaw.Tray.UITests/NativeOllamaOsInspectionTests.cs')) {
-        if ((Hash (Join-Path $Source 'tests/OpenClaw.Tray.UITests/NativeOllamaOsInspectionTests.cs')) -cne
-            (Hash (Join-Path $PSScriptRoot 'NativeOllamaOsInspectionTests.cs'))) { throw 'OS inspection overlay differs.' }
-        $expected += 'tests/OpenClaw.Tray.UITests/NativeOllamaOsInspectionTests.cs'
+    if ($WithComparison) {
+        foreach ($overlay in @($overlays.common) + @($overlays.afterOnly)) {
+            if ((Hash (Join-Path $Source $overlay.path)) -cne $overlay.sha256) { throw "Test-only overlay differs: $($overlay.path)" }
+            $expected += $overlay.path
+        }
     }
     $actual = @(@(Invoke-Git $Source @('diff','--name-only','HEAD')) + @(Invoke-Git $Source @('ls-files','--others','--exclude-standard')) | Sort-Object -Unique)
-    if (@(Compare-Object ($expected | Sort-Object -Unique) $actual).Count -ne 0) { throw 'Unreviewed product delta.' }
+    if (@(Compare-Object ($expected | Sort-Object -Unique) $actual).Count -ne 0) { throw 'Unreviewed source delta.' }
 }
 function Assert-StrictTrx([string]$Path, [int]$Expected, [datetime]$StartedUtc) {
     . (Join-Path $env:OPENCLAW_REPO_ROOT 'scripts/TestResultContract.ps1')

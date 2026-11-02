@@ -47,7 +47,7 @@ public sealed class NativeOllamaOsInspectionTests(UIThreadFixture ui, ITestOutpu
                 Assert.NotNull(args.OllamaSetupFactory);
                 frame.Navigate(typeof(AiSetupPage), args);
                 var page = Assert.IsType<AiSetupPage>(frame.Content);
-                OnboardingNativeProof.ActivateOwned(window);
+                await OllamaPrivateMountedPresentation.PresentAsync(window);
                 await TestSupport.WaitForRenderedConditionAsync(() => page.IsLoaded &&
                     TestSupport.FindDescendants<SetupActionCard>(Assert.IsType<ItemsControl>(page.FindName("PrepareChoices")))
                         .Any(card => card.IsEnabled), "real factory Ollama card");
@@ -68,8 +68,8 @@ public sealed class NativeOllamaOsInspectionTests(UIThreadFixture ui, ITestOutpu
                     item => item.Name == "OllamaAppInstallConsent");
                 Assert.False(consent.IsChecked == true);
                 Assert.All(transport.Calls, method => Assert.Equal("openclaw.setup.detect", method));
-                using (await OnboardingNativeProof.CaptureAsync(window, "ollama-real-windows-inspection", output,
-                    ["Ollama"], requiredContent: dialog)) { }
+                await OllamaPrivateMountedPresentation.CaptureRequiredAsync(window,
+                    "ollama-real-windows-inspection", output, ["Ollama"], dialog);
                 output.WriteLine(JsonSerializer.Serialize(new
                 {
                     qualification = "Real Windows observation through production SetupWindow factory; synthetic selected Gateway. No consent or app mutation.",

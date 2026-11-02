@@ -7,7 +7,7 @@ Assert-Base $Source
 if (Test-Path -LiteralPath $Artifacts) { throw 'Refuse stale real-source admission.' }
 New-Item -ItemType Directory -Path $Artifacts | Out-Null
 $patch = Join-Path $PSScriptRoot 'ollama-windows-composed.patch'
-if ((Hash $patch) -cne 'fd1d39dfb6184ac07fa359990c4c42a2348b26954543f63d7e4e3794d5ec6a95') { throw 'Reviewed product patch differs.' }
+if ((Hash $patch) -cne 'f25cff6b71801078260e2f5080e2d8d9c32584829ad7d7dfb9c59d79e254961d') { throw 'Reviewed product patch differs.' }
 Invoke-Checked 'git' @('-C',$Source,'apply','--check',$patch)
 Invoke-Checked 'git' @('-C',$Source,'apply',$patch)
 Assert-Product $Source

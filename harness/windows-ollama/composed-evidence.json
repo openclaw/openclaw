@@ -1,12 +1,12 @@
 {
-  "status": "complete composed source candidate; final source review has no actionable P0-P3 findings; native qualification pending parent release",
-  "worktree": "/home/openclaw/.openclaw/projects/05ecb4050064f070/openclaw/.openclaw/tmp/llama-native-windows/ollama-windows-install-01",
-  "branch": "ollama/windows-install-01",
+  "schema": "windows-ollama-repaired-source-v2",
+  "status": "Uncommitted coherent repair candidate; native requalification not executed.",
   "base": "d38ebb418c3aba6b24a4d6470def72b2bba4c4a8",
+  "branch": "ollama/windows-install-01",
   "patch": {
-    "path": "/home/openclaw/.openclaw/projects/05ecb4050064f070/openclaw/.openclaw/tmp/local-installer-plan/ollama-windows-composed.patch",
-    "sha256": "fd1d39dfb6184ac07fa359990c4c42a2348b26954543f63d7e4e3794d5ec6a95",
-    "bytes": 165710
+    "path": "ollama-windows-composed.patch",
+    "sha256": "f25cff6b71801078260e2f5080e2d8d9c32584829ad7d7dfb9c59d79e254961d",
+    "bytes": 169445
   },
   "files": [
     {
@@ -23,7 +23,7 @@
     },
     {
       "path": "src/OpenClaw.SetupEngine.UI/Controls/OllamaWindowsSetupDialog.cs",
-      "sha256": "de7fd1a8f01ac83abd3ae4fffe547313156ea86c32572139c1afc1cbb7a1ac5d"
+      "sha256": "a0371ae57fb9a0d2700f1b889cc473f38c5abf205c614144f02a480a25f854e8"
     },
     {
       "path": "src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs",
@@ -86,52 +86,32 @@
       "sha256": "29d6b1f75dadd3fbd6f4ea432a4355163d8c25b2497ab13e61ff34356cd2cede"
     },
     {
+      "path": "tests/OpenClaw.SetupEngine.Tests/ProviderArtworkSourceContractTests.cs",
+      "sha256": "713e458c651b15e37df254bec0f6cc324bb03d154e41aa03e03883f3afd00782"
+    },
+    {
       "path": "tests/OpenClaw.Shared.TestHost/Program.cs",
       "sha256": "8c11cc7680e875abe53629e5f29c6a2d0bac46b016b10f0e3543c41fb9d445dd"
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingOllamaPageTests.cs",
-      "sha256": "0bdd76f5c194b737797b3ba722d5c2f23aa85f6654aada500b8819af634707be"
+      "sha256": "36e55db282974627f2d0fbfa46bdebb18557ac0602e6fc0028dde8999137d945"
     }
   ],
-  "sourceFingerprint": "34f1b36d3a8f7b609921e4e61aaa25de24d72ef075d76227b4e59223289e8292",
-  "csharpSyntaxOnly": {
-    "files": 12,
-    "errors": 0,
-    "semanticCompilation": false
+  "prior": {
+    "patchSha256": "fd1d39dfb6184ac07fa359990c4c42a2348b26954543f63d7e4e3794d5ec6a95",
+    "productFiles": 21
   },
-  "csharpTestsExecuted": 0,
-  "docsStatic": {
-    "candidateExit": 1,
-    "baselineExit": 1,
-    "classification": "Unchanged Windows proof-pool path handling fails on Linux at scripts\\validate-mxc-e2e.ps1; not a passing docs gate"
-  },
-  "localeKeysPerLocale": 3350,
-  "newKeysPerLocale": 37,
-  "baselineGuideBytesPreserved": true,
-  "nativeExecution": false,
-  "numstat": "2\t0\tdocs/ARCHITECTURE.md\n49\t0\tdocs/ONBOARDING_WIZARD.md\n28\t14\tsrc/OpenClaw.Connection/WindowsAuthenticodeVerifier.cs\n67\t2\tsrc/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs\n12\t1\tsrc/OpenClaw.SetupEngine.UI/SetupWindow.xaml.cs\n28\t5\tsrc/OpenClaw.SetupEngine/CommandRunner.cs\n1\t0\tsrc/OpenClaw.SetupEngine/OpenClaw.SetupEngine.csproj\n7\t0\tsrc/OpenClaw.SetupEngine/SetupAccessDraft.cs\n111\t0\tsrc/OpenClaw.Tray.WinUI/Strings/en-us/Resources.resw\n111\t0\tsrc/OpenClaw.Tray.WinUI/Strings/fr-fr/Resources.resw\n111\t0\tsrc/OpenClaw.Tray.WinUI/Strings/nl-nl/Resources.resw\n111\t0\tsrc/OpenClaw.Tray.WinUI/Strings/pt-br/Resources.resw\n111\t0\tsrc/OpenClaw.Tray.WinUI/Strings/zh-cn/Resources.resw\n111\t0\tsrc/OpenClaw.Tray.WinUI/Strings/zh-tw/Resources.resw\n65\t0\ttests/OpenClaw.SetupEngine.Tests/CommandRunnerTests.cs\n26\t0\ttests/OpenClaw.Shared.TestHost/Program.cs\n296\t0\tsrc/OpenClaw.SetupEngine.UI/Controls/OllamaWindowsSetupDialog.cs\n316\t0\tsrc/OpenClaw.SetupEngine/OllamaWindowsAppHost.cs\n264\t0\tsrc/OpenClaw.SetupEngine/OllamaWindowsSetup.cs\n287\t0\ttests/OpenClaw.SetupEngine.Tests/OllamaWindowsSetupTests.cs\n475\t0\ttests/OpenClaw.Tray.UITests/OnboardingOllamaPageTests.cs\n",
-  "identityRepairDelta": {
-    "previousPatch": "76917d7fd10d5463f3314dfe7defa5bd9c489fe66f5dacc5f89ab8f376e9f3b6",
-    "changedFiles": [
+  "repairDelta": {
+    "path": "candidate-repair-from-fd1d39.patch",
+    "sha256": "45eace8a52b98119c5f3e2b332faf429b8d655d02c18c40772247539900813f6",
+    "bytes": 7651,
+    "files": [
       "src/OpenClaw.SetupEngine.UI/Controls/OllamaWindowsSetupDialog.cs",
-      "src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs",
-      "src/OpenClaw.SetupEngine/OllamaWindowsSetup.cs",
-      "tests/OpenClaw.SetupEngine.Tests/OllamaWindowsSetupTests.cs",
+      "tests/OpenClaw.SetupEngine.Tests/ProviderArtworkSourceContractTests.cs",
       "tests/OpenClaw.Tray.UITests/OnboardingOllamaPageTests.cs"
-    ],
-    "unchangedFileSeals": 16
+    ]
   },
-  "finalSourceReview": {
-    "verdict": "no actionable P0-P3 findings",
-    "reviewedPatch": "fd1d39dfb6184ac07fa359990c4c42a2348b26954543f63d7e4e3794d5ec6a95",
-    "identityRepairVerified": true,
-    "currentChangedFilesReadCompletely": 5,
-    "unchangedFullReviewFileSealsVerified": 16,
-    "allCurrentFileSealsVerified": 21,
-    "basePlusPatchReconstructed": true,
-    "sourceFreezeUnchanged": true,
-    "semanticCompilation": false,
-    "nativeAcceptance": false
-  }
+  "sourceFingerprint": "c0f7a6cfabfa2287892e23a7c1bf0bae1fba8f8fed79366bdbbb022765e4ff95",
+  "nativeEvidence": "Prior run41495507649 retained separately, not relabeled current passing qualification."
 }

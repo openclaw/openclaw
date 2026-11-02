@@ -1,3 +1,9 @@
+# Dormant real-app consumer. NOT registered or authorized
+
+The v2 workflow contains ONLY noninstalling fixture repair. These retained consumer sources are not native-qualified or dispatch-ready. The invented exactv1.29.380 prerequisite is withdrawn. Exact observed/source-qualifiedv1.11.510 is documented in DEPENDENCY-CONTRACTS.md; configured-catalog download, resulting Ollama signer/hash, installation, launcher, private presentation and app survival remain unqualified. No app/model acquisition is authorized here. Stopped-app Open remains blocked.
+
+Historical design below is retained as design, not execution evidence; v2 workflow and scope above supersede its old invocation/prerequisite suggestions.
+
 # Real Ollama application boundary consumer
 
 Preparation only. No native execution, download, installation, CI dispatch, VM,
@@ -12,7 +18,7 @@ boundary declaration. These three drafts were fully reconciled after the draftin
 
 Use a separate prepared source copy containing ONLY base
 **d38ebb418c3aba6b24a4d6470def72b2bba4c4a8** plus the 21 product files in patch
-SHA256 **fd1d39dfb6184ac07fa359990c4c42a2348b26954543f63d7e4e3794d5ec6a95**.
+SHA256 **f25cff6b71801078260e2f5080e2d8d9c32584829ad7d7dfb9c59d79e254961d**.
 Do not pass the comparison/OS-inspection overlay checkout. The driver first
 runs the existing product guard, then adds exactly its own test overlay.
 
@@ -59,7 +65,7 @@ not a parser defect or hidden working download capability. If a literally
 detect/verify-only advertised list is mandatory, that narrower request remains
 blocked without a separately reviewed product contract change.
 
-Official current WinGet v1.29.380 upstream serialization emits Arg. The product
+Official current WinGet v1.11.510 upstream serialization emits Arg. The product
 parser is correct and unchanged. The driver requires that exact reviewed
 first-party version, the current-user alias and healthy Microsoft App Installer
 package. Missing/different availability blocks without bootstrap, reset, source,

@@ -1210,6 +1210,30 @@ index 92fe9829..1f7643dc 100644
      [Theory]
      [InlineData("wsl.exe")]
      [InlineData(@"C:\Windows\System32\WSL.EXE")]
+diff --git a/tests/OpenClaw.SetupEngine.Tests/ProviderArtworkSourceContractTests.cs b/tests/OpenClaw.SetupEngine.Tests/ProviderArtworkSourceContractTests.cs
+index 6241df07..3778ecf6 100644
+--- a/tests/OpenClaw.SetupEngine.Tests/ProviderArtworkSourceContractTests.cs
++++ b/tests/OpenClaw.SetupEngine.Tests/ProviderArtworkSourceContractTests.cs
+@@ -4,13 +4,16 @@ namespace OpenClaw.SetupEngine.Tests;
+ public sealed class ProviderArtworkSourceContractTests
+ {
+     [Fact]
+-    public void Page_ForwardsAllMetadataAndClosesArtworkBeforeConnectionCleanup()
++    public void Page_ForwardsArtworkMetadataAndClosesArtworkBeforeAsyncCleanup()
+     {
+         var page = Read("src", "OpenClaw.SetupEngine.UI", "Pages", "AiSetupPage.xaml.cs");
+         Assert.Contains("candidate.BrandId, candidate.Icon, candidate.Kind", page);
+-        Assert.Contains("MetadataActionLabel: localService ? S(\"ManualConnect\") : option.ActionLabel", page);
++        // Action metadata and the native Ollama override are exercised on mounted cards.
+         Assert.Contains("Icon: option.Icon, ProviderKind: option.Kind", page);
+-        Assert.Contains("_artworkSession.Dispose();", page);
++        var close = page[page.IndexOf("public Task CloseAsync()", StringComparison.Ordinal)..];
++        var dispose = close.IndexOf("_artworkSession.Dispose();", StringComparison.Ordinal);
++        var cleanup = close.IndexOf("_ = CompleteCloseAsync(completion);", StringComparison.Ordinal);
++        Assert.True(dispose >= 0 && cleanup > dispose);
+         Assert.DoesNotContain("new HttpClient", page);
+         Assert.DoesNotContain("IconVisibility", page);
+         var xaml = Read("src", "OpenClaw.SetupEngine.UI", "Pages", "AiSetupPage.xaml");
 diff --git a/tests/OpenClaw.Shared.TestHost/Program.cs b/tests/OpenClaw.Shared.TestHost/Program.cs
 index c9a814d1..12f50a80 100644
 --- a/tests/OpenClaw.Shared.TestHost/Program.cs
@@ -1256,14 +1280,15 @@ index c9a814d1..12f50a80 100644
          Console.Out.Write("holding-stdout");
 diff --git a/src/OpenClaw.SetupEngine.UI/Controls/OllamaWindowsSetupDialog.cs b/src/OpenClaw.SetupEngine.UI/Controls/OllamaWindowsSetupDialog.cs
 new file mode 100644
-index 00000000..8e98d3d0
+index 00000000..f7d5362f
 --- /dev/null
 +++ b/src/OpenClaw.SetupEngine.UI/Controls/OllamaWindowsSetupDialog.cs
-@@ -0,0 +1,296 @@
+@@ -0,0 +1,297 @@
 +using System.Diagnostics;
 +using OpenClaw.Shared;
 +using Microsoft.UI.Xaml;
 +using Microsoft.UI.Xaml.Automation;
++using Microsoft.UI.Xaml.Automation.Peers;
 +using Microsoft.UI.Xaml.Controls;
 +
 +namespace OpenClaw.SetupEngine.UI.Controls;
@@ -2443,10 +2468,10 @@ index 00000000..437976fd
 +}
 diff --git a/tests/OpenClaw.Tray.UITests/OnboardingOllamaPageTests.cs b/tests/OpenClaw.Tray.UITests/OnboardingOllamaPageTests.cs
 new file mode 100644
-index 00000000..9636ab48
+index 00000000..7ae2f478
 --- /dev/null
 +++ b/tests/OpenClaw.Tray.UITests/OnboardingOllamaPageTests.cs
-@@ -0,0 +1,475 @@
+@@ -0,0 +1,497 @@
 +using System.Reflection;
 +using System.Text.Json;
 +using Microsoft.UI.Xaml;
@@ -2475,6 +2500,17 @@ index 00000000..9636ab48
 +        await WithWindowAsync(async context =>
 +        {
 +            context.Host.Current = installed ? Verified : Missing;
++            var choices = Assert.IsType<ItemsControl>(context.Page.FindName("PrepareChoices"));
++            await TestSupport.WaitForRenderedConditionAsync(() => TestSupport.FindDescendants<SetupActionCard>(choices)
++                .Any(card => TestSupport.FindDescendants<TextBlock>(card).Any(text => text.Text == "Metadata probe")), "metadata provider card");
++            var metadataCard = Assert.Single(TestSupport.FindDescendants<SetupActionCard>(choices),
++                card => TestSupport.FindDescendants<TextBlock>(card).Any(text => text.Text == "Metadata probe"));
++            Assert.Contains(TestSupport.FindDescendants<TextBlock>(metadataCard), text => text.Text == Transport.MetadataAction);
++            var metadataArtwork = Assert.Single(TestSupport.FindDescendants<ProviderArtwork>(metadataCard));
++            Assert.Equal("ProviderIcon-codex.svg", metadataArtwork.Descriptor!.BundledFileName);
++            var artworkClosed = false;
++            var artworkSession = Assert.IsType<ProviderArtworkSession>(metadataArtwork.Session);
++            artworkSession.Closed += () => artworkClosed = true;
 +            await OpenOllamaAsync(context);
 +            var dialog = await DialogAsync(context.Page);
 +            var primary = Button(dialog, "PrimaryButton");
@@ -2522,7 +2558,9 @@ index 00000000..9636ab48
 +            Assert.False(Assert.IsType<CheckBox>(provider.FindName("ConfirmInput")).IsChecked == true);
 +            Assert.Equal(0, context.Transport.ModelDownloadAnswers);
 +            Assert.Equal(0, context.Completed());
-+        });
++            await context.Page.CloseAsync();
++            Assert.True(artworkClosed);
++        }, includeMetadataProbe: true);
 +    }
 +
 +    [Theory]
@@ -2695,7 +2733,7 @@ index 00000000..9636ab48
 +        });
 +    }
 +
-+    private async Task WithWindowAsync(Func<Context, Task> assertion)
++    private async Task WithWindowAsync(Func<Context, Task> assertion, bool includeMetadataProbe = false)
 +    {
 +        OnboardingNativeProof.AssertIsolatedRoots();
 +        using var temp = new TempDirectory("ollama-mounted-");
@@ -2716,7 +2754,7 @@ index 00000000..9636ab48
 +                    dataDir: data, localDataDir: local, commandLineArgs: [], startupRegistrationAllowed: false));
 +                var root = Assert.IsType<Grid>(window.Content);
 +                var frame = Assert.IsType<Frame>(root.FindName("RootFrame"));
-+                var transport = new Transport();
++                var transport = new Transport { IncludeMetadataProbe = includeMetadataProbe };
 +                host = new Host(temp.Path);
 +                var completed = 0;
 +                var logPath = temp.Combine("ollama.jsonl");
@@ -2758,7 +2796,8 @@ index 00000000..9636ab48
 +    private async Task OpenOllamaAsync(Context context)
 +    {
 +        var choices = Assert.IsType<ItemsControl>(context.Page.FindName("PrepareChoices"));
-+        var card = Assert.Single(TestSupport.FindDescendants<SetupActionCard>(choices));
++        var card = Assert.Single(TestSupport.FindDescendants<SetupActionCard>(choices),
++            item => TestSupport.FindDescendants<TextBlock>(item).Any(text => text.Text == "Ollama"));
 +        Assert.Equal("Set up", Assert.Single(TestSupport.FindDescendants<TextBlock>(card),
 +            text => text.Text == "Set up").Text);
 +        Assert.IsAssignableFrom<IInvokeProvider>(FrameworkElementAutomationPeer.CreatePeerForElement(card)
@@ -2858,6 +2897,8 @@ index 00000000..9636ab48
 +    private sealed class Transport : IGatewayAiSetupTransport
 +    {
 +        public const string Model = "ollama/synthetic:local";
++        public const string MetadataAction = "Metadata provider action";
++        public bool IncludeMetadataProbe { get; init; }
 +        public GatewayAiSetupRoute Route { get; } = new("ui-proof", "agent", "authority", new string('A', 64),
 +            new string('B', 64), "agent:agent:main");
 +        public long Generation => 1;
@@ -2888,7 +2929,13 @@ index 00000000..9636ab48
 +                            new { kind = "existing-model", label = "Current model", detail = "Configured", modelRef = Model, recommended = false },
 +                            new { kind = "provider-auto:ollama", label = "Ollama", detail = "Discovered", modelRef = Model, recommended = false }
 +                        } : [],
-+                        manualProviders = Array.Empty<object>(), prepareOptions = new[] { new { id = "ollama", label = "Ollama", kind = "custom" } },
++                        manualProviders = Array.Empty<object>(), prepareOptions = new object[]
++                        {
++                            new { id = "ollama", label = "Ollama", kind = "custom", brandId = "ollama", actionLabel = "Gateway-supplied action" },
++                        }.Concat(IncludeMetadataProbe ? new object[]
++                        {
++                            new { id = "metadata-probe", label = "Metadata probe", kind = "custom", brandId = "codex", actionLabel = MetadataAction },
++                        } : Array.Empty<object>()),
 +                        workspace = "/synthetic", configuredModel = HasModel ? Model : ActivatedModel,
 +                        setupComplete = HasModel || ActivatedModel is not null
 +                    };
