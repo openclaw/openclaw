@@ -34,6 +34,7 @@ import {
   settingsNavigationLabelForRoute,
   settingsNavigationOwnerRoute,
   settingsSearchTextMatches,
+  settingsSearchTitleRank,
 } from "../lib/settings-navigation.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
 import {
@@ -307,6 +308,52 @@ function EmbeddedSettingsHeader(props: SettingsSidebarProps) {
 export function renderSettingsSidebar(props: SettingsSidebarProps) {
   const query = createMemo(() => props.searchQuery);
   let searchInput: HTMLInputElement | undefined;
+  const clearSearch = () => {
+    props.onSearchQueryChange("");
+    searchInput?.focus();
+  };
+  function SettingsSearch() {
+    return (
+      <div class="settings-sidebar__search" role="search">
+        <span class="settings-sidebar__search-icon" aria-hidden="true">
+          <Icon name="search" />
+        </span>
+        <input
+          class="settings-sidebar__search-input"
+          type="search"
+          autocomplete="off"
+          spellcheck="false"
+          aria-label={t("nav.settingsSearchLabel")}
+          placeholder={t("nav.settingsSearchPlaceholder")}
+          ref={[(element) => (searchInput = element), liveValue(query)]}
+          onInput={(event) => props.onSearchQueryChange(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape" || isComposingKeyboardEvent(event)) {
+              return;
+            }
+            event.preventDefault();
+            // Native input can be newer than the committed query projection.
+            if (event.currentTarget.value) {
+              event.currentTarget.value = "";
+              props.onSearchQueryChange("");
+            } else {
+              props.onExit();
+            }
+          }}
+        />
+        <Show when={props.searchQuery}>
+          <button
+            type="button"
+            class="settings-sidebar__search-clear"
+            aria-label={t("nav.settingsSearchClear")}
+            onClick={clearSearch}
+          >
+            <Icon name="x" />
+          </button>
+        </Show>
+      </div>
+    );
+  }
   function SettingsNavigation() {
     const branding = themeBrandingProjection;
     const blockMatches = createMemo(() => {
@@ -351,13 +398,21 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           ...visibleBlockMatches.map((block) => block.routeId),
         ]),
       ];
-      const directRoutes = searchableRoutes.filter((routeId) =>
-        [
-          settingsNavigationLabelForRoute(routeId),
-          titleForRoute(routeId),
-          subtitleForRoute(routeId),
-        ].some((value) => settingsSearchTextMatches(value, normalizedQuery)),
-      );
+      const titlesForRoute = (routeId: RouteId) => [
+        settingsNavigationLabelForRoute(routeId, nativeDeviceSettings?.snapshot),
+        titleForRoute(routeId),
+      ];
+      const directRoutes = searchableRoutes
+        .filter((routeId) =>
+          [...titlesForRoute(routeId), subtitleForRoute(routeId)].some((value) =>
+            settingsSearchTextMatches(value, normalizedQuery),
+          ),
+        )
+        .toSorted(
+          (a, b) =>
+            settingsSearchTitleRank(titlesForRoute(a), normalizedQuery) -
+            settingsSearchTitleRank(titlesForRoute(b), normalizedQuery),
+        );
       const includedRoutes = new Set<RouteId>(directRoutes);
       const groupRoutes = navigationGroups.flatMap((group) => {
         const groupMatches =
@@ -441,9 +496,12 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
             <Show
               when={groups().length > 0}
               fallback={
-                <p class="settings-sidebar__empty" role="status">
-                  {t("nav.settingsSearchNoResults")}
-                </p>
+                <div class="settings-sidebar__empty settings-sidebar__empty--search">
+                  <p role="status">{t("nav.settingsSearchNoResults")}</p>
+                  <button type="button" class="btn btn--sm" onClick={clearSearch}>
+                    {t("nav.settingsSearchClear")}
+                  </button>
+                </div>
               }
             >
               <For each={groups()} keyed={false}>
@@ -491,6 +549,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           <section class="settings-embed-list">
             <EmbeddedSettingsHeader {...props} />
             <SettingsAgentSelector {...props} />
+            <SettingsSearch />
             <SettingsNavigation />
           </section>
         }
@@ -507,47 +566,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
             <h1 class="settings-sidebar__title">{t("nav.settings")}</h1>
           </header>
           <SettingsAgentSelector {...props} />
-          <div class="settings-sidebar__search" role="search">
-            <span class="settings-sidebar__search-icon" aria-hidden="true">
-              <Icon name="search" />
-            </span>
-            <input
-              class="settings-sidebar__search-input"
-              type="search"
-              autocomplete="off"
-              spellcheck="false"
-              aria-label={t("nav.settingsSearchLabel")}
-              placeholder={t("nav.settingsSearchPlaceholder")}
-              ref={[(element) => (searchInput = element), liveValue(query)]}
-              onInput={(event) => props.onSearchQueryChange(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key !== "Escape" || isComposingKeyboardEvent(event)) {
-                  return;
-                }
-                event.preventDefault();
-                // Native input can be newer than the committed query projection.
-                if (event.currentTarget.value) {
-                  event.currentTarget.value = "";
-                  props.onSearchQueryChange("");
-                } else {
-                  props.onExit();
-                }
-              }}
-            />
-            <Show when={props.searchQuery}>
-              <button
-                type="button"
-                class="settings-sidebar__search-clear"
-                aria-label={t("nav.settingsSearchClear")}
-                onClick={() => {
-                  props.onSearchQueryChange("");
-                  searchInput?.focus();
-                }}
-              >
-                <Icon name="x" />
-              </button>
-            </Show>
-          </div>
+          <SettingsSearch />
           <SettingsNavigation />
           <footer class="settings-sidebar__footer">
             <Show when={props.footerStatus}>

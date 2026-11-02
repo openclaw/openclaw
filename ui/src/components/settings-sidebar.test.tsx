@@ -379,6 +379,33 @@ describe("settings sidebar search", () => {
     expect(onExit).toHaveBeenCalledOnce();
   });
 
+  it("lists title matches before pages that only match elsewhere", () => {
+    render({ searchQuery: "agent", searchBlockMatches: [] });
+    const results = labels();
+    expect(results.slice(0, 2)).toEqual(["Agents", "Agent Defaults"]);
+    expect(results.length).toBeGreaterThan(2);
+  });
+
+  it("clears an empty search from its own empty state", () => {
+    const search = searchHarness("zzzz", { searchBlockMatches: [] });
+    const clear = container.querySelector<HTMLButtonElement>(
+      ".settings-sidebar__empty--search button",
+    )!;
+    expect(clear.textContent).toBe("Clear settings search");
+    clear.click();
+    flush();
+    expect(search.value).toBe("");
+    expect(document.activeElement).toBe(search.input);
+    expect(container.querySelector(".settings-sidebar__empty")).toBeNull();
+  });
+
+  it("searches from the embedded settings list", () => {
+    const search = searchHarness("", { presentation: "embed-list", searchBlockMatches: [] });
+    search.enter("appearance");
+    flush();
+    expect(labels()).toEqual(["Appearance"]);
+  });
+
   it("clears the visible search before its projected query commits", () => {
     const onExit = vi.fn();
     const onSearchQueryChange = vi.fn((searchQuery: string) => {

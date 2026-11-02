@@ -49,6 +49,19 @@ function settingsSearchHasWordPrefix(value: string, query: string): boolean {
   return false;
 }
 
+/** Lower ranks first: exact title, title prefix, title match, then no title match. */
+export function settingsSearchTitleRank(titles: readonly string[], query: string): number {
+  const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
+  const candidates = titles.map((title) => normalizeLowercaseStringOrEmpty(title).normalize("NFC"));
+  if (candidates.includes(normalizedQuery)) {
+    return 0;
+  }
+  if (candidates.some((title) => title.startsWith(normalizedQuery))) {
+    return 1;
+  }
+  return titles.some((title) => settingsSearchTextMatches(title, query)) ? 2 : 3;
+}
+
 export function settingsSearchTextMatches(value: string, query: string): boolean {
   const candidate = normalizeLowercaseStringOrEmpty(value).normalize("NFC");
   const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
