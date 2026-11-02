@@ -1,5 +1,6 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -27,6 +28,11 @@ import {
   readGatewayRequestMutationAuthority,
 } from "./session-mutation-guards.js";
 import type { GatewayRequestHandler, GatewayRequestHandlerOptions } from "./types.js";
+
+type ReplayPublication = {
+  resources: AsyncDisposableStack;
+  assertCurrent?: () => void;
+};
 
 /** Binds the existing public idempotency key; no deployment-specific inputs or session IDs. */
 async function prepareCreation(request: GatewayRequestHandlerOptions) {
@@ -91,6 +97,7 @@ async function prepareCreation(request: GatewayRequestHandlerOptions) {
 async function replayCreation(
   request: GatewayRequestHandlerOptions,
   prepared: Exclude<Awaited<ReturnType<typeof prepareCreation>>, undefined | { error: unknown }>,
+  publication: ReplayPublication,
   cached?: GatewayInflightResult,
 ): Promise<GatewayInflightResult | undefined> {
   const { stored, operation, assertCurrent, agentId, storePath, cfg } = prepared;
@@ -128,11 +135,13 @@ async function replayCreation(
     return reject("The original creation incarnation is no longer available.");
   }
   const target = { agentId, storePath, canonicalKey: receipt.sessionKey };
-  await using lifecycle = prepareGatewaySessionLifecycleTargets({
-    cfg,
-    getCurrentConfig: request.context.getRuntimeConfig,
-    targets: [{ target, entry }],
-  });
+  const lifecycle = publication.resources.use(
+    prepareGatewaySessionLifecycleTargets({
+      cfg,
+      getCurrentConfig: request.context.getRuntimeConfig,
+      targets: [{ target, entry }],
+    }),
+  );
   const held = await Promise.all(lifecycle.preparations);
   const sharing = await resolveSessionMutationAuthorizationAsync({
     client: request.client,
@@ -148,47 +157,64 @@ async function replayCreation(
     sessionScope: readGatewayRequestMutationAuthority(request).sessionScope,
     assertInvocationCurrent: assertCurrent,
   });
-  try {
-    if (sharing.error) {
-      return { ok: false, error: sharing.error };
-    }
+  publication.resources.defer(() => sharing.authorization?.release?.());
+  if (sharing.error) {
+    return { ok: false, error: sharing.error };
+  }
+  publication.assertCurrent = () => {
     assertCurrent();
     sharing.authorization?.assertCurrent();
     lifecycle.assertCurrent();
     if (!held.every((source) => source.matchesCurrent(request.context.getRuntimeConfig()))) {
-      return reject("The original creation incarnation is no longer available.");
+      throw new SessionMutationAuthorizationChangedError(
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "The original creation incarnation is no longer available.",
+        ),
+      );
     }
-    if (cached) {
-      return cached;
-    }
-    const model = resolveSessionModelRef(request.context.getRuntimeConfig(), entry, agentId);
-    return {
-      ok: true,
-      payload: {
-        ok: true,
-        key: receipt.sessionKey,
-        sessionId: entry.sessionId,
-        entry: projectPublicSessionEntry(entry),
-        runStarted: false,
-        creationReplayed: true,
-        publicRead: Boolean(resolveSessionPublicShare(entry)),
-        resolved: { modelProvider: model.provider, model: model.model },
-      },
-      meta: { cached: true },
-    };
-  } finally {
-    sharing.authorization?.release?.();
+  };
+  publication.assertCurrent();
+  // A replay-filled process cache can outlive its durable receipt. Only reuse the
+  // response for this exact incarnation; a replaced receipt supplies its own projection.
+  if (
+    cached &&
+    isRecord(cached.payload) &&
+    cached.payload.key === receipt.sessionKey &&
+    cached.payload.sessionId === receipt.sessionId &&
+    isRecord(cached.payload.entry) &&
+    (cached.payload.entry.lifecycleRevision ?? null) === receipt.lifecycleRevision
+  ) {
+    return cached;
   }
+  const model = resolveSessionModelRef(request.context.getRuntimeConfig(), entry, agentId);
+  return {
+    ok: true,
+    payload: {
+      ok: true,
+      key: receipt.sessionKey,
+      sessionId: entry.sessionId,
+      entry: projectPublicSessionEntry(entry),
+      runStarted: false,
+      creationReplayed: true,
+      publicRead: Boolean(resolveSessionPublicShare(entry)),
+      resolved: { modelProvider: model.provider, model: model.model },
+    },
+    meta: { cached: true },
+  };
 }
 
-function durableSessionCreate(handler: GatewayRequestHandler): GatewayRequestHandler {
+function durableSessionCreate(
+  handler: GatewayRequestHandler,
+  publication: ReplayPublication,
+): GatewayRequestHandler {
   return async (request) => {
     const prepared = await prepareCreation(request);
     if (prepared && "error" in prepared) {
       request.respond(false, undefined, prepared.error);
       return;
     }
-    const replay = prepared ? await replayCreation(request, prepared) : undefined;
+    const replay = prepared ? await replayCreation(request, prepared, publication) : undefined;
     if (replay) {
       request.respond(replay.ok, replay.payload, replay.error, replay.meta);
       return;
@@ -210,6 +236,7 @@ function durableSessionCreate(handler: GatewayRequestHandler): GatewayRequestHan
 async function replayDurableSessionCreate(
   request: GatewayRequestHandlerOptions,
   cached: GatewayInflightResult,
+  publication: ReplayPublication,
 ) {
   const prepared = await prepareCreation(request);
   if (prepared && "error" in prepared) {
@@ -220,7 +247,7 @@ async function replayDurableSessionCreate(
     return cached;
   }
   return (
-    (await replayCreation(request, prepared, cached)) ?? {
+    (await replayCreation(request, prepared, publication, cached)) ?? {
       ok: false,
       error: errorShape(ErrorCodes.UNAVAILABLE, "Session creation receipt expired; start again."),
     }
@@ -230,10 +257,25 @@ async function replayDurableSessionCreate(
 export function idempotentDurableSessionCreate(
   handler: GatewayRequestHandler,
 ): GatewayRequestHandler {
-  const create = idempotentSessionCreate(durableSessionCreate(handler), replayDurableSessionCreate);
   return async (request) => {
+    // Replay leases belong to this invocation, never to a cached result. Idempotency
+    // awaits after capturing the inner response, so retain them through actual publication.
+    await using resources = new AsyncDisposableStack();
+    const publication: ReplayPublication = { resources };
+    const create = idempotentSessionCreate(
+      durableSessionCreate(handler, publication),
+      (replayRequest, cached) => replayDurableSessionCreate(replayRequest, cached, publication),
+    );
+    const respond: GatewayRequestHandlerOptions["respond"] = (...args) => {
+      if (args[0]) {
+        publication.assertCurrent?.();
+      }
+      request.respond(...args);
+    };
     try {
-      await create(request);
+      await create(
+        bindGatewayRequestHandlerMutationAuthority(request, { ...request, respond }, undefined),
+      );
     } catch (error) {
       if (!(error instanceof SessionMutationAuthorizationChangedError)) {
         throw error;

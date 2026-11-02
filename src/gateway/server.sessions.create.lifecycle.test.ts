@@ -9,6 +9,8 @@ import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/se
 import {
   resolveSqliteStoreScope,
   runExclusiveSqliteSessionWrite,
+  toDatabaseOptions,
+  withSqliteSessionDatabase,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -40,9 +42,38 @@ import {
   sessionLifecycleHookMocks,
 } from "./test/server-sessions.test-helpers.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+const publicationBoundary = vi.hoisted(
+  (): {
+    afterCold: (() => Promise<void>) | undefined;
+    afterWarm: (() => Promise<void>) | undefined;
+  } => ({ afterCold: undefined, afterWarm: undefined }),
+);
+
+vi.mock("./server-methods/session-create-idempotency.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./server-methods/session-create-idempotency.js")>();
+  const idempotentSessionCreate: typeof actual.idempotentSessionCreate = (handler, replay) =>
+    actual.idempotentSessionCreate(
+      async (request) => {
+        await handler(request);
+        await publicationBoundary.afterCold?.();
+      },
+      replay
+        ? async (request, result) => {
+            const replayed = await replay(request, result);
+            await publicationBoundary.afterWarm?.();
+            return replayed;
+          }
+        : undefined,
+    );
+  return { ...actual, idempotentSessionCreate };
+});
+
 const { createSessionStoreDir, openClient } = setupPersistentSessionCreateTestHarness();
 let storePath: string;
 beforeEach(async () => {
+  publicationBoundary.afterCold = undefined;
+  publicationBoundary.afterWarm = undefined;
   ({ storePath } = await createSessionStoreDir());
 });
 
@@ -742,5 +773,138 @@ test.each(["requester", "membership"] as const)(
     } finally {
       source.release();
     }
+  },
+);
+
+test.each(["cold", "warm"] as const)(
+  "durable %s replay refuses membership removal at final response publication",
+  async (cache) => {
+    const client = roleClient("view", "publication-replay-member");
+    const profileId = client.authenticatedUserProfile!.profileId;
+    const creator = ensureProfileForEmail("publication-replay-creator@example.test").id;
+    const key = "agent:main:dashboard:publication-replay";
+    const scope = { agentId: "main", storePath, sessionKey: key };
+    replaceSessionEntrySync(scope, {
+      sessionId: "publication-original",
+      lifecycleRevision: "publication-original",
+      updatedAt: 1,
+      label: "Original replay metadata",
+      visibility: "read-only",
+      createdActor: { type: "human", source: "profile", id: creator },
+    });
+    await addSessionMember(scope, { identityId: profileId, addedBy: creator });
+    const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
+    const context = { dedupe: new Map(), getRuntimeConfig: () => cfg };
+    const request = () =>
+      directSessionReq<CreatedSession>(
+        "sessions.create",
+        { agentId: "main", key, idempotencyKey: "publication-replay-once" },
+        {
+          client,
+          context: cache === "warm" ? context : { ...context, dedupe: new Map() },
+        },
+      );
+    expectOk(await request());
+    expect(await request()).toMatchObject({
+      ok: true,
+      payload: {
+        key,
+        sessionId: "publication-original",
+        entry: { label: "Original replay metadata" },
+      },
+    });
+    let removals = 0;
+    // Decorate only completion: real replay authorization, idempotency, and membership writes run.
+    // The handoff remains after replay preparation even when cleanup moves past publication.
+    publicationBoundary[cache === "warm" ? "afterWarm" : "afterCold"] = async () => {
+      expect(await removeSessionMember(scope, profileId)).toMatchObject({ identityId: profileId });
+      removals++;
+    };
+    const denied = await request();
+    expect(removals).toBe(1);
+    expect(denied).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+      },
+    });
+    expect(denied.payload).toBeUndefined();
+    expect(JSON.stringify(denied)).not.toContain("Original replay metadata");
+    expect(readEntry(key)?.sessionId).toBe("publication-original");
+    console.info(
+      `PASS ${cache} replay membership removal at final callback: no metadata published`,
+    );
+  },
+);
+
+test.each(["new-session", "reset"] as const)(
+  "warm replay uses the replacement receipt for %s",
+  async (replacement) => {
+    const client = {
+      connect: { role: "operator", scopes: ["operator.write", "operator.admin"] },
+      authenticatedUserProfile: {
+        profileId: ensureProfileForEmail("receipt-replacement@example.test").id,
+      },
+    };
+    const params = {
+      agentId: "main",
+      idempotencyKey: `replace-expired-receipt-${replacement}`,
+      ...(replacement === "reset" ? { key: "agent:main:dashboard:receipt-reset" } : {}),
+    };
+    const warmContext = { dedupe: new Map() };
+    const request = (context = { dedupe: new Map() }) =>
+      directSessionReq<CreatedSession>("sessions.create", params, {
+        client: client as never,
+        context,
+      });
+    const original = await request();
+    expect(original.ok, `original create: ${JSON.stringify(original.error)}`).toBe(true);
+    const first = original.payload!;
+    expect(await request(warmContext)).toMatchObject({
+      ok: true,
+      payload: { key: first.key, sessionId: first.sessionId },
+    });
+    // Advance only the persisted retention deadline. Both incarnations and receipts
+    // still come from the public handlers; the independent warm cache stays live.
+    const scope = resolveSqliteStoreScope(storePath, { agentId: "main" });
+    await runExclusiveSqliteSessionWrite(
+      scope,
+      async () => {
+        await withSqliteSessionDatabase(toDatabaseOptions(scope), ({ db }) =>
+          db
+            .prepare("UPDATE session_creation_operations SET expires_at = ? WHERE session_key = ?")
+            .run(Date.now() - 1, first.key),
+        );
+      },
+      "session.entry.create-with-transcript",
+    );
+    if (replacement === "reset") {
+      const reset = await directSessionReq(
+        "sessions.reset",
+        { key: first.key },
+        { client: client as never },
+      );
+      expect(reset.ok, `reset: ${JSON.stringify(reset.error)}`).toBe(true);
+    }
+    const next = await request();
+    expect(next.ok, `replacement create: ${JSON.stringify(next.error)}`).toBe(true);
+    if (replacement === "reset") {
+      expect(next.payload?.sessionId).toBe(first.sessionId);
+      expect(next.payload?.entry.lifecycleRevision).not.toBe(first.entry.lifecycleRevision);
+    } else {
+      expect(next.payload?.key).not.toBe(first.key);
+      expect(next.payload?.sessionId).not.toBe(first.sessionId);
+    }
+    const replay = await request(warmContext);
+    expect(replay.ok, `warm replay: ${JSON.stringify(replay.error)}`).toBe(true);
+    expect(replay.payload).toMatchObject({
+      key: next.payload!.key,
+      sessionId: next.payload!.sessionId,
+      creationReplayed: true,
+      runStarted: false,
+    });
+    expect(replay.payload?.entry.lifecycleRevision).toBe(next.payload?.entry.lifecycleRevision);
+    expect(readEntry(next.payload!.key)?.sessionId).toBe(next.payload?.sessionId);
   },
 );
