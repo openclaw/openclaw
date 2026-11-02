@@ -78,7 +78,6 @@ async function linkedClaw() {
       "MembershipChange",
       { claw_id: prep.claw_id, seq, target, issued_at: now() },
       signer,
-      signer === device ? [cert] : [],
     );
   return { authority, cert, device, root, w1, sign };
 }
@@ -282,7 +281,6 @@ describe("Gateway membership authority and enforcement", () => {
         issued_at: now(),
       },
       claw.device,
-      [claw.cert],
     );
     expect(await service.submitStatement("tunnel", revocation)).toMatchObject({ ok: true });
     expect((await service.linkStatus()).ownerDevices?.map((device) => device.label)).toEqual([

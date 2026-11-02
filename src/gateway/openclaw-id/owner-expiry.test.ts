@@ -188,7 +188,7 @@ describe("owner certificate expiry at the Gateway", () => {
     expect(await claw.authority.submit(d2.change, "tunnel")).toMatchObject({ ok: true });
     const effects: OpenClawIdEffects = {
       captureConnections: vi.fn((keys: readonly string[]) => keys.map((key) => `conn-${key}`)),
-      cancelRuns: vi.fn(async () => {}),
+      cancelRuns: vi.fn(async () => 0),
       closeConnections: vi.fn(),
       revokeDeviceTokens: vi.fn(async () => {}),
     };

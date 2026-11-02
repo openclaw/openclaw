@@ -81,7 +81,6 @@ async function addExpiringOwner(claw: LinkedClaw, seconds: number) {
       root_epoch: 1,
     },
     claw.device,
-    [claw.cert],
   );
   const change = await claw.sign({ op: "add_owner_device", cert });
   expect(await claw.authority.submit(change, "tunnel")).toMatchObject({ ok: true });
