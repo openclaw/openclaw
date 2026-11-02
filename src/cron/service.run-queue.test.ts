@@ -736,13 +736,11 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
   }
 });
 
-it("keeps a committed manual run for the next drain when its drain meets a locked database", async ({
-  signal,
-}) => {
+it("retries the drain of a committed manual run that met a locked database", async ({ signal }) => {
   const job = commandJob("locked-drain");
   const storePath = await storeJobs([job]);
   const runCommandJob = successfulCommand();
-  const { cron, state } = service(storePath, { runCommandJob });
+  const { cron } = service(storePath, { runCommandJob });
   const runOperation = stateWorker.runOpenClawStateWorkerOperation;
   let lockedDrains = 0;
   const drains = vi
@@ -773,8 +771,10 @@ it("keeps a committed manual run for the next drain when its drain meets a locke
     await vi.waitFor(() => expect(lockedDrains).toBe(1));
     expect(runCommandJob).not.toHaveBeenCalled();
     drains.mockRestore();
-    await drainCronRunQueue(state);
+    // No caller drains again; the request's own retry runs it before any scheduler pass.
+    const refusedAt = Date.now();
     await expect(withinTest(run, signal)).resolves.toEqual({ ok: true, ran: true });
+    expect(Date.now() - refusedAt).toBeLessThan(30_000);
     expect(runCommandJob).toHaveBeenCalledOnce();
   } finally {
     drains.mockRestore();
