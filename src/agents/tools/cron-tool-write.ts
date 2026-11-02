@@ -256,6 +256,15 @@ export async function assertCronStreamExecPolicyWithoutApproval(
   }
 }
 
+/** cron.update's closed patch schema would reject these with an opaque anyOf error. */
+function assertNoCronCreateOnlyUpdateFields(patch: Record<string, unknown>): void {
+  for (const field of ["owner", "declarationKey"] as const) {
+    if (Object.hasOwn(patch, field)) {
+      throw new Error(`${field} can only be set by action="add"; remove it from the update patch`);
+    }
+  }
+}
+
 export function assertNoCronShellExecution(value: unknown): void {
   if (!isRecord(value)) {
     return;
@@ -443,6 +452,7 @@ export async function updateCronJobFromAgentTool(params: {
     creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined,
   ) => Promise<void>;
 }): Promise<unknown> {
+  assertNoCronCreateOnlyUpdateFields(params.patch);
   const callerIncludedPayloadPatch = isRecord(params.patch.payload);
   let creatorAuthorityPromise: Promise<CronCreatorToolAuthoritySnapshot> | undefined;
   const resolveCreatorToolAuthority = params.resolveCreatorToolAuthority
