@@ -102,17 +102,10 @@ internal interface ChatDictationRecognizer {
 
 internal class AndroidChatDictationRecognizer(
   context: Context,
-  private val recognitionAvailable: () -> Boolean =
-    {
-      runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(context.applicationContext) }.getOrDefault(false)
-    },
-  private val createRecognizer: (Context) -> SpeechRecognizer =
-    { appContext -> SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext) },
-  private val preferOffline: Boolean = true,
 ) : ChatDictationRecognizer {
   private val appContext = context.applicationContext
-  override val isAvailable: Boolean
-    get() = recognitionAvailable()
+  override val isAvailable: Boolean =
+    runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext) }.getOrDefault(false)
   private var generation = 0L
   private var recognizer: SpeechRecognizer? = null
 
@@ -124,7 +117,7 @@ internal class AndroidChatDictationRecognizer(
       if (operation == generation) onEvent(event)
     }
     retireRecognizer()
-    val active = createRecognizer(appContext)
+    val active = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
     active.setRecognitionListener(
       object : SpeechRecognitionListenerAdapter() {
         override fun onReadyForSpeech(params: Bundle?) {
@@ -170,7 +163,7 @@ internal class AndroidChatDictationRecognizer(
           putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
           putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
           putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-          putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOffline)
+          putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
           putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
           putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, appContext.packageName)
         },
@@ -200,133 +193,6 @@ internal class AndroidChatDictationRecognizer(
     runCatching { active?.cancel() }
     runCatching { active?.destroy() }
   }
-}
-
-/**
- * Tries recognizers in order. A failure before speech starts falls through so
- * an on-device engine that reports itself available but cannot start (common on
- * Samsung) does not hide the platform recognizer Gboard already uses.
- * Errors after speech starts stay on that engine.
- */
-internal class FallbackChatDictationRecognizer(
-  private val candidates: List<ChatDictationRecognizer>,
-) : ChatDictationRecognizer {
-  override val isAvailable: Boolean
-    get() = candidates.any { it.isAvailable }
-
-  private var generation = 0L
-  private var active: ChatDictationRecognizer? = null
-
-  override fun start(onEvent: (ChatDictationRecognitionEvent) -> Unit) {
-    generation += 1
-    startAt(generation, candidates.filter { it.isAvailable }, 0, onEvent)
-  }
-
-  private fun startAt(
-    operation: Long,
-    usable: List<ChatDictationRecognizer>,
-    index: Int,
-    onEvent: (ChatDictationRecognitionEvent) -> Unit,
-  ) {
-    if (operation != generation) return
-    val engine = usable.getOrNull(index)
-    if (engine == null) {
-      onEvent(ChatDictationRecognitionEvent.Error(SpeechRecognizer.ERROR_CLIENT))
-      return
-    }
-    active = engine
-    var opened = false
-    try {
-      engine.start { event ->
-        if (operation != generation) return@start
-        when (event) {
-          is ChatDictationRecognitionEvent.Error -> {
-            val fallback =
-              !opened &&
-                index + 1 < usable.size &&
-                shouldFallbackDictationBeforeSpeech(event.code)
-            if (fallback) {
-              engine.cancel()
-              startAt(operation, usable, index + 1, onEvent)
-            } else {
-              onEvent(event)
-            }
-          }
-
-          ChatDictationRecognitionEvent.Ready,
-          is ChatDictationRecognitionEvent.PartialTranscript,
-          ChatDictationRecognitionEvent.EndOfSpeech,
-          -> {
-            opened = true
-            onEvent(event)
-          }
-
-          is ChatDictationRecognitionEvent.Transcript -> {
-            onEvent(event)
-          }
-        }
-      }
-    } catch (_: Throwable) {
-      engine.cancel()
-      if (operation == generation && index + 1 < usable.size) {
-        startAt(operation, usable, index + 1, onEvent)
-      } else if (operation == generation) {
-        onEvent(ChatDictationRecognitionEvent.Error(SpeechRecognizer.ERROR_CLIENT))
-      }
-    }
-  }
-
-  override fun finish() {
-    active?.finish()
-  }
-
-  override fun cancel() {
-    generation += 1
-    active = null
-    candidates.forEach { candidate -> runCatching { candidate.cancel() } }
-  }
-
-  override fun destroy() {
-    cancel()
-    candidates.forEach { candidate -> runCatching { candidate.destroy() } }
-  }
-}
-
-internal fun shouldFallbackDictationBeforeSpeech(code: Int): Boolean =
-  when (dictationFailureForError(code)) {
-    ChatDictationFailure.Generic,
-    ChatDictationFailure.Unavailable,
-    -> true
-
-    ChatDictationFailure.PermissionRequired,
-    ChatDictationFailure.Busy,
-    ChatDictationFailure.Network,
-    ChatDictationFailure.NoSpeech,
-    -> false
-  }
-
-internal fun androidComposerDictationRecognizer(context: Context): ChatDictationRecognizer {
-  val appContext = context.applicationContext
-  return FallbackChatDictationRecognizer(
-    listOf(
-      AndroidChatDictationRecognizer(
-        context = appContext,
-        recognitionAvailable = {
-          runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext) }.getOrDefault(false)
-        },
-        createRecognizer = { SpeechRecognizer.createOnDeviceSpeechRecognizer(it) },
-        preferOffline = true,
-      ),
-      AndroidChatDictationRecognizer(
-        context = appContext,
-        recognitionAvailable = {
-          runCatching { SpeechRecognizer.isRecognitionAvailable(appContext) }.getOrDefault(false)
-        },
-        createRecognizer = { SpeechRecognizer.createSpeechRecognizer(it) },
-        preferOffline = false,
-      ),
-    ),
-  )
 }
 
 internal class ChatDictationController(
@@ -533,7 +399,7 @@ internal fun rememberChatDictationController(viewModel: MainViewModel): ChatDict
   val controller =
     remember(context, viewModel) {
       ChatDictationController(
-        recognizer = androidComposerDictationRecognizer(context),
+        recognizer = AndroidChatDictationRecognizer(context),
         requestPermission = viewModel::requestRecordAudioPermission,
         acquireMic = viewModel::tryAcquireDictationMic,
         releaseMic = viewModel::releaseDictationMic,
