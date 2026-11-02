@@ -76,9 +76,14 @@ api.registerCommand({
 ```
 
 Treat user arguments as data inside the prompt (for example, JSON-quote them). An
-empty `prompt` fails the command. Continuation applies to text and channel turns that
-run the reply pipeline; scheduled command turns refuse it, and native Telegram and
-Discord slash invocations currently deliver only the reply payload.
+empty `prompt` fails the command. Continuation works for text commands and native
+slash commands; scheduled command turns refuse it.
+
+Channels that run native commands themselves call `dispatch.execute(...)`. When
+`pluginCommandResultContinuesAgent(result)` (from `openclaw/plugin-sdk/plugin-command-runtime`)
+is true, they skip their own reply and pass the same dispatch to the reply pipeline as the
+planned plugin command decision. The pipeline then applies the result once, without running
+the command again.
 
 Commands that receive `senderIsOwner` also receive the host's optional
 `assertOwnerCurrent` callback when admitted as an owner. Capture that callback

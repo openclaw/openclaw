@@ -9,6 +9,11 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { waitForPluginCacheRetirement } from "../../plugins/plugin-cache.js";
+import {
+  createPluginCommandRuntime,
+  matchPluginCommandInvocation,
+  PLUGIN_COMMAND_DISPATCH,
+} from "../../plugins/plugin-command-runtime.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
   disposePluginRegistryInstances,
@@ -38,6 +43,7 @@ const PLUGIN_SOURCE = `module.exports = { id: "${PLUGIN_ID}", register(api) {
     description: "Recall what we did",
     acceptsArgs: true,
     handler: (ctx) => {
+      globalThis.openclawRecallRuns = (globalThis.openclawRecallRuns ?? 0) + 1;
       const args = (ctx.args ?? "").trim();
       if (args === "list") return { text: "Nothing saved yet." };
       return { continueAgent: { prompt: "Recall request (JSON string): " + JSON.stringify(args || "everything") } };
@@ -49,6 +55,10 @@ const PLUGIN_SOURCE = `module.exports = { id: "${PLUGIN_ID}", register(api) {
     handler: () => ({ continueAgent: { prompt: "  " } }),
   });
 } };`;
+
+declare global {
+  var openclawRecallRuns: number | undefined;
+}
 
 let state: OpenClawTestState | undefined;
 let registry: PluginRegistry | undefined;
@@ -64,6 +74,7 @@ afterEach(async () => {
   state = undefined;
   clearRuntimeConfigSnapshot();
   vi.clearAllMocks();
+  globalThis.openclawRecallRuns = undefined;
 });
 
 async function loadPromptCommandPlugin(): Promise<OpenClawConfig> {
@@ -111,7 +122,12 @@ async function loadPromptCommandPlugin(): Promise<OpenClawConfig> {
   return cfg;
 }
 
-async function send(cfg: OpenClawConfig, body: string, sessionKey: string) {
+async function send(
+  cfg: OpenClawConfig,
+  body: string,
+  sessionKey: string,
+  opts?: Parameters<typeof getReplyFromConfig>[1],
+) {
   return [
     await getReplyFromConfig(
       finalizeInboundContext({
@@ -126,7 +142,7 @@ async function send(cfg: OpenClawConfig, body: string, sessionKey: string) {
         ChatType: "direct",
         SessionKey: sessionKey,
       }),
-      undefined,
+      opts,
       cfg,
     ),
   ].flat();
@@ -145,6 +161,31 @@ it("continues a plugin slash command as an agent turn with its replacement promp
   expect(input.prompt).not.toContain("/recall");
   // Core rewrites (/learn, /dashboard, /loop) record the rewritten text as the user turn.
   expect(input.transcriptPrompt).toBe(prompt);
+});
+
+it("applies a continuation a native channel already ran without running the command again", async () => {
+  const cfg = await loadPromptCommandPlugin();
+  const body = "/recall the deploy steps";
+  const dispatch = matchPluginCommandInvocation(createPluginCommandRuntime(), body, {
+    channel: "webchat",
+  })?.dispatch;
+  expect(dispatch).toBeDefined();
+  // Telegram and Discord run native commands themselves, then hand the same dispatch over.
+  await dispatch!.execute({
+    channel: "webchat",
+    isAuthorizedSender: true,
+    commandBody: body,
+    config: cfg,
+  });
+
+  const reply = await send(cfg, body, "agent:main:native-handoff", {
+    [PLUGIN_COMMAND_DISPATCH]: dispatch,
+  } as Parameters<typeof getReplyFromConfig>[1]);
+
+  expect(reply).toEqual([expect.objectContaining({ text: "Agent answered" })]);
+  expect(globalThis.openclawRecallRuns).toBe(1);
+  const input = vi.mocked(runEmbeddedAgent).mock.calls[0]![0];
+  expect(input.transcriptPrompt).toBe('Recall request (JSON string): "the deploy steps"');
 });
 
 it("matches the transcript shape of a core command rewrite", async () => {

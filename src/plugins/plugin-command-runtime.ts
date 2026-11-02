@@ -114,6 +114,24 @@ type SelectedCommand = {
 };
 
 const dispatchSelections = new WeakMap<object, SelectedCommand>();
+// A channel that runs a dispatch itself hands a continuing result to the reply pipeline by passing
+// the same dispatch; the pipeline applies it once instead of running the command a second time.
+const continuedDispatches = new WeakMap<PluginCommandDispatch, PluginCommandResult>();
+
+/** True when a command result hands the turn to the agent (`true` or `{ prompt }`). */
+export function pluginCommandResultContinuesAgent(result: PluginCommandResult): boolean {
+  const continuation: unknown = result.continueAgent;
+  return continuation === true || (typeof continuation === "object" && continuation !== null);
+}
+
+/** Takes the continuing result a channel already produced for this dispatch, at most once. */
+export function takeContinuedPluginCommandResult(
+  dispatch: PluginCommandDispatch,
+): PluginCommandResult | undefined {
+  const result = continuedDispatches.get(dispatch);
+  continuedDispatches.delete(dispatch);
+  return result;
+}
 const runtimeStates = new WeakMap<PluginCommandRuntime, PluginCommandRuntimeState>();
 
 const INVALID_SELECTION_REPLY = {
@@ -134,7 +152,11 @@ function createSelectedPluginCommandDispatch(
       if (this !== dispatch) {
         return { ...INVALID_SELECTION_REPLY };
       }
-      return await executePluginCommandDispatch(dispatch, context);
+      const result = await executePluginCommandDispatch(dispatch, context);
+      if (pluginCommandResultContinuesAgent(result)) {
+        continuedDispatches.set(dispatch, result);
+      }
+      return result;
     },
   }) as PluginCommandDispatch;
   dispatchSelections.set(dispatch, {

@@ -12,6 +12,8 @@ import {
   executePluginCommandDispatch,
   matchPluginCommandInvocation,
   PLUGIN_COMMAND_DISPATCH,
+  pluginCommandResultContinuesAgent,
+  takeContinuedPluginCommandResult,
   type PluginCommandExecutionReplyOptions,
 } from "../../plugins/plugin-command-runtime.js";
 import { createPluginRequesterModels } from "../../plugins/requester-models.js";
@@ -134,8 +136,10 @@ export const handlePluginCommand: CommandHandler = async (params, allowTextComma
         : {}),
     });
   const withNative = params.opts?.withCommandNativeSubagents;
+  // A native channel surface already ran this dispatch and is handing its continuation over.
   const result =
-    withNative && targetSessionEntry?.sessionId
+    takeContinuedPluginCommandResult(dispatch) ??
+    (withNative && targetSessionEntry?.sessionId
       ? await withNative(
           {
             agentId: targetAgentId,
@@ -146,10 +150,10 @@ export const handlePluginCommand: CommandHandler = async (params, allowTextComma
           },
           execute,
         )
-      : await execute();
+      : await execute());
   const { continueAgent: continuation, suppressReply, ...reply } = result;
   const prompt = typeof continuation === "object" ? continuation?.prompt : undefined;
-  const continueAgent = continuation === true || prompt !== undefined;
+  const continueAgent = pluginCommandResultContinuesAgent(result);
   if (prompt !== undefined) {
     // Same rewrite core command sugar uses: this turn's text becomes the prompt everywhere.
     applyCommandTextToParams(params, prompt);
