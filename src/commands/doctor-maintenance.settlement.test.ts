@@ -106,7 +106,7 @@ function executeEvidence(pathname: string, sql: string) {
 
 function fingerprintReads() {
   // These SQLite fixtures exercise generation settlement without native engine inspection.
-  vi.spyOn(databaseBackup, "readBackupEngine").mockResolvedValue({ engine: "sqlite" });
+  vi.spyOn(databaseBackup, "readBackupEngine").mockReturnValue({ engine: "sqlite" });
   vi.spyOn(updateState, "readUpdateDatabaseGenerationPairIsolated").mockImplementation(
     async (paths) => readUpdatePhysicalDatabaseGenerationPair(paths),
   );

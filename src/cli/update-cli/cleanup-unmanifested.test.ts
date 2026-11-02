@@ -116,7 +116,7 @@ async function preview(f: Fixture, paths: string[]) {
     env: f.env,
     current: true,
   });
-  await selectUnmanifestedRecovery({ inventory, paths, cfg: {}, env: f.env });
+  selectUnmanifestedRecovery({ inventory, paths, cfg: {}, env: f.env });
   return inventory.report;
 }
 function report(): RecoveryCleanupReport {
@@ -428,9 +428,9 @@ it("retains a configured live store even when its name is classified as a recove
   expect(inventory.report.artifacts.find((item) => item.path === f.original)?.reason).toBe(
     "unmanifested-recovery-original",
   );
-  await expect(
+  expect(() =>
     selectUnmanifestedRecovery({ inventory, paths: [f.original], cfg, env: f.env }),
-  ).rejects.toThrow(/Active database path/);
+  ).toThrow(/Active database path/);
   expect(fs.readFileSync(f.original, "utf8")).toBe("retained original");
 });
 

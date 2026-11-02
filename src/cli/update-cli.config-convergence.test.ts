@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import * as configIo from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -257,17 +256,7 @@ it.each(["caller", "service"] as const)(
       () => expectUpdateFailure({ channel: "beta", yes: true, restart: false, json: true }),
       owner === "service" ? { OPENCLAW_PROFILE: "personal" } : {},
     );
-    let admissionDiagnostic: string | undefined;
-    if (mocks.candidateValidation.mock.calls.length !== 1) {
-      // Earlier refusals share ExitError(1); retain their phase without dumping authored config.
-      const result = checks.lastWriteJsonCall();
-      admissionDiagnostic = JSON.stringify({
-        status: isRecord(result) ? result.status : undefined,
-        reason: isRecord(result) ? result.reason : undefined,
-        errors: checks.getErrorOutput().slice(-2_000),
-      });
-    }
-    expect(mocks.candidateValidation, admissionDiagnostic).toHaveBeenCalledTimes(1);
+    expect(mocks.candidateValidation).toHaveBeenCalledTimes(1);
     if (owner === "service") {
       expect(mocks.candidateValidation.mock.calls[0]?.[0].config).toEqual(selectedConfig);
     }

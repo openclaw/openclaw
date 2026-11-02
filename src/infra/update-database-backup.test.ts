@@ -217,7 +217,7 @@ it.each(["auto", "off"] as const)(
     const previous = getFsSafeNativeConfig();
     const audit = vi.spyOn(sqliteIntegrity, "assertSqliteIntegrity");
     const generations = vi.spyOn(generationReads, "readUpdateDatabaseGeneration");
-    const engineImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocation");
+    const engineImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
     try {
       configureFsSafeNative({ mode });
       const backup = await f.capture({ stopped: true });
@@ -273,7 +273,7 @@ it.each([
       }
     }
     const reader = activity.startsWith("reader");
-    const engineImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocation");
+    const engineImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
     const capture = f.capture({
       stopped: true,
       onProgress: ({ phase, path: source }) => {
@@ -335,7 +335,7 @@ it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
       f.shared,
       "INSERT INTO payload VALUES ('checkpoint pending');",
     );
-    const parentImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocation");
+    const parentImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
     const generations = vi.spyOn(generationReads, "readUpdateDatabaseGeneration");
     await using scope =
       mode === "ordinary" || mode === "maintenance" ? maintenanceScope() : undefined;
@@ -353,7 +353,7 @@ it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
           originalCaptureSourcePaths: mode === "original-custody" ? [f.shared] : undefined,
         });
     if (scope) {
-      // Only explicit maintenance capture needs a separate engine-classification image.
+      // Parent SQLite opens require maintenance custody: even read-only opens can release locks.
       expect(parentImages.mock.calls.map(([file]) => file)).toEqual(
         mode === "maintenance" ? [f.shared] : [],
       );

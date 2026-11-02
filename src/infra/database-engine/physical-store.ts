@@ -1,9 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import { withPreparedSqliteSnapshot } from "../sqlite-readonly-location-cleanup.js";
-import { resolveSqliteInspectionSignal } from "../sqlite-readonly-worker.js";
-import { prepareSqliteReadOnlyLocation } from "../sqlite-snapshot-source.js";
+import { prepareSqliteReadOnlyLocationSync } from "../sqlite-snapshot-source.js";
 import { readEngineAnchor } from "./open.js";
 
 export type BackupEngine =
@@ -35,17 +32,11 @@ export function readEngineAnchorIdentity(db: DatabaseSync, sourcePath: string): 
 }
 
 /** Acquire the private image in a child so source descriptor closes preserve live POSIX locks. */
-export async function readBackupEngine(
-  sourcePath: string,
-  inputSignal?: AbortSignal,
-): Promise<BackupEngine> {
-  const signal = resolveSqliteInspectionSignal(inputSignal ?? getAsyncWorkSignal());
-  const prepared = await prepareSqliteReadOnlyLocation(sourcePath, {
-    preserveSourceArtifacts: true,
-    signal,
-  });
-  return withPreparedSqliteSnapshot(prepared, (location) => {
-    signal?.throwIfAborted();
-    return readBackupEngineImage(location, sourcePath);
-  });
+export function readBackupEngine(sourcePath: string): BackupEngine {
+  const prepared = prepareSqliteReadOnlyLocationSync(sourcePath);
+  try {
+    return readBackupEngineImage(prepared.location, sourcePath);
+  } finally {
+    prepared.cleanup();
+  }
 }

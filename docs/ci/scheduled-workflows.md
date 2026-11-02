@@ -152,7 +152,7 @@ frozen release target or replace an exact-head PR release gate.
 
 ### What stays on pushes
 
-CodeQL retains all seven main-push security categories. CI retains
+CodeQL batches main security scans hourly. CI retains
 `security-fast` (committed private keys and changed-workflow security auditing)
 on its existing non-docs push scope. Pull-request, push, and scheduled CI skip
 production dependency auditing; only release dispatches run it, as a warning.
@@ -490,7 +490,11 @@ For normal PRs, follow scoped CI/check evidence instead of treating parity as a 
 
 ## CodeQL
 
-The `CodeQL` workflow is intentionally a narrow first-pass security scanner, not the full repository sweep. Daily, manual, `main` push, and non-draft pull request guard runs scan Actions workflow code plus the highest-risk JavaScript/TypeScript surfaces with high-confidence security queries filtered to high/critical `security-severity`.
+The `CodeQL` workflow is a narrow first-pass security scanner. Hourly, manual, and non-draft pull request runs scan Actions workflow code and the highest-risk JavaScript/TypeScript surfaces with high-confidence security queries filtered to high/critical `security-severity`.
+
+Main scans run at minute 23 of every hour, separately from CI. An active scheduled scan finishes; a newer hour can replace pending work. Main pushes do not start another scan. Manual dispatch always runs all seven categories and stays independent of the schedule.
+
+Scheduled admission compares accumulated changes separately for each of the seven categories, against that category's last successful scan. Inputs come from its CodeQL profile's extraction paths; shared workflow, admission, and query configuration changes refresh every category. Path exclusions are ignored conservatively. When GitHub caps the changed-file list, admission uses an exact Git tree comparison before authorizing a skip. Unchanged inputs skip that category; missing proof, unsupported profiles, incomplete comparisons, and lookup failures run it. Proof older than 24 hours triggers a fresh scan even without source changes. Skipped scans never advance the comparison baseline.
 
 The pull request guard stays light: it only starts for changes under `.github/actions`, `.github/codeql`, `.github/workflows`, `packages`, `scripts`, `src`, or process-owning bundled plugin runtime paths, and it runs the same high-confidence security matrix as the scheduled workflow. Android and macOS CodeQL stay out of PR defaults.
 

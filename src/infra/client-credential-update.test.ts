@@ -256,7 +256,7 @@ async function fixture(
     seedCredentials(db, native, sourceVersion);
   }
   const readShared = async () => {
-    const anchor = await readBackupEngine(pathname);
+    const anchor = readBackupEngine(pathname);
     if (anchor.engine === "postgres") {
       namespaces.add(anchor.namespace);
       const client = new Client({ connectionString: connection });
@@ -994,7 +994,7 @@ describe.skipIf(!connection)("client credential PostgreSQL public update custody
       error: undefined,
     });
     assertMigratedCredentials(f);
-    expect((await readBackupEngine(f.pathname)).engine).toBe("postgres");
+    expect(readBackupEngine(f.pathname).engine).toBe("postgres");
     const backups = fs
       .readdirSync(path.dirname(f.pathname))
       .filter((name) => name.endsWith(".postgres.bak"));
@@ -1017,7 +1017,7 @@ describe.skipIf(!connection)("client credential PostgreSQL public update custody
       /Start the Gateway once on SQLite and run openclaw doctor --fix, then use openclaw database port/,
     );
     expect(fs.readFileSync(f.pathname)).toEqual(before);
-    expect((await readBackupEngine(f.pathname)).engine).toBe("sqlite");
+    expect(readBackupEngine(f.pathname).engine).toBe("sqlite");
     expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(false);
   });
 });

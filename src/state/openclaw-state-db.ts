@@ -71,6 +71,7 @@ import {
 import {
   openUnpublishedStateDatabase,
   openUnpublishedStateDatabaseAsync,
+  runStateOpenSteps,
   runStateOpenStepsAsync,
 } from "./openclaw-state-db-open.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
@@ -354,16 +355,7 @@ type StateDatabaseOpenStep = {
 function openOpenClawStateDatabaseWithBusyTimeout(
   ...args: Parameters<typeof openStateDatabaseSteps>
 ): OpenClawStateDatabase {
-  const operation = openStateDatabaseSteps(...args);
-  let step = operation.next();
-  while (!step.done) {
-    try {
-      step = operation.next(step.value.run());
-    } catch (error) {
-      step = operation.throw(error);
-    }
-  }
-  return step.value;
+  return runStateOpenSteps(openStateDatabaseSteps(...args));
 }
 
 type DoctorStateDatabaseOpenOptions = OpenClawStateDatabaseOptions & {

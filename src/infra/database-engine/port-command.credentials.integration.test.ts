@@ -111,14 +111,14 @@ function expectReady(state: OpenClawTestState, deviceId: string) {
   ).toMatchObject({ kind: "token", token: { token: "retained-token" } });
 }
 
-async function expectBinding(
+function expectBinding(
   state: OpenClawTestState,
   shared: string,
   original: ReturnType<typeof snapshot>,
   engine: "sqlite" | "postgres",
 ) {
   const after = snapshot(state);
-  const anchor = await readBackupEngine(shared);
+  const anchor = readBackupEngine(shared);
   assert(engine === "sqlite" || anchor.engine === "postgres");
   expect(after).toEqual({
     ...original,
@@ -149,10 +149,10 @@ describe.skipIf(!connection)("database port client credential continuity", () =>
         expectReady(state, identity.deviceId);
         await doctorDatabasePort({ to: "postgres" });
         expectReady(state, identity.deviceId);
-        await expectBinding(state, shared, original, "postgres");
+        expectBinding(state, shared, original, "postgres");
         await doctorDatabasePort({ to: "sqlite" });
         expectReady(state, identity.deviceId);
-        await expectBinding(state, shared, original, "sqlite");
+        expectBinding(state, shared, original, "sqlite");
       },
       true,
       { store: "state" },
@@ -174,7 +174,7 @@ describe.skipIf(!connection)("database port client credential continuity", () =>
         vi.restoreAllMocks();
         await doctorDatabasePort({ rollback: recovery.databasePortManifestPath(state.stateDir) });
         expectReady(state, identity.deviceId);
-        await expectBinding(state, shared, original, "postgres");
+        expectBinding(state, shared, original, "postgres");
       },
       true,
       { store: "state" },
@@ -230,7 +230,7 @@ describe.skipIf(!connection)("database port client credential continuity", () =>
           );
           await doctorDatabasePort({ resume: manifestPath });
           expectReady(state, identity.deviceId);
-          await expectBinding(state, shared, original, "postgres");
+          expectBinding(state, shared, original, "postgres");
         },
         true,
         { store: "state" },
@@ -284,7 +284,7 @@ describe.skipIf(!connection)("database port client credential continuity", () =>
               await expect(port).resolves.toMatchObject({ phase: "complete", engine: "postgres" });
               expect(fs.existsSync(local)).toBe(false);
             }
-            expect((await readBackupEngine(shared)).engine).toBe("postgres");
+            expect(readBackupEngine(shared).engine).toBe("postgres");
           } finally {
             await closeOpenClawStateDatabaseAsync();
           }
@@ -322,7 +322,7 @@ describe.skipIf(!connection)("database port client credential continuity", () =>
           owner.close();
           await expect(doctorDatabasePort({ to: "postgres" })).rejects.toThrow("Database port");
           expect(hash()).toBe(before);
-          expect(await readBackupEngine(shared)).toEqual({ engine: "sqlite" });
+          expect(readBackupEngine(shared)).toEqual({ engine: "sqlite" });
         }
       },
       true,

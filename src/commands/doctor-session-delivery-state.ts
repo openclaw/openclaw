@@ -16,6 +16,7 @@ import {
 } from "../infra/session-sqlite-migration-readers.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
+import { prepareArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -27,7 +28,6 @@ import {
 } from "../infra/state-migrations.messages.js";
 import { AgentDatabaseMaintenanceRequiredError } from "../state/openclaw-agent-db-maintenance-authority.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "../state/openclaw-agent-db-migration-required.js";
-import { prepareOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   isOpenClawAgentDatabaseOpen,
@@ -134,7 +134,7 @@ async function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairPara
           identity,
         );
       } else {
-        await prepareOpenClawAgentDatabaseReadOnly(target.sqlitePath, signal);
+        await prepareArtifactPreservingSqliteRead(target.sqlitePath, signal);
         scanDoctorSessionEntriesTolerant(
           scope,
           ({ entry, recoveredFromProjections, sessionKey }) => {

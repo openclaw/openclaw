@@ -260,6 +260,11 @@ async function recoverInterruptedUpdater() {
     runOutcome = { status: recovered.status, reason: recovered.status === "succeeded"
       ? "managed-service-handoff-recovered" : reason,
       after: { version: recovered.recovery.version, buildId: recovered.recovery.buildId } };
+    if (recovered.warning) {
+      appendLog(recovered.warning);
+      runWarnings.set("warning:plugin-cohort-recovery", recovered.warning);
+      runOutcome.nextAction = "openclaw update repair";
+    }
     runLedger.recordUpdateRunStep(params.runId, { step: "managed-service-handoff-recovery", status: "completed",
       detail: recovered.status === "succeeded" ? "Succeeded with recovery after the updater exited without a result." : "Cancelled activation; original Gateway restored.", endedAtMs: Date.now() });
     triageFailure = undefined;

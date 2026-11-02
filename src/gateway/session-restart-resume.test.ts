@@ -15,7 +15,6 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   captureSessionQueuedInputsForRestart,
   listSessionPendingInputs,
@@ -26,13 +25,10 @@ import type { InternalSessionEntry, SessionEntry } from "../config/sessions/type
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
-import {
-  createAgentDatabaseInspectionRefusal,
-  preparePendingAgentDatabase,
-  publishPendingAgentDatabaseReadAdmission,
-  readAgentDatabaseAdmissionRefusal,
-  recordAgentDatabaseAdmissions,
-} from "../state/agent-database-admission.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
+import { createAgentDatabaseStartupObservation } from "../state/agent-database-startup-observation.js";
+import type { PendingAgentDatabaseRecovery } from "../state/agent-database-startup.types.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
@@ -47,65 +43,208 @@ import {
   resumeMarkedSessions,
 } from "./session-restart-resume.js";
 
-it("resumes orphaned lifecycle owners once through the marker path without adopting live or terminal work", () =>
+it("reuses a prepared restart snapshot and joins its queue admission before startup unlocks", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
-    setRuntimeConfigSnapshot({});
-    const cases: Array<[string, Partial<InternalSessionEntry>, boolean]> = [
-      ["crash", {}, true],
-      ["marked", { resumeAfterRestart: { queuedInputIds: [] } }, true],
-      ["yielded", { endedAt: 2 }, true],
-      ["completed", { status: "done" }, false],
-      ["stopped", { status: "killed", abortedLastRun: true }, false],
-      ["archived", { archivedAt: 2 }, false],
-      ["external", { modelSelectionLocked: true }, false],
-      ["cron:job", {}, false],
-      ["subagent:child", {}, false],
-      ["live", {}, false],
-    ];
-    for (const [name, patch] of cases) {
-      const sessionKey = `agent:main:${name}`;
-      replaceSessionEntrySync({ agentId: "main", sessionKey }, { sessionId: name, updatedAt: 1 });
-      await persistGatewaySessionLifecycleEvent({
-        sessionKey,
-        event: { runId: name, sessionId: name, ts: 1, data: { phase: "start", startedAt: 1 } },
-      });
-      const entry = loadExactSessionEntry({ agentId: "main", sessionKey })!.entry;
-      expect(entry.lifecycleRunId).toBe(name);
-      replaceSessionEntrySync({ agentId: "main", sessionKey }, { ...entry, ...patch });
-    }
-    const claim = claimAgentRunContext(
-      "live",
-      { agentId: "main", sessionKey: "agent:main:live", sessionId: "live" },
-      { trackOwner: true, ownsContext: true },
-    );
-    const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockReturnValue({
-      accepted: Promise.resolve({ ok: true }),
-      id: "restart-input",
-      settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
-      cancel: () => false,
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const target = { agentId: "main", sessionKey: "agent:main:prepared" };
+    replaceSessionEntrySync(target, { sessionId: "prepared", updatedAt: 1 });
+    replaceSessionEntrySync(target, {
+      ...loadExactSessionEntry(target)!.entry,
+      resumeAfterRestart: { queuedInputIds: [] },
     });
+    expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({ queuedInputIds: [] });
+    const signal = new AbortController().signal;
+    const pending = new Map<string, PendingAgentDatabaseRecovery>();
+    const context = createContext([], () => cfg);
+    context.agentDatabaseStartup = createAgentDatabaseStartupObservation(pending, signal);
+    context.resolveGatewayContext = () => context;
+    const accepted = createDeferredCore<{ ok: true }>();
+    const enqueued = createDeferredCore();
+    const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation(() => {
+      enqueued.resolve();
+      return {
+        accepted: accepted.promise,
+        id: "prepared-resume",
+        settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+        cancel: () => false,
+      };
+    });
+    const discover = vi.spyOn(pendingInputWithdrawal, "listOrphanedSessionPendingInputTargets");
+    const params = { context, signal, log: { warn: vi.fn() } };
+    let recovering: Promise<void> | undefined;
+    let startup: Promise<void> | undefined;
     try {
-      for (let boot = 0; boot < 2; boot++) {
-        await resumeMarkedSessions({
-          context: createContext(),
-          signal: new AbortController().signal,
-          log: { warn() {} },
-        });
-      }
-      expect(resume.mock.calls.map(([, options]) => options.sessionKey).toSorted()).toEqual(
-        cases
-          .filter((row) => row[2])
-          .map(([name]) => `agent:main:${name}`)
-          .toSorted(),
-      );
-      expect(
-        loadExactSessionEntry({ agentId: "main", sessionKey: "agent:main:live" })?.entry,
-      ).toHaveProperty("lifecycleRunId", "live");
+      const prepared = await prepareAgentRestartRecovery({
+        ...params,
+        agentId: "main",
+        env: process.env,
+        assertCurrent() {},
+      });
+      expect(params.log.warn.mock.calls).toEqual([]);
+      assert(prepared, "Expected the persisted marker to prepare a continuation");
+      recovering = prepared().finally(() => pending.delete("main"));
+      // The database is writable; its prepared input still owns the admission fence.
+      pending.set("main", {
+        refusal: {
+          agentId: "main",
+          paths: [],
+          code: "agent-database-inspection-pending",
+          reason: "Prepared fixture",
+          repairHint: "Wait for input recovery",
+        },
+        completion: Promise.resolve(),
+        inputReady: recovering,
+        startedAt: 0,
+        phase: "input-recovery",
+        phaseStartedAt: 0,
+        phaseDurationsMs: {},
+      });
+      expect(resume).not.toHaveBeenCalled();
+      let unlocked = false;
+      startup = resumeMarkedSessions(params).then(() => {
+        unlocked = true;
+      });
+      await Promise.race([enqueued.promise, recovering]);
+      expect(resume, JSON.stringify(params.log.warn.mock.calls)).toHaveBeenCalledOnce();
+      expect(unlocked).toBe(false);
+      expect(discover).toHaveBeenCalledOnce();
+      accepted.resolve({ ok: true });
+      await Promise.all([startup, recovering]);
+      await resumeMarkedSessions(params);
+      expect(resume).toHaveBeenCalledOnce();
+      expect(discover).toHaveBeenCalledOnce();
     } finally {
+      accepted.resolve({ ok: true });
+      await Promise.allSettled([startup, recovering].flatMap((work) => work ?? []));
       resume.mockRestore();
-      releaseAgentRunContext("live", claim);
+      discover.mockRestore();
     }
   }));
+
+it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)(
+  "bounds orphan recovery to the predecessor and settles abandoned runs (%s)",
+  (mode) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { entries: { main: {}, other: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const sessionTarget = (name: string) => {
+        const agentId = name === "marked" ? "other" : "main";
+        return { agentId, sessionKey: `agent:${agentId}:${name}` };
+      };
+      const cases: Array<[string, Partial<InternalSessionEntry>, boolean]> = [
+        ["crash", {}, mode === "crash"],
+        ["yielded", { endedAt: 120 }, mode === "crash"],
+        ["stale", { startedAt: 1, updatedAt: 999 }, false],
+        ["missing-start", { startedAt: undefined }, false],
+        ["new-incarnation", { startedAt: 200 }, false],
+        ["completed", { status: "done" }, false],
+        ["stopped", { status: "killed", abortedLastRun: true }, false],
+        ["archived", { archivedAt: 2 }, false],
+        ["external", { modelSelectionLocked: true }, false],
+        ["cron:job", {}, false],
+        ["subagent:child", {}, false],
+        ["live", {}, false],
+        ...(mode === "markers"
+          ? [
+              ["marked", { resumeAfterRestart: { queuedInputIds: [] } }, true] as [
+                string,
+                Partial<InternalSessionEntry>,
+                boolean,
+              ],
+            ]
+          : []),
+      ];
+      for (const [name, patch] of cases) {
+        const target = sessionTarget(name);
+        const { sessionKey } = target;
+        replaceSessionEntrySync(target, { sessionId: name, updatedAt: 110 });
+        await persistGatewaySessionLifecycleEvent({
+          sessionKey,
+          event: {
+            runId: name,
+            sessionId: name,
+            ts: 110,
+            data: { phase: "start", startedAt: 110 },
+          },
+        });
+        const entry = loadExactSessionEntry(target)!.entry;
+        expect(entry.lifecycleRunId).toBe(name);
+        replaceSessionEntrySync(target, { ...entry, ...patch });
+      }
+      if (mode === "failed-preparation") {
+        recordAgentDatabaseAdmissions(
+          [
+            {
+              agentId: "other",
+              paths: [],
+              code: "agent-database-inspection-failed",
+              reason: "Synthetic completed inspection failure",
+              repairHint: "Repair the synthetic database",
+            },
+          ],
+          { source: "startup" },
+        );
+      }
+      const claim = claimAgentRunContext(
+        "live",
+        { agentId: "main", sessionKey: "agent:main:live", sessionId: "live" },
+        { trackOwner: true, ownsContext: true },
+      );
+      const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockReturnValue({
+        accepted: Promise.resolve({ ok: true }),
+        id: "restart-input",
+        settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+        cancel: () => false,
+      });
+      try {
+        for (let boot = 0; boot < 2; boot++) {
+          await resumeMarkedSessions({
+            context: {
+              ...createContext(),
+              getRuntimeConfig: () => cfg,
+              ...(mode === "failed-preparation"
+                ? {
+                    agentDatabaseStartup: createAgentDatabaseStartupObservation(
+                      new Map(),
+                      new AbortController().signal,
+                    ),
+                  }
+                : {}),
+              ...(mode !== "clean-or-unknown"
+                ? { restartResumeWindow: { startedAt: 100, endedAt: 200 } }
+                : {}),
+            },
+            signal: new AbortController().signal,
+            log: { warn() {} },
+          });
+        }
+        expect(resume.mock.calls.map(([, options]) => options.sessionKey).toSorted()).toEqual(
+          cases
+            .filter((row) => row[2])
+            .map(([name]) => sessionTarget(name).sessionKey)
+            .toSorted(),
+        );
+        expect(
+          loadExactSessionEntry({ agentId: "main", sessionKey: "agent:main:stale" })?.entry,
+        ).toMatchObject({
+          status: "killed",
+          abortedLastRun: true,
+          lastRunId: "stale",
+        });
+        expect(
+          loadExactSessionEntry({ agentId: "main", sessionKey: "agent:main:stale" })?.entry
+            .lifecycleRunId,
+        ).toBeUndefined();
+        expect(
+          loadExactSessionEntry({ agentId: "main", sessionKey: "agent:main:live" })?.entry,
+        ).toHaveProperty("lifecycleRunId", "live");
+      } finally {
+        resume.mockRestore();
+        releaseAgentRunContext("live", claim);
+      }
+    }),
+);
 
 it("marks completed reply settlement only when accepted inputs remain queued", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -342,92 +481,6 @@ it("fails a captured browser-copilot send instead of running without its live bi
       send.mockRestore();
       receipt.finish("cancelled");
       await receipt.settled?.();
-    }
-  }));
-
-it("leaves a read-ready shared store to its pending preparation owner for restart recovery", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async ({ env, statePath }) => {
-    const storePath = statePath("restart-shared.sqlite");
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: {}, other: {} } },
-      session: { store: storePath },
-    };
-    setRuntimeConfigSnapshot(cfg);
-    const targets = ["main", "other"].map((agentId) => ({
-      agentId,
-      sessionKey: `agent:${agentId}:pending-restart`,
-      sessionId: `${agentId}-pending-restart`,
-      storePath,
-    }));
-    for (const target of targets) {
-      replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const entry = loadExactSessionEntry(target)?.entry;
-      assert(entry, "Restart fixture session was not created");
-      replaceSessionEntrySync(target, {
-        ...entry,
-        resumeAfterRestart: { queuedInputIds: [] },
-      });
-    }
-    const refusal = createAgentDatabaseInspectionRefusal({
-      agentId: "main",
-      paths: [storePath],
-      reason: "Shared store is inspected; writable preparation is still pending",
-      pending: true,
-    });
-    recordAgentDatabaseAdmissions([refusal], { env, source: "startup" });
-    const revokeRead = publishPendingAgentDatabaseReadAdmission(refusal, {
-      env,
-      paths: [storePath],
-      assertCurrent() {},
-    });
-    const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockReturnValue({
-      accepted: Promise.resolve({ ok: true }),
-      id: "pending-preparation-resume",
-      settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
-      cancel: () => false,
-    });
-    const params = {
-      context: createContext([], () => cfg),
-      signal: new AbortController().signal,
-      log: { warn: vi.fn() },
-    };
-    try {
-      // Discovery must release the global input fence while this store is still pending.
-      await resumeMarkedSessions(params);
-      expect(readAgentDatabaseAdmissionRefusal("main", { env })).toBe(refusal);
-      expect(resume).not.toHaveBeenCalled();
-      for (const target of targets) {
-        expect((await readSessionEntryReadOnlyInWorker(target))?.resumeAfterRestart).toEqual({
-          queuedInputIds: [],
-        });
-      }
-      let recover: Awaited<ReturnType<typeof prepareAgentRestartRecovery>>;
-      await preparePendingAgentDatabase(refusal, { env, assertCurrent() {} }, async () => {
-        recover = await prepareAgentRestartRecovery({
-          ...params,
-          agentId: "main",
-          env,
-          assertCurrent() {},
-        });
-      });
-      expect(readAgentDatabaseAdmissionRefusal("main", { env })).toBeUndefined();
-      assert(recover, "Preparation did not retain the shared store's restart recovery");
-      await recover();
-      expect(resume.mock.calls.map(([, options]) => options.sessionKey).toSorted()).toEqual(
-        targets.map(({ sessionKey }) => sessionKey).toSorted(),
-      );
-      for (const target of targets) {
-        expect(
-          (await readSessionEntryReadOnlyInWorker(target))?.resumeAfterRestart,
-        ).toBeUndefined();
-      }
-      await resumeMarkedSessions(params);
-      expect(resume).toHaveBeenCalledTimes(2);
-      expect(params.log.warn).not.toHaveBeenCalled();
-    } finally {
-      revokeRead();
-      recordAgentDatabaseAdmissions([], { env, source: "startup" });
-      resume.mockRestore();
     }
   }));
 

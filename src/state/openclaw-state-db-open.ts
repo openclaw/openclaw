@@ -135,12 +135,13 @@ export function openUnpublishedStateDatabase(
 type StateOpenStep = { run(): void; runAsync(): Promise<void> };
 type StateOpenSteps = Generator<StateOpenStep, OpenClawStateDatabase, void>;
 
-function runStateOpenSteps(operation: StateOpenSteps): OpenClawStateDatabase {
+export function runStateOpenSteps<Input>(
+  operation: Generator<{ run(): Input }, OpenClawStateDatabase, Input>,
+): OpenClawStateDatabase {
   let step = operation.next();
   while (!step.done) {
     try {
-      step.value.run();
-      step = operation.next();
+      step = operation.next(step.value.run());
     } catch (error) {
       step = operation.throw(error);
     }

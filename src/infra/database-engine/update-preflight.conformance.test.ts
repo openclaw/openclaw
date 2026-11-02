@@ -218,7 +218,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
       try {
         if (anchorCreated) {
           for (const pathname of [shared, ...additionalAnchors]) {
-            const restored = await readBackupEngine(pathname);
+            const restored = readBackupEngine(pathname);
             if (restored.engine === "postgres") {
               namespaces.add(restored.namespace);
             }
@@ -736,7 +736,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
             env,
             assertCurrent() {},
           });
-          const restored = await readBackupEngine(shared);
+          const restored = readBackupEngine(shared);
           assert(restored.engine === "postgres", "Expected restored PostgreSQL state");
           namespaces.add(restored.namespace);
           const credential = runClientCredentialOperation.bind(undefined, env);
@@ -761,7 +761,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
             ],
             [runId],
           );
-          const restoredAgent = await readBackupEngine(agent);
+          const restoredAgent = readBackupEngine(agent);
           assert(restoredAgent.engine === "postgres", "Expected restored PostgreSQL agent");
           namespaces.add(restoredAgent.namespace);
           await expectRows(
@@ -773,7 +773,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
             [{ path: agent }],
           );
           for (const store of stores) {
-            const restoredStore = await readBackupEngine(store.pathname);
+            const restoredStore = readBackupEngine(store.pathname);
             assert(restoredStore.engine === "postgres", `Expected restored ${store.provider.id}`);
             namespaces.add(restoredStore.namespace);
             await expectRows(

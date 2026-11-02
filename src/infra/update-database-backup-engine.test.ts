@@ -379,7 +379,7 @@ it.each([
       },
     };
   });
-  const reacquire = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocation");
+  const reacquire = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync");
   const publish = vi.spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot");
   const captured = await f.capture().catch((error: unknown) => error);
   expect(captured).toBeInstanceOf(Error);
@@ -405,7 +405,7 @@ it.each(["acquisition", "settlement"] as const)(
     const f = await fixture();
     const failure = new Error(`generation ${phase} unavailable`);
     const before = fs.readFileSync(f.shared);
-    const engineImages = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocation");
+    const engineImages = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync");
     if (phase === "acquisition") {
       f.generationImages.mockImplementationOnce(() => {
         throw failure;

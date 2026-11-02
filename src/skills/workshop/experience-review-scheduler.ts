@@ -42,7 +42,6 @@ type ExperienceReviewAgentContext = {
   toolNames?: readonly string[];
   trigger?: string;
   agentId: string;
-  requester?: SessionForkRequester;
 };
 
 export type SkillExperienceReviewParams = {
@@ -55,13 +54,15 @@ export type SkillExperienceReviewParams = {
 };
 
 export type ExperienceReviewCandidate = {
-  ctx: Pick<ExperienceReviewAgentContext, "runId" | "authProfileId" | "requester"> & {
+  ctx: Pick<ExperienceReviewAgentContext, "runId" | "authProfileId"> & {
     workspaceDir: string;
     modelProviderId: string;
     modelId: string;
   };
   config: OpenClawConfig;
   source: TranscriptEntryAnchor;
+  /** Read from the anchored turn at admission, never from the hook context. */
+  requester?: SessionForkRequester;
   usedSkills?: ExperienceReviewAgentEndEvent["skillsUsed"];
   turnAborted?: boolean;
 };
@@ -351,7 +352,6 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           modelProviderId,
           modelId,
           authProfileId: params.ctx.authProfileId,
-          requester: params.ctx.requester,
         },
         config: params.config,
         source: { ...source },

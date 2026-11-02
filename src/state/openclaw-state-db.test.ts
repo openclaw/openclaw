@@ -41,7 +41,10 @@ import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-sup
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { listOpenClawRegisteredAgentDatabases } from "./openclaw-agent-db-registry.js";
 import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
-import { snapshotPreflightSourceManifest } from "./openclaw-database-preflight.test-support.js";
+import {
+  expectLiveReadSourceManifest,
+  snapshotPreflightSourceManifest,
+} from "./openclaw-database-preflight.test-support.js";
 import { seedOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.test-support.js";
 import { recordOpenClawStateDatabaseOpenFailure } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
@@ -1938,20 +1941,16 @@ describe("openclaw state database", () => {
 
   it("rejects a missing stable v5 table before migration through startup admission", async () => {
     const { stateDir, options, databasePath } = createStateFixture();
+    const ready = () =>
+      assertOpenClawDatabasesReady({ env: options.env, operation: "gateway-startup", config: {} });
 
     {
       const intact = openNativeDatabase(databasePath);
       markStateDatabaseVersion(intact, 5);
       intact.close();
       const before = snapshotPreflightSourceManifest(stateDir);
-      await expect(
-        assertOpenClawDatabasesReady({
-          env: options.env,
-          operation: "gateway-startup",
-          config: {},
-        }),
-      ).resolves.toBeUndefined();
-      expect(snapshotPreflightSourceManifest(stateDir)).toEqual(before);
+      await expect(ready()).resolves.toBeUndefined();
+      expectLiveReadSourceManifest(stateDir, before, databasePath);
     }
     const damaged = openNativeDatabase(databasePath);
     damaged.exec("DROP TABLE apns_registration_tombstones;");
@@ -1963,14 +1962,8 @@ describe("openclaw state database", () => {
     const message = `SQLite schema is incomplete or noncanonical for ${databasePath}: missing table apns_registration_tombstones; run openclaw doctor --fix to repair it.`;
     {
       const before = snapshotPreflightSourceManifest(stateDir);
-      await expect(
-        assertOpenClawDatabasesReady({
-          env: options.env,
-          operation: "gateway-startup",
-          config: {},
-        }),
-      ).rejects.toThrow(new SqliteSchemaMismatchError(message));
-      expect(snapshotPreflightSourceManifest(stateDir)).toEqual(before);
+      await expect(ready()).rejects.toThrow(new SqliteSchemaMismatchError(message));
+      expectLiveReadSourceManifest(stateDir, before, databasePath);
     }
 
     withReadOnlyDatabase(databasePath, (after) => {

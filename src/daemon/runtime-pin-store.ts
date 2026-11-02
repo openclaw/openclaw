@@ -148,21 +148,6 @@ export async function withPreparedDaemonRuntimePinStore<T>(
   return await operation(owner);
 }
 
-/** One native write retains the prepared target through its asynchronous observations. */
-function withDaemonRuntimePinStoreAsync<T>(
-  env: NodeJS.ProcessEnv,
-  operation: (db: DatabaseSync) => T,
-): Promise<T | undefined> {
-  return withPreparedDaemonRuntimePinStore(env, (owner) =>
-    runUpdateSqliteMigrationAsync(
-      owner.database,
-      owner.path,
-      () => runSqliteImmediateTransactionSync(owner.database, () => operation(owner.database)),
-      { retainExclusive: true },
-    ),
-  );
-}
-
 function admitDaemonRuntimePinStore<T>(
   db: DatabaseSync,
   writable: boolean,
@@ -276,7 +261,17 @@ export async function completeUnshippedDaemonRuntimePinMigrationAsync(
     return false;
   }
   if (pending !== undefined) {
-    await withDaemonRuntimePinStoreAsync(env, completeUnshippedReceipt);
+    await withPreparedDaemonRuntimePinStore(env, (owner) =>
+      runUpdateSqliteMigrationAsync(
+        owner.database,
+        owner.path,
+        () =>
+          runSqliteImmediateTransactionSync(owner.database, () =>
+            completeUnshippedReceipt(owner.database),
+          ),
+        { retainExclusive: true },
+      ),
+    );
     unshippedMigrations.add(pending);
   }
   return true;

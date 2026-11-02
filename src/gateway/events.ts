@@ -35,6 +35,8 @@ export const GATEWAY_EVENTS = [
   "session.typing",
   "session.tool",
   "sessions.changed",
+  "worktrees.branches.changed",
+  "projects.checkoutOptions.changed",
   "sessions.processes.changed",
   "socket.drain",
   "controlUi.sessionPullRequests.changed",

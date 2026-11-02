@@ -1,6 +1,6 @@
 import path from "node:path";
 import { toUSVString } from "node:util";
-import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { PreservedOrphanTaskDelivery } from "../state/openclaw-state-db-task-delivery-recovery-preservation.js";
 import { markPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
@@ -26,7 +26,6 @@ export type SqliteReadOnlyWorkerMode =
   | "metadata"
   | "consolidated"
   | "task-delivery-recovery"
-  | "reclaim"
   | "auth-profile-rows"
   | "operation"
   | "staging-create"
@@ -46,7 +45,6 @@ export type SqliteReadOnlyWorkerResult =
   | { ok: true; location: string }
   | { ok: true; contentVersion: string }
   | { ok: true; generation: string }
-  | { ok: true; warnings: string[] }
   | { ok: true; taskDeliveryRecovery: PreservedOrphanTaskDelivery }
   | { ok: false; message: string };
 
@@ -148,7 +146,6 @@ export type SqliteReadOnlyWorkerOutput =
   | { kind: "launch-failed"; error: Error };
 export type SqliteReadOnlyWorkerValue =
   | string
-  | string[]
   | SqliteAuthProfileRows
   | PreservedOrphanTaskDelivery
   | SqliteReadOnlyOperationResult;
@@ -168,7 +165,6 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
       typeof value.contentVersion === "string" &&
       /^(?:[a-f0-9]{64})?$/.test(value.contentVersion)) ||
     (value.ok === true && "generation" in value && typeof value.generation === "string") ||
-    (value.ok === true && "warnings" in value && isStringArray(value.warnings)) ||
     (value.ok === true &&
       "taskDeliveryRecovery" in value &&
       isRecord(value.taskDeliveryRecovery) &&
@@ -234,10 +230,6 @@ export function readSqliteReadOnlyWorkerValue(
 ): string;
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
-  mode: "reclaim",
-): string[];
-export function readSqliteReadOnlyWorkerValue(
-  params: SqliteReadOnlyWorkerOutput,
   mode: SqliteReadOnlyWorkerMode,
 ): SqliteReadOnlyWorkerValue;
 export function readSqliteReadOnlyWorkerValue(
@@ -297,9 +289,6 @@ export function readSqliteReadOnlyWorkerValue(
   }
   if ((mode === "file-generation" || mode === "update-generation") && "generation" in result) {
     return result.generation;
-  }
-  if (mode === "reclaim" && "warnings" in result) {
-    return result.warnings;
   }
   if (mode === "task-delivery-recovery" && "taskDeliveryRecovery" in result) {
     return result.taskDeliveryRecovery;

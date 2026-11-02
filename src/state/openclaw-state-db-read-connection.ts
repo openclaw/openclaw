@@ -20,7 +20,7 @@ import { retainSnapshotTempDirectory } from "../infra/sqlite-readonly-location-c
 import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { acquireSqliteSnapshotReadToken } from "../infra/sqlite-snapshot-staging.js";
-import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
+import { assertTransactionUsable, runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type { SqliteSchemaErrorContext } from "../infra/sqlite-user-version.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
@@ -318,7 +318,11 @@ export function readOpenClawStateReadOnlyLocation<T>(
             context,
           );
           operationStarted = true;
-          return operation(opened.database);
+          const value = operation(opened.database);
+          if (ownedSource === pathname && isPromiseLike(value)) {
+            throw new SqliteCoordinatorError("SQLite source read must remain synchronous");
+          }
+          return value;
         });
       const readTransaction = () =>
         isPostgresSqlConnection(opened.database.db)
@@ -335,7 +339,9 @@ export function readOpenClawStateReadOnlyLocation<T>(
               undefined,
               true,
             )
-          : read();
+          : retained && ownedSource === pathname
+            ? runSqliteReadSnapshotSync(opened.database.db, read)
+            : read();
       const value = withPostgresSchemaAdmissionRetry(
         opened.database.db,
         readTransaction,
@@ -348,10 +354,6 @@ export function readOpenClawStateReadOnlyLocation<T>(
         corruptedReaders.add(opened.database.db);
       }
       result = { status: "unavailable", error };
-    }
-    const location = typeof source === "string" ? source : source.location;
-    if (result.status === "available" && location === pathname && isPromiseLike(result.value)) {
-      throw new SqliteCoordinatorError("SQLite source read must remain synchronous");
     }
     // A failed transaction rollback can preserve its original query error.
     assertTransactionUsable(opened.database.db);

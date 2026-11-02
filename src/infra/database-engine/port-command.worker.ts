@@ -100,20 +100,23 @@ async function inspectSqliteImage(
     version,
     migrationRequired: schemaMigrationRequired,
     pendingColumns,
+    pendingTables = [],
   } = descriptor.inspectSqliteSource?.(db) ?? {
     version: (await import("../sqlite-user-version.js")).readSqliteUserVersion(db),
     migrationRequired: false,
     pendingColumns: {},
   };
-  // Port preparation also fills first-use columns that the live store may omit.
+  // Port preparation fills first-use objects that the live store may omit.
   const migrationRequired =
-    schemaMigrationRequired || Object.values(pendingColumns).some((columns) => columns.length > 0);
+    schemaMigrationRequired ||
+    pendingTables.length > 0 ||
+    Object.values(pendingColumns).some((columns) => columns.length > 0);
   if (allowMigration && migrationRequired) {
     // Historical repairs use family admission; current first-use repairs still
     // need the port's complete layout before preparing a private copy.
     const admitted =
       !schemaMigrationRequired || !descriptor.migrateSqliteSource
-        ? inspectSqlitePortSchema(db, descriptor, pendingColumns)
+        ? inspectSqlitePortSchema(db, descriptor, pendingColumns, pendingTables)
         : descriptor;
     return { version, migrationRequired, notes: admitted.notes };
   }
@@ -310,7 +313,7 @@ async function verify(
   descriptor: PortDescriptor,
   source?: { engine: BackupEngine; facts?: Awaited<ReturnType<typeof inspectSqliteImage>> },
 ) {
-  const engine = source?.engine ?? (await readBackupEngine(task.sourcePath));
+  const engine = source?.engine ?? readBackupEngine(task.sourcePath);
   if (
     engine.engine !== task.engine ||
     (engine.engine === "postgres" &&
@@ -331,7 +334,7 @@ export async function executeDatabasePortTask(
   assertCurrent: () => void,
 ): Promise<DatabasePortReply> {
   if (task.operation === "analyze") {
-    const anchor = await readBackupEngine(task.sourcePath);
+    const anchor = readBackupEngine(task.sourcePath);
     if (anchor.engine === "postgres") {
       return withDatabasePortConnection(
         task.config,
