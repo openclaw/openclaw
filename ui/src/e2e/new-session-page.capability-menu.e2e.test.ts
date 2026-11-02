@@ -60,12 +60,10 @@ suite.define(() => {
         await expect.poll(() => draft.getAttribute("aria-checked")).toBe("true");
       } else {
         await draft.click();
-        await expect
-          .poll(() => composer.locator(".new-session-page__visibility--draft").isVisible())
-          .toBe(mode === "desktop");
-        await expect
-          .poll(() => page.locator(".new-session-page__draft-toggle").isVisible())
-          .toBe(mode === "mobile");
+        // Draft sits beside Incognito at the top on every width, never in the footer.
+        const toggle = page.locator(".new-session-page__draft-toggle");
+        await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("true");
+        expect(await toggle.isVisible()).toBe(true);
         return;
       }
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();

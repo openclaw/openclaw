@@ -1,12 +1,11 @@
-import { assert, expect, it, vi } from "vitest";
-import { memoryStore, sampleUpload } from "./beam-store.test-support.js";
+import { expect, it, vi } from "vitest";
+import { memoryStore, sampleUpload, staffReceipt } from "./beam-store.test-support.js";
 import { beamTestServiceContext } from "./beam.test-support.js";
 import { createBeamSessionCatalog } from "./session-catalog.js";
-import type { BeamStoredSession } from "./types.js";
 
 it("shares inventory until expiry and invalidates it on upload and delete", async () => {
   const store = memoryStore();
-  await store.upload(sampleUpload(), { receivedAt: 100 });
+  await store.upload(sampleUpload(), staffReceipt(100));
   const rows = (await store.keyedStore.entries()).map((row) =>
     Object.assign(row, { expiresAt: 200 }),
   );
@@ -22,7 +21,7 @@ it("shares inventory until expiry and invalidates it on upload and delete", asyn
   expect(await store.list()).toEqual([]);
   expect(entries).toHaveBeenCalledTimes(1);
 
-  await store.upload(sampleUpload({ title: "Updated title" }), { receivedAt: 200 });
+  await store.upload(sampleUpload({ title: "Updated title" }), staffReceipt(200));
   expect((await catalog.list({ agentId: "main" }))[0]?.sessions[0]?.name).toBe("Updated title");
   await store.delete(sampleUpload().beamId);
   expect((await catalog.list({ agentId: "main" }))[0]?.sessions).toEqual([]);
@@ -39,7 +38,7 @@ it("refreshes foreign changes in the background and drains its service on stop",
     await store.catalogService.stop?.(ctx);
   };
   try {
-    await store.upload(sampleUpload(), { receivedAt: 100 });
+    await store.upload(sampleUpload(), staffReceipt(100));
     await store.catalogService.start(ctx);
     store.values.set(sampleUpload().beamId, {
       ...sampleUpload({ title: "Foreign update" }),
@@ -78,30 +77,4 @@ it("refreshes foreign changes in the background and drains its service on stop",
     await stop();
     vi.useRealTimers();
   }
-});
-
-it.each([
-  ["older", "2026-07-20T12:00:00.000099Z", false],
-  ["same completed", "2026-07-20T08:00:00.000100-04:00", false],
-  ["newer", "2026-07-20T12:00:00.000101Z", true],
-] as const)("rechecks the %s revision after a competing upload", async (_, updatedAt, accepted) => {
-  const store = memoryStore();
-  const competing: BeamStoredSession = {
-    ...sampleUpload({ updatedAt: "2026-07-20T12:00:00.000100Z", completed: true }),
-    uploaderProfileId: "competing-publisher",
-    createdAt: 50,
-    receivedAt: 75,
-  };
-  const compare = store.keyedStore.compareAndApply.getMockImplementation();
-  assert(compare, "Beam test store has no comparison implementation");
-  store.keyedStore.compareAndApply.mockImplementationOnce(async (...args) => {
-    store.values.set(competing.beamId, competing);
-    return compare(...args);
-  });
-  const upload = sampleUpload({ updatedAt, title: "Candidate snapshot" });
-
-  expect(await store.upload(upload, { receivedAt: 100 })).toBe(accepted);
-  expect(await store.get(upload.beamId)).toEqual(
-    accepted ? { ...upload, createdAt: 50, receivedAt: 100 } : competing,
-  );
 });

@@ -2,8 +2,8 @@ import { isDeepStrictEqual } from "node:util";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { PluginSourceSnapshotIndexChange } from "../plugins/plugin-source-snapshot.types.js";
 import {
-  readPluginCohortArtifactIdentity,
   readPluginCohortArtifactPreimage,
+  readPluginCohortPublishedArtifactIdentity,
   readPluginCohortRetentionMarker,
 } from "../plugins/update-cohort-artifacts.js";
 import {
@@ -382,7 +382,10 @@ export function recordPluginCohortIndexPublicationInDatabase(
     ) {
       return artifact;
     }
-    return { ...artifact, identity: readPluginCohortArtifactIdentity(artifact.targetPackageDir) };
+    return {
+      ...artifact,
+      identity: readPluginCohortPublishedArtifactIdentity(artifact.targetPackageDir),
+    };
   });
   const cohort = {
     ...pair.cohort,

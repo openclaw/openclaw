@@ -10,6 +10,17 @@ title: "Managed worktrees"
 
 Managed worktrees give an agent task its own git branch and checkout without placing temporary directories inside the source repository. OpenClaw records them in the shared state database and snapshots their tracked and non-ignored untracked contents before ordinary removal. [Capacity eviction](#capacity-and-eviction) can purge unsaved data when a snapshot cannot be made.
 
+Branch pickers display the last recorded local refs while discovery refreshes in
+background. A refreshing indicator stays visible until the Gateway sends the
+updated options; slow Git keeps cached choices available. Discovery never fetches
+from a remote or scans checkout contents. Ref changes invalidate the suggestions,
+and session creation validates the selected base before changing a checkout.
+
+When the selected source is a folder inside a Git repository, **Recents** keeps
+that folder rather than replacing it with the repository root or the managed
+checkout. Choosing the recent source again starts the next session in the same
+selected folder.
+
 When a new chat starts a managed worktree, OpenClaw can begin the first model
 turn while the checkout finishes. It first prepares the project instructions,
 workspace skills, and other prompt files from the selected Git commit in the

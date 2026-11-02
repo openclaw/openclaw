@@ -829,3 +829,73 @@ describe("Sessions query clearing", () => {
     }
   });
 });
+
+describe("sessions view at phone width", () => {
+  beforeEach(() => {
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      (media) =>
+        ({
+          matches: media === "(max-width: 640px)",
+          media,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+        }) as unknown as MediaQueryList,
+    );
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders phone row titles and full keys and searches from the toolbar", async () => {
+    const onSearchChange = vi.fn();
+    await renderSettled(
+      [
+        createRow("agent:main:alpha", { label: "Alpha", updatedAt: Date.now() }),
+        createRow("agent:main:beta", { label: "Beta", updatedAt: Date.now() }),
+      ],
+      { onSearchChange },
+    );
+    flush();
+
+    expectTexts(".session-list-cell__title", ["Alpha", "Beta"]);
+    expectTexts(".session-list-cell__key", ["agent:main:alpha", "agent:main:beta"]);
+    const search = getInput(".sessions-search input");
+    expect(search?.placeholder).toBe("Search sessions");
+    search!.value = "alp";
+    search!.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onSearchChange).toHaveBeenCalledWith("alp");
+  });
+
+  it("sorts from the filter and shows a changed sort on the trigger", async () => {
+    const onSortChange = vi.fn();
+    document.body.append(container);
+    const defaults = { onSortChange, searchQuery: "alp", includeGlobal: true, limit: "50" };
+    await renderSettled([createRow("agent:main:alpha", { updatedAt: Date.now() })], defaults);
+    flush();
+    const trigger = getButton(".sessions-filter-popover__trigger");
+    // The toolbar shows the search itself, so only a changed sort lights the trigger.
+    expect(trigger?.classList.contains("active")).toBe(false);
+
+    trigger?.click();
+    flush();
+    const choose = (select: HTMLSelectElement, value: string) => {
+      select.value = value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    const [, sort, direction] = queryAll<HTMLSelectElement>("#sessions-filter-popover select");
+    choose(sort!, "key");
+    expect(onSortChange).toHaveBeenLastCalledWith("key", "desc");
+    choose(direction!, "asc");
+    expect(onSortChange).toHaveBeenLastCalledWith("updated", "asc");
+    expect(text("#sessions-filter-popover .oc-sheet__title")).toBe("Filters");
+    expect(attr("#sessions-filter-popover .oc-sheet__close", "aria-label")).toBe("Close");
+
+    disposeSessionViews();
+    await renderSettled([createRow("agent:main:alpha", { updatedAt: Date.now() })], {
+      ...defaults,
+      sortDir: "asc",
+    });
+    flush();
+    expect(getButton(".sessions-filter-popover__trigger")?.classList.contains("active")).toBe(true);
+  });
+});

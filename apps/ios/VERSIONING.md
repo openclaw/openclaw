@@ -136,7 +136,11 @@ artifacts so a partial distribution cannot silently regenerate its notes.
 After processing, the pipeline saves the immutable source ref, writes the saved
 What to Test notes, assigns the external group, and submits for TestFlight review
 when the build is eligible. Automatic tester notification distributes the build
-after Apple approves it. The result distinguishes pending review from a build
+after Apple approves it. Distribution readback checks the external group,
+automatic notification, and exact saved notes up to 12 times, with 10 seconds
+between mismatches. Only reads repeat; distribution is not resubmitted. If the
+checks still disagree, the error names the mismatched fields for saved-artifact
+staging recovery. The result distinguishes pending review from a build
 available to testers; the runner does not wait for human review. Apple determines
 whether each build requires review, so the schedule is a daily distribution
 attempt rather than a guarantee of daily availability.

@@ -46,7 +46,7 @@ async function verifyCustody(page: Page) {
   await page.locator("[data-settings-send-shortcut]").selectOption("enter");
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
   const composer = page.locator(".agent-chat__input textarea");
-  const stop = page.getByRole("button", { name: "Stop generating" });
+  const stop = page.getByRole("button", { name: "Stop", exact: true });
   await stop.waitFor();
   await gateway.emitGatewayEvent("chat", {
     sessionKey,
