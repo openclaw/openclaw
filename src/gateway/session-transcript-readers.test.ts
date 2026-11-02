@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { zstdCompressSync } from "node:zlib";
 import { assert, describe, expect, test } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -9,6 +10,7 @@ import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sql
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
+import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
 import {
   transcriptMessage as event,
   useTranscriptFixture,
@@ -525,6 +527,33 @@ describe("session transcript reader facade", () => {
       name: "SessionTranscriptStorageUnavailableError",
       reason: "database-missing",
     });
+  });
+
+  test("surfaces archive expansion failures during discovery and exact archive reads", async () => {
+    const sessionId = "reader-expanding-archive";
+    const scope = scopeFor(sessionId);
+    const archivePath = fixture.path(`${sessionId}.jsonl.reset.2026-07-12T18-00-00.000Z.zst`);
+    fs.writeFileSync(
+      archivePath,
+      zstdCompressSync(
+        Buffer.from(
+          `${JSON.stringify({ type: "session", id: sessionId })}\n${JSON.stringify(
+            event("large", null, { role: "user", content: "x".repeat(2 * 1024 * 1024) }),
+          )}\n`,
+        ),
+      ),
+    );
+
+    await expect(
+      readRecent(scope, { maxMessages: 1, allowResetArchiveFallback: true }),
+    ).rejects.toThrow(/Session archive .* exceeds .* decompressed bytes/);
+    await expect(
+      new ArchivedTranscriptReader({ ...scope, exactArchivePath: archivePath }).readAroundId({
+        messageId: "large",
+        maxMessages: 1,
+        maxBytes: 1024,
+      }),
+    ).rejects.toThrow(/Session archive .* exceeds .* decompressed bytes/);
   });
 
   test.each(["artifact", "sqlite"] as const)(

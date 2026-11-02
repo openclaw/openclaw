@@ -165,9 +165,10 @@ type PluginUpdateAttemptState = {
   channelFallbackSuffix: string;
 };
 
-type PluginUpdateAttemptResult =
-  | { kind: "exception"; message: string; error: unknown }
-  | ({ kind: "result"; result: PluginUpdateInstallResult } & PluginUpdateAttemptState);
+type PluginUpdateAttemptResult = {
+  kind: "result";
+  result: PluginUpdateInstallResult;
+} & PluginUpdateAttemptState;
 
 type PluginUpdateVersionOutcomeParams = {
   pluginId: string;
@@ -294,7 +295,6 @@ export async function runPluginUpdateAttempt(params: {
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<PluginUpdateAttemptResult> {
   const dryRunOption = params.dryRun ? { dryRun: true } : {};
-  const phase = params.dryRun ? "check" : "update";
   const commonInstallOptions = copyPluginInstallTransactionRequest(params, {
     config: params.config,
     mode: "update" as const,
@@ -307,62 +307,53 @@ export async function runPluginUpdateAttempt(params: {
     expectedPluginId: params.pluginId,
     logger: params.logger,
   });
-  let result: PluginUpdateInstallResult;
-  try {
-    if (params.record.source === "npm" && !params.dryRun) {
-      params.onNpmInstall();
-    }
-    result =
-      params.record.source === "npm"
-        ? await installPluginFromNpmSpec({
-            spec: params.effectiveSpec!,
-            npmMetadata: params.npmMetadata,
+  if (params.record.source === "npm" && !params.dryRun) {
+    params.onNpmInstall();
+  }
+  let result: PluginUpdateInstallResult =
+    params.record.source === "npm"
+      ? await installPluginFromNpmSpec({
+          spec: params.effectiveSpec!,
+          npmMetadata: params.npmMetadata,
+          ...commonInstallOptions,
+          trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+          expectedReplacementPluginId: params.expectedReplacementPluginId,
+          expectedIntegrity: params.expectedIntegrity,
+          onIntegrityDrift: async (drift) => {
+            const payload: PluginUpdateIntegrityDriftParams = {
+              pluginId: params.pluginId,
+              spec: drift.spec,
+              expectedIntegrity: drift.expectedIntegrity,
+              actualIntegrity: drift.actualIntegrity,
+              resolvedSpec: drift.resolution.resolvedSpec,
+              resolvedVersion: drift.resolution.version,
+              dryRun: params.dryRun,
+            };
+            if (params.onIntegrityDrift) {
+              return await params.onIntegrityDrift(payload);
+            }
+            params.logger.warn?.(
+              `Integrity drift for "${params.pluginId}" (${payload.resolvedSpec ?? payload.spec}): expected ${payload.expectedIntegrity}, got ${payload.actualIntegrity}`,
+            );
+            return false;
+          },
+        })
+      : params.record.source === "clawhub"
+        ? await installPluginFromClawHub({
+            spec: params.effectiveSpec ?? `clawhub:${params.record.clawhubPackage!}`,
+            baseUrl: params.record.clawhubUrl,
             ...commonInstallOptions,
-            trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-            expectedReplacementPluginId: params.expectedReplacementPluginId,
-            expectedIntegrity: params.expectedIntegrity,
-            onIntegrityDrift: async (drift) => {
-              const payload: PluginUpdateIntegrityDriftParams = {
-                pluginId: params.pluginId,
-                spec: drift.spec,
-                expectedIntegrity: drift.expectedIntegrity,
-                actualIntegrity: drift.actualIntegrity,
-                resolvedSpec: drift.resolution.resolvedSpec,
-                resolvedVersion: drift.resolution.version,
-                dryRun: params.dryRun,
-              };
-              if (params.onIntegrityDrift) {
-                return await params.onIntegrityDrift(payload);
-              }
-              params.logger.warn?.(
-                `Integrity drift for "${params.pluginId}" (${payload.resolvedSpec ?? payload.spec}): expected ${payload.expectedIntegrity}, got ${payload.actualIntegrity}`,
-              );
-              return false;
-            },
           })
-        : params.record.source === "clawhub"
-          ? await installPluginFromClawHub({
-              spec: params.effectiveSpec ?? `clawhub:${params.record.clawhubPackage!}`,
-              baseUrl: params.record.clawhubUrl,
+        : params.record.source === "git"
+          ? await installPluginFromGitSpec({
+              spec: params.effectiveSpec!,
               ...commonInstallOptions,
             })
-          : params.record.source === "git"
-            ? await installPluginFromGitSpec({
-                spec: params.effectiveSpec!,
-                ...commonInstallOptions,
-              })
-            : await installPluginFromMarketplace({
-                marketplace: params.record.marketplaceSource!,
-                plugin: params.record.marketplacePlugin!,
-                ...commonInstallOptions,
-              });
-  } catch (error) {
-    return {
-      kind: "exception",
-      message: `Failed to ${phase} ${params.pluginId}: ${String(error)}`,
-      error,
-    };
-  }
+          : await installPluginFromMarketplace({
+              marketplace: params.record.marketplaceSource!,
+              plugin: params.record.marketplacePlugin!,
+              ...commonInstallOptions,
+            });
 
   let activeClawHubInstallSpec = params.effectiveSpec;
   let channelFallbackSuffix = "";
@@ -419,11 +410,9 @@ export async function runPluginUpdateAttempt(params: {
           officialNpmFallback: undefined,
         }),
       );
-      return npmAttempt.kind === "result"
-        ? { ...npmAttempt, npmFallbackSpec: fallback.recordSpec, channelFallbackSuffix }
-        : npmAttempt;
+      return { ...npmAttempt, npmFallbackSpec: fallback.recordSpec, channelFallbackSuffix };
     },
-    result: (entry) => (entry.kind === "result" ? entry.result : { ok: false }),
+    result: (entry) => entry.result,
     onFallback: (message) => {
       channelFallbackSuffix += ` ${message}`;
       params.logger.warn?.(message);

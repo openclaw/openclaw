@@ -21,6 +21,7 @@ import {
 } from "../../../plugins/test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "../../../plugins/test-helpers/managed-npm-plugin.js";
 import { runPluginUpdateAttempt } from "../../../plugins/update-attempt.js";
+import { runPluginUpdateWithClawHubLease } from "../../../plugins/update-template-lifecycle.js";
 import * as pluginUpdates from "../../../plugins/update.js";
 import {
   withOpenClawTestState,
@@ -283,21 +284,26 @@ it("retains an initiating-owner read failure across install error normalization"
   const refusal = new Error("initiating-owner store read failed");
   let checks = 0;
   vi.spyOn(pluginUpdates, "updateNpmInstalledPlugins").mockImplementationOnce(async (params) => {
-    // The real attempt owner catches installer exceptions. No package child is launched here.
+    // Use the update error boundary without launching a package child.
     vi.spyOn(pluginInstaller, "installPluginFromNpmSpec").mockImplementationOnce(async () => {
       await Promise.resolve();
       await params.beforePersistentEffect?.();
       return { ok: false, error: "fixture installer did not publish" };
     });
-    const attempt = await runPluginUpdateAttempt({
+    const attempt = await runPluginUpdateWithClawHubLease({
       pluginId: "peerplugin",
-      record,
-      config: params.config,
       dryRun: false,
-      effectiveSpec: record.spec,
-      trustedSourceLinkedOfficialInstall: false,
-      logger: {},
-      onNpmInstall: () => {},
+      run: () =>
+        runPluginUpdateAttempt({
+          pluginId: "peerplugin",
+          record,
+          config: params.config,
+          dryRun: false,
+          effectiveSpec: record.spec,
+          trustedSourceLinkedOfficialInstall: false,
+          logger: {},
+          onNpmInstall: () => {},
+        }),
     });
     if (attempt.kind !== "exception") {
       throw new Error("fixture expected normalized refusal");

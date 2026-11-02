@@ -386,6 +386,13 @@ unchanged. Missing required executability, changed content, and unsafe file type
 still fail verification. The installed updater must contain this fix; a newer
 candidate cannot change an older updater's package verification.
 
+Content-inventory diagnostics distinguish malformed metadata, content mismatches,
+and executable-permission mismatches in local errors and prepared public reports.
+They identify the failed check, not the underlying cause or affected file. Public
+reports still omit private paths and hash values. The installed updater must
+contain this diagnostic change; older updaters and recorded generic errors keep
+their original diagnostics.
+
 Supervisor-managed migrations also validate Doctor's repairable projection before
 rejecting retired config fields such as `agents.defaults.heartbeat`. They preserve
 the original config and database backups before Doctor migrates the state and

@@ -36,6 +36,7 @@ import {
 import {
   DEFERRED_PLUGIN_MIGRATION_RUN_PREFIX as RUN_PREFIX,
   deferredPluginMigrationSchema,
+  sameDeferredPluginMigrationInputs,
   type DeferredPluginMigration,
 } from "./deferred-plugin-migrations.contract.js";
 import { isTruthyEnvValue } from "./env.js";
@@ -283,7 +284,7 @@ function assertPendingGeneration(
   expected: readonly DeferredPluginMigration[],
   phase: string,
 ): void {
-  if (!isDeepStrictEqual(current, expected)) {
+  if (!sameDeferredPluginMigrationInputs(current, expected)) {
     throw new DeferredPluginMigrationConflictError(current, { expected, phase });
   }
 }
@@ -473,7 +474,7 @@ export function withDeferredPluginMigrationsCurrent<T>(
   const result = runOpenClawStateWriteTransaction(
     ({ db }) => {
       const pending = pendingMigrationRecords(readPendingMigrationRows(db));
-      if (!isDeepStrictEqual(pending, expectedPending) && params.onConflict) {
+      if (params.onConflict && !sameDeferredPluginMigrationInputs(pending, expectedPending)) {
         // Commit preservation facts against these rows; callers refuse publication after return.
         return params.onConflict(pending);
       }

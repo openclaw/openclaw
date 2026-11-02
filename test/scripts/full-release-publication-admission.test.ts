@@ -303,6 +303,9 @@ console.log('{"status":"identical"}');
         check(identityIndex).toBeLessThan(
           resolveTarget.steps.findIndex((step) => step.id === "resolve"),
         );
+        check(resolveTarget.steps[identityIndex]?.run).toContain(
+          '${admission_args[@]+"${admission_args[@]}"}',
+        );
         let status = 0;
         let stderr = "";
         const completed: string[] = [];
@@ -762,7 +765,7 @@ globalThis.fetch = async (input, init = {}) => {
   if (url.origin === "https://registry.npmjs.org") {
     if (${JSON.stringify(options.registry)} === "advisory-deadline" && url.pathname === "/demo-runtime") {
       const now = Date.now;
-      Date.now = () => now() + 300001;
+      Date.now = () => now() + 600001;
     }
     if (${JSON.stringify(options.registry)} === "required-budget" ||
         (${JSON.stringify(options.registry)} === "advisory-budget" && url.pathname.startsWith("/advisory-"))) {
@@ -1744,9 +1747,9 @@ describe("FRV observation worker boundary", () => {
         (entry) => entry.kind === "settled" && entry.worker,
       );
       check(settlement).toMatchObject({ active: 0 });
-      check(settlement?.maximumActive).toBeLessThanOrEqual(16);
+      check(settlement?.maximumActive).toBeLessThanOrEqual(8);
       if (registry === "concurrency") {
-        check(settlement?.maximumActive).toBe(16);
+        check(settlement?.maximumActive).toBe(8);
       }
       for (const plan of [result.observations.plans.npm, result.observations.plans.clawhub]) {
         check(plan.all).toHaveLength(count);

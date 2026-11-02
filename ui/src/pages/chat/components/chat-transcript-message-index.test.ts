@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fingerprint from "../../../../../src/shared/fnv1a.js";
 import * as historyIdentity from "../../../lib/chat/history-message-identity.ts";
-import * as fingerprint from "../../../lib/fnv1a.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { resetWorkingProgress } from "../chat-progress.ts";
 import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
