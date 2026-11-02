@@ -262,6 +262,8 @@ const enSettings = {
       stateRunning: "Running",
       stateConfigured: "Configured",
       stateAttention: "Needs attention",
+      stateNotConfigured: "Not configured",
+      details: "Details",
       setUp: "Set up",
       guidedSetup: "Guided step-by-step setup",
       openDetails: "Open details",

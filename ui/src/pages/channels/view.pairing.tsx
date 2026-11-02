@@ -6,6 +6,7 @@ import { Picker } from "../../components/select-picker.ts";
 import "../../components/modal-dialog.tsx";
 import { ChannelPicker } from "../../components/solid/channel-picker.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
@@ -284,6 +285,7 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
   );
 }
 
+/** Lives with the other on-demand rows, and opens itself when a request is waiting. */
 export function renderChannelPairingDetail(channelId: string, props: ChannelsProps) {
   const accounts = createMemo(() =>
     (props.channels.pairingSnapshot?.accounts ?? []).filter(
@@ -291,12 +293,13 @@ export function renderChannelPairingDetail(channelId: string, props: ChannelsPro
     ),
   );
   const requests = createMemo(() => props.channels.pairingSnapshot?.requests ?? []);
+  const waiting = createMemo(
+    () => requests().filter((request) => request.channel === channelId).length,
+  );
   return (
     <Show when={props.canManagePairing && accounts().length > 0}>
-      <SettingsSection
-        title={t("channels.pairing.detailTitle")}
-        description={t("channels.pairing.detailSubtitle")}
-      >
+      <SettingsDisclosure title={t("channels.pairing.detailTitle")} open={waiting() > 0}>
+        <p class="channels-pairing-help">{t("channels.pairing.detailSubtitle")}</p>
         <For each={accounts()} keyed={(account) => account.accountId}>
           {(account) => {
             const pending = createMemo(
@@ -310,7 +313,9 @@ export function renderChannelPairingDetail(channelId: string, props: ChannelsPro
             return (
               <SettingsRow
                 title={accountName(account())}
-                description={account().accountId}
+                description={
+                  accountName(account()) === account().accountId ? undefined : account().accountId
+                }
                 control={
                   <>
                     <SettingsStatus
@@ -336,7 +341,7 @@ export function renderChannelPairingDetail(channelId: string, props: ChannelsPro
             );
           }}
         </For>
-      </SettingsSection>
+      </SettingsDisclosure>
     </Show>
   );
 }

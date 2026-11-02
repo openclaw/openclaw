@@ -126,11 +126,10 @@ it("loads a changed locale without replacing the edited profile input", async ()
   expect(f.button("Save & Publish")).toBeDefined();
 });
 
-it("retains channel and profile facts while refreshed snapshots update their values", () => {
+it("retains profile facts while refreshed snapshots update their values", () => {
   f.click("Cancel");
   const fact = (label: string) =>
     [...f.container.querySelectorAll("dt")].find((node) => node.textContent === label)!;
-  const configured = fact("Configured");
   const name = fact("Name");
   const nameValue = name.nextElementSibling;
   const key = f.container.querySelector("code");
@@ -144,8 +143,6 @@ it("retains channel and profile facts while refreshed snapshots update their val
     },
   });
 
-  expect(fact("Configured")).toBe(configured);
-  expect(configured.nextElementSibling?.textContent).toBe("No");
   expect(fact("Name")).toBe(name);
   expect(name.nextElementSibling).toBe(nameValue);
   expect(nameValue?.textContent).toBe("Refreshed");
