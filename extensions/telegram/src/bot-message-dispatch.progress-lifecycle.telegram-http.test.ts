@@ -515,6 +515,21 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     expect(retiredAt).toBeGreaterThan(finalAt);
   });
 
+  it("delivers compaction notices beside the progress card and the final", async () => {
+    const notice = "⚠️ Compaction completed with a degraded summary.";
+    await dispatch(
+      async (options) => {
+        await options?.onCompactionStart?.();
+        await waitForCall((call) => String(call.fields.text).includes("Compacting context"));
+        await options?.onBlockReply?.({ text: notice, isCompactionNotice: true });
+        await options?.onCompactionEnd?.({ completed: true });
+        await options?.onBlockReply?.({ text: "Interim answer prose." });
+      },
+      { finalReply: { text: "Compaction finished." } },
+    );
+    expect(texts()).toEqual([notice, "Compaction finished."]);
+  });
+
   it("suppresses typed reasoning while preserving literal answer text when reasoning is off", async () => {
     await dispatch(
       async (options) => {
