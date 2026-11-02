@@ -1,2 +1,2 @@
-# Two catalog loads must stay quiet while known formats remain validated.
-29
+# Catalog warning regression and the startup fixture preserving real logger exports.
+32
