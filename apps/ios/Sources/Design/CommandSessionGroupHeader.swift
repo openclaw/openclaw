@@ -263,11 +263,9 @@ struct CommandSessionGroupHeader<Accessory: View>: View {
                     if connection.allows("sessions.groups.defaults", scope: "operator.read") {
                         let response: SessionsGroupsDefaultsResult = try await connection
                             .read("sessions.groups.defaults")
-                        guard let defaults = response.defaults.first(where: { $0.name == self.name }) else {
-                            throw OpenClawChatTransportSendError.notDispatched
-                        }
-                        cwd = defaults.cwd
-                        worktree = defaults.worktree
+                        let defaults = response.defaults.first(where: { $0.name == self.name })
+                        cwd = defaults?.cwd
+                        worktree = defaults?.worktree
                     }
                     let request = OpenClawChatGatewayRequests.createSession(
                         key: key,
