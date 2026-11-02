@@ -75,6 +75,29 @@ or portal. Inspect the application separately before claiming a working preview.
 Use the returned URLs unchanged; replacing their scheme, hostname, or port with
 the Gateway's address does not create an ingress route.
 
+## Private chat handoff
+
+For a requested app link in a private conversation, the agent can return the
+portal’s authenticated `url` directly to the authorized recipient instead of
+requiring a Control UI side panel. The same portal service handles the app,
+assets, navigation, downloads, and streaming; no separate mobile tunnel or URL
+rewrite is needed. The app remains responsible for its mobile layout.
+
+`url` is a bearer credential: anyone holding it can access the application while
+the portal is active. Do not automatically post it to a group or public channel,
+include it in logs or screenshots, or use it as `PUBLIC_URL`. Closing the portal
+withdraws the link. The token-free `publicUrl` is app configuration, not an
+authenticated first-visit link; do not assume another browser or chat’s in-app
+browser already has its authentication cookie.
+
+A private chat does not make a loopback route reachable from a phone. If the
+portal reports `loopback-only`, explain the required [remote access](#remote-access)
+setup instead of offering it as a remote preview. A non-loopback URL still needs
+verification from the recipient’s browser; a successful Gateway-host test is not
+phone-delivery proof. In the Control UI, the usual portal panel remains available.
+The `portal` tool must be permitted by the agent’s existing tool policy; this
+handoff does not grant tool access or configure network ingress.
+
 ## Remote access
 
 Prefer managed private [Tailscale Serve](/gateway/tailscale) when the operator and

@@ -4,9 +4,11 @@ import {
   PortalListResultSchema,
   PortalSummarySchema,
 } from "../../../packages/gateway-protocol/src/schema/portals.js";
+import { PORTAL_LINK_GUIDANCE } from "../portal-link-guidance.js";
 
 export const PORTAL_TOOL_DESCRIPTION =
-  "Allocate a portal route for an HTTP app/dev server, not a file (attach media with MEDIA:<path>). Select the app's environmentId for an attached environment; omit it only for the current execution host. First action=open with the app port; then start the server in that same environment as a background process with the returned PORT and token-free PUBLIC_URL. Workspace servers may be declared in .openclaw/portals.json. HTTP and WebSockets are proxied; a waiting page appears until the app listens. Read exposure in open/list: loopback-only means local to the Gateway host, not remote viewer access; non-loopback still does not prove reachability. Local use is valid. Present through available Control UI capabilities and verify app rendering from the requesting viewer; a worker/Gateway browser test is not delivery proof. Keep returned URLs unchanged and bearer launch URLs private. action=list/close manage routes; portals end at Gateway restart.";
+  "Allocate a portal route for an HTTP app/dev server, not a file (attach media with MEDIA:<path>). Select the app's environmentId for an attached environment; omit it only for the current execution host. First action=open with the app port; then start the server in that same environment as a background process with the returned PORT and token-free PUBLIC_URL. Workspace servers may be declared in .openclaw/portals.json. HTTP and WebSockets are proxied; a waiting page appears until the app listens. Read exposure in open/list: loopback-only means local to the Gateway host, not remote viewer access; non-loopback still does not prove reachability. Local use is valid. For an in-UI preview, use available Control UI capabilities. Verify app rendering from the requesting viewer; a worker/Gateway browser test is not delivery proof. action=list/close manage routes; portals end at Gateway restart. " +
+  PORTAL_LINK_GUIDANCE;
 
 export const PortalToolSchema = Type.Object(
   {
@@ -37,4 +39,5 @@ export const SessionPortalToolSchema = Type.Omit(PortalToolSchema, ["environment
   additionalProperties: false,
 });
 export const SESSION_PORTAL_TOOL_DESCRIPTION =
-  "Allocate a portal route for an HTTP app/dev server on this conversation's attached dedicated worker, not a file (attach media with MEDIA:<path>). First action=open with the app port; then start the server on that worker with the returned PORT and token-free PUBLIC_URL. action=list/close manage only this worker's portals; Gateway-host and other machines' ports are unavailable. Read exposure in open/list: loopback-only is local to the Gateway host, even though the app runs on a worker; non-loopback still does not prove viewer reachability. Local use is valid. Present through available Control UI capabilities and verify rendering from the requesting viewer, not just a worker/Gateway browser. Use returned URLs unchanged. Launch URLs are private bearer links: anyone holding one can access the application while its portal and environment remain active.";
+  "Allocate a portal route for an HTTP app/dev server on this conversation's attached dedicated worker, not a file (attach media with MEDIA:<path>). First action=open with the app port; then start the server on that worker with the returned PORT and token-free PUBLIC_URL. action=list/close manage only this worker's portals; Gateway-host and other machines' ports are unavailable. Read exposure in open/list: loopback-only is local to the Gateway host, even though the app runs on a worker; non-loopback still does not prove viewer reachability. Local use is valid. For an in-UI preview, use available Control UI capabilities. Verify rendering from the requesting viewer, not just a worker/Gateway browser. " +
+  PORTAL_LINK_GUIDANCE;

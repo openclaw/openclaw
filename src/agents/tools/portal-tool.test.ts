@@ -86,7 +86,13 @@ it.each(["host", "worker", "bound"] as const)(
       { closed: true },
     ]);
     expect(recorded.requestScopes).toEqual(mode === "bound" ? [] : [["operator.write"]]);
-    for (const result of summary === localPortal ? [opened, listed] : [opened]) {
+    expect(selected.description).toContain("When the user requests a private app link");
+    for (const result of [opened, listed]) {
+      expect(result.content[0]).toMatchObject({
+        text: expect.stringContaining(
+          "share the returned url unchanged with the authorized recipient",
+        ),
+      });
       expect(result.content[0]).toMatchObject({
         type: "text",
         text:
