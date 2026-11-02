@@ -2243,6 +2243,7 @@
                       "providers/deepseek",
                       "providers/featherless",
                       "providers/fireworks",
+                      "providers/fortytwo",
                       "providers/github-copilot",
                       "providers/gmi",
                       "providers/google",
