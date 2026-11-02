@@ -97,26 +97,23 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [190837](https://github.com/openclaw/openclaw/pull/190837): Remove the unread agent-tools MCP fixture tempRoot property. Counted getter control records zero reads; both mock and real stdio keepers catch an actual cwd fault, with exact restoration. All ten declarations/eleven cases remain; baseline/candidate/published eleven, focused checks, every removal scan and fresh review pass;59 CI checks succeed. Native reconciled the original accepted auto intent after changing mergeability projections. Zero net test lines; production unchanged.
 
+- [190868](https://github.com/openclaw/openclaw/pull/190868): Remove the parity default catalog's unselected runtime-control-ui row. Actual request-deduplication fault fails the retained repeated-start keeper; owner/test bytes restored exactly. Both declarations/three cases remain; baseline/candidate/published three, focused checks, every removal scan and fresh review pass;57 CI checks succeed. Three fewer formatted test lines; production unchanged.
+
 ## Current qualification
 
-Pinned main db41a6a3a2e4: remove only the unselected runtime-control-ui row
-from the parity test's default scenario catalog. The selected runtime-channel
-row, both physical declarations/three expanded cases, every retained case vector
-and assertion, retry evidence and repeated-start progress-slot checks remain.
+Pinned main 52c106496b85: remove two absorbed assertions from the tool-name
+allowlist and DeepSeek text-filter tests. The frozen caller already rejects
+in-place sorting; each exact expected output already excludes DSML.
+Keep all ten physical declarations/eighteen expanded cases, every input,
+the output-mutation/iterator check and partial-buffer/immediate-output cases.
+Two fewer test lines proposed; production unchanged.
 
-Untouched official baseline and clean candidate pass all three cases.
-An actual requested-ID deduplication fault fails the retained repeated-start
-keeper: four calls expected versus two observed, with two other cases skipped.
-All temporary owner/test bytes were restored exactly before the candidate.
-Typed lint, scoped types, format, ledger MDX and whitespace checks pass.
-Every dependency, unused-file and production/full-tree/script export phase passes.
-Every other test byte and the test-line baseline remain unchanged.
-Three fewer test lines: one removed row plus canonical single-item array formatting.
-No production change. Fresh review, final published proof and CI remain pending.
-
-No public API, runtime configuration, migration or state contract change.
-Synthetic parity fixtures are not live Control UI, Codex, Gateway, provider,
-browser or PostgreSQL proof.
+Fresh source, owners, helpers, callers, history and static unit-fast routing
+are qualified. Untouched official baseline, actual in-place-sort and DSML-output
+faults against retained keepers, exact restoration, clean candidate,
+focused checks, all removal scans, fresh review, final published proof and CI
+remain pending. No public API, runtime configuration, migration or state contract
+change. These local contracts are not live provider, Gateway or agent proof.
 
 ## Completed source review
 
