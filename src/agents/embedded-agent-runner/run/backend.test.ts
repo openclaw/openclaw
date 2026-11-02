@@ -36,6 +36,7 @@ beforeEach(() => {
 
 vi.mock("../../harness/selection.js", () => ({
   runAgentHarnessAttempt: harnessMocks.runAttempt,
+  runAgentHarnessSettledTurnFinalization: vi.fn(),
 }));
 
 it("carries child receipts only across the same admitted instance", async () => {

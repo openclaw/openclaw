@@ -127,29 +127,31 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned mainc17c6245ce35: remove only the unused settled-turn mock export in
-the backend suite and the unselected null answer-stream option in the Telegram
-delivery helper. Keep the real finalization owner and its live sibling mocks,
-all six helper exports, both Telegram consumer bytes, every selected
-input/assertion and all22 physical declarations/31 cases across three suites.
+Pinned mainc17c6245ce35: remove only the unselected null answer-stream
+option in the Telegram delivery helper. Keep all six helper exports, both
+Telegram consumer bytes, every selected input/assertion and all15 physical
+declarations/18 cases across the two suites.
 
-The untouched official baseline passes31 with no skips on the normal
-agents-embedded-agent-run and isolated extension-telegram projects. All13
-backend cases pass with a throwing unused-export getter; all18 Telegram cases
-pass with a throwing null branch. Both temporary guards are restored exactly.
-The clean candidate passes the same31; the required unchanged attempt.test.ts
-sibling also passes all35. No assertions or declarations are removed.
+The untouched official baseline passes all18 Telegram cases with no skips on
+the isolated extension-telegram project. The same18 pass with a throwing null
+branch; the temporary guard is restored exactly. The clean candidate passes
+the same18. No assertions or declarations are removed.
 
 All four removal components pass, including production/full-tree exports,
-both unused-file phases and every script-export wrapper subscan. Four
+both unused-file phases and every script-export wrapper subscan. Three
 test/support lines are removed; production and the shared test-line scalar are
 unchanged. Managed checkout is code-only; the official Native workflow owns
 test dependencies.
 
+The initial head also removed an unused backend mock property. CI's exact
+mock-factory ratchet rejected that changed closed factory; runtime non-use does
+not waive its module-export contract. The backend suite is restored byte-for-byte
+to the pinned base, with no new isolation exception or baseline allowance.
+
 Typed lint, scoped core/extension types, formatting, ledger MDX and whitespace
-pass. Fresh review, final published proof and CI remain pending.
-Local mocked boundaries only; no live Gateway/provider/Telegram transport or
-performance claim.
+pass for the unchanged Telegram edit. The restored mock factory passes its exact
+ratchet, and the repaired tree passes all18 Telegram cases with no skips. Fresh
+review, final published proof and CI remain pending.
 
 ## Completed source review
 
