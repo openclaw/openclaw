@@ -3372,7 +3372,7 @@ describe("install.sh macOS Homebrew Node behavior", () => {
       set -euo pipefail
       source "${SCRIPT_PATH}"
       OS=macos
-      stale_prefix="$(mktemp -d)/node"
+      stale_prefix="$(mktemp -d "$HOME/stale-node.XXXXXX")/node"
       mkdir -p "$stale_prefix/bin"
       printf '#!/bin/sh\\necho v26.10.0\\n' > "$stale_prefix/bin/node"
       chmod +x "$stale_prefix/bin/node"
