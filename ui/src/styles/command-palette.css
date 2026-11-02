@@ -296,10 +296,11 @@
   font-size: 12px;
 }
 
-/* Below the card, as the composer's status band sits below its surface. */
-.cmd-palette__creation-error {
-  --composer-attached-surface: var(--chat-composer-surface);
-  margin-top: 6px;
+/* On the shelf below the panel, as the composer's status band sits below its surface. */
+.cmd-palette-stack .cmd-palette__creation-error {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 0;
 }
 
 .cmd-palette__footer {

@@ -2592,22 +2592,33 @@ td.data-table-key-col {
   display: none;
 }
 
-/* Outside the card so switching content never moves the palette's top anchor.
-   A small sheet of the panel's own surface keeps the labels legible over any page. */
-.cmd-palette__modes {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 0;
+/* One card: the panel sits in a sunken shelf that shares its edge and radius.
+   The shelf stays above the panel, so switching content moves neither. */
+.cmd-palette-stack {
+  --composer-attached-surface: color-mix(
+    in srgb,
+    var(--chat-composer-surface) 60%,
+    var(--background, var(--bg))
+  );
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px;
-  border: 1px solid color-mix(in srgb, var(--text-strong) 9%, transparent);
-  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
+  flex-direction: column;
+  width: 100%;
+  max-height: calc(100dvh - var(--cmd-palette-top) - 24px);
+  overflow: hidden;
+  border-radius: calc(20px * var(--openclaw-corner-radius-scale));
   corner-shape: var(--chat-composer-corner-shape);
   background:
-    linear-gradient(var(--chat-composer-surface), var(--chat-composer-surface)),
+    linear-gradient(var(--composer-attached-surface), var(--composer-attached-surface)),
     var(--bg-content, var(--bg));
+}
+
+.cmd-palette__modes {
+  display: flex;
+  flex: 0 0 var(--cmd-palette-dock-height);
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding-inline: 8px;
 }
 
 .cmd-palette__mode-tabs {
@@ -2621,8 +2632,8 @@ td.data-table-key-col {
   align-items: center;
   height: 28px;
   padding: 0 10px;
-  /* Concentric with the sheet: its radius minus the border and padding. */
-  border-radius: max(0px, calc(16px * var(--openclaw-corner-radius-scale) - 5px));
+  /* Concentric with the card: its radius minus the shelf's inset. */
+  border-radius: calc(14px * var(--openclaw-corner-radius-scale));
   corner-shape: var(--chat-composer-corner-shape);
   color: var(--muted);
   font-size: 13px;
@@ -2654,8 +2665,9 @@ td.data-table-key-col {
   color: var(--text-strong);
 }
 
+/* The selected tab takes the panel's surface, so it reads as part of the panel. */
 .cmd-palette__mode[aria-selected="true"] {
-  background: color-mix(in srgb, var(--text) 8%, transparent);
+  background: var(--chat-composer-surface);
   color: var(--text-strong);
   font-weight: var(--control-ui-font-weight-semibold);
 }
@@ -2681,11 +2693,15 @@ td.data-table-key-col {
 }
 
 .cmd-palette__modes .cmd-palette__mode-key {
-  margin-inline-end: 6px;
+  margin-inline-end: 10px;
 }
 
-/* A phone has no Tab key to teach. */
 @media (max-width: 560px) {
+  .cmd-palette__mode {
+    height: 32px;
+  }
+
+  /* A phone has no Tab key to teach. */
   .cmd-palette__modes .cmd-palette__mode-key {
     display: none;
   }
@@ -2698,10 +2714,10 @@ td.data-table-key-col {
   position: relative;
   display: flex;
   flex-direction: column;
+  flex: 0 1 auto;
   width: 100%;
-  max-height: calc(100dvh - min(20dvh, 160px) - 24px);
+  min-height: 0;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--text-strong) 9%, transparent);
   border-radius: calc(20px * var(--openclaw-corner-radius-scale));
   corner-shape: var(--chat-composer-corner-shape);
   background:
@@ -2714,15 +2730,25 @@ td.data-table-key-col {
   min-height: var(--chat-composer-min-height);
 }
 
-/* Outranks the composer's own shadow: this surface floats above the page. */
-:root[data-theme-mode] .cmd-palette-overlay .cmd-palette,
-:root[data-theme-mode] .cmd-palette-overlay .cmd-palette__modes {
-  box-shadow: var(--overlay-modal-shadow);
+/* Outranks the composer's own frame: the card floats above the page, the panel sits in it. */
+:root[data-theme-mode] .cmd-palette-overlay .cmd-palette-stack {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--text-strong) 9%, transparent),
+    var(--overlay-modal-shadow);
 }
 
-:root[data-theme-mode="light"] .cmd-palette-overlay .cmd-palette,
-:root[data-theme-mode="light"] .cmd-palette-overlay .cmd-palette__modes {
-  border-color: transparent;
+:root[data-theme-mode] .cmd-palette-overlay .cmd-palette {
+  border: 0;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-strong) 6%, transparent);
+}
+
+/* A light page sits close to the panel, so the shelf needs one more step to read as sunken. */
+:root[data-theme-mode="light"] .cmd-palette-overlay .cmd-palette-stack {
+  --composer-attached-surface: color-mix(
+    in srgb,
+    var(--text-strong) 4%,
+    color-mix(in srgb, var(--chat-composer-surface) 60%, var(--background, var(--bg)))
+  );
   box-shadow:
     0 0 0 1px rgb(0 0 0 / 6%),
     var(--overlay-modal-shadow);
@@ -2732,11 +2758,12 @@ td.data-table-key-col {
   position: relative;
   flex: 0 0 auto;
   min-width: 0;
-  padding: 14px 5px 14px 18px;
+  padding: 14px 4px 14px 18px;
 }
 
+/* The field keeps its inset across modes, so the caret never shifts on Tab. */
 .cmd-palette--prompt .cmd-palette__entry {
-  padding: 14px 4px 0 14px;
+  padding-bottom: 0;
 }
 
 .cmd-palette__input-scroll {
@@ -2749,19 +2776,22 @@ td.data-table-key-col {
   display: block;
   width: 100%;
   min-width: 0;
-  height: 24px;
-  min-height: 24px;
-  max-height: 66px;
+  --cmd-palette-input-size: var(--chat-composer-editor-size, var(--control-ui-text-md));
+  --cmd-palette-input-line: calc(var(--cmd-palette-input-size) * 1.5);
+  --control-ui-touch-input-size: var(--cmd-palette-input-size);
+  height: var(--cmd-palette-input-line);
+  min-height: var(--cmd-palette-input-line);
+  max-height: calc(var(--cmd-palette-input-line) * 3);
   margin: 0;
-  padding: 0 13px 0 0;
+  padding: 0 10px 0 0;
   resize: none;
   overflow-y: hidden;
   scrollbar-width: thin;
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
   font-family: inherit;
-  font-size: 15px;
-  line-height: 22px;
+  font-size: var(--cmd-palette-input-size);
+  line-height: var(--cmd-palette-input-line);
   background: transparent;
   border: 0;
   border-radius: 0;
@@ -2770,17 +2800,9 @@ td.data-table-key-col {
   outline: none;
 }
 
-/* Compose writes at the composer's size; eight lines, then it scrolls. */
+/* Both modes write at the composer's size; Compose grows to eight lines, then scrolls. */
 .cmd-palette--prompt .cmd-palette__input {
-  --cmd-palette-compose-size: var(--chat-composer-editor-size, var(--control-ui-text-md));
-  --cmd-palette-compose-line: calc(var(--cmd-palette-compose-size) * 1.5);
-  --control-ui-touch-input-size: var(--cmd-palette-compose-size);
-  height: var(--cmd-palette-compose-line);
-  min-height: var(--cmd-palette-compose-line);
-  max-height: min(calc(var(--cmd-palette-compose-line) * 8), 35dvh);
-  padding-right: 10px;
-  font-size: var(--cmd-palette-compose-size);
-  line-height: var(--cmd-palette-compose-line);
+  max-height: min(calc(var(--cmd-palette-input-line) * 8), 35dvh);
 }
 
 .cmd-palette__input[aria-busy="true"] {

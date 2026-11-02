@@ -65,7 +65,10 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     // ResizeObserver's initial delivery schedules another layout frame.
     await threeFrames();
     const originalHeight = input.clientHeight;
-    expect([host.clientWidth, originalHeight]).toEqual([740, 24]);
+    expect([host.clientWidth, originalHeight]).toEqual([
+      740,
+      Number.parseFloat(getComputedStyle(input).lineHeight),
+    ]);
     const measureContent = vi.spyOn(input, "scrollHeight", "get");
     const settings = host.appendChild(document.createElement("button"));
     input.focus();
@@ -152,7 +155,7 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     edit(input, input.value);
     const top = input.getBoundingClientRect().top;
     const lineHeight = Number.parseFloat(getComputedStyle(input).lineHeight);
-    expect(input.clientHeight).toBe(24);
+    expect(input.clientHeight).toBe(lineHeight);
 
     for (const lines of [2, 5]) {
       edit(input, Array(lines).fill("Prompt line").join("\n"));
@@ -178,7 +181,7 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     }
 
     edit(input, "A short task");
-    expect(input.clientHeight).toBe(24);
+    expect(input.clientHeight).toBe(lineHeight);
     expectFades(entry, false, false);
     expect(input.getBoundingClientRect().top).toBe(top);
 

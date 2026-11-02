@@ -28,46 +28,49 @@ export function CommandPaletteLoading(props: {
         style={COMMAND_PALETTE_DIALOG_STYLE}
         onModal-cancel={() => props.onClose()}
       >
-        <CommandPaletteModes
-          mode={props.state.mode()}
-          onChange={(mode) => props.state.setMode(mode)}
-          disabled={props.state.submitRequested()}
-        />
-        <div
-          id="cmd-palette-panel"
-          role="tabpanel"
-          aria-labelledby={`cmd-palette-tab-${props.state.mode()}`}
-          class={["cmd-palette", { "cmd-palette--prompt": props.state.mode() === "compose" }]}
-          aria-busy="true"
-          onCompositionStart={() => props.state.handleCompositionStart()}
-          onCompositionEnd={() => props.state.handleCompositionEnd()}
-          onKeyDown={(event) => props.state.handleKeydown(event)}
-          onDragOver={(event) => props.state.handleDragOver(event)}
-          onDrop={(event) => props.state.handleDrop(event)}
-        >
-          <CommandPaletteInput
-            onAutofocusRef={(element) => {
-              initialInput = element;
-            }}
-            value={value()}
-            placeholder={t(
-              props.state.mode() === "compose"
-                ? props.state.hasAttachments()
-                  ? "palette.attachmentPrompt"
-                  : "palette.composePlaceholder"
-                : "palette.searchPlaceholder",
-            )}
-            maxLines={props.state.mode() === "compose" ? 8 : 3}
-            onInputRef={(element, previous) => props.state.inputRef(element, previous)}
-            onValueChange={(nextValue, event) => props.state.captureInput(nextValue, event)}
-            onPaste={(event) => props.state.handlePaste(event)}
-            readOnly={props.state.submitRequested()}
+        {/* The same stack as the loaded palette, so the handoff moves nothing. */}
+        <div class="cmd-palette-stack">
+          <CommandPaletteModes
+            mode={props.state.mode()}
+            onChange={(mode) => props.state.setMode(mode)}
+            disabled={props.state.submitRequested()}
           />
-          <Show when={props.state.mode() === "search"}>
-            <div class="cmd-palette__empty" role="status">
-              {t("common.loading")}
-            </div>
-          </Show>
+          <div
+            id="cmd-palette-panel"
+            role="tabpanel"
+            aria-labelledby={`cmd-palette-tab-${props.state.mode()}`}
+            class={["cmd-palette", { "cmd-palette--prompt": props.state.mode() === "compose" }]}
+            aria-busy="true"
+            onCompositionStart={() => props.state.handleCompositionStart()}
+            onCompositionEnd={() => props.state.handleCompositionEnd()}
+            onKeyDown={(event) => props.state.handleKeydown(event)}
+            onDragOver={(event) => props.state.handleDragOver(event)}
+            onDrop={(event) => props.state.handleDrop(event)}
+          >
+            <CommandPaletteInput
+              onAutofocusRef={(element) => {
+                initialInput = element;
+              }}
+              value={value()}
+              placeholder={t(
+                props.state.mode() === "compose"
+                  ? props.state.hasAttachments()
+                    ? "palette.attachmentPrompt"
+                    : "palette.composePlaceholder"
+                  : "palette.searchPlaceholder",
+              )}
+              maxLines={props.state.mode() === "compose" ? 8 : 3}
+              onInputRef={(element, previous) => props.state.inputRef(element, previous)}
+              onValueChange={(nextValue, event) => props.state.captureInput(nextValue, event)}
+              onPaste={(event) => props.state.handlePaste(event)}
+              readOnly={props.state.submitRequested()}
+            />
+            <Show when={props.state.mode() === "search"}>
+              <div class="cmd-palette__empty" role="status">
+                {t("common.loading")}
+              </div>
+            </Show>
+          </div>
         </div>
       </ModalDialog>
     </ShellComponentBoundary>
