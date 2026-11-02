@@ -169,6 +169,7 @@ it("delivers visible text before transport completion without leaking reasoning"
         let completed = false;
         const pending = completeWithPreparedSimpleCompletionModel({
           model: makeProviderModelFixture({
+            id: "utility",
             provider: "custom",
             api: "openai-completions",
             baseUrl: "https://provider.invalid",

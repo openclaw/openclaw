@@ -1,5 +1,9 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   readAnswerLensPreference,
@@ -10,15 +14,13 @@ import { AnswerLens, ORIGINAL_LENS } from "./answer-lens.ts";
 const source = { messageId: "latest", text: "A detailed explanation. ".repeat(12) };
 const preference = { coverage: "gist", wording: "plain" } as const;
 function setup() {
-  const request = vi
-    .fn<GatewayBrowserClient["request"]>()
-    .mockImplementation(async (_method, params) => ({
-      ...params,
-      text: "Rewritten",
-      sourceRevision: "revision",
-      durationMs: 1,
-    }));
-  const client = { request };
+  const request = createGatewayRequestMock().mockImplementation(async (_method, params) => ({
+    ...asOptionalRecord(params),
+    text: "Rewritten",
+    sourceRevision: "revision",
+    durationMs: 1,
+  }));
+  const client = createTestGatewayClient(request);
   const owner = new AnswerLens();
   const configure = (sessionKey: string, latestMessageId = source.messageId) =>
     owner.configure({ client, sessionKey, latestMessageId });

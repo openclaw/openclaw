@@ -8,8 +8,17 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
+import { broadcastFor, createBroadcastPeer } from "../server-broadcast.test-support.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  createProjectedSessionEventPredicate,
+  roleClient,
+  rolePolicyConfig,
+  sharingPolicyClient,
+} from "../session-sharing.test-utils.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { chatRpc } from "./chat-rpc-fixture.test-support.js";
 import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.js";
@@ -23,15 +32,26 @@ beforeEach(() => {
     .mockResolvedValue({ text: "Simpler answer.", provider: "fixture", model: "utility" });
 });
 
-async function fixture() {
-  const cfg = rolePolicyConfig();
+async function fixture(incognito = false) {
+  const cfg = incognito ? {} : rolePolicyConfig();
   setRuntimeConfigSnapshot(cfg);
-  const client = roleClient("write", "lens-owner");
+  const client = incognito
+    ? sharingPolicyClient({ user: "gateway-owner" })
+    : roleClient("write", "lens-owner");
   client.connId = "lens-owner-connection";
-  const scope = { agentId: "main", sessionKey: "agent:main:lens", sessionId: "lens-session" };
+  if (incognito) {
+    ensureGatewayOwnerProfile("Lens owner");
+    client.internal = { authenticatedOperator: true };
+  }
+  const scope = {
+    agentId: "main",
+    sessionKey: incognito ? "agent:main:dashboard:incognito-lens" : "agent:main:lens",
+    sessionId: "lens-session",
+  };
   await upsertSessionEntryCore(scope, {
     sessionId: scope.sessionId,
-    updatedAt: 1,
+    updatedAt: Date.now(),
+    ...(incognito ? { incognito: true as const } : {}),
     status: "done",
     visibility: "draft",
     createdActor: {
@@ -61,12 +81,15 @@ async function fixture() {
       wording: "original",
       ...params,
     });
-  return { scope, client, context, request };
+  return { scope, client, context, request, cfg };
 }
-async function withLens(run: (f: Awaited<ReturnType<typeof fixture>>) => Promise<void>) {
+async function withLens(
+  run: (f: Awaited<ReturnType<typeof fixture>>) => Promise<void>,
+  incognito = false,
+) {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     try {
-      await run(await fixture());
+      await run(await fixture(incognito));
     } finally {
       await disposeSessionReadContexts();
     }
@@ -120,8 +143,8 @@ it("refuses stale revisions, inaccessible sources and read-only operators before
 it("discards inference after source session replacement", () =>
   withLens(async (f) => {
     const baseline = await f.request();
-    const entered = createDeferred<void>();
-    const gate = createDeferred<void>();
+    const entered = createDeferred();
+    const gate = createDeferred();
     complete.mockImplementation(async () => {
       entered.resolve();
       await gate.promise;
@@ -140,8 +163,8 @@ it("discards inference after source session replacement", () =>
 it("cancels only the requesting connection's active operation", () =>
   withLens(async (f) => {
     const baseline = await f.request();
-    const entered = createDeferred<void>();
-    const gate = createDeferred<void>();
+    const entered = createDeferred();
+    const gate = createDeferred();
     complete.mockImplementation(async () => {
       entered.resolve();
       await gate.promise;
@@ -200,8 +223,8 @@ it("does not disclose provider error details", () =>
 it("streams only to the requesting connection and fences chunks after cancellation", () =>
   withLens(async (f) => {
     const baseline = await f.request();
-    const entered = createDeferred<void>();
-    const gate = createDeferred<void>();
+    const entered = createDeferred();
+    const gate = createDeferred();
     const broadcast = vi.spyOn(f.context, "broadcastToConnIds");
     let onText!: (text: string) => void;
     complete.mockImplementation(async (params) => {
@@ -232,3 +255,81 @@ it("streams only to the requesting connection and fences chunks after cancellati
     gate.resolve();
     expect((await operation)[0]).toBe(false);
   }));
+
+it("delivers incognito deltas through the real broadcaster only to the requesting non-admin", () =>
+  withLens(async (f) => {
+    const owner = createBroadcastPeer(f.client.connId!, true);
+    Object.assign(owner.client, f.client);
+    const other = createBroadcastPeer("other", true, f.client.connect);
+    const broadcaster = broadcastFor([owner, other], {
+      canReceiveSessionEvent: createProjectedSessionEventPredicate(
+        f.cfg,
+        expectDefined(getSessionRowProjection(f.context), "projection"),
+      ),
+    });
+    f.context.broadcastToConnIds = broadcaster.broadcastToConnIds;
+    const baseline = await f.request();
+    expect(baseline[0], JSON.stringify(baseline)).toBe(true);
+    complete.mockImplementation(async ({ onText }) => {
+      onText("Private first words");
+      return { text: "Private final words", provider: "fixture", model: "utility" };
+    });
+    expect(
+      (
+        await f.request({
+          wording: "plain",
+          sourceRevision: (baseline[1] as { sourceRevision: string }).sourceRevision,
+        })
+      )[0],
+    ).toBe(true);
+    expect(owner.frames).toEqual([
+      expect.objectContaining({
+        event: "chat.answer.delta",
+        payload: expect.objectContaining({ text: "Private first words" }),
+      }),
+    ]);
+    expect(other.frames).toEqual([]);
+  }, true));
+
+it.each(["dispatch", "chunk"])(
+  "fences incognito %s after source closure while connection remains active",
+  (effect) =>
+    withLens(async (f) => {
+      const baseline = await f.request();
+      expect(baseline[0], JSON.stringify(baseline)).toBe(true);
+      const broadcast = vi.spyOn(f.context, "broadcastToConnIds");
+      let rejected = false;
+      complete.mockImplementation(async ({ assertCurrent, onText }) => {
+        const owner = expectDefined(memorySessionActorOwners.list()[0], "memory owner");
+        owner.closeSession(f.scope.sessionKey);
+        try {
+          if (effect === "dispatch") {
+            assertCurrent();
+          } else {
+            onText("Must not escape");
+          }
+        } catch {
+          rejected = true;
+        }
+        return { text: "Must not escape", provider: "fixture", model: "utility" };
+      });
+      expect(
+        (
+          await f.request({
+            wording: "plain",
+            sourceRevision: (baseline[1] as { sourceRevision: string }).sourceRevision,
+          })
+        )[0],
+      ).toBe(false);
+      expect(rejected).toBe(true);
+      expect(broadcast).not.toHaveBeenCalled();
+    }, true),
+);
+
+it("keeps identified non-admin incognito reads forbidden before model dispatch", () =>
+  withLens(async (f) => {
+    const identified = roleClient("write", "private-viewer");
+    identified.connId = "identified-connection";
+    expect((await f.request({}, identified))[0]).toBe(false);
+    expect(complete).not.toHaveBeenCalled();
+  }, true));

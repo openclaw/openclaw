@@ -1,5 +1,5 @@
-import "../../../styles/chat/answer-lens.css";
 import { For, Show } from "solid-js";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { createAnswerLensProjection } from "../../../lib/reactive/answer-lens.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -36,7 +36,7 @@ export function AnswerLensControls(props: Props) {
             return (
               <button
                 type="button"
-                class="answer-lens__point"
+                class="oc-menu-item answer-lens__point"
                 aria-label={t(`chat.messages.answerLens.${props.axis}.${value}`)}
                 title={t(`chat.messages.answerLens.${props.axis}.${value}`)}
                 aria-pressed={
@@ -58,24 +58,26 @@ export function AnswerLensControls(props: Props) {
                   props.onSelect();
                 }}
               >
-                <Show when={value === "full" || value === "technical"}>
-                  <span>{t(`chat.messages.answerLens.${props.axis}.${value}`)}</span>
-                </Show>
-                <span class="answer-lens__dot" aria-hidden="true" />
-                <Show when={value === "gist" || value === "plain"}>
-                  <span>{t(`chat.messages.answerLens.${props.axis}.${value}`)}</span>
-                </Show>
+                <span class="oc-menu-item__label">
+                  {t(`chat.messages.answerLens.${props.axis}.${value}`)}
+                </span>
+                <span class="oc-menu-item__check" aria-hidden="true">
+                  <Show when={(entry()?.target ?? ORIGINAL_LENS)[props.axis] === value}>
+                    <Icon name="check" />
+                  </Show>
+                </span>
               </button>
             );
           }}
         </For>
       </div>
       <Show when={entry()?.error}>
-        <p class="answer-lens__error" role="alert">
+        <p class="muted" role="alert">
           {entry()?.error}
         </p>
         <button
           type="button"
+          class="btn btn--sm"
           onClick={() => void props.owner.select(props.source, entry()?.target ?? ORIGINAL_LENS)}
         >
           {t("common.retry")}

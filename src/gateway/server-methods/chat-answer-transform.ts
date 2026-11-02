@@ -5,7 +5,7 @@ import {
   validateChatAnswerTransformParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { captureSessionActorTranscriptRead } from "../../config/sessions/session-actor-transcript-read.js";
 import { answerLensRevision, readAnswerLensSource } from "../answer-lens.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
@@ -127,19 +127,28 @@ export const chatAnswerTransformHandlers: GatewayRequestHandlers = {
       }
       const { selectedSession, entry, queries, readCurrentSharing, rowProjection } = selection;
       const { cfg, agentId, storePath, canonicalKey } = selectedSession;
-      // Recheck resident sharing facts before each awaited runtime boundary can dispatch.
-      // Private actor reads retain their own lifecycle and connection authority.
-      if (!isIncognitoSessionKey(canonicalKey)) {
-        assertSourceCurrent = () => {
-          if (!readCurrentSharing(rowProjection)) {
-            throw new Error("Answer Lens access changed.");
-          }
-        };
-      }
       if (!entry?.sessionId) {
         fail("The source answer is unavailable.");
         return;
       }
+      const memory = captureSessionActorTranscriptRead(
+        {
+          agentId,
+          sessionId: entry.sessionId,
+          sessionKey: canonicalKey,
+          storePath,
+          sessionEntry: entry,
+        },
+        signal,
+      );
+      // Private actor authority must outlive the read and fence every provider/socket effect.
+      assertSourceCurrent = memory
+        ? memory.assertCurrent
+        : () => {
+            if (!readCurrentSharing(rowProjection)) {
+              throw new Error("Answer Lens access changed.");
+            }
+          };
       const withCurrent = <T>(consume: () => T) =>
         withReadySessionRows(rowProjection, queries, (read) => {
           assertCurrent();

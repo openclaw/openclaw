@@ -1,6 +1,10 @@
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
 import { AnswerLens, ORIGINAL_LENS, type AnswerLensResult } from "./answer-lens.ts";
 
 const source = {
@@ -17,9 +21,9 @@ const result = (text: string): AnswerLensResult => ({
   durationMs: 150,
 });
 function setup() {
-  const request = vi.fn<GatewayBrowserClient["request"]>();
+  const request = createGatewayRequestMock();
   const owner = new AnswerLens();
-  const client = { request };
+  const client = createTestGatewayClient(request);
   owner.configure({ client, epoch: 1, sessionKey: "agent:test:lens", agentId: "test" });
   return { owner, request, client };
 }
@@ -145,7 +149,7 @@ it("shows request-scoped partial text without caching it and rolls it back on fa
   const detach = vi.fn();
   owner.configure({
     client: {
-      request,
+      request: createTestGatewayClient(request).request,
       addEventListener: (listener) => {
         receive = listener;
         return detach;

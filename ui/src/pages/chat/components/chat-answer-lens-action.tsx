@@ -14,10 +14,6 @@ type Props = { owner: AnswerLens; source: AnswerLensSource };
 export function AnswerLensControl(props: Props) {
   const id = createUniqueId();
   const [open, setOpen] = createSignal<"coverage" | "wording" | undefined>(undefined);
-  const entry = createAnswerLensProjection(
-    () => props.owner,
-    () => props.source,
-  );
   return (
     <For each={["coverage", "wording"] as const}>
       {(axis) => (
@@ -26,11 +22,7 @@ export function AnswerLensControl(props: Props) {
           label={t(`chat.messages.answerLens.${axis}Label`)}
           trigger={<Icon name={axis === "coverage" ? "listFilter" : "bookOpenText"} />}
           triggerTitle={t(`chat.messages.answerLens.${axis}Label`)}
-          triggerClass={[
-            "chat-reply-btn",
-            "answer-lens-trigger",
-            { "is-active": (entry()?.target ?? ORIGINAL_LENS)[axis] !== ORIGINAL_LENS[axis] },
-          ]}
+          triggerClass="chat-reply-btn answer-lens-trigger"
           placement="top-end"
           class="answer-lens"
           open={open() === axis}
@@ -60,16 +52,19 @@ export function AnswerLensStatus(props: Props) {
   );
   return (
     <Show when={entry()?.displayed || entry()?.pending || entry()?.error}>
-      <div class="answer-lens-status" aria-live="polite">
-        <Icon name="search" />
+      <div class="answer-lens-status chip" aria-live="polite">
         <span>
           {entry()?.pending
             ? t("chat.messages.answerLens.adjusting")
             : entry()?.error
               ? t("chat.messages.answerLens.failed")
               : `${t(`chat.messages.answerLens.wording.${entry()!.displayed!.wording}`)} · ${t(`chat.messages.answerLens.coverage.${entry()!.displayed!.coverage}`)}`}
-        </span>
-        <button type="button" onClick={() => void props.owner.select(props.source, ORIGINAL_LENS)}>
+        </span>{" "}
+        <button
+          class="btn btn--xs"
+          type="button"
+          onClick={() => void props.owner.select(props.source, ORIGINAL_LENS)}
+        >
           {t("chat.messages.answerLens.reset")}
         </button>
       </div>

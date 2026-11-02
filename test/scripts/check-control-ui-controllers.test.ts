@@ -97,6 +97,23 @@ describe("Control UI controller guard", () => {
     expect(errors.mock.calls.flat().join("\n")).toContain(`${file}:1`);
   });
 
+  it("distinguishes one-callback subscriptions from native event bindings", () => {
+    const root = fixture();
+    const file = "ui/src/view.tsx";
+    write(root, file, "const dispose = client.addEventListener?.(event => consume(event));");
+    expect(main(root, [])).toBe(0);
+    for (const source of [
+      'element.addEventListener("click", handler);',
+      'element["addEventListener"]?.("click", handler);',
+      "element.addEventListener(...args);",
+    ]) {
+      errors.mockClear();
+      write(root, file, source);
+      expect(main(root, [])).toBe(1);
+      expect(errors.mock.calls.flat().join("\n")).toContain(`${file}:1`);
+    }
+  });
+
   it("ratchets plugin helpers separately from host and other plugin allowances, including staged source", () => {
     const root = fixture();
     const file = "extensions/nostr/browser/lifetime.ts";

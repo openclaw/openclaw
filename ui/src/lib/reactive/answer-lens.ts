@@ -1,8 +1,9 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createMemo } from "solid-js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AnswerLens, AnswerLensSource } from "../../pages/chat/answer-lens.ts";
 import { persistedMessageEntryId } from "../../pages/chat/chat-thread-items.ts";
-import type { ChatThreadProps } from "../../pages/chat/components/chat-thread-interactions.ts";
+import { createTranscriptMemo } from "../../pages/chat/components/chat-transcript-memo.ts";
 import { projectSource } from "./projection.ts";
 
 export function createAnswerLensProjection(
@@ -36,15 +37,31 @@ export function createAnswerLensProjection(
   return () => projection()?.read();
 }
 
-export function configureTranscriptAnswerLens(owner: AnswerLens, props: ChatThreadProps) {
+const latestAnswerIds = createTranscriptMemo<string | null>();
+
+export function configureTranscriptAnswerLens(
+  owner: AnswerLens,
+  props: {
+    connected?: boolean;
+    gatewayClient?: GatewayBrowserClient | null;
+    connectionEpoch?: number;
+    mediaPolicyEpoch?: number;
+    sessionKey: string;
+    messages: readonly unknown[];
+    currentAgentId?: string;
+    fullMessageAgentId?: string;
+  },
+) {
   owner.configure({
     client: props.connected ? (props.gatewayClient ?? null) : null,
     epoch: props.connectionEpoch,
     // The pane advances this on config changes and sharing revocation.
     policyEpoch: props.mediaPolicyEpoch,
     sessionKey: props.sessionKey,
-    latestMessageId: persistedMessageEntryId(
-      props.messages.findLast((message) => asOptionalRecord(message)?.role === "assistant"),
+    latestMessageId: latestAnswerIds(props.messages, [], () =>
+      persistedMessageEntryId(
+        props.messages.findLast((message) => asOptionalRecord(message)?.role === "assistant"),
+      ),
     ),
     agentId: props.currentAgentId ?? props.fullMessageAgentId,
   });

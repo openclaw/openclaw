@@ -4,14 +4,11 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import {
+  type AnswerLensSettings,
   readAnswerLensPreference,
   rememberAnswerLensPreference,
 } from "./answer-lens-preference.ts";
 
-export type AnswerLensSettings = {
-  coverage: "gist" | "condensed" | "full";
-  wording: "plain" | "clearer" | "technical" | "original";
-};
 export type AnswerLensSource = { messageId: string; text: string };
 export type AnswerLensResult = AnswerLensSettings & {
   text: string;

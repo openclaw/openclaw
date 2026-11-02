@@ -1,6 +1,9 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import type { AnswerLensSettings } from "./answer-lens.ts";
+export type AnswerLensSettings = {
+  coverage: "gist" | "condensed" | "full";
+  wording: "plain" | "clearer" | "technical" | "original";
+};
 
 const key = "openclaw.control.answerLens.v1";
 let volatileChoice: AnswerLensSettings | undefined;

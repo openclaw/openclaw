@@ -1,6 +1,9 @@
 /* @vitest-environment jsdom */
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { AnswerLens, ORIGINAL_LENS } from "../answer-lens.ts";
 import { createChatMessageHarness } from "./chat-message-render.test-support.tsx";
@@ -16,9 +19,13 @@ describe("Answer Lens native message integration", () => {
     async (bubbleMode) => {
       const writeText = vi.fn().mockResolvedValue(undefined);
       vi.stubGlobal("navigator", { clipboard: { writeText } } as unknown as Navigator);
-      const request = vi.fn<GatewayBrowserClient["request"]>();
+      const request = createGatewayRequestMock();
       const owner = new AnswerLens();
-      owner.configure({ client: { request }, sessionKey: "agent:test:lens", epoch: 1 });
+      owner.configure({
+        client: createTestGatewayClient(request),
+        sessionKey: "agent:test:lens",
+        epoch: 1,
+      });
       const message = createAssistantMessage(original, {
         __openclaw: { id: "lens-source", seq: 1 },
       });

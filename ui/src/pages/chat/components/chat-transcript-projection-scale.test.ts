@@ -3,9 +3,11 @@
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { configureTranscriptAnswerLens } from "../../../lib/reactive/answer-lens.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { AnswerLens } from "../answer-lens.ts";
 import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import { createInitialChatRealtimeState } from "../chat-realtime.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
@@ -307,6 +309,29 @@ describe("transcript projection", () => {
     flush();
     expect(projectRows).toHaveBeenCalledOnce();
     expect(voice()).toBeNull();
+  });
+
+  it("refreshes the remembered-lens target when retained history is replaced", () => {
+    const owner = new AnswerLens();
+    const configure = vi.spyOn(owner, "configure");
+    const first = msg("assistant", "First answer", 1, { __openclaw: { id: "first" } });
+    const trailing = msg("user", "Follow-up", 2);
+    const props = threadProps("lens-history", "agent:main:lens", [first, trailing]);
+    configureTranscriptAnswerLens(owner, props);
+    expect(configure).toHaveBeenLastCalledWith(
+      expect.objectContaining({ latestMessageId: "first" }),
+    );
+    props.messages = [
+      ...props.messages,
+      msg("assistant", "Second answer", 3, { __openclaw: { id: "second" } }),
+    ];
+    configureTranscriptAnswerLens(owner, props);
+    expect(configure).toHaveBeenLastCalledWith(
+      expect.objectContaining({ latestMessageId: "second" }),
+    );
+    props.messages = [trailing];
+    configureTranscriptAnswerLens(owner, props);
+    expect(configure).toHaveBeenLastCalledWith(expect.objectContaining({ latestMessageId: null }));
   });
 
   it.each(["answer", "reasoning"] as const)(

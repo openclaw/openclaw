@@ -417,6 +417,14 @@ function solidPatterns(root: string, sources: ReadonlyMap<string, string>) {
           if (entry === "onCleanup") {
             return imported === entry && isViewModule(file) && !inComputation(node, importedName);
           }
+          if (entry === "addEventListener") {
+            // EventTarget needs an event type and listener; one-callback subscriptions
+            // (for example GatewayBrowserClient) are not native event bindings.
+            return (
+              name === entry &&
+              (node.arguments.length >= 2 || node.arguments.some(ts.isSpreadElement))
+            );
+          }
           return IMPORTED_PATTERNS.some((importedPattern) => importedPattern === entry)
             ? entry === imported
             : entry === name || (entry === "querySelector" && name === "querySelectorAll");
@@ -433,7 +441,7 @@ function solidPatterns(root: string, sources: ReadonlyMap<string, string>) {
         }
         if (
           (name === "createRenderEffect" && !file.startsWith("ui/src/lib/reactive/")) ||
-          (name === "addEventListener" && file.endsWith(".tsx")) ||
+          (pattern === "addEventListener" && file.endsWith(".tsx")) ||
           (pattern === "querySelector" && !DOM_ISLANDS.has(file))
         ) {
           forbid(node, `${name} is not allowed here`);

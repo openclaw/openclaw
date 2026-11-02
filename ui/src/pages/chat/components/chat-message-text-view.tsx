@@ -131,11 +131,7 @@ export function MessageMarkdown(props: MessageMarkdownProps) {
             content={presentation()}
             media={props.media}
             direction={detectTextDirection(props.media?.text ?? presentation().source)}
-            class={
-              lens()?.pending
-                ? "chat-text answer-lens-text answer-lens-text--pending"
-                : "chat-text answer-lens-text"
-            }
+            class="chat-text"
             elementRef={elementRef}
             fetchLinkFavicon={props.options.fetchLinkFavicon}
           />
