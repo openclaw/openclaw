@@ -338,7 +338,6 @@ describe("session branch diff stats", () => {
       await initializeFeatureWork();
       await connectGithub();
       await git("tag", "feature");
-      await git("tag", "origin/main");
       await git("remote", "add", "fork", `https://github.com/${forkOwner}/openclaw.git`);
       vi.stubGlobal(
         "fetch",
@@ -385,6 +384,7 @@ describe("session branch diff stats", () => {
         await expect(git("config", "--get", key)).rejects.toThrow();
       }
 
+      await git("tag", "origin/main");
       expect(await forkContext()).toMatchObject({
         owner: "openclaw",
         repo: "openclaw",
