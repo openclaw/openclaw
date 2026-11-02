@@ -56,14 +56,30 @@ const coreTests = (directories = ["src", "test", "packages"]) =>
       (file) => !file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX) && !file.startsWith("test/helpers/"),
     );
 
-function findExtensionImports(source: SourceFile): string[] {
+type ExtensionImportReference = { kind: string; specifier: string };
+
+function findExtensionImports(source: SourceFile): ExtensionImportReference[] {
   return (
     collectModuleReferencesFromSource(source, {
       acceptSpecifier: (specifier) => /^(?:\.\.\/)+extensions\//u.test(specifier),
     })
       // This guard owns import specifiers, not URL construction for fixture roots or manifests.
       .filter(({ kind }) => kind !== "import-meta-url")
-      .map(({ specifier }) => specifier)
+      .map(({ kind, specifier }) => ({ kind, specifier }))
+  );
+}
+
+// Timed integration suites warm a plugin's lazy runtime module before the clock starts.
+// The owner resolves that module by path at runtime, so a dynamic import couples the
+// suite to a published runtime artifact rather than to extension implementation detail;
+// a static import still would, and stays rejected.
+const EXTENSION_RUNTIME_WARMUP_SPECIFIER_RE =
+  /^(?:\.\.\/)+extensions\/[^/]+\/[a-z0-9-]+\.runtime\.js$/u;
+
+function isExtensionRuntimeWarmup(reference: ExtensionImportReference): boolean {
+  return (
+    reference.kind === "dynamic-import" &&
+    EXTENSION_RUNTIME_WARMUP_SPECIFIER_RE.test(reference.specifier)
   );
 }
 
@@ -164,6 +180,22 @@ describe("non-extension test boundaries", () => {
     ).toEqual([]);
   });
 
+  it("only lets dynamic imports warm a plugin runtime module", () => {
+    const warmup = (statement: string) =>
+      findExtensionImports(parser.parseSourceFile("source.ts", statement))
+        .filter(isExtensionRuntimeWarmup)
+        .map(({ specifier }) => specifier);
+
+    expect(
+      warmup('async function warm() { await import("../extensions/x/a.runtime.js"); }'),
+    ).toEqual(["../extensions/x/a.runtime.js"]);
+    expect(warmup('import "../extensions/x/a.runtime.js";')).toEqual([]);
+    expect(warmup('async function warm() { await import("../extensions/x/models.js"); }')).toEqual(
+      [],
+    );
+    expect(warmup('async function warm() { await import("../src/a.runtime.js"); }')).toEqual([]);
+  });
+
   it("lists boundary scan files from git without walking repo roots", () => {
     expectNoReaddirSyncDuring(() => {
       const srcTests = walk(path.join(repoRoot, "src"));
@@ -189,9 +221,10 @@ describe("non-extension test boundaries", () => {
       }));
       for (const source of parser.parseSourceFiles(sources)) {
         const file = toRepoRelativePath(repoRoot, source.fileName);
-        const imports = findExtensionImports(source).filter(
-          (specifier) => !isAllowedExtensionPublicImport(specifier),
-        );
+        const imports = findExtensionImports(source)
+          .filter((reference) => !isExtensionRuntimeWarmup(reference))
+          .map((reference) => reference.specifier)
+          .filter((specifier) => !isAllowedExtensionPublicImport(specifier));
         if (imports.length === 0 || isAllowedCoreContractSuite(file, imports)) {
           continue;
         }
