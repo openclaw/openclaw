@@ -304,7 +304,13 @@ async function createBackupArchiveInScope(
   const onlyConfig = Boolean(opts.onlyConfig);
   const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
   const plan =
-    preparedPlan ?? (await resolveBackupPlanFromDisk({ includeWorkspace, onlyConfig, nowMs }));
+    preparedPlan ??
+    (await resolveBackupPlanFromDisk({
+      includeWorkspace,
+      localCompanion: opts.localCompanion,
+      onlyConfig,
+      nowMs,
+    }));
   const selection = plan.databaseSelection;
   if (!preparedPlan && opts.localCompanion) {
     if (

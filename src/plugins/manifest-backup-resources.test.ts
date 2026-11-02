@@ -89,6 +89,8 @@ describe("plugin manifest backup resources", () => {
     ["non-array declarations", {}],
     ["unknown disposition", [resource({ disposition: "exclude" })]],
     ["unknown scope", [resource({ scope: "workspace" })]],
+    ["unknown backup profile", [resource({ disposition: "regenerable", profile: "unknown" })]],
+    ["profile-limited durable data", [resource({ profile: "local-companion" })]],
     ["owner-controlled extra keys", [resource({ pluginId: "spoofed" })]],
     ["missing keys", [{ disposition: "include", relativePath: "owner" }]],
     ["unsupported database family", [resource({ databaseFamily: "unknown" })]],
@@ -155,6 +157,17 @@ describe("plugin manifest backup resources", () => {
       }
     },
   );
+
+  it("retains distinct full and companion-only declarations without activating runtime", () => {
+    const full = resource({ disposition: "regenerable" });
+    const companion = { ...full, profile: "local-companion" };
+    const fixture = createPluginFixture([full, companion]);
+    expect(fixture.inventory({ entries: { [fixture.id]: { enabled: true } } }).resources).toEqual([
+      { pluginId: fixture.id, ...full },
+      { pluginId: fixture.id, ...companion },
+    ]);
+    expect(fixture.inventory({ enabled: false }).resources).toEqual([]);
+  });
 
   it("retains only database resources when plugins are disabled", () => {
     const database = resource({ databaseFamily: "state" });

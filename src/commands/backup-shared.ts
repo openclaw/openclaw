@@ -188,6 +188,7 @@ async function resolveBackupPlanFromPaths(params: {
   agentRoots?: readonly BackupAgentRoot[];
   pluginInventory?: ActivatedPluginBackupInventory;
   configCapture?: BackupConfigCapture;
+  localCompanion?: boolean;
   includeWorkspace?: boolean;
   onlyConfig?: boolean;
   skillDiscoveryLimits?: ResolvedSkillDiscoveryLimits;
@@ -240,6 +241,7 @@ async function resolveBackupPlanFromPaths(params: {
     agentRoots,
     pluginResources: params.pluginInventory?.resources ?? [],
     pluginRoots: params.pluginInventory?.pluginRoots ?? [],
+    localCompanion: params.localCompanion,
     onlyConfig,
   });
 
@@ -553,6 +555,7 @@ export async function resolveBackupAgentRoots(config: OpenClawConfig): Promise<B
 export async function resolveBackupPlanFromDisk(
   params: {
     includeWorkspace?: boolean;
+    localCompanion?: boolean;
     onlyConfig?: boolean;
     nowMs?: number;
   } = {},
@@ -581,6 +584,7 @@ export async function resolveBackupPlanFromDisk(
 
 async function resolveBackupPlanFromState(params: {
   includeWorkspace?: boolean;
+  localCompanion?: boolean;
   onlyConfig?: boolean;
   nowMs?: number;
 }) {
@@ -654,6 +658,7 @@ async function resolveBackupPlanFromState(params: {
     agentRoots,
     pluginInventory,
     configCapture,
+    localCompanion: params.localCompanion,
     includeWorkspace,
     onlyConfig,
     skillDiscoveryLimits: resolveSkillDiscoveryLimits(discoverySnapshot.config),

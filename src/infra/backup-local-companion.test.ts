@@ -7,6 +7,7 @@ import { createBackupResourcePlan } from "../commands/backup-resource-inventory.
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { verifyBackupArchive } from "../commands/backup-verify.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
+import { loadPluginManifest } from "../plugins/manifest.js";
 import { buildBackupArchivePath } from "./backup-archive-path-policy.js";
 import { createBackupArchive } from "./backup-create.js";
 import { withIsolatedBackupState } from "./backup-create.test-support.js";
@@ -59,15 +60,49 @@ it("captures companion anchors and fixed-local credentials without exporting Pos
     mocks.exportPostgres.mockImplementation(() => {
       throw new Error("Companion capture must not export database rows");
     });
-    const resources = await createBackupResourcePlan({
+    const codexHome = path.join(path.dirname(agent), "codex-home");
+    await fs.mkdir(path.join(codexHome, "sessions"), { recursive: true });
+    const diagnostics = [
+      "logs_2.sqlite",
+      "logs_2.sqlite-wal",
+      "logs_2.sqlite-shm",
+      "logs_2.sqlite-journal",
+    ];
+    const durable = [
+      "state_5.sqlite",
+      "auth.json",
+      "sessions/rollout.jsonl",
+      "logs_2.sqlite.backup",
+    ];
+    for (const relative of [...diagnostics, ...durable]) {
+      await fs.writeFile(path.join(codexHome, relative), `synthetic ${relative}`);
+    }
+    const unrelatedLog = state.statePath("logs_2.sqlite");
+    await fs.writeFile(unrelatedLog, "unrelated user database");
+    const codex = loadPluginManifest(path.resolve("extensions/codex"));
+    expect(codex.ok).toBe(true);
+    if (!codex.ok) {
+      throw new Error(codex.error);
+    }
+    const resourceInput = {
       stateDir: state.stateDir,
       configPaths: [],
       oauthDirs: [],
       workspaceDirs: [],
       excludedWorkspaceDirs: [],
-      agentRoots: [],
-      pluginResources: [],
+      agentRoots: [{ agentId: "retained", sourcePath: path.dirname(agent), databasePath: agent }],
+      pluginResources: (codex.manifest.backupResources ?? []).map((resource) =>
+        Object.assign({}, resource, { pluginId: "codex" }),
+      ),
       pluginRoots: [],
+    };
+    const fullResources = await createBackupResourcePlan(resourceInput);
+    for (const relative of diagnostics) {
+      expect(fullResources.isIncluded(path.join(codexHome, relative))).toBe(true);
+    }
+    const resources = await createBackupResourcePlan({
+      ...resourceInput,
+      localCompanion: true,
     });
     const nowMs = Date.parse("2026-10-16T00:00:00Z");
     const { buildBackupArchiveRoot } = await import("../commands/backup-shared.js");
@@ -119,6 +154,27 @@ it("captures companion anchors and fixed-local credentials without exporting Pos
     );
     expect(manifest.postgresAnchors).toHaveLength(2);
     expect(mocks.exportPostgres).not.toHaveBeenCalled();
+    for (const relative of diagnostics) {
+      const source = path.join(codexHome, relative);
+      await expect(
+        fs.stat(path.join(target, buildBackupArchivePath(archiveRoot, source))),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(source, "utf8")).toBe(`synthetic ${relative}`);
+    }
+    for (const relative of durable) {
+      expect(
+        await fs.readFile(
+          path.join(target, buildBackupArchivePath(archiveRoot, path.join(codexHome, relative))),
+          "utf8",
+        ),
+      ).toBe(`synthetic ${relative}`);
+    }
+    expect(
+      await fs.readFile(
+        path.join(target, buildBackupArchivePath(archiveRoot, unrelatedLog)),
+        "utf8",
+      ),
+    ).toBe("unrelated user database");
     const entries: string[] = [];
     await tar.t({
       file: result.archivePath,
