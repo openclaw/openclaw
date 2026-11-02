@@ -13,7 +13,8 @@ let unmarked: HTMLElement | undefined;
  * not depending on what was clicked before it. Text fields keep their native indication.
  */
 export function focusProgrammatically(element: HTMLElement, options?: FocusOptions): void {
-  if (element.matches(TEXT_ENTRY)) {
+  // Input in another document never reaches this window; preserve its native focus indication.
+  if (element.ownerDocument !== document || element.matches(TEXT_ENTRY)) {
     element.focus(options);
     return;
   }

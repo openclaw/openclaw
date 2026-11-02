@@ -41,6 +41,7 @@ const { values } = parseArgs({
     "capture-ms": { type: "string", default: "8000" },
     "transcript-late-paint": { type: "boolean", default: false },
     "dashboard-end-anchor": { type: "boolean", default: false },
+    "dashboard-pane-chrome": { type: "boolean", default: false },
     "plugin-activation": { type: "boolean", default: false },
     "details-session-facts": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
@@ -748,6 +749,7 @@ try {
     sessions,
     transcriptLatePaint: values["transcript-late-paint"],
     dashboardEndAnchor: values["dashboard-end-anchor"],
+    dashboardPaneChrome: values["dashboard-pane-chrome"],
     pluginActivation: values["plugin-activation"],
     detailsSessionFacts: values["details-session-facts"],
     ...(admission
