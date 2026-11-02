@@ -420,10 +420,7 @@ it.each([false, true])(
       indeterminate: [],
     });
     // Substitute only storage transport; run the real heartbeat queries against retained rows.
-    vi.spyOn(
-      stateReadOnly,
-      "withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync",
-    ).mockImplementation(async (operation) => {
+    const readStore: typeof stateReadOnly.withExistingOpenClawStateDatabaseReadOnly = (operation) => {
       const selectedPath = getDatabaseEngineInput("state") ? storePath : anchorPath;
       const db = new DatabaseSync(selectedPath, { readOnly: true });
       try {
@@ -431,7 +428,13 @@ it.each([false, true])(
       } finally {
         db.close();
       }
-    });
+    };
+    // Cron path selection still reads its machine-state key through the native reader.
+    vi.spyOn(stateReadOnly, "withExistingOpenClawStateDatabaseReadOnly").mockImplementation(readStore);
+    vi.spyOn(
+      stateReadOnly,
+      "withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync",
+    ).mockImplementation(async (operation) => readStore(operation));
     const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     const before = f.snapshot();
 
