@@ -10,6 +10,7 @@ import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { createFileMutationClock } from "./file-mutation-clock.test-support.js";
 import * as fsSafe from "./fs-safe.js";
 import { hasNodeErrorCode } from "./path-guards.js";
+import { captureUpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import {
   copyUpdateCandidatePluginTrees,
   prepareUpdateCandidatePluginTrees,
@@ -209,6 +210,31 @@ it.each(["file", "symlink"] as const)(
     } else {
       expect(await fs.readlink(target)).toBe(f.file);
     }
+  },
+);
+
+it.each(["ENOENT", "ENOTDIR", "ELOOP"] as const)(
+  "records a plugin code link whose target resolves with %s as unresolvable",
+  async (code) => {
+    const root = await fs.realpath(dirs.make("unresolved-code-link-"));
+    const link = path.join(root, "plugin-code-link");
+    if (code === "ENOENT") {
+      await fs.symlink("missing-target", link);
+    } else if (code === "ENOTDIR") {
+      await fs.writeFile(path.join(root, "blocker"), "not a directory");
+      await fs.symlink(path.join("blocker", "nested"), link);
+    } else {
+      await fs.symlink("loop-b", path.join(root, "loop-a"));
+      await fs.symlink("loop-a", path.join(root, "loop-b"));
+      await fs.symlink("loop-a", link);
+    }
+    await expect(fs.realpath(link)).rejects.toMatchObject({ code });
+    const captured = captureUpdateCandidatePluginCodeLink(
+      link,
+      fsSync.lstatSync(link, { bigint: true }),
+      await fs.readlink(link),
+    );
+    expect(captured.target).toBeNull();
   },
 );
 
