@@ -227,8 +227,11 @@ Register each capability inside `register(api)` alongside your existing
     Set `bridge.pacesInputAudio: true` when the provider buffers incoming PCM
     at its sample rate and supplies silence between microphone writes. This
     prevents transports such as Discord from appending an extra silence burst
-    at each capture boundary. GPT-Live Gateway WebRTC and WebSocket bridges
-    share that input clock; closing the bridge stops it.
+    at each capture boundary. GPT-Live Gateway WebRTC and WebSocket PCM bridges
+    share that input clock; closing the bridge stops it. Public GPT-Live
+    WebSocket input in mono G.711 mu-law at 8 kHz instead follows the carrier's
+    cadence. It drains retained capture at session readiness and forwards later
+    frames without an additional clock or injected silence.
     When native audio events identify an item, pass that identity alongside
     PCM as `req.onAudio(audio, { itemId })`; omit
     metadata for transports without native item IDs. If supplied,

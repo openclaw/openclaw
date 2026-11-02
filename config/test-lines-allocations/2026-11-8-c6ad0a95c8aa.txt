@@ -1,0 +1,5 @@
+3
+# LOCAL 2026.11.8 row 162; source c6ad0a95c8aa01eade73a956e437e963605657f3.
+# Carrier-paced public GPT-Live G.711 input is forwarded without a second local pacing clock; noncarrier PCM/WebRTC paths retain pacing. Session-start buffering, bounded audio queues, transport failure, and cleanup behavior remain owned by the existing runtime.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.

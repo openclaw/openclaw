@@ -44,7 +44,7 @@ it.each(["direct", "webrtc"] as const)(
       if (!captured) {
         throw new Error("Missing converted microphone audio");
       }
-      expect(captured.length).toBeGreaterThan(800);
+      expect(captured.length).toBeGreaterThanOrEqual(transport === "direct" ? 960 : 801);
       expect(captured.length).toBeLessThanOrEqual(960);
       let loudSamples = 0;
       for (let offset = 0; offset < captured.length; offset += 2) {
