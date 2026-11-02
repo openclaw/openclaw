@@ -92,7 +92,7 @@ export function isCodexRemoteRuntimeVersionUpgrade(previous?: string, current?: 
       value.connectionClass !== "remote" ||
       typeof value.endpoint !== "string"
     ) {
-      return;
+      return undefined;
     }
     const endpoint: unknown = JSON.parse(value.endpoint);
     if (
@@ -103,7 +103,7 @@ export function isCodexRemoteRuntimeVersionUpgrade(previous?: string, current?: 
       typeof endpoint.credentialFingerprint !== "string" ||
       !/^sha256:[0-9a-f]{64}$/.test(endpoint.credentialFingerprint)
     ) {
-      return;
+      return undefined;
     }
     const identity = value.runtimeIdentity;
     if (
@@ -112,7 +112,7 @@ export function isCodexRemoteRuntimeVersionUpgrade(previous?: string, current?: 
       !identity.platformFamily ||
       !identity.platformOs
     ) {
-      return;
+      return undefined;
     }
     const version = value.appServerVersion;
     const agent =
@@ -124,11 +124,11 @@ export function isCodexRemoteRuntimeVersionUpgrade(previous?: string, current?: 
       identity.serverVersion !== version ||
       agent[2] !== version
     ) {
-      return;
+      return undefined;
     }
     const parsed = parseSemver(version);
     if (!parsed) {
-      return;
+      return undefined;
     }
     return {
       version: parsed,
