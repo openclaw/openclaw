@@ -1185,16 +1185,16 @@ textarea.settings-input {
 }
 
 /* Who a connection acts as is what the row is read for; the rest of the line explains it. */
-.github-connection__login {
-  color: var(--text-strong);
-}
-
 .github-device-code {
   color: var(--text-strong);
   font-size: var(--control-ui-text-lg);
   font-weight: 700;
   letter-spacing: 0.08em;
   user-select: all;
+}
+
+.github-connection__login {
+  color: var(--text-strong);
 }
 
 .shell--embed-settings {
