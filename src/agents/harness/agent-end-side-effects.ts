@@ -6,6 +6,7 @@ import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/tran
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { consumeRunSkillUsage } from "../../skills/runtime/run-usage.js";
+import { resolveSkillWorkshopConfig } from "../../skills/workshop/config.js";
 import {
   scheduleSkillExperienceReview,
   scheduleDailyWorkshopMaintenance,
@@ -117,6 +118,12 @@ function runCoreAgentEndSideEffects(
   };
   try {
     scheduleDailyWorkshopMaintenance(config, foregroundPromptContext.agentId);
+    // A disabled workshop only cancelled its bookkeeping inside the scheduler, after this
+    // boundary had already captured authority and awaited a live transcript anchor. Skip that
+    // work entirely: with reviews off the anchor is never read.
+    if (resolveSkillWorkshopConfig(config).autonomous.mode === "off") {
+      return;
+    }
     // CLI hook contexts omit toolNames, so isEligibleContext rejects them.
     const source = params.skillExperienceReviewSource;
     if (!source) {

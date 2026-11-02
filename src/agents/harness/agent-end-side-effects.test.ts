@@ -122,6 +122,20 @@ it("schedules an append receipt without rereading it and refuses a revoked write
   });
 });
 
+it("skips transcript anchor preparation when the workshop is off", async () => {
+  const params = sideEffectParams();
+  params.ctx.config = {
+    skills: { workshop: { autonomous: { mode: "off" } } },
+  } as typeof params.ctx.config;
+
+  await runAgentEndSideEffectsAsync(params);
+
+  // With reviews disabled the anchor is never needed: no authority capture, no live read.
+  expect(transcriptAnchor.readActiveTranscriptEntryAnchorAsync).not.toHaveBeenCalled();
+  expect(nativeAnchor.readActiveTranscriptEntryAnchor).not.toHaveBeenCalled();
+  expect(mockExperienceReview).not.toHaveBeenCalled();
+});
+
 it.each(["sdk", "bundled"] as const)(
   "prepares the experience review before %s plugin hooks",
   async (mode) => {
