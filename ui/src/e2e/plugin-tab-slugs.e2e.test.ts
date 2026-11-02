@@ -122,14 +122,14 @@ suite.define(() => {
     },
   );
 
-  it("recovers an unknown slug to chat only after hello", async () => {
+  it("recovers an unknown slug to New Session only after hello", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const { gateway } = await installReports(page, true);
       await page.goto(`${suite.server.baseUrl}unknown-reports`);
       await gateway.waitForRequest("connect");
       expect(new URL(page.url()).pathname).toBe("/unknown-reports");
       await gateway.resolveDeferred("connect");
-      await page.waitForURL((url) => /^\/chat(?:\/|$)/.test(url.pathname));
+      await page.waitForURL((url) => url.pathname === "/new");
       expect(await page.locator("openclaw-plugin-page").count()).toBe(0);
     });
   });

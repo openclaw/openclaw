@@ -394,7 +394,7 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
   await page.setViewportSize({ height: 1000, width: 1280 });
   await page.getByRole("searchbox", { name: "Search settings" }).focus();
   await page.keyboard.press("Escape");
-  await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
+  await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
   expect(await widget.isVisible()).toBe(true);
   await widget.getByRole("button", { name: "Close", exact: true }).press("Escape");
   await overlay.waitFor({ state: "detached" });

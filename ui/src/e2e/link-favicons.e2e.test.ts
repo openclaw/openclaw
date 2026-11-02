@@ -1,5 +1,6 @@
 // Control UI tests cover the authenticated default-on link-favicon flow and explicit opt-out.
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -40,7 +41,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const icon = page.locator(
         'img.markdown-link-favicon[data-link-favicon-host="docs.example.com"]',
       );
@@ -72,7 +73,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.locator('a[href="https://docs.example.com/guide"]').waitFor();
       await page.waitForTimeout(100);
       expect(faviconRequests).toBe(0);

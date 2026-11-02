@@ -67,7 +67,7 @@ suite.define(() =>
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        await waitForControlUiRoute(page, { routeId: "chat" });
+        await waitForControlUiRoute(page, { routeId: "new-session" });
 
         const sidebar = page.locator("openclaw-app-sidebar");
         const main = sidebar.locator('[data-agent-group="main"]');

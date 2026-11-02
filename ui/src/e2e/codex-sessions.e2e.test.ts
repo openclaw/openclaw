@@ -6,6 +6,7 @@ import type {
   SessionCatalogHost,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
@@ -117,7 +118,7 @@ suite.define(() => {
       },
     });
 
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     await gateway.waitForRequest("sessions.catalog.list");
     expect(await page.locator('[data-session-section="catalog:codex"]').count()).toBe(0);
     expect(await page.locator('[data-session-section="catalog:claude"]').count()).toBe(0);
@@ -185,7 +186,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await expandCodingSection(page, true);
       const sessionGroups = page.locator(".sidebar-recent-sessions");
       const workSection = sessionGroups.locator(':scope > [data-session-section="work"]');
@@ -288,7 +289,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await expandCodingSection(page);
       const section = page.locator('[data-session-section="catalog:codex"]');
       await section.waitFor({ state: "visible" });
@@ -429,7 +430,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await expandCodingSection(page);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
@@ -551,7 +552,7 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await expandCodingSection(page);
       await page.getByText("External release check", { exact: true }).click();
       const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
@@ -637,7 +638,7 @@ suite.define(() => {
         },
       },
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     await expandCodingSection(page);
     await page.getByText("Release checklist", { exact: true }).click();
     const catalogPane = page

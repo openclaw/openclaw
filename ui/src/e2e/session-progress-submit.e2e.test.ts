@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { openChatTaskProgress } from "./chat-details.test-support.ts";
 import {
   createChatFlowE2eSuite,
@@ -128,7 +129,7 @@ suite.define(() => {
             revision,
           });
         };
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, scenario.sessionKey));
         const card = page.locator('[data-progress-card-placement="details"]');
         await page.locator(".agent-chat__composer-combobox textarea").waitFor();
         expect(await page.locator(".chat-details:visible").count()).toBe(0);

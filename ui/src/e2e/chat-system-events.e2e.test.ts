@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -58,7 +59,7 @@ suite.define(() => {
         async ({ page }) => {
           const initial = grouped ? history.slice(0, -1) : [history[0]!, events[2]!];
           const gateway = await installMockGateway(page, { historyMessages: initial });
-          await page.goto(suite.server.baseUrl + "chat");
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           const disclosure = page.locator(".chat-system-events");
           const summary = disclosure.locator("summary");
           const warning = page.locator(".chat-thread").getByText(warningText, { exact: true });
@@ -128,7 +129,7 @@ suite.define(() => {
   it("keeps operational history quiet, readable, keyboard accessible and responsive", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       await installMockGateway(page, { historyMessages: history });
-      await page.goto(suite.server.baseUrl + "chat");
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const disclosure = page.locator(".chat-system-events");
       const summary = disclosure.locator("summary");
       await summary.waitFor();

@@ -98,9 +98,7 @@ async function openPublicationChat(
     methodResponses: { ...subscriptionResponses, ...methodResponses },
   });
   await page.goto(
-    scenario.sessionKey
-      ? controlUiSessionUrl(suite.server.baseUrl, scenario.sessionKey)
-      : `${suite.server.baseUrl}chat`,
+    controlUiSessionUrl(suite.server.baseUrl, scenario.sessionKey ?? "agent:main:main"),
   );
   const watchedKey = await waitForWatchedSessionKey(gateway);
   await openChatDetails(page);
@@ -288,7 +286,7 @@ suite.define(() => {
       featureMethods: subscriptionMethods,
       methodResponses: subscriptionResponses,
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const watchedKey = await waitForWatchedSessionKey(gateway);
     await emitPullRequests(gateway, watchedKey, {
       pullRequests: [
@@ -401,7 +399,7 @@ suite.define(() => {
         historyMessages: [{ role: "assistant", content: "The changes are ready to inspect." }],
         methodResponses: subscriptionResponses,
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const watchedKey = await waitForWatchedSessionKey(gateway);
       await openChatDetails(page);
       await expect

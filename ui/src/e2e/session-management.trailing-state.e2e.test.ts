@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import { it, expect } from "vitest";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import * as ui from "./session-management.compact.test-support.ts";
@@ -27,7 +28,7 @@ async function showPullRequests(
     localStorage.setItem("openclaw:sidebar:sessions:show-preview", String(show));
   }, preview);
   await ui.installSessionRows(page, rows, { ...pullRequests, sessionKey: "agent:main:main" });
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
   const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
   await ui.visible(toggle);
   await toggle.click();
@@ -79,7 +80,7 @@ suite.define(() => {
         { sessionKey: "agent:main:main" },
       );
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const actionOnlyRow = page.locator('[data-session-key="agent:main:hover-actions"]');
       await ui.visible(actionOnlyRow, 10_000);
       const actionOnlyText = actionOnlyRow.locator(".sidebar-recent-session__text");
@@ -167,7 +168,7 @@ suite.define(() => {
         { sessionKey: "agent:main:main" },
       );
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const row = page.locator('[data-session-key="agent:main:touch-forked"]');
       await ui.visible(row, 10_000);
       const fork = row.locator(".sidebar-recent-session__name .sidebar-session-fork-indicator");

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -149,7 +150,7 @@ suite.define(() => {
           });
 
           await page.clock.install();
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, main.key));
           const selectFilter = async (label: "Archived" | "All" | "Active") => {
             await page.getByRole("button", { name: /^Filter & sort · /, exact: true }).click();
             await chooseSidebarMenuOption(page, "Status", label);

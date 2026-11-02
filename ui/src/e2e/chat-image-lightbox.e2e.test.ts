@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { openChatPanels } from "../test-helpers/chat-layout-menu.ts";
 import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   exactButton,
@@ -92,7 +93,7 @@ async function installImageGalleries(page: Page) {
       },
     ]),
   });
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
   await gateway.waitForRequest("sessions.messages.subscribe");
 }
 
@@ -140,7 +141,7 @@ suite.define(() => {
       },
     });
 
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     await gateway.waitForRequest("sessions.messages.subscribe");
 
     const transcriptTrigger = page.getByRole("button", { name: "Open image OpenClaw banner" });
@@ -397,7 +398,7 @@ suite.define(() => {
         ),
       ],
     });
-    await page.goto(suite.server.baseUrl + "chat");
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     await gateway.waitForRequest("sessions.messages.subscribe");
     const trigger = exactButton(page, "Open image before.png");
     const lightbox = page.locator("openclaw-image-lightbox");
@@ -481,7 +482,7 @@ suite.define(() => {
         },
       ],
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     await gateway.waitForRequest("sessions.messages.subscribe");
     const lightbox = page.locator("openclaw-image-lightbox");
     const counter = lightbox.locator(".gallery-counter");

@@ -63,7 +63,7 @@ suite.define(() => {
         },
       },
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const pane = page.locator(".chat-pane-cache__pane--active");
     const thread = pane.locator(".chat-thread");
     const textarea = pane.locator(".agent-chat__composer-combobox textarea");
@@ -149,7 +149,7 @@ suite.define(() => {
           ),
         },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       let pane = page.locator(".chat-pane-cache__pane--active");
       let thread = pane.locator(".chat-thread");
       await thread.getByText(/^Retained message 51\./).waitFor();
@@ -298,7 +298,7 @@ suite.define(() => {
             "chat.history": history(older, more, loadedCount),
           },
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const pane = page.locator(".chat-pane-cache__pane--active");
         const thread = pane.locator(".chat-thread");
         await thread.getByText(/^Transcript entry 1800\./).waitFor();

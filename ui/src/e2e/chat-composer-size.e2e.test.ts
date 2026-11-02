@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -18,7 +19,7 @@ suite.define(() => {
         .poll(() => newComposer.evaluate((element) => element.getBoundingClientRect().height))
         .toBe(112);
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.getByText("Ready for a follow-up.", { exact: true }).waitFor();
       const composer = page.locator(".chat-footer .agent-chat__input");
       const editor = composer.locator("textarea");

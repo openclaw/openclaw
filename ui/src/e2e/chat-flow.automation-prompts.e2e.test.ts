@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { chatFixture, timedText, transcript } from "./chat-flow-fixtures.test-support.ts";
 import { captureUiProofEnabled, createChatFlowE2eSuite } from "./chat-flow.test-support.ts";
 
@@ -30,7 +31,7 @@ suite.define(() => {
       },
       { viewport: { width: 390, height: 844 }, colorScheme: "light" },
     );
-    await page.goto(suite.server.baseUrl + "chat");
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const thread = transcript(page);
     await thread.getByText("The pull request is ready for review.", { exact: true }).waitFor();
     if (captureUiProofEnabled) {

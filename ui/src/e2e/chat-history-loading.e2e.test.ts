@@ -125,7 +125,7 @@ suite.define(() => {
         ),
       },
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
     const activity = pane.locator(".chat-tool-row, .chat-activity-group__summary").first();
     await activity.waitFor();
@@ -166,7 +166,7 @@ suite.define(() => {
             ),
           },
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
         await gateway.waitForRequest("chat.history");
         await gateway.rejectDeferred(
@@ -220,7 +220,7 @@ suite.define(() => {
       (await gateway.getRequests("chat.history")).map(
         (request) => (request.params as { cursor?: string } | undefined)?.cursor,
       );
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
     await page.getByText("Conversation message 80", { exact: true }).waitFor();
     await expectHistoryBoundaryState(pane, false);
@@ -307,7 +307,7 @@ suite.define(() => {
             },
           },
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
         await gateway.waitForRequest("sessions.messages.subscribe");
         await gateway.waitForRequest("chat.history");

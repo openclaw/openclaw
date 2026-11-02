@@ -3,6 +3,7 @@ import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
 } from "../../../src/gateway/control-ui-contract.js";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatDetails, openDetailsPullRequests } from "./chat-details.test-support.ts";
 import { newChatPage } from "./chat-flow.test-support.ts";
@@ -32,7 +33,7 @@ suite.define(() => {
             requestAnimationFrame(() => resolve());
           }),
       );
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const key = await waitForWatchedSessionKey(gateway);
     const pullRequest = {
       number: 111532,

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatTaskProgress } from "./chat-details.test-support.ts";
 import {
@@ -32,7 +33,7 @@ suite.define(() => {
       sessionKey: "global",
       sessionScope: "global",
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "global", "chat", "ops"));
     await gateway.waitForRequest("chat.startup");
     const composer = page.locator(".agent-chat__composer-combobox textarea");
     const send = page.getByRole("button", { name: "Send message" });

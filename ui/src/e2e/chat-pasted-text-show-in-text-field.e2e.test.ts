@@ -5,6 +5,7 @@ import {
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.ts";
 import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   seedChatSettings,
@@ -118,7 +119,12 @@ suite.define(() => {
               }
             : {}),
         });
-        await page.goto(`${suite.server.baseUrl}chat${kind === "image" ? "/main/paste-a" : ""}`);
+        await page.goto(
+          controlUiSessionUrl(
+            suite.server.baseUrl,
+            kind === "image" ? rows[0]!.key : "agent:main:main",
+          ),
+        );
         const composers = page.locator(".agent-chat__composer-combobox textarea");
         await expect.poll(() => composers.count()).toBe(kind === "image" ? 2 : 1);
         const composer = composers.last();
@@ -222,7 +228,11 @@ suite.define(() => {
             ? `${pastedText}\n${"Keep this line reachable in the attachment reader.\n".repeat(60)}${endMarker}`
             : pastedText;
         const gateway = await installMockGateway(page);
-        await page.goto(`${suite.server.baseUrl}${route}`);
+        await page.goto(
+          route === "chat"
+            ? controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")
+            : `${suite.server.baseUrl}${route}`,
+        );
         const composer = page.locator(selector);
         await composer.waitFor({ state: "visible" });
         await composer.fill("");
@@ -285,7 +295,7 @@ suite.define(() => {
     const options = { ...contextOptions, viewport: { width, height: 900 } };
     await suite.withPage(options, async ({ page }) => {
       const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible" });
       await composer.fill("Keep this draft");
@@ -366,7 +376,7 @@ suite.define(() => {
 
   it("opens, copies, and restores exact pasted text under the Gateway CSP", async () => {
     await suite.withPage(contextOptions, async ({ page }) => {
-      const chatUrl = `${suite.server.baseUrl}chat`;
+      const chatUrl = controlUiSessionUrl(suite.server.baseUrl, "agent:main:main");
       let gatewayCsp = "";
       await page.route(chatUrl, async (route) => {
         const response = await route.fetch();
@@ -542,7 +552,7 @@ suite.define(() => {
           ),
         ],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const chips = page.locator(".chat-thread-inner .chat-selection-annotations__chip");
       await expect.poll(() => chips.count()).toBe(3);
       await expect.poll(() => chips.nth(2).textContent()).toContain("Legacy pasted text");
@@ -596,7 +606,7 @@ suite.define(() => {
       await installMockGateway(page, {
         historyMessages: [history([fact(text, fileName, "paste", { sizeBytes: bytes.length })])],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await button(page, "Preserve the original UTF-8 te…").click();
       const preview = page.locator("openclaw-chat-detail-panel:visible");
       await preview

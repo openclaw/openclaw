@@ -8,6 +8,7 @@ import {
 } from "../../../src/gateway/control-ui-contract.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   installMockGateway,
   type ControlUiMockGatewayScenario,
@@ -108,7 +109,7 @@ suite.define(() => {
             "ui/src/pages/chat/components/chat-pull-requests-content.tsx",
           ),
         );
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const details = await openChatDetails(page);
         const key = await waitForWatchedSessionKey(gateway);
         await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
@@ -179,7 +180,7 @@ suite.define(() => {
             },
           },
         });
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await gateway.waitForRequest("connect");
         await gateway.resolveDeferred("connect");
         await gateway.waitForRequest("chat.startup");

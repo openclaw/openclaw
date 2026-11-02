@@ -1,6 +1,7 @@
 import type { Route } from "playwright";
 import { expect, it } from "vitest";
 import type { SessionMembersListEvidenceResult } from "../api/types.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -44,7 +45,9 @@ suite.define(() => {
         ],
       });
       try {
-        await page.goto(`${suite.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"), {
+          waitUntil: "domcontentloaded",
+        });
         const slot = page.locator(".chat-group.user .chat-avatar-slot");
         const portrait = slot.locator("img");
         await portrait.waitFor({ state: "visible" });
@@ -112,7 +115,7 @@ suite.define(() => {
           },
         ],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await expect.poll(() => pending.length).toBeGreaterThan(0);
       const slot = page.locator(".chat-group.user .chat-avatar-slot");
       await expect.poll(() => slot.getAttribute("data-avatar-state")).toBe("pending");
@@ -176,7 +179,7 @@ suite.define(() => {
           },
         ],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const visibleAvatar = page.locator(".chat-group.user .chat-avatar:visible");
       const [offset, leftGap, rightGap, height] = await visibleAvatar.evaluate((node) => {
         const group = node.closest(".chat-group")!;

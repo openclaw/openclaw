@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
@@ -33,7 +34,7 @@ async function openAccount(page: Page, name: string) {
       },
     },
   });
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
   const sidebar = page.locator("openclaw-app-sidebar");
   // The rail account control keeps its full name accessible without widening the rail.
   const account = sidebar.locator(".sidebar-identity-card");

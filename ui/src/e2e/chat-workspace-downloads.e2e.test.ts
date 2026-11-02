@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
 import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -94,7 +95,7 @@ suite.define(() => {
       expect(await download.failure()).toBeNull();
     };
     try {
-      await page.goto(baseUrl + "chat");
+      await page.goto(controlUiSessionUrl(baseUrl, scope.sessionKey));
       const originalUrl = page.url();
       await openChatSidePanelType(page, "Files");
       const rail = page.locator(".workspace-desktop");

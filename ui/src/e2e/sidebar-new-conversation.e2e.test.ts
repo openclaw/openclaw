@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -18,7 +19,7 @@ suite.define(() => {
             sidebarSession("agent:main:design", "Design review", { updatedAt: 1791871000000 }),
           ],
         });
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:current"));
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await composer.waitFor();
         await page

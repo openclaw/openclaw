@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { pathForRoute } from "../app-route-paths.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -76,7 +77,9 @@ function withSettingsPage(
       const pageErrors: string[] = [];
       page.on("pageerror", (error) => pageErrors.push(error.message));
       const gateway = await installSettingsGateway(page);
-      await page.goto(`${suite.server.baseUrl}${pathForRoute(routeId).slice(1)}`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+      await waitForControlUiRoute(page, { routeId: "chat" });
+      await page.evaluate((route) => window.openclawControlUi!.navigate(route), routeId);
       await waitForControlUiRoute(page, { routeId });
       await run(page, gateway);
       expect(pageErrors).toEqual([]);

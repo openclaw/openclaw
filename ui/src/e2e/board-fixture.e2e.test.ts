@@ -468,7 +468,9 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     });
     await runQaGatewayFixture(
       async () => {
-        await page.goto(`${origin}/chat`, { waitUntil: "domcontentloaded" });
+        await page.goto(controlUiSessionUrl(origin + "/", "agent:main:main"), {
+          waitUntil: "domcontentloaded",
+        });
         // The fixture viewer is Riley; this shared checkout belongs to Peter.
         await selectAllSidebarSessions(page);
         await page.getByText("OpenClaw work checkout", { exact: true }).click();
@@ -807,9 +809,12 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
   it(
     "opens a visible catalog session with its transcript in chronological order",
     withFixturePage(async (page) => {
-      await page.goto(new URL("/chat", fixtureServer.url).toString(), {
-        waitUntil: "domcontentloaded",
-      });
+      await page.goto(
+        controlUiSessionUrl(new URL("/", fixtureServer.url).toString(), "agent:main:main"),
+        {
+          waitUntil: "domcontentloaded",
+        },
+      );
       // External catalog sessions have no human owner.
       await selectAllSidebarSessions(page);
       await page.getByText("Release checklist sweep", { exact: true }).click();

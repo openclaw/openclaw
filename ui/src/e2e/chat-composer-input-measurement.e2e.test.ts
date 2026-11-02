@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -23,7 +24,7 @@ suite.define(() => {
           timestamp: 1000 + index,
         })),
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.getByText("Typing performance history 49", { exact: false }).waitFor();
       // Initial roster publication also renders the pane; exclude that background
       // startup work from the subsequent native-keystroke measurements.

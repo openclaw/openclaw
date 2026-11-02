@@ -98,7 +98,7 @@ suite.define(() => {
                 }),
               ],
       });
-      await page.goto(suite.server.baseUrl + "chat");
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const table = page.locator('[data-entry-id="leading-table"] .markdown-table');
       const avatar = page.locator(".chat-group.assistant > :is(.chat-avatar, .chat-avatar-slot)");
       await table.waitFor();
@@ -152,7 +152,7 @@ suite.define(() => {
             "config.get": { config, raw: JSON.stringify(config), valid: true, hash: "link-ink" },
           },
         });
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const links = page.locator(".chat-text a");
         await expect.poll(() => links.count()).toBe(10);
         await expect.poll(() => page.locator(".markdown-session-link--titled").count()).toBe(2);
@@ -266,7 +266,7 @@ ${auditMarkdownTable}`,
         ),
       ],
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const message = page.locator('[data-entry-id="wrapping-table"]');
     const shell = message.locator(".markdown-table").first();
     const compact = message.locator(".markdown-table__viewport");
@@ -430,7 +430,7 @@ ${overflowTable}`,
     const widthInput = page.locator("[data-settings-chat-message-width]");
     await widthInput.fill("82%");
     await widthInput.press("Tab");
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const tables = page.locator('[data-entry-id="percentage-table"] .markdown-table');
     const shell = tables.first();
     const overflow = tables.nth(1);
@@ -539,7 +539,7 @@ ${overflowTable}`,
         historyMessages: [tableMessage("assistant-table", wideTable)],
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       if (surface === "assistant panel") {
         await page.locator(".sidebar-brand__search").click();
         await page
@@ -784,7 +784,7 @@ ${overflowTable}`,
         ),
       ],
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const shell = page.locator('[data-entry-id="retained-table"] .markdown-table');
     const viewport = shell.locator(".markdown-table__viewport");
     await shell.waitFor({ state: "visible" });

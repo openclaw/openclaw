@@ -4,6 +4,7 @@ import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
 } from "../../../src/gateway/control-ui-contract.js";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import {
@@ -92,7 +93,7 @@ suite.define(() => {
         const gateway = await installPublicationGateway(page, {
           methodResponses: { "sessions.github.publish": receipt },
         });
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await showPublicationBranch(gateway, branch);
         const environment = await openChatPublication(page);
         await page.keyboard.press("Escape");
@@ -211,7 +212,7 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await showPublicationBranch(gateway, "openclaw/review-request");
       await gateway.waitForRequest(githubOptions);
       const chip = page.locator(`a.markdown-github-item[href="${href}"]`);
@@ -241,7 +242,7 @@ suite.define(() => {
   it("shows unavailable cached PR state distinctly and clears the warning after recovery", async () => {
     await suite.withPage(publicationContextOptions(), async ({ page }) => {
       const gateway = await installPublicationGateway(page);
-      await page.goto(suite.server.baseUrl + "chat");
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await openChatDetails(page);
       const key = await waitForWatchedSessionKey(gateway);
       const emit = (status: "ready" | "unavailable", state: "open" | "merged" = "open") =>
@@ -298,7 +299,7 @@ suite.define(() => {
           [githubOptions]: sharedOptions(failure),
         },
       });
-      await page.goto(suite.server.baseUrl + "chat");
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await openChatDetails(page);
       const key = await waitForWatchedSessionKey(gateway);
       await openChatPublication(page);
@@ -460,7 +461,7 @@ suite.define(() => {
         });
         return key;
       };
-      await page.goto(suite.server.baseUrl + "chat");
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await openChatDetails(page);
       const key = await showBranch();
       await openChatPublication(page);

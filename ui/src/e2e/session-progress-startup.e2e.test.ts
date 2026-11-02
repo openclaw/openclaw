@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { openChatDetails, closeChatDetails } from "./chat-details.test-support.ts";
 import {
@@ -13,7 +14,7 @@ suite.define(() => {
   it("backs off repeated progress failures without generating new progress", async () => {
     const page = await newChatPage(suite);
     const gateway = await installMockGateway(page, { deferredMethods: ["progressCard.get"] });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     await gateway.waitForRequest("progressCard.get");
     await openChatDetails(page);
     await page.clock.install();
@@ -73,7 +74,7 @@ suite.define(() => {
         deferredMethods: ["chat.startup", "progressCard.get", "chat.send"],
         methodResponses: { "progressCard.get": { card } },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("chat.startup");
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.fill("Queue before history and progress");
@@ -232,7 +233,7 @@ suite.define(() => {
         historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
         deferredMethods: ["progressCard.get"],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("progressCard.get");
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       const draft = "Keep draft and focus through either reply order";

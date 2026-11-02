@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { buildControlUiCspHeader } from "../../../src/gateway/control-ui-csp.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -22,7 +23,11 @@ suite.define(() => {
     });
     const page = await context.newPage();
     await page.clock.install();
-    await page.route(`**${controlUiBasePath}/chat`, async (route) => {
+    const sessionUrl = controlUiSessionUrl(
+      `${suite.server.baseUrl}${controlUiBasePath.slice(1)}/`,
+      "agent:main:main",
+    );
+    await page.route(sessionUrl, async (route) => {
       const response = await route.fetch();
       await route.fulfill({
         response,
@@ -92,7 +97,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}${controlUiBasePath.slice(1)}/chat`);
+      await page.goto(sessionUrl);
       const image = page.getByAltText(imageTitle);
       await image.waitFor({ state: "visible", timeout: 10_000 });
       await expect

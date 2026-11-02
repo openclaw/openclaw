@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -139,7 +140,7 @@ suite.define(() => {
         sessions: [row],
         sessionInfo: row,
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
       const picker = page.locator(".chat-controls__model-picker").first();
       await picker.locator("[data-chat-model-select]").click();
       const meta = page.getByRole("region", { name: "Meta models", exact: true });

@@ -3,7 +3,11 @@ import path from "node:path";
 import { chromium, webkit, type Browser } from "playwright";
 import { expect, inject, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  startControlUiE2eServer,
+} from "../test-helpers/control-ui-e2e.ts";
 
 const useWebKit = process.env.OPENCLAW_CONTROL_UI_E2E_BROWSER === "webkit";
 const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
@@ -29,7 +33,7 @@ it("replaces a silent suspended socket when its tab returns to the foreground", 
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
-    await page.goto(`${server.baseUrl}chat?wake=1#latest`);
+    await page.goto(`${controlUiSessionUrl(server.baseUrl, "agent:main:main")}?wake=1#latest`);
     await waitForControlUiGatewayReady(page);
     await expect.poll(() => gateway.getSocketCount()).toBe(1);
     const composer = page.locator(".agent-chat__composer-combobox textarea");

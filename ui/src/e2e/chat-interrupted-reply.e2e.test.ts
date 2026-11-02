@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   captureUiProof,
   createChatFlowE2eSuite,
@@ -24,7 +25,7 @@ suite.define(() => {
             },
           ],
         });
-        await currentPage.goto(`${suite.server.baseUrl}chat`);
+        await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await currentPage
           .locator(".chat-text")
           .getByText("From the earliest river", { exact: true })

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { chatMessage } from "./chat-flow.test-support.ts";
@@ -54,7 +55,7 @@ suite.define(() => {
       (await gateway.getRequests("chat.history")).filter(
         ({ params }) => (params as { sessionKey?: string } | undefined)?.sessionKey === sessionKey,
       ).length;
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, MAIN_SESSION_KEY));
     await gateway.waitForRequest("sessions.messages.subscribe", {
       match: { key: MAIN_SESSION_KEY },
     });

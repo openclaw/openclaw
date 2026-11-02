@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   captureUiProofEnabled,
@@ -72,7 +73,7 @@ suite.define(() => {
             sessionInfo: { key: sessionKey, activeRunIds: [runId], hasActiveRun: true },
             methodResponses: { "progressCard.get": { card: initialCard } },
           });
-          await page.goto(suite.server.baseUrl + "chat");
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           const card = page.locator('[data-progress-card-placement="details"]');
           const panel = page.locator('.chat-details[role="dialog"]');
           const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");

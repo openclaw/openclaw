@@ -219,7 +219,7 @@ function coldOpenScenario(populated = false): ControlUiMockGatewayScenario {
 async function openColdSidebar(page: Page, scenario = coldOpenScenario()) {
   await mediaRoute(page);
   const gateway = await installMockGateway(page, scenario);
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
   await waitForControlUiGatewayReady(page);
   await gateway.waitForRequest("session.discussion.info");
   await gateway.waitForRequest("sessions.companion.state");
@@ -416,7 +416,7 @@ suite.define(() => {
         },
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await waitForControlUiGatewayReady(page);
       await openChatSidePanelType(page, "Browser");
       const browser = page.locator("openclaw-browser-panel");

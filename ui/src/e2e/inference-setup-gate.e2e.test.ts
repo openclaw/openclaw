@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import {
   createNewSessionPageE2eSuite,
@@ -25,7 +26,7 @@ async function expectSetupRoute(page: Page) {
 suite.define(() => {
   it("keeps help available on empty chat home while messages require a model", async () => {
     await withSetupPage(async (page, gateway) => {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.locator(".agent-chat__empty").waitFor();
 
       await expect.poll(() => page.locator(".agent-chat__composer-shell").count()).toBe(1);

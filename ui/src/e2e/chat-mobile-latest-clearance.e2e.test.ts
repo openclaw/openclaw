@@ -3,6 +3,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   chatMessage,
@@ -66,7 +67,7 @@ suite.define(() => {
             ),
             methodResponses: { "progressCard.get": { card: null } },
           });
-          await page.goto(suite.server.baseUrl + "chat");
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           await page.getByText("Workspace review 29.", { exact: false }).waitFor();
           const thread = page.locator(".chat-thread");
           const latest = page.locator('.chat-scroll-to-bottom[data-visible="true"]');

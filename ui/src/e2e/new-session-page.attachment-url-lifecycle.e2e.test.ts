@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { navigateToControlUiSession } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { agentRoster } from "./agent-roster.test-support.ts";
 import {
   controlUiSessionPath,
@@ -154,7 +155,7 @@ suite.define(() => {
         await pastePng(composer);
         await page.getByRole("img", { name: "pixel.png" }).waitFor();
         await waitForCommittedNewSessionDraft(page, "", 1);
-        await navigate("chat");
+        await navigateToControlUiSession(page, "agent:main:main");
         await waitForCommittedChatRoute(page);
         await expectActiveObjectUrls(1);
 

@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   createTalkRegressionSuite,
   installTalkGateway,
@@ -49,7 +50,7 @@ suite.define(() => {
       });
       await scenario.install(page);
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await waitForTalkReady(page);
       await expect
         .poll(() => page.locator('[data-chat-talk-capability="realtime"]').count())

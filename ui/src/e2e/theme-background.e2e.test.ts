@@ -4,6 +4,10 @@ import { BUILTIN_THEME_IDS } from "../../../packages/gateway-protocol/src/theme-
 import { resolveTheme, type ThemeName } from "../app/theme.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
+  controlUiSessionUrl,
+  navigateToControlUiSession,
+} from "../test-helpers/control-ui-e2e-session-urls.ts";
+import {
   controlUiBundledGatewayUrl,
   waitForControlUiRoute,
   type MockGatewayControls,
@@ -78,8 +82,10 @@ suite.define(() => {
       for (const route of ["new", "chat", "settings/appearance"] as const) {
         if (route === "new") {
           await page.goto(`${suite.server.baseUrl}${route}`);
+        } else if (route === "chat") {
+          await navigateToControlUiSession(page, "agent:main:main");
         } else {
-          const routeId = route === "chat" ? "chat" : "appearance";
+          const routeId = "appearance";
           await evaluateControlUiContext(
             page,
             (app, target: "chat" | "appearance") => app.navigate(target),
@@ -226,7 +232,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         methodResponses: { "config.get": themeConfig("custom", "dark") },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const composer = page.locator(".agent-chat__input");
       await composer.locator("textarea").fill("Keep imported palettes local and quiet");
       const images = new Set<string>();

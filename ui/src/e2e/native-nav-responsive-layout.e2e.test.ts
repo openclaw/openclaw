@@ -1,5 +1,6 @@
 import type { BrowserContext, Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
@@ -52,7 +53,11 @@ suite.define(() => {
     await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
     });
-    const response = await page.goto(`${suite.server.baseUrl}${options.route ?? ""}`);
+    const response = await page.goto(
+      options.route
+        ? `${suite.server.baseUrl}${options.route}`
+        : controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"),
+    );
     expect(response?.status()).toBe(200);
     const ready = options.route?.startsWith("settings/") ? ".settings-sidebar" : ".sidebar-rail";
     await page.locator(ready).waitFor({ state: "attached" });

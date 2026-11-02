@@ -8,6 +8,7 @@ import {
 } from "../../../src/gateway/control-ui-contract.js";
 import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
 import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -127,7 +128,7 @@ async function openPullPreviewPage(
       ),
     ],
   });
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
 
   const pullLink = page.locator('a.markdown-github-link[href$="/pull/99816"]');
   const commentLink = page.getByRole("link", { name: "the review comment", exact: true });
@@ -343,7 +344,7 @@ suite.define(() => {
         },
       },
     });
-    await page.goto(suite.server.baseUrl + "chat");
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const key = await waitForWatchedSessionKey(gateway);
     await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
       sessions: { [key]: { repository, pullRequests: [], rateLimited: false, status: "ready" } },
@@ -440,7 +441,7 @@ suite.define(() => {
         },
       },
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const key = await waitForWatchedSessionKey(gateway);
     await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
       sessions: { [key]: { repository, pullRequests: [], rateLimited: false, status: "ready" } },
@@ -668,7 +669,7 @@ suite.define(() => {
         ),
       ],
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
 
     const previewRequestsFor = async (number: number) =>
       (await gateway.getRequests("forge.preview")).filter(

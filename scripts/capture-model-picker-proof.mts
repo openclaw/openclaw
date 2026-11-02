@@ -9,6 +9,7 @@ import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui
 import {
   canRunPlaywrightChromium,
   installMockGateway,
+  controlUiSessionUrl,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
@@ -49,8 +50,13 @@ const page = await context.newPage();
 page.setDefaultTimeout(30_000);
 
 try {
-  const gateway = await installMockGateway(page, { agentModel: "openai/gpt-5.5", models });
-  await page.goto(`${server.baseUrl}chat`);
+  const fixtureSessionKey = "agent:main:main";
+  const gateway = await installMockGateway(page, {
+    agentModel: "openai/gpt-5.5",
+    models,
+    sessionKey: fixtureSessionKey,
+  });
+  await page.goto(controlUiSessionUrl(server.baseUrl, fixtureSessionKey));
   await gateway.waitForRequest("chat.startup");
 
   const composer = page.locator(".agent-chat__input");

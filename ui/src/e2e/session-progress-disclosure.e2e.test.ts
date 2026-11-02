@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
@@ -56,7 +57,7 @@ suite.define(() => {
         const open = () => card.evaluate((element) => (element as HTMLDetailsElement).open);
         const paneKey = () =>
           pane.evaluate((element) => (element as HTMLElement & { sessionKey: string }).sessionKey);
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await page.locator(".agent-chat__composer-combobox textarea").first().waitFor();
         // Short-key resolution closes the popover, so activate before opening it.
         await pane.locator(".agent-chat__composer-combobox textarea").click();

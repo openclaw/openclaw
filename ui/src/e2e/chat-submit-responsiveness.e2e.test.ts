@@ -1,5 +1,6 @@
 import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -17,7 +18,7 @@ suite.define(() => {
     });
     page = await context.newPage();
     gateway = await installMockGateway(page);
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     composer = page.locator(".agent-chat__composer-combobox textarea");
   });
   it("keeps a durably admitted removal retired across the browser input yield", async () => {

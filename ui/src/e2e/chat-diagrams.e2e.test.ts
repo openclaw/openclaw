@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { chatFixture, timedText } from "./chat-flow-fixtures.test-support.ts";
 import { captureUiProofEnabled, createChatFlowE2eSuite } from "./chat-flow.test-support.ts";
 
@@ -37,7 +38,7 @@ suite.define(() => {
       },
       { viewport: { width: scenario.width, height: scenario.height }, colorScheme: scenario.mode },
     );
-    await page.goto(suite.server.baseUrl + "chat");
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const diagram = page.locator("openclaw-mermaid");
     const image = diagram.locator(".preview img");
     await image.waitFor({ timeout: 25_000 });

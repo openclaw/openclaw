@@ -6,6 +6,7 @@ import { expect, it, onTestFinished } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { expectCount } from "./session-page.test-support.ts";
@@ -216,7 +217,7 @@ suite.define(() => {
       },
     });
 
-    await page.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await page.goto(controlUiSessionUrl(suite.server?.baseUrl ?? "", "agent:main:main"));
     const sidebarRow = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
     await sidebarRow.getByText(sessionLabel, { exact: true }).waitFor({ timeout: 10_000 });
     const sidebarRequests = await gateway.getRequests("sessions.list");

@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { chatMessage, installMockGateway, textContent } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -59,7 +60,7 @@ suite.define(() => {
           ],
         });
 
-        await page.goto(`${suite.server.baseUrl}rosita/chat`);
+        await page.goto(controlUiSessionUrl(`${suite.server.baseUrl}rosita/`, "agent:main:main"));
         await gateway.waitForRequest("sessions.messages.subscribe");
         const image = page.getByAltText("Managed proof image");
         await image.waitFor({ state: "attached", timeout: 10_000 });

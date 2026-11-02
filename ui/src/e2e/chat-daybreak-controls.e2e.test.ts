@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import type { CyberAccessProgram } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -80,7 +81,7 @@ suite.define(() => {
               },
             ],
           });
-          await page.goto(suite.server.baseUrl + "chat");
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           const composer = page.locator(".agent-chat__input");
           if (mobile) {
             await composer.locator("textarea").click();

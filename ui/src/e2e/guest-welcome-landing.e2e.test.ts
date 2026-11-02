@@ -88,7 +88,7 @@ suite.define(() => {
         // Any call after creation reports the existing session.
         guestScenario(ready(false)),
       );
-      await page.goto(suite.server.baseUrl);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await expectBrowser(page).toHaveURL(onSession(welcome.sessionId));
       await expectBrowser(page.getByText("Welcome to OpenClaw Team, Sam.")).toBeVisible();
       expect(await gateway.getRequests(GUEST_WELCOME_ENSURE_METHOD)).toHaveLength(1);
@@ -123,7 +123,7 @@ suite.define(() => {
         page,
         guestScenario({ sequence: [pending, pending, pending, ready(true)] }),
       );
-      await page.goto(suite.server.baseUrl);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const status = page
         .getByRole("status")
         .filter({ hasText: "Setting up your welcome session…" });
@@ -147,7 +147,7 @@ suite.define(() => {
           ],
         }),
       );
-      await page.goto(suite.server.baseUrl);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const failure = page
         .getByRole("alert")
         .filter({ hasText: "We couldn't set up your welcome session." });
@@ -167,6 +167,48 @@ suite.define(() => {
       await expectBrowser(page).toHaveURL(onSession(shared.sessionId));
     });
   });
+
+  it.each(["pending", "failed"] as const)(
+    "keeps setup %s visible on New Session without replacing an unsent draft",
+    async (state) => {
+      await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
+        const gateway = await installMockGateway(
+          page,
+          guestScenario({
+            sequence:
+              state === "pending"
+                ? [
+                    { status: "pending", retryAfterMs: 600 },
+                    { status: "pending", retryAfterMs: 600 },
+                    { status: "pending", retryAfterMs: 600 },
+                    ready(true),
+                  ]
+                : [{ status: "failed", message: "Synthetic setup service is busy." }, ready(true)],
+          }),
+        );
+        await page.goto(`${suite.server.baseUrl}new`);
+        const draft = page.locator(".new-session-page__message");
+        await draft.fill("Synthetic unsent welcome draft.");
+        const status = page.getByRole(state === "pending" ? "status" : "alert").filter({
+          hasText:
+            state === "pending"
+              ? "Setting up your welcome session…"
+              : "We couldn't set up your welcome session.",
+        });
+        await expectBrowser(status).toBeVisible();
+        if (state === "failed") {
+          await status.getByRole("button", { name: "Try again" }).click();
+        }
+        await expectBrowser(page.locator(".chat-guest-welcome-status")).toHaveCount(0);
+        await expectBrowser(page).toHaveURL((url) => url.pathname === "/new");
+        await expectBrowser(draft).toHaveValue("Synthetic unsent welcome draft.");
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        for (const method of ["chat.history", "chat.startup", "sessions.messages.subscribe"]) {
+          expect(await gateway.getRequests(method)).toHaveLength(0);
+        }
+      });
+    },
+  );
 
   it("changes nothing when the Gateway does not advertise the method", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {

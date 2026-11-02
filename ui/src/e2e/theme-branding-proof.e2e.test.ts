@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import type { ThemeDefinition } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createThemePaletteFixture } from "../../../test/helpers/theme-fixture.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   controlUiBundledGatewayUrl,
   installMockGateway,
@@ -113,7 +114,7 @@ suite.define(() => {
         mascot: "claw",
         workingIndicator: "claw",
       });
-      await page.goto(suite.server.baseUrl + "chat");
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page
         .locator(".agent-chat__composer-combobox textarea")
         .fill("Explore the new workspace.");

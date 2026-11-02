@@ -101,7 +101,7 @@ suite.define(() => {
           return recovery;
         };
 
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(support.controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const cancelled = await openRecovery(0);
         await ui.button(cancelled, "Cancel").click();
         await cancelled.waitFor({ state: "detached" });
@@ -357,7 +357,7 @@ suite.define(() => {
           sessionKey: "agent:main:main",
         },
       );
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(support.controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       await ui.visible(row, 10_000);
       await row.hover();

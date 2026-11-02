@@ -108,7 +108,7 @@ suite.define(() => {
       await edge.press("ArrowRight");
       await expect.poll(width).toBe(initial - 20);
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await prepareKeyboardEdge();
       await expect.poll(width).toBe(initial - 20);
       await edge.press("ArrowRight");

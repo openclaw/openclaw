@@ -3,6 +3,7 @@ import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../pages/chat/sidebar-layout.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   controlUiBundledSettingsStorageKey,
   createControlUiMockSameOriginGatewayScript,
@@ -67,7 +68,7 @@ async function prepareRailPage(page: Page, colorScheme: "dark" | "light") {
     },
     { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), mode: colorScheme },
   );
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
 }
 
 async function trackReader(page: Page) {

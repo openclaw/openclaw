@@ -37,7 +37,7 @@ suite.define(() => {
       };
       const history = [prompt];
       const gateway = await installMockGateway(page, { historyMessages: history });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const dock = page.locator(".agent-chat__question-dock");
       const draft = dock.getByRole("textbox", { name: `Your own answer for ${title}` });
       await draft.fill("New contributors and maintainers");
@@ -96,7 +96,7 @@ suite.define(() => {
       { viewport: { width: 1440, height: 1200 }, colorScheme: "dark", reducedMotion: "reduce" },
       async ({ page }) => {
         await installMockGateway(page, { historyMessages: [questionMessage] });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const panel = page.locator(".agent-chat__question-dock .chat-question-panel");
         const composer = page.locator(".agent-chat__input");
         await expectBrowser(panel).toBeVisible();
@@ -340,7 +340,7 @@ suite.define(() => {
       methodResponses: { "question.list": { questions: [] } },
     });
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.fill("Continue researching while I decide.");
       const card = page.locator(".agent-chat__question-dock openclaw-chat-question-panel");
@@ -437,7 +437,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         historyMessages: [{ ...questionMessage, __openclaw: { id: "delivery-question", seq: 1 } }],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const card = page.locator(".agent-chat__question-dock openclaw-chat-question-panel");
       const summary = page
         .locator(".chat-thread .chat-question-summary")
@@ -533,7 +533,7 @@ suite.define(() => {
               : { ...questionMessage, openclawAsyncDelivery: undefined },
           ],
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const transcript = page.locator(".chat-text");
         if (fallback === "offline") {
           const card = page.locator(".agent-chat__question-dock openclaw-chat-question-panel");

@@ -1,9 +1,11 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { controlUiE2eWaitTimeoutMs } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { twoFrames } from "./chat-presentation.test-support.ts";
 import {
   expectForegroundUnchanged,
+  foregroundKey,
   openFromForeground,
   scenario,
 } from "./command-palette.test-support.ts";
@@ -90,7 +92,7 @@ suite.define(() => {
         controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
       );
       try {
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, foregroundKey));
         await page.locator(".agent-chat__composer-combobox textarea:visible").waitFor();
         await page.keyboard.press("ControlOrMeta+K");
         const cold = page.locator(".cmd-palette[aria-busy=true] textarea");

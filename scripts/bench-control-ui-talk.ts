@@ -24,6 +24,7 @@ import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
   installMockGateway,
+  controlUiSessionUrl,
   type MockGatewayWindow,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
@@ -675,7 +676,9 @@ try {
                 },
               );
               await installTalkPerfFixture(page, values.counters, suspendNativeAudio, transport);
+              const fixtureSessionKey = "agent:main:main";
               const gateway = await installMockGateway(page, {
+                sessionKey: fixtureSessionKey,
                 serverBuildId: slot.buildId,
                 serverVersion: slot.version,
                 historyMessages: [TALK_READY_HISTORY_MESSAGE],
@@ -723,7 +726,7 @@ try {
               if (viewport.name === "mobile") {
                 await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true });
               }
-              await page.goto(new URL("/chat", slot.url).href);
+              await page.goto(controlUiSessionUrl(slot.url, fixtureSessionKey));
               await waitForTalkReady(page);
               if (transport === "gateway-relay") {
                 await page.evaluate(() => {

@@ -3,6 +3,7 @@ import {
   waitForControlUiFrameLayout,
   waitForControlUiProofSurface,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -56,7 +57,7 @@ suite.define(() => {
             },
           },
         });
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const tail = page.getByText("Synthetic conversation message 40.", { exact: true });
         await tail.waitFor();
         const footer = page.locator(".chat-footer");
@@ -127,7 +128,8 @@ suite.define(() => {
 
   it("waits for the start of the conversation before showing unsent-message paging", async () => {
     await suite.withPage({ viewport: { width: 390, height: 900 } }, async ({ page }) => {
-      const sessionId = "session:agent:main:main";
+      const sessionKey = "agent:main:main";
+      const sessionId = `session:${sessionKey}`;
       const message = (seq: number) => ({
         role: "assistant",
         content: `Synthetic conversation message ${seq}.`,
@@ -158,10 +160,11 @@ suite.define(() => {
         pendingInputs,
       });
       const gateway = await installMockGateway(page, {
+        sessionKey,
         deferredMethods: ["chat.history"],
         methodResponses: { "chat.startup": historyPage(21, 40, true) },
       });
-      await page.goto(suite.server.baseUrl + "chat");
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await page.getByText("Synthetic conversation message 40.", { exact: true }).waitFor();
       const thread = page.locator(".chat-thread");
       const earlierUnsent = thread.getByRole("button", {

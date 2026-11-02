@@ -1,5 +1,6 @@
 import type { Request } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiChatHistoryMessage } from "../test-helpers/control-ui-session-fixtures.ts";
 import { exactButton } from "./chat-flow.test-support.ts";
@@ -49,7 +50,7 @@ suite.define(() => {
           ],
         });
         // The standard mock bootstrap disables generic external embed URLs.
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const card = page
           .locator("openclaw-youtube-video")
           .filter({ hasText: "Synthetic trailer" });

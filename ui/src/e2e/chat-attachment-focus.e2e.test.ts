@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   attachmentBrowser,
@@ -26,7 +27,7 @@ suite.define(() => {
           await installMockGateway(page);
           // Arm interception before raw keyboard input can open a chooser.
           page.on("filechooser", () => {});
-          await page.goto(suite.server.baseUrl + "chat");
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           const trigger = page.getByRole("button", { name: "Add attachment", exact: true });
           const menu = page.locator(".agent-chat__attach-menu .oc-menu");
           await menu.waitFor({ state: "attached" });

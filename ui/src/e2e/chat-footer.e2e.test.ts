@@ -2,6 +2,7 @@ import type { CDPSession, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatTaskProgress } from "./chat-details.test-support.ts";
 import {
@@ -97,7 +98,7 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
       },
     },
   });
-  await page.goto(suite.server.baseUrl + "chat");
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
   const thread = page.locator(".chat-thread");
   await page.getByText("Project verification 29.", { exact: false }).waitFor();
   await waitForChatScrollIdle(page);

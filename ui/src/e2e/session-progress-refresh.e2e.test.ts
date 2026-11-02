@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { openChatTaskProgress } from "./chat-details.test-support.ts";
 import {
   createChatFlowE2eSuite,
@@ -31,7 +32,7 @@ async function openProgress(page: Page) {
     heldMethods: ["progressCard.refresh"],
     methodResponses: { ...scenario.methodResponses, "progressCard.get": { card: saved } },
   });
-  await page.goto(suite.server.baseUrl + "chat");
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, scenario.sessionKey));
   await page.locator(".agent-chat__composer-combobox textarea").fill("Keep this draft.");
   const card = await openChatTaskProgress(page);
   await waitForChatScrollIdle(page);

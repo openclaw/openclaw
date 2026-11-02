@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -26,7 +27,7 @@ suite.define(() => {
         const encoderRequests = () =>
           requests.filter((url) => /chat-attachment-video|mediabunny/u.test(url));
         const gateway = await installMockGateway(page, { attachmentMaxBytes: limit });
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         const send = button(page, "Send message");
         await composer.fill("A synthetic screen recording.");
@@ -134,7 +135,7 @@ suite.define(() => {
               (await response.text()),
           });
         });
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await page.locator(".agent-chat__composer-combobox textarea").fill("Keep this draft.");
         const expectError = async (error: string) => {
           await expect.poll(() => button(page, "Send message").isEnabled()).toBe(true);

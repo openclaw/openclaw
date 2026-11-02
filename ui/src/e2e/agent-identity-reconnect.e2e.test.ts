@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -23,7 +24,9 @@ suite.define(() => {
           "cron.list": cronJobsListResponse([], { snapshotRevision: "idle" }),
         },
       });
-      await page.goto(`${suite.server.baseUrl}chat#token=test-token`);
+      await page.goto(
+        `${controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")}#token=test-token`,
+      );
       await page.locator(".agent-chat__composer-combobox textarea").waitFor();
       const methods = ["agent.identity.get", "cron.list", "cron.status", "models.list"];
       // The sidebar defers startup reads until the foreground conversation is ready.
@@ -83,7 +86,9 @@ suite.define(() => {
               "config.get": sourceConfigSnapshot(config, "identity-fixture"),
             },
           });
-          await page.goto(`${suite.server.baseUrl}chat#token=test-token`);
+          await page.goto(
+            `${controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")}#token=test-token`,
+          );
           // Include an existing browser cache; reconnect must rediscover the target live.
           await expect
             .poll(() =>

@@ -9,6 +9,7 @@ import type {
   ControlUiLinkReaderDescriptor,
 } from "../../../src/shared/control-ui-link-reader.js";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -246,7 +247,7 @@ suite.define(() => {
             },
           },
         );
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const chat = page
           .locator(".chat-text")
           .filter({ hasText: "without losing this conversation" });
@@ -441,7 +442,7 @@ suite.define(() => {
         featureMethods: ["chat.startup", "chat.metadata", "github.detail"],
         methodResponses: { "github.detail": hostile },
       });
-      await page.goto(suite.server.baseUrl + "chat");
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.getByRole("link", { name: "Image security fixture", exact: true }).click();
       const panel = page.locator("openclaw-link-reader-panel");
       await heading(panel, issue.title);

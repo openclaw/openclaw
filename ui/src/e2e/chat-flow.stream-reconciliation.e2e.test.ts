@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   chatMessage,
   newChatPage,
@@ -105,7 +106,7 @@ async function openRun(runId: string, options: Parameters<typeof installMockGate
     sessionInfo: activeSession(runId),
     ...options,
   });
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
   await stopButton(page).waitFor();
   return { page, gateway, events: runEvents(gateway, runId) };
 }
@@ -295,7 +296,7 @@ suite.define(() => {
   ])("deduplicates $persistence then $terminal", async ({ persistence, terminal }) => {
     const page = await newChatPage(suite);
     const gateway = await installMockGateway(page, { historyMessages: [] });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     await page.locator(".agent-chat__composer-combobox textarea").fill("Check the workspace");
     await page.getByRole("button", { name: "Send message" }).click();
     const send = await gateway.waitForRequest("chat.send");

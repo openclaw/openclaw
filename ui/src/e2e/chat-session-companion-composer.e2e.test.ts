@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ChatSendShortcut } from "../app/settings.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
@@ -27,7 +28,7 @@ async function withSideChat(run: SideChatRun, chatSendShortcut: ChatSendShortcut
         "sessions.companion.state": { exchanges: [] },
       },
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     await openChatSidePanelType(page, "Side chat");
 
     await run(gateway, page.getByRole("textbox", { name: "Ask in side chat", exact: true }), page);

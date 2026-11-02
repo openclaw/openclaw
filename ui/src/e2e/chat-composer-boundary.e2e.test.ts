@@ -3,6 +3,7 @@ import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { chatMessage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -27,7 +28,7 @@ suite.define(() => {
           await installMockGateway(page, {
             historyMessages: [chatMessage("assistant", "Ready to review the next change.")],
           });
-          await page.goto(suite.server.baseUrl + "chat");
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           const footer = page.locator(".chat-footer");
           const input = footer.locator("textarea");
           await input.waitFor();

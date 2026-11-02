@@ -4,6 +4,7 @@ import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { composer, sendChat, timedText } from "./chat-flow-fixtures.test-support.ts";
 import { requireString } from "./chat-flow.test-support.ts";
@@ -31,7 +32,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           historyMessages: [timedText("assistant", "Ready for a Guardian-reviewed action.")],
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await page.getByText("Ready for a Guardian-reviewed action.").waitFor();
         const request = await sendChat(page, gateway, "Review this action.");
         const runId = requireString(request.idempotencyKey, "chat run id");

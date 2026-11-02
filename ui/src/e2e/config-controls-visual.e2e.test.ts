@@ -9,6 +9,7 @@ import {
   takeControlUiElementScreenshot,
   waitForControlUiProofSurface,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   configSnapshot,
@@ -403,7 +404,7 @@ suite.define(() => {
             );
           }
 
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           await addProofLink(page, true);
           await page.locator("[data-control-ui-browser-handled]").click();
           expect(await gateway.getRequests("browser.request")).toEqual([]);

@@ -9,6 +9,7 @@ import {
 } from "../../../test/helpers/gateway-integration-fixtures.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { ChatHtmlPreviewElement } from "../pages/chat/components/chat-html-preview-element.tsx";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   createControlUiMockBootstrapConfig,
   defaultControlUiFeatureMethods,
@@ -81,10 +82,11 @@ suite.define(() => {
                 json: { ...createControlUiMockBootstrapConfig(), embedSandbox: "strict" },
               }),
             );
-            await page.route(suite.server.baseUrl + "chat", (route) =>
-              fulfillWithControlUiCsp(route, "Content-Security-Policy"),
+            await page.route(
+              controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"),
+              (route) => fulfillWithControlUiCsp(route, "Content-Security-Policy"),
             );
-            await page.goto(suite.server.baseUrl + "chat");
+            await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
             await gateway.waitForRequest("sessions.messages.subscribe");
             const preview = page.locator("openclaw-chat-html-preview");
             for (const [index, mode] of (["strict", "scripts", "strict"] as const).entries()) {

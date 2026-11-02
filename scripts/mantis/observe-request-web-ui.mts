@@ -9,6 +9,7 @@ import { chromium, type WebSocketRoute } from "playwright";
 import { createDeferredCore } from "../../src/shared/deferred.ts";
 import {
   createControlUiMockBootstrapConfig,
+  controlUiSessionUrl,
   createControlUiMockGatewayInitScript,
   createControlUiMockSameOriginGatewayScript,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
@@ -27,6 +28,7 @@ const prompt = `Mantis request ${randomUUID()}`;
 const reply = `Mantis reply ${randomUUID()}`;
 const sessionKey = "agent:main:main";
 const scenario = {
+  sessionKey,
   historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Mantis ready." }] }],
 };
 // This realm never loads candidate HTML or scripts. The existing mock protocol
@@ -185,7 +187,7 @@ try {
     });
   });
   await context.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
-  await page.goto(`${origin}/chat`);
+  await page.goto(controlUiSessionUrl(origin, sessionKey));
   await page.getByText("Mantis ready.", { exact: true }).waitFor({ timeout: 30_000 });
   captureArmed = true;
   await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);

@@ -1,5 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   installMockGateway,
   defaultControlUiFeatureMethods,
@@ -51,7 +52,7 @@ suite.define(() => {
             railShortcuts: ["session-rail:agent:main:design"],
           }),
         });
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:current"));
         const pin = page
           .locator(".sidebar-rail")
           .getByRole("link", { name: "Design ideas", exact: true });
@@ -144,7 +145,7 @@ suite.define(() => {
           themeMode: "dark",
         }),
       });
-      await page.goto(suite.server.baseUrl + "chat");
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:current"));
       await page.locator(".agent-chat__composer-combobox textarea").waitFor();
       const rail = page.locator("openclaw-app-sidebar .sidebar-rail");
       const pins = rail.locator(".sidebar-rail__pin");

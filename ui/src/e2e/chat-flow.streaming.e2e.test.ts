@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { ChatHost } from "../pages/chat/chat-send-contract.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   timedText,
   persistedText,
@@ -43,7 +44,7 @@ suite.define(() => {
       },
       { hasTouch: mobile, isMobile: mobile, viewport },
     );
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     await page.getByText("Earlier completed reply.").waitFor();
     const earlier = page.locator(".chat-group.assistant").first();
     const params = await sendChat(page, gateway, "show turn metadata");
@@ -112,7 +113,7 @@ suite.define(() => {
 
   it("normalizes Unicode line separators in streaming and final chat DOM", async () => {
     const { page, gateway } = await chatFixture(suite);
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     await gateway.deferNext("chat.send");
     const params = await sendChat(page, gateway, "render Unicode separators");
     const runId = requireString(params.idempotencyKey, "chat send idempotency key");
@@ -154,7 +155,7 @@ suite.define(() => {
         isMobile: label === "mobile",
         viewport,
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const params = await sendChat(page, gateway, "stream before terminal error");
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
       const partialText = "Partial answer before gateway error.";
@@ -231,7 +232,7 @@ suite.define(() => {
       sessionInfo: session,
     });
 
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     await gateway.deferNext("chat.send");
 
     const prompt = "hold this until the ack arrives";
@@ -339,7 +340,7 @@ suite.define(() => {
   it("refreshes history after a tool-call window disconnects and reconnects", async () => {
     const { page, gateway } = await chatFixture(suite);
 
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
 
     const prompt = "use a tool then reconnect";
     await chatComposer(page).fill(prompt);
@@ -422,7 +423,7 @@ suite.define(() => {
   it("keeps chat-only assistant text exact through tool activity and finalization", async () => {
     const { page, gateway } = await chatFixture(suite);
 
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
 
     const connect = await gateway.waitForRequest("connect");
     expect(requireRecord(connect.params).caps).toContain("chat-only-assistant-text");

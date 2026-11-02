@@ -5,6 +5,7 @@ import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui
 import {
   canRunPlaywrightChromium,
   installMockGateway,
+  controlUiSessionUrl,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
@@ -146,15 +147,16 @@ async function openScenario(sessions: unknown[], groups: string[] = []) {
   });
   const page = await context.newPage();
   page.setDefaultTimeout(30_000);
+  const fixtureSessionKey = "agent:main:main";
   await installMockGateway(page, {
     methodResponses: {
       "sessions.list": sessionsListResponse(sessions),
     },
     sessionArchiveFiltering: true,
     sessionGroups: groups,
-    sessionKey: "agent:main:main",
+    sessionKey: fixtureSessionKey,
   });
-  await page.goto(`${server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(server.baseUrl, fixtureSessionKey));
   await page.locator("openclaw-app-sidebar").waitFor({ state: "visible" });
   await page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
   return { context, page };

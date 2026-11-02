@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
@@ -37,7 +38,7 @@ suite.define(() => {
         );
         try {
           const gateway = await installMockGateway(page);
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           await openChatSidePanelType(page, "Side chat");
           await held.request;
           let side = page.getByRole("textbox", { name: "Ask in side chat", exact: true });

@@ -2,6 +2,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -135,7 +136,7 @@ suite.define(() => {
             },
           },
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         for (const catalogId of catalogIds) {
           await exactText(page, `${catalogId} shared transcript`).click();
           // Every catalog has the same transcript; wait for the clicked pane before reading it.
@@ -528,7 +529,7 @@ suite.define(() => {
       },
     });
 
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     for (const { id } of pairedCatalogs) {
       const icon = page.locator(
         `[data-session-section="catalog:${id}"] [data-provider-icon="${id}"]`,

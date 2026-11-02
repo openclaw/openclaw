@@ -5,6 +5,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
+import { navigateToControlUiSession } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { chatMessage } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
@@ -663,7 +664,7 @@ suite.define(() => {
       await page.getByRole("img", { name: "pixel-1.png", exact: true }).waitFor();
       await waitForCommittedNewSessionDraft(page, "", ["pixel-1.png"]);
 
-      await navigateInApp(page, "chat");
+      await navigateToControlUiSession(page, "agent:main:main");
       await waitForCommittedChatRoute(page);
       await expect
         .poll(readProof)

@@ -8,6 +8,7 @@ import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -614,7 +615,7 @@ suite.define(() => {
           historyMessages: [{ role: "user", content: "Run the workspace checks headlessly." }],
           deferredMethods: ["sessions.move"],
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await gateway.waitForRequest("sessions.messages.subscribe");
         await page.getByText("Run the workspace checks headlessly.", { exact: true }).waitFor();
         await page.getByText(session.placementMove.error, { exact: true }).waitFor();

@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -56,7 +57,7 @@ suite.define(() => {
           const gateway = await installMockGateway(page, {
             historyMessages: restored ? [reply] : [],
           });
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           await gateway.waitForRequest("sessions.messages.subscribe");
           if (!restored) {
             await gateway.setHistoryMessages([reply]);

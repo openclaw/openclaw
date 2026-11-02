@@ -1,6 +1,7 @@
 import { webkit, type Browser } from "playwright";
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { controlUiE2eWaitTimeoutMs, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { thinkingLevels } from "./chat-flow.test-support.ts";
@@ -29,7 +30,11 @@ suite.define(() => {
         await page.emulateMedia({ reducedMotion: "reduce" });
         await installMockGateway(page);
         for (const route of ["new?agent=main", "chat"]) {
-          await page.goto(suite.server.baseUrl + route);
+          await page.goto(
+            route === "chat"
+              ? controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")
+              : suite.server.baseUrl + route,
+          );
           const composer = page.locator(".agent-chat__input");
           const trigger = composer.locator(".agent-chat__input-btn--attach");
           await trigger.waitFor();
@@ -117,7 +122,7 @@ suite.define(() => {
         const workspace = page.locator('[data-panel-slot="workspace"]');
         const prepareComposer = async () => {
           await page.setViewportSize({ width: 1100, height: 729 });
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           await gateway.waitForRequest("sessions.messages.subscribe");
           await composer.locator('[data-chat-thinking-select="true"]').waitFor();
           await openChatSidePanelType(page, "Files");

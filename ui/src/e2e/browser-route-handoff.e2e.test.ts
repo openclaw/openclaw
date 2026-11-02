@@ -2,6 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -202,7 +203,7 @@ suite.define(() => {
             ),
           });
           const browserRequests = () => gateway.getRequests("browser.request");
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           await page.getByText("History is ready.", { exact: true }).waitFor();
           await expectRequestCountStable(gateway, "browser.request", 0);
           expect(await page.locator("openclaw-browser-tab-card").count()).toBe(0);
@@ -418,7 +419,7 @@ suite.define(() => {
             (await browserRequests())
               .slice(offset)
               .filter((request) => requestPath(request) === "/tabs/focus");
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           await page.getByText("The pages are ready.", { exact: true }).waitFor();
           const hostCard = page
             .locator("openclaw-browser-tab-card")

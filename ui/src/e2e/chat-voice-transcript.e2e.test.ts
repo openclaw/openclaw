@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -36,7 +37,7 @@ suite.define(() => {
       { ...createControlUiE2eContextOptions(), colorScheme: "light" },
       async ({ page }) => {
         const gateway = await installMockGateway(page, { historyMessages: history });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const transcript = page.locator(".chat-thread-inner");
         await transcript.getByText(backend, { exact: true }).first().waitFor();
         const disclosure = transcript.locator("details", {

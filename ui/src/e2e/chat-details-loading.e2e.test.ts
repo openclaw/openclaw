@@ -1,4 +1,5 @@
 import { expect, it, onTestFinished } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -31,7 +32,7 @@ suite.define(() => {
             },
           ],
         });
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await page.locator(".mobile-header__title").waitFor();
         expect(module.requests()).toBe(0);
         const details = await openChatDetails(page);

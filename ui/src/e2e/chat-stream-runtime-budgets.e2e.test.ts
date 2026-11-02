@@ -6,6 +6,7 @@ import {
   evaluateControlUiContext,
   getControlUiContextHandle,
 } from "../test-helpers/control-ui-e2e-context.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -517,7 +518,7 @@ suite.define(() => {
         deferredMethods: ["models.list"],
         heldMethods: ["sessions.describe"],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("sessions.messages.subscribe");
       await settleInitialModelCatalog(page, gateway);
       const runId = await openStreamingTurn(page, gateway, "burst coalescing probe");
@@ -617,7 +618,7 @@ suite.define(() => {
   it("keeps the live tool stream bounded under complete tool lifecycles", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("sessions.messages.subscribe");
       const runId = await openStreamingTurn(page, gateway, "tool flood probe");
 
@@ -668,7 +669,7 @@ suite.define(() => {
       });
 
       const loadStartedAt = Date.now();
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("sessions.messages.subscribe");
       await page
         .locator(".chat-thread-inner")
@@ -708,7 +709,7 @@ suite.define(() => {
         historyMessages: buildLongTranscriptFixture(LONG_TRANSCRIPT_MESSAGE_COUNT),
         deferredMethods: ["models.list"],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("sessions.messages.subscribe");
       await page.locator(".chat-thread-inner").getByText("LONG-TAIL-SENTINEL").waitFor();
       await settleInitialModelCatalog(page, gateway);
@@ -779,7 +780,7 @@ suite.define(() => {
   it("stays quiet while idle after a settled stream", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page, context }) => {
       const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("sessions.messages.subscribe");
 
       const runId = await openStreamingTurn(page, gateway, "idle quiescence probe");

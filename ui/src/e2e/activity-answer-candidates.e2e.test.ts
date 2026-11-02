@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -84,7 +85,7 @@ suite.define(() => {
         await selected.getByText("Authoritative bounded answer.", { exact: true }).waitFor();
         await screenshot(page, "02-after-selected-answer.png");
 
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await expect
           .poll(() => page.getByText("Authoritative bounded answer.", { exact: true }).count())
           .toBe(0);

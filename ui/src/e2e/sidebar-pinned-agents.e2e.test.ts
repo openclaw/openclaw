@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -50,7 +51,7 @@ async function checkAccessiblePins(page: Page, width: number) {
       },
     },
   });
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
   await waitForControlUiRoute(page, { routeId: "chat" });
   const drawerToggle = navigationDrawerToggle(page);
   if (await page.locator(".shell--mobile-nav").count()) {

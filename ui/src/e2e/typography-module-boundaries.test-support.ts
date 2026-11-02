@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import {
   type createControlUiE2eSuite,
   holdModuleResponse,
@@ -27,7 +28,7 @@ export function defineTypographyModuleBoundaryTests(
           moduleRequest("ui/src/components/solid/tooltip.tsx"),
         );
         try {
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           const trigger = page.locator(".sidebar-brand__search");
           await trigger.waitFor();
           expect(popupModule.requests()).toBe(0);

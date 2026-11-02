@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { navigateToControlUiSession } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -58,7 +59,7 @@ suite.define(() =>
           await expect.poll(() => shell.getAttribute("class")).not.toContain(collapsedClass);
           await assertSidebarIdentity();
 
-          await page.evaluate(() => window.openclawControlUi?.navigate("chat"));
+          await navigateToControlUiSession(page, "agent:main:main");
           await waitForControlUiRoute(page, { routeId: "chat" });
           const composer = page.locator(".agent-chat__composer-combobox textarea");
           const draft = "Keep this synthetic draft through connection recovery.";

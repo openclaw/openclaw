@@ -1,6 +1,7 @@
 import type { Locator } from "playwright";
 import { it, expect } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import * as ui from "./session-management.compact.test-support.ts";
@@ -41,7 +42,7 @@ suite.define(() => {
         },
       );
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const sidebar = page.locator("openclaw-app-sidebar");
       const rowFor = ui.sessionRows(sidebar);
       const eachRow = async (check: (row: Locator) => Promise<unknown>, offset = 0) => {

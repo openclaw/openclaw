@@ -4,6 +4,7 @@ import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
 import type { UsersListResult } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -63,7 +64,7 @@ async function personPage(page: Page, scenario: Parameters<typeof installMockGat
     historyMessages: [mentionMessage("profile-old")],
     ...scenario,
   });
-  await page.goto(suite.server.baseUrl + "chat");
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
   const reference = page.locator(".markdown-person-reference");
   const card = page.locator(".person-activity-hovercard[role=dialog]");
   return {

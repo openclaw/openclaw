@@ -1,5 +1,6 @@
 import { webkit, type Browser, type BrowserContext } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -84,7 +85,7 @@ suite.define(() => {
             "chat.history": history(1, 160, false),
           },
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
         await thread.getByText(/^Answer 190\./).waitFor();
         // Read up to the boundary until the older page lands, then read on through it.

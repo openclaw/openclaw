@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   captureUiProofEnabled,
   createChatFlowE2eSuite,
@@ -26,7 +27,7 @@ suite.define(() => {
             { role: "assistant", content: "NO_REPLY", timestamp: 2 },
           ],
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await page.getByText("Show the prepared reply examples.", { exact: true }).waitFor();
         const thread = page.locator(".chat-thread-inner");
         const literal = thread.getByText("NO_REPLY", { exact: true });

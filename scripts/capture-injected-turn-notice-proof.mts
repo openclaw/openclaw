@@ -8,6 +8,7 @@ import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui
 import {
   canRunPlaywrightChromium,
   installMockGateway,
+  controlUiSessionUrl,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
@@ -83,8 +84,9 @@ try {
   });
   const page = await context.newPage();
   page.setDefaultTimeout(30_000);
-  await installMockGateway(page, { historyMessages });
-  await page.goto(`${server.baseUrl}chat`);
+  const fixtureSessionKey = "agent:main:main";
+  await installMockGateway(page, { historyMessages, sessionKey: fixtureSessionKey });
+  await page.goto(controlUiSessionUrl(server.baseUrl, fixtureSessionKey));
   await page.getByText("Autoreview finished: no findings.").waitFor({ state: "visible" });
   await page.getByText("Run the autoreview skill on this branch.").waitFor({ state: "visible" });
   if (mode === "after") {

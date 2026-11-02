@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -106,7 +107,7 @@ suite.define(() => {
           const requestCount = async (path: string) =>
             (await gateway.getRequests("browser.request", { path })).length;
           await page.clock.install();
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           await page.getByText("Open the browser.", { exact: true }).waitFor();
           const jpeg = await page.evaluate(() => {
             const canvas = document.createElement("canvas");

@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { captureUiProof, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -24,7 +25,7 @@ suite.define(() => {
         await installMockGateway(page, {
           historyMessages: [{ role: "assistant", content: passage }],
         });
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const source = page
           .locator(".chat-group.assistant .chat-text p")
           .filter({ hasText: passage });
@@ -89,7 +90,7 @@ suite.define(() => {
         await installMockGateway(page, {
           historyMessages: [{ role: "assistant", content: passage }],
         });
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const source = page
           .locator(".chat-group.assistant .chat-text p")
           .filter({ hasText: passage });

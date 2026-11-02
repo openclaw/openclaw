@@ -27,7 +27,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         historyMessages: [chatMessage("user", prompt), chatMessage("assistant", reply)],
       });
-      await page.goto(suite.server.baseUrl + "chat");
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const user = page.getByText(prompt, { exact: true });
       const assistant = page.getByText(reply, { exact: true });
       await user.waitFor();
@@ -112,7 +112,7 @@ suite.define(() => {
             ),
           ],
         });
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await gateway.waitForRequest("sessions.messages.subscribe");
         const thread = page.locator(".chat-thread");
         const start = page.getByText(first, { exact: true });

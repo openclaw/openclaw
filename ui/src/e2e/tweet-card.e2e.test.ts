@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { recordedToolCall } from "./recorded-tool.test-support.ts";
@@ -67,7 +68,7 @@ suite.define(() => {
             { role: "assistant", content: "Here’s the post for context.", timestamp: 4000 },
           ],
         });
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await page.getByText("Here’s the post for context.", { exact: true }).waitFor();
         const card = page.locator("openclaw-browser-tab-card");
         const open = card.getByRole("button", { name: "Open post", exact: true });

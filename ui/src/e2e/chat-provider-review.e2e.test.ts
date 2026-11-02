@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   exactButton,
   newChatPage,
@@ -31,7 +32,7 @@ suite.define(() => {
       },
       deferredMethods: ["sessions.providerReview.continue"],
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, row.key));
     const composer = page.locator(".agent-chat__composer-combobox textarea");
     await composer.fill("Clean up the selected project.");
     await exactButton(page, "Send message").click();

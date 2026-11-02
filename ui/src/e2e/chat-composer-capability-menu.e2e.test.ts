@@ -1,6 +1,7 @@
 // Control UI E2E coverage proves the composer capability menu against a mocked Gateway.
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -222,7 +223,7 @@ suite.define(() => {
         },
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("sessions.messages.subscribe");
       const attachTrigger = page.getByRole("button", { name: "Add attachment" });
       await expect
@@ -375,7 +376,7 @@ suite.define(() => {
         },
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const composer = await openMenu(page);
       const menu = composer.locator(".agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
@@ -452,7 +453,7 @@ suite.define(() => {
         },
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const composer = await openMenu(page);
       const menu = composer.locator(".agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
@@ -480,7 +481,7 @@ suite.define(() => {
         },
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const composer = await openMenu(page);
       const menu = composer.locator(".agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
@@ -526,7 +527,7 @@ suite.define(() => {
       });
       const notice = "MCP tools will appear here after an agent run discovers them.";
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const composer = await openMenu(page);
       const menu = composer.locator(".agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
@@ -567,7 +568,7 @@ suite.define(() => {
         },
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const composer = await openMenu(page);
       const menu = composer.locator(".agent-chat__capability-menu");
       const notice = menu.getByText(
@@ -608,7 +609,7 @@ suite.define(() => {
         },
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("sessions.list");
       const composer = await openMenu(page);
       const menu = composer.locator(".agent-chat__capability-menu");
@@ -660,7 +661,7 @@ suite.define(() => {
           },
         });
 
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await gateway.waitForRequest("sessions.messages.subscribe");
         if (!operatorScopes.includes("operator.write")) {
           const composer = page.locator(".agent-chat__input");
@@ -744,7 +745,7 @@ suite.define(() => {
         },
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await Promise.all([
         gateway.waitForRequest("sessions.list", { match: rosterMatch }),
         gateway.waitForRequest("config.get"),
@@ -818,7 +819,7 @@ suite.define(() => {
           },
         });
 
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const composer = await openMenu(page);
         const menu = composer.locator(".agent-chat__capability-menu");
         const webSearch = webSearchItem(menu);
@@ -850,7 +851,7 @@ suite.define(() => {
         },
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const composer = await openMenu(page);
       const menu = composer.locator(".agent-chat__capability-menu");
       await expect.poll(() => webSearchItem(menu).count()).toBe(1);
@@ -891,7 +892,7 @@ suite.define(() => {
         },
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       let composer = await openMenu(page);
       let menu = composer.locator(".agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Plugins/ }).click();

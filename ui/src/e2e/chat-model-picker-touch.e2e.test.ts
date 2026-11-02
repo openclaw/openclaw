@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -43,7 +44,7 @@ async function openPickerByTouch(page: Page) {
     models,
     methodResponses: { "models.list": { models } },
   });
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
   const picker = page.locator(".agent-chat__input .chat-controls__model-picker").first();
   const trigger = picker.locator("[data-chat-model-select]");
   await page.getByRole("textbox", { name: "Chat composer", exact: true }).tap();

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   createChatFlowE2eSuite,
@@ -66,7 +67,7 @@ suite.define(() => {
       },
     });
 
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
     await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
 
     const main = page.getByRole("main");

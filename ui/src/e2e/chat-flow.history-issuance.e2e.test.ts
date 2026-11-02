@@ -309,7 +309,7 @@ suite.define(() => {
       subscriptionInitialHistory: false,
       historyMessages: [chatMessage("assistant", marker, { timestamp: Date.now() })],
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const transcript = textInThread(page, marker);
     await transcript.waitFor({ state: "visible" });
     await gateway.deferNext("chat.startup");

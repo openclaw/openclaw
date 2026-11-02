@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import { waitForControlUiInitialRoster } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -75,7 +76,11 @@ suite.define(() => {
               },
             },
           });
-          await page.goto(`${suite.server.baseUrl}${route}`);
+          await page.goto(
+            route === "chat"
+              ? controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")
+              : `${suite.server.baseUrl}${route}`,
+          );
           const composer = page.locator(
             route === "new"
               ? ".new-session-page__composer textarea"

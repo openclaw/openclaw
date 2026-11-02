@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
 import {
   confirmIme,
@@ -19,7 +20,7 @@ const suite = createChatFlowE2eSuite();
 async function offlineQueue() {
   const page = await newChatPage(suite);
   const gateway = await installMockGateway(page);
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
   const composer = page.locator(".agent-chat__composer-combobox textarea");
   await composer.waitFor({ state: "visible", timeout: 15_000 });
   await page.locator(".agent-chat__empty").waitFor({ state: "visible" });

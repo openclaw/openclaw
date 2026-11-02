@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
+import { controlUiSessionUrl } from "../../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   calendarPlugin,
   captureScreenshot,
@@ -57,7 +58,7 @@ describeControlUiE2e("Control UI installed plugin catalog", () => {
         });
       });
       try {
-        await page.goto(`${server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(server.baseUrl, "agent:main:main"));
         // Navigation can finish before the shell installs its palette shortcut.
         await page.locator(".agent-chat__composer-combobox textarea:visible").waitFor();
         await page.keyboard.press("ControlOrMeta+K");

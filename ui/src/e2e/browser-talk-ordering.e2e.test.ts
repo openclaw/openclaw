@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   createTalkRegressionSuite,
   installTalkGateway,
@@ -15,7 +16,7 @@ const suite = createTalkRegressionSuite("Control UI browser Talk transcript orde
 async function startTalk(page: Page, voiceSessionId: string) {
   const gateway = await installTalkGateway(page, voiceSessionId);
   await installOpenAiTalkFixture(page);
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
   await waitForTalkReady(page);
   await page.getByRole("button", { name: "Start voice input" }).click();
   await gateway.waitForRequest("talk.client.create");

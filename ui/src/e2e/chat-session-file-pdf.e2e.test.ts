@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
 import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { captureUiProofEnabled, chatMessage } from "./chat-flow.test-support.ts";
 import { exactButton, polledCount } from "./chat-presentation.test-support.ts";
@@ -120,7 +121,7 @@ suite.define(() => {
             },
           },
         });
-        await page.goto(`http://127.0.0.1:${server.claim.port}/chat`);
+        await page.goto(controlUiSessionUrl(`http://127.0.0.1:${server.claim.port}/`, sessionKey));
         for (const file of files) {
           const url = `/api/artifacts/download/pdf-fixture/${file.name}`;
           await gateway.setMethodResponse("sessions.files.download", {

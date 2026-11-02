@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { polledAttribute, polledCount, polledVisible } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -47,7 +48,7 @@ suite.define(() => {
             },
           },
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await waitForControlUiRoute(page, { routeId: "chat" });
         const sidebar = page.locator("openclaw-app-sidebar");
         const switcher = sidebar.locator(

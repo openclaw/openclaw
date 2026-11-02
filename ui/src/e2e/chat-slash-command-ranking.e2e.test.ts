@@ -2,6 +2,7 @@ import { text } from "node:stream/consumers";
 import type { Page } from "playwright";
 import { assert, expect, it } from "vitest";
 import type { CommandEntry } from "../../../packages/gateway-protocol/src/index.js";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { agentRoster } from "./agent-roster.test-support.ts";
 import { polledAttribute, polledText } from "./chat-presentation.test-support.ts";
@@ -53,7 +54,7 @@ async function installCommands(
 }
 
 async function openChat(page: Page, gateway: Awaited<ReturnType<typeof installMockGateway>>) {
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
   await gateway.waitForRequest("sessions.messages.subscribe");
   const composer = page.locator(".agent-chat__composer-combobox textarea");
   await composer.waitFor({ state: "visible" });

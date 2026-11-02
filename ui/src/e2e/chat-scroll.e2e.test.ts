@@ -1,6 +1,7 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   chatThreadDistanceFromBottom,
@@ -37,7 +38,7 @@ function history(prefix: string, baseTs = Date.now() - 100_000) {
 async function openHistory(prefix: string, options: Parameters<typeof installMockGateway>[1] = {}) {
   const page = await newChatPage(suite);
   const gateway = await installMockGateway(page, { historyMessages: history(prefix), ...options });
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
   await page.getByText(`${prefix} 49`).waitFor({ timeout: 10_000 });
   return { page, gateway };
 }
@@ -53,7 +54,7 @@ suite.define(() => {
         inFlightRun: { runId, text: "Reviewing the workspace." },
         sessionInfo: { key: "agent:main:main", activeRunIds: [runId], hasActiveRun: true },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.getByText("Composer wheel history 49").waitFor();
       await waitForChatScrollIdle(page);
       const thread = page.locator(".chat-thread");

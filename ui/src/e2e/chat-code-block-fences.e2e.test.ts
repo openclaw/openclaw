@@ -1,5 +1,6 @@
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { chatMessage } from "./chat-flow.test-support.ts";
 import { polledAttribute } from "./chat-presentation.test-support.ts";
@@ -63,7 +64,7 @@ suite.define(() => {
               { role: "assistant", content: "```ts\n" + source + "\n```", timestamp: 2000 },
             ],
           });
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           await setThemeMode(page, theme);
           const block = page.locator(".chat-thread .code-block-wrapper");
           const viewport = block.locator(".code-block-viewport");
@@ -131,7 +132,7 @@ suite.define(() => {
       await installMockGateway(page, {
         historyMessages: [{ role: "assistant", content: "```\n" + art + "\n```", timestamp: 1000 }],
       });
-      await page.goto(suite.server.baseUrl + "chat");
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const code = page.locator(".code-block-wrapper.is-collapsible code.markdown-block-art");
       await code.waitFor();
       for (const width of [1280, 390]) {
@@ -182,7 +183,7 @@ suite.define(() => {
           ],
         });
 
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await setThemeMode(page, theme);
         const shortBubble = page.locator('[data-entry-id="assistant-fence-short"]');
         const wideBubble = page.locator('[data-entry-id="assistant-fence-wide"]');

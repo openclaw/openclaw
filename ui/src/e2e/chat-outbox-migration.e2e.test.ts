@@ -281,7 +281,9 @@ suite.define(() => {
         },
         inFlightRun: { runId: "mock-held-run", text: "Mock Gateway: keeping upgrade queue held." },
       });
-      await page.goto(`${suite.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"), {
+        waitUntil: "domcontentloaded",
+      });
       await expect.poll(() => composer.inputValue()).toBe("Mock Gateway: old durable draft");
       await expect.poll(() => pane.locator(".chat-attachment-thumb").count()).toBe(1);
       expect(await readQueue(page)).toEqual([]);

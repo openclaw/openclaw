@@ -7,11 +7,12 @@ export function controlUiSessionPath(
   sessionKey: string,
   basePath = "",
   namespace: "chat" | "dashboard" = "chat",
+  fallbackAgentId = sessionKey.split(":")[1] || "main",
 ): string {
   const pathname = buildControlUiSessionPath({
     namespace,
     sessionKey,
-    fallbackAgentId: sessionKey.split(":")[1] || "main",
+    fallbackAgentId,
     basePath,
     shortIdLength: 32,
   });
@@ -22,6 +23,7 @@ export function controlUiSessionUrl(
   baseUrl: string,
   sessionKey: string,
   namespace: "chat" | "dashboard" = "chat",
+  fallbackAgentId = sessionKey.split(":")[1] || "main",
 ): string {
   const url = new URL(baseUrl);
   // Cold fixture navigation knows the exact key; it must not depend on a warm
@@ -31,28 +33,35 @@ export function controlUiSessionUrl(
       namespace,
       sessionKey,
       basePath: url.pathname,
-      fallbackAgentId: sessionKey.split(":")[1] || "main",
+      fallbackAgentId,
       exactKey: true,
-    }) ?? controlUiSessionPath(sessionKey, url.pathname, namespace);
+    }) ?? controlUiSessionPath(sessionKey, url.pathname, namespace, fallbackAgentId);
   url.search = "";
   url.hash = "";
   return url.toString();
 }
 
-export async function navigateToControlUiSession(page: Page, sessionKey: string): Promise<void> {
+export async function navigateToControlUiSession(
+  page: Page,
+  sessionKey: string,
+  fallbackAgentId?: string,
+): Promise<void> {
   // The hook loads its readiness module on first read, so the first read can be undefined.
   await page.waitForFunction(() => window.openclawControlUi !== undefined);
-  const expectedPathname = await page.evaluate((sessionPath) => {
-    const app: ControlUiReadiness["hook"] | undefined = window.openclawControlUi;
-    if (!app) {
-      throw new Error("Control UI readiness hook is unavailable");
-    }
-    const pathname = `${app.snapshot().basePath}${sessionPath}`;
-    const url = new URL(window.location.href);
-    url.pathname = pathname;
-    app.navigate("chat", { pathname });
-    return url.pathname;
-  }, controlUiSessionPath(sessionKey));
+  const expectedPathname = await page.evaluate(
+    (sessionPath) => {
+      const app: ControlUiReadiness["hook"] | undefined = window.openclawControlUi;
+      if (!app) {
+        throw new Error("Control UI readiness hook is unavailable");
+      }
+      const pathname = `${app.snapshot().basePath}${sessionPath}`;
+      const url = new URL(window.location.href);
+      url.pathname = pathname;
+      app.navigate("chat", { pathname });
+      return url.pathname;
+    },
+    controlUiSessionPath(sessionKey, "", "chat", fallbackAgentId),
+  );
   await page.waitForURL((url) => url.pathname === expectedPathname);
   await page.waitForFunction(
     (targetSessionKey) =>

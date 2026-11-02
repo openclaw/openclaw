@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { chatDelta } from "./chat-flow-fixtures.test-support.ts";
@@ -62,7 +63,7 @@ suite.define(() => {
         },
       });
       await page.setViewportSize({ width: 1280, height: 900 });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await openChatSidePanelType(page, "Files");
       for (const presentation of ["desktop", "narrow", "mobile"]) {
         const mobile = presentation === "mobile";
@@ -167,7 +168,7 @@ suite.define(() => {
       await page.route("**/api/artifacts/download/navigation/notes", (route) =>
         route.fulfill({ body: "# Delivery notes\n", contentType: "text/markdown" }),
       );
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
       await composer.fill("Please review the delivery notes before publishing.");
       await openChatSidePanelType(page, "Files");
@@ -232,7 +233,7 @@ suite.define(() => {
         },
       });
       const listRequests = () => gateway.getRequests("sessions.files.list");
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await openChatSidePanelType(page, "Files");
       const rail = page.locator(".workspace-desktop");
       await rail.getByText("checklist.md", { exact: true }).waitFor();
@@ -314,7 +315,7 @@ suite.define(() => {
           files: [{ kind: "modified", name, path: `/workspace/${name}` }],
         });
       const listRequests = () => gateway.getRequests("sessions.files.list");
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       expect(await listRequests()).toHaveLength(0);
       expect(await page.locator(".workspace-desktop:visible").count()).toBe(0);
 

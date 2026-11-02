@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import {
@@ -50,7 +51,9 @@ suite.define(() => {
         },
       });
 
-      expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
+      expect(
+        (await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")))?.status(),
+      ).toBe(200);
       await openChatSidePanelType(page, "Files");
       await openChatSidePanelType(page, "Browser");
 

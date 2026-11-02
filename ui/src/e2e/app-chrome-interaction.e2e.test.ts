@@ -1,5 +1,6 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   installMockGateway,
   waitForControlUiSettingsTakeover,
@@ -67,7 +68,7 @@ suite.define(() => {
         ],
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const transcript = page.getByText("Selectable transcript content", { exact: true });
       await transcript.waitFor();
       await page.locator('[data-chat-model-select="true"]').click();
@@ -164,7 +165,7 @@ suite.define(() => {
             models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }, ...scrollModels],
           });
 
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           await page.getByText("Selectable transcript content", { exact: true }).waitFor();
           thumbColorByScheme[colorScheme] = await page.evaluate(
             () => getComputedStyle(document.body, "::-webkit-scrollbar-thumb").backgroundColor,

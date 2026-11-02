@@ -1,8 +1,8 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
-  controlUiSessionPath,
   defaultControlUiFeatureMethods,
   installMockGateway,
   waitForControlUiRoute,
@@ -79,7 +79,7 @@ suite.define(() => {
   it("supports keyboard and modified-click source settings navigation", async () => {
     await suite.withPage({}, async ({ page, context }) => {
       await installMockGateway(page, { featureMethods, methodResponses });
-      await page.goto(new URL(controlUiSessionPath("agent:main:main"), suite.server.baseUrl).href);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const trigger = page.getByRole("button", { name: /^Filter & sort · /, exact: true });
       const item = page.getByRole("link", { name: "Session sources", exact: true });
       await trigger.click();
@@ -136,7 +136,7 @@ suite.define(() => {
   it("navigates from the sidebar and independently saves source preferences", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, { featureMethods, methodResponses });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.getByRole("button", { name: /^Filter & sort · /, exact: true }).click();
       await page.getByRole("link", { name: "Session sources", exact: true }).click();
       await waitForControlUiSettingsTakeover(page);

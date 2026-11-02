@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
@@ -208,7 +209,7 @@ suite.define(() => {
           workspace: "/workspace/release-review",
           workspaceGit: true,
         });
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const thread = page.locator(".chat-thread");
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await composer.waitFor();

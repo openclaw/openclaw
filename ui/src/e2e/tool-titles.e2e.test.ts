@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { projectAgentToolActivity } from "../../../src/infra/agent-activity-events.js";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   createChatFlowE2eSuite,
   chatMessage,
@@ -32,7 +33,7 @@ suite.define(() => {
             chatMessage("assistant", "The checks are complete."),
           ],
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const historyRow = page.locator(".chat-tool-row", { hasText: "Check the test suite" });
         await historyRow.waitFor();
         await historyRow.click();

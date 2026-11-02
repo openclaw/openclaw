@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "./chat-flow.test-support.ts";
 import {
   polledAttribute,
@@ -45,7 +46,7 @@ suite.define(() => {
           "users.listModelAccounts": inventory("openai:old-alternate", "Old alternate"),
         },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const { picker, trigger, search } = modelPicker(page);
       await trigger.click();
       await polledCount(picker.locator("[data-chat-model-provider-toggle]")).toBe(1);
@@ -108,7 +109,7 @@ suite.define(() => {
             "models.authStatus": authStatus("openai:siwc", "long-account-name+siwc@example.test"),
           },
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const { picker, trigger, search, option } = modelPicker(page);
         const alpha = option("openai/shared-alpha");
         const beta = option("anthropic/shared-beta");

@@ -11,6 +11,7 @@ import {
   takeControlUiScreenshotFrame,
   takeControlUiViewportScreenshot,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { activateChatHeaderPanelAction } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -367,7 +368,7 @@ suite.define(() => {
     ]) {
       await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
         await installMockGateway(page, testCase);
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await openPalette(page);
         expect(await page.getByRole("option", { name: "Desktop", exact: true }).count()).toBe(0);
       });
@@ -391,7 +392,7 @@ suite.define(() => {
             },
           },
         );
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await openPalette(page);
         expect(await page.getByRole("option", { name: "Desktop", exact: true }).count()).toBe(1);
 
@@ -461,7 +462,7 @@ suite.define(() => {
         unavailable("requested worker desktop is temporarily unavailable"),
         { methodResponses: { "sessions.list": sessionsList("active") } },
       );
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
 
       await openDirectDesktop(page, "missing-worker");
 
@@ -491,7 +492,7 @@ suite.define(() => {
           "environments.status": unavailable("desktop inventory is temporarily unavailable"),
         },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       // Settle automatic discovery of the chat's worker before opening another target.
       await gateway.waitForRequest("environments.status", {
         match: { environmentId: "other-worker" },
@@ -540,7 +541,7 @@ suite.define(() => {
   it("does not observe after closing a status refresh", () =>
     withDesktopPage(async (page) => {
       const gateway = await desktopGateway(page, [], observe("stale", false));
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.deferNext("environments.status");
       const inventoryCount = await requestCount(gateway, "environments.status");
 

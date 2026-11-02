@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -24,7 +25,7 @@ suite.define(() => {
         models,
         sessionKey: "agent:main:main",
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const main = page.getByRole("main");
       const picker = main.locator('[data-chat-model-select="true"]').first();
       await picker.waitFor({ state: "visible", timeout: 10_000 });

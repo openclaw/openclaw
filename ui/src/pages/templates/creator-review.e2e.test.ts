@@ -8,6 +8,7 @@ import { createDarkDesktopControlUiContextOptions } from "../../e2e/control-ui-b
 import { seedSidebarSettings } from "../../e2e/sidebar-contract.test-support.ts";
 import { getControlUiContextHandle } from "../../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../../test-helpers/control-ui-e2e-readiness.ts";
+import { controlUiSessionUrl } from "../../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   installMockGateway,
   reconnectMockGateway,
@@ -85,7 +86,7 @@ async function withHeldCreator(
         imports.push(request.url());
       }
     });
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(server.baseUrl, "agent:main:main"));
     await waitForControlUiRoute(page, { routeId: "chat" });
     const row = page.locator('.sidebar-agent-roster__row[data-agent-id="main"]');
     const menu = page.getByRole("button", { name: "Options for Harbor" });

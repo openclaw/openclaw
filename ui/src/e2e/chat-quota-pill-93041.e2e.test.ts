@@ -174,7 +174,7 @@ async function withChat(
       const gateway = await installMockGateway(page, {
         methodResponses: { "models.authStatus": authStatus, "sessions.list": sessions },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("models.authStatus");
       await run(page);
     },

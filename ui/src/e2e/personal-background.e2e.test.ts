@@ -5,6 +5,7 @@ import {
   type BackgroundPreference,
 } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import type { UserBackgroundAsset } from "../../../packages/gateway-protocol/src/schema/users-background.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -250,7 +251,7 @@ suite.define(() => {
         await openRoute(page, "new", "new-session");
         await page.locator(".new-session-page openclaw-session-background img").waitFor();
         reads.length = 0;
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await page.getByText("A readable conversation", { exact: true }).waitFor();
         await expectCount(page, chatImage, 0);
         expect(reads).toEqual([]);
@@ -301,7 +302,7 @@ suite.define(() => {
         await page.reload();
         await page.locator(sectionSelector).scrollIntoViewIfNeeded();
         await expectSelected(section, "none");
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await page.getByText("A readable conversation", { exact: true }).waitFor();
         await expectCount(page, backgroundImage, 0);
         await expectNoWrites(gateway, ["config.patch"]);

@@ -166,7 +166,7 @@ suite.define(() => {
           sessionKey: main.key,
         });
 
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, main.key));
         await setSidebarStatus(page, "Archived");
 
         const sidebar = page.locator("openclaw-app-sidebar");
@@ -527,7 +527,7 @@ suite.define(() => {
             .toContain("sidebar-recent-session--active");
         };
 
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, mainKey));
         const activePane = chatPane(page);
         const rowFor = (key: string) => sidebarRow(page, key);
         await rowFor(selected.key).waitFor({ state: "visible", timeout: 10_000 });

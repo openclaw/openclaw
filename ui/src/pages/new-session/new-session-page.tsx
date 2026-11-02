@@ -40,6 +40,7 @@ import "../../styles/new-session-attachment-panel.css";
 import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { focusChatComposerFromKeydown } from "../chat/chat-pane-shared.ts";
 import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
+import { renderGuestWelcomeStatus } from "../chat/components/chat-guest-welcome-status.tsx";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import { ComposerDictationStatus } from "../chat/components/chat-voice-activity.tsx";
@@ -270,6 +271,9 @@ function DraftBlock(props: {
               : undefined
           }
         />
+      </Show>
+      <Show when={props.page().context?.guestWelcome} keyed>
+        {(owner) => renderGuestWelcomeStatus(owner)}
       </Show>
       <NewSessionComposer
         surroundings={surroundings}

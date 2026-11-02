@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
@@ -120,7 +121,7 @@ suite.define(() => {
         };
         const pageKeys = async () => (await sidebarState()).keys;
         const settledResearchRevision = async () => (await sidebarState()).revision;
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, main.key));
         await filter("Archived");
         for (const target of targets) {
           await rowFor(target.key).waitFor({ state: "visible" });

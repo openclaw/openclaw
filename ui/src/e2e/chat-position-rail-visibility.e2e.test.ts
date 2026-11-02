@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
 import {
   chatMessage,
@@ -26,7 +27,7 @@ suite.define(() => {
       ],
     });
     await page.addInitScript(createControlUiMockSameOriginGatewayScript());
-    await page.goto(suite.server.baseUrl + "chat");
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const thread = page.locator(".chat-thread");
     const answer = page.getByText(answerText, { exact: true });
     await answer.waitFor();

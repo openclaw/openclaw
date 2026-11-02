@@ -2,6 +2,7 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { textMessage } from "./chat-flow-fixtures.test-support.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -151,7 +152,7 @@ suite.define(() => {
             textMessage("assistant", "Second copy.", { timestamp: 3_000 }),
           ],
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const copies = ["First copy.", "Second copy."].map((text) =>
           page.locator(".chat-group.assistant").filter({ hasText: text }).locator(".chat-copy-btn"),
         );
@@ -193,7 +194,7 @@ suite.define(() => {
           const gateway = await installMockGateway(page, {
             historyMessages: [textMessage("assistant", text, { timestamp: 1_000 })],
           });
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           const message = page.locator(".chat-group.assistant").filter({ hasText: text });
           const copy = message.locator(".chat-copy-btn");
           await copy.waitFor({ state: "visible" });
@@ -256,7 +257,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           historyMessages: [textMessage("assistant", text, { timestamp: 1_000 })],
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const bubble = page.locator(".chat-bubble").filter({ hasText: text });
         await bubble.waitFor();
         await deferClipboard(page);
@@ -324,7 +325,7 @@ suite.define(() => {
           },
         });
 
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await page.locator(".chat-pane__workspace-chip").filter({ visible: true }).click();
         await gateway.waitForRequest("worktrees.branches");
         await page
@@ -384,7 +385,7 @@ suite.define(() => {
               }),
             ),
           });
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           const message = page.locator(".chat-group").filter({ hasText: texts[0] });
           await expect.poll(() => message.locator(".chat-copy-btn").count()).toBe(2);
           if (role === "user") {

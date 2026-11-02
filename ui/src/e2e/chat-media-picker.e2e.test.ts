@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   attachmentBrowser,
@@ -33,7 +34,11 @@ suite.define(() => {
         async ({ page }) => {
           await installAttachmentBrowserIdentity(page, attachmentBrowser(browser));
           const gateway = await installMockGateway(page, { historyMessages: [] });
-          await page.goto(suite.server.baseUrl + route);
+          await page.goto(
+            route === "chat"
+              ? controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")
+              : suite.server.baseUrl + route,
+          );
           const editor = page
             .locator(
               ".agent-chat__composer-combobox textarea, .new-session-page__composer textarea",

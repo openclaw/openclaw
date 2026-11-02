@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { modelSessionList } from "./chat-runtime-fixtures.test-support.ts";
@@ -23,7 +24,7 @@ suite.define(() => {
         methodResponses: { "models.list": { models, pendingProviders: ["example"] } },
         sessionInfo: { model: "model-0", modelProvider: "example" },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const composer = page.locator(".agent-chat__input").first();
       const picker = composer.locator(".chat-controls__model-picker");
       const trigger = picker.locator("[data-chat-model-select]");
@@ -230,7 +231,7 @@ suite.define(() => {
             },
           },
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const composer = page.locator(".agent-chat__input").first();
         const model = composer.locator('[data-chat-model-select="true"]');
         await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
@@ -485,7 +486,11 @@ suite.define(() => {
             ),
           },
         });
-        await page.goto(`${suite.server.baseUrl}${route}`);
+        await page.goto(
+          route === "chat"
+            ? controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")
+            : `${suite.server.baseUrl}${route}`,
+        );
         const composer = page.locator(".agent-chat__input").first();
         const model = composer.locator('[data-chat-model-select="true"]');
         const effort = composer.locator('[data-chat-thinking-select="true"]');
@@ -715,7 +720,7 @@ suite.define(() => {
             ),
           },
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const composer = page.locator(".agent-chat__input");
         const model = composer.locator('[data-chat-model-select="true"]');
         await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");

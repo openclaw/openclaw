@@ -225,7 +225,7 @@ suite.define(() => {
             lastEntryId: `${entry === "boot" ? "entry-home" : "entry"}-${count - 1}`,
           });
           const url = controlUiSessionUrl(suite.server.baseUrl, target);
-          await page.goto(entry === "boot" ? `${suite.server.baseUrl}chat` : url);
+          await page.goto(url);
           const observeEntry = async (observedEntry: "boot" | "direct" | "sidebar") => {
             await page.waitForFunction(() => window.sessionEntryRecorder.done, undefined, {
               timeout: controlUiE2eWaitTimeoutMs,

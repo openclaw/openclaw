@@ -750,7 +750,7 @@ suite.define(() => {
   it("fences stale writes and expires or evicts bounded durable drafts", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await verifyDurableComposerFences(page);
     });
   });

@@ -2,6 +2,7 @@ import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createNestedToolActivity } from "../../../src/sessions/nested-tool-activity.ts";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { showText } from "./activity-assertions.test-support.ts";
 import { chatMessage, textContent } from "./chat-flow.test-support.ts";
@@ -105,7 +106,7 @@ suite.define(() => {
           ]),
         },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.getByText(conclusion, { exact: true }).waitFor();
       await gateway.waitForRequest("sessions.messages.subscribe");
       const work = page.locator(".chat-activity-group").first();
@@ -168,7 +169,7 @@ suite.define(() => {
           chatMessage("assistant", "Runtime checked.", { timestamp: timestamp + 300 }),
         ],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.getByText("Runtime checked.", { exact: true }).waitFor();
       const call = page.locator(".chat-tool-msg-summary", { hasText: "Check runtime version" });
       await call.waitFor();

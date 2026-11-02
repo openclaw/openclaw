@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -68,7 +69,7 @@ suite.define(() => {
               },
             })),
           });
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
           await page.getByText("Image fixture message 59.", { exact: false }).waitFor();
           await thread.hover();
@@ -191,7 +192,7 @@ suite.define(() => {
                 __openclaw: { id: "shimmer-message-" + index, seq: index + 1 },
               })),
             });
-            await page.goto(suite.server.baseUrl + "chat");
+            await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
             const frame = page.locator(
               '.chat-bubble[data-entry-id="shimmer-message-57"] .chat-image-frame',
             );

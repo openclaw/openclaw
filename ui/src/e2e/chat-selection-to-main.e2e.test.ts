@@ -1,6 +1,7 @@
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { storedChatOutboxScopeKey } from "../lib/chat/outbox-store.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -91,7 +92,7 @@ async function openSelection(
     historyMessages: [{ role: "assistant", content: passage }],
     ...options,
   });
-  await page.goto(suite.server.baseUrl + "chat");
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
   return gateway;
 }
 
@@ -490,7 +491,7 @@ suite.define(() => {
               ),
             }),
           );
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           const composer = replacement
             ? page.getByRole("textbox", { name: "Fixture draft", exact: true })
             : mainComposer;

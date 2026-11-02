@@ -3,6 +3,7 @@ import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { controlUiSessionPath } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { textContent, chatSessionListResponse } from "./chat-flow.test-support.ts";
@@ -161,6 +162,7 @@ suite.define(() => {
     "animates sidebar clicks but settles shortcut toggles before the next frame at %ipx",
     async (viewportWidth) => {
       const page = await openPage({
+        pathname: controlUiSessionPath("agent:main:main").slice(1),
         nativeNav: false,
         width: viewportWidth,
         scenario: {
@@ -355,6 +357,7 @@ suite.define(() => {
 
   it("hosts navigation, search, sessions, and history in web titlebar chrome", async () => {
     const page = await openPage({
+      pathname: controlUiSessionPath("agent:main:main").slice(1),
       colorScheme: "dark",
       scenario: {
         featureMethods: ["chat.metadata", "chat.startup", "sessions.create", "update.run"],
@@ -523,6 +526,7 @@ suite.define(() => {
     { deviceLess: true, label: "limited-access", operatorScopes: limitedScopes },
   ])("keeps focused main controls clear of $label web titlebar chrome", async (testCase) => {
     const page = await openPage({
+      pathname: controlUiSessionPath("agent:main:main").slice(1),
       deviceLess: testCase.deviceLess,
       scenario: testCase.operatorScopes
         ? {
@@ -584,6 +588,7 @@ suite.define(() => {
 
   it("keeps the mobile drawer modal, keyboard-contained, and focus-restoring", async () => {
     const page = await openPage({
+      pathname: controlUiSessionPath("agent:main:main").slice(1),
       nativeNav: false,
       scenario: {
         methodResponses: { "sessions.list": chatSessionListResponse() },
@@ -727,6 +732,7 @@ suite.define(() => {
     "keeps drawer toast actionable and handed-off toast clear of chat chrome in $finalLayout $colorScheme mode",
     async ({ colorScheme, finalLayout, finalViewport }) => {
       const page = await openPage({
+        pathname: controlUiSessionPath("agent:main:main").slice(1),
         colorScheme,
         height: 844,
         nativeNav: false,

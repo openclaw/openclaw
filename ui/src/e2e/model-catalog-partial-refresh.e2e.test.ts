@@ -2,6 +2,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import partialConfig from "../../../test/fixtures/config-corpus/provider-partially-unavailable.json" with { type: "json" };
 import type { ModelCatalogResult } from "../api/types.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -115,7 +116,7 @@ suite.define(() => {
         },
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const composer = page.locator(".agent-chat__input").first();
       const effortPicker = composer.locator(".chat-controls__effort-picker");
       const effort = composer.locator('[data-chat-thinking-select="true"]');
@@ -167,7 +168,11 @@ suite.define(() => {
               "sessions.list": sessionList(modelFields(), { sessionId }),
             },
           });
-          await page.goto(`${suite.server.baseUrl}${route}`);
+          await page.goto(
+            route === "chat"
+              ? controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")
+              : `${suite.server.baseUrl}${route}`,
+          );
           const composer = page.locator(".agent-chat__input").first();
           const model = composer.locator("[data-chat-model-select]");
           await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
@@ -261,7 +266,7 @@ suite.define(() => {
             ),
           },
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const model = page.locator("[data-chat-model-select]");
         await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
         await model.click();

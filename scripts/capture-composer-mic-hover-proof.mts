@@ -7,6 +7,7 @@ import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui
 import {
   canRunPlaywrightChromium,
   installMockGateway,
+  controlUiSessionUrl,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
@@ -33,8 +34,9 @@ const page = await context.newPage();
 page.setDefaultTimeout(30_000);
 
 try {
-  await installMockGateway(page);
-  await page.goto(`${server.baseUrl}chat`);
+  const fixtureSessionKey = "agent:main:main";
+  await installMockGateway(page, { sessionKey: fixtureSessionKey });
+  await page.goto(controlUiSessionUrl(server.baseUrl, fixtureSessionKey));
   const composer = page.locator(".agent-chat__input");
   await composer.waitFor({ state: "visible" });
   const voice = page.getByRole("button", { name: "Start voice input" });

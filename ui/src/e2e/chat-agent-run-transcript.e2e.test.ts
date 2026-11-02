@@ -2,6 +2,7 @@ import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { projectChatDisplayMessages } from "../../../src/gateway/chat-display-projection.js";
 import { createNestedToolActivity } from "../../../src/sessions/nested-tool-activity.js";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -47,7 +48,9 @@ async function openTranscript(
   });
   const page = await context.newPage();
   const gateway = await installMockGateway(page, scenario);
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(
+    controlUiSessionUrl(suite.server.baseUrl, scenario?.sessionKey ?? "agent:main:main"),
+  );
   return { page, gateway };
 }
 

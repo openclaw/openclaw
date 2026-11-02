@@ -2,6 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it } from "vitest";
 import { projectAgentToolActivity } from "../../../src/infra/agent-activity-events.js";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -23,7 +24,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         historyMessages: [{ role: "assistant", content: ready, timestamp: Date.now() }],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.locator(".chat-text").getByText(ready, { exact: true }).waitFor();
       await page.locator(".agent-chat__input textarea").fill("Prepare the release");
       await page.getByRole("button", { name: "Send message" }).click();
@@ -92,7 +93,7 @@ suite.define(() => {
           ]),
         },
       });
-      await historyPage.goto(`${suite.server.baseUrl}chat`);
+      await historyPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await historyPage.locator(".chat-text").getByText(completed, { exact: true }).waitFor();
       const group = historyPage.locator(".chat-activity-group__summary").first();
       // Completed work leaves failed and skipped steps to their rows.

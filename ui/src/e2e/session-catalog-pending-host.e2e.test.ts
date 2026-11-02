@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -42,7 +43,7 @@ suite.define(() => {
         featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
         methodResponses: { "sessions.catalog.list": { catalogs: [catalog] } },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const sidebar = page.locator("openclaw-app-sidebar");
       const heldRow = sidebar.getByText("Paired node release review", { exact: true });
       await heldRow.waitFor();

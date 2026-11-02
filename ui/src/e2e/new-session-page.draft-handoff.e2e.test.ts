@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProof,
@@ -97,7 +98,7 @@ suite.define(() => {
           "sessions.list": createdSessionListResult(sessionKey),
         },
       });
-      await pageA.goto(`${suite.server.baseUrl}chat`);
+      await pageA.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const existingSession = pageA
         .locator(".sidebar-recent-session")
         .filter({ hasText: "Created session" });

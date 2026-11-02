@@ -120,9 +120,7 @@ async function openDiff(
     methodResponses,
   });
   await page.goto(
-    options.sessionKey
-      ? controlUiSessionUrl(suite.server.baseUrl, options.sessionKey)
-      : `${suite.server.baseUrl}chat`,
+    controlUiSessionUrl(suite.server.baseUrl, options.sessionKey ?? "agent:main:main"),
   );
   return { page, gateway };
 }

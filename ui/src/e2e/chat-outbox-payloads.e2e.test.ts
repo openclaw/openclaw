@@ -7,6 +7,7 @@ import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   createChatFlowE2eSuite,
   expectRequestCountStable,
@@ -50,7 +51,9 @@ const expectAttachmentSend = (params: unknown, fields: Record<string, unknown>) 
 const waitForHistory = (page: Page) =>
   paneFor(page).getByText("Mock Gateway: payload lifecycle proof.", { exact: true }).waitFor();
 const openChat = async (page: Page) => {
-  await page.goto(`${suite.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"), {
+    waitUntil: "domcontentloaded",
+  });
   await waitForHistory(page);
 };
 async function queueAttachment(page: Page, message: string) {
@@ -362,7 +365,9 @@ suite.define(() => {
       }, releaseEvent);
       const duplicateGateway = await installGateway(duplicate);
       try {
-        await duplicate.goto(`${suite.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
+        await duplicate.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"), {
+          waitUntil: "domcontentloaded",
+        });
         await duplicateGateway.setOnline(true);
         await waitForControlUiGatewayReady(duplicate);
         await duplicate.waitForFunction(

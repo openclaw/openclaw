@@ -259,7 +259,7 @@ suite.define(() => {
         },
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const composer = page.locator(".agent-chat__composer-combobox > textarea");
       const draft = "Keep this draft while opening agent settings";
       await composer.fill(draft);
@@ -377,7 +377,7 @@ suite.define(() => {
             },
           },
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await page.locator("openclaw-app-sidebar .sidebar-agent-card__main").click();
         const menu = page.locator("openclaw-app-sidebar .sidebar-agent-menu");
         await menu.evaluate(async (dropdown) => {

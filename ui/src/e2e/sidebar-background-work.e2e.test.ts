@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import * as ui from "./session-management.compact.test-support.ts";
@@ -39,7 +40,7 @@ suite.define(() => {
             ],
           },
         );
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
         await ui.visible(row);
         const ring = row.getByRole("img", { name: "Background work running", exact: true });
@@ -104,7 +105,7 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const section = page.locator('[data-session-section="work"]');
       const sectionToggle = section.locator(".sidebar-session-group-toggle");
       await ui.visible(sectionToggle);

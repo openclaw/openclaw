@@ -4,6 +4,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -102,7 +103,7 @@ suite.define(() => {
         ]),
       ]);
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.evaluate(() => {
         document.documentElement.setAttribute("data-theme", "openknot");
         document.documentElement.setAttribute("data-theme-mode", "dark");
@@ -152,7 +153,7 @@ suite.define(() => {
         featureMethods: ["terminal.open"],
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const row = page.locator(`[data-session-key="${adoptedKey}"]`);
       await row.waitFor({ state: "visible" });
       const menuTrigger = row.locator(".sidebar-recent-session__link");

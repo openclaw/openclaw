@@ -3,6 +3,7 @@ import type { BrowserContext, Locator, Page } from "playwright";
 import { expect } from "vitest";
 import { encodePngRgba } from "../../../src/media/png-encode.ts";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { readOutboxPayloadAttachments } from "./chat-flow.test-support.ts";
 function pngChunk(type: string, data: Buffer): Buffer {
   const chunk = Buffer.alloc(data.length + 12);
@@ -107,7 +108,7 @@ export async function outboxChatUrl(
   baseUrl: string,
   origin: "localhost" | "plain HTTP",
 ) {
-  const url = new URL("chat", baseUrl);
+  const url = new URL(controlUiSessionUrl(baseUrl, "agent:main:main"));
   if (origin === "plain HTTP") {
     url.hostname = "plain-http.test";
     await context.route(`${url.origin}/**`, async (route) => {

@@ -46,7 +46,7 @@ async function openChat(options: Parameters<typeof installMockGateway>[1] = {}, 
     await page.clock.install();
   }
   const gateway = await installMockGateway(page, options);
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, mainSessionKey));
   return { page, gateway };
 }
 async function openAbortable(runId: string) {
@@ -645,7 +645,7 @@ suite.define(() => {
       ],
     });
 
-    await page.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await page.goto(controlUiSessionUrl(suite.server?.baseUrl ?? "", mainSessionKey));
     await page.getByText("saved 875.3k tokens", { exact: true }).waitFor();
     await page.locator(".agent-chat__input textarea").fill("keep working");
     // Fix wall time without freezing the mock ACK and rendering timers.

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
+import { navigateToControlUiSession } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import { getInitialHistoryRequests } from "./chat-initial-history.test-support.ts";
 import {
@@ -96,7 +97,7 @@ suite.define(() => {
           expect(await page.locator('.sidebar-recent-session [aria-current="page"]').count()).toBe(
             0,
           );
-          await navigateInApp(page, "chat");
+          await navigateToControlUiSession(page, old.key);
           await waitForCommittedChatRoute(page);
           if (mode === "chip") {
             await oldRow.locator('[aria-current="page"]').waitFor();

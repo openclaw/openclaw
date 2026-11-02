@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
+import { controlUiSessionUrl } from "../../../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   captureScreenshot,
   describeControlUiE2e,
@@ -53,7 +54,7 @@ describeControlUiE2e("Chat plugin installation status", () => {
       },
     });
     try {
-      await page.goto(server.baseUrl + "chat");
+      await page.goto(controlUiSessionUrl(server.baseUrl, "agent:main:main"));
       const cards = page.locator("openclaw-chat-clawhub-card");
       await expect.poll(() => cards.locator(".chat-clawhub-card__install").count()).toBe(2);
       await expect.poll(() => cards.locator(".chat-clawhub-card__dismiss").count()).toBe(2);

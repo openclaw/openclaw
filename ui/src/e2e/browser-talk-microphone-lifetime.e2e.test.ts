@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   createTalkRegressionSuite,
   installTalkGateway,
@@ -34,7 +35,7 @@ suite.define(() => {
           return permission.then(() => getUserMedia(constraints));
         };
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await waitForTalkReady(page);
       await page.getByRole("button", { name: "Start voice input" }).click();
       await expect
@@ -73,7 +74,7 @@ suite.define(() => {
   it("surfaces microphone loss and closes native browser call resources", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const gateway = await installMicrophone(page, "voice-microphone-loss-e2e");
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await waitForTalkReady(page);
       await page.getByRole("button", { name: "Start voice input" }).click();
       await expect

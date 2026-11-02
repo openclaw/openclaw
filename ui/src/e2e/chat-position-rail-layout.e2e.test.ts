@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
@@ -75,7 +76,7 @@ async function keepRailAnchored(page: Page, count: number, direction: string) {
   if (direction === "rtl") {
     await page.addInitScript(() => localStorage.setItem("openclaw.i18n.locale", "ar"));
   }
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
   await page.locator(`.chat-text[dir="${direction}"]`).first().waitFor();
   if (count === 1 || count === 5) {
     // These fixtures end with a clamped user message; expose its scrollable content.
@@ -242,7 +243,7 @@ async function readBottomDock(page: Page) {
     key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
     value: settings,
   });
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
   await page.locator(".sidebar-region--bottom.sidebar-region--open").waitFor();
   const { transcript, track, marks } = chat(page);
   const first = marks.locator(".chat-position-rail__marker").first();

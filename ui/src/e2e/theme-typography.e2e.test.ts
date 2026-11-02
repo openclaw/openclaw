@@ -2,6 +2,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   defaultControlUiFeatureMethods,
   waitForControlUiRoute,
@@ -104,7 +105,7 @@ suite.define(() => {
       const { page } = await openThemedChat(theme, "dark", {
         historyMessages: [historyMessage("assistant", "a >= b and keep ... going", Date.now())],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await expect.poll(() => page.locator(".chat-text").last().textContent()).toContain("keep");
 
       const textarea = page.locator(composerSelector);
@@ -164,7 +165,7 @@ suite.define(() => {
         },
       },
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
 
     const composer = page.locator(composerSelector);
     await composer.waitFor({ state: "visible" });
@@ -243,7 +244,7 @@ suite.define(() => {
   it("keeps system chrome with the mounted route across shell and viewport lifecycles", async () => {
     const { page } = await openThemedChat("claw", "light");
     await page.setViewportSize({ width: 720, height: 900 });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     await page.locator(".agent-chat__composer-combobox textarea").waitFor();
 
     const readChrome = async () => {
@@ -379,7 +380,7 @@ suite.define(() => {
       await paletteGate;
       await route.continue();
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     await waitForComposer(page);
     await page.evaluate(() => {
       const root = document.documentElement;
@@ -466,7 +467,9 @@ suite.define(() => {
       await route.fulfill({ status: 404, body: "", contentType: "text/css" });
     });
 
-    await page.goto(`${suite.server.baseUrl}${basePath.slice(1)}/chat`);
+    await page.goto(
+      controlUiSessionUrl(new URL(`${basePath}/`, suite.server.baseUrl).href, "agent:main:main"),
+    );
     await page
       .locator(".agent-chat__composer-combobox textarea")
       .waitFor({ state: "visible", timeout: 30_000 });

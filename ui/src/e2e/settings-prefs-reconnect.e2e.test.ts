@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
@@ -196,7 +197,11 @@ suite.define(() => {
       const context = await createContext();
       const page = await context.newPage();
       const gateway = await installMockGateway(page, { agentModel: "openai/gpt-5.6-luna" });
-      await page.goto(`${suite.server.baseUrl}${route}`);
+      await page.goto(
+        route === "chat"
+          ? controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")
+          : `${suite.server.baseUrl}${route}`,
+      );
       const selector =
         route === "new" ? ".new-session-page__message" : ".agent-chat__composer-combobox textarea";
       const textarea = page.locator(selector).first();
@@ -279,7 +284,7 @@ suite.define(() => {
       presenceUsers: [{ id: "profile-theme-light", self: true }],
     });
 
-    const response = await page.goto(`${suite.server.baseUrl}chat`);
+    const response = await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     expect(response?.status()).toBe(200);
     await gateway.waitForRequest("config.get");
     await gateway.waitForRequest("users.prefs.get");

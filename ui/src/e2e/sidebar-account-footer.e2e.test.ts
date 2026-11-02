@@ -50,7 +50,7 @@ suite.define(() => {
           },
         ],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const avatar = page.locator(".sidebar-identity-card .viewer-avatar");
       await expect.poll(() => avatar.getAttribute("data-avatar-state")).toBe("pending");
       const before = await avatar.boundingBox();
@@ -94,7 +94,7 @@ suite.define(() => {
           },
         ],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.locator(".mobile-nav-toggle:visible").first().tap();
       const card = page.locator(".sidebar-identity-card:visible").first();
       await expect.poll(async () => (await card.boundingBox())?.x).toBeGreaterThanOrEqual(0);

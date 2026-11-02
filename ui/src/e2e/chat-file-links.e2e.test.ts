@@ -2,6 +2,7 @@ import fs from "node:fs";
 import nodePath from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -83,7 +84,7 @@ suite.define(() => {
       await page.route("**/api/chat/media/outgoing/**", (route) =>
         route.fulfill({ status: 200, contentType: "application/json", body: original }),
       );
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
       await composer.fill("Keep this unsent note.");
       const chatUrl = page.url();
@@ -159,7 +160,7 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await page.locator(`.chat-thread a[data-file-path="${requestPath(report)}"]`).click();
       const fileView = page.locator(".sidebar-file-view:visible");
       const reader = fileView.locator(".sidebar-file-view__markdown");
@@ -209,7 +210,7 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await page.locator('.chat-thread a[data-file-path="/workspace/report.md"]').click();
       const reader = page.locator(".sidebar-file-view:visible .sidebar-file-view__markdown");
       await polledText(reader).toContain("Report");
@@ -257,7 +258,7 @@ suite.define(() => {
             },
           },
         });
-        const response = await page.goto(`${suite.server.baseUrl}chat`);
+        const response = await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         expect(response?.status()).toBe(200);
         if (intent === "list") {
           await openChatSidePanelType(page, "Files");
@@ -354,7 +355,7 @@ suite.define(() => {
           },
         },
       });
-      const response = await page.goto(`${suite.server.baseUrl}chat`);
+      const response = await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const links = page.locator(".chat-thread a.markdown-file-link");
       await links.nth(files.length).waitFor({ state: "visible" });
       const bubble = page.locator(".chat-bubble").filter({ hasText: "Please check" });
@@ -473,7 +474,7 @@ suite.define(() => {
         },
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await openChatSidePanelType(page, "Review");
       await gateway.waitForRequest("sessions.diff");
       await openChatSidePanelType(page, "Files");
@@ -632,7 +633,7 @@ suite.define(() => {
         await page.locator("openclaw-chat-detail-panel").waitFor({ state: "detached" });
       };
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await openPreview("notes.txt");
       await page.locator(".sidebar-file-view").waitFor({ state: "visible" });
       expect(await page.locator(".cm-content").textContent()).toContain(
@@ -706,7 +707,7 @@ suite.define(() => {
               },
             },
           });
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           const link = page.locator('a[data-file-path="skills/release-notes/SKILL.md"]');
           await link.waitFor();
           if (viewport.width === 390) {

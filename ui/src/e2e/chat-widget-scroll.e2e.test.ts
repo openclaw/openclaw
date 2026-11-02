@@ -1,6 +1,7 @@
 import type { CDPSession, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import { scrollChatThreadToTop, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
@@ -191,7 +192,7 @@ suite.define(() => {
             },
           ],
         });
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const thread = page.locator(".chat-thread");
         const frame = page.locator(".chat-tool-card__preview-frame");
         await expect

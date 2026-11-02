@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   createControlUiMockBootstrapConfig,
   installMockGateway,
@@ -23,7 +24,7 @@ suite.define(() => {
         }),
       );
       const artifacts = createControlUiE2eArtifactDir("uploads-policy");
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const textarea = page.locator(".agent-chat__composer-combobox textarea").first();
       await textarea.waitFor({ state: "visible" });
       await textarea.fill("Review this draft");

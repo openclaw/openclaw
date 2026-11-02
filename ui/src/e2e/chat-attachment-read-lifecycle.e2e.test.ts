@@ -227,7 +227,7 @@ suite.define(() => {
       page.on("pageerror", (error) => pageErrors.push(error.message));
       const proofDir = path.join(suite.artifactDir, scenario);
       await mkdir(proofDir, { recursive: true });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       const send = page.getByRole("button", { name: "Send message", exact: true });
       await composer.fill(currentText);
@@ -834,7 +834,7 @@ suite.define(() => {
         maxPayload: 256 * 1024 + 400,
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.fill("Send both files");
       await page.locator(".agent-chat__file-input").setInputFiles([
@@ -874,7 +874,7 @@ suite.define(() => {
       await installDeferredAttachmentReader(page);
       const gateway = await installMockGateway(page);
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       const send = page.getByRole("button", { name: "Send message" });
       await composer.fill("Include the image that is still loading");
@@ -993,7 +993,7 @@ suite.define(() => {
       const proofDir = path.join(suite.artifactDir, "stalled-attachment-read");
       await mkdir(proofDir, { recursive: true });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       const send = page.getByRole("button", { name: "Send message" });
       const draftText = "Draft message while attachment read stalls";

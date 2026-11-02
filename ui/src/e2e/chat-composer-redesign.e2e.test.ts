@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   installMockGateway,
   type ControlUiMockGatewayScenario,
@@ -49,7 +50,7 @@ suite.define(() => {
           const gateway = await installMockGateway(page, {
             models: [modelFixture({ available: false, unavailableReason: reason })],
           });
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           await gateway.waitForRequest("sessions.messages.subscribe");
           const textarea = page.locator(".agent-chat__composer-combobox textarea");
           const sendButton = exactButton(page, "Send message");
@@ -113,7 +114,7 @@ suite.define(() => {
         models: [modelFixture({ available: false, unavailableReason: "auth-failed" })],
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await exactButton(page, "Stop").waitFor();
       await gateway.emitGatewayEvent("chat", {
         errorDetail: {
@@ -145,7 +146,7 @@ suite.define(() => {
         subscriptionInitialHistory: false,
         deferredMethods: ["chat.startup", "models.list"],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("chat.startup");
 
       const composer = page.locator(".agent-chat__input");
@@ -166,7 +167,7 @@ suite.define(() => {
   it("keeps mobile picker panels above an attachment-expanded composer", async () => {
     await suite.withPage({ viewport: { width: 393, height: 852 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("sessions.messages.subscribe");
 
       const composer = page.locator(".agent-chat__input");
@@ -222,7 +223,7 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
       const gateway = await installMockGateway(page);
-      await page.goto(suite.server.baseUrl + "chat");
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("sessions.messages.subscribe");
       const textarea = page.locator(".agent-chat__input textarea");
       const voice = page.getByRole("button", { name: "Start voice input" });

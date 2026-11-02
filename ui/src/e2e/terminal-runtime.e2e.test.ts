@@ -2,6 +2,7 @@ import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -102,7 +103,7 @@ suite.define(() => {
             "terminal.open": terminalSession("copy-terminal"),
           },
         });
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await waitForControlUiGatewayReady(page);
         await page.locator(".agent-chat__composer-combobox textarea").waitFor();
         await page.keyboard.press("Control+Backquote");

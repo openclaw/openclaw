@@ -4,6 +4,10 @@ import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
+  controlUiSessionUrl,
+  navigateToControlUiSession,
+} from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -14,7 +18,6 @@ import { createPageOpener } from "./new-session-page.scenario.test-support.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
-  navigateInApp,
   pollLocatorText,
   WORKSPACE,
   pollAttribute,
@@ -84,7 +87,7 @@ suite.define(() => {
     expect(await gateway.getRequests("terminal.attach")).toHaveLength(0);
     expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
 
-    await navigateInApp(page, "chat");
+    await navigateToControlUiSession(page, "agent:main:main");
     await page.locator(".agent-chat__composer-combobox textarea").waitFor();
     expect(await terminalPage.count()).toBe(0);
     expect(await gateway.getRequests("terminal.close")).toHaveLength(0);
@@ -144,7 +147,7 @@ suite.define(() => {
       { terminalEnabled: true },
     );
 
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const row = page.locator(
       '[data-catalog-session-key="catalog:codex:gateway%3Alocal:resume-thread"]',
     );

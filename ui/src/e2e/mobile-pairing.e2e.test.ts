@@ -9,6 +9,7 @@ import type { OpenClawModalDialog } from "../components/modal-dialog.tsx";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import {
@@ -120,7 +121,7 @@ suite.define(() => {
           "node.list": { nodes: [] },
         },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.locator(".sidebar-identity-card").click();
       const menu = page.locator(".sidebar-identity-menu");
       const pair = menu.locator('[data-value="command:pair-mobile"]');
@@ -184,7 +185,7 @@ suite.define(() => {
         operatorScopes: ["operator.admin"],
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const baseline = page
         .locator(".chat-group.assistant .chat-text")
         .getByText(baselineText, { exact: true });

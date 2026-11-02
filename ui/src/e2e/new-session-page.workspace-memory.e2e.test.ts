@@ -2,6 +2,7 @@ import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
+import { navigateToControlUiSession } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { selectChatModel } from "../test-helpers/select-picker-e2e.ts";
 import {
   createPageOpener,
@@ -79,7 +80,7 @@ async function seedPreferences(
 }
 
 async function returnToDraft(page: Page) {
-  await navigateInApp(page, "chat");
+  await navigateToControlUiSession(page, "agent:main:main");
   await waitForCommittedChatRoute(page);
   await navigateInApp(page, "new-session");
 }
@@ -149,7 +150,7 @@ suite.define(() => {
     });
     await page.goto(`${suite.server.baseUrl}new`);
     await choosePackagesFolder(page);
-    await navigateInApp(page, "chat");
+    await navigateToControlUiSession(page, "agent:main:main");
     await waitForCommittedChatRoute(page);
     const requests = (await gateway.getRequests("fs.listDir")).length;
     await gateway.deferNext("fs.listDir");
@@ -527,7 +528,7 @@ suite.define(() => {
     const newSession = page.locator("openclaw-new-session-page");
     const modelSelect = newSession.locator('[data-chat-model-select="true"]');
     await selectChatModel(newSession, "anthropic/claude-sonnet-4-6");
-    await navigateInApp(page, "chat");
+    await navigateToControlUiSession(page, "agent:main:main");
     await waitForCommittedChatRoute(page);
     const metadataRequests = (await gateway.getRequests("chat.metadata")).length;
     const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
@@ -582,7 +583,7 @@ suite.define(() => {
     await placeTrigger.click();
     await button(page, "Browse folders").click();
     await button(page, "Use this folder").click();
-    await navigateInApp(page, "chat");
+    await navigateToControlUiSession(page, "agent:main:main");
     await waitForCommittedChatRoute(page);
     await gateway.setMethodResponse("agents.list", mainAgentList(MOVED_WORKSPACE));
     await page.reload();

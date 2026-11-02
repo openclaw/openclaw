@@ -2,6 +2,7 @@ import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
   installMockGateway,
@@ -48,7 +49,9 @@ function watchPageErrors(page: Page) {
   return errors;
 }
 async function announceUpdate(page: Page, gateway: MockGatewayControls, mobile = false) {
-  expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
+  expect(
+    (await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")))?.status(),
+  ).toBe(200);
   await gateway.waitForRequest("sessions.messages.subscribe");
   if (mobile) {
     await page.getByRole("button", { name: "Expand sidebar" }).click();

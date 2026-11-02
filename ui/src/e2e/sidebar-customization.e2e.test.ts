@@ -1,6 +1,7 @@
 // Control UI tests cover customizable sidebar navigation and persistence.
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiSessionPath,
@@ -54,7 +55,7 @@ suite.define(() => {
               updatedAt: 1_800_000_000_000 - index * 60_000,
             })),
           });
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           const body = page.locator(".sidebar-shell__body");
           const nav = page.locator(".shell-nav");
           const resizer = page.getByRole("separator", { name: "Resize sidebar" });
@@ -159,7 +160,7 @@ suite.define(() => {
               "route:cron",
             ],
           });
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           if (width < 900) {
             await navigationDrawerToggle(page).click();
           }
@@ -361,7 +362,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
 
       const sidebar = page.locator("openclaw-app-sidebar");
       const pinnedItems = sidebar.locator(
@@ -564,7 +565,7 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("button", { name: "Exit setup" }).isVisible())
         .toBe(false);
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
 
       const pagesButton = sidebar.getByRole("button", { name: "Pages", exact: true });
       let pages = await openSidebarPages(page);
@@ -598,7 +599,7 @@ suite.define(() => {
       const railUsage = pinnedItems.first();
       await railUsage.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.reload();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
       // The transient selected view resets, but saved personal pins do not.
@@ -750,7 +751,7 @@ suite.define(() => {
           );
         }, controlUiBundledGatewayUrl(suite.server.baseUrl));
 
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const sidebar = page.locator("openclaw-app-sidebar");
         const pages = await openSidebarPages(page);
         await pages

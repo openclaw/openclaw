@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatModelPicker, revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { modelPicker, runtimeModel } from "./chat-runtime-fixtures.test-support.ts";
@@ -20,7 +21,7 @@ suite.define(() => {
         ],
       });
       await installMockGateway(page, { agentModel: "openai/gpt-5.6-sol", models: [model] });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const { picker, runtime } = modelPicker(page);
       await openChatModelPicker(picker);
       for (const [id, name, context] of [

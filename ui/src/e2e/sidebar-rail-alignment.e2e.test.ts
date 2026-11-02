@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { captureFrame } from "./sidebar-assertions.test-support.ts";
@@ -40,7 +41,7 @@ suite.define(() => {
             },
           });
           await page.emulateMedia({ colorScheme: "dark" });
-          await page.goto(suite.server.baseUrl + "chat");
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:current"));
           const rail = page.locator("openclaw-app-sidebar .sidebar-rail");
           const owner = page.locator(".sidebar-session-owner-filter .picker-select__trigger");
           await owner.waitFor();

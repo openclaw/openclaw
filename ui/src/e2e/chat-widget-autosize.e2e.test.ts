@@ -200,7 +200,7 @@ suite.define(() => {
           if (saved) {
             await gateway.setMethodResponse("canvas.document.view", canvasView(legacyTrailer));
           }
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           const widget = innerWidget(page);
           const player = widget.getByLabel("Primetime official trailer");
           await readyMedia(player);
@@ -263,7 +263,7 @@ suite.define(() => {
         },
         historyMessages: [assistant(embed("Autosize proof"), 100)],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const frame = widgetFrame(page);
       await frame.waitFor();
       await expect

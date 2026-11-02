@@ -104,7 +104,7 @@ suite.define(() => {
         }
       });
       await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.locator(".agent-chat__composer-combobox textarea").waitFor();
       const inbox = page.locator(".sidebar-issues-button");
       await inbox.waitFor();
