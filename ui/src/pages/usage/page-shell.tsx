@@ -4,6 +4,7 @@ import { createMemo } from "solid-js";
 import type { SessionsUsageResult } from "../../api/types.ts";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status-state.ts";
+import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { PanelRefreshStatus as PanelRefreshStatusView } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
@@ -44,7 +45,15 @@ export function UsagePageShell(props: {
       <HubPageHeader
         active="usage"
         docsUrl="https://docs.openclaw.ai/concepts/usage-tracking"
-        actions={phone() ? props.phoneActions : <UsageAgentScope result={props.result} />}
+        actions={
+          phone() ? (
+            <FloatingHeaderActions fallback={props.phoneActions}>
+              {props.phoneActions}
+            </FloatingHeaderActions>
+          ) : (
+            <UsageAgentScope result={props.result} />
+          )
+        }
       />
       <SettingsWorkspace>{props.children}</SettingsWorkspace>
     </>

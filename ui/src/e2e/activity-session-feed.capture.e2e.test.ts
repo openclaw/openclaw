@@ -262,7 +262,7 @@ suite.define(() => {
           .toBe(false);
         await page.keyboard.press("Escape");
 
-        const actions = activity.locator(".activity-live-actions__trigger");
+        const actions = page.locator(".topnav-shell__page-actions .activity-live-actions__trigger");
         await actions.click();
         await page.getByRole("menuitem", { name: "Expand all" }).click();
         await expect

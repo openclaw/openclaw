@@ -1566,7 +1566,8 @@ openclaw-plugins-page
     text-overflow: ellipsis;
   }
 
-  openclaw-skills-page .skill-library-search__action {
+  openclaw-skills-page .skill-library-search__action,
+  .topnav-shell__page-actions .skill-library-search__action {
     display: inline-flex;
     flex: none;
   }
