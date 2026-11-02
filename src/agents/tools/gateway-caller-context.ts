@@ -44,6 +44,7 @@ import {
   requesterCreatorProfileId,
   type RequesterOrigin,
 } from "../requester-origin.js";
+import { intersectProducerSurfaceToolAllowlists } from "../tool-policy.js";
 import { readToolStringParam, type AnyAgentTool } from "./common.js";
 import type { GatewayToolCallerReceiptAdmission } from "./gateway-caller-receipt.types.js";
 
@@ -612,12 +613,10 @@ export async function withGatewayToolCallerIdentity<T>(
               identity.sessionEventSettings,
             )
           : (identity.sessionEventSettings ?? inheritedOwner?.sessionEventSettings),
-      sessionEventToolsAllow:
-        identity.sessionEventToolsAllow && inheritedOwner?.sessionEventToolsAllow
-          ? identity.sessionEventToolsAllow.filter((name) =>
-              inheritedOwner.sessionEventToolsAllow!.includes(name),
-            )
-          : (identity.sessionEventToolsAllow ?? inheritedOwner?.sessionEventToolsAllow),
+      sessionEventToolsAllow: intersectProducerSurfaceToolAllowlists(
+        identity.sessionEventToolsAllow,
+        inheritedOwner?.sessionEventToolsAllow,
+      ),
       workspaceBaseRefreshSandbox: inheritedValue("workspaceBaseRefreshSandbox"),
       workspacePrAdoptionSessionId: inheritedValue("workspacePrAdoptionSessionId"),
       workspaceEvidenceSandbox: inheritedValue("workspaceEvidenceSandbox"),

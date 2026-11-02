@@ -9,6 +9,10 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { prepareExecExitNotification } from "./bash-tools.exec-notify.js";
+import {
+  isProducerSurfaceToolAllowlist,
+  markToolAllowlistAsProducerSurface,
+} from "./tool-policy.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 it.each([
@@ -51,6 +55,40 @@ it.each([
       expect(readSessionEventTargetCommandOwner(target)?.requester.senderId).toBe(
         owner ? senderId : undefined,
       );
+    });
+  },
+);
+
+it.each([[true], [false]] as const)(
+  "keeps the producer-surface fact of its tool cap through capture: %s",
+  async (producerSurface) => {
+    await withOpenClawTestState({ label: "exec-cap-provenance" }, async (state) => {
+      const sessionKey = "agent:main:exec-cap";
+      setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
+      openOpenClawStateDatabase({ env: state.env });
+      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      writeSessionEntry(database, sessionKey, {
+        sessionId: "exec-cap",
+        updatedAt: Date.now(),
+        permissionMode: "full",
+      });
+      const process = createProcessSessionFixture({ id: "exec-cap", backgrounded: true });
+      Object.assign(process, { agentId: "main", sessionKey, notifyOnExit: true });
+      const toolsAllow = ["read", "exec", "message"];
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey,
+          sessionEventToolsAllow: producerSurface
+            ? markToolAllowlistAsProducerSurface([...toolsAllow])
+            : [...toolsAllow],
+        },
+        () => prepareExecExitNotification(process, false),
+      );
+      const target = expectDefined(process.notifySessionTarget, "exec completion destination");
+      // The ceiling survives either way; only its provenance differs.
+      expect(target.toolsAllow).toEqual(toolsAllow);
+      expect(isProducerSurfaceToolAllowlist(target.toolsAllow)).toBe(producerSurface);
     });
   },
 );

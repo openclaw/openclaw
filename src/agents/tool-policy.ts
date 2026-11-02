@@ -16,10 +16,14 @@ export {
   attachToolAllowlistIntersection,
   couldNormalizeToolNamePrefixToAllowedTool,
   expandToolGroups,
+  intersectProducerSurfaceToolAllowlists,
+  isProducerSurfaceToolAllowlist,
+  markToolAllowlistAsProducerSurface,
   normalizeToolList,
   normalizeToolPolicyName,
   readToolAllowlistIntersection,
   resolveToolProfilePolicy,
+  retainProducerSurfaceToolAllowlist,
 } from "./tool-policy-shared.js";
 
 /** Tool allow/deny policy shape accepted by agent and sandbox config. */
