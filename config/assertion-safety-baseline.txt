@@ -2247,7 +2247,7 @@ src/templates/project-build.ts	4
 src/templates/project.ts	2
 src/templates/reader.ts	3
 src/templates/schema.ts	2
-src/trajectory/export.ts	8
+src/trajectory/export.ts	7
 src/trajectory/runtime-store.sqlite.ts	1
 src/trajectory/runtime.ts	2
 src/transcripts/config.ts	2
