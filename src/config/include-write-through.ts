@@ -505,6 +505,11 @@ export async function publishStagedIncludeWrites(params: {
           configPath: target.absolutePath,
           previousRaw: currentRaw,
           content: entry.bytes,
+          warn: (message) => {
+            if (!params.skipOutputLogs) {
+              console.warn(message);
+            }
+          },
           fsModule: guardedFs.fileSystem,
           assertCurrent: guardedFs.assertCurrent,
           assertBeforeMutation: guardedFs.assertBeforeMutation,

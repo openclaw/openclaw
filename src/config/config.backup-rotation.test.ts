@@ -1,6 +1,8 @@
+import { Console } from "node:console";
 import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { useConfigCliIntegrationHarness } from "../cli/config-cli.integration.test-harness.js";
 import { createPreUpdateConfigSnapshot } from "./backup-rotation.js";
@@ -159,6 +161,103 @@ describe("config backup rotation", () => {
         warn.mockRestore();
       }
     });
+  });
+
+  it("mixed config saves report failed include backups and honor silent writes", async () => {
+    const root = {
+      gateway: { mode: "local", port: 19000 },
+      agents: { defaults: { model: { primary: "ollama/llama3" } } },
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            api: "ollama",
+            models: { $include: "models.json" },
+          },
+        },
+      },
+    };
+    await withConfig(
+      "openclaw-config-mixed-backup-warning-",
+      JSON.stringify(root),
+      async ({ configPath, tempDir }) => {
+        const includePath = path.join(tempDir, "models.json");
+        const original = '[{"id":"llama3","name":"Llama"}]\n';
+        await fs.writeFile(includePath, original, { mode: 0o600 });
+        const patchPath = path.join(tempDir, "patch.json");
+        await fs.writeFile(
+          patchPath,
+          JSON.stringify({
+            gateway: { port: 19001 },
+            models: {
+              providers: {
+                ollama: {
+                  models: [
+                    { id: "llama3", name: "Llama" },
+                    { id: "qwen3", name: "Qwen" },
+                  ],
+                },
+              },
+            },
+          }),
+        );
+        let output = "";
+        const stream = new Writable({
+          write(chunk, _encoding, done) {
+            output += String(chunk);
+            done();
+          },
+        });
+        const originalConsole = globalThis.console;
+        const rename = failBackupRename(includePath);
+        globalThis.console = new Console({ stdout: stream, stderr: stream });
+        try {
+          await run(["config", "patch", "--file", patchPath]);
+
+          const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+          expect(saved.gateway.port).toBe(19001);
+          expect(saved.models.providers.ollama.models).toEqual({ $include: "models.json" });
+          expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual([
+            { id: "llama3", name: "Llama" },
+            { id: "qwen3", name: "Qwen" },
+          ]);
+          await expectPathMissing(`${includePath}.bak`);
+          expect(output.split("Config backup rotation failed")).toHaveLength(2);
+          expect(output).toContain("openclaw backup create --verify");
+          expect(output).not.toContain(includePath);
+          expect(output).not.toContain(original);
+
+          output = "";
+          const io = createConfigIO({ observe: false });
+          const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
+          const quiet = structuredClone(snapshot.config);
+          quiet.gateway = { ...quiet.gateway, port: 19002 };
+          const provider = quiet.models?.providers?.ollama;
+          if (!provider) {
+            throw new Error("Saved Ollama provider is missing");
+          }
+          for (const model of provider.models) {
+            model.name = "Quiet";
+          }
+          await io.writeConfigFile(quiet, {
+            ...writeOptions,
+            baseSnapshot: snapshot,
+            skipOutputLogs: true,
+          });
+          expect(JSON.parse(await fs.readFile(configPath, "utf8")).gateway.port).toBe(19002);
+          expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toMatchObject([
+            { id: "llama3", name: "Quiet" },
+            { id: "qwen3", name: "Quiet" },
+          ]);
+          await expectPathMissing(`${includePath}.bak`);
+          expect(output).toBe("");
+        } finally {
+          globalThis.console = originalConsole;
+          rename.mockRestore();
+          stream.end();
+        }
+      },
+    );
   });
 
   it.skipIf(IS_WINDOWS).each(["symlink", "hardlink"])(
