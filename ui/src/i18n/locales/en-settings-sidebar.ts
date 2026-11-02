@@ -14,6 +14,7 @@ const enSettingsSidebar = {
     autoSaveRejected: "Settings not applied",
     autoSaveRejectedHint: "Current settings are unchanged.",
     rejectionDetails: "Show reason",
+    rejectionDetailsHide: "Hide reason",
     recoveryReload: "Discard draft and reload",
     autoSaveConflict: "Settings changed elsewhere",
     retry: "Retry",

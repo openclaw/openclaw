@@ -83,7 +83,9 @@ describe("settings save indicator", () => {
     });
     expect(indicator.textContent).toContain("Save failed");
     expect(indicator.textContent).not.toContain("Saving");
-    expect(indicator.querySelector("details")?.textContent).toContain("permission denied");
+    expect(indicator.querySelector(".settings-save-indicator__reason")?.textContent).toContain(
+      "permission denied",
+    );
     button("Discard draft and reload")?.click();
     expect(onReload).toHaveBeenCalledOnce();
     expect(onRetry).not.toHaveBeenCalled();
@@ -97,11 +99,13 @@ describe("settings save indicator", () => {
     const feedback = indicator.querySelector('[role="status"]');
     expect(feedback?.textContent).toContain(message);
     if (status === "error") {
-      expect(feedback).toMatchObject({ title: lastError, ariaLabel: `${message}: ${lastError}` });
+      expect(feedback).toMatchObject({ ariaLabel: `${message}: ${lastError}` });
     } else {
       expect(indicator.textContent).toContain("Current settings are unchanged.");
-      expect(indicator.querySelector("details")?.textContent).toContain(lastError);
-      expect(indicator.querySelector(".settings-save-indicator--danger")).toBeNull();
+      expect(indicator.querySelector(".settings-save-indicator__reason")?.textContent).toContain(
+        lastError,
+      );
+      expect(indicator.querySelector(".settings-save-indicator__failure")).toBeNull();
     }
     button("Retry")?.click();
     expect(onRetry).toHaveBeenCalledOnce();
@@ -129,7 +133,9 @@ describe("settings save indicator", () => {
     expect(indicator.textContent?.trim()).toBe("Saving…");
     await update({ status: "error", lastError });
     expect(indicator.textContent).toContain("Save failed");
-    expect(indicator.querySelector('[role="status"]')).toMatchObject({ title: lastError });
+    expect(indicator.querySelector(".settings-save-indicator__reason")?.textContent).toBe(
+      lastError,
+    );
   });
 
   it("applies pending changes and reports the in-flight state", async () => {

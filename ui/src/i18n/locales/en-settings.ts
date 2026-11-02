@@ -2002,6 +2002,7 @@ const enSettings = {
     autoSaveRejected: registerSettingsSidebarEnglish.catalog.configView.autoSaveRejected,
     autoSaveRejectedHint: registerSettingsSidebarEnglish.catalog.configView.autoSaveRejectedHint,
     rejectionDetails: registerSettingsSidebarEnglish.catalog.configView.rejectionDetails,
+    rejectionDetailsHide: registerSettingsSidebarEnglish.catalog.configView.rejectionDetailsHide,
     recoveryNotRestored: en.configView.recoveryNotRestored,
     recoveryUnknown: en.configView.recoveryUnknown,
     recoveryBackup: en.configView.recoveryBackup,

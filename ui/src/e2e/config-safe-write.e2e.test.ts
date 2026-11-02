@@ -205,11 +205,14 @@ suite.define(() => {
       // Let the resize settle so the comparison below only sees save feedback.
       let fieldBefore = await endpoint.boundingBox();
       await expect
-        .poll(async () => {
-          const previous = fieldBefore;
-          fieldBefore = await endpoint.boundingBox();
-          return previous?.y === fieldBefore?.y;
-        })
+        .poll(
+          async () => {
+            const previous = fieldBefore;
+            fieldBefore = await endpoint.boundingBox();
+            return previous?.x === fieldBefore?.x && previous?.y === fieldBefore?.y;
+          },
+          { interval: 500 },
+        )
         .toBe(true);
       await gateway.resolveDeferred("config.set");
       await expectSaveStatus(page, "Saved");
