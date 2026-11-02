@@ -3,6 +3,14 @@ import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
 const enAgentsHome = {
+  chat: {
+    sidebar: {
+      resetAgentOrder: "Reset agent order",
+      agentMoved: "{agent} moved to position {position} of {total}.",
+      agentOrderTooLarge:
+        "This order exceeds the saved preference limit. Your previous order is unchanged.",
+    },
+  },
   agentsHome: {
     pinnedAgents: "Pinned agents",
     noAssistantMessage: "No assistant reply yet",

@@ -4,9 +4,10 @@ import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForAgentPanel } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
+import { registerAgentsHomeEnglish } from "../i18n/locales/en-agents-home.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { SidebarDropdown } from "./app-sidebar-dropdown.tsx";
 import { COMMAND_VALUE_PREFIX } from "./sidebar-identity-menu-links.tsx";
@@ -20,6 +21,7 @@ import {
   type MenuItem,
 } from "./solid/menu.tsx";
 
+registerEnglishCatalog(registerAgentsHomeEnglish);
 const AGENT_VALUE_PREFIX = "agent:";
 
 type SidebarAgentMenuSwitcherParams = {

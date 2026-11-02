@@ -77,6 +77,11 @@ type ProfileNavigation = {
   sidebarAgentOrder?: string[];
   personalSessionGroups?: PersonalSessionGroup[];
 };
+const NAVIGATION_FIELDS = [
+  ["railShortcuts", "sidebarEntries", normalizeSidebarEntries],
+  ["sidebarAgentOrder", "sidebarAgentOrder", normalizeSidebarAgentOrder],
+  ["personalSessionGroups", "personalSessionGroups", normalizePersonalSessionGroups],
+] as const;
 type PersistedUiSettings = Omit<
   UiSettings,
   | "token"
@@ -235,19 +240,17 @@ export function readSettingsForGateway(
 
 export function profileNavigation(
   parsed: PersistedUiSettings | undefined,
-  profileId: string,
+  profileId?: string | null,
 ): ProfileNavigation | null {
-  const entry = asOptionalRecord(parsed?.navigationByProfile?.[profileId]);
-  const railShortcuts = normalizeSidebarEntries(entry?.railShortcuts);
-  const sidebarAgentOrder = normalizeSidebarAgentOrder(entry?.sidebarAgentOrder);
-  const personalSessionGroups = normalizePersonalSessionGroups(entry?.personalSessionGroups);
-  return railShortcuts || sidebarAgentOrder || personalSessionGroups
-    ? {
-        ...(railShortcuts ? { railShortcuts } : {}),
-        ...(sidebarAgentOrder ? { sidebarAgentOrder } : {}),
-        ...(personalSessionGroups ? { personalSessionGroups } : {}),
-      }
-    : null;
+  const entry = asOptionalRecord(profileId ? parsed?.navigationByProfile?.[profileId] : parsed);
+  const navigation: ProfileNavigation = {};
+  for (const [key, , normalize] of NAVIGATION_FIELDS) {
+    const value = normalize(entry?.[key]);
+    if (value != null) {
+      Object.assign(navigation, { [key]: value });
+    }
+  }
+  return Object.keys(navigation).length ? navigation : null;
 }
 
 function tokenSessionKeyForGateway(gatewayUrl: string): string {
@@ -426,9 +429,8 @@ export function loadUiPreferences(
     const customTheme = parseImportedCustomTheme(parsed.customTheme);
     const { theme, mode } = parseThemeSelection(parsed.theme, parsed.themeMode);
     const textScale = normalizeTextScale(parsed.textScale);
-    const parsedRecord = asOptionalRecord(parsed) ?? {};
     const profileId = resolveProfileAppearanceProfileId(gatewayUrl);
-    const personalNavigation = profileId ? profileNavigation(parsed, profileId) : null;
+    const personalNavigation = profileNavigation(parsed, profileId);
     const booleanSetting = <K extends BooleanSettingKey>(key: K) => {
       const value = parsed[key];
       return typeof value === "boolean" ? value : defaults[key];
@@ -481,15 +483,9 @@ export function loadUiPreferences(
       sidebarPreTeamScope: normalizeSidebarPreTeamScope(parsed.sidebarPreTeamScope),
       sidebarCollapsedAgentIds: normalizeUniqueTrimmedStringList(parsed.sidebarCollapsedAgentIds),
       sidebarRecentlyCreatedAgentId: normalizeOptionalString(parsed.sidebarRecentlyCreatedAgentId),
-      sidebarEntries: profileId
-        ? (personalNavigation?.railShortcuts ?? defaults.sidebarEntries)
-        : (normalizeSidebarEntries(parsedRecord.railShortcuts) ?? defaults.sidebarEntries),
-      personalSessionGroups: profileId
-        ? (personalNavigation?.personalSessionGroups ?? [])
-        : (normalizePersonalSessionGroups(parsed.personalSessionGroups) ?? []),
-      sidebarAgentOrder: profileId
-        ? (personalNavigation?.sidebarAgentOrder ?? [])
-        : (normalizeSidebarAgentOrder(parsed.sidebarAgentOrder) ?? []),
+      sidebarEntries: personalNavigation?.railShortcuts ?? defaults.sidebarEntries,
+      personalSessionGroups: personalNavigation?.personalSessionGroups ?? [],
+      sidebarAgentOrder: personalNavigation?.sidebarAgentOrder ?? [],
       sidebarLiveActivity: booleanSetting("sidebarLiveActivity"),
       chatMessageMaxWidth: normalizeChatMessageMaxWidth(parsed.chatMessageMaxWidth),
       showAdvancedSettings: booleanSetting("showAdvancedSettings"),
@@ -526,20 +522,13 @@ export function patchSettings(
 ): UiSettings {
   const previous = loadSettings(patch.gatewayUrl);
   const next = { ...previous, ...patch };
-  if (Object.hasOwn(patch, "sidebarAgentOrder")) {
-    next.sidebarAgentOrder = normalizeSidebarAgentOrder(patch.sidebarAgentOrder) ?? [];
-  }
-  if (Object.hasOwn(patch, "personalSessionGroups")) {
-    next.personalSessionGroups = normalizePersonalSessionGroups(patch.personalSessionGroups) ?? [];
-  }
-  saveSettings(next, {
-    selectGateway: options.selectGateway ?? patch.gatewayUrl !== undefined,
-    writeNavigation: {
-      railShortcuts: Object.hasOwn(patch, "sidebarEntries"),
-      sidebarAgentOrder: Object.hasOwn(patch, "sidebarAgentOrder"),
-      personalSessionGroups: Object.hasOwn(patch, "personalSessionGroups"),
-    },
-  });
+  Object.assign(
+    next,
+    saveSettings(next, {
+      selectGateway: options.selectGateway ?? patch.gatewayUrl !== undefined,
+      navigationPatch: patch,
+    }),
+  );
   settingsChangeListener?.(previous, next);
   return next;
 }
@@ -561,7 +550,7 @@ export function saveSettings(
   next: UiSettings,
   options: {
     selectGateway?: boolean;
-    writeNavigation?: Partial<Record<keyof ProfileNavigation, boolean>>;
+    navigationPatch?: Partial<UiSettings>;
   } = {},
 ) {
   const storage = getSafeLocalStorage();
@@ -584,21 +573,19 @@ export function saveSettings(
   }
   const profileId = resolveProfileAppearanceProfileId(next.gatewayUrl);
   // Each action owns only its fields; group edits cannot replay stale pins, or vice versa.
-  const writesShortcuts =
-    !options.writeNavigation || options.writeNavigation.railShortcuts === true;
-  const writesGroups =
-    !options.writeNavigation || options.writeNavigation.personalSessionGroups === true;
-  const writesAgentOrder =
-    !options.writeNavigation || options.writeNavigation.sidebarAgentOrder === true;
-  const navigation: ProfileNavigation = {
-    ...(writesShortcuts ? { railShortcuts: next.sidebarEntries } : {}),
-    ...(writesAgentOrder
-      ? { sidebarAgentOrder: normalizeSidebarAgentOrder(next.sidebarAgentOrder) ?? [] }
-      : {}),
-    ...(writesGroups
-      ? { personalSessionGroups: normalizePersonalSessionGroups(next.personalSessionGroups) ?? [] }
-      : {}),
-  };
+  const navigation: ProfileNavigation = {};
+  const profilelessNavigation: ProfileNavigation = {};
+  const canonicalNavigation: Partial<UiSettings> = {};
+  for (const [key, setting, normalize] of NAVIGATION_FIELDS) {
+    if (!options.navigationPatch || Object.hasOwn(options.navigationPatch, setting)) {
+      const value = setting === "sidebarEntries" ? next[setting] : (normalize(next[setting]) ?? []);
+      Object.assign(navigation, { [key]: value });
+      Object.assign(canonicalNavigation, { [setting]: value });
+    }
+    Object.assign(profilelessNavigation, {
+      [key]: !profileId && Object.hasOwn(navigation, key) ? navigation[key] : source?.parsed[key],
+    });
+  }
   const pendingNavigation = {
     ...(settingsFallback?.key === scopedKey ? settingsFallback.pendingNavigation : null),
   };
@@ -607,7 +594,7 @@ export function saveSettings(
     // through storage failure so recovery cannot replay an unchanged sibling layout.
     const storedNavigation = profileNavigation(source?.parsed, profileId);
     const changed: ProfileNavigation = {};
-    for (const key of ["railShortcuts", "sidebarAgentOrder", "personalSessionGroups"] as const) {
+    for (const [key] of NAVIGATION_FIELDS) {
       if (
         Object.hasOwn(navigation, key) &&
         JSON.stringify(navigation[key]) !== JSON.stringify(storedNavigation?.[key])
@@ -680,16 +667,7 @@ export function saveSettings(
     sidebarCollapsedAgentIds: next.sidebarCollapsedAgentIds?.length
       ? normalizeUniqueTrimmedStringList(next.sidebarCollapsedAgentIds)
       : undefined,
-    railShortcuts:
-      !profileId && writesShortcuts ? next.sidebarEntries : source?.parsed.railShortcuts,
-    sidebarAgentOrder:
-      !profileId && writesAgentOrder
-        ? navigation.sidebarAgentOrder
-        : source?.parsed.sidebarAgentOrder,
-    personalSessionGroups:
-      !profileId && writesGroups
-        ? navigation.personalSessionGroups
-        : source?.parsed.personalSessionGroups,
+    ...profilelessNavigation,
     sidebarEntries: source?.parsed.sidebarEntries,
     sidebarPinnedRoutes: source?.parsed.sidebarPinnedRoutes,
     navigationByProfile: {
@@ -745,4 +723,5 @@ export function saveSettings(
   if (owner && gatewayOriginScope(owner.gatewayUrl()) === scope) {
     owner.refresh();
   }
+  return canonicalNavigation;
 }

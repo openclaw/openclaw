@@ -1782,10 +1782,6 @@ const startupEnglish = {
       reorderItem: "Reorder {item}",
       moveUp: "Move up",
       moveDown: "Move down",
-      resetAgentOrder: "Reset agent order",
-      agentMoved: "{agent} moved to position {position} of {total}.",
-      agentOrderTooLarge:
-        "This order exceeds the saved preference limit. Your previous order is unchanged.",
       hideFromSidebar: "Hide from sidebar",
       sectionHidden: "{section} hidden.",
       sectionHiddenRecovery: "Show it again in Settings > Appearance > Sidebar.",
