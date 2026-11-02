@@ -129,19 +129,30 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main e57f41560520: qualify removal of only two implied assertions:
-the inline-media PNG prefix exclusion already follows from the generic data:
-exclusion on the same prompt, and the plain-fallback inequality follows from
-the retained complete HTML table prefix on the same rendered string.
-Keep all eight physical declarations/cases, every fixture/input and every
-other assertion across both suites; production remains unchanged.
+Pinned main e57f41560520: remove only two implied assertions. The PNG-specific
+inline-media prefix exclusion follows from the generic data-prefix exclusion
+on the same prompt; the plain-fallback inequality follows from the retained
+complete HTML table prefix on the same rendered string.
 
-Root source/support/caller/history qualification is complete. The named
-49-path fence from c17c6245ce35 changes only a Doctor operation inventory
-entry; selected sources, dependencies, instructions and static routes are
-unchanged. Runtime baseline, actual-owner fault controls on both original
-and candidate tests, removal scans, focused checks, fresh review, published
-proof and CI remain pending.
+All eight physical declarations/cases, every fixture/input and every other
+assertion remain. The untouched official baseline and clean candidate both
+pass all eight without skips. Actual serializer prefix-leak and canonical
+plain-fallback faults each fail their intended retained keeper on both the
+original and candidate tests; all other cases pass. Temporary owners are
+restored byte-for-byte. The required unchanged attempt.test.ts sibling passes
+all35 cases with no skips.
+
+All removal components completed. Both unused-file phases and the script-only
+export phase pass. Production/full-tree exports and the export wrapper report
+the same unused buildRequestBody export in the AI package on the candidate
+and an exact original-source snapshot. These inherited failures remain red;
+no suppression or baseline allowance is added.
+
+Typed lint, scoped core/extension types, formatting, ledger MDX and whitespace
+pass. Two test lines are removed; production and the shared test-line scalar
+are unchanged. The managed checkout stays code-only; official Native owns
+test dependencies. Fresh committed-range review, final published proof and
+CI remain pending.
 
 ## Completed source review
 
