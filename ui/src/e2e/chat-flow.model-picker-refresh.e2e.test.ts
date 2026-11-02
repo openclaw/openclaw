@@ -435,7 +435,7 @@ suite.define(() => {
       });
       expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-      const stop = page.getByRole("button", { name: "Stop generating", exact: true });
+      const stop = page.getByRole("button", { name: "Stop", exact: true });
       expect(await stop.count()).toBe(1);
       await gateway.emitChatFinal({ runId, text: "The first reply finished normally." });
       await bubble(page, "The first reply finished normally.");
