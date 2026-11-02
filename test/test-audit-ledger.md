@@ -121,19 +121,24 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main744232dfe4dd: isolate the Telegram network decision fixtures from
-inherited DNS-result ordering using the existing environment stub lifecycle.
-Preserve both physical declarations/all five expanded cases, every assertion,
-input row, platform mock and memoization contract. No production change or
-retirement of declarations, assertions, rows, helpers or exports.
+Pinned main744232dfe4dd: isolate Telegram network-decision fixtures from inherited
+DNS-result ordering using the existing environment stub lifecycle. The normal
+runner with inherited IPv4-first ordering fails exactly the original runtime-
+default row while the other four cases pass. The added stub makes all five
+cases pass under the same inherited environment; the clean candidate also
+passes five. Production owners remain byte-for-byte unchanged.
 
-Selected source, determining owners/supports, actual caller, siblings, history,
-instructions, static routing and dependency inputs are qualified at the frozen
-base. Untouched official baseline, original/repaired normal-runner controls with
-inherited IPv4-first DNS ordering, clean candidate, focused checks, fresh review,
-published proof and CI remain pending. A passing original inherited-environment
-control rejects this premise. Input isolation only; no observed cross-test leak,
-live Gateway, Telegram transport or Bot API claim.
+The untouched official baseline passes all five cases on extension-telegram.
+Both physical declarations, every assertion, input row, platform mock and
+memoization contract remain. One additional test line has an exact one-line
+allocation; production and the shared test-line scalar are unchanged.
+
+Typed lint, scoped extensions test types, format, ledger MDX and whitespace pass.
+No declaration, assertion, row, helper or export retirement; removal scans do
+not apply. Input isolation only; no observed cross-test leak, live Gateway,
+Telegram transport or Bot API proof.
+
+Fresh review, final published proof and CI remain pending.
 
 ## Completed source review
 
