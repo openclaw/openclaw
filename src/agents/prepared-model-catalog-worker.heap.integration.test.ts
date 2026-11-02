@@ -329,7 +329,12 @@ export function register(api) {
   );
   const config = {
     ...fixture.config,
-    plugins: { ...fixture.config.plugins, load: { paths: [entry] } },
+    plugins: {
+      ...fixture.config.plugins,
+      load: { paths: [entry] },
+      // Keep registration inputs stable instead of applying Vitest's memory defaults per load.
+      slots: { memory: "none" },
+    },
   };
   const metadataByWorkspace = new Map<string, PluginMetadataSnapshot>();
   const metadataForWorkspace = (workspaceDir: string) => {

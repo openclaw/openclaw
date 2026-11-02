@@ -1,2 +1,2 @@
 # Real worker registration identity across catalog revisions and config changes.
-35
+40
