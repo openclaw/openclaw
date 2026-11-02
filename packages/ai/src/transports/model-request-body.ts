@@ -1,7 +1,7 @@
 const REQUEST_BODY = Symbol("modelRequestBody");
 const payloadObservers = new WeakSet<object>();
 
-/** Observing wrappers inherit mutation requirements from the hook they delegate to. */
+/** Input observers may patch request settings; caller hooks still require editable input. */
 export function markModelPayloadObserver<T extends object>(observer: T, wrapped?: object): T {
   if (!hasMutableModelPayloadHook(wrapped)) {
     payloadObservers.add(observer);
