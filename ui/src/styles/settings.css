@@ -1469,6 +1469,58 @@ textarea.settings-input {
   }
 }
 
+openclaw-approvals-page .data-table-pagination {
+  border-top: 0;
+}
+
+/* Each grant is one exact command with one action, so the whole command stays
+   visible and nothing hides behind a disclosure. */
+.standing-grants {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+}
+
+.standing-grants__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px var(--space-4);
+  padding: var(--space-2);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+}
+
+.standing-grants__automation,
+.standing-grants__command,
+.standing-grants__meta {
+  grid-column: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.standing-grants__command {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: inherit;
+}
+
+.standing-grants__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-3);
+  color: var(--muted);
+}
+
+.standing-grants__revoke {
+  grid-area: 1 / 2 / span 3;
+  align-self: start;
+}
+
 /* Quiet-hours details stay connected to their toggle without changing row controls. */
 .quiet-hours-window .settings-row {
   padding-top: 0;
