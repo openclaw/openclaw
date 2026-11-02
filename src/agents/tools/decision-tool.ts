@@ -51,7 +51,7 @@ export function createDecisionTool(
       ) {
         continue;
       }
-      const model = providers[selection.provider]?.models.find((model) => model.id === modelId);
+      const model = providers[selection.provider]?.models.find((entry) => entry.id === modelId);
       if (model) {
         return model.inference?.decision;
       }
