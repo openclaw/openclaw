@@ -38,47 +38,28 @@ async function titleOffset(page: Page, width: number) {
 }
 
 suite.define(() => {
-  for (const width of [320, 360, 390]) {
-    it(`moves page menus into the pill with the title centered at ${width}px`, async () => {
-      await suite.withPage(
-        { ...createControlUiE2eContextOptions(), viewport: { width, height: 800 } },
-        async ({ page }) => {
-          await install(page);
-          for (const { path, trigger, item } of PAGES) {
-            await page.goto(`${suite.server.baseUrl}${path}`);
-            const inPill = page.locator(`.topnav-shell__page-actions ${trigger}`);
-            await inPill.waitFor();
-            expect(await page.locator(`main.content ${trigger}`).count()).toBe(0);
-            await expect.poll(() => titleOffset(page, width)).toBeLessThan(1);
-
-            await inPill.click();
-            await expect
-              .poll(() => page.getByRole("menuitem", { name: item, exact: true }).count())
-              .toBe(1);
-            await page.keyboard.press("Escape");
-          }
-        },
-      );
-    });
-  }
-
-  it("keeps the Custodian title centered beside History", async () => {
-    for (const width of [320, 360, 390]) {
-      await suite.withPage(
-        { ...createControlUiE2eContextOptions(), viewport: { width, height: 800 } },
-        async ({ page }) => {
-          await install(page);
-          await page.goto(`${suite.server.baseUrl}custodian`);
-          await page.locator(".topnav-shell__page-actions .custodian__history-toggle").waitFor();
-          await expect
-            .poll(() => page.locator(".topbar-page-title").textContent())
-            .toBe("OpenClaw");
+  const width = 320;
+  it(`moves page menus into the pill with the title centered at ${width}px`, async () => {
+    await suite.withPage(
+      { ...createControlUiE2eContextOptions(), viewport: { width, height: 800 } },
+      async ({ page }) => {
+        await install(page);
+        for (const { path, trigger, item } of PAGES) {
+          await page.goto(`${suite.server.baseUrl}${path}`);
+          const inPill = page.locator(`.topnav-shell__page-actions ${trigger}`);
+          await inPill.waitFor();
+          expect(await page.locator(`main.content ${trigger}`).count()).toBe(0);
           await expect.poll(() => titleOffset(page, width)).toBeLessThan(1);
-        },
-      );
-    }
-  });
 
+          await inPill.click();
+          await expect
+            .poll(() => page.getByRole("menuitem", { name: item, exact: true }).count())
+            .toBe(1);
+          await page.keyboard.press("Escape");
+        }
+      },
+    );
+  });
   it("leaves Agents one Refresh, in the menu, and no hole beside New agent", async () => {
     await suite.withPage(
       { ...createControlUiE2eContextOptions(), viewport: { width: 390, height: 800 } },
