@@ -591,6 +591,7 @@ export async function maybeRepairGatewayServiceConfig(
         env: serviceInstallEnv,
         token: gatewayTokenForRepair,
         assertCurrent: options.serviceMaintenance?.assertCurrent,
+        runNativePhase: options.serviceMaintenance?.runNativePhase,
       });
       note(
         reused

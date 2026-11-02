@@ -44,6 +44,7 @@ import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import type { GatewayServiceControlArgs, GatewayServiceEnv } from "./service-types.js";
 import {
   assertGatewayServiceUpdateCurrent,
+  runGatewayServiceNativePhase,
   isUpdateOwnedGatewayServiceCommand,
 } from "./service-update-authority.js";
 
@@ -143,6 +144,7 @@ async function assertGatewayPortReleasedAfterStop(
   await cleanStaleGatewayProcesses(port, {
     env: cleanupEnv,
     assertCurrent: assertNativeCurrent,
+    runNativePhase: runGatewayServiceNativePhase,
   });
   const diagnostics = await inspectPortUsage(port, {
     probeHosts,

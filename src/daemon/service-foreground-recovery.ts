@@ -8,6 +8,7 @@ import { sleep } from "../utils/sleep.js";
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import type { GatewayService, GatewayServiceControlArgs } from "./service-types.js";
+import { runGatewayServiceNativePhase } from "./service-update-authority.js";
 import { assertSystemdServiceActionAllowed } from "./systemd-lifecycle.js";
 import {
   assertNoSystemGatewayOwnershipForActivation,
@@ -65,14 +66,19 @@ export async function recoverForegroundGatewayForService(
       assertCurrent();
     }
     // A current lease identifies our state owner; a fresh start time excludes PID reuse.
-    if (
-      owner.startedAt === null ||
-      getFileLockProcessStartTime(owner.pid, ownerEnv) !== owner.startedAt
-    ) {
-      throw new Error(`Foreground Gateway pid ${owner.pid} identity changed; process preserved.`);
-    }
     try {
-      process.kill(owner.pid, "SIGTERM");
+      await runGatewayServiceNativePhase(() => {
+        assertCurrent();
+        if (
+          owner.startedAt === null ||
+          getFileLockProcessStartTime(owner.pid, ownerEnv) !== owner.startedAt
+        ) {
+          throw new Error(
+            `Foreground Gateway pid ${owner.pid} identity changed; process preserved.`,
+          );
+        }
+        process.kill(owner.pid, "SIGTERM");
+      });
     } catch (error) {
       if (!hasErrnoCode(error, "ESRCH")) {
         throw error;

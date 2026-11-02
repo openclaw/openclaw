@@ -634,6 +634,58 @@ it.each(["append", "restart"] as const)("captures a committed prefix across WAL 
   }
 });
 
+it("retries current acquisition when a commit arrives during main verification", async () => {
+  const fixture = createFixture(Buffer.alloc(0));
+  const writer = new (requireNodeSqlite().DatabaseSync)(fixture.sourcePath);
+  let prepared: Awaited<ReturnType<typeof prepareSqliteReadOnlyCopyInProcess>> | undefined;
+  try {
+    writer.exec(`
+      PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;
+      CREATE TABLE entries(value TEXT); PRAGMA wal_checkpoint(TRUNCATE);
+      INSERT INTO entries VALUES('before-copy');
+    `);
+    const read = fs.readSync.bind(fs);
+    let committed = false;
+    let afterCommit: ReturnType<typeof snapshotSqliteFamily> | undefined;
+    interceptSourceReads(fixture.sourcePath, (descriptor, buffer, options) => {
+      const count = read(descriptor, buffer, options);
+      if (
+        !committed &&
+        (options.length ?? buffer.byteLength) > 100 &&
+        listDirectoryTreeStrictSync(fixture.stagingRoot).some((entry) =>
+          entry.relativePath.endsWith("-wal"),
+        )
+      ) {
+        committed = true;
+        writer.exec("INSERT INTO entries VALUES('during-main-verification')");
+        afterCommit = snapshotSqliteFamily(fixture.sourcePath);
+      }
+      return count;
+    });
+    prepared = await prepareSqliteReadOnlyCopyInProcess(
+      fixture.sourcePath,
+      fixture.stagingRoot,
+      undefined,
+      "current",
+    );
+    expect(committed).toBe(true);
+    expectRows(prepared.location, {
+      "SELECT value FROM entries ORDER BY rowid": [
+        { value: "before-copy" },
+        { value: "during-main-verification" },
+      ],
+      "PRAGMA integrity_check": [{ integrity_check: "ok" }],
+    });
+    expect(snapshotSqliteFamily(fixture.sourcePath)).toEqual(afterCommit);
+  } finally {
+    if (prepared) {
+      expect(await prepared.cleanupAsync()).toBe(true);
+    }
+    writer.close();
+    expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
+  }
+});
+
 it("rejects a reset WAL paired with checkpoint-restored main bytes during native copying", async () => {
   const fixture = createFixture(Buffer.alloc(0));
   const sqlite = requireNodeSqlite();

@@ -32,7 +32,7 @@ export function retainOpenClawStateWorkerLease(
   host?.assertSharedStateAdmission();
   const maintenance = context.maintenanceScope;
   context.admission.assertCurrent();
-  maintenance?.assertAdmission();
+  maintenance?.assertReadAdmission();
   const ready = createDeferredCore();
   const admitted = createDeferredCore();
   const released = createDeferredCore();
@@ -72,7 +72,7 @@ export function retainOpenClawStateWorkerLease(
       throw new SqliteWorkerError("Shared-state worker lease is closed", "closed");
     }
     context.admission.assertCurrent();
-    maintenance?.assertAdmission();
+    maintenance?.assertReadAdmission();
   };
   const retireNative = () => {
     retirement ??= (async () => {

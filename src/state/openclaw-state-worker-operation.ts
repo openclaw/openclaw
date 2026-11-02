@@ -37,7 +37,7 @@ export function runWithCapturedWorkerContext<T>(
 ): Promise<T> {
   const maintenance = context.maintenanceScope;
   const run = () =>
-    maintenance ? maintenance.run(() => maintenance.track(operation())) : operation();
+    maintenance ? maintenance.run(() => maintenance.track(operation()), "read") : operation();
   return context.runInCapturedSchemaScope ? context.runInCapturedSchemaScope(run) : run();
 }
 

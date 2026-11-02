@@ -1,3 +1,4 @@
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type {
   OpenClawStateDatabaseOptions,
   OpenClawStateSchemaReadAdmission,
@@ -7,12 +8,18 @@ import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
-  readCurrentOpenClawStateDatabaseContentVersion,
+  withCurrentOpenClawStateReadScope,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
 } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import type { OpenClawStateReadOptions } from "../state/openclaw-state-read.types.js";
+import { existingPathOrUndefined } from "../state/openclaw-state-db.paths.js";
+import type {
+  OpenClawStateReadOnlyDatabase,
+  OpenClawStateReadOptions,
+} from "../state/openclaw-state-read.types.js";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "./kysely-sync.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
 import { withUpdateRunRead } from "./update-run-read-admission.js";
 import {
   decodeRun,
@@ -130,38 +137,94 @@ export function createUpdateRunAdmissionReader(
   input: UpdateRunListInput,
   options: OpenClawStateDatabaseOptions,
   openStateSchemaReadAdmission: OpenClawStateSchemaReadAdmission,
-): () => UpdateRunRecord[] {
-  const readWarm = createOpenClawStateCurrentWarmReader(
-    ({ db }) => readUpdateRuns(db, input),
-    options,
-    openStateSchemaReadAdmission,
-  );
-  let previous: { version: string; runs: UpdateRunRecord[] } | undefined;
-  return () => {
+): (() => UpdateRunRecord[]) & {
+  runPrepared<T>(this: void, operation: () => T, signal?: AbortSignal): Promise<Awaited<T>>;
+} {
+  const readWarm = createOpenClawStateCurrentWarmReader(options, openStateSchemaReadAdmission);
+  let preparedRead: (() => UpdateRunRecord[]) | undefined;
+  const read = () => {
+    if (preparedRead) {
+      return preparedRead();
+    }
     // PostgreSQL ledger writes do not change the SQLite anchor's content fingerprint.
     if (isStatePostgres()) {
-      previous = undefined;
       return listUpdateRuns(input, options, openStateSchemaReadAdmission);
     }
-    const warm = readWarm();
+    const warm = readWarm(({ db }) => readUpdateRuns(db, input));
     if (warm.available) {
-      previous = undefined;
       return warm.value;
     }
-    const version = readCurrentOpenClawStateDatabaseContentVersion(options);
-    if (version !== undefined && previous?.version === version) {
-      return previous.runs;
-    }
-    previous = undefined;
-    const runs = listUpdateRuns(input, options, openStateSchemaReadAdmission);
-    if (
-      version !== undefined &&
-      version === readCurrentOpenClawStateDatabaseContentVersion(options)
-    ) {
-      previous = { version, runs };
-    }
-    return runs;
+    // Shipped synchronous callers retain their contract. Doctor's async-only
+    // inspection scope refuses an unprepared cold call before starting a child.
+    return listUpdateRuns(input, options, openStateSchemaReadAdmission);
   };
+  const consume = <T>(
+    database: OpenClawStateReadOnlyDatabase | undefined,
+    operation: () => T,
+    signal?: AbortSignal,
+  ) => {
+    signal?.throwIfAborted();
+    const parent = preparedRead;
+    preparedRead = () => {
+      signal?.throwIfAborted();
+      return database ? readUpdateRuns(database.db, input) : [];
+    };
+    try {
+      return operation();
+    } finally {
+      // Neither retained callbacks nor continuations after await may borrow this image.
+      preparedRead = parent;
+    }
+  };
+  return Object.assign(read, {
+    async runPrepared<T>(operation: () => T, signal?: AbortSignal): Promise<Awaited<T>> {
+      const callerSignal = resolveSqliteInspectionSignal(signal ?? getAsyncWorkSignal());
+      callerSignal?.throwIfAborted();
+      if (preparedRead || isStatePostgres()) {
+        return await operation();
+      }
+      let started: { result: T } | undefined;
+      const invoke = (database: OpenClawStateReadOnlyDatabase | undefined) =>
+        (started = { result: consume(database, operation, callerSignal) });
+      try {
+        const warm = readWarm(invoke);
+        if (warm.available) {
+          return await warm.value.result;
+        }
+        const prepared = withCurrentOpenClawStateReadScope(options, (pathname) => ({
+          pathname,
+          result: withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+            invoke,
+            options,
+            openStateSchemaReadAdmission,
+            callerSignal,
+          ),
+        }));
+        const result = await prepared.result;
+        callerSignal?.throwIfAborted();
+        if (!result && existingPathOrUndefined(prepared.pathname) !== undefined) {
+          throw new Error(
+            "Shared state appeared during update admission preparation; retry Doctor.",
+          );
+        }
+        return await (result ?? invoke(undefined)).result;
+      } catch (error) {
+        // A callback may launch a native child before private reader cleanup fails.
+        // Never release custody while that launched effect is unsettled.
+        if (started) {
+          const [outcome] = await Promise.allSettled([started.result]);
+          if (outcome.status === "rejected" && outcome.reason !== error) {
+            throw new AggregateError(
+              [error, outcome.reason],
+              "Update admission read and native continuation failed.",
+              { cause: error },
+            );
+          }
+        }
+        throw error;
+      }
+    },
+  });
 }
 
 /** Keep the fixed status projection in one read-worker snapshot. */

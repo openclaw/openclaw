@@ -14,6 +14,7 @@ import {
   getUpdateDoctorConfigWriteAuthority,
   assertUpdateDoctorConfigInputHash,
   recordUpdateDoctorConfigWrite,
+  runUpdateDoctorConfigPublication,
 } from "../infra/update-doctor-result.js";
 import { initializeNativeSessionCatalogPreferences } from "../plugins/native-session-catalog-config.js";
 import { assertAgentDeletionTargetsUnchanged } from "./agent-workspace-roster-transition.js";
@@ -534,12 +535,14 @@ export async function writeConfigFileFromContext(
       publication.phase = "published";
       return published;
     };
-    const result = databaseAccessAllowed
-      ? withDeferredPluginMigrationsCurrent(
-          { env: deps.env, configPath, expectedPending: pendingMigrations },
-          publish,
-        )
-      : publish();
+    const result = await runUpdateDoctorConfigPublication(() =>
+      databaseAccessAllowed
+        ? withDeferredPluginMigrationsCurrent(
+            { env: deps.env, configPath, expectedPending: pendingMigrations },
+            publish,
+          )
+        : publish(),
+    );
     options.assertConfigPathForWrite?.();
     publication.phase = "accepted";
     recordUpdateDoctorConfigWrite(configPath, previousHash, nextHash, snapshot.parsed, json);

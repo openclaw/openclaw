@@ -309,7 +309,7 @@ export function runSqliteReadOnlyWorker(
 export function runSqliteReadOnlyWorker(
   pathname: string,
   options: {
-    mode: "sync" | "async" | "file-generation";
+    mode: "sync" | "current" | "async" | "file-generation";
     stagingRoot?: string;
     signal?: AbortSignal;
   },

@@ -52,7 +52,7 @@ export function prepareOpenClawStateReadSource(input: { path: string; env?: Node
   let worker: OpenClawStateWorkerContext | undefined;
 
   const refresh = () => {
-    original.maintenanceScope?.assertAdmission();
+    original.maintenanceScope?.assertReadAdmission();
     if (!original.admission.identity.key.startsWith("file:")) {
       original.admission.assertCurrent();
     }
@@ -70,7 +70,7 @@ export function prepareOpenClawStateReadSource(input: { path: string; env?: Node
     return (context = next);
   };
   const current = () => {
-    context.maintenanceScope?.assertAdmission();
+    context.maintenanceScope?.assertReadAdmission();
     try {
       context.admission.assertCurrent();
       if (context.admission.identity.key.startsWith("file:")) {

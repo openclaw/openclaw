@@ -434,6 +434,8 @@ async function runStandaloneDoctor(
       signal: new AbortController().signal,
       warnings: [],
       settle: (operation) => operation(),
+      runNativePhase: async (operation) => await operation(),
+      runInstallationNativePhase: async (operation) => await operation(),
     });
     return;
   }

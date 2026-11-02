@@ -106,7 +106,7 @@ export function startOpenClawStateReadOperation(
     signal,
     assertCurrent() {
       signal.throwIfAborted();
-      context.maintenanceScope?.assertAdmission();
+      context.maintenanceScope?.assertReadAdmission();
       context.admission.assertCurrent();
       openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(pathname, "cached-read");
     },

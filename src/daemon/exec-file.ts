@@ -12,6 +12,7 @@ import {
   assertGatewayServiceUpdateCurrent,
   getGatewayServiceUpdateNativeCommand,
   GatewayServiceAuthorityError,
+  runGatewayServiceNativePhase,
 } from "./service-update-authority.js";
 
 export type ExecResult = Pick<SpawnResult, "stdout" | "stderr"> & {
@@ -46,24 +47,23 @@ export async function execFileUtf8(
       }
     : undefined;
   try {
-    beforeEffect?.();
     // Scoped dispatch serializes before its parent-currentness check. Ordinary
     // calls retain the existing synchronous assertion and unbound runner.
     const runNative = scopedNative ?? runCommandWithTimeout;
+    const dispatch = () => {
+      beforeEffect?.();
+      return runNative([command, ...args], {
+        baseEnv: resolveServiceManagerEnv(options.env),
+        cwd: options.cwd ?? (process.platform === "win32" ? undefined : "/"),
+        killSignal: options.killSignal,
+        maxOutputBytes: 1024 * 1024,
+        timeoutMs: options.timeout,
+        ...(scopedNative && beforeEffect ? { beforeInput: beforeEffect } : {}),
+      });
+    };
     const { stdout, stderr, code, termination, signal, cleanup } = await withChildProcessOperation(
       "service.manager",
-      () =>
-        runNative([command, ...args], {
-          baseEnv: resolveServiceManagerEnv(options.env),
-          // sudo -u can inherit an operator directory the service account cannot enter.
-          cwd: options.cwd ?? (process.platform === "win32" ? undefined : "/"),
-          killSignal: options.killSignal,
-          maxOutputBytes: 1024 * 1024,
-          timeoutMs: options.timeout,
-          // The retained root spawner withholds its gate input until this callback.
-          // Recheck after queueing and child custody, before native effects are released.
-          ...(scopedNative && beforeEffect ? { beforeInput: beforeEffect } : {}),
-        }),
+      () => (beforeEffect && !scopedNative ? runGatewayServiceNativePhase(dispatch) : dispatch()),
     );
     // Compensation cannot run while an earlier writer may still be active.
     if (scoped && cleanup === "uncertain") {

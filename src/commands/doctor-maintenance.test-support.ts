@@ -13,7 +13,7 @@ export function createDoctorMaintenanceFixture(overrides: Partial<DoctorMaintena
     failureFacts: [],
     databaseWrites: undefined,
     serviceUpdateVerdict: undefined,
-    run: <T>(operation: () => T): T => operation(),
+    run: async <T>(operation: () => T): Promise<Awaited<T>> => await operation(),
     releaseState: vi.fn(async () => {}),
     repairSqliteNoCow: vi.fn(async () => {}),
     enableSqliteReclamation: vi.fn(async () => {}),

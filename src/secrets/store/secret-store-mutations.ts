@@ -21,16 +21,23 @@ type WorkerWriteOptions = {
 export type SecretStoreWriteParams = Omit<KernelWriteParams, "database"> & WorkerWriteOptions;
 export type SecretStoreBatchWriteParams = Omit<KernelBatchParams, "database"> & WorkerWriteOptions;
 
-function admission(context: OpenClawStateWorkerContext, assertCallerCurrent?: () => void) {
+function admission(
+  context: OpenClawStateWorkerContext,
+  assertCallerCurrent?: () => void,
+  runNativePhase?: <T>(operation: () => T) => Promise<Awaited<T>>,
+) {
   const assertCurrent = () => {
     context.admission.assertCurrent();
     assertCallerCurrent?.();
   };
   return {
     assertCurrent,
-    createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-      context.admission.databasePath,
-    ]),
+    createAdmission: createSqliteWorkerWriteAdmission(
+      assertCurrent,
+      [context.admission.databasePath],
+      undefined,
+      runNativePhase,
+    ),
   };
 }
 
@@ -168,6 +175,7 @@ export async function writeSecretStoreEntryForConfigRef(params: {
   value: string;
   updatedBy: string;
   assertCurrent?: () => void;
+  runNativePhase?: <T>(operation: () => T) => Promise<Awaited<T>>;
   database?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
 }): Promise<string> {
   registerSecretValueForRedaction(params.value);
@@ -185,7 +193,7 @@ export async function writeSecretStoreEntryForConfigRef(params: {
           now: Date.now(),
         },
       }),
-    admission(context, () => params.assertCurrent?.()),
+    admission(context, () => params.assertCurrent?.(), params.runNativePhase),
   );
   return name;
 }

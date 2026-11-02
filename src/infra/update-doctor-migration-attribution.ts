@@ -197,14 +197,20 @@ export async function runUpdateSqliteMigrationAsync<T>(
   const signal = resolveSqliteInspectionSignal(getAsyncWorkSignal());
   signal?.throwIfAborted();
   const operation = updateSqliteMigrationSteps(...args);
-  let step = operation.next();
+  const advance = async <R>(next: () => R) => {
+    const scope = getOpenClawDatabaseMaintenanceScope();
+    return scope ? await scope.runNativePhase(next) : next();
+  };
+  // Releasing retained native exclusion cannot require a new effect grant.
+  const unwind = (error: unknown) => operation.throw(error);
+  let step = await advance(() => operation.next()).catch(unwind);
   while (!step.done) {
     try {
       await step.value.readAsync(signal);
       signal?.throwIfAborted();
-      step = operation.next();
+      step = await advance(() => operation.next());
     } catch (error) {
-      step = operation.throw(error);
+      step = unwind(error);
     }
   }
   if (isPromiseLike(step.value)) {

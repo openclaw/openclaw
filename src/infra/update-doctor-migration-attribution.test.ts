@@ -129,11 +129,16 @@ it.each([
   "cancel before mutation",
   "lose authority before mutation",
   "cancel after commit",
+  "lose authority after commit",
 ] as const)("settles awaited native migration observations (%s)", async (outcome) => {
   const { pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
   const generations = readUpdateDatabaseGenerations([pathname]);
   const controller = new AbortController();
   const failure = new Error(outcome);
+  const commitsMutation =
+    outcome === "complete" ||
+    outcome === "cancel after commit" ||
+    outcome === "lose authority after commit";
   let current = true;
   let observations = 0;
   const { receipt } = await withCapture(
@@ -161,6 +166,8 @@ it.each([
             }
           } else if (outcome === "cancel after commit") {
             controller.abort(failure);
+          } else if (outcome === "lose authority after commit") {
+            current = false;
           }
           return observed;
         });
@@ -184,19 +191,13 @@ it.each([
         } else {
           await expect(migration).rejects.toBe(failure);
         }
-        expect(mutate).toHaveBeenCalledTimes(
-          outcome === "complete" || outcome === "cancel after commit" ? 1 : 0,
-        );
-        expect(observations).toBe(
-          outcome === "complete" || outcome === "cancel after commit" ? 2 : 1,
-        );
+        expect(mutate).toHaveBeenCalledTimes(commitsMutation ? 1 : 0);
+        expect(observations).toBe(commitsMutation ? 2 : 1);
         expect(synchronous).not.toHaveBeenCalled();
         expect(database.isTransaction).toBe(false);
         expect(database.prepare("PRAGMA locking_mode").get()?.locking_mode).toBe("normal");
         expect(database.prepare("SELECT value FROM retained ORDER BY value").all()).toEqual(
-          outcome === "complete" || outcome === "cancel after commit"
-            ? [{ value: 7 }, { value: 8 }]
-            : [{ value: 7 }],
+          commitsMutation ? [{ value: 7 }, { value: 8 }] : [{ value: 7 }],
         );
       } finally {
         clearImmediate(immediate);

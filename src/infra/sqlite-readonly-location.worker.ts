@@ -66,6 +66,7 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
   const stagingRoot = args[2] || undefined;
   if (
     (mode !== "sync" &&
+      mode !== "current" &&
       mode !== "private-fork" &&
       mode !== "update-generation" &&
       mode !== "async" &&
@@ -107,6 +108,7 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       args.length > 4 ||
       (args[3] !== undefined &&
         mode !== "sync" &&
+        mode !== "current" &&
         mode !== "staged-sync" &&
         mode !== "metadata" &&
         mode !== "private-fork")
@@ -233,8 +235,13 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
     } else {
       const destination = staged && stagingRoot ? { directory: stagingRoot } : stagingRoot;
       prepared =
-        mode === "sync" || mode === "staged-sync"
-          ? await prepareSqliteReadOnlyCopyInProcess(pathname, destination, expectedSourceIdentity)
+        mode === "sync" || mode === "current" || mode === "staged-sync"
+          ? await prepareSqliteReadOnlyCopyInProcess(
+              pathname,
+              destination,
+              expectedSourceIdentity,
+              mode === "current" ? "current" : undefined,
+            )
           : await prepareSqliteReadOnlyLocationInProcess(pathname, destination);
     }
     releaseSnapshotTempDirectory(prepared.cleanupRoot ?? path.dirname(prepared.location));

@@ -99,10 +99,14 @@ async function runSystemdServiceAction(
     commandTimeoutMs = timeout + 5_000;
   }
   let runSystemctl: (args: string[]) => ReturnType<typeof execSystemctl>;
+  const beforeEffect = () => {
+    params.assertCurrent?.();
+    params.beforeEffect?.();
+  };
   if (installed?.scope === "system") {
     runSystemctl = (args) => {
       params.assertCurrent?.();
-      return execSystemctl(args, env, commandTimeoutMs, params.beforeEffect);
+      return execSystemctl(args, env, commandTimeoutMs, beforeEffect);
     };
   } else {
     runSystemctl = (args) =>
@@ -112,7 +116,7 @@ async function runSystemdServiceAction(
         commandTimeoutMs,
         params.assertCurrent,
         action === "stop" ? { warn } : undefined,
-        params.beforeEffect,
+        beforeEffect,
       );
   }
   if (action !== "stop") {

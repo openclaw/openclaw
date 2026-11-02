@@ -173,11 +173,15 @@ export async function prepareSqliteReadOnlyLocation(
     requireCleanup?: boolean;
     /** Mutable consumers need exclusive bytes, including while preparation is in flight. */
     shared?: false;
+    /** Current authority rejects WAL commits arriving during private acquisition. */
+    current?: true;
   } = {},
 ): Promise<PreparedSqliteReadOnlyLocation> {
   const signal = resolveSqliteInspectionSignal(options.signal);
   const preserveSourceArtifacts =
-    options.preserveSourceArtifacts === true || isArtifactPreservingStateRead("agent", pathname);
+    options.current === true ||
+    options.preserveSourceArtifacts === true ||
+    isArtifactPreservingStateRead("agent", pathname);
   try {
     signal?.throwIfAborted();
     if (!preserveSourceArtifacts && options.allowLiveOwner !== false) {
@@ -191,7 +195,7 @@ export async function prepareSqliteReadOnlyLocation(
     const requireCleanup = options.requireCleanup ?? options.signal !== undefined;
     return prepareSingleFlightSqliteSnapshot(
       pathname,
-      `${preserveSourceArtifacts ? "worker-sync" : "worker-async"}:${requireCleanup ? "strict" : "best-effort"}:sync-token`,
+      `${options.current ? "worker-current" : preserveSourceArtifacts ? "worker-sync" : "worker-async"}:${requireCleanup ? "strict" : "best-effort"}:sync-token`,
       async (flightSignal, recordCleanupFailure) => {
         let stagingRoot: string | undefined;
         try {
@@ -199,7 +203,7 @@ export async function prepareSqliteReadOnlyLocation(
           stagingRoot = await createSqliteSnapshotStagingDirectory(undefined, false, flightSignal);
           flightSignal.throwIfAborted();
           const location = await runSqliteReadOnlyWorker(pathname, {
-            mode: preserveSourceArtifacts ? "sync" : "async",
+            mode: options.current ? "current" : preserveSourceArtifacts ? "sync" : "async",
             signal: flightSignal,
             stagingRoot,
           });

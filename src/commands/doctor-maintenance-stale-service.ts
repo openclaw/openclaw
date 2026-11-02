@@ -48,7 +48,7 @@ export async function inspectStaleDoctorGateway(params: {
   root: string;
   env: NodeJS.ProcessEnv;
   before: PreManagedServiceStop;
-  assertCurrent?: () => void;
+  assertCurrent?: () => void | Promise<void>;
 }): Promise<DoctorStaleGateway | undefined> {
   const { before, root, env } = params;
   const legacy = await readLegacyGatewayLockIdentity(env);
@@ -62,7 +62,7 @@ export async function inspectStaleDoctorGateway(params: {
     readBuiltGatewayBuildId(root),
     service.readCommand(serviceEnv).catch(() => null),
   ]);
-  params.assertCurrent?.();
+  await params.assertCurrent?.();
   if ((!version || !buildId) && !legacy) {
     return undefined;
   }
@@ -80,7 +80,7 @@ export async function inspectStaleDoctorGateway(params: {
         openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
         requirePluginHealth: false,
       });
-  params.assertCurrent?.();
+  await params.assertCurrent?.();
   const stale =
     legacy ||
     health?.buildIdMismatch?.actual != null ||
@@ -117,12 +117,12 @@ export async function inspectStaleDoctorGateway(params: {
 export async function assertStaleDoctorGatewayStopped(params: {
   stale: DoctorStaleGateway;
   env: NodeJS.ProcessEnv;
-  assertCurrent?: () => void;
+  assertCurrent?: () => void | Promise<void>;
 }): Promise<void> {
   const runtime = await resolveGatewayService().readRuntime(params.env);
   const port = await probePortUsage(params.stale.port);
   const legacy = await readLegacyGatewayLockIdentity(params.env);
-  params.assertCurrent?.();
+  await params.assertCurrent?.();
   if (runtime.status !== "stopped" || (runtime.pid ?? 0) > 0 || port !== "free" || legacy) {
     throw new Error(
       `Stale Gateway PID ${params.stale.pid ?? "unknown"} did not stop: service=${runtime.status}, PID=${runtime.pid ?? "none"}, port ${params.stale.port}=${port}, legacy lock owner=${legacy?.pid ?? "none"}.`,

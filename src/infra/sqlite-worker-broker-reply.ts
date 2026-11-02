@@ -195,6 +195,7 @@ export async function dispatchSqliteWorkerJob(
             }
           };
           retained.admission.bindDatabaseAuthority({
+            runNativePhase: job.maintenanceScope?.runNativePhase,
             databasePath,
             databaseIdentity: job.request.databaseIdentity,
             ...(job.request.type === "open" &&
@@ -245,38 +246,45 @@ export async function dispatchSqliteWorkerJob(
     job.request.timing = job.observation.timing;
     job.request.requestCustody = job.custody.descriptor;
     const request = prepareSqliteWorkerRequest(job);
-    assertDispatchable();
-    const selection = request.stateContext?.databaseEngineSelection;
-    if (!slot.postgresPoolSent && selection) {
-      // A carrier can be created before boot selects its database engines.
-      request.postgresPool = createPostgresPoolEndpoints(selection);
-    }
-    assertStateAccess?.();
-    job.custody.accept();
-    job.detach();
-    if (actor && request.type !== "close") {
-      // A later request may open or write natively even if its reply is lost.
-      actor.openDispatch.openRefused = false;
-    }
-    job.custody.post();
-    if (request.timing) {
-      request.timing.posted = performance.now();
-    }
-    // Serialized commands are owned by this dispatch; custody keeps their byte charge until settlement.
-    slot.worker.postMessage(request, [
-      ...postgresPoolTransferList(request.postgresPool),
-      ...(request.operationAdmission ? [request.operationAdmission] : []),
-      ...("input" in request ? [request.input.buffer] : []),
-      ...(request.type === "open" && request.preparation ? [request.preparation.buffer] : []),
-    ]);
-    if (request.postgresPool) {
-      slot.postgresPoolSent = true;
-    }
-    if (actor && deliveredStateContext) {
-      actor.deliveredStateContext = deliveredStateContext;
-    }
-    if (request.timing) {
-      request.timing.postFinished = performance.now();
+    const dispatch = () => {
+      assertDispatchable();
+      const selection = request.stateContext?.databaseEngineSelection;
+      if (!slot.postgresPoolSent && selection) {
+        // A carrier can be created before boot selects its database engines.
+        request.postgresPool = createPostgresPoolEndpoints(selection);
+      }
+      assertStateAccess?.();
+      job.custody.accept();
+      job.detach();
+      if (actor && request.type !== "close") {
+        // A later request may open or write natively even if its reply is lost.
+        actor.openDispatch.openRefused = false;
+      }
+      job.custody.post();
+      if (request.timing) {
+        request.timing.posted = performance.now();
+      }
+      // Serialized commands are owned by this dispatch; custody keeps their byte charge until settlement.
+      slot.worker.postMessage(request, [
+        ...postgresPoolTransferList(request.postgresPool),
+        ...(request.operationAdmission ? [request.operationAdmission] : []),
+        ...("input" in request ? [request.input.buffer] : []),
+        ...(request.type === "open" && request.preparation ? [request.preparation.buffer] : []),
+      ]);
+      if (request.postgresPool) {
+        slot.postgresPoolSent = true;
+      }
+      if (actor && deliveredStateContext) {
+        actor.deliveredStateContext = deliveredStateContext;
+      }
+      if (request.timing) {
+        request.timing.postFinished = performance.now();
+      }
+    };
+    if (job.maintenanceScope && (job.createAdmission || request.type === "open")) {
+      await job.maintenanceScope.runNativePhase(dispatch);
+    } else {
+      dispatch();
     }
   } catch (error) {
     // A refused dispatch may have captured a publication without delivering it.

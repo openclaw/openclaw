@@ -207,9 +207,9 @@ async function withRecoveryMetadata<T>(
     outcome?: RecordedOutcome;
     pin: Awaited<ReturnType<typeof pinDirectory>>;
   }) => Promise<T>,
-  assertOwned?: () => void,
+  assertOwned?: () => void | Promise<void>,
 ): Promise<T> {
-  assertOwned?.();
+  await assertOwned?.();
   updateRecoveryBackupRefSchema.partial({ manifestSha256: true }).parse(location);
   if (
     path.resolve(location.directory) !== location.directory ||
@@ -219,7 +219,7 @@ async function withRecoveryMetadata<T>(
   }
   const pin = await pinDirectory(location.directory);
   try {
-    assertOwned?.();
+    await assertOwned?.();
     await assertPinnedDirectoryAt(
       pin,
       location.directory,
@@ -227,11 +227,11 @@ async function withRecoveryMetadata<T>(
     );
     await assertUpdateRecoverySealComplete(location.directory);
     const source = await safeRoot(location.directory, { symlinks: "reject", hardlinks: "reject" });
-    assertOwned?.();
+    await assertOwned?.();
     const bytes = await source.readBytes("manifest.json", {
       maxBytes: MAX_MANIFEST_BYTES,
     });
-    assertOwned?.();
+    await assertOwned?.();
     const ref = { ...location, manifestSha256: sha256Hex(bytes) };
     if (location.manifestSha256 !== undefined && ref.manifestSha256 !== location.manifestSha256) {
       throw new Error("Update recovery manifest changed before metadata access.");
@@ -240,21 +240,21 @@ async function withRecoveryMetadata<T>(
     assertManifestLocation(ref, manifest);
     let outcome: RecordedOutcome | undefined;
     const outcomeEntry = await lstatIfExists(path.join(ref.directory, "outcome.json"), "ENOENT");
-    assertOwned?.();
+    await assertOwned?.();
     if (outcomeEntry) {
       outcome = recordedOutcomeSchema.parse(
         await source.readJson("outcome.json", {
           maxBytes: MAX_UPDATE_RECOVERY_OUTCOME_BYTES,
         }),
       );
-      assertOwned?.();
+      await assertOwned?.();
       if (outcome.manifestSha256 !== ref.manifestSha256) {
         throw new Error("Update recovery outcome refers to another manifest.");
       }
     }
     await pin.assertCurrent();
     await assertUpdateRecoverySealComplete(location.directory);
-    assertOwned?.();
+    await assertOwned?.();
     return await run({ ref, manifest, outcome, pin });
   } finally {
     await pin.close();
@@ -420,8 +420,8 @@ export async function readUpdateRecoveryBaselineIdentity(params: {
   env: NodeJS.ProcessEnv;
   ref?: UpdateRecoveryBackupRef;
   installRoot?: string;
-  readContinuation: () => UpdateRunRecord | undefined;
-  assertCurrent: () => void;
+  readContinuation: () => UpdateRunRecord | undefined | Promise<UpdateRunRecord | undefined>;
+  assertCurrent: () => void | Promise<void>;
 }): Promise<{ ref: UpdateRecoveryBackupRef; manifest: UpdateRecoveryBackupManifest } | undefined> {
   if (!/^[a-zA-Z0-9_-]{1,128}$/u.test(params.runId)) {
     throw new Error("Invalid original update capture run identity.");
@@ -430,7 +430,7 @@ export async function readUpdateRecoveryBaselineIdentity(params: {
   if (expectedRef && !params.installRoot?.trim()) {
     throw new Error("An explicit original capture requires its admitted installation root.");
   }
-  params.assertCurrent();
+  await params.assertCurrent();
   const scopes = captureScopes(params.env);
   const candidates = expectedRef
     ? [expectedRef.directory]
@@ -438,7 +438,7 @@ export async function readUpdateRecoveryBaselineIdentity(params: {
   const present: string[] = [];
   for (const directory of candidates) {
     const entry = await lstatIfExists(directory, "ENOENT");
-    params.assertCurrent();
+    await params.assertCurrent();
     if (!entry) {
       continue;
     }
@@ -460,9 +460,9 @@ export async function readUpdateRecoveryBaselineIdentity(params: {
   let identity:
     | { ref: UpdateRecoveryBackupRef; manifest: UpdateRecoveryBackupManifest }
     | undefined;
-  const assertReuseCurrent = () => {
-    params.assertCurrent();
-    const run = params.readContinuation();
+  const assertReuseCurrent = async () => {
+    await params.assertCurrent();
+    const run = await params.readContinuation();
     if (
       (!expectedRef && !run) ||
       (run && (run.runId !== params.runId || run.status !== "running" || run.finishedAtMs !== null))
@@ -507,24 +507,24 @@ export async function readUpdateRecoveryBaselineIdentity(params: {
     expectedRef ?? { directory, manifestPath: path.join(directory, "manifest.json") },
     async ({ ref, manifest, outcome, pin }) => {
       identity = { ref, manifest };
-      assertReuseCurrent();
+      await assertReuseCurrent();
       if (outcome) {
         throw new Error("A terminal update capture cannot be reused as the original baseline.");
       }
       for (const kind of ["candidate", "prepared"] as const) {
         const entry = await lstatIfExists(path.join(directory, kind), "ENOENT");
-        assertReuseCurrent();
+        await assertReuseCurrent();
         if (entry) {
           throw new Error("Original update capture already has later recovery generations.");
         }
       }
       await pin.assertCurrent();
-      assertReuseCurrent();
+      await assertReuseCurrent();
       return identity;
     },
     assertReuseCurrent,
   );
-  assertReuseCurrent();
+  await assertReuseCurrent();
   return result;
 }
 

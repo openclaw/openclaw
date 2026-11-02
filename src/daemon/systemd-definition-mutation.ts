@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { constants, promises as fs, type BigIntStats } from "node:fs";
+import { constants, fstatSync, promises as fs, type BigIntStats } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
@@ -28,6 +28,7 @@ import {
 import {
   assertGatewayServiceUpdateCurrent,
   GatewayServiceAuthorityError,
+  runGatewayServiceNativePhase,
   withGatewayServiceInstallationRecovery,
 } from "./service-update-authority.js";
 import { execSystemctlUser, readSystemctlDetail } from "./systemd-exec.js";
@@ -337,10 +338,14 @@ export async function withSystemdDefinitionMutation<T>(
       const initial = await inspect(env, environment, { timeoutMs: remainingTimeoutMs() });
       assertServiceDefinitionWritable(initial.capability);
       // Group-writable umasks must not create directories that inspect() would reject.
-      assertGatewayServiceUpdateCurrent();
-      await fs.mkdir(path.dirname(unit), { recursive: true, mode: 0o755 });
-      assertGatewayServiceUpdateCurrent();
-      await fs.mkdir(path.dirname(generated), { recursive: true, mode: 0o700 });
+      await runGatewayServiceNativePhase(() => {
+        assertGatewayServiceUpdateCurrent();
+        return fs.mkdir(path.dirname(unit), { recursive: true, mode: 0o755 });
+      });
+      await runGatewayServiceNativePhase(() => {
+        assertGatewayServiceUpdateCurrent();
+        return fs.mkdir(path.dirname(generated), { recursive: true, mode: 0o700 });
+      });
       if (initial.repairStateDirectory) {
         const directory = await fs.open(
           path.dirname(generated),
@@ -352,8 +357,13 @@ export async function withSystemdDefinitionMutation<T>(
             throw new Error("Cannot repair a foreign-owned service state directory.");
           }
           // Tighten the owned inode before writing service credentials; reads never chmod.
-          assertGatewayServiceUpdateCurrent();
-          await directory.chmod(0o700);
+          await runGatewayServiceNativePhase(() => {
+            assertGatewayServiceUpdateCurrent();
+            if (fstatSync(directory.fd).uid !== process.geteuid?.()) {
+              throw new Error("Cannot repair a foreign-owned service state directory.");
+            }
+            return directory.chmod(0o700);
+          });
         } finally {
           await directory.close();
         }
@@ -411,6 +421,8 @@ export async function withSystemdDefinitionMutation<T>(
           ["daemon-reload"],
           remainingTimeoutMs(),
           assertGatewayServiceUpdateCurrent,
+          undefined,
+          assertGatewayServiceUpdateCurrent,
         );
         assertGatewayServiceUpdateCurrent();
         if (result.code !== 0 || result.termination !== "exit") {
@@ -461,9 +473,11 @@ export async function withSystemdDefinitionMutation<T>(
         await refresh(true);
         // Locks coordinate OpenClaw writers, not external editors: POSIX rename
         // has no expected-inode check. Quiesce administrative edits during installation.
-        assertGatewayServiceUpdateCurrent();
-        options?.definitionTransaction?.assertCurrent();
-        await fs.rename(temporary, file);
+        await runGatewayServiceNativePhase(() => {
+          assertGatewayServiceUpdateCurrent();
+          options?.definitionTransaction?.assertCurrent();
+          return fs.rename(temporary, file);
+        });
         reloadPending ||= file === unit;
         // Re-read every artifact against this inode/payload. Canonical temp paths
         // keep cleanup in the original directory even if the publication alias moves.
@@ -506,9 +520,11 @@ export async function withSystemdDefinitionMutation<T>(
       await options?.definitionTransaction?.beforeWrite();
       await refresh(true);
       await options?.definitionTransaction?.filePrepared(file, null);
-      assertGatewayServiceUpdateCurrent();
-      options?.definitionTransaction?.assertCurrent();
-      await fs.unlink(file);
+      await runGatewayServiceNativePhase(() => {
+        assertGatewayServiceUpdateCurrent();
+        options?.definitionTransaction?.assertCurrent();
+        return fs.unlink(file);
+      });
       initial.fingerprint.set(file, "missing");
       await options?.definitionTransaction?.fileWritten(file, null);
       await refresh(true);
@@ -550,8 +566,10 @@ export async function withSystemdDefinitionMutation<T>(
         await remove(file);
       } else {
         await refresh(true);
-        assertGatewayServiceUpdateCurrent();
-        await fs.unlink(file);
+        await runGatewayServiceNativePhase(() => {
+          assertGatewayServiceUpdateCurrent();
+          return fs.unlink(file);
+        });
         initial.fingerprint.set(file, "missing");
         await refresh(true);
       }

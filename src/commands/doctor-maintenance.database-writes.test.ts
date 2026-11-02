@@ -47,13 +47,14 @@ it.each([false, true])(
         expect(child.status, child.stderr).not.toBe(0);
         expect(fs.existsSync(`${pathname}-shm`)).toBe(true);
         const databaseGenerations = readUpdateDatabaseGenerations([pathname]);
-        const admission = resolveDoctorUpdateAdmission(state.env);
+        const admission = await resolveDoctorUpdateAdmission(state.env);
         const maintenance = await beginDoctorRepair({
           databaseGenerations,
           assertCurrent: admission.assertCurrent,
+          runNativePhase: admission.runPrepared,
         });
         try {
-          maintenance!.run(() => {
+          await maintenance!.run(() => {
             expect(
               withOpenClawStateDatabaseReadOnly(
                 ({ db }) => db.prepare("SELECT count(*) AS count FROM update_runs").get()?.count,

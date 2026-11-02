@@ -2098,7 +2098,6 @@ src/state/openclaw-state-db-borrow.ts
 src/state/openclaw-state-db-cache.admission.ts
 src/state/openclaw-state-db-cache.idle.ts
 src/state/openclaw-state-db-cache.ts
-src/state/openclaw-state-db-content-version.ts
 src/state/openclaw-state-db-cache.wal.ts
 src/state/openclaw-state-db-contract.ts
 src/state/openclaw-state-db-cron-delivery-migration.ts

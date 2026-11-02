@@ -255,10 +255,11 @@ it("keeps config and declared plugin resources while excluding disposable core i
           vi.stubGlobal("SEALED_RUNTIME_BUILD", true);
           await maintenance!.run(async () => {
             const scope = getOpenClawDatabaseMaintenanceScope()!;
-            vi.spyOn(doctorAdmission, "resolveDoctorUpdateAdmission").mockReturnValue({
+            vi.spyOn(doctorAdmission, "resolveDoctorUpdateAdmission").mockResolvedValue({
               assertCurrent: scope.assertAdmission,
               readContinuation: () => undefined,
               recordContinuation() {},
+              runPrepared: async (operation) => await operation(),
             });
             await preserveDoctorOriginalState({
               root: process.cwd(),

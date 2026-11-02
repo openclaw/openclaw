@@ -628,6 +628,7 @@ async function stopManagedServiceBeforeMutableUpdate(
       }
       stoppedAtMs = Date.now();
       await service.stop({
+        runNativePhase: params.runNativePhase,
         env: currentState.env,
         ...(inspected.serviceSystemdIdentity
           ? { systemdIdentity: inspected.serviceSystemdIdentity }

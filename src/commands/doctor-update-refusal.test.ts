@@ -49,7 +49,10 @@ vi.mock("./doctor-service-repair-policy.js", async (importOriginal) => ({
 // These cases exercise service/schema refusal after update admission, not ledger admission.
 vi.mock("../infra/update-run-reader.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-run-reader.js")>()),
-  createUpdateRunAdmissionReader: () => () => [],
+  createUpdateRunAdmissionReader: () =>
+    Object.assign(() => [], {
+      runPrepared: async <T>(operation: () => T) => await operation(),
+    }),
 }));
 
 const activationReason =

@@ -62,7 +62,7 @@ export function setupDoctorAdmissionFixture() {
       vi.unstubAllEnvs();
     }
   });
-  return (keepWriter = false) => {
+  return async (keepWriter = false) => {
     const root = fs.realpathSync(directories.make("doctor-admission-source-"));
     const binding = createManagedHandoffTestBinding(root);
     // Children that never resolve shared scratch still fence every real native
@@ -128,8 +128,9 @@ export function setupDoctorAdmissionFixture() {
     expect(binding.assertPath(resolveManagedUpdateLeaseDatabasePath())).toBe(binding.databasePath);
     // Compiled runtime modules use native builtin exports, outside Vitest's facade.
     // Observe the actual functions and synchronize ESM bindings; calls stay real.
+    const synchronousSpawns = vi.spyOn(childProcess, "spawnSync");
     const spawns = [
-      vi.spyOn(childProcess, "spawnSync"),
+      synchronousSpawns,
       vi.spyOn(childProcess, "spawn"),
       vi.spyOn(childProcess, "execFile"),
     ];
@@ -227,12 +228,35 @@ export function setupDoctorAdmissionFixture() {
       }
       binding.assertPath(resolveManagedUpdateLeaseDatabasePath());
     };
-    const admitted = resolveDoctorUpdateAdmission(env);
+    const beforePreparation = spawns.map((spy) => spy.mock.calls.length);
+    const admitted = await resolveDoctorUpdateAdmission(env);
+    const isReadOnlyChild = (args: unknown) =>
+      Array.isArray(args) && args.includes("--openclaw-sqlite-readonly-child");
+    expect(
+      synchronousSpawns.mock.calls
+        .slice(beforePreparation[0])
+        .filter((call) => isReadOnlyChild(call[1])),
+    ).toEqual([]);
+    expect(
+      spawns.some(
+        (spy, index) =>
+          index > 0 &&
+          spy.mock.calls.slice(beforePreparation[index]).some((call) => {
+            const args = call[1];
+            return (
+              isReadOnlyChild(args) &&
+              Array.isArray(args) &&
+              args[args.indexOf("--openclaw-sqlite-readonly-child") + 1] === "current"
+            );
+          }),
+      ),
+    ).toBe(true);
     return {
       env,
       database,
       family,
       admission: admitted.assertCurrent,
+      runNativePhase: admitted.runPrepared,
       assertIsolation,
       [Symbol.dispose]: assertIsolation,
       createStateDir: () => directories.make("doctor-admission-replacement-"),

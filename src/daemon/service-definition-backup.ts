@@ -36,7 +36,10 @@ import {
   type GatewayServiceCommandConfig,
   type GatewayServiceEnv,
 } from "./service-types.js";
-import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  runGatewayServiceNativePhase,
+} from "./service-update-authority.js";
 import { resolveGatewayService } from "./service.js";
 import { withSystemdDefinitionMutation } from "./systemd-definition-mutation.js";
 import { reloadSystemdUserManager } from "./systemd-exec.js";
@@ -469,8 +472,10 @@ async function restorePreparedGatewayServiceDefinitionBackup(
           });
         } else {
           await hooks.filePrepared(file.sourcePath, null);
-          hooks.assertCurrent();
-          await fs.unlink(file.sourcePath);
+          await runGatewayServiceNativePhase(() => {
+            hooks.assertCurrent();
+            return fs.unlink(file.sourcePath);
+          });
           await hooks.fileWritten(file.sourcePath, null);
         }
       }

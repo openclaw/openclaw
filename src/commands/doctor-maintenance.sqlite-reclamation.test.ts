@@ -39,6 +39,7 @@ it("drains an admitted custom agent outside the state root and retains original 
       signal: controller.signal,
       deadline: () => undefined,
       assertReadCurrent() {},
+      runNativePhase: async (operation) => await operation(),
       settle: (operation) => operation(),
       warn: vi.fn(),
     });

@@ -125,6 +125,7 @@ export type ManagedServicePackageUpdatePlan = {
 };
 
 export type ManagedServiceStopParams = {
+  runNativePhase?: <T>(operation: () => T) => Promise<Awaited<T>>;
   recovery?: unknown;
   updateRun?: UpdateCommandOptions["run"];
   recordPhase?: (phase: "activating") => Promise<void>;

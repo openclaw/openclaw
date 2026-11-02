@@ -16,7 +16,11 @@ import type { GatewayServiceState } from "../daemon/service-types.js";
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { reserveGatewayStateRestoration } from "../infra/gateway-state-owner-record.js";
-import { DoctorMaintenanceRefusalError, UpdateDoctorError } from "../infra/update-doctor-result.js";
+import {
+  DoctorMaintenanceRefusalError,
+  UpdateDoctorError,
+  withUpdateDoctorConfigPublication,
+} from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact, type UpdateFailureFact } from "../infra/update-failure-facts.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -150,6 +154,8 @@ export async function restoreDoctorGatewayService(params: {
   assertCustody?: () => void;
   assertRestoreAdmission?: () => void;
   assertInstallationAdmission?: () => void;
+  runNativePhase: <T>(operation: () => T) => Promise<Awaited<T>>;
+  runInstallationNativePhase: <T>(operation: () => T) => Promise<Awaited<T>>;
 }) {
   const {
     before,
@@ -182,8 +188,9 @@ export async function restoreDoctorGatewayService(params: {
       assertInspectionCurrent();
       assertRestoreAdmission?.();
     };
+    const assertPreparedMaintenanceCurrent = () => params.runNativePhase(assertMaintenanceCurrent);
     const assertAutoStartCurrent = async () => {
-      assertMaintenanceCurrent();
+      await assertPreparedMaintenanceCurrent();
       if (before.serviceAutoStartEnabled === undefined) {
         return;
       }
@@ -194,7 +201,7 @@ export async function restoreDoctorGatewayService(params: {
         );
       }
       const enabled = await settle(() => readEnabled({ env: serviceEnv }));
-      assertMaintenanceCurrent();
+      await assertPreparedMaintenanceCurrent();
       if (enabled !== before.serviceAutoStartEnabled) {
         throw new Error(
           "Gateway native autostart policy changed during Doctor repair; automatic restoration was refused. Inspect gateway status --deep before starting it.",
@@ -255,11 +262,11 @@ export async function restoreDoctorGatewayService(params: {
         }
         inspectionFailure = error;
       }
-      assertMaintenanceCurrent();
+      await assertPreparedMaintenanceCurrent();
       return current;
     };
     await readInspection();
-    assertMaintenanceCurrent();
+    await assertPreparedMaintenanceCurrent();
     let installation = before.serviceUpdateVerdict;
     const inspectActivation = async (): Promise<StoppedGatewayInspection> => {
       const state = current;
@@ -284,7 +291,7 @@ export async function restoreDoctorGatewayService(params: {
         return true;
       }
       const inspection = await inspectActivation();
-      assertMaintenanceCurrent();
+      await assertPreparedMaintenanceCurrent();
       if (inspection.kind === "owned-offline") {
         return true;
       }
@@ -342,17 +349,17 @@ export async function restoreDoctorGatewayService(params: {
           assertMaintenanceCurrent();
           params.assertInstallationAdmission?.();
         };
-        assertInstallationCurrent();
+        await params.runInstallationNativePhase(assertInstallationCurrent);
         await assertAutoStartCurrent();
         const [{ maybeRepairGatewayServiceConfig }, { createDoctorPrompter }] = await Promise.all([
           import("./doctor-gateway-services.js"),
           import("./doctor-prompter.js"),
         ]);
-        assertInstallationCurrent();
+        await params.runInstallationNativePhase(assertInstallationCurrent);
         const originalDefinition = await fingerprintGatewayServiceDefinition(
           current?.command ?? null,
         );
-        assertInstallationCurrent();
+        await params.runInstallationNativePhase(assertInstallationCurrent);
         try {
           cfg = await withGatewayServiceRebindCapture(originalDefinition, async () => {
             try {
@@ -368,7 +375,7 @@ export async function restoreDoctorGatewayService(params: {
                   }),
                   {
                     async writeConfig(nextConfig) {
-                      assertInstallationCurrent();
+                      await params.runInstallationNativePhase(assertInstallationCurrent);
                       // Failed maintenance entry has no inspected Doctor writer context.
                       // Do not fall back to an independent config replacement on recovery.
                       if (!writeConfig) {
@@ -376,13 +383,25 @@ export async function restoreDoctorGatewayService(params: {
                           "Doctor config writer is unavailable during service restoration.",
                         );
                       }
-                      const committed = await writeConfig(nextConfig);
-                      assertInstallationCurrent();
+                      const committed = await withUpdateDoctorConfigPublication(
+                        (operation) =>
+                          params.runInstallationNativePhase(() => {
+                            assertInstallationCurrent();
+                            return operation();
+                          }),
+                        () => writeConfig(nextConfig),
+                      );
+                      await params.runInstallationNativePhase(assertInstallationCurrent);
                       return committed;
                     },
                     serviceMaintenance: {
                       managerUid: before.serviceManagerUid,
-                      assertCurrent: assertInstallationCurrent,
+                      assertCurrent: assertInspectionCurrent,
+                      runNativePhase: (operation) =>
+                        params.runInstallationNativePhase(() => {
+                          assertInstallationCurrent();
+                          return operation();
+                        }),
                       assertReadCurrent: assertInspectionCurrent,
                       beforeMutation: assertAutoStartCurrent,
                     },
@@ -409,16 +428,16 @@ export async function restoreDoctorGatewayService(params: {
           warnings.push(warning);
           params.runtime.log(warning);
         }
-        assertInstallationCurrent();
+        await params.runInstallationNativePhase(assertInstallationCurrent);
         const repairedState = before.stopped ? await readCurrent() : await readInspection();
-        assertInstallationCurrent();
+        await params.runInstallationNativePhase(assertInstallationCurrent);
         if (!repairedState) {
           await mayRestore();
           return undefined;
         }
         assertDoctorServiceSelection(env, repairedState.env);
         const repaired = await revalidate(repairedState);
-        assertInstallationCurrent();
+        await params.runInstallationNativePhase(assertInstallationCurrent);
         if (repaired.kind === "owned" && !repaired.requiresInstallRootRefresh) {
           if (
             originalInstallation.requiresInstallRootRefresh ||
@@ -452,13 +471,13 @@ export async function restoreDoctorGatewayService(params: {
       warnings.push(warning);
       params.runtime.log(warning);
     }
-    assertMaintenanceCurrent();
+    await assertPreparedMaintenanceCurrent();
     // A disabled Scheduled Task cannot run. Older releases disabled it on `gateway stop`;
     // `gateway start` re-enables it, so leave that choice to the operator.
     if (process.platform === "win32" && service.isEnabled) {
       const readEnabled = service.isEnabled;
       const enabled = await settle(() => readEnabled({ env: current?.env ?? serviceEnv }));
-      assertMaintenanceCurrent();
+      await assertPreparedMaintenanceCurrent();
       if (!enabled) {
         const warning = `Gateway Scheduled Task is disabled, so Doctor left the Gateway stopped. Start it with \`${formatCliCommand("openclaw gateway start", serviceEnv)}\` (this re-enables the task), then check \`${formatCliCommand("openclaw gateway status --deep", serviceEnv)}\`.`;
         warnings.push(warning);
@@ -474,13 +493,18 @@ export async function restoreDoctorGatewayService(params: {
         preserveDefinition: true,
         preserveAutoStart: true,
         beforeMutation: assertAutoStartCurrent,
-        assertCurrent: assertMaintenanceCurrent,
+        assertCurrent: assertInspectionCurrent,
+        runNativePhase: (operation) =>
+          params.runNativePhase(() => {
+            assertMaintenanceCurrent();
+            return operation();
+          }),
         ...(before.serviceSystemdIdentity
           ? { systemdIdentity: before.serviceSystemdIdentity }
           : {}),
       });
     });
-    assertMaintenanceCurrent();
+    await assertPreparedMaintenanceCurrent();
     return current ?? { env: serviceEnv, command: null };
   });
   return { service, state: restoredState, cfg };

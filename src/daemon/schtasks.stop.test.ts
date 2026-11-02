@@ -113,7 +113,7 @@ function mockGatewayProcess(
   });
 }
 
-function prepareDoctorAdmission(env: GatewayFixture["env"]) {
+async function prepareDoctorAdmission(env: GatewayFixture["env"]) {
   env.OPENCLAW_STATE_DIR = path.join(expectDefined(env.USERPROFILE, "fixture home"), ".openclaw");
   openOpenClawStateDatabase({ env });
   closeOpenClawStateDatabaseForTest();
@@ -123,7 +123,7 @@ function prepareDoctorAdmission(env: GatewayFixture["env"]) {
 describe("Scheduled Task stop/restart cleanup", () => {
   it("restores an ownerless task in state 4 while revalidating Doctor's state admission", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
-      const admission = prepareDoctorAdmission(env);
+      const admission = await prepareDoctorAdmission(env);
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       let clock = 0;
       vi.spyOn(Date, "now").mockImplementation(() => clock);
@@ -140,14 +140,23 @@ describe("Scheduled Task stop/restart cleanup", () => {
       pushSuccessfulSchtasksResponses(4);
 
       await expect(
-        withGatewayServiceUpdateAuthority(admission.assertCurrent, (assertCurrent) =>
-          restartScheduledTask({ env, stdout, assertCurrent, preserveDefinition: true }),
+        withGatewayServiceUpdateAuthority(
+          undefined,
+          (assertCurrent) =>
+            restartScheduledTask({ env, stdout, assertCurrent, preserveDefinition: true }),
+          {
+            runNativePhase: (operation) =>
+              admission.runPrepared(() => {
+                admission.assertCurrent();
+                return operation();
+              }),
+          },
         ),
       ).resolves.toMatchObject({ outcome: "completed" });
 
       expect(schtasksCalls).toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
       expect(schtasksCalls.filter(([action]) => action === "/End")).toHaveLength(1);
-      expect(() => admission.assertCurrent()).not.toThrow();
+      await expect(admission.runPrepared(admission.assertCurrent)).resolves.toBeUndefined();
     });
   });
 
@@ -156,7 +165,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
     ["stop and cleanup", true],
   ] as const)("preserves %s failures without activating the task", async (_name, failStop) => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
-      const admission = prepareDoctorAdmission(env);
+      const admission = await prepareDoctorAdmission(env);
       const acquire = gatewayStateOwner.tryAcquireGatewayStateOwner;
       const captured: { exclusion: ReturnType<typeof acquire> } = { exclusion: null };
       vi.spyOn(gatewayStateOwner, "tryAcquireGatewayStateOwner").mockImplementation(
@@ -170,7 +179,6 @@ describe("Scheduled Task stop/restart cleanup", () => {
       const stopFailure = new Error("native stop authority refused");
       const cleanupFailure = new Error("native state close failed");
       const assertCurrent = () => {
-        admission.assertCurrent();
         const currentScope = getOpenClawDatabaseMaintenanceScope();
         if (currentScope && !resources) {
           resources = currentScope;
@@ -188,8 +196,22 @@ describe("Scheduled Task stop/restart cleanup", () => {
       setTaskStateProbeResult(3);
       pushSuccessfulSchtasksResponses(4);
       try {
-        const failure = await withGatewayServiceUpdateAuthority(assertCurrent, (current) =>
-          restartScheduledTask({ env, stdout, assertCurrent: current, preserveDefinition: true }),
+        const failure = await withGatewayServiceUpdateAuthority(
+          assertCurrent,
+          (current) =>
+            restartScheduledTask({
+              env,
+              stdout,
+              assertCurrent: current,
+              preserveDefinition: true,
+            }),
+          {
+            runNativePhase: (operation) =>
+              admission.runPrepared(() => {
+                admission.assertCurrent();
+                return operation();
+              }),
+          },
         ).catch((error: unknown) => error);
         const errors = collectNestedErrorCandidates(failure);
         if (failStop) {
@@ -197,7 +219,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
         }
         expect(errors).toContain(cleanupFailure);
         expect(schtasksCalls).not.toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
-        expect(() => admission.assertCurrent()).toThrow(
+        await expect(admission.runPrepared(admission.assertCurrent)).rejects.toThrow(
           "without an active schema lease or maintenance scope",
         );
       } finally {

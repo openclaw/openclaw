@@ -76,29 +76,30 @@ export async function preserveDoctorOriginalState(params: {
     );
     return { findings, warnings };
   }
-  let admission: ReturnType<typeof resolveDoctorUpdateAdmission> | undefined;
-  const assertCurrent = () => {
-    assertCallerCurrent();
-    admission?.assertCurrent();
-  };
+  const assertCurrent = assertCallerCurrent;
   try {
     // Older drivers may lack capture lineage; repair keeps its live maintenance and write authority.
-    admission =
+    const admission =
       updateInProgress && runId
-        ? resolveDoctorUpdateAdmission(params.env, original?.runId)
+        ? await resolveDoctorUpdateAdmission(params.env, original?.runId, params.signal)
         : undefined;
     if (admission && runId) {
+      const assertAdmissionCurrent = () =>
+        admission.runPrepared(() => {
+          assertCallerCurrent();
+          admission.assertCurrent();
+        });
       const { readUpdateRecoveryBaselineIdentity } =
         await import("../infra/update-recovery-backup-reader.js");
-      assertCurrent();
+      await assertAdmissionCurrent();
       const retained = await readUpdateRecoveryBaselineIdentity({
         runId,
         env: params.env,
         ...(original ? { ref: original.ref, installRoot: original.installRoot } : {}),
-        readContinuation: admission.readContinuation,
-        assertCurrent,
+        readContinuation: () => admission.runPrepared(admission.readContinuation),
+        assertCurrent: assertAdmissionCurrent,
       });
-      assertCurrent();
+      await assertAdmissionCurrent();
       log.debug(
         retained
           ? `Original update recovery copy retained. For manual recovery: ${retained.ref.manifestPath}.`

@@ -7,17 +7,25 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { execFileUtf8 } from "./exec-file.js";
 import { SCHTASKS_TIMEOUT_MS } from "./schtasks-budget.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
-import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  runGatewayServiceNativePhase,
+} from "./service-update-authority.js";
 
 /** Runs Windows schtasks with a bounded timeout and normalized process results. */
 export async function execSchtasks(
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   assertGatewayServiceUpdateCurrent();
-  const result = await runCommandWithTimeout(["schtasks", ...args], {
-    baseEnv: resolveServiceManagerEnv(),
-    timeoutMs: SCHTASKS_TIMEOUT_MS,
-  });
+  const dispatch = () =>
+    runCommandWithTimeout(["schtasks", ...args], {
+      baseEnv: resolveServiceManagerEnv(),
+      timeoutMs: SCHTASKS_TIMEOUT_MS,
+    });
+  const result =
+    args[0]?.toLowerCase() === "/query"
+      ? await dispatch()
+      : await runGatewayServiceNativePhase(dispatch);
   const operation = [args[0], args.find((arg) => /^\/(?:DISABLE|ENABLE)$/i.test(arg))]
     .filter(Boolean)
     .join(" ");
@@ -64,6 +72,7 @@ export async function execScheduledTaskEnabledChange(
     buildEncodedPowerShellArgs(script),
     {
       timeout: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+      beforeEffect: assertGatewayServiceUpdateCurrent,
     },
   );
   const nativeCode = result.stdout.trim();

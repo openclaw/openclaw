@@ -48,6 +48,8 @@ export type GatewayServiceInstallArgs = {
   beforeMutation?: () => Promise<void>;
   /** Live caller authority, retained at every native write boundary. */
   assertCurrent?: () => void;
+  /** Doctor prepares current policy rows before each native effect. */
+  runNativePhase?: <T>(operation: () => T) => Promise<Awaited<T>>;
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
   warn?: (message: string) => void;
@@ -68,6 +70,8 @@ export type GatewayServiceManageArgs = {
 };
 
 export type GatewayServiceControlArgs = {
+  /** Doctor prepares current policy rows before each native effect. */
+  runNativePhase?: <T>(operation: () => T) => Promise<Awaited<T>>;
   /** One caller-owned budget for native activation and its recovery. */
   deadline?: { remainingMs: () => number; signal: AbortSignal };
   /** Retained POSIX recovery observes attempts before a native restart can accept writes. */

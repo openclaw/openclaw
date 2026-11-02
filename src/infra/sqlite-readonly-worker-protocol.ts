@@ -16,6 +16,7 @@ export const SQLITE_READONLY_WORKER_MAX_BUFFER = 1024 * 1024;
 
 export type SqliteReadOnlyWorkerMode =
   | "sync"
+  | "current"
   | "private-fork"
   | "content-version"
   | "file-generation"
@@ -126,7 +127,12 @@ export function sqliteReadOnlyWorkerRequestArgs(
       ? undefined
       : options.expectedSourceIdentity;
   if (expected !== undefined) {
-    if (options.mode !== "sync" && options.mode !== "staged-sync" && options.mode !== "metadata") {
+    if (
+      options.mode !== "sync" &&
+      options.mode !== "current" &&
+      options.mode !== "staged-sync" &&
+      options.mode !== "metadata"
+    ) {
       throw new Error("SQLite source identity is supported only for sync or metadata snapshots");
     }
     args.push(stagingRoot ?? "", JSON.stringify(readDatabaseFileIdentity(expected)));
@@ -222,6 +228,7 @@ export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
   mode:
     | "sync"
+    | "current"
     | "private-fork"
     | "async"
     | "staged-sync"
@@ -281,6 +288,7 @@ export function readSqliteReadOnlyWorkerValue(
   }
   if (
     (mode === "sync" ||
+      mode === "current" ||
       mode === "private-fork" ||
       mode === "async" ||
       mode === "staged-sync" ||

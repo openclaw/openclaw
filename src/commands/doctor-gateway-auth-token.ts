@@ -11,6 +11,7 @@ export async function preserveGatewayAuthTokenForService(params: {
   env: NodeJS.ProcessEnv;
   token: string;
   assertCurrent?: () => void;
+  runNativePhase?: <T>(operation: () => T) => Promise<Awaited<T>>;
 }): Promise<{ ref: SecretRef; reused: boolean; backupPath?: string }> {
   const { listSecretStoreEntries, readSecretStoreValue, writeSecretStoreEntryForConfigRef } =
     await import("../secrets/store/secret-store.js");
@@ -62,6 +63,7 @@ export async function preserveGatewayAuthTokenForService(params: {
     updatedBy: "doctor",
     database,
     assertCurrent: params.assertCurrent,
+    runNativePhase: params.runNativePhase,
   });
   return { ref: { source: "store", provider, id }, reused: false, backupPath };
 }
