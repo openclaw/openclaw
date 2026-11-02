@@ -1,0 +1,60 @@
+name: Windows stock owner-class qualification
+on:
+  workflow_dispatch:
+    inputs:
+      qualification:
+        description: 'Type stock-d38-ownerclass-once after parent packet review'
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  stock-ownerclass:
+    if: github.event.inputs.qualification == 'stock-d38-ownerclass-once' && github.run_attempt == 1
+    runs-on: windows-2025
+    env:
+      GitVersion_NoNormalizeEnabled: 'true'
+      GitVersion_NoFetchEnabled: 'true'
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out reviewed harness only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
+        with:
+          path: proof-harness
+          persist-credentials: false
+      - name: Check out byte-exact stock d38 without any W4 overlay
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
+        with:
+          repository: openclaw/openclaw-windows-node
+          ref: d38ebb418c3aba6b24a4d6470def72b2bba4c4a8
+          path: source-stock
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up exact original SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: 10.0.403
+      - name: Qualify the 98 original stock owner-class cases once
+        timeout-minutes: 15 # Existing core-tests test-step budget, not a new per-test timer.
+        run: ./proof-harness/harness/windows-stock-ownerclass/Invoke-StockOwnerClass.ps1
+      - name: Preserve reports even for a noncomparable order or failure
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-stock-ownerclass-d38
+          path: .artifacts/stock-ownerclass/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7

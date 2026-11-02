@@ -1,0 +1,215 @@
+
+// Task-owned presentation capture only. App production sources are unchanged.
+// Appended here to reuse this file's maintained in-memory Gateway and AX helpers.
+@Suite(.serialized, .testWaitLimit)
+@MainActor
+struct LlamaNativeCaptureTests {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_LLAMA_CAPTURE_ROOT"] != nil))
+    func nativeOnboardingCapture() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        let root = URL(fileURLWithPath: try #require(environment["OPENCLAW_LLAMA_CAPTURE_ROOT"]))
+        let stage = try #require(environment["OPENCLAW_LLAMA_CAPTURE_STAGE"])
+        let fixtures = root.appendingPathComponent("fixtures")
+        let output = root.appendingPathComponent("pngs/\(stage)")
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let detected = try Data(contentsOf: fixtures.appendingPathComponent("detect.json"))
+        let note = try Data(contentsOf: fixtures.appendingPathComponent("install-note.json"))
+        let endpoint = try Data(contentsOf: fixtures.appendingPathComponent("endpoint.json"))
+        let notePayload = try #require(JSONSerialization.jsonObject(with: note) as? [String: Any])
+        let noteStep = try #require(notePayload["step"] as? [String: Any])
+        let noteMessage = try #require(noteStep["message"] as? String)
+        let recorder = AISetupRequestRecorder()
+        let session = makeAISetupRequestSession(recorder: recorder, handler: { task, request in
+            let payload: Any
+            switch request.method {
+            case "openclaw.setup.detect":
+                payload = try JSONSerialization.jsonObject(with: detected)
+            case "openclaw.setup.prepare.start":
+                #expect(request.params["authChoice"] as? String == "llama-app")
+                payload = try Self.wizardPayload(note, request: request)
+            case "wizard.next":
+                #expect((request.params["answer"] as? [String: Any])?["stepId"] as? String == "llama-install-note")
+                payload = try Self.wizardPayload(endpoint, request: request)
+            case "wizard.cancel":
+                payload = ["done": true, "status": "cancelled", "sessionId": request.params["sessionId"] as? String ?? ""]
+            default:
+                Issue.record("Unexpected capture RPC: \(request.method). No activation or inference is permitted.")
+                payload = [:]
+            }
+            let response = try JSONSerialization.data(withJSONObject: [
+                "type": "res", "id": request.id, "ok": true, "payload": payload,
+            ])
+            task.emitReceiveSuccess(.data(response))
+        }, receiveHook: { task, receiveIndex in
+            if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+            return .data(GatewayWebSocketTestSupport.connectOkData(
+                id: task.snapshotConnectRequestID() ?? "connect",
+                methods: ["openclaw.setup.prepare.start"], capabilities: []))
+        })
+        let gateway = makeAISetupGateway(url: try #require(URL(string: "ws://llama-capture.invalid")), session: session)
+        let suite = "LlamaNativeCapture.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let state = AppState(preview: true)
+        state.connectionMode = .local
+        state.isPaused = true
+        let view = makeAISetupView(state: state, gateway: gateway, defaults: defaults, routeIdentityProvider: { "local" })
+        let model = view.aiSetup
+        do {
+            await model.detectConnections(intent: .inspectOnly)
+            try #require(model.detectError == nil)
+            try #require(!model.connected && model.selectedKind == nil)
+            try #require(model.candidates.first?.kind == "existing-model")
+            let choice = try #require(model.prepareOptions.first { $0.id == "llama-app" })
+            try #require(choice.label == "Llama app" && choice.actionLabel == "Set up")
+            try #require(model.prepareOptions.map(\.id) == ["llama-app", "llama-cpp", "llama-cpp-existing-server", "ollama"])
+            try #require(model.prepareOptions.allSatisfy { $0.actionLabel == "Set up" })
+            let appMark = try #require(OnboardingProviderIcon.resourceURL(for: "llama-app"))
+            let managedMark = OnboardingProviderIcon.resourceURL(for: "llama-cpp")
+            try #require((managedMark == appMark) == (stage == "before"))
+            try await Self.capture(view.aiSetupPage(contentHeight: 1000),
+                width: view.pageWidth, height: 1000,
+                output: output.appendingPathComponent("onboarding.png"),
+                required: ["Connect your AI", "Set up a local model", "Llama app", "Built-in local AI",
+                    "Existing llama.cpp server", "Ollama", "Set up", "Existing model"],
+                managedLabel: "Built-in local AI", expectedActions: model.prepareOptions.map(\.label))
+            model.startProviderPrepare(choice)
+            try await TestWait.observed("Llama installation note") { model.authStep?.id == "llama-install-note" && !model.authBusy }
+            try await Self.capture(OnboardingAISetupSheet(model: model), width: 500, height: 380,
+                output: output.appendingPathComponent("install-note.png"),
+                required: ["Llama app", "Set up Llama app", noteMessage, "Continue", "Cancel"],
+                requiredActions: ["Continue", "Cancel"])
+            let next = try #require(model.continueProviderAuth())
+            await next.value
+            try #require(model.authStep?.id == "llama-url" && !model.authBusy)
+            try await Self.capture(OnboardingAISetupSheet(model: model), width: 500, height: 300,
+                output: output.appendingPathComponent("endpoint.png"),
+                required: ["Llama app", "Llama app URL", "Submit", "Cancel"],
+                requiredActions: ["Submit", "Cancel"], requiresTextField: true)
+            let requests = await recorder.snapshot()
+            try #require(requests.methods == ["openclaw.setup.detect", "openclaw.setup.prepare.start", "wizard.next"])
+            try #require(!model.connected && model.selectedKind == nil)
+            try #require(model.authText.isEmpty)
+            let receipt: [String: Any] = [
+                "boundary": "native production onboarding/prepare-sheet presentation with an in-memory fixture Gateway",
+                "stage": stage, "requests": requests.methods,
+                "activated": false, "inferenceAttempted": false, "selectedKind": NSNull(),
+                "existingModelUntouched": true, "locale": "en_US", "appearance": "light",
+                "appHead": stage == "after" ? "adcfa7ca4a204860ff67b5e1db4f45bd7d5c8a17" : "0b584645a34242f72b0566f8cf3acebd9ac63a73",
+                "gatewayFixtureSource": "7830780292c95ac7f2e96ecee19cdfb1639393bb",
+                "appHasBundledMark": true, "managedBorrowsAppMark": managedMark == appMark,
+            ]
+            try JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys])
+                .write(to: output.appendingPathComponent("receipt.json"))
+            model.resetForGatewayChange()
+            await gateway.shutdown()
+        } catch {
+            model.resetForGatewayChange()
+            await gateway.shutdown()
+            throw error
+        }
+    }
+
+    nonisolated private static func wizardPayload(_ data: Data, request: (id: String, method: String, params: [String: Any])) throws -> [String: Any] {
+        var payload = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        if request.method == "openclaw.setup.prepare.start" {
+            payload["sessionId"] = request.params["sessionId"] as? String
+        }
+        return payload
+    }
+
+    private static func capture(_ content: some View, width: CGFloat, height: CGFloat,
+                                output: URL, required: [String], managedLabel: String? = nil,
+                                expectedActions: [String] = [], requiredActions: [String] = [],
+                                requiresTextField: Bool = false) async throws {
+        _ = AppKitTestSupport.application
+        let hosting = NSHostingView(rootView: content
+            .background(Color.white)
+            .environment(\.locale, Locale(identifier: "en_US"))
+            .environment(\.colorScheme, .light))
+        hosting.appearance = NSAppearance(named: .aqua)
+        hosting.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        window.orderFront(nil)
+        hosting.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let accessibility = try await inspectAISetupAccessibility(hosting)
+        for label in required {
+            try #require(accessibility.labels.contains { $0 == label || $0.contains(label) },
+                         "Missing native control/label: \(label)")
+        }
+        for label in expectedActions {
+            try #require(accessibility.actions.contains { $0.key.contains(label) && $0.key.contains("Set up") && $0.value },
+                         "Missing enabled provider action: \(label)")
+        }
+        for label in requiredActions {
+            try #require(accessibility.actions[label] == true, "Missing enabled action: \(label)")
+        }
+        hosting.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        // SwiftUI owns final sheet sizing (500 wide, at least 220 high). Requested
+        // seed heights are not screenshot dimensions; bind pixels to actual final bounds.
+        let bounds = hosting.bounds
+        let screenBounds = window.convertToScreen(hosting.convert(bounds, to: nil))
+        func rect(_ value: NSRect) -> [String: Double] {
+            ["x": Double(value.minX), "y": Double(value.minY),
+             "width": Double(value.width), "height": Double(value.height)]
+        }
+        var nodes: [[String: Any]] = []
+        var visited = Set<ObjectIdentifier>()
+        func visit(_ element: AnyObject) {
+            guard visited.insert(ObjectIdentifier(element)).inserted else { return }
+            let role = element.accessibilityRole?()
+            let value: Any? = element.accessibilityValue?()
+            let text = [element.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: element),
+                        value as? String].compactMap(\.self)
+            if let frame = element.accessibilityFrame?(), frame.width > 0, frame.height > 0 {
+                nodes.append(["labels": text, "role": role?.rawValue ?? "unknown", "screenFrame": rect(frame),
+                              "insideCapture": screenBounds.integral.contains(frame.integral)])
+            }
+            for child in element.accessibilityChildren?() ?? [] { visit(child as AnyObject) }
+        }
+        visit(hosting)
+        for label in required {
+            try #require(nodes.contains { node in
+                let labels = node["labels"] as? [String] ?? []
+                return labels.contains { $0 == label || $0.contains(label) } && node["insideCapture"] as? Bool == true
+            }, "Required native content lies outside final capture bounds: \(label)")
+        }
+        let controlRoles = [NSAccessibility.Role.button.rawValue, NSAccessibility.Role.link.rawValue,
+                            NSAccessibility.Role.textField.rawValue]
+        let controls = nodes.filter { controlRoles.contains($0["role"] as? String ?? "") }
+        try #require(!controls.isEmpty && controls.allSatisfy { $0["insideCapture"] as? Bool == true },
+                     "A native control is clipped by final capture bounds")
+        if requiresTextField {
+            try #require(controls.contains { $0["role"] as? String == NSAccessibility.Role.textField.rawValue })
+        }
+        var managed: [String: Any] = [:]
+        if let managedLabel {
+            let matches = controls.filter { node in
+                node["role"] as? String == NSAccessibility.Role.button.rawValue &&
+                    (node["labels"] as? [String] ?? []).contains { $0.contains(managedLabel) }
+            }
+            try #require(matches.count == 1, "Expected one mounted managed llama.cpp row")
+            managed = try #require(matches.first)
+        }
+        let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: bounds))
+        hosting.cacheDisplay(in: bounds, to: bitmap)
+        try #require(hosting.bounds == bounds, "Native bounds changed during frame capture")
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        try png.write(to: output)
+        let record: [String: Any] = [
+            "labels": accessibility.labels, "actions": accessibility.actions,
+            "capture": ["requestedSize": ["width": Double(width), "height": Double(height)],
+                        "bounds": rect(bounds), "screenBounds": rect(screenBounds),
+                        "backingScaleFactor": Double(window.backingScaleFactor),
+                        "rasterSize": ["width": bitmap.pixelsWide, "height": bitmap.pixelsHigh]],
+            "nodes": nodes, "controls": controls, "managedControl": managed,
+        ]
+        try JSONSerialization.data(withJSONObject: record, options: [.prettyPrinted, .sortedKeys])
+            .write(to: output.deletingPathExtension().appendingPathExtension("accessibility.json"))
+    }
+}

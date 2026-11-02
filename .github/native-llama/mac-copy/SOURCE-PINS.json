@@ -1,0 +1,61 @@
+{
+  "baseCommit": "adcfa7ca4a204860ff67b5e1db4f45bd7d5c8a17",
+  "baseTree": "12fe3ed2d4c8dfd6757dd54fd6220ba9b74162a3",
+  "afterCommit": "3a1836ac152b88245b8019dd080b5e6b2e5b3c39",
+  "state": "accepted exact source committed/pushed; native CI and packet release pending",
+  "authoredPatchSha256": "38ab1927940bb4b2b2d370f13db8d105c27daffdfe68bcb78a558e119bcde508",
+  "authoredFiles": [
+    {
+      "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
+      "beforeSha256": "126f43409422af5b526bd309a8b0dc38aedc4483b5d0b4a5a5ecb06bebcf7bd4",
+      "afterSha256": "f311f9f537641a8520397de959e1944eefbc67856b23901956e25d804a9d821d",
+      "beforeBlob": "a64e70b6661f34242ed438b8670987b27433dded",
+      "afterBlob": "b4ff4374e2d30a5b6e9daee522464523d16c0d8a",
+      "bytes": 31585
+    },
+    {
+      "path": "apps/macos/Tests/OpenClawIPCTests/OnboardingAISetupTests.swift",
+      "beforeSha256": "9193c7afe99b32504e5ef6fa361d9ee4fb204e322a4d84325a6bc40ac4eed847",
+      "afterSha256": "ee870ce43afce8a7480a9f76f9c2134114c266507892febf34a7ba75a2a16ea5",
+      "beforeBlob": "c9679e8ffdd065e31b7c2f271c5e4ee701e7db6f",
+      "afterBlob": "d7c374049b10445786b6fecd01bf82fbf891a302",
+      "bytes": 301539
+    }
+  ],
+  "generatedCompanion": {
+    "path": "apps/.i18n/native-source.json",
+    "patchSha256": "e24ed67a7f45082316507451104cea140da02d16c04f125dbc3aaf2a01abc131",
+    "afterSha256": "5ab133e17d528751a49bf689a8933b76b2d4ff37f82761098d4fff4b638e355d"
+  },
+  "fixture": {
+    "path": "copy-detect.json",
+    "sha256": "d86cbbc380342d1c5804a67e3b2bbd1bc94131431376138d7188fe43fd546c4a",
+    "source": "new mounted test literal, synthetic optional-field/passthrough wire case"
+  },
+  "authoredCandidateTree": "d7a2d4c289a90218909e3c24bbdbc611528bc9c1",
+  "effectiveCandidateTree": "4cafea0569bd7b0e77a939387a1b4713be805445",
+  "effectiveChangedPaths": [
+    "apps/.i18n/native-source.json",
+    "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
+    "apps/macos/Tests/OpenClawIPCTests/OnboardingAISetupTests.swift"
+  ],
+  "captureAssembly": {
+    "qualifiedAdcHelperSha256": "648e0927752bf07c818828965e1c1367e6b20064051dd7d8e289953776a100e5",
+    "copyAppendSha256": "2b5d29cbad73ec1f04274bbb9332c0930f16f845ee154b0ad8313937123c4bd7",
+    "effectiveTestFileSha256BothStages": "46c2850464d659f8ae97abeb8a40832e62bf92d0c7454c36239858b3841a573c",
+    "beforeTestOnlyOverlay": "exact After test postimage replaces the Before canonical test file; record separately from canonical source freeze",
+    "mountedTestFilter": "OnboardingAISetupTests/prepare rows use plain copy and preserve wire actions",
+    "captureFilter": "LlamaNativeCaptureTests/nativePlainCopyPageCapture",
+    "expectedBeforeMountedIssues": 2,
+    "expectedAfterMountedIssues": 0,
+    "expectedRawPngs": 2,
+    "unchangedIconAndSheetProof": "reuse qualified ADC evidence, no old six-frame rerun",
+    "qualifiedAdcHelperSource": "e6380391b66b1e8fae7793a04206af10341aad84:.github/native-llama/mac/overlay/LlamaNativeCapture.swift.append",
+    "mountedIdSuffix": "OnboardingAISetupTests/prepare rows use plain copy and preserve wire actions()",
+    "captureIdSuffix": "LlamaNativeCaptureTests/nativePlainCopyPageCapture()",
+    "expectedBeforeIssueLines": [
+      1141,
+      1142
+    ]
+  }
+}

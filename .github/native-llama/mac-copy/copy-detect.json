@@ -1,0 +1,20 @@
+{
+  "candidates": [],
+  "manualProviders": [],
+  "authOptions": [],
+  "prepareOptions": [
+    {
+      "id": "fixture-fallback",
+      "label": "Fallback local app",
+      "hint": "Supplied fallback hint"
+    },
+    {
+      "id": "fixture-custom",
+      "label": "Custom local app",
+      "hint": "Supplied custom hint",
+      "actionLabel": "Provider-owned action"
+    }
+  ],
+  "workspace": "/synthetic-workspace",
+  "setupComplete": false
+}

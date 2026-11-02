@@ -1,0 +1,69 @@
+// Append after the unchanged, already-qualified ADC capture helper in the same test file.
+// Select ONLY nativePlainCopyPageCapture; do not run the old six-frame campaign.
+extension LlamaNativeCaptureTests {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_MAC_COPY_ROOT"] != nil))
+    func nativePlainCopyPageCapture() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        let root = URL(fileURLWithPath: try #require(environment["OPENCLAW_MAC_COPY_ROOT"]))
+        let stage = try #require(environment["OPENCLAW_MAC_COPY_STAGE"])
+        try #require(stage == "before" || stage == "after")
+        let output = root.appendingPathComponent("pngs/\(stage)")
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let fixture = try Data(contentsOf: root.appendingPathComponent("copy-detect.json"))
+        let recorder = AISetupRequestRecorder()
+        let session = makeAISetupRequestSession(recorder: recorder, handler: { task, request in
+            try #require(request.method == "openclaw.setup.detect", "Copy capture permits detection only")
+            let payload = try JSONSerialization.jsonObject(with: fixture)
+            let response = try JSONSerialization.data(withJSONObject: [
+                "type": "res", "id": request.id, "ok": true, "payload": payload,
+            ])
+            task.emitReceiveSuccess(.data(response))
+        }, receiveHook: { task, receiveIndex in
+            if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+            return .data(GatewayWebSocketTestSupport.connectOkData(
+                id: task.snapshotConnectRequestID() ?? "connect",
+                methods: ["openclaw.setup.prepare.start"], capabilities: []))
+        })
+        let gateway = makeAISetupGateway(url: try #require(URL(string: "ws://copy-capture.invalid")), session: session)
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "NativeCopyCapture"))
+        let state = AppState(preview: true)
+        state.connectionMode = .local
+        state.isPaused = true
+        let view = makeAISetupView(state: state, gateway: gateway, defaults: defaults, routeIdentityProvider: { "local" })
+        let model = view.aiSetup
+        do {
+            await model.detectConnections(intent: .inspectOnly)
+            try #require(model.detectError == nil && model.prepareOptions.count == 2)
+            try #require(!model.connected && model.selectedKind == nil)
+            let intro = stage == "after"
+                ? "Choose an option below to connect or set up local AI."
+                : "Connect a local model service, or prepare a model on this Gateway."
+            let fallback = stage == "after" ? "Set up" : "Connect / Set up"
+            try await Self.capture(view.aiSetupPage(contentHeight: 1000),
+                width: view.pageWidth, height: 1000, output: output.appendingPathComponent("onboarding.png"),
+                required: ["Connect your AI", "Set up a local model", intro, "Fallback local app",
+                    "Supplied fallback hint", fallback, "Custom local app", "Supplied custom hint", "Provider-owned action"],
+                requiredActions: ["Fallback local app, Supplied fallback hint, \(fallback)",
+                    "Custom local app, Supplied custom hint, Provider-owned action"])
+            let requests = await recorder.snapshot()
+            try #require(requests.methods == ["openclaw.setup.detect"])
+            try #require(!model.connected && model.selectedKind == nil)
+            let receipt: [String: Any] = [
+                "boundary": "one real native production onboarding page with a synthetic read-only wire fixture",
+                "stage": stage, "requests": requests.methods, "locale": "en_US", "appearance": "light",
+                "intro": intro, "fallbackAction": fallback, "customAction": "Provider-owned action",
+                "activated": false, "inferenceAttempted": false, "selectedKind": NSNull(),
+                "fixtureSha256": try #require(environment["OPENCLAW_MAC_COPY_FIXTURE_SHA256"]),
+                "sourceTree": try #require(environment["OPENCLAW_MAC_COPY_SOURCE_TREE"]),
+            ]
+            try JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys])
+                .write(to: output.appendingPathComponent("receipt.json"))
+            model.resetForGatewayChange()
+            await gateway.shutdown()
+        } catch {
+            model.resetForGatewayChange()
+            await gateway.shutdown()
+            throw error
+        }
+    }
+}

@@ -16,4 +16,4 @@ Optional prior screenshots may be staged as visual/before-service-fact.png and v
 
 Candidate SHA256: c0d2d159492cc008674c4c4229ce63d461a4e95a4bf8a48685b929bae69b059e (35984 UTF-8 bytes). Launcher SHA256: 263b0281ba41629c5bb86ec2efad45fa9612aee3c629441515bad89bf1e2540d. Reuse those already-imported exact artifacts. Only this packet's new small text files need relay.
 
-Diagnostic-only execution: the accepted candidate and launcher remain unchanged. A separately sealed one-test overlay records existing startup/bootstrap/HTTP/cleanup awaits without changing the 60-second deadline or any assertion. Both patch hashes and the instrumented tree are recorded; a passing diagnostic alone is not a repair or canonical qualification.
+Canonical suite-fixture repair: actual cold Gateway/client/HTTP acquisition now belongs to beforeAll under the unchanged180s source hook budget; the real four-scenario RPC case still has60s. Existing lifetime/state/cleanup owners join before selector restoration. No diagnostic spies, import warming, assertion/network/behavior waiver. New canonical qualification is required.

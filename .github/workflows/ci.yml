@@ -6,9 +6,14 @@ run-name: Native Llama ${{ inputs.platform }} - ${{ inputs.dispatch_id }}
       platform:
         description: Native screenshot producer to run
         type: choice
-        options: [mac, windows-w4, service, windows-ollama-fixtures]
+        options: [mac, windows-w4, service, windows-ollama-fixtures, mac-copy, stock-shared]
         default: mac
         required: true
+      qualification:
+        description: Exact parent-reviewed stock-owner-class acknowledgement
+        type: string
+        required: false
+        default: ''
       dispatch_id:
         description: Unique capture correlation, not a release request
         type: string
@@ -167,8 +172,8 @@ jobs:
         run: |
           set -euo pipefail
           cd .ci-packet/.github/qualification/service-reachability
-          echo 'a59233cfc1b344c04f5f89164927c71b2bfb00132df97ad54e9dcb987e4ce560  manifest.json' | sha256sum --check --strict
-          echo '49496be2c8a6d87f697bf2b6902c5158b36794cd144c7439584fd025d711287b  driver.mjs' | sha256sum --check --strict
+          echo '5b33449920861d75d788d2f46b1113626af64a07a2d9a2f14d660f493211f3e2  manifest.json' | sha256sum --check --strict
+          echo 'b54039c0703ae1c2570fecd7cc34bc25719e8bd3964659cbb909fddabaf72d23  driver.mjs' | sha256sum --check --strict
           cd "$GITHUB_WORKSPACE"
           node .ci-packet/.github/qualification/service-reachability/driver.mjs apply
       - name: Prepare gateway runtime through existing owner
@@ -253,6 +258,122 @@ jobs:
         with:
           name: windows-ollama-frozen-candidate
           path: .artifacts/windows-ollama/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  # Parent-only insertion into the existing manual proof branch/workflow.
+  # Root workflow_dispatch must define string input platform. No pull_request/push trigger.
+  mac-native-plain-copy:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/roboclaw/local-ai-native-followups-20261102' && inputs.platform == 'mac-copy'
+    permissions:
+      contents: read
+    runs-on: macos-26
+    timeout-minutes: 150
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
+      LLAMA_GITHUB_HOSTED_ACK: task-owned-secretless-github-hosted
+    steps:
+      - name: Checkout reviewed manual proof payload
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/native-llama/mac-copy
+      - name: Admit sealed payload
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cd .github/native-llama/mac-copy
+          echo 'e9e215f44a6db563ae2add6d11c9ebd44af6885fd4d5c79411b7b6658d285376  INPUT-SHA256SUMS' | /usr/bin/shasum -a 256 -c -
+          /usr/bin/shasum -a 256 -c INPUT-SHA256SUMS
+      - name: Checkout ADC Before
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: adcfa7ca4a204860ff67b5e1db4f45bd7d5c8a17
+          path: .source-before
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Checkout reviewed exact plain-copy After
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: 3a1836ac152b88245b8019dd080b5e6b2e5b3c39
+          path: .source-after
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Install source CI pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - name: Install source packageManager pinned pnpm
+        uses: ./.source-before/.github/actions/setup-pnpm-store-cache
+        with:
+          node-version: 24.22.1
+          package-manager-file: .source-before/package.json
+          lockfile-path: .source-before/pnpm-lock.yaml
+          cache-mode: off
+      - name: Execute only new mounted case and one native page per stage
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          /bin/bash .github/native-llama/mac-copy/run-mac-ci.sh \
+            "$GITHUB_WORKSPACE/.source-before" \
+            "$GITHUB_WORKSPACE/.source-after" \
+            "$GITHUB_WORKSPACE/.artifacts/native-llama/mac-copy"
+      - name: Preserve completed or honestly failed proof
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-mac-plain-copy
+          path: .artifacts/native-llama/mac-copy/
+          if-no-files-found: error
+          retention-days: 7
+
+  stock-ownerclass:
+    if: inputs.platform == 'stock-shared' && github.ref == 'refs/heads/roboclaw/local-ai-native-followups-20261102' && github.event.inputs.qualification == 'stock-d38-ownerclass-once' && github.run_attempt == 1
+    runs-on: windows-2025
+    env:
+      GitVersion_NoNormalizeEnabled: 'true'
+      GitVersion_NoFetchEnabled: 'true'
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out reviewed harness only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
+        with:
+          path: proof-harness
+          persist-credentials: false
+      - name: Check out byte-exact stock d38 without any W4 overlay
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
+        with:
+          repository: openclaw/openclaw-windows-node
+          ref: d38ebb418c3aba6b24a4d6470def72b2bba4c4a8
+          path: source-stock
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up exact original SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: 10.0.403
+      - name: Qualify the 98 original stock owner-class cases once
+        timeout-minutes: 15 # Existing core-tests test-step budget, not a new per-test timer.
+        run: ./proof-harness/harness/windows-stock-ownerclass/Invoke-StockOwnerClass.ps1
+      - name: Preserve reports even for a noncomparable order or failure
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-stock-ownerclass-d38
+          path: .artifacts/stock-ownerclass/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7

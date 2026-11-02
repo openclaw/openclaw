@@ -4,10 +4,9 @@
   "testFile": "src/gateway/setup-inference.local-services.integration.test.ts",
   "testTitle": "keeps reachable local services separate from runnable models through setup RPC",
   "files": {
-    "candidate.patch": "c0d2d159492cc008674c4c4229ce63d461a4e95a4bf8a48685b929bae69b059e",
-    "driver.mjs": "49496be2c8a6d87f697bf2b6902c5158b36794cd144c7439584fd025d711287b",
-    "ci-fixture.sh": "263b0281ba41629c5bb86ec2efad45fa9612aee3c629441515bad89bf1e2540d",
-    "diagnostic.patch": "f1b0e5ebaa728cab93900b6f84f3554d99089574e94ecd3802e946638cc68178"
+    "candidate.patch": "30ae1b5183195a7a4f3badc172436302ce743da55f003ce1cc5baf35ba5fcba4",
+    "driver.mjs": "b54039c0703ae1c2570fecd7cc34bc25719e8bd3964659cbb909fddabaf72d23",
+    "ci-fixture.sh": "263b0281ba41629c5bb86ec2efad45fa9612aee3c629441515bad89bf1e2540d"
   },
   "postimages": [
     {
@@ -93,12 +92,12 @@
     {
       "path": "config/test-lines-allocations/local-setup-service-reachability.txt",
       "bytes": 125,
-      "sha256": "a517189aa2d901a76213dd20f3de6483d34cdc0901d108dab837047cfc5b477d"
+      "sha256": "1e4722be371fb3cfe753e933be00e69d0fa37d0c7826458f4c6984aab61342b3"
     },
     {
       "path": "src/gateway/setup-inference.local-services.integration.test.ts",
-      "bytes": 10091,
-      "sha256": "fc656132017aaddfa2bb6e874deb1a765f7a8ea41be4cbb8f1e3f3bbd2a6d895"
+      "bytes": 8747,
+      "sha256": "8c02720ceafa80ef186c07990c6ed733228ef913d12f11d1c15df6e5c4aef826"
     },
     {
       "path": "ui/src/e2e/model-setup-service-reachability.e2e.test.ts",
@@ -115,6 +114,5 @@
       "name": "after-service-fact.png",
       "sha256": "b4c3bf8fe47d103bc0d4d7af090cb2b84630eefa844cc5a61efc30c7e50da3b2"
     }
-  ],
-  "diagnosticPatch": "diagnostic.patch"
+  ]
 }

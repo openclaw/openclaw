@@ -1,0 +1,794 @@
+{
+  "sourceRunId": "41491349646",
+  "artifactId": "13165785850",
+  "artifactSha256": "7dfc0089c310ad1462d95d261042a1377c33ba81ed8bc5ffa20ae61dbdf9d430",
+  "originalFailure": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.Changed_ManagedThenExternalEvents_HaveMonotonicSequences",
+  "originalFailureOrdinal": 74,
+  "originalFailureHResult": null,
+  "order": [
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.Normalize_DefaultAgentMigratedToMain",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:37.3878078+00:00",
+      "endTime": "2026-11-02T17:34:37.3947835+00:00",
+      "duration": "00:00:00.0068841",
+      "executionId": "4b552b89-a008-482a-bc1f-2b4bb4493b8b"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_MalformedFile_DoesNotOverwriteFile",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:37.3950588+00:00",
+      "endTime": "2026-11-02T17:34:37.3986203+00:00",
+      "duration": "00:00:00.0036589",
+      "executionId": "55d40574-b675-4fe1-ad20-a4bb6418301c"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.Normalize_BothSocketFieldsEmpty_SocketBecomesNull",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:37.3989026+00:00",
+      "endTime": "2026-11-02T17:34:37.4025075+00:00",
+      "duration": "00:00:00.0037774",
+      "executionId": "88fe1d2b-98b8-48a1-9980-ef03e4581c10"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.Normalize_SocketPathPreserved",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:37.4026737+00:00",
+      "endTime": "2026-11-02T17:34:37.4048364+00:00",
+      "duration": "00:00:00.0021854",
+      "executionId": "b8cc042c-e3eb-4d13-9f34-c573f4420394"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.Normalize_MainWinsOverDefaultOnConflict",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:37.4058879+00:00",
+      "endTime": "2026-11-02T17:34:37.4081376+00:00",
+      "duration": "00:00:00.0031372",
+      "executionId": "e4d61e16-a6b6-430e-99cb-161f1d6b7a91"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveAsync_MalformedFile_PreservesFileAndReturnsDefaultDeny",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:37.4083965+00:00",
+      "endTime": "2026-11-02T17:34:37.4153457+00:00",
+      "duration": "00:00:00.0070664",
+      "executionId": "e08d8093-9c78-4309-b092-4afc0e3127de"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.RecordAllowlistUseAsync_BestEffort_IoExceptionReturnsFalse",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:37.4155360+00:00",
+      "endTime": "2026-11-02T17:34:37.4194683+00:00",
+      "duration": "00:00:00.0039918",
+      "executionId": "6cde77bc-e8f9-4634-be73-3cc413de56c4"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_WildcardFillsGapsWhenNoAgentEntry",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:37.4196411+00:00",
+      "endTime": "2026-11-02T17:34:37.4244177+00:00",
+      "duration": "00:00:00.0047731",
+      "executionId": "31a5f2cc-1afd-4195-9dbe-837cb490c8cc"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.RecordAllowlistUseAsync_MalformedFile_ReturnsFalse",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:37.4246482+00:00",
+      "endTime": "2026-11-02T17:34:37.4267779+00:00",
+      "duration": "00:00:00.0022667",
+      "executionId": "41d057e1-5d8a-441b-9a5e-036a312f46db"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveAsync_NullAgentsField_InitializesAgentsAndSaves",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:37.4269351+00:00",
+      "endTime": "2026-11-02T17:34:37.4457739+00:00",
+      "duration": "00:00:00.0179640",
+      "executionId": "912683e0-778f-4023-94d9-f9bfb6772125"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_AutoAllowSkills_True_WhenSetInAgent",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:37.4460622+00:00",
+      "endTime": "2026-11-02T17:34:37.4487361+00:00",
+      "duration": "00:00:00.0031051",
+      "executionId": "291d01ca-d083-42b0-bcc2-16a463000841"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveAsync_ExistingFile_DoesNotRecreate",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:37.4496938+00:00",
+      "endTime": "2026-11-02T17:34:37.4514499+00:00",
+      "duration": "00:00:00.0025675",
+      "executionId": "af7e6192-5580-450c-bfde-862384751c33"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.RecordAllowlistUseAsync_RaisesChangedOnceWithoutWatcherEcho",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:37.4516746+00:00",
+      "endTime": "2026-11-02T17:34:39.7066746+00:00",
+      "duration": "00:00:02.2544434",
+      "executionId": "8c22f973-d0d9-4e56-8820-bfe34f5d5467"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_LegacyAskFallback_MapsToSecurity(legacyValue: \"always\", expected: Deny)",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:39.7069623+00:00",
+      "endTime": "2026-11-02T17:34:39.7110604+00:00",
+      "duration": "00:00:00.0041189",
+      "executionId": "8358cb3d-b56f-4d13-93bd-4a034a345f09"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_LegacyAskFallback_MapsToSecurity(legacyValue: \"off\", expected: Full)",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:39.7111708+00:00",
+      "endTime": "2026-11-02T17:34:39.7137838+00:00",
+      "duration": "00:00:00.0027031",
+      "executionId": "03a6bc86-d80a-4a67-b2e6-7872b5da85a4"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_LegacyAskFallback_MapsToSecurity(legacyValue: \"on-miss\", expected: Allowlist)",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:39.7139287+00:00",
+      "endTime": "2026-11-02T17:34:39.7159928+00:00",
+      "duration": "00:00:00.0020485",
+      "executionId": "63d7ea73-3b8d-43d9-8082-4a27f18ef54e"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.JsonOptions_ExecAskDeny_SerializesAsDeny",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:39.7162009+00:00",
+      "endTime": "2026-11-02T17:34:39.7186453+00:00",
+      "duration": "00:00:00.0025345",
+      "executionId": "a19f8b95-0b43-4c3b-adc0-fd3d314e9e25"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.AddAllowlistEntryAsync_NewAgent_CreatesAgentWithEntry",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:39.7188246+00:00",
+      "endTime": "2026-11-02T17:34:39.7332602+00:00",
+      "duration": "00:00:00.0140523",
+      "executionId": "c6f51759-c7fb-4ddc-a92d-9c2af7d8a959"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_ExplicitAgentId_PreservedInResult",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:39.7333720+00:00",
+      "endTime": "2026-11-02T17:34:39.7356418+00:00",
+      "duration": "00:00:00.0021980",
+      "executionId": "bf764856-eab0-49e1-96d8-e3364a3dbadc"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.MigrateLegacyFileIfNeeded_CustomStateDir_MigratesLegacyFile",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:39.7357983+00:00",
+      "endTime": "2026-11-02T17:34:39.7735398+00:00",
+      "duration": "00:00:00.0377645",
+      "executionId": "5995d490-b5bb-4a10-982e-2a94919883f7"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_DirectoryAtFilePath_ReturnsDefaultDeny",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:39.7751031+00:00",
+      "endTime": "2026-11-02T17:34:39.7758814+00:00",
+      "duration": "00:00:00.0022069",
+      "executionId": "dd6a77e7-9505-4fad-ba9e-6997cc17957e"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveAsync_UnsupportedVersion_PreservesFileAndReturnsDefaultDeny",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:39.7760176+00:00",
+      "endTime": "2026-11-02T17:34:39.7790132+00:00",
+      "duration": "00:00:00.0030049",
+      "executionId": "6cd94859-e638-4257-b148-0135639a70b9"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.AddAllowlistEntryAsync_Concurrency_SamePattern_SingleEntry",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:39.7791219+00:00",
+      "endTime": "2026-11-02T17:34:39.8649500+00:00",
+      "duration": "00:00:00.0719322",
+      "executionId": "4a28e94e-6901-4b51-b749-2712f595871e"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.AddAllowlistEntryAsync_AtomicWrite_NoTempFileLeft",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:39.8651017+00:00",
+      "endTime": "2026-11-02T17:34:39.8971998+00:00",
+      "duration": "00:00:00.0270376",
+      "executionId": "405c4d17-4995-4e37-96c3-0c0f51df08d6"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.RecordAllowlistUseAsync_DoesNotTouchOtherEntries",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:39.8974370+00:00",
+      "endTime": "2026-11-02T17:34:39.9311779+00:00",
+      "duration": "00:00:00.0155816",
+      "executionId": "ca9b2b70-84e9-4a6f-9e3d-e54db4324a5a"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_AgentWinsOverDefaultsLevel",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:39.9314579+00:00",
+      "endTime": "2026-11-02T17:34:39.9341998+00:00",
+      "duration": "00:00:00.0027946",
+      "executionId": "8789cd07-9e05-4400-a792-38c6d6b8433b"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.Dispose_StopsObservation",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:39.9344547+00:00",
+      "endTime": "2026-11-02T17:34:41.5698511+00:00",
+      "duration": "00:00:01.6279481",
+      "executionId": "79a010f6-aad9-4b62-9ec3-b816e76283a4"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_NoFile_DoesNotCreateFile",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.5700171+00:00",
+      "endTime": "2026-11-02T17:34:41.5720310+00:00",
+      "duration": "00:00:00.0020091",
+      "executionId": "1432da41-fcf1-44ef-b0ae-7be296412c21"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.AddAllowlistEntryAsync_BestEffort_IoExceptionReturnsFalse",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.5721657+00:00",
+      "endTime": "2026-11-02T17:34:41.5750114+00:00",
+      "duration": "00:00:00.0028518",
+      "executionId": "8f1a5272-98d5-49ef-a9db-c9c1017b1cf5"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_CustomStateDir_FailsClosedUntilMigration",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.5751634+00:00",
+      "endTime": "2026-11-02T17:34:41.5782070+00:00",
+      "duration": "00:00:00.0031172",
+      "executionId": "782b25cb-f454-4722-ab25-3890069d5c00"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_EnumValues_DeserializedCorrectly",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.5783287+00:00",
+      "endTime": "2026-11-02T17:34:41.5815255+00:00",
+      "duration": "00:00:00.0022719",
+      "executionId": "6cc8047f-c3b1-4ca1-9fcf-06d34208ca29"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.JsonOptions_SerializesEnumValues_MatchMacOS",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.5816173+00:00",
+      "endTime": "2026-11-02T17:34:41.5822176+00:00",
+      "duration": "00:00:00.0015876",
+      "executionId": "2ff1c7a5-a9c8-4f61-b615-066d16fbbfac"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ReplaceAsync_MissingHashFromReadOnlySnapshot_CreatesFile",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.5823231+00:00",
+      "endTime": "2026-11-02T17:34:41.5939781+00:00",
+      "duration": "00:00:00.0110271",
+      "executionId": "d80f7cc3-a122-4056-a946-9b219d38a640"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_CustomStateDir_TargetWinsOverLegacyFile",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.5941156+00:00",
+      "endTime": "2026-11-02T17:34:41.5981767+00:00",
+      "duration": "00:00:00.0040920",
+      "executionId": "328a5eae-793c-49e9-8115-6bab153972f9"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.RecordAllowlistUseAsync_PatternNotPresent_ReturnsFalse",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.5982792+00:00",
+      "endTime": "2026-11-02T17:34:41.6016996+00:00",
+      "duration": "00:00:00.0034540",
+      "executionId": "4850fdab-989c-4ad2-af03-4cdcde6ee3b2"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_EmptyAgentId_NormalizesToMain",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.6018264+00:00",
+      "endTime": "2026-11-02T17:34:41.6038899+00:00",
+      "duration": "00:00:00.0021299",
+      "executionId": "a8a1c45a-c68b-4d4e-afef-b0be1227b2b9"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.GetSnapshotReadOnlyAsync_MissingStore_ReturnsDefaultSnapshotAndCreatesNothing",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.6040058+00:00",
+      "endTime": "2026-11-02T17:34:41.6137561+00:00",
+      "duration": "00:00:00.0097386",
+      "executionId": "59d8a8ca-227f-48f8-9716-6067aaf14053"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_MissingVersion_ReturnsDefaultDenyAndWarns",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.6138601+00:00",
+      "endTime": "2026-11-02T17:34:41.6162519+00:00",
+      "duration": "00:00:00.0024375",
+      "executionId": "970e301e-3291-4c2c-aa2b-03c34f99aebe"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ReplaceAsync_StaleHash_ReturnsNullAndDoesNotRaiseSuccess",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.6163593+00:00",
+      "endTime": "2026-11-02T17:34:41.8937085+00:00",
+      "duration": "00:00:00.2764033",
+      "executionId": "9df1c0d9-667e-46c2-8cd3-f6b58e5afa7f"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_AllowlistWildcardPlusAgent_Concatenated",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.8942826+00:00",
+      "endTime": "2026-11-02T17:34:41.8977865+00:00",
+      "duration": "00:00:00.0039523",
+      "executionId": "02e1cb19-2a2e-4e67-b52e-2c885e8e7aeb"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.AddAllowlistEntryAsync_MalformedFile_RefusesToWriteAndWarns",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.8979759+00:00",
+      "endTime": "2026-11-02T17:34:41.9026090+00:00",
+      "duration": "00:00:00.0038283",
+      "executionId": "8401a315-877d-4d65-aead-2493a44c4686"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.AddAllowlistEntry_RoundTrip_ResolvedByReadPath",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.9026906+00:00",
+      "endTime": "2026-11-02T17:34:41.9122154+00:00",
+      "duration": "00:00:00.0095011",
+      "executionId": "fe0edcf9-e48f-4b17-9257-7002a9a5165f"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_WildcardAsk_CascadesToUnknownAgent",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.9123217+00:00",
+      "endTime": "2026-11-02T17:34:41.9146644+00:00",
+      "duration": "00:00:00.0023005",
+      "executionId": "89741fb6-5588-499f-88be-2a00a9085b0f"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.Replace_HashMatchesExactPersistedBytes",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.9147942+00:00",
+      "endTime": "2026-11-02T17:34:41.9254921+00:00",
+      "duration": "00:00:00.0100421",
+      "executionId": "ac64a5ff-2c0d-4a1f-b98a-935866dfcf65"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.AddAllowlistEntryAsync_CustomStateDir_MigratesLegacyBeforeWriting",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.9256193+00:00",
+      "endTime": "2026-11-02T17:34:41.9449866+00:00",
+      "duration": "00:00:00.0187115",
+      "executionId": "855a07c9-4ec5-4889-80c3-20f6838d54c3"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_FullSecurityAndAlwaysAsk_DeserializedCorrectly",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.9450847+00:00",
+      "endTime": "2026-11-02T17:34:41.9476432+00:00",
+      "duration": "00:00:00.0025343",
+      "executionId": "40787b7f-75c2-4290-b7af-90513e253c56"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_NumericEnumValue_ReturnsDefaultDenyAndWarns",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.9477532+00:00",
+      "endTime": "2026-11-02T17:34:41.9504219+00:00",
+      "duration": "00:00:00.0026962",
+      "executionId": "f83264e5-f982-4810-a0ce-dcc82b7455fe"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveFilePath_StateDirOverrideWins",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.9505301+00:00",
+      "endTime": "2026-11-02T17:34:41.9517161+00:00",
+      "duration": "00:00:00.0011692",
+      "executionId": "52c6486a-4779-4501-9144-50f9fb213b8b"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ReplaceAsync_ConcurrentDisjointWrites_OneStaleRejection",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:41.9518091+00:00",
+      "endTime": "2026-11-02T17:34:42.6989654+00:00",
+      "duration": "00:00:00.7456735",
+      "executionId": "81cd5b7a-390f-4d4d-9e8b-9ff05c21a021"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.GetSnapshotReadOnlyAsync_MalformedFile_ReturnsTypedFailureWithoutRewrite",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:42.6992496+00:00",
+      "endTime": "2026-11-02T17:34:42.7084915+00:00",
+      "duration": "00:00:00.0092316",
+      "executionId": "6db5e2b9-b302-4122-a6c8-ba2e85b4d2ba"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.Changed_TwoOriginFilteredSubscribers_ReceiveOtherWriterExactlyOnce",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:42.7086225+00:00",
+      "endTime": "2026-11-02T17:34:42.9849408+00:00",
+      "duration": "00:00:00.2757407",
+      "executionId": "dc9532a9-c4af-4f13-ab9a-e916e6ba57ef"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.Normalize_SocketTokenPreserved",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:42.9851100+00:00",
+      "endTime": "2026-11-02T17:34:42.9879260+00:00",
+      "duration": "00:00:00.0028316",
+      "executionId": "ac442524-be29-4174-8298-6a6d1c9fda59"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_AgentOverridesDefault",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:42.9880183+00:00",
+      "endTime": "2026-11-02T17:34:42.9905913+00:00",
+      "duration": "00:00:00.0025896",
+      "executionId": "7aa18eea-7311-4c55-911b-2b851e7b7562"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_MalformedJson_ReturnsDefaultDenyAndWarns",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:42.9906817+00:00",
+      "endTime": "2026-11-02T17:34:42.9930810+00:00",
+      "duration": "00:00:00.0023924",
+      "executionId": "292c147f-20d5-484a-8efb-e3e27dfcfb22"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveAsync_NoFile_CreatesFileAndReturnsAllowlistOnMiss",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:42.9931719+00:00",
+      "endTime": "2026-11-02T17:34:42.9990141+00:00",
+      "duration": "00:00:00.0047788",
+      "executionId": "fdcec6da-1a10-45fd-93a0-069e70ab3fce"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.RecordAllowlistUse_StampsOnlyTheMatchedArgumentBinding",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:42.9991011+00:00",
+      "endTime": "2026-11-02T17:34:43.0116929+00:00",
+      "duration": "00:00:00.0116760",
+      "executionId": "88e51726-f521-418a-880e-495e4a4614a0"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_WildcardWinsOverDefaultsLevel",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:43.0117785+00:00",
+      "endTime": "2026-11-02T17:34:43.0139416+00:00",
+      "duration": "00:00:00.0025289",
+      "executionId": "1c1a8ee1-6c49-497d-8b73-c6ee6189400c"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_AllowlistEmptyPatternDropped",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:43.0141327+00:00",
+      "endTime": "2026-11-02T17:34:43.0165471+00:00",
+      "duration": "00:00:00.0025320",
+      "executionId": "eac1101c-79fd-4801-b017-038f893a0ca5"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_AllowlistDeduplicatedCaseInsensitive",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:43.0166257+00:00",
+      "endTime": "2026-11-02T17:34:43.0188946+00:00",
+      "duration": "00:00:00.0022737",
+      "executionId": "71005c5b-4c9b-474a-b827-ea311d4f38c1"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.RecordAllowlistUseAsync_PatternInBothBuckets_UpdatesBoth",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:43.0189783+00:00",
+      "endTime": "2026-11-02T17:34:43.0260642+00:00",
+      "duration": "00:00:00.0066397",
+      "executionId": "0f5f5e40-f2f2-4b9d-82de-397acb0f2038"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.Changed_ExternalAtomicValidReplacement_RaisesExactlyOnce",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:43.0262010+00:00",
+      "endTime": "2026-11-02T17:34:43.3507247+00:00",
+      "duration": "00:00:00.3237949",
+      "executionId": "8eb45399-6840-4cf3-87a4-0409aa88588b"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.JsonOptions_SerializesDenyAndFull_MatchMacOS",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:43.3512986+00:00",
+      "endTime": "2026-11-02T17:34:43.3534289+00:00",
+      "duration": "00:00:00.0025569",
+      "executionId": "4ecf710e-8e3f-41b8-af32-21fbd3f9fba9"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_CascadeOrder_AgentWildcardDefaultsSystem",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:43.3535248+00:00",
+      "endTime": "2026-11-02T17:34:43.3556616+00:00",
+      "duration": "00:00:00.0021462",
+      "executionId": "0a5a4749-9fe7-4dac-ab57-e225c8a8ee0b"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.Changed_SubscribeWithMissingDirectory_ObservesFirstExternalCreateExactlyOnce",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:43.3557496+00:00",
+      "endTime": "2026-11-02T17:34:43.6679731+00:00",
+      "duration": "00:00:00.3118535",
+      "executionId": "0628bd38-afd9-416d-8a51-9a4721f98f47"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.AddAllowlistEntryAsync_EmptyOrWhitespacePattern_ReturnsFalse",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:43.6685935+00:00",
+      "endTime": "2026-11-02T17:34:43.6712256+00:00",
+      "duration": "00:00:00.0031116",
+      "executionId": "834799dd-bbcb-468f-928d-52cd7836858f"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.Normalization_PreservesGeneratedEntryBinding",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:43.6713231+00:00",
+      "endTime": "2026-11-02T17:34:43.6789940+00:00",
+      "duration": "00:00:00.0072911",
+      "executionId": "8f30ff91-dbb8-4854-93a7-7194882850a2"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.Deserialize_LastUsedAt_AsDouble",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:43.6791266+00:00",
+      "endTime": "2026-11-02T17:34:43.6817235+00:00",
+      "duration": "00:00:00.0025863",
+      "executionId": "c81028ab-3fd4-416e-9519-fe56c2308fc6"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.Changed_SubscribeWithMissingDirectory_CreatesNothing",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:43.6818360+00:00",
+      "endTime": "2026-11-02T17:34:43.6840968+00:00",
+      "duration": "00:00:00.0022849",
+      "executionId": "2b9c4499-2848-4892-bce9-943505993a6a"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.Changed_ReactivateAfterUnobservedEdit_DoesNotSuppressRevertToPriorContent",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:43.6841885+00:00",
+      "endTime": "2026-11-02T17:34:44.0002397+00:00",
+      "duration": "00:00:00.3157025",
+      "executionId": "e4790f5b-b8d4-44cc-a6b1-c3d68c4bc94a"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.RecordAllowlistUseAsync_AgentNotPresent_ReturnsFalse",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:44.0004201+00:00",
+      "endTime": "2026-11-02T17:34:44.0037184+00:00",
+      "duration": "00:00:00.0032865",
+      "executionId": "092148c5-aba1-4823-be3a-8249f9653cdd"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.Snapshot_HashMatchesExactPersistedBytes",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:44.0038326+00:00",
+      "endTime": "2026-11-02T17:34:44.0081661+00:00",
+      "duration": "00:00:00.0039933",
+      "executionId": "dfe049cb-61ed-4087-ae0f-e5a2cf01f82d"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_NoFile_ReturnsAllowlistOnMiss",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:44.0082785+00:00",
+      "endTime": "2026-11-02T17:34:44.0097181+00:00",
+      "duration": "00:00:00.0014387",
+      "executionId": "46877115-410e-4f91-aaab-c8e23a85aa5d"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_DirectoryAtLegacyPathWithStateOverride_ReturnsDefaultDeny",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:44.0098163+00:00",
+      "endTime": "2026-11-02T17:34:44.0115758+00:00",
+      "duration": "00:00:00.0017458",
+      "executionId": "6d87bcc6-7b84-4a9b-82ee-9c50f312ae77"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.Changed_ManagedThenExternalEvents_HaveMonotonicSequences",
+      "outcome": "Failed",
+      "startTime": "2026-11-02T17:34:44.0116713+00:00",
+      "endTime": "2026-11-02T17:34:44.6990242+00:00",
+      "duration": "00:00:00.6773618",
+      "executionId": "e632b260-324e-4802-87bf-2263216c6b6a"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveAsync_WrittenFile_OmitsNullFields",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:44.7065371+00:00",
+      "endTime": "2026-11-02T17:34:44.7278723+00:00",
+      "duration": "00:00:00.0230695",
+      "executionId": "13823662-0896-49d0-8309-b413659ad924"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.Normalize_DefaultAllowlistMergedIntoMain",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:44.7280679+00:00",
+      "endTime": "2026-11-02T17:34:44.7281168+00:00",
+      "duration": "00:00:00.0028895",
+      "executionId": "9f44ada2-411a-471c-89f3-ab23cc51a712"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.RoundTrip_WrittenFileIsValidJsonWithCorrectFields",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:44.7285672+00:00",
+      "endTime": "2026-11-02T17:34:44.7484402+00:00",
+      "duration": "00:00:00.0164874",
+      "executionId": "c9cc4bd8-c276-48a2-919b-061db71a3054"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.AddAllowlistEntryAsync_CustomStateDir_UnreadableLegacy_RefusesToWrite",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:44.7485442+00:00",
+      "endTime": "2026-11-02T17:34:44.7518564+00:00",
+      "duration": "00:00:00.0033064",
+      "executionId": "44f027c4-38c1-4a35-80a7-1e727acae4b9"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.AddAllowlistEntryAsync_ExistingFile_AddsEntryWithIdAndMetadata",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:44.7519598+00:00",
+      "endTime": "2026-11-02T17:34:44.7680225+00:00",
+      "duration": "00:00:00.0082918",
+      "executionId": "175eb200-f81c-47d2-b55b-b164228f8576"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.GetSnapshotReadOnlyAsync_ActiveSubscriber_DoesNotConsumePendingExternalChange",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:44.7684944+00:00",
+      "endTime": "2026-11-02T17:34:45.0930455+00:00",
+      "duration": "00:00:00.3205474",
+      "executionId": "fe197770-bd8b-40a4-8e0a-39d9bc130941"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_DefaultsLevel_UsedWhenNoAgentOrWildcard",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:45.0931852+00:00",
+      "endTime": "2026-11-02T17:34:45.0962303+00:00",
+      "duration": "00:00:00.0029659",
+      "executionId": "05a798d8-1a43-44dc-b67a-aea55b992398"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveAsync_TildeOnlyStateDir_ResolvesToEffectiveHome",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:45.0963193+00:00",
+      "endTime": "2026-11-02T17:34:45.1110732+00:00",
+      "duration": "00:00:00.0150481",
+      "executionId": "4660b356-a555-4f69-9628-eb028a013035"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.RecordAllowlistUseAsync_WildcardBucketOnly_UpdatesMetadata",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:45.1111878+00:00",
+      "endTime": "2026-11-02T17:34:45.1470637+00:00",
+      "duration": "00:00:00.0346842",
+      "executionId": "c3e2a610-8208-4972-8035-f9cf6d68f4ab"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_Version0_ReturnsDefaultDenyAndWarns",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:45.1471573+00:00",
+      "endTime": "2026-11-02T17:34:45.1530352+00:00",
+      "duration": "00:00:00.0058696",
+      "executionId": "5cde3f0a-a82f-4c20-a621-1fd3b1ebb22f"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.Changed_ExternalCorruptThenValid_RaisesFailureThenRecovery",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:45.1531599+00:00",
+      "endTime": "2026-11-02T17:34:45.6650509+00:00",
+      "duration": "00:00:00.5099050",
+      "executionId": "19dbddf9-f5e3-4403-bead-6d0d26f37392"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_Version2_ReturnsDefaultDenyAndWarns",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:45.6652123+00:00",
+      "endTime": "2026-11-02T17:34:45.6679909+00:00",
+      "duration": "00:00:00.0028191",
+      "executionId": "668ae34f-a87d-47e0-8343-b0a8037d1338"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.AddAllowlistEntryAsync_NoFile_CreatesFileWithEntry",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:45.6681004+00:00",
+      "endTime": "2026-11-02T17:34:45.6759958+00:00",
+      "duration": "00:00:00.0073361",
+      "executionId": "2e7425e6-e814-45c9-98e3-07a3cca3db1b"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.RecordAllowlistUseAsync_UpdatesMetadataAndPreservesIdAndPattern",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:45.6760848+00:00",
+      "endTime": "2026-11-02T17:34:45.6844555+00:00",
+      "duration": "00:00:00.0077575",
+      "executionId": "fb144fbf-e4de-4724-a120-53e951ab6b96"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveAsync_AtomicWrite_NoTempFileLeft",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:45.6884798+00:00",
+      "endTime": "2026-11-02T17:34:45.6939094+00:00",
+      "duration": "00:00:00.0085936",
+      "executionId": "7512709b-cd3d-49be-a1a8-76d6018abec6"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveAsync_CustomStateDir_InvalidLegacyFile_FailsClosedWithoutReplacement",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:45.6940017+00:00",
+      "endTime": "2026-11-02T17:34:45.6972402+00:00",
+      "duration": "00:00:00.0032520",
+      "executionId": "8f0b6f44-45d4-4558-8864-504f73e15449"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.AddAllowlistEntryAsync_RaisesChangedOnceWithoutWatcherEcho",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:45.6973232+00:00",
+      "endTime": "2026-11-02T17:34:46.0421981+00:00",
+      "duration": "00:00:00.3399207",
+      "executionId": "f9086804-8068-4b37-89ad-c3e00717dd70"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_NullAgentId_NormalizesToMain",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:46.0423112+00:00",
+      "endTime": "2026-11-02T17:34:46.0457338+00:00",
+      "duration": "00:00:00.0035334",
+      "executionId": "8cd054e3-140f-4670-9027-ef7fe02fee56"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.Normalize_EmptySocketTokenNulled",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:46.0463079+00:00",
+      "endTime": "2026-11-02T17:34:46.0492433+00:00",
+      "duration": "00:00:00.0030962",
+      "executionId": "104fa8d5-b460-417b-ac05-bd24384bf788"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveAsync_HomeRelativeStateDir_UsesOpenClawHome",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:46.0493462+00:00",
+      "endTime": "2026-11-02T17:34:46.0717098+00:00",
+      "duration": "00:00:00.0228152",
+      "executionId": "77dda99e-8666-4d95-bd9a-62645cb1c4f3"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_AllowlistFromAgent_Returned",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:46.0718388+00:00",
+      "endTime": "2026-11-02T17:34:46.0780137+00:00",
+      "duration": "00:00:00.0031545",
+      "executionId": "61e41838-77d0-431a-b551-e5ed2a693f08"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveReadOnly_AgentWinsOverWildcard",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:46.0781677+00:00",
+      "endTime": "2026-11-02T17:34:46.0782274+00:00",
+      "duration": "00:00:00.0027442",
+      "executionId": "eccbf156-91dc-464f-bd66-92b75aa539fe"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.AddAllowlistEntryAsync_DuplicatePattern_NotAddedCaseInsensitive",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:46.0786966+00:00",
+      "endTime": "2026-11-02T17:34:46.1168473+00:00",
+      "duration": "00:00:00.0270185",
+      "executionId": "e5efe9a7-7f14-4885-8892-4ddfde37d43d"
+    },
+    {
+      "testName": "OpenClaw.Shared.Tests.ExecApprovalsStoreTests.ResolveAsync_TildePrefixedOpenClawHome_ExpandsRelativeToOsHome",
+      "outcome": "Passed",
+      "startTime": "2026-11-02T17:34:46.1169495+00:00",
+      "endTime": "2026-11-02T17:34:46.1377965+00:00",
+      "duration": "00:00:00.0215165",
+      "executionId": "97399ede-d620-4edd-a266-6b170b67fb64"
+    }
+  ]
+}
