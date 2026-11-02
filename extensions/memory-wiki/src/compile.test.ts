@@ -78,23 +78,31 @@ describe("compileMemoryWikiVault", () => {
     await expect(fs.readFile(sourcePath, "utf8")).resolves.toContain(notesLine);
   });
 
-  it("keeps generated native links to page paths containing spaces clickable", async () => {
+  it("keeps native links clickable with Markdown-sensitive titles and paths", async () => {
     const { config, page, read } = await createVault();
     await page("entities/plan.md", { pageType: "entity", id: "entity.plan", title: "Plan" });
-    await page(
-      "sources/meeting notes.md",
-      { pageType: "source", id: "source.meeting-notes", title: "Meeting notes" },
-      "# Meeting notes\n\n[Plan](../entities/plan.md)\n",
-    );
+    const titles = [
+      ["Meeting notes", "Meeting notes"],
+      ["Opening [notes", "Opening \\[notes"],
+      ["Closing notes]", "Closing notes\\]"],
+      ["Windows path\\", "Windows path\\\\"],
+    ];
+    for (const [index, [title]] of titles.entries()) {
+      await page(
+        `sources/${index} notes.md`,
+        { pageType: "source", id: `source.notes-${index}`, title },
+        "# Source\n\n[Plan](../entities/plan.md)\n",
+      );
+    }
 
     await compileMemoryWikiVault(config);
 
-    expect(extractWikiLinks(await read("index.md"), "index.md")).toContain(
-      "sources/meeting notes.md",
-    );
-    await expect(read("entities/plan.md")).resolves.toContain(
-      "[Meeting notes](<../sources/meeting notes.md>)",
-    );
+    const links = extractWikiLinks(await read("index.md"), "index.md");
+    const backlinks = await read("entities/plan.md");
+    for (const [index, [, label]] of titles.entries()) {
+      expect(links).toContain(`sources/${index} notes.md`);
+      expect(backlinks).toContain(`[${label}](<../sources/${index} notes.md>)`);
+    }
   });
 
   it("rejects directory-index syntax-error frontmatter without changing its bytes", async () => {
