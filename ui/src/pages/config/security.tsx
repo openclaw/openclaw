@@ -75,6 +75,8 @@ function networkAccessWarns(access: GatewayNetworkAccess, gatewayAuth: string) {
 }
 
 function GatewayAccessSection(props: SecurityViewProps) {
+  const gatewayAuthLabel = () =>
+    knownValueLabel(GATEWAY_AUTH_VALUES, "gatewayAuthValue", props.security.gatewayAuth);
   const networkAccessLabel = () =>
     t(`quickSettings.security.networkAccessValue.${props.security.networkAccess.kind}`);
   return (
@@ -82,20 +84,12 @@ function GatewayAccessSection(props: SecurityViewProps) {
       <SettingsNavRow
         title={t("quickSettings.security.gatewayAuth")}
         control={
-          <SettingsStatus
-            kind={
-              props.security.gatewayAuth === "none"
-                ? "warn"
-                : props.security.gatewayAuth === "unknown"
-                  ? "muted"
-                  : "ok"
-            }
-            label={knownValueLabel(
-              GATEWAY_AUTH_VALUES,
-              "gatewayAuthValue",
-              props.security.gatewayAuth,
-            )}
-          />
+          // The reported mode can miss a startup --auth, so it can raise a concern but not reassure.
+          props.security.gatewayAuth === "none" ? (
+            <SettingsStatus kind="warn" label={gatewayAuthLabel()} />
+          ) : (
+            <SettingsValue value={gatewayAuthLabel()} />
+          )
         }
         onClick={() => props.onOpenGatewaySettings?.()}
       />

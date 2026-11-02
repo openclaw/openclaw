@@ -51,20 +51,17 @@ describe("Security", () => {
   });
 
   it.each([
-    ["none", "None", "warn"],
-    ["token", "Token", "ok"],
-    ["password", "Password", "ok"],
-    ["trusted-proxy", "Trusted proxy", "ok"],
-    ["unknown", "Unknown", null],
-    ["hand-edited", "hand-edited", "ok"],
-  ])("shows %s auth as a status", (gatewayAuth, label, kind) => {
-    const status = expectRowByTitle(
-      renderSecurity({ gatewayAuth }).container,
-      "Gateway auth",
-    ).querySelector(".settings-status");
-    expect(status?.textContent?.trim()).toBe(label);
-    expect(status?.className).toBe(
-      kind ? `settings-status settings-status--${kind}` : "settings-status",
+    ["none", "None", true],
+    ["token", "Token", false],
+    ["password", "Password", false],
+    ["trusted-proxy", "Trusted proxy", false],
+    ["unknown", "Unknown", false],
+    ["hand-edited", "hand-edited", false],
+  ])("shows %s auth without vouching for it", (gatewayAuth, label, warns) => {
+    const row = expectRowByTitle(renderSecurity({ gatewayAuth }).container, "Gateway auth");
+    expect(row.querySelector(".settings-row__control")?.textContent?.trim()).toBe(label);
+    expect(row.querySelector(".settings-status")?.className).toBe(
+      warns ? "settings-status settings-status--warn" : undefined,
     );
   });
 

@@ -699,7 +699,7 @@ it("publishes the running Gateway's auth mode as it changes", () => {
     runtimeConfig: { state: { connected: false } },
   });
   const view = mountConfigPage(context, { pageId: "security" });
-  const auth = () => view.container.querySelector(".settings-status")?.textContent?.trim();
+  const auth = () => view.container.querySelector(".settings-row__control")?.textContent?.trim();
   expect(auth()).toBe("Unknown");
 
   Object.assign(context.gateway.snapshot, { hello: { snapshot: { authMode: "password" } } });
