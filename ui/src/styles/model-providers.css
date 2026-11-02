@@ -283,18 +283,6 @@
   font-size: 12px;
 }
 
-.model-providers__probe--success {
-  border-color: color-mix(in srgb, var(--ok) 35%, var(--border));
-}
-
-.model-providers__probe--warning {
-  border-color: color-mix(in srgb, var(--warn) 35%, var(--border));
-}
-
-.model-providers__probe--error {
-  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
-}
-
 .model-providers__probe-summary,
 .model-providers__probe-target {
   display: flex;
