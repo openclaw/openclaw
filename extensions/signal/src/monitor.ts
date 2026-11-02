@@ -89,8 +89,23 @@ export type MonitorSignalOpts = {
   statusSink?: SignalStatusSink;
 };
 
-function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
+/** Teardown keeps moving after this window when a receive or reply makes no progress. */
+export const SIGNAL_IDLE_DRAIN_TIMEOUT_MS = 30_000;
+
+export function createSignalMonitorTaskRunner(
+  runtime: RuntimeEnv,
+  idleDrainTimeoutMs: number = SIGNAL_IDLE_DRAIN_TIMEOUT_MS,
+) {
   const inFlight = new Set<Promise<void>>();
+  const drainedWithinWindow = (): Promise<boolean> =>
+    new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), idleDrainTimeoutMs);
+      timer.unref?.();
+      void Promise.allSettled(inFlight).then(() => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
   return {
     runTask(task: () => Promise<void>): Promise<void> {
       const trackedTask = Promise.resolve().then(task);
@@ -102,8 +117,16 @@ function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
       return trackedTask;
     },
     async waitForIdle(): Promise<void> {
+      // A stuck receive must not hold Gateway stop open, so each round is bounded; the
+      // leftover task keeps running and is reported instead of being awaited forever.
       while (inFlight.size > 0) {
-        await Promise.allSettled(inFlight);
+        if (await drainedWithinWindow()) {
+          continue;
+        }
+        runtime.error?.(
+          `signal waitForIdle made no progress within ${idleDrainTimeoutMs}ms; continuing teardown with ${inFlight.size} task(s) still in flight`,
+        );
+        return;
       }
     },
   };
