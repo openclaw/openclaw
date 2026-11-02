@@ -17,7 +17,6 @@ const {
   nativeDarwinCensus,
   rosetta,
   ancestry,
-  processIdentity,
   fixturePath,
 } = vi.hoisted(() => ({
   census: vi.fn(),
@@ -32,7 +31,6 @@ const {
   nativeDarwinCensus: vi.fn(),
   rosetta: vi.fn(),
   ancestry: vi.fn(),
-  processIdentity: vi.fn(),
   fixturePath: (file: string) => file.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""),
 }));
 vi.mock("node:child_process", () => ({ spawnSync: census }));
@@ -62,10 +60,7 @@ vi.mock("../process/supervisor/darwin-process-command.js", () => ({
   readDarwinProcessCommand: darwinCommand,
 }));
 // mock-isolation: Native ancestry would otherwise read real host PIDs behind the synthetic table.
-vi.mock("@openclaw/proc-safe/identity", () => ({
-  readProcessAncestry: ancestry,
-  readProcessIdentity: processIdentity,
-}));
+vi.mock("@openclaw/proc-safe/identity", () => ({ readProcessAncestry: ancestry }));
 import {
   type HandoffReferences,
   inspectOtherOpenClawProcesses,
@@ -122,7 +117,6 @@ beforeEach(() => {
   );
   rosetta.mockReset().mockReturnValue(false);
   ancestry.mockReset().mockReturnValue(null);
-  processIdentity.mockReset().mockReturnValue(null);
   realpath.mockReset().mockImplementation((file: string) => file);
   stat.mockReset().mockReturnValue({ isDirectory: () => false });
   readlink.mockReset().mockImplementation((file: string) => {
@@ -212,38 +206,23 @@ it.each([
   expectPids([], undefined, free);
 });
 
-it("releases runtimes from OpenClaw processes started after them without artifact evidence", () => {
+it("releases runtimes from OpenClaw processes that are not their updater", () => {
   const runtime = "/tmp/openclaw-update-runtime-Held01";
-  const createdAtMs = Date.UTC(2026, 10, 2, 12);
-  const startedAt = new Map([
-    [peer, createdAtMs + 120_000],
-    [peer + 1, createdAtMs - 30_000],
-    [peer + 2, createdAtMs + 5_000],
-    [peer + 3, createdAtMs + 120_000],
-  ]);
-  processIdentity.mockImplementation((pid: number) => {
-    const started = startedAt.get(pid);
-    return started === undefined
-      ? null
-      : { startTimeMicros: started * 1000, startTimeResolutionMicros: 1_000_000, exited: false };
-  });
-  // Restarted Gateway: its process title erased the script path.
+  const alias = "/tmp/runtime-alias/dist/worker.js";
+  realpath.mockImplementation((file: string) =>
+    file === alias ? `${runtime}/dist/worker.js` : file,
+  );
+  // A Gateway's process title erases its script path.
   processRow(peer, ["openclaw-gateway"], { cwd: "/" });
-  // The creating updater predates mkdtemp; a near-simultaneous start is unproven.
-  processRow(peer + 1, ["openclaw-update"], { cwd: "/" });
-  processRow(peer + 2, ["openclaw-gateway"], { cwd: "/" });
-  // A later worker that references the runtime still holds it.
-  processRow(peer + 3, ["node", `${runtime}/dist/worker.js`], { cwd: "/" });
-  expect(inspectOtherOpenClawProcesses(runtime, createdAtMs)).toEqual({
-    pids: [peer + 1, peer + 2, peer + 3],
-  });
-  expectPids([peer, peer + 1, peer + 2, peer + 3], undefined, runtime);
-  processIdentity.mockImplementation(() => {
-    throw new Error("identity unavailable");
-  });
-  expect(inspectOtherOpenClawProcesses(runtime, createdAtMs)).toEqual({
-    pids: [peer, peer + 1, peer + 2, peer + 3],
-  });
+  processRow(peer + 1, ["node", "/app/dist/index.js", "gateway", "--port", "18789"]);
+  // A title-erased CLI or a visible update may be the runtime's creator.
+  processRow(peer + 2, ["openclaw"], { cwd: "/" });
+  processRow(peer + 3, ["node", "/app/dist/index.js", "update", "--yes"]);
+  // Resolved artifact evidence survives a later OpenClaw preload.
+  processRow(peer + 4, ["node", "--import", "/app/dist/version.js", alias], { cwd: "/" });
+  processRow(peer + 5, ["openclaw-gateway", `${runtime}/dist/worker.js`], { cwd: "/" });
+  expectPids([peer + 2, peer + 3, peer + 4, peer + 5], undefined, runtime);
+  expectPids([peer, peer + 1, peer + 2, peer + 3, peer + 4, peer + 5]);
 });
 
 it.each(["relative", "alias", "cwd-and-preload"])(

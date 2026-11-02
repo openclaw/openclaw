@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { readProcessAncestry, readProcessIdentity } from "@openclaw/proc-safe/identity";
+import { readProcessAncestry } from "@openclaw/proc-safe/identity";
 import { isBunRuntime, resolveRuntimeScriptPosition } from "../daemon/runtime-binary.js";
 import { readDarwinProcessCommand } from "../process/supervisor/darwin-process-command.js";
 import {
@@ -67,28 +67,26 @@ function isStandardSystemdLoginProcess(
 
 type ArtifactCustody =
   | { kind: "not-holder" }
-  /** identityOnly: an OpenClaw process with no reference to any retained artifact. */
-  | { kind: "holder"; paths?: string[]; identityOnly?: true }
+  /** notUpdater: no artifact evidence, and its OpenClaw command is known and not `update`. */
+  | { kind: "holder"; paths?: string[]; notUpdater?: true }
   | { kind: "unknown"; reason: string };
 
-// Covers coarse start-time resolution and small wall-clock corrections.
-const RUNTIME_START_MARGIN_MS = 10_000;
-
 // Without an artifact reference, an OpenClaw process can hold a runtime only as
-// its creating updater, which started before mkdtemp created the directory.
-// Gateways and CLIs launched later (title changes erase their argv) cannot.
-function startedAfterRuntime(pid: number, createdAtMs: number): boolean {
-  try {
-    const identity = readProcessIdentity(pid);
-    return (
-      identity !== null &&
-      !identity.exited &&
-      identity.startTimeMicros - identity.startTimeResolutionMicros >
-        (createdAtMs + RUNTIME_START_MARGIN_MS) * 1000
-    );
-  } catch {
-    return false;
+// the `update` that created it. Process titles erase a Gateway's script path, so
+// its title (or visible subcommand) is the only evidence that it is not one.
+function readOpenClawCommand(
+  argv: readonly string[],
+  identity: ReturnType<typeof classifyOpenClawArgv>,
+): string | undefined {
+  const title = /^openclaw-([a-z0-9-]+)$/u.exec(
+    path.basename((argv[0] ?? "").replaceAll("\\", "/")).replace(/\.(exe|cmd|bat)$/iu, ""),
+  );
+  if (title) {
+    return title[1];
   }
+  return identity.kind === "openclaw" && identity.entryIndex !== undefined
+    ? getRootOptionAwareCommandPath(["node", ...argv.slice(identity.entryIndex)], 1)[0]
+    : undefined;
 }
 
 function classifyProcessArtifactCustody(
@@ -105,9 +103,6 @@ function classifyProcessArtifactCustody(
     cwd ?? "",
     "executable" in command ? (command.executable ?? "") : "",
   ].filter(referencesRetainedArtifact);
-  const unscoped: Extract<ArtifactCustody, { kind: "holder" }> = references.length
-    ? { kind: "holder" }
-    : { kind: "holder", identityOnly: true };
   if ("argvUnavailable" in command || argv.length === 0) {
     return references.length ? { kind: "holder" } : { kind: "not-holder" };
   }
@@ -132,11 +127,19 @@ function classifyProcessArtifactCustody(
     return unknown ? { kind: "unknown", reason: unknown } : { kind: "holder", paths };
   }
   const identity = classifyOpenClawArgv(argv, options);
+  const openClawCommand = readOpenClawCommand(argv, identity);
+  // Artifact evidence, including a resolved alias, keeps an unscoped holder conservative.
+  let artifactEvidence = references.length > 0 || paths.length > 0;
+  const unscoped = (): Extract<ArtifactCustody, { kind: "holder" }> =>
+    artifactEvidence || openClawCommand === undefined || openClawCommand === "update"
+      ? { kind: "holder" }
+      : { kind: "holder", notUpdater: true };
   if (identity.kind === "openclaw") {
     if (!identity.artifactPath) {
-      return unscoped;
+      return unscoped();
     }
     paths.push(identity.artifactPath);
+    artifactEvidence = true;
   }
   let holder: Extract<ArtifactCustody, { kind: "holder" }> | undefined = paths.length
     ? { kind: "holder", paths }
@@ -163,7 +166,7 @@ function classifyProcessArtifactCustody(
       ? readProcessPackageIdentity(cwd, true)
       : undefined;
   if (pkg?.kind === "package" && pkg.name === "openclaw") {
-    holder = unscoped;
+    holder = unscoped();
   }
   const scripts = pkg?.kind === "package" ? pkg.scripts : {};
   if (pkg?.kind === "unknown") {
@@ -196,10 +199,11 @@ function classifyProcessArtifactCustody(
     if (evidence.kind === "unclassified") {
       unknown ??= evidence.reason;
     } else if (evidence.kind === "openclaw") {
+      artifactEvidence ||= evidence.artifactPath !== undefined;
       holder =
         evidence.artifactPath && (!holder || holder.paths)
           ? { kind: "holder", paths: [...(holder?.paths ?? []), evidence.artifactPath] }
-          : unscoped;
+          : unscoped();
     }
   }
   return unknown ? { kind: "unknown", reason: unknown } : (holder ?? { kind: "not-holder" });
@@ -281,12 +285,8 @@ function classifyWindowsHandoffAncestry(
 export function inspectOtherOpenClawProcesses(references: HandoffReferences): CensusResult;
 export function inspectOtherOpenClawProcesses(
   runtimeDirectory?: string,
-  runtimeCreatedAtMs?: number,
 ): { pids: number[]; warnings?: string[] } | { error: string };
-export function inspectOtherOpenClawProcesses(
-  references?: HandoffReferences | string,
-  runtimeCreatedAtMs?: number,
-) {
+export function inspectOtherOpenClawProcesses(references?: HandoffReferences | string) {
   const handoff = typeof references === "object" ? references : undefined;
   const runtimeDirectory = typeof references === "string" ? references : undefined;
   const warnings: string[] = [];
@@ -529,9 +529,7 @@ export function inspectOtherOpenClawProcesses(
         runtimeDirectory &&
         (custody.paths
           ? !custody.paths.some((value) => matches.test(normalize(value)))
-          : custody.identityOnly &&
-            runtimeCreatedAtMs !== undefined &&
-            startedAfterRuntime(pid, runtimeCreatedAtMs))
+          : custody.notUpdater)
       ) {
         continue;
       }
