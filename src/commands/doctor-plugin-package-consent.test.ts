@@ -1,10 +1,10 @@
+// Mock registration must precede the transitive Doctor imports.
 import "../flows/doctor-health.test-support.js";
 import fs from "node:fs";
 import { note } from "@clack/prompts";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import { useDoctorHealthFixture } from "../flows/doctor-health.fixture.test-support.js";
-import { mocks } from "../flows/doctor-health.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as configFlow from "./doctor-config-flow.js";
 import { doctorCommand } from "./doctor.js";
@@ -25,6 +25,7 @@ vi.mock("../plugins/clawhub.js", async (original) => ({
   },
 }));
 
+const { mocks } = await import("../flows/doctor-health.test-support.js");
 const { loadAndMaybeMigrateDoctorConfig } =
   await vi.importActual<typeof configFlow>("./doctor-config-flow.js");
 useDoctorHealthFixture();
