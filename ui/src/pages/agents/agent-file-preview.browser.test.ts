@@ -152,14 +152,10 @@ describe.runIf(browserMode)("agent file preview", () => {
       const shown = afterOwnTransition(modal, "overlay-after-show");
       await userEvent.click(requireButton(".agent-file-header .agent-file-actions button"));
       await shown;
-      expect(container.querySelector(".md-preview-dialog__path")?.textContent?.trim()).toBe(
-        "AGENTS.md",
-      );
+      // A root file's path would only repeat its name.
+      expect(container.querySelector(".md-preview-dialog__path")).toBeNull();
       expect(container.querySelector(".md-preview-dialog__chip strong")?.textContent).toBe(status);
       expect(container.querySelector(".md-preview-dialog__meta")?.textContent).toContain(updated);
-      expect(container.querySelector(".md-preview-dialog__eyebrow span")?.textContent?.trim()).toBe(
-        "Markdown Preview",
-      );
       const reader = container.querySelector(".md-preview-dialog__reader")!;
       expect(reader.querySelector("img")?.getAttribute("src")).toBe(
         "https://example.invalid/image.png",
@@ -281,7 +277,7 @@ describe.runIf(browserMode)("agent file preview", () => {
       await userEvent.click(preview);
       await shown;
       expect(dialog.open).toBe(true);
-      const identity = container.querySelector<HTMLElement>(".md-preview-dialog__header-main")!;
+      const identity = container.querySelector<HTMLElement>(".md-preview-dialog__title")!;
       const actions = container.querySelector<HTMLElement>(".md-preview-dialog__actions")!;
       const meta = container.querySelector<HTMLElement>(".md-preview-dialog__meta")!;
       const essentialChips = meta.querySelectorAll<HTMLDivElement>('[data-priority="essential"]');

@@ -80,3 +80,20 @@
     --skill-reader-inset: var(--space-4);
   }
 }
+
+.skill-library-dialog__source {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  font-family: var(--mono);
+  resize: vertical;
+}
+
+.skill-library-dialog__details {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.skill-library-dialog .oc-dialog__body > p {
+  margin: 0;
+}
