@@ -758,7 +758,7 @@
 }
 
 /* Identities may be long keys; numbers never break mid-value. */
-.usage-creators-table td:first-child {
+.usage-creators-table tbody th:first-child {
   overflow-wrap: anywhere;
   white-space: normal;
 }
@@ -794,6 +794,7 @@
 
 .usage-creator-select {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   width: 100%;
   gap: 7px;
   padding: 4px 0;
@@ -1925,6 +1926,23 @@
     gap: 14px;
   }
 
+  .usage-creators {
+    container-type: inline-size;
+  }
+
+  /* Numbers keep their natural width; the identity takes the rest and wraps. */
+  .usage-creators-table {
+    table-layout: auto;
+  }
+
+  .usage-creators-table th:first-child {
+    width: auto;
+  }
+
+  .usage-creators-table tbody tr {
+    border-top: 0;
+  }
+
   .usage-controls,
   .usage-filter-row,
   .usage-filters-inline {
@@ -2210,4 +2228,37 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+}
+
+/* Too narrow for four columns: the identity takes its own line above the numbers. */
+@container (max-width: 320px) {
+  .usage-creators-table,
+  .usage-creators-table thead,
+  .usage-creators-table tbody {
+    display: block;
+  }
+
+  .usage-creators-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr);
+  }
+
+  .usage-creators-table thead th:first-child {
+    display: none;
+  }
+
+  .usage-creators-table tbody th:first-child {
+    grid-column: 1 / -1;
+    padding-right: 0;
+    padding-bottom: 2px;
+  }
+
+  .usage-creators-table td {
+    padding-top: 4px;
+  }
+
+  .usage-creators-table :is(th, td):nth-child(2) {
+    padding-left: 0;
+    text-align: left;
+  }
 }
