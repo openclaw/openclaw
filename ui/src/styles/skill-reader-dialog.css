@@ -55,7 +55,9 @@
 }
 
 .skill-reader-dialog__notice {
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
   margin: 0 var(--skill-reader-inset) var(--space-3);
   overflow-wrap: anywhere;
   white-space: pre-wrap;

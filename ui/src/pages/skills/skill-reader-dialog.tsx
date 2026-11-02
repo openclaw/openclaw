@@ -122,6 +122,7 @@ export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: b
                     {(result) => (
                       <div
                         role={result().kind === "error" ? "alert" : "status"}
+                        tabindex={0}
                         class={[
                           "callout skill-reader-dialog__notice",
                           result().kind === "error" ? "danger" : "success",
