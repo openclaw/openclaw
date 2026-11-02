@@ -9,6 +9,7 @@ import {
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -191,6 +192,8 @@ type Fixture = {
   foregroundRequests: ProviderRequest[];
   /** A dashboard turn by the authenticated operator; returns its completed assistant entry. */
   dashboardTurn: (sessionKey: string) => Promise<Turn>;
+  /** A Telegram turn from one sender through `agentCommandFromIngress` (TUI, node, plugin runs). */
+  ingressTurn: (sessionKey: string, senderId: string) => Promise<Turn>;
   /** An authorized Telegram direct message through the channel inbound dispatcher. */
   channelTurn: (sessionKey: string, senderId: string) => Promise<Turn>;
   fork: (
@@ -375,6 +378,30 @@ async function withForkGateway(
                 { timeoutMs: 50_000 },
               ),
             ).toMatchObject({ status: "ok" });
+            mode = "fork";
+            return anchorTurn(sessionKey);
+          },
+          ingressTurn: async (sessionKey, senderId) => {
+            mode = "foreground";
+            await agentCommandFromIngress({
+              agentId: "main",
+              sessionKey,
+              runId: randomUUID(),
+              message: "Say hello.",
+              allowModelOverride: false,
+              deliver: false,
+              channel: "telegram",
+              messageChannel: "telegram",
+              messageProvider: "telegram",
+              accountId: "default",
+              to: "4321",
+              runContext: {
+                senderId,
+                messageChannel: "telegram",
+                accountId: "default",
+                chatId: "4321",
+              },
+            });
             mode = "fork";
             return anchorTurn(sessionKey);
           },
@@ -578,6 +605,26 @@ describe("plugin forked turns through the real Gateway", () => {
           ]);
           // The fork runs on the model the anchored turn ran on.
           expect(fixture.forkRequests[0]?.model).toBe(fixture.foregroundRequests.at(-1)?.model);
+
+          // Agent-command ingress turns record the same requester, so forks check it too.
+          const ingressBlocked = await fixture.ingressTurn(
+            `agent:main:telegram:direct:fork-proof-ingress-42-${randomUUID()}`,
+            "42",
+          );
+          const ingressAllowed = await fixture.ingressTurn(
+            `agent:main:telegram:direct:fork-proof-ingress-7-${randomUUID()}`,
+            "7",
+          );
+          const forkCalls = fixture.forkRequests.length;
+          await expect(fixture.fork(ingressBlocked, {})).resolves.toEqual({
+            ok: true,
+            result: { status: "refused", reason: "tool_policy" },
+          });
+          expect(fixture.forkRequests).toHaveLength(forkCalls);
+          await expect(fixture.fork(ingressAllowed, {})).resolves.toMatchObject({
+            ok: true,
+            result: { status: "settled" },
+          });
 
           // Overrides need trust unless they name the turn's own model.
           const writer = await connectGatewayClient({

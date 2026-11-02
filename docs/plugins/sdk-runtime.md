@@ -232,9 +232,10 @@ if (result.status === "refused") {
   `sessionId` and `lifecycleRevision` the fork read, so a follow-up notice can
   target that same generation.
 - Tool policy is checked as the anchored turn's requester: the sender, owner
-  flag, group and channel that the turn's stored user message recorded. Turns
-  that recorded no requester fall back to the session's stored conversation
-  facts. Plugins cannot supply requester facts.
+  flag, group and channel that the turn's stored user message recorded. Channel
+  turns and agent-command turns (TUI, node, plugin runs) record them. Older
+  turns that recorded no requester fall back to the session's stored
+  conversation facts. Plugins cannot supply requester facts.
 - The fork runs on the model the anchored turn ran on. An explicit `provider`
   and `model` that name the turn's or the session's own model need no extra
   trust; any other override uses the subagent override policy above.

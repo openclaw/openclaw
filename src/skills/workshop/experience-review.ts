@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { prepareSessionFork, runSessionFork } from "../../agents/session-fork-run.js";
+import {
+  prepareSessionFork,
+  readSessionForkTurn,
+  runSessionFork,
+} from "../../agents/session-fork-run.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -27,17 +31,34 @@ export async function prepareSkillExperienceReviewCandidate(
   ) {
     return undefined;
   }
+  // The same host-owned turn facts a plugin fork uses: the anchored turn's requester and model.
+  const turn = await readSessionForkTurn(candidate.source);
+  const model = turn.model ?? {
+    provider: candidate.ctx.modelProviderId,
+    model: candidate.ctx.modelId,
+  };
   const fork = await prepareSessionFork({
     config,
     source: candidate.source,
     tools: REVIEW_TOOLS,
-    model: { provider: candidate.ctx.modelProviderId, model: candidate.ctx.modelId },
+    model,
     workspaceDir: candidate.ctx.workspaceDir,
-    ...(candidate.ctx.requester ? { requester: candidate.ctx.requester } : {}),
+    ...(turn.requester ? { requester: turn.requester } : {}),
   });
-  return fork
-    ? { ...candidate, ctx: { ...candidate.ctx, workspaceDir: fork.workspaceDir }, config }
-    : undefined;
+  if (!fork) {
+    return undefined;
+  }
+  return {
+    ...candidate,
+    ctx: {
+      ...candidate.ctx,
+      workspaceDir: fork.workspaceDir,
+      modelProviderId: model.provider,
+      modelId: model.model,
+    },
+    ...(turn.requester ? { requester: turn.requester } : {}),
+    config,
+  };
 }
 
 export async function runSkillExperienceReview(
@@ -69,7 +90,7 @@ export async function runSkillExperienceReview(
         ...(candidate.ctx.authProfileId ? { authProfileId: candidate.ctx.authProfileId } : {}),
       },
       workspaceDir: candidate.ctx.workspaceDir,
-      ...(candidate.ctx.requester ? { requester: candidate.ctx.requester } : {}),
+      ...(candidate.requester ? { requester: candidate.requester } : {}),
       timeoutMs: resolveAgentTimeoutMs({ cfg: config }),
       ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
       assertCallerCurrent: () => {
