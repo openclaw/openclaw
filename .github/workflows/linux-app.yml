@@ -7,7 +7,6 @@ on:
       - "apps/linux/**"
       - "scripts/lib/openclaw-bun.json"
       - "scripts/stage-openclaw-bun.sh"
-      - "test/scripts/stage-openclaw-bun.test.ts"
       - ".github/workflows/linux-app.yml"
       - ".github/workflows/linux-app-release.yml"
       - "!apps/linux/README.md"

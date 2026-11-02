@@ -6,6 +6,7 @@ import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.t
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createOverlay, type Overlay } from "../../components/overlay-lifecycle.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   disposeSessionViews,
   renderSessionsView,
@@ -666,8 +667,13 @@ const unavailable = "Connect to the Gateway to search transcripts.";
 const connectionStatus = () => container.querySelector('.settings-section__desc [role="status"]');
 const transcriptTrigger = () =>
   container.querySelector<HTMLButtonElement>(".sessions-transcript-search__trigger");
-const filterInput = () =>
-  container.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
+const filterInput = () => {
+  if (!container.querySelector(".sessions-filter-popover__search input")) {
+    container.querySelector<HTMLButtonElement>(".sessions-filter-popover__search button")?.click();
+    flush();
+  }
+  return container.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
+};
 const escapeKey = (options: KeyboardEventInit = {}) =>
   new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, ...options });
 
@@ -706,7 +712,7 @@ describe("sessions transcript search view", () => {
       await Promise.resolve();
 
       const rosterFilter = container.querySelector<HTMLInputElement>(
-        '.sessions-filter-popover__search input[type="text"]',
+        ".sessions-filter-popover__search input",
       );
       const trigger = transcriptTrigger();
       expect(rosterFilter?.value).toBe("agent label");

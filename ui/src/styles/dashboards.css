@@ -23,7 +23,7 @@
 }
 
 .dashboards-loading__control {
-  height: 40px;
+  height: var(--settings-control-height);
 }
 
 .dashboards-loading__select {
@@ -75,33 +75,17 @@
 
 .dashboards-search input,
 .dashboards-select select {
-  min-height: 40px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  color: var(--text);
-  background: var(--card);
-  font: inherit;
+  min-height: var(--settings-control-height);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+  background-color: var(--field-bg);
+  font-size: var(--field-font-size);
   outline: none;
-  transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
 }
 
 .dashboards-search input {
   width: 100%;
   padding: 0 var(--space-3) 0 40px;
-}
-
-.dashboards-search input::placeholder {
-  color: var(--muted);
-}
-
-.dashboards-search input:focus,
-.dashboards-select select:focus {
-  border-color: color-mix(in srgb, var(--accent) 66%, var(--border-strong));
-  background: var(--bg-elevated);
-  box-shadow: 0 0 0 3px var(--accent-subtle);
 }
 
 .dashboards-select {
@@ -121,7 +105,7 @@
 
 .dashboards-select select {
   min-width: 156px;
-  padding: 0 34px 0 var(--space-3);
+  padding: 0 36px 0 var(--field-padding-inline);
 }
 
 .dashboards-results {

@@ -1,5 +1,5 @@
 import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
-import { frames } from "./control-ui-interaction-navigation.ts";
+import { frames, openNavigationDrawer } from "./control-ui-interaction-navigation.ts";
 import { cronLoadedJobCount, interactionScenarios } from "./control-ui-interaction-scenarios.ts";
 
 /** Fixed work spans WebKit's coarse CPU samples; probes also count hot-path operations. */
@@ -12,7 +12,8 @@ export function createEngineActionScenarios(): readonly EngineScenario[] {
   const cycles = 8;
   const chatPicker = interactionScenarios.find(({ id }) => id === "model-picker-first-open-search");
   const sessions = interactionScenarios.find(({ id }) => id === "sessions-sort");
-  if (!chatPicker || !sessions) {
+  const sidebar = interactionScenarios.find(({ id }) => id === "sidebar-toggle");
+  if (!chatPicker || !sessions || !sidebar) {
     throw new Error("Missing shared chat picker or Sessions scenario");
   }
   const repeated = (
@@ -52,6 +53,46 @@ export function createEngineActionScenarios(): readonly EngineScenario[] {
     });
   });
   return [
+    ...(["open", "close"] as const).map((direction): EngineScenario =>
+      Object.assign({}, sidebar, {
+        id: `sidebar-${direction}`,
+        explicitOnly: true,
+        viewports: ["mobile"],
+        expected: `One native activation ${direction}s the populated drawer and preserves the conversation.`,
+        prepare: async (page, gateway) => {
+          await sidebar.prepare(page, gateway);
+          if (direction === "open") {
+            await page.keyboard.press("Escape");
+            await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+            await page
+              .locator(".shell-nav")
+              .evaluate((drawer) =>
+                Promise.all(drawer.getAnimations().map((animation) => animation.finished)),
+              );
+          }
+        },
+        run: async (page) => {
+          if (direction === "open") {
+            await openNavigationDrawer(page);
+            if (!(await page.locator(".shell-nav :focus").first().isVisible())) {
+              throw new Error("Opening the mobile drawer must focus a control inside it");
+            }
+          } else {
+            await page.keyboard.press("Escape");
+            await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+            await page
+              .locator(".shell-nav")
+              .evaluate((drawer) =>
+                Promise.all(drawer.getAnimations().map((animation) => animation.finished)),
+              );
+            if ((await page.locator("#control-ui-main").getAttribute("inert")) !== null) {
+              throw new Error("Closing the mobile drawer must restore the conversation");
+            }
+          }
+          return { nativeActivations: 1 };
+        },
+      } satisfies Partial<EngineScenario>),
+    ),
     {
       ...cronSearch,
       id: "cron-unbound-input-paste",

@@ -116,6 +116,7 @@ export async function handleChatSendWithStorage(
     lifecycleGeneration,
     messageInjectionTarget,
   } = admission;
+  diagnostics.setRunIdentity(admittedSessionId, clientRunId);
   const phase = diagnostics.scope("attachments");
   const preparedAttachments = await prepareChatSendAttachments({
     ...setup,

@@ -1450,16 +1450,14 @@ function installControlUiMockGateway(
             events: scenario.featureEvents,
             ...(scenario.omitFeatureMethods ? {} : { methods: scenario.featureMethods }),
           },
-          controlUiTabs: scenario.controlUiTabs,
-          controlUiLinkReaders: scenario.controlUiLinkReaders ?? [],
-          controlUiWidgetKinds: scenario.controlUiWidgetKinds,
+          ...scenario.controlUiPluginHello,
           protocol: protocolVersion,
           server: {
             buildId: serverBuildId,
             bootId: gatewayBootId,
             controlUiBuildSource: scenario.controlUiBuildSource,
             connId: "control-ui-e2e",
-            version: scenario.serverVersion,
+            ...scenario.serverRelease,
           },
           policy: {
             maxPayload: scenario.maxPayload,

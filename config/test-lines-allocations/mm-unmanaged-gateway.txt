@@ -1,0 +1,3 @@
+# Regression: managed recovery waits for its foreground state owner; preserve other supervisors/PIDs.
+# Real process effects prove permission, system ownership and live-authority refusal before SIGTERM; reports remain truthful.
+156

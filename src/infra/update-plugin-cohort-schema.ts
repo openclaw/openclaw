@@ -2,6 +2,7 @@ import path from "node:path";
 import { z } from "zod";
 import type { ConfigFileWritePathSnapshot } from "../config/io.write-path.types.js";
 import { StrictPluginInstallRecordSchema } from "../config/zod-schema.installs.js";
+import { PluginSourceSnapshotIndexChangeSchema } from "../plugins/plugin-source-snapshot.types.js";
 import type { UpdateRecoveryRecord } from "./update-run-recovery-schema.js";
 
 export const PLUGIN_COHORT_RECOVERY_KEY_PREFIX = "update.pluginCohort.";
@@ -131,6 +132,7 @@ const pluginCohortRecoverySchema = z
         z.discriminatedUnion("kind", [
           z.strictObject({
             kind: z.literal("records"),
+            sourceSnapshots: z.array(PluginSourceSnapshotIndexChangeSchema).max(4096).optional(),
             records: z
               .array(
                 z.strictObject({

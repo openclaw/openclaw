@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -181,6 +182,50 @@ describe("prepared model support admission", () => {
     ...custom,
     agents: { defaults: { modelPolicy: { allow: ["fixture/manual-only"] } } },
   };
+  it.each([
+    { visible: false, agentPolicy: undefined, policyPath: "agents.defaults.modelPolicy.allow" },
+    {
+      visible: true,
+      agentPolicy: { allow: ["fixture/agent-only"] },
+      policyPath: "agents.entries.*.modelPolicy.allow",
+    },
+  ])(
+    "explains $policyPath before creating a child",
+    async ({ visible, agentPolicy, policyPath }) => {
+      await withTestDir({ prefix: "openclaw-spawn-policy-" }, async (dir) => {
+        const config: OpenClawConfig = {
+          ...manualPolicy,
+          session: { store: path.join(dir, "sessions.json") },
+          agents: {
+            ...manualPolicy.agents,
+            entries: { main: { workspace: dir, modelPolicy: agentPolicy } },
+          },
+        };
+        publish(() => true, config, { agentDir: path.join(dir, "agent"), workspaceDir: dir });
+        const { callGateway, tool } = createSpawnReachingGateway(config);
+        setRuntimeConfigSnapshot(config);
+        try {
+          const result = await tool.execute("policy-refusal", {
+            task: "test",
+            model: "fixture/new-model",
+            visible,
+          });
+          expect(result.details).toMatchObject({
+            status: "error",
+            error: expect.stringContaining(
+              `model not allowed: fixture/new-model. Rejected by ${policyPath}.`,
+            ),
+          });
+          expect(result.details).toMatchObject({
+            error: expect.stringContaining("Add the model or its provider wildcard"),
+          });
+          expect(callGateway).not.toHaveBeenCalled();
+        } finally {
+          clearRuntimeConfigSnapshot();
+        }
+      });
+    },
+  );
   const inheritedRef = { provider: "fixture", model: "fixture/custom-model" };
   it.each([
     {
@@ -197,13 +242,6 @@ describe("prepared model support admission", () => {
         ref: inheritedRef,
         model: { id: inheritedRef.model, baseUrl: "https://custom.invalid/v1" },
       },
-    },
-    {
-      name: "applies manual override policy",
-      current: true,
-      config: manualPolicy,
-      request: { source: "override" as const },
-      expected: { kind: "unavailable", error: "model not allowed: fixture/new-model" },
     },
     {
       name: "does not replace a missing pinned account with the shared account",

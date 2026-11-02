@@ -361,8 +361,9 @@
   width: 34px;
   height: 34px;
   margin-bottom: 20px;
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--accent);
+  color: var(--accent);
+  background: currentColor;
+  mask: var(--spinner-mask-large);
   border-radius: 50%;
   animation: btn-spinner-spin 800ms linear infinite;
 }

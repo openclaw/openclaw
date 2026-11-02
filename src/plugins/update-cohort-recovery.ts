@@ -33,6 +33,7 @@ import {
   preparePersistedInstalledPluginIndexCacheEntry,
 } from "./installed-plugin-index-record-state.js";
 import { withoutPluginInstallRecords } from "./installed-plugin-index-records.js";
+import { foldPluginSourceSnapshotChanges } from "./installed-plugin-index-source-snapshots.js";
 import { RETAINED_MANAGED_NPM_KEEP_FILES_REASON } from "./managed-npm-retention-contract.js";
 import {
   clearRetainedManagedNpmInstallMarker,
@@ -395,6 +396,11 @@ export async function settleUpdatePluginCohort(
       );
       if (params.action === "rollback") {
         const recordChanges = foldPluginCohortRecordPublications(pair.cohort.publications);
+        const sourceSnapshotRestorations = foldPluginSourceSnapshotChanges(
+          pair.cohort.publications.flatMap((publication) =>
+            publication.kind === "records" ? (publication.sourceSnapshots ?? []) : [],
+          ),
+        );
         const migrations = pair.cohort.publications.filter(
           (publication) => publication.kind === "plugin-migrations",
         );
@@ -427,7 +433,7 @@ export async function settleUpdatePluginCohort(
         }
         // Install closures may have removed intermediate fresh generations. Restore
         // each plugin directly to its original record with one atomic index write.
-        if (recordChanges.size > 0) {
+        if (recordChanges.size > 0 || sourceSnapshotRestorations.length > 0) {
           const currentRecords = await readCohortInstallRecords(params.env);
           const nextRecords = copyPluginInstallRecordMap(currentRecords);
           const snapshot = await readConfigFileSnapshot({
@@ -499,8 +505,12 @@ export async function settleUpdatePluginCohort(
             }
           }
           fence.assertCurrent();
-          if (!isDeepStrictEqual(nextRecords, currentRecords)) {
+          if (
+            !isDeepStrictEqual(nextRecords, currentRecords) ||
+            sourceSnapshotRestorations.length > 0
+          ) {
             await commitPluginInstallRecordsOnly({
+              sourceSnapshotRestorations,
               previousInstallRecords: currentRecords,
               nextInstallRecords: nextRecords,
               nextConfig: withoutPluginInstallRecords(snapshot.sourceConfig),
@@ -600,6 +610,13 @@ export async function settleUpdatePluginCohort(
       }
       fence.assertCurrent();
       deletePluginCohortRecovery(pair, fence, { env: params.env });
+      try {
+        const { collectInstalledPluginSourceSnapshots } =
+          await import("./plugin-source-snapshot-collection.js");
+        await collectInstalledPluginSourceSnapshots(resolveStateDir(params.env));
+      } catch (error) {
+        process.emitWarning(`Plugin source snapshot collection deferred: ${String(error)}`);
+      }
       return { configPaths };
     },
   );

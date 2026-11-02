@@ -11,8 +11,8 @@
  * mocks; no database or workspace scan belongs to this in-memory owner. This is
  * owner CPU/allocation evidence, not whole-Gateway latency or model execution.
  * Compare interleaved revisions and identical-source A/A controls. Acceptance:
- * unrelated auth changes retain all consumers; selected-provider changes refuse
- * them. Report CPU/allocation changes and spread rather than inferring throughput.
+ * unrelated auth, logging and provider changes retain all consumers; selected
+ * auth changes refuse them. Report CPU/allocation changes and spread.
  * --phase bind includes complete policy capture and its first check, accounting
  * for preparation moved out of repeated live-policy checks.
  */
@@ -47,7 +47,7 @@ const stateDir = path.resolve(values["state-dir"]);
 const workspace = path.resolve(values.workspace);
 const rounds = Number(values.rounds);
 assert(Number.isSafeInteger(rounds) && rounds > 0);
-assert(values.scenario === "unrelated" || values.scenario === "unchanged");
+assert(["unrelated", "unchanged", "logging", "unrelated-provider"].includes(values.scenario));
 assert(values.phase === "check" || values.phase === "bind");
 assert(!existsSync(values.output), "Refusing to overwrite a measurement");
 const fixture = JSON.parse(readFileSync(path.join(stateDir, "team-shape-summary.json"), "utf8"));
@@ -106,6 +106,9 @@ const { captureScheduledSessionEventConfigPolicy } =
 const original: OpenClawConfig = {
   ...JSON.parse(readFileSync(path.join(stateDir, "openclaw.json"), "utf8")),
   auth: { profiles: { "openai:manual": { provider: "openai", mode: "api_key" } } },
+  ...(values.scenario === "unrelated-provider"
+    ? { models: { providers: { other: { baseUrl: "https://before.example/v1", models: [] } } } }
+    : {}),
 };
 const unrelated: OpenClawConfig = {
   ...original,
@@ -148,7 +151,19 @@ const check = (config: OpenClawConfig, policies = consumers) => {
 };
 assert.equal(check(original), 5000, "Unchanged config must retain admitted policy");
 assert.equal(check(relevant), 0, "Selected-provider credential policy must fail closed");
-const measuredConfig = values.scenario === "unchanged" ? original : unrelated;
+const measuredConfig: OpenClawConfig =
+  values.scenario === "unchanged"
+    ? original
+    : values.scenario === "logging"
+      ? { ...original, logging: { ...original.logging, level: "debug" } }
+      : values.scenario === "unrelated-provider"
+        ? {
+            ...original,
+            models: {
+              providers: { other: { baseUrl: "https://after.example/v1", models: [] } },
+            },
+          }
+        : unrelated;
 const measure = () =>
   check(measuredConfig, values.phase === "bind" ? sessionKeys.map(prepareConsumer) : consumers);
 for (let warmup = 0; warmup < 3; warmup++) {

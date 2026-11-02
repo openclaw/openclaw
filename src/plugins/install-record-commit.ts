@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
-  readConfigFileSnapshot,
   replaceConfigFile,
   resolveConfigWriteAfterWrite,
   transformConfigFileWithRetry,
@@ -26,8 +25,9 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { composeConfigWriteAssertions } from "../config/write-authority.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { pluginCohortPublicationContext } from "../infra/update-plugin-cohort-context.js";
+import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { resolveDefaultPluginNpmDir, resolvePluginNpmProjectsDir } from "./install-paths.js";
-import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
+import { assertPluginConfigActivationConsent } from "./install-record-activation.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   PLUGIN_INSTALLS_CONFIG_PATH,
@@ -50,6 +50,10 @@ import {
 } from "./managed-npm-retention.js";
 import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
 import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
+import type {
+  PluginSourceSnapshotIndexChange,
+  PluginSourceSnapshotPublication,
+} from "./plugin-source-snapshot.types.js";
 import { recordPluginPackageUninstallPlan } from "./uninstall-package-plan.js";
 import { planPluginUninstall } from "./uninstall.js";
 
@@ -333,56 +337,9 @@ async function markRetiredManagedNpmInstallRecords(params: {
   }
 }
 
-/** Recheck staged enablement at its config writer, after any intervening plugin update. */
-async function assertPluginConfigActivationConsent(params: {
-  nextConfig: OpenClawConfig;
-  previousInstallRecords?: Record<string, PluginInstallRecord>;
-  nextInstallRecords?: Record<string, PluginInstallRecord>;
-}): Promise<void> {
-  const records = params.nextInstallRecords ?? (await loadInstalledPluginIndexInstallRecords());
-  if (Object.keys(records).length === 0) {
-    return;
-  }
-  const { resolvePluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
-  const { resolvePluginCapabilityConsent } = await import("./capability-consent.js");
-  const { resolvePluginControlPlaneWorkspace } = await import("./control-plane-workspace.js");
-  const snapshot = await readConfigFileSnapshot();
-  const metadataForConfig = (config: OpenClawConfig) =>
-    resolvePluginMetadataSnapshot({
-      config,
-      allowCurrent: false,
-      workspaceDir: resolvePluginControlPlaneWorkspace({ config }).workspaceDir,
-    });
-  const previous = metadataForConfig(snapshot.config);
-  const next = metadataForConfig(params.nextConfig);
-  const previouslyEnabled = new Set(
-    previous.index.plugins
-      .filter((plugin) => snapshot.valid && plugin.enabled)
-      .map((plugin) => plugin.pluginId),
-  );
-  for (const plugin of next.index.plugins) {
-    if (!plugin.enabled || plugin.origin === "bundled") {
-      continue;
-    }
-    const owner = resolveInstalledPluginIndexInstallOwner(plugin) ?? plugin.pluginId;
-    const record = records[owner];
-    const previousRecord = params.previousInstallRecords?.[owner];
-    const replaced =
-      params.previousInstallRecords !== undefined &&
-      (!previousRecord || record?.acceptedSurface !== undefined) &&
-      !isDeepStrictEqual(previousRecord, record);
-    // Metadata refreshes do not retroactively require consent from a running legacy install.
-    if (replaced || !previouslyEnabled.has(plugin.pluginId)) {
-      await resolvePluginCapabilityConsent({
-        config: params.nextConfig,
-        pluginId: plugin.pluginId,
-        metadata: next,
-      });
-    }
-  }
-}
-
 async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResult | void>(params: {
+  sourceSnapshots?: readonly PluginSourceSnapshotPublication[];
+  sourceSnapshotRestorations?: readonly PluginSourceSnapshotIndexChange[];
   prepareInstallRecords: (storeOptions: InstalledPluginIndexRecordStoreOptions) => Promise<{
     previousInstallRecords: Record<string, PluginInstallRecord>;
     nextInstallRecords: Record<string, PluginInstallRecord>;
@@ -422,6 +379,8 @@ async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResul
         {
           ...storeOptions,
           config: params.nextConfig,
+          sourceSnapshots: params.sourceSnapshots,
+          sourceSnapshotRestorations: params.sourceSnapshotRestorations,
           lease,
           assertCurrent: params.writeOptions?.assertConfigPathForWrite,
           onAcknowledged: (receipt) => {
@@ -535,12 +494,26 @@ async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResul
         );
       }
       throw error;
+    } finally {
+      // Install owns its wider migration settlement; ordinary record/uninstall writes finish here.
+      if (tentativeWrite && params.sourceSnapshots === undefined) {
+        try {
+          const { collectInstalledPluginSourceSnapshots } =
+            await import("./plugin-source-snapshot-collection.js");
+          await collectInstalledPluginSourceSnapshots(
+            resolveOpenClawStateDirForDatabasePath(lease.databasePath),
+          );
+        } catch (error) {
+          process.emitWarning(`Plugin source snapshot collection deferred: ${String(error)}`);
+        }
+      }
     }
   });
 }
 
 /** Persist plugin install records and commit the matching config update to disk. */
 export async function commitPluginInstallRecordsWithConfig(params: {
+  sourceSnapshots?: readonly PluginSourceSnapshotPublication[];
   previousInstallRecords?: Record<string, PluginInstallRecord>;
   nextInstallRecords: Record<string, PluginInstallRecord>;
   nextConfig: OpenClawConfig;
@@ -549,6 +522,7 @@ export async function commitPluginInstallRecordsWithConfig(params: {
   beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<InstalledPluginIndexWriteReceipt & { configWrite: ConfigReplaceResult }> {
   const result = await commitPluginInstallRecordsWithWriter({
+    sourceSnapshots: params.sourceSnapshots,
     prepareInstallRecords: async (storeOptions) => ({
       previousInstallRecords:
         params.previousInstallRecords ??
@@ -571,12 +545,16 @@ export async function commitPluginInstallRecordsWithConfig(params: {
 
 /** Persist plugin install records without rewriting the user-authored config file. */
 export async function commitPluginInstallRecordsOnly(params: {
+  sourceSnapshots?: readonly PluginSourceSnapshotPublication[];
+  sourceSnapshotRestorations?: readonly PluginSourceSnapshotIndexChange[];
   previousInstallRecords?: Record<string, PluginInstallRecord>;
   nextInstallRecords: Record<string, PluginInstallRecord>;
   nextConfig: OpenClawConfig;
   verifyConfigFresh?: () => Promise<void>;
 }): Promise<InstalledPluginIndexWriteReceipt> {
   const result = await commitPluginInstallRecordsWithWriter({
+    sourceSnapshots: params.sourceSnapshots,
+    sourceSnapshotRestorations: params.sourceSnapshotRestorations,
     prepareInstallRecords: async (storeOptions) => ({
       previousInstallRecords:
         params.previousInstallRecords ??

@@ -2326,6 +2326,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/skill-workshop:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/slack:
     dependencies:
       '@slack/bolt':
@@ -2504,8 +2510,8 @@ importers:
   extensions/tokenjuice:
     dependencies:
       tokenjuice:
-        specifier: 0.8.5
-        version: 0.8.5
+        specifier: 0.10.0
+        version: 0.10.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2920,6 +2926,9 @@ importers:
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../normalization-core
+      json5:
+        specifier: 2.2.3
+        version: 2.2.3
       markdown-it:
         specifier: 15.0.3
         version: 15.0.3
@@ -3135,8 +3144,8 @@ importers:
         specifier: workspace:*
         version: link:../packages/gateway-protocol
       '@openclaw/libterminal':
-        specifier: 0.3.10
-        version: 0.3.10
+        specifier: 0.3.11
+        version: 0.3.11
       '@openclaw/media-core':
         specifier: workspace:*
         version: link:../packages/media-core
@@ -5155,8 +5164,8 @@ packages:
     resolution: {integrity: sha512-v9RWszhsnswr7kAg/6ZM1fUxtyY1PItj7uBarnQ2UdeTPgDdUZFS5hXIGUdLtNvSty/JEPJvjE3MWqbKbx9dng==}
     engines: {node: '>=22'}
 
-  '@openclaw/libterminal@0.3.10':
-    resolution: {integrity: sha512-KowZVA82B3VFlKNC+DhNZUxTQPQ9hA/4f7iTlcnfDE4dDGPlUcBlzHo89eBs3gzUA8mwsRpjI8M/NFy3nL6CXA==}
+  '@openclaw/libterminal@0.3.11':
+    resolution: {integrity: sha512-Iq3ztdigaVghrcjIR8VfRZpB4A9ASTBit+tg1Vfo6lWiu5MLtI8ZP4oQjNcMBW/9N+bSaauwAK5plZuArThAmQ==}
     engines: {node: ^22.18.0 || >=24.11.0}
     peerDependencies:
       node-pty: '>=1.0.0'
@@ -10412,9 +10421,9 @@ packages:
     resolution: {integrity: sha512-dRXchy+C0IgK8WPC6xvCHFRIWYUbqqdEIKPaKo/AcTUNzwLTK6AH7RjdLWsEZcAN/TBdtfUw3PYEgPr5VPr6ww==}
     engines: {node: '>=14.16'}
 
-  tokenjuice@0.8.5:
-    resolution: {integrity: sha512-5soJ9faUut2eAC8f4rHxBH3lipdK2mtgy6N8uWvYCnt3MZ37tKYeR6e5PjEyyO3NrSkt1PMG3KZxQIc10urA3w==}
-    engines: {node: '>=20'}
+  tokenjuice@0.10.0:
+    resolution: {integrity: sha512-xDd+oSPvGAY1trZLQLE7AP9nUgZPVuJruHu+vLQXTLcrzpjDMzp+XQ6unTg4F0zBM0rO243RZ7MDgCyzTd1HKw==}
+    engines: {node: '>=22'}
     hasBin: true
 
   totalist@3.0.1:
@@ -13241,7 +13250,7 @@ snapshots:
       '@openclaw/fs-safe-win32-x64-msvc': 0.27.0
       jszip: 3.10.2
 
-  '@openclaw/libterminal@0.3.10':
+  '@openclaw/libterminal@0.3.11':
     dependencies:
       ghostty-web: 0.4.0(patch_hash=d4c6598b6840564dac4a469f3aa9b8df24fe6eab48a6744302707017e095a524)
 
@@ -15745,7 +15754,8 @@ snapshots:
 
   escape-html@1.0.3: {}
 
-  escape-string-regexp@4.0.0: {}
+  escape-string-regexp@4.0.0:
+    optional: true
 
   escape-string-regexp@5.0.0: {}
 
@@ -18732,7 +18742,7 @@ snapshots:
       '@tokenizer/token': 0.3.0
       ieee754: 1.2.1
 
-  tokenjuice@0.8.5: {}
+  tokenjuice@0.10.0: {}
 
   totalist@3.0.1: {}
 

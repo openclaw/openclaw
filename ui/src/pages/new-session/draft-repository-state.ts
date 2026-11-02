@@ -10,6 +10,8 @@ import type {
   WorktreesBranchesResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { findSelectableAgent } from "../../lib/agents/display.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { DraftRepositoryState } from "./discovery.ts";
@@ -285,7 +287,7 @@ export class DraftRepositoryStateOwner {
     const revision = this.selectionRevision;
     const snapshot = this.read();
     const agentId = normalizeAgentId(submission.agentId);
-    const agent = snapshot.agents.find((candidate) => normalizeAgentId(candidate.id) === agentId);
+    const agent = findSelectableAgent(snapshot.agents, agentId);
     const owner = { agentId, workspace: normalizeOptionalString(agent?.workspace) ?? "" };
     const currentAgent = owner.agentId === snapshot.agentId;
     const persist = this.callbacks.capturePreferenceConsumption(owner, {
@@ -398,6 +400,13 @@ export class DraftRepositoryStateOwner {
       return this.adoptResolvedRepository({ kind: "idle" });
     }
     const { repoRoot } = discovery;
+    if (!hasOperatorWriteAccess(snapshot.gateway.hello?.auth ?? null)) {
+      return this.adoptResolvedRepository({
+        kind: "forbidden",
+        repoRoot,
+        missingScope: "operator.write",
+      });
+    }
     this.repositoryValue = discovery;
     const completed = client.request<WorktreesBranchesResult>("worktrees.branches", {
       repoRoot,

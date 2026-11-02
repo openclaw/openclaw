@@ -26,6 +26,7 @@ export type ConfigFormProps = {
   showSectionDocs?: boolean;
   sectionPrelude?: JSX.Element;
   embedded?: boolean;
+  progressive?: boolean;
   revealSensitive?: boolean;
   maskSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;

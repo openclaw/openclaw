@@ -5,6 +5,7 @@ import {
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { focusProgrammatically } from "../../lib/programmatic-focus.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import type { Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed } from "../overlay-registry.ts";
@@ -35,7 +36,7 @@ export function createMenuControls(): MenuControls {
 export type MenuBinding = {
   isOpen(): boolean;
   itemRef(): (element: HTMLElement) => void;
-  items(): HTMLElement[];
+  items(ordered?: boolean): HTMLElement[];
   highlightedValue(): string | null;
   highlightedValueNow(): string | null;
   setHighlightedValue(value: string | null): void;
@@ -390,8 +391,8 @@ export function useMenuMachine(
             return;
           }
           const focus = event.detail === 0 || options.pointerFocus?.() !== "trigger";
-          if (!focus) {
-            overlay.trigger?.focus({ preventScroll: true });
+          if (!focus && overlay.trigger) {
+            focusProgrammatically(overlay.trigger, { preventScroll: true });
           }
           overlay.request(parentBinding ? true : !overlay.open, focus ? "first" : "none");
         },

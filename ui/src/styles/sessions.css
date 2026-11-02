@@ -105,7 +105,6 @@
 
 .sessions-transcript-search__clear:focus-visible,
 .sessions-transcript-search__result:focus-visible,
-.sessions-filter-popover__clear:focus-visible,
 .session-actions .icon-btn:focus-visible,
 .session-details-toggle:focus-visible {
   outline: none;
@@ -211,59 +210,6 @@
   white-space: nowrap;
 }
 
-.sessions-filter-popover__search {
-  position: relative;
-  width: 100%;
-}
-
-.sessions-filter-popover__search > svg {
-  position: absolute;
-  top: 50%;
-  inset-inline-start: 9px;
-  width: 14px;
-  height: 14px;
-  translate: 0 -50%;
-  stroke: var(--muted);
-  stroke-width: 1.8px;
-  pointer-events: none;
-}
-
-.sessions-filter-popover__search input {
-  padding-inline: 30px 34px;
-}
-
-.sessions-filter-popover__clear {
-  position: absolute;
-  inset-inline-end: 1px;
-  top: 50%;
-  translate: 0 -50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  background: transparent;
-}
-
-.sessions-filter-popover__clear[hidden] {
-  display: none;
-}
-
-.sessions-filter-popover__clear:hover {
-  color: var(--text);
-  background: var(--bg-hover);
-}
-
-.sessions-filter-popover__clear svg {
-  width: 14px;
-  height: 14px;
-  pointer-events: none;
-}
-
 @media (max-width: 768px), (pointer: coarse) {
   .sessions-filter-popover__search input {
     min-height: 44px;
@@ -289,7 +235,6 @@
   align-items: center;
   gap: var(--space-1);
   height: 30px;
-  box-sizing: border-box;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -318,7 +263,6 @@
 .session-filter-input {
   width: 48px;
   height: 24px;
-  box-sizing: border-box;
   padding: 0 6px;
   color: var(--text);
   background: transparent;
@@ -413,10 +357,61 @@
   width: min(280px, calc(100vw - 48px));
   gap: var(--space-3);
   padding: var(--space-3);
-  background: var(--bg-elevated);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--overlay-shadow);
+}
+
+.oc-sheet .sessions-filter-popover__panel {
+  width: auto;
+  padding: 0;
+}
+
+.oc-sheet
+  .sessions-filter-popover__panel
+  :is(.sessions-filter-popover__fields, .session-filter-toggle-group) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.oc-sheet
+  .sessions-filter-popover__panel
+  :is(.sessions-filter-popover__fields, .session-filter-toggle-group)
+  > openclaw-tooltip {
+  display: block;
+  min-width: 0;
+}
+
+.oc-sheet .sessions-filter-popover__panel .sessions-view-segment > * {
+  justify-content: center;
+}
+
+/* Global and Unknown read as fields: the check carries the state, not a tinted box. */
+.oc-sheet .sessions-filter-popover__panel .session-filter-check {
+  display: flex;
+  justify-content: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  height: var(--settings-control-height);
+  padding-inline: var(--field-padding-inline);
+  border-color: var(--field-border);
+  border-radius: var(--field-radius);
+  background: var(--field-bg);
+}
+
+/* An unchecked toggle draws no check; its slot stays so the label doesn't move. */
+.oc-sheet .session-filter-check__input:not(:checked) + .session-filter-check__mark svg {
+  visibility: hidden;
+}
+
+.oc-sheet .session-filter-check__input:focus-visible + .session-filter-check__mark {
+  opacity: 1;
+}
+
+.oc-sheet .sessions-filter-popover__panel .session-filter-check__label {
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: var(--control-ui-font-weight-normal);
+  line-height: 1.25;
+  text-overflow: ellipsis;
 }
 
 .sessions-filter-popover__fields {

@@ -5,7 +5,7 @@ import {
   resolveCompactionReplayEligibility,
   stripCompactionReplayCheckpoint,
 } from "@openclaw/ai/transports";
-import type { ModelCompatConfig } from "../../../config/types.models.js";
+import type { ModelCompatConfig } from "../../../config/zod-schema.model-compat.js";
 import type { ContextEngineInfo } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { withGuardedFetchBeforeRequest } from "../../../infra/net/fetch-request-authority.js";

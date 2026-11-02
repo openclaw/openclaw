@@ -13,7 +13,7 @@ import { listenLoopback, sendChat } from "./gateway-recovery.test-support.js";
 const REFUSAL_EXPLANATION = "Service unavailable. Try again.";
 const REFUSAL_TEXT =
   "The provider refused this request (category: reasoning_extraction). Revise the request and try again.";
-// Canonical category/next-step copy is public; the provider explanation remains private.
+// Canonical refusal guidance is public; raw provider explanations stay private.
 const REFUSAL_NOTICE = `Your request couldn't be completed: ${REFUSAL_TEXT}`;
 
 type GatewayHistory = {

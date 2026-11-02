@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 case "${OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE:-required}" in
-  required) ;;
+  required | legacy) ;;
   unsupported)
     echo "NOT RUN: cold transcript storage is unavailable in the selected frozen target"
     exit 0

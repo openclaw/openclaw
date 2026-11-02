@@ -54,10 +54,12 @@ export function SettingsPage(props: {
   children?: JSX.Element;
   wide?: boolean;
   carapace?: boolean;
+  busy?: boolean;
 }) {
   return (
     <ShellLayoutBoundary traits={{ settingsPage: true, settingsWide: props.wide }}>
       <div
+        aria-busy={props.busy ? "true" : undefined}
         class={[
           "settings-page",
           { "settings-page--wide": props.wide, "oc-app-surface": props.carapace },
@@ -99,6 +101,8 @@ export function SettingsPageHeader(props: {
   stacked?: boolean;
 }) {
   let heading!: HTMLHeadingElement;
+  // Resolve once: actions may own a portal, which a second read would mount again.
+  const actions = children(() => props.actions);
   onSettled(() => props.registerHeading?.(heading));
   return (
     <ShellLayoutBoundary traits={{ toolbarHeader: !props.stacked }}>
@@ -116,8 +120,8 @@ export function SettingsPageHeader(props: {
             <div class="page-subtitle">{props.subtitle}</div>
           </Show>
         </div>
-        <Show when={props.actions}>
-          <div class="page-header-actions">{props.actions}</div>
+        <Show when={actions()}>
+          <div class="page-header-actions">{actions()}</div>
         </Show>
       </section>
     </ShellLayoutBoundary>

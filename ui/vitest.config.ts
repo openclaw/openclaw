@@ -76,6 +76,11 @@ const nodeSetupFiles = ["./src/test-helpers/dom.setup.ts"];
 const nodeDrivenBrowserLayoutTests = relativizeScopedPatterns(uiNodeDrivenBrowserTestFiles, "ui");
 const timingTests = relativizeScopedPatterns(uiTimingTestFiles, "ui");
 const mockRegistryUnitTests = uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length));
+// These renderer mocks require their own module graph even when a native pane ran first.
+const mockRegistryBrowserTests = [
+  "src/pages/chat/chat-pane-frame-updates.browser.test.tsx",
+  "src/pages/chat/components/chat-transcript-geometry-updates.browser.test.tsx",
+].map((file) => resolveUiTypeScriptPath(file, here));
 function resolveChromiumLaunchOptions(): { executablePath: string } | undefined {
   const defaultExecutablePath = chromium.executablePath();
   const executablePath = resolvePlaywrightChromiumExecutablePath(defaultExecutablePath);
@@ -125,7 +130,6 @@ const webkitTestFiles = [
   "src/components/hub-tabs.browser.test.tsx",
   "src/components/tooltip-title.browser.test.ts",
   "src/pages/chat/chat-composer-mobile.browser.test.tsx",
-  "src/pages/chat/chat-composer-height.browser.test.tsx",
   "src/pages/chat/chat-composer-context.browser.test.ts",
   "src/pages/chat/chat-composer-context.palette.browser.test.ts",
   "src/pages/chat/chat-composer-overflow.browser.test.tsx",
@@ -158,6 +162,8 @@ export function createUiBrowserVitestConfig(
       : ["src/**/*.browser.test.{ts,tsx}", "../extensions/*/browser/**/*.browser.test.{ts,tsx}"],
     env,
   );
+  const mockRegistryInclude =
+    browser === "chromium" ? includeUiTests(mockRegistryBrowserTests, env) : [];
   const runtimeFiles = loadPatternListFromEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", env);
   const excludesBrowserFiles =
     runtimeFiles !== null &&
@@ -254,7 +260,23 @@ export function createUiBrowserVitestConfig(
         enabled: true,
         provider,
         commands: { overlayEmulateMedia },
-        instances: [{ browser, name: browser }],
+        instances: [
+          {
+            browser,
+            name: browser,
+            exclude: [...nodeDrivenBrowserLayoutTests, ...mockRegistryBrowserTests],
+          },
+          ...(mockRegistryInclude.length
+            ? [
+                {
+                  browser,
+                  name: "chromium-mock-registry",
+                  include: mockRegistryInclude,
+                  isolate: true,
+                },
+              ]
+            : []),
+        ],
         headless: true,
         ui: false,
       },

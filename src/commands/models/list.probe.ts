@@ -54,6 +54,7 @@ import type { EmbeddedStateLockHandle } from "../../infra/embedded-state-lock.js
 import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { appendConfigPathSegment } from "../../shared/dot-path.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import { redactStatusSecrets as redactAuthProbeError } from "../status-all/format.js";
 import { createAuthProbeWork, disposeAuthProbeDirectory } from "./list.probe.cleanup.js";
 import { buildProbeCandidateMap, selectProbeModel } from "./list.probe.models.js";
@@ -627,6 +628,7 @@ export async function runAuthProbes(
 ) {
   return await withAuthProbeStateOwnership(params.stateOwnership, async (abortSignal) => {
     const startedAt = Date.now();
+    const startedAtMonotonic = monotonicNow();
     const plan = await buildProbeTargets(params);
 
     const totalTargets = plan.targets.length;
@@ -786,12 +788,10 @@ export async function runAuthProbes(
       );
     }
 
-    const finishedAt = Date.now();
-
     return {
       startedAt,
-      finishedAt,
-      durationMs: finishedAt - startedAt,
+      finishedAt: Date.now(),
+      durationMs: Math.round(monotonicNow() - startedAtMonotonic),
       totalTargets,
       options: params.options,
       results: [...plan.results, ...results],

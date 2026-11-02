@@ -118,6 +118,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           sessions: rows,
           featureMethods: ["board.get"],
+          deferredRequests: [{ method: "sessions.list", match: { hasBoard: true } }],
           methodResponses: {
             "config.get": themeConfigResponse("dash", mode),
             "sessions.list": { cases: [responseCase({ hasBoard: true }, list(rows))] },
@@ -134,6 +135,14 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}dashboards`);
         const gallery = page.locator("openclaw-dashboards-page");
+        const toolbar = gallery.locator(".dashboards-toolbar");
+        await gallery.locator(".dashboards-loading__control").first().waitFor();
+        const loadingToolbar = await toolbar.boundingBox();
+        await gateway.resolveDeferred("sessions.list");
+        await gallery.getByRole("searchbox").waitFor();
+        const loadedToolbar = await toolbar.boundingBox();
+        expect(loadedToolbar!.y).toBeCloseTo(loadingToolbar!.y, 0);
+        expect(Math.abs(loadedToolbar!.height - loadingToolbar!.height)).toBeLessThan(1);
         const emptyCard = gallery.locator(`[data-dashboard-session="${emptyKey}"]`);
         const filledCard = gallery.locator(`[data-dashboard-session="${selectedSessionKey}"]`);
         const empty = emptyCard.locator(".board-empty");
@@ -207,6 +216,8 @@ suite.define(() => {
           cases: [responseCase({ hasBoard: true }, list([]))],
         });
         await page.reload();
+        await gallery.locator(".dashboards-loading__control").first().waitFor();
+        await gateway.resolveDeferred("sessions.list");
         await gallery.locator("[data-dashboards-empty]").waitFor();
         expect(await gallery.locator("[data-dashboards-no-results]").count()).toBe(0);
         await saveFrame("catalog-empty", gallery.locator("[data-dashboards-empty]"));

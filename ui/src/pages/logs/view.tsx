@@ -19,6 +19,7 @@ import {
 import type { PanelRefreshStatus as RefreshStatus } from "../../components/panel-refresh-status-state.ts";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
   SettingsRow,
@@ -83,7 +84,9 @@ export function LogsView(props: LogsProps) {
     // eslint-disable-next-line solid/no-react-specific-props -- The shared status API calls this prop className.
     <PanelRefreshStatus status={props.status} className="logs-refresh-status" />
   );
-  const needle = createMemo(() => normalizeLowercaseStringOrEmpty(props.filterText));
+  const needle = createMemo(() =>
+    normalizeLowercaseStringOrEmpty(props.filterText).normalize("NFC"),
+  );
   const filtered = createMemo(() => {
     const query = needle();
     const matches =
@@ -94,7 +97,9 @@ export function LogsView(props: LogsProps) {
             (!query ||
               normalizeLowercaseStringOrEmpty(
                 [entry.message, entry.subsystem, entry.raw].filter(Boolean).join(" "),
-              ).includes(query));
+              )
+                .normalize("NFC")
+                .includes(query));
     const rows: LogRow[] = [];
     const byKey = new Map<VirtualItem["key"], number>();
     for (const entry of props.entries) {
@@ -267,7 +272,7 @@ export function LogsView(props: LogsProps) {
     return (
       <div
         ref={(node) => (element = node)}
-        class={["log-row", { "log-row--last": rowProps.item.index === rows().length - 1 }]}
+        class="log-row"
         role="listitem"
         aria-posinset={rowProps.item.index + 1}
         aria-setsize={rows().length}
@@ -295,18 +300,20 @@ export function LogsView(props: LogsProps) {
         <div class="settings-section__actions">
           <Loading
             fallback={
-              <button class="btn" disabled>
-                {props.completion?.quiet ? t("common.refresh") : t("common.loading")}
-              </button>
+              <RefreshButton
+                label={t("common.refresh")}
+                busy={!props.completion?.quiet}
+                disabled
+                onClick={() => props.onRefresh()}
+              />
             }
           >
-            <button
-              class="btn"
+            <RefreshButton
+              label={t("common.refresh")}
+              busy={loading()}
               disabled={props.refreshDisabled || isPending(read)}
               onClick={() => props.onRefresh()}
-            >
-              {loading() ? t("common.loading") : t("common.refresh")}
-            </button>
+            />
           </Loading>
           <button
             class="btn"

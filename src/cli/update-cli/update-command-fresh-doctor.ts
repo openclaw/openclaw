@@ -102,6 +102,12 @@ export async function withPrePluginUpdateDoctorEnv<T>(run: () => Promise<T>): Pr
   );
 }
 
+// Isolated update-compat workers set this while serving an older release's updater
+// (scripts/lib/update-compat-isolated-bridge.mjs). That updater's executor fence was never
+// admitted by this runtime, so Doctor runs through the published CLI, not executor custody.
+const servesOlderUpdater = () =>
+  Reflect.get(globalThis, Symbol.for("openclaw.updateCompat.olderUpdater")) === true;
+
 export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   phase: "pre-plugin" | "post-plugin";
   root: string;
@@ -228,7 +234,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       env: { ...commandOptions.env, ...sectionTiming.env },
     };
     let doctorArgv: string[];
-    if (doctorConfigWrites && executorFence && runId) {
+    if (doctorConfigWrites && executorFence && runId && !servesOlderUpdater()) {
       doctorArgv = [...workerCommand, "--doctor"];
     } else {
       if (
@@ -264,7 +270,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       exitCode: null,
     };
     let child: Awaited<ReturnType<typeof runUpdateDoctorProcess>>;
-    if (doctorConfigWrites && executorFence && runId) {
+    if (doctorConfigWrites && executorFence && runId && !servesOlderUpdater()) {
       const snapshot = await readUpdateConfigSnapshot(resolveConfigPath());
       assertCurrent();
       if (params.databaseBackup) {
