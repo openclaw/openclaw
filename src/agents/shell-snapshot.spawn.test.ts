@@ -2,6 +2,7 @@ import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
@@ -97,6 +98,42 @@ describe.skipIf(process.platform === "win32")("shell snapshot subprocesses", () 
     const options = spawnMock.mock.calls[0]?.[2] as SpawnOptions | undefined;
     expect(options?.stdio).toBe("ignore");
     expect(killProcessTreeMock).toHaveBeenCalledWith(4242, { graceMs: 0, detached: true });
+  });
+
+  it("places a shell it starts itself in the agent exec cgroup when no broker is running", async () => {
+    const agentExecCgroup = tempDirs.make("openclaw-snapshot-agent-exec-");
+    const cgroupProcs = path.join(agentExecCgroup, "cgroup.procs");
+    fs.writeFileSync(cgroupProcs, "");
+    getAgentExecCgroupMock.mockReturnValue(agentExecCgroup);
+
+    // Run the real launcher: the pid the cgroup receives has to be the pid that
+    // went on to exec the shell, so no fake child can stand in for it.
+    const { spawn: realSpawn } =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    spawnMock.mockImplementation((...args) => realSpawn(...args));
+
+    const home = tempDirs.make("openclaw-snapshot-self-home-");
+    const stateDir = tempDirs.make("openclaw-snapshot-self-state-");
+    setTestEnvValue("HOME", home);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+
+    const wrapped = await maybeWrapCommandWithShellSnapshot({
+      command: "echo captured",
+      shell: "/bin/bash",
+      shellArgs: ["-c"],
+      cwd: os.tmpdir(),
+      env: { ...process.env },
+    });
+
+    const started = spawnMock.mock.results
+      .map((result) => (result.value as ChildProcess | undefined)?.pid)
+      .filter((pid): pid is number => typeof pid === "number");
+    const placed = fs.readFileSync(cgroupProcs, "utf8").split("\n").filter(Boolean).map(Number);
+    expect(started).toHaveLength(2);
+    expect(placed.toSorted()).toEqual(started.toSorted());
+    // A validated snapshot is published and used to wrap the command.
+    expect(wrapped).toContain("shell-snapshots");
+    expect(wrapped).toContain("echo captured");
   });
 
   it("places capture and validation shells in the agent exec cgroup via the broker", async () => {

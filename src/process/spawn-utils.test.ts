@@ -1,7 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import childProcess from "node:child_process";
 import { EventEmitter, once } from "node:events";
-import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,15 +28,6 @@ import {
   withGitProcessOperation,
 } from "./spawn-diagnostics.js";
 import { spawnProcess, spawnAndWait } from "./spawn-utils.js";
-
-// A delegated agent exec cgroup only exists on a Linux service, so the tests below
-// point the lookup at a temporary directory that stands in for it.
-const agentExecCgroup = vi.hoisted(() => ({ directory: undefined as string | undefined }));
-
-vi.mock("./linux-exec-cgroup.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./linux-exec-cgroup.js")>()),
-  getAgentExecCgroup: () => agentExecCgroup.directory,
-}));
 
 describe("spawnAndWait", () => {
   it("attributes native launch stalls without profiling or counting child lifetime", async () => {
@@ -80,57 +70,6 @@ describe("spawnAndWait", () => {
         spawnAndWait({
           argv: [path.join(dir, "missing-executable")],
           options: { stdio: "ignore" },
-        }),
-      ).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
-});
-
-describe("agent exec placement", () => {
-  afterEach(() => {
-    agentExecCgroup.directory = undefined;
-  });
-
-  it("moves the child it started into the agent exec cgroup", async () => {
-    await withTempDir("openclaw-agent-exec-", async (dir) => {
-      agentExecCgroup.directory = dir;
-      const ran = path.join(dir, "ran");
-      const child = await spawnAndWait({
-        argv: ["/bin/sh", "-c", `printf '%s' "$$" > '${ran}'`],
-        options: { stdio: "ignore" },
-        executionIntent: "agent-tool",
-      });
-
-      // The pid the cgroup received is the pid that actually ran the command.
-      expect(fs.readFileSync(path.join(dir, "cgroup.procs"), "utf8")).toBe(String(child.pid));
-      await once(child, "exit");
-      expect(fs.readFileSync(ran, "utf8")).toBe(String(child.pid));
-    });
-  });
-
-  it("rejects ENOENT from a real missing executable asked to run as agent work", async () => {
-    await withTempDir("openclaw-spawn-missing-agent-", async (dir) => {
-      agentExecCgroup.directory = dir;
-      await expect(
-        spawnAndWait({
-          argv: [path.join(dir, "missing-executable")],
-          options: { stdio: "ignore" },
-          executionIntent: "agent-tool",
-        }),
-      ).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
-
-  it("rejects ENOENT for an executable script whose interpreter is missing", async () => {
-    await withTempDir("openclaw-spawn-shebang-", async (dir) => {
-      agentExecCgroup.directory = dir;
-      const tool = path.join(dir, "tool");
-      fs.writeFileSync(tool, "#!/removed/interpreter\n", { mode: 0o755 });
-      await expect(
-        spawnAndWait({
-          argv: [tool],
-          options: { stdio: "ignore" },
-          executionIntent: "agent-tool",
         }),
       ).rejects.toMatchObject({ code: "ENOENT" });
     });
