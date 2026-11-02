@@ -101,9 +101,11 @@ function GatewayAccessSection(props: SecurityViewProps) {
       <SettingsNavRow
         title={t("quickSettings.security.gatewayAuth")}
         control={
-          // The reported mode can miss a startup --auth, so it can raise a concern but not reassure.
+          // Older Gateways' reported mode can miss a startup --auth, so only a real report reassures.
           props.security.gatewayAuth === "none" ? (
             <SettingsStatus kind="warn" label={gatewayAuthLabel()} />
+          ) : props.security.gatewayAuthReported ? (
+            <SettingsStatus kind="ok" label={gatewayAuthLabel()} />
           ) : (
             <SettingsValue value={gatewayAuthLabel()} />
           )

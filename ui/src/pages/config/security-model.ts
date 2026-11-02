@@ -197,6 +197,8 @@ export function extractQuickSettingsSecurity(
   const profile = tools?.profile;
   return {
     gatewayAuth: resolveGatewayAuth(root, live),
+    // Gateways that report their exposure also report the auth connections are checked against.
+    gatewayAuthReported: Boolean(live.authMode && live.bindHost && live.tailscaleMode),
     networkAccess: resolveNetworkAccess(root, live),
     execPolicy: resolveExecPolicy(root, live),
     browserEnabled: browser?.enabled !== false,

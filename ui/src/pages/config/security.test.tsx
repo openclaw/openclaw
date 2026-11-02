@@ -35,6 +35,7 @@ function renderSecurity(
   const props: SecurityViewProps = {
     security: {
       gatewayAuth: "token",
+      gatewayAuthReported: false,
       networkAccess: { kind: "loopback" },
       execPolicy: "allowlist",
       browserEnabled: true,
@@ -366,6 +367,41 @@ describe("extractQuickSettingsSecurity", () => {
       ).toEqual(expected);
     },
   );
+
+  it.each([
+    ["token", "Token"],
+    ["password", "Password"],
+    ["trusted-proxy", "Trusted proxy"],
+  ])("vouches for %s auth once the Gateway really reports it", (gatewayAuth, label) => {
+    const row = expectRowByTitle(
+      renderSecurity({ gatewayAuth, gatewayAuthReported: true }).container,
+      "Gateway auth",
+    );
+    expect(row.querySelector(".settings-status")?.className).toBe(
+      "settings-status settings-status--ok",
+    );
+    expect(row.querySelector(".settings-row__control")?.textContent?.trim()).toBe(label);
+  });
+
+  it("still warns about no auth when the Gateway reports it", () => {
+    const row = expectRowByTitle(
+      renderSecurity({ gatewayAuth: "none", gatewayAuthReported: true }).container,
+      "Gateway auth",
+    );
+    expect(row.querySelector(".settings-status")?.className).toBe(
+      "settings-status settings-status--warn",
+    );
+  });
+
+  it.each([
+    ["an older Gateway", { authMode: "token" }, false],
+    ["config alone", {}, false],
+    ["a partial report", { authMode: "token", bindHost: "127.0.0.1" }, false],
+    ["a full report", { authMode: "token", bindHost: "127.0.0.1", tailscaleMode: "off" }, true],
+  ])("treats auth from %s as reported: %s", (_name, live, reported) => {
+    const root = { gateway: { auth: { mode: "token" } } };
+    expect(extractQuickSettingsSecurity(root, live).gatewayAuthReported).toBe(reported);
+  });
 
   it("reports even when config can't be read", () => {
     expect(
