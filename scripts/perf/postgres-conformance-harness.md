@@ -16,7 +16,7 @@ not pinned-Bun timing gains.
 
 Count fixture creation, migration, snapshot, subprocess, and worker operations
 before comparing elapsed time. For every changed file, run five alternating
-baseline/candidate pairs on the same host using the pinned Bun runner. This also
+baseline/candidate pairs on the same host using the PostgreSQL CI runtime. This also
 satisfies the minimum three-pair per-file check. Keep cold preparation separate
 from warm runs. Report all samples, median, p95, and range for wall time, process
 CPU, and peak RSS; report case counts and setup operations alongside them.
@@ -47,6 +47,12 @@ Keep Node at the campaign version, `NODE_DISABLE_COMPILE_CACHE=1`, and `HOME`,
 `TMPDIR`, Bun's transpiler cache, and the Vitest filesystem cache in the test's
 internal scratch directory. CPU-heavy runs use the campaign proof semaphore.
 
+Create scratch under a private temporary root with `umask 077`; writable
+checkout ancestors can fail the database staging directory checks. For diagnostic
+runner profiles of the infra suite, add `--pool=forks`: its default diagnostic
+fork pool is custom, while the profiler supports the built-in forks and threads
+pools. Retain the default pool for unprofiled comparisons.
+
 ## Baseline provenance
 
 Initial source: `6f8748ad889`.
@@ -74,3 +80,6 @@ Ranked by summed printed case duration across those runs, the top ten files are:
 
 Use the acceptance rule above for this follow-up. Printed case durations rank
 diagnostic work; they do not establish elapsed time or savings.
+The PostgreSQL CI job at this source uses Node 24.22.1: its setup disables Bun,
+and the conformance runner uses the CI default without a runtime override. Use
+that Node version for paired comparisons, replacing the older Bun assumption.
