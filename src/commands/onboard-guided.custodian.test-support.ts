@@ -29,7 +29,8 @@ vi.mock("./auth-choice-prompt.js", () => ({
 }));
 
 vi.mock("../agents/auth-profiles.runtime.js", () => ({ ensureAuthProfileStore }));
-vi.mock("../wizard/setup.gateway-service-offer.js", () => ({
+vi.mock("../wizard/setup.gateway-service-offer.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../wizard/setup.gateway-service-offer.js")>()),
   canOfferGatewayServiceForOnboarding: canOfferGatewayService,
 }));
 vi.mock("../plugins/provider-setup-availability.js", () => ({

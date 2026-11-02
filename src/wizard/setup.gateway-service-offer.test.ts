@@ -9,11 +9,18 @@ const { blockMessage, unsupportedReason, systemdAvailable } = vi.hoisted(() => (
   systemdAvailable: vi.fn<() => Promise<boolean>>(),
 }));
 
-vi.mock("../cli/daemon-cli/shared.js", () => ({ resolveDaemonInstallBlockMessage: blockMessage }));
-vi.mock("../daemon/service.js", () => ({
+vi.mock("../cli/daemon-cli/shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/daemon-cli/shared.js")>()),
+  resolveDaemonInstallBlockMessage: blockMessage,
+}));
+vi.mock("../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service.js")>()),
   resolveGatewayService: () => ({ unsupportedReason: unsupportedReason() }),
 }));
-vi.mock("../daemon/systemd.js", () => ({ isSystemdUserServiceAvailable: systemdAvailable }));
+vi.mock("../daemon/systemd.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/systemd.js")>()),
+  isSystemdUserServiceAvailable: systemdAvailable,
+}));
 
 describe("canOfferGatewayServiceForOnboarding", () => {
   const argv = process.argv;
