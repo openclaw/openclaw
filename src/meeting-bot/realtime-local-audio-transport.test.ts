@@ -45,7 +45,10 @@ function createTransport(
 ) {
   const output = createProcess({ stdin: outputStdin });
   const input = createProcess({ stdout: new EventEmitter() });
-  const replacementOutput = createProcess({ stdin: createStdin(true, true) });
+  const replacementOutput = createProcess({
+    stdin: createStdin(true, true),
+    stdout: new EventEmitter(),
+  });
   const spawn = vi.fn().mockReturnValueOnce(output).mockReturnValueOnce(input);
   spawn.mockReturnValueOnce(replacementOutput);
   const transport = createTransportWith({ spawn: spawn as never, ...overrides });
@@ -87,17 +90,11 @@ describe("local meeting realtime audio transport", () => {
 
   it.each([60_000, -60_000])("keeps cooldown after a %i ms wall-clock change", async (shiftMs) => {
     vi.useFakeTimers();
-    const capture = createProcess({ stdout: new EventEmitter() });
-    const playback = createProcess({ stdin: createStdin(true, true) });
-    const microphone = createProcess({ stdout: new EventEmitter() });
-    const transport = createTransportWith({
+    const { transport, replacementOutput: microphone } = createTransport(undefined, {
       bargeInInputCommand: ["microphone"],
       bargeInCooldownMs: 1_000,
       bargeInPeakThreshold: 1,
       bargeInRmsThreshold: 1,
-      spawn: vi.fn((command) =>
-        command === "play" ? playback : command === "capture" ? capture : microphone,
-      ),
     });
     const onBargeIn = vi.fn(() => true);
     transport.startBargeInMonitor?.(onBargeIn);
