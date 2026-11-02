@@ -1,5 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
@@ -46,6 +46,8 @@ export function SessionsCard(props: {
   overview?: UsageProps["data"]["sessionPage"];
   loading?: boolean;
   totalSessions: number;
+  onRowSelected?: (key: string, row: HTMLElement, button: HTMLElement) => void;
+  onRowMounted?: (key: string, row: HTMLElement, button: HTMLElement) => void;
 }) {
   const isTokenMode = createMemo(() => props.usage.display.chartMode === "tokens");
   // The page leads with the costliest sessions; the rest of the page stays one click away.
@@ -155,6 +157,8 @@ export function SessionsCard(props: {
               selectedSessions={props.usage.filters.selectedSessions}
               isTokenMode={isTokenMode()}
               onSelect={props.usage.callbacks.details.onSelectSession}
+              onRowSelected={props.onRowSelected}
+              onRowMounted={props.onRowMounted}
             />
             <Show when={props.sessions.length > SESSION_PREVIEW}>
               <button
@@ -211,6 +215,8 @@ export function SessionsCard(props: {
                 selectedSessions={props.usage.filters.selectedSessions}
                 isTokenMode={isTokenMode()}
                 onSelect={props.usage.callbacks.details.onSelectSession}
+                onRowSelected={props.onRowSelected}
+                onRowMounted={props.onRowMounted}
               />
             </div>
           </div>
@@ -225,6 +231,8 @@ function SessionRows(props: {
   selectedSessions: string[];
   isTokenMode: boolean;
   onSelect: UsageProps["callbacks"]["details"]["onSelectSession"];
+  onRowSelected?: (key: string, row: HTMLElement, button: HTMLElement) => void;
+  onRowMounted?: (key: string, row: HTMLElement, button: HTMLElement) => void;
 }) {
   const orderedKeys = createMemo(() => props.sessions.map((session) => session.key));
   return (
@@ -251,10 +259,16 @@ function SessionRows(props: {
         const copyIdentity = createMemo(() => ({ label: label() }), {
           equals: (previous, next) => previous.label === next.label,
         });
-        const onSelect = (event: MouseEvent) =>
+        let row!: HTMLDivElement;
+        let selection!: HTMLButtonElement;
+        onSettled(() => props.onRowMounted?.(session().key, row, selection));
+        const onSelect = (event: MouseEvent) => {
+          props.onRowSelected?.(session().key, row, selection);
           props.onSelect(session().key, event.shiftKey, orderedKeys());
+        };
         return (
           <div
+            ref={(element) => (row = element)}
             class={[
               "session-bar-row",
               { selected: props.selectedSessions.includes(session().key) },
@@ -268,6 +282,7 @@ function SessionRows(props: {
             title={session().key}
           >
             <button
+              ref={(element) => (selection = element)}
               type="button"
               class="session-bar-selection"
               aria-label={label()}
