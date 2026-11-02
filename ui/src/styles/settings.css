@@ -1314,6 +1314,36 @@ textarea.settings-input {
       justify-content: flex-end;
     }
 
+    /* Read-only rows keep label and value on one line when both fit; a longer
+       value wraps beneath its label. Rows with a description stay stacked, since
+       whether they fit would vary row by row. Plugin rows nest the value in two
+       spans. */
+    .settings-row:not(
+        .settings-row--stacked,
+        .settings-row--stacked-on-narrow,
+        :has(> .settings-row__text > .settings-row__desc)
+      ):has(
+        > .settings-row__control > :is(.settings-row__value, .settings-status):only-child,
+        > .settings-row__control
+          > span:only-child
+          > span:only-child
+          > :is(.settings-row__value, .settings-status):only-child
+      ) {
+      > .settings-row__text {
+        flex: 1 1 auto;
+      }
+
+      > .settings-row__control {
+        width: auto;
+        flex: 0 1 auto;
+        justify-content: flex-end;
+      }
+
+      .settings-row__value {
+        text-align: start;
+      }
+    }
+
     /* The help icon sits beside its label and keeps its touch target without
        growing the header. */
     .settings-section__header:has(
