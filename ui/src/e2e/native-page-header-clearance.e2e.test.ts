@@ -194,7 +194,7 @@ suite.define(() => {
     { width: 1280, height: 900, direction: "rtl" },
     { width: 390, height: 844, direction: "ltr" },
   ] as const)(
-    "shares a stacked title and aligned tabs across Sessions and Worktrees at $width px ($direction)",
+    "keeps headings accessible and tabs aligned across Sessions and Worktrees at $width px ($direction)",
     async ({ width, height, direction }) => {
       const { page, toolbar } = await openPage(
         "sessions",
@@ -213,9 +213,9 @@ suite.define(() => {
       const title = header.locator(".page-title");
       await expect.poll(() => title.textContent()).toBe("Sessions");
       const tabs = header.locator(".hub-page-header__tabs");
-      const alignment = () =>
-        header.evaluate((element) => {
-          const titleBox = element.querySelector(".page-title")!.getBoundingClientRect();
+      const alignment = (titleSelector = ".page-title") =>
+        header.evaluate((element, selector) => {
+          const titleBox = element.querySelector(selector)!.getBoundingClientRect();
           const tabsBox = element.querySelector(".hub-page-header__tabs")!.getBoundingClientRect();
           const edge = getComputedStyle(element).direction === "rtl" ? "right" : "left";
           return {
@@ -224,17 +224,30 @@ suite.define(() => {
             tabsBelowTitle: tabsBox.y >= titleBox.bottom,
             xDelta: Math.abs(tabsBox[edge] - titleBox[edge]),
           };
-        });
-      const expectAlignedHub = async () => {
+        }, titleSelector);
+      const expectAlignedHub = async (titleSelector = ".page-title") => {
         await expect
           .poll(async () => {
-            const { titleWidth, tabsBelowTitle, xDelta } = await alignment();
+            const { titleWidth, tabsBelowTitle, xDelta } = await alignment(titleSelector);
             return titleWidth > 1 && tabsBelowTitle ? xDelta : Infinity;
           })
           .toBeLessThanOrEqual(1);
       };
-      await expectAlignedHub();
-      if (width > 560) {
+      if (width <= 560) {
+        // Sessions clips its phone heading for assistive tech; the intro still anchors the tabs.
+        expect(
+          await header.getByRole("heading", { name: "Sessions", level: 1 }).evaluate((heading) => {
+            const box = heading.getBoundingClientRect();
+            return {
+              width: box.width,
+              height: box.height,
+              clipped: getComputedStyle(heading).clipPath !== "none",
+            };
+          }),
+        ).toEqual({ width: 1, height: 1, clipped: true });
+        await expectAlignedHub(".hub-page-header__title");
+      } else {
+        await expectAlignedHub();
         expect((await alignment()).titleY).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
       }
       await tabs.getByRole("tab", { name: "Worktrees" }).click();

@@ -1,0 +1,2 @@
+# Preserve 390px native Sessions accessibility/alignment and unchanged Worktrees checks.
+13
