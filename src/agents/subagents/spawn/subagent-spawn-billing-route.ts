@@ -1,3 +1,4 @@
+import type { ModelApi } from "../../../config/model-config-vocabulary.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { isUserModelAuthProfileId } from "../../../state/user-model-account-id.js";
@@ -12,7 +13,10 @@ import {
   getPreparedModelCatalogOwnerSnapshot,
   materializePreparedModelCatalogOwner,
 } from "../../prepared-model-catalog.js";
-import { getPreparedModelRuntimeAuthStore } from "../../prepared-model-runtime-auth.js";
+import {
+  getPreparedModelRuntimeAuthMaterializations,
+  getPreparedModelRuntimeAuthStore,
+} from "../../prepared-model-runtime-auth.js";
 import { resolveEffectiveAgentRuntime } from "../../thinking-runtime.js";
 
 const log = createSubsystemLogger("agents/spawn-billing-route");
@@ -64,7 +68,7 @@ export function describeSpawnAuth(
   };
 }
 
-type SpawnModelTransport = { api?: string; baseUrl?: string };
+type SpawnModelTransport = { api?: ModelApi; baseUrl?: string };
 
 /** The transport execution passes to harness selection: catalog first, then authored config. */
 function resolveSpawnModelTransport(params: {
@@ -130,6 +134,56 @@ async function resolveSpawnRuntime(params: {
   }
 }
 
+type PreparedOwner = ReturnType<typeof materializePreparedModelCatalogOwner>;
+
+/**
+ * Evaluates the child's credential through the prepared decision owner that session_status and
+ * models.list use, so every prepared input (native logins, synthetic auth refs, native-command
+ * and plugin-owned auth, materializations, account listings) applies exactly as it does there.
+ */
+async function evaluatePreparedSpawnAuth(params: {
+  owner: PreparedOwner;
+  preparedAuthStore: NonNullable<ReturnType<typeof getPreparedModelRuntimeAuthStore>>;
+  agentId: string;
+  provider: string;
+  model: string;
+  runtimeId: string;
+  authProfileId?: string;
+  transport: SpawnModelTransport;
+}) {
+  const { owner, provider, model, runtimeId } = params;
+  // Lazy like harness selection: the decision owner reaches agent assembly modules.
+  const { prepareModelCatalogDecisions } = await import("../../model-catalog-decisions.js");
+  const decisions = await prepareModelCatalogDecisions({
+    cfg: owner.config,
+    agentId: params.agentId,
+    agentDir: owner.agentDir,
+    workspaceDir: owner.workspaceDir,
+    snapshot: owner.modelCatalog,
+    metadataSnapshot: owner.metadataSnapshot,
+    preparedAuthStore: params.preparedAuthStore,
+    preparedRuntimeAuthModes: owner.authModes,
+    preparedRuntimeAuthMaterializations: getPreparedModelRuntimeAuthMaterializations(owner),
+    pluginRegistry: owner.pluginRegistry,
+    observationConfig: owner.observationConfig,
+    isCurrent: owner.isCurrent,
+    ...(params.authProfileId
+      ? { preferredProfileId: params.authProfileId, pinnedProfileId: params.authProfileId }
+      : {}),
+    profileProvider: provider,
+  });
+  const entry = findModelInCatalog(decisions.snapshot.entries, provider, model);
+  const variants = decisions.snapshot.routeVariants.filter(
+    (row) => row.provider === provider && row.id === model,
+  );
+  const host = decisions.evaluateEntry(
+    entry ?? { provider, id: model, ...params.transport },
+    variants.length ? variants : entry ? [entry] : undefined,
+    runtimeId,
+  );
+  return entry ? decisions.evaluateNative(entry, host, runtimeId) : host;
+}
+
 /**
  * Projects the runtime and credential owners for a spawned child so the receipt names its
  * billing route for the primary model. Like session_status, it reads configured profiles and
@@ -167,30 +221,34 @@ export async function resolveSpawnBillingRoute(params: {
   const transport = resolveSpawnModelTransport({ cfg, provider, model, owner });
   const resolvedRuntime = await resolveSpawnRuntime({ ...params, transport });
   try {
-    const authStore =
-      (owner && getPreparedModelRuntimeAuthStore(owner)) ??
-      (await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir, {
-        allowKeychainPrompt: false,
-      }));
-    const evaluation = createModelAuthAvailabilityResolver({
-      cfg,
-      agentId,
-      agentDir,
-      workspaceDir: params.workspaceDir,
-      authStore,
-      externalCliProviderIds: [],
-      ...(owner
-        ? {
-            metadataSnapshot: owner.metadataSnapshot,
-            preparedRuntimeAuthModes: owner.authModes,
-          }
-        : {}),
-    }).evaluateRuntimeModelAuth(provider, {
-      modelId: model,
-      runtimeId: resolvedRuntime,
-      pinnedProfileId: params.authProfileId,
-      ...transport,
-    });
+    const preparedAuthStore = owner && getPreparedModelRuntimeAuthStore(owner);
+    const evaluation =
+      owner && preparedAuthStore
+        ? await evaluatePreparedSpawnAuth({
+            owner,
+            preparedAuthStore,
+            agentId,
+            provider,
+            model,
+            runtimeId: resolvedRuntime,
+            authProfileId: params.authProfileId,
+            transport,
+          })
+        : createModelAuthAvailabilityResolver({
+            cfg,
+            agentId,
+            agentDir,
+            workspaceDir: params.workspaceDir,
+            authStore: await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir, {
+              allowKeychainPrompt: false,
+            }),
+            externalCliProviderIds: [],
+          }).evaluateRuntimeModelAuth(provider, {
+            modelId: model,
+            runtimeId: resolvedRuntime,
+            pinnedProfileId: params.authProfileId,
+            ...transport,
+          });
     return { resolvedRuntime, ...describeSpawnAuth(evaluation) };
   } catch (error) {
     log.warn(`spawn billing route unresolved for ${provider}/${model}: ${String(error)}`);
