@@ -1,15 +1,15 @@
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
-import { SESSION_CREATE_IDEMPOTENCY_RETENTION_MS } from "../../../packages/gateway-protocol/src/index.js";
+import { SESSION_CREATE_IDEMPOTENCY_RETENTION_MS } from "../../../packages/gateway-protocol/src/session-limits.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { SESSION_CREATION_OPERATIONS_TABLE } from "../../state/openclaw-agent-creation-operations-schema.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
-import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
+import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import type {
   SessionCreationOperation,
   SessionCreationReceipt,

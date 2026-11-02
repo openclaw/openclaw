@@ -11,9 +11,10 @@ export const AGENT_CREATION_OPERATIONS_SQL = extractSqliteTableSchema(
 
 /** Keep pre-receipt admission and rollback witnesses at their original schema. */
 export function withoutAgentCreationOperations(schema: string): string {
-  return schema
-    .replace(AGENT_CREATION_OPERATIONS_SQL, "")
-    .replace("-- END SESSION CREATION OPERATIONS\n", "");
+  return schema.replace(
+    `${AGENT_CREATION_OPERATIONS_SQL}-- END SESSION CREATION OPERATIONS\n\n`,
+    "",
+  );
 }
 
 // Agent40 also adopts the SQLite-only deletion indexes deferred by the PostgreSQL generator.
@@ -22,7 +23,7 @@ const postgresObjects =
   /CREATE TABLE "session_creation_operations" \([\s\S]*?\n\);|CREATE INDEX "idx_agent_(?:session_creation_operations_expiry|session_input_completions_session_key|conversation_deliveries_source_session)"[^;]+;/gu;
 
 export function withoutAgentPostgresCreationOperations(schema: string): string {
-  return schema.replace(postgresObjects, "");
+  return schema.replace(new RegExp(`(?:${postgresObjects.source})\\n\\n`, "gu"), "");
 }
 
 export function agentCreationOperationsPostgresMigration(schema: string): string {

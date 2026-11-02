@@ -14,6 +14,10 @@ import { projectPublicSessionEntry } from "../../config/sessions/session-entry-p
 import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { prepareGatewaySessionLifecycleTargets } from "../session-lifecycle-preparation.js";
+import {
+  sessionMutationForbiddenError,
+  SessionMutationAuthorizationChangedError,
+} from "../session-mutation-authorization-error.js";
 import { resolveSessionCreateAgentId } from "../session-request-agent.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import type { GatewayInflightResult } from "./inflight.js";
@@ -53,9 +57,17 @@ async function prepareCreation(request: GatewayRequestHandlerOptions) {
   }
   const authority = readGatewayRequestMutationAuthority(request);
   const assertCurrent = () => {
-    authority.assertCurrent();
-    operator?.assertCurrent();
-    request.sessionMutationAuthorization?.assertCurrent();
+    try {
+      authority.assertCurrent();
+      operator?.assertCurrent();
+      request.sessionMutationAuthorization?.assertCurrent();
+    } catch {
+      // The added preflight must keep creation's public authorization envelope,
+      // including cancellation of an already-admitted tool invocation.
+      throw sessionMutationForbiddenError(
+        "Session creation requires a current authorized requester.",
+      );
+    }
   };
   assertCurrent();
   const operation: SessionCreationOperation = {
@@ -218,5 +230,15 @@ async function replayDurableSessionCreate(
 export function idempotentDurableSessionCreate(
   handler: GatewayRequestHandler,
 ): GatewayRequestHandler {
-  return idempotentSessionCreate(durableSessionCreate(handler), replayDurableSessionCreate);
+  const create = idempotentSessionCreate(durableSessionCreate(handler), replayDurableSessionCreate);
+  return async (request) => {
+    try {
+      await create(request);
+    } catch (error) {
+      if (!(error instanceof SessionMutationAuthorizationChangedError)) {
+        throw error;
+      }
+      request.respond(false, undefined, error.error);
+    }
+  };
 }
