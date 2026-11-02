@@ -125,23 +125,32 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned maind29a7705651d: qualify two Telegram test-only reductions together.
-Remove unused voice/photo/animation media fixture literals and their private
-selector alternatives; keep all four helper exports and sole consumer bytes.
-Remove only the first menu publication count if the retained exact four-entry
-call array catches actual duplicate publication. Keep deletion/localization
+Pinned maind29a7705651d: remove three unused Telegram media fixture variants
+and one implied menu publication-count assertion. Preserve all four helper
+exports, the sole media consumer bytes, every selected input, deletion/locale
 guards and all14 physical declarations/17 cases across both suites.
 
-Selected source, owners, consumed supports, sole fixture caller, siblings,
-history, instructions, dependencies and static routes are qualified at the
-frozen base. Both suites use the normal isolated extension-telegram project,
-without database-worker overrides. Managed checkout is code-only; the official
-Native workflow owns test dependencies.
+All seven media cases pass with throwing getters for voice/photo/animation.
+An awaited duplicate publication in the actual owner fails the original count
+at eight versus four calls; after removing only that count, the same fault fails
+the complete four-entry call-array equality. The deletion count immediately
+before it still passes. Nine unrelated cases are deliberately skipped only in
+each menu fault control. The actual production owner is restored exactly.
 
-Untouched official baseline, original/repaired actual-owner duplicate-publish
-controls, clean candidate, every removal scan phase, focused checks, fresh
-review, published proof and CI remain pending. Restore temporary owner faults
-exactly. No production change or live Gateway/Telegram/Bot API claim.
+Untouched official baseline and clean candidate pass all17 cases without skips
+in the normal isolated extension-telegram project. The candidate removes11
+test/support lines; production and the shared test-line scalar are unchanged.
+Managed checkout is code-only; the official Native workflow owns dependencies.
+
+All four removal components completed. Full-tree exports and both unused-file phases
+pass; the script-export wrapper also passes its script/full-tree subscans.
+Production Knip and that wrapper's production subscan still fail on
+resolvePluginInstallTransaction and EmbeddingProviderCreateOptions. Exact
+original test sources reproduce the same diagnostics. No suppression or allowance change. Typed lint, scoped
+extension test types, formatting, ledger MDX and whitespace pass.
+
+Fresh review, final published proof and CI remain pending. Local mocked media/menu boundaries only; no live Gateway,
+Telegram transport or Bot API claim.
 
 ## Completed source review
 
