@@ -37,7 +37,7 @@ export function updatePreparedSessionProfileInvolvement(
   );
 }
 
-export function updateSessionProfileInvolvementInTransaction(
+function updateSessionProfileInvolvementInTransaction(
   database: OpenClawAgentDatabase,
   resolved: Pick<ResolvedSqliteScope, "agentId" | "sessionKey">,
   params: SessionInvolvementMutation & { assertCurrent?: () => void },

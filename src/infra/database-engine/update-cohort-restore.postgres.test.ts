@@ -34,31 +34,33 @@ import { readBackupEngineImage } from "./physical-store.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
-const adminConnection = typeof configured === "string" ? configured : undefined;
+const connection = typeof configured === "string" ? configured : undefined;
 
-describe.skipIf(!adminConnection)("PostgreSQL plugin cohort backup restoration", () => {
+describe.skipIf(!connection)("PostgreSQL plugin cohort backup restoration", () => {
   const database = `cohort_restore_${randomUUID().replaceAll("-", "")}`;
-  const databaseUrl = adminConnection ? new URL(adminConnection) : undefined;
+  const databaseUrl = connection ? new URL(connection) : undefined;
   if (databaseUrl) {
     databaseUrl.pathname = `/${database}`;
   }
-  const admin = new Client({ connectionString: adminConnection });
   const client = new Client({ connectionString: databaseUrl?.href });
+  const sibling = new Client({ connectionString: connection });
+  const siblingNamespace = `restore_${randomUUID().replaceAll("-", "")}`;
   beforeAll(async () => {
-    // Namespace leakage assertions must not observe another conformance test's cleanup.
-    await admin.connect();
-    await admin.query(`CREATE DATABASE "${database}"`);
+    await sibling.connect();
+    // The complete orphan inventory must not include other suites' restores.
+    await sibling.query(`CREATE DATABASE "${database}"`);
     await client.connect();
     await client.query(
-      "CREATE EXTENSION vector; CREATE EXTENSION pg_trgm; CREATE EXTENSION unaccent",
+      "CREATE EXTENSION unaccent; CREATE EXTENSION pg_trgm; CREATE EXTENSION vector",
     );
   });
   afterAll(async () => {
     try {
       await client.end();
-      await admin.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
+      await sibling.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
+      await sibling.query(`DROP SCHEMA IF EXISTS "${siblingNamespace}" CASCADE`);
     } finally {
-      await admin.end();
+      await sibling.end();
     }
   });
 
@@ -66,14 +68,14 @@ describe.skipIf(!adminConnection)("PostgreSQL plugin cohort backup restoration",
     if (!databaseUrl) {
       throw new Error("PostgreSQL conformance connection is required");
     }
-    const connection = databaseUrl.href;
+    const isolatedConnection = databaseUrl.href;
     const config = {
       plugins: { enabled: false },
-      database: { engine: "postgres" as const, postgres: { connection } },
+      database: { engine: "postgres" as const, postgres: { connection: isolatedConnection } },
     };
     const selection = {
       effectiveEngines: resolveDatabaseFamilyEngines(config),
-      postgres: { connection, schemaPrefix: "cohort_restore" },
+      postgres: { connection: isolatedConnection, schemaPrefix: "cohort_restore" },
     };
     await withOpenClawTestState({ label: "cohort-postgres-restore" }, async (state) => {
       await state.writeConfig(config);
@@ -262,6 +264,7 @@ describe.skipIf(!adminConnection)("PostgreSQL plugin cohort backup restoration",
           }
           expect(await readPairRows(facts.namespace)).toEqual(originalPairRows);
           admitted(() => deletePluginCohortRecovery(pair, fence, { env: state.env }));
+          await sibling.query(`CREATE SCHEMA "${siblingNamespace}"`);
           const beforeRefusal = (
             await client.query<{ nspname: string }>(
               "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
@@ -270,6 +273,7 @@ describe.skipIf(!adminConnection)("PostgreSQL plugin cohort backup restoration",
           await expect(restore("missing-live-pair")).rejects.toThrow(
             "lost its live plugin cohort recovery pair",
           );
+          await sibling.query(`DROP SCHEMA "${siblingNamespace}"`);
           const afterRefusal = (
             await client.query<{ nspname: string }>(
               "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
