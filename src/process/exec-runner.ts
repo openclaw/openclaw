@@ -63,6 +63,7 @@ type CommandTerminationReason = SpawnResult["termination"] | "output-limit";
 
 export type CommandOptions = {
   executionIntent?: ProcessExecutionIntent;
+  executionScopeKey?: string;
   timeoutMs?: number;
   cwd?: string;
   input?: string | Uint8Array;
@@ -242,6 +243,7 @@ async function runCommandWithOutputEncoding(
 
   const { child, invocation } = spawnCommandWithInvocation(argv, {
     executionIntent: options.executionIntent,
+    executionScopeKey: options.executionScopeKey,
     buffer: false,
     cancelSignal: cancelController.signal,
     inheritScopeCancellation: false,
