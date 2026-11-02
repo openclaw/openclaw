@@ -160,7 +160,7 @@ export function DiscordIdentity() {
         </div>
       </Show>
       <Show when={linked()}>
-        <SettingsDisclosure label={t("profilePage.discord.details")}>
+        <SettingsDisclosure quiet title={t("profilePage.discord.details")}>
           <SettingsRow
             title={t("profilePage.discord.id")}
             control={

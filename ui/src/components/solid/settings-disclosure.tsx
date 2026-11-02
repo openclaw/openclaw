@@ -1,19 +1,44 @@
 import type { JSX } from "@solidjs/web";
+import { Show } from "solid-js";
 import { Icon } from "./icon.tsx";
 
-/** The quiet chevron row for on-demand detail; opens subrows beneath it. */
-export function SettingsDisclosure(props: { label: JSX.Element; children?: JSX.Element }) {
+/**
+ * One disclosure for settings: a row that opens to more rows in the same group.
+ * `quiet` is for details inside a surrounding group: a muted row with indented subrows.
+ */
+export function SettingsDisclosure(props: {
+  id?: string;
+  class?: string;
+  title: JSX.Element;
+  description?: JSX.Element;
+  open?: boolean;
+  quiet?: boolean;
+  onToggle?: JSX.EventHandler<HTMLDetailsElement, Event>;
+  children?: JSX.Element;
+}) {
   return (
-    <details class="cfg-object settings-disclosure">
-      <summary class="settings-row cfg-object__summary">
-        <span class="settings-row__desc">{props.label}</span>
+    <details
+      id={props.id}
+      class={["settings-disclosure", { "settings-group": !props.quiet }, props.class]}
+      open={props.open}
+      onToggle={(event) => props.onToggle?.(event)}
+    >
+      <summary class="settings-row settings-row--nav settings-disclosure__summary">
+        <div class="settings-row__text">
+          <span class={props.quiet ? "settings-row__desc" : "settings-row__title"}>
+            {props.title}
+          </span>
+          <Show when={props.description}>
+            <span class="settings-row__desc">{props.description}</span>
+          </Show>
+        </div>
         <div class="settings-row__control">
-          <span class="settings-row__chevron cfg-object__chevron">
+          <span class="settings-row__chevron settings-disclosure__chevron">
             <Icon name="chevronRight" />
           </span>
         </div>
       </summary>
-      <div class="settings-subrows">{props.children}</div>
+      {props.quiet ? <div class="settings-subrows">{props.children}</div> : props.children}
     </details>
   );
 }

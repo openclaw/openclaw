@@ -661,7 +661,7 @@ export function ProfilePage() {
                     />
                   )}
                 </Show>
-                <SettingsDisclosure label={t("profilePage.access.details")}>
+                <SettingsDisclosure quiet title={t("profilePage.access.details")}>
                   <SettingsRow
                     title={t("profilePage.access.scopes")}
                     description={t("profilePage.access.description")}

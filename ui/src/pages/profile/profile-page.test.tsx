@@ -167,7 +167,7 @@ it("renders identity before Usage statistics and opens the usage page", async ()
   expect(docsLink?.href).toBe("https://docs.openclaw.ai/concepts/user-model");
   expect(page.querySelector(".profile-stats")).toBeNull();
   expect(page.querySelector(".profile-heatmap")).toBeNull();
-  const usageRow = page.querySelector<HTMLButtonElement>(".settings-row--nav");
+  const usageRow = page.querySelector<HTMLButtonElement>("button.settings-row--nav");
   expect(usageRow?.textContent).toContain("Usage statistics");
   expect(page.querySelector("#settings-profile-identity")?.compareDocumentPosition(usageRow!)).toBe(
     Node.DOCUMENT_POSITION_FOLLOWING,

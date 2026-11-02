@@ -506,6 +506,18 @@ openclaw-appearance-background .settings-background-preview .session-background_
   border-color: color-mix(in srgb, var(--danger) 35%, var(--border) 65%);
 }
 
+.settings-disclosure__summary {
+  list-style: none;
+}
+
+.settings-disclosure__summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-disclosure[open] > .settings-disclosure__summary .settings-disclosure__chevron {
+  transform: rotate(90deg);
+}
+
 /* Lives here rather than config.css because every schema-driven surface
  * (config pages and the channel detail forms) renders the same split. */
 
@@ -780,21 +792,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
 
 .cfg-object[open] > .cfg-object__summary .cfg-object__chevron {
   transform: rotate(90deg);
-}
-
-/* config.css stays with the Config page; other settings pages share the row here. */
-.settings-disclosure > .cfg-object__summary {
-  cursor: var(--cursor-action);
-  list-style: none;
-  transition: background var(--duration-fast) ease;
-}
-
-.settings-disclosure > .cfg-object__summary::-webkit-details-marker {
-  display: none;
-}
-
-.settings-disclosure > .cfg-object__summary:hover {
-  background: var(--bg-hover);
 }
 
 /* Status and a short note read together under a row's title. */
