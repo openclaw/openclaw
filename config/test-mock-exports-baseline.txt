@@ -6311,7 +6311,6 @@
 ["test/line-question-gateway.test.ts","openclaw/plugin-sdk/conversation-runtime","88b20d187488d173c82e4e6d6319c4f27f18772bc8d29a5078c0a34078667127",1]
 ["test/loopback-ask-user-telegram-channel.test.ts","../src/agents/node-exec-availability.js","71ec8ee2c185e6b5049a3d16551c604ca81707e8473f8c24a2420035f245d7ca",1]
 ["test/loopback-ask-user-telegram-channel.test.ts","../src/plugins/hook-runner-global.js","1bbcc11318d7e6fdb669b7837445d214b2cf63654843a9ab7517c5a4373a66e9",1]
-["test/loopback-ask-user-telegram-channel.test.ts","../src/tts/tts-settings.js","2c402d525da89b9803dffded8666bacd8581343e79054c540b35d81222951fd1",1]
 ["test/msteams-read-authority.integration.test.ts","../extensions/msteams/src/sdk.js","f9b8a39eeec6bd725938586cacac316f51ffaa0edae24d2d629f6bddfe7df7ce",1]
 ["test/msteams-read-target.integration.test.ts","../extensions/msteams/src/sdk.js","7a6257f585c2adb65989ddad6a330d5c8a523ec38ca08f0b78f8240ccdeb4e15",1]
 ["test/openai-model-discovery-auth-order.test.ts","../src/plugins/provider-discovery.runtime.js","08e1b7645a15cc5d59c8282a90be5b521a396c339b7ea53617901552bc8941fb",1]
