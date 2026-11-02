@@ -356,9 +356,12 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                 <Icon name="externalLink" />
               </span>
             </a>
-            <button class="btn btn--ghost" type="button" onClick={() => props.onManageDevices()}>
-              {t("devices.pairing.manageDevices")}
-            </button>
+            {/* Review opens the same page, and says why, once a request is waiting. */}
+            <Show when={!setup() || props.pendingCount === 0}>
+              <button class="btn btn--ghost" type="button" onClick={() => props.onManageDevices()}>
+                {t("devices.pairing.manageDevices")}
+              </button>
+            </Show>
             <Show when={props.lifecycle.phase === "selection"}>
               <button
                 class="btn primary"
@@ -383,15 +386,6 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
             <Show when={setup()}>
               {(current) => (
                 <>
-                  <Show when={props.pendingCount > 0}>
-                    <button
-                      class="btn btn--sm"
-                      type="button"
-                      onClick={() => props.onManageDevices()}
-                    >
-                      {t("devices.pairing.review")}
-                    </button>
-                  </Show>
                   <button
                     class="btn"
                     type="button"
@@ -406,7 +400,7 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                         let label!: HTMLSpanElement;
                         return (
                           <button
-                            class="btn primary"
+                            class={["btn", { primary: props.pendingCount === 0 }]}
                             type="button"
                             onClick={(event) =>
                               void handleCopyButton(event, code, copyLabel(), { label })
@@ -420,6 +414,15 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                         );
                       }}
                     </For>
+                  </Show>
+                  <Show when={props.pendingCount > 0}>
+                    <button
+                      class="btn primary"
+                      type="button"
+                      onClick={() => props.onManageDevices()}
+                    >
+                      {t("devices.pairing.review")}
+                    </button>
                   </Show>
                 </>
               )}

@@ -678,6 +678,22 @@ describe("DevicesPage gateway lifecycle", () => {
     },
   );
 
+  it("keeps the accent on the first pending request's Approve", () => {
+    const { client } = clientFor();
+    mountPage(gatewayFixture(gatewaySnapshot(client)), {
+      nodes: [{ nodeId: "node-1" }],
+      devicesList: {
+        paired: [],
+        pending: [
+          { requestId: "request-1", deviceId: "device-1", displayName: "Browser" },
+          { requestId: "request-2", deviceId: "device-2", displayName: "Phone" },
+        ],
+      },
+    });
+    const approvals = [...document.querySelectorAll(".device-entry__approve")];
+    expect(approvals.map((button) => button.classList.contains("primary"))).toEqual([true, false]);
+  });
+
   it("rejects a device pairing request after the in-app dialog is confirmed", async () => {
     const { client, request } = clientFor();
     const fixture = gatewayFixture(gatewaySnapshot(client));
