@@ -479,13 +479,16 @@ export async function startNodeHostMcpManager(
 
   return {
     descriptors,
-    async callMcpTool(params: {
-      server: string;
-      tool: string;
-      arguments?: Record<string, unknown>;
-      timeoutMs?: number;
-      signal?: AbortSignal;
-    }) {
+    async callMcpTool(
+      this: void,
+      params: {
+        server: string;
+        tool: string;
+        arguments?: Record<string, unknown>;
+        timeoutMs?: number;
+        signal?: AbortSignal;
+      },
+    ) {
       const state = states.get(params.server);
       const session = state?.current;
       if (!state || !session?.connected) {
