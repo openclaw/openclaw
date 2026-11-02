@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import {
   For,
   Loading,
@@ -14,12 +13,7 @@ import {
   validateApprovalHistoryResult,
   type ApprovalHistoryResult,
 } from "../../../../packages/gateway-protocol/src/approval-result-validators.js";
-import type {
-  ApprovalDecision,
-  ApprovalKind,
-  ApprovalTerminalReason,
-  TerminalApprovalSnapshot,
-} from "../../../../packages/gateway-protocol/src/schema/approvals.js";
+import type { TerminalApprovalSnapshot } from "../../../../packages/gateway-protocol/src/schema/approvals.js";
 import type {
   ExecApprovalGrantsListResult,
   ExecApprovalStandingGrant,
@@ -44,6 +38,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ApprovalErrorNotice } from "./approval-error-notice.tsx";
+import { Cell, HistoryRow } from "./approval-history-row.tsx";
 
 registerEnglishCatalog(registerApprovalsEnglish);
 
@@ -66,55 +61,6 @@ function grantStateLabel(grant: ExecApprovalStandingGrant, nowMs: number): strin
 const APPROVAL_HISTORY_REQUIRED_SCOPE = "operator.approvals";
 const APPROVALS_DOCS_URL = "https://docs.openclaw.ai/tools/exec-approvals";
 
-const APPROVAL_KIND_LABELS = {
-  exec: "approvalHistory.kinds.exec",
-  plugin: "approvalHistory.kinds.plugin",
-  "system-agent": "approvalHistory.kinds.systemAgent",
-} satisfies Record<ApprovalKind, string>;
-
-const APPROVAL_STATUS_LABELS = {
-  allowed: "approvalHistory.statuses.allowed",
-  denied: "approvalHistory.statuses.denied",
-  expired: "approvalHistory.statuses.expired",
-  cancelled: "approvalHistory.statuses.cancelled",
-} satisfies Record<TerminalApprovalSnapshot["status"], string>;
-
-const APPROVAL_DECISION_LABELS = {
-  "allow-once": "approvalHistory.decisions.allowOnce",
-  "allow-always": "approvalHistory.decisions.allowAlways",
-  deny: "approvalHistory.decisions.deny",
-} satisfies Record<ApprovalDecision, string>;
-
-const APPROVAL_REASON_LABELS = {
-  user: "approvalHistory.reasons.user",
-  timeout: "approvalHistory.reasons.timeout",
-  "malformed-verdict": "approvalHistory.reasons.malformedVerdict",
-  "no-route": "approvalHistory.reasons.noRoute",
-  "run-aborted": "approvalHistory.reasons.runAborted",
-  "gateway-restart": "approvalHistory.reasons.gatewayRestart",
-  "storage-corrupt": "approvalHistory.reasons.storageCorrupt",
-} satisfies Record<ApprovalTerminalReason, string>;
-
-function requestLabel(item: TerminalApprovalSnapshot): string {
-  const presentation = item.presentation;
-  const request = presentation.kind === "exec" ? presentation.commandText : presentation.title;
-  return request || t("approvalHistory.unknown");
-}
-
-function sourceLabel(item: TerminalApprovalSnapshot): string {
-  const parts = [item.source?.agentId, item.source?.sessionKey].filter((part): part is string =>
-    Boolean(part),
-  );
-  return parts.length > 0 ? parts.join(" · ") : t("approvalHistory.unknown");
-}
-
-function resolverLabel(item: TerminalApprovalSnapshot): string {
-  if (!item.resolver) {
-    return t("approvalHistory.unknown");
-  }
-  return item.resolver.id ? `${item.resolver.kind} · ${item.resolver.id}` : item.resolver.kind;
-}
-
 function EmptyRow(props: { columns: number; label: string }) {
   return (
     <tr>
@@ -124,13 +70,6 @@ function EmptyRow(props: { columns: number; label: string }) {
         </div>
       </td>
     </tr>
-  );
-}
-function Cell(props: { labelKey: string; value: JSX.Element; mono?: boolean }) {
-  return (
-    <td class={{ mono: props.mono }} data-label={t(props.labelKey)}>
-      {props.value}
-    </td>
   );
 }
 
@@ -528,40 +467,6 @@ export function ApprovalsPage() {
       </tr>
     );
   }
-  function HistoryRow(props: { item: TerminalApprovalSnapshot }) {
-    return (
-      <tr>
-        <Cell
-          labelKey="approvalHistory.columns.resolved"
-          value={formatResolvedAt()(props.item.resolvedAtMs)}
-        />
-        <Cell
-          labelKey="approvalHistory.columns.kind"
-          value={t(APPROVAL_KIND_LABELS[props.item.presentation.kind])}
-        />
-        <Cell labelKey="approvalHistory.columns.request" value={requestLabel(props.item)} mono />
-        <Cell
-          labelKey="approvalHistory.columns.decision"
-          value={
-            <>
-              {t(APPROVAL_STATUS_LABELS[props.item.status])} ·{" "}
-              {t(
-                "decision" in props.item && props.item.decision
-                  ? APPROVAL_DECISION_LABELS[props.item.decision]
-                  : "approvalHistory.notApplicable",
-              )}
-            </>
-          }
-        />
-        <Cell
-          labelKey="approvalHistory.columns.reason"
-          value={t(APPROVAL_REASON_LABELS[props.item.reason])}
-        />
-        <Cell labelKey="approvalHistory.columns.source" value={sourceLabel(props.item)} mono />
-        <Cell labelKey="approvalHistory.columns.resolver" value={resolverLabel(props.item)} mono />
-      </tr>
-    );
-  }
   return (
     <openclaw-approvals-page>
       <SettingsPageHeader
@@ -651,7 +556,7 @@ export function ApprovalsPage() {
                   <div class="approval-history">
                     <div class="data-table-container">
                       <table
-                        class="data-table approval-history-table settings-table--stacked"
+                        class="data-table approval-history-table"
                         role="table"
                         aria-labelledby="approval-history-title"
                         aria-busy={isPending(historyRead) ? "true" : "false"}
@@ -687,7 +592,9 @@ export function ApprovalsPage() {
                             />
                           ) : (
                             <For each={historyItems()} keyed={(item) => item.id}>
-                              {(item) => <HistoryRow item={item()} />}
+                              {(item) => (
+                                <HistoryRow item={item()} formatResolvedAt={formatResolvedAt()} />
+                              )}
                             </For>
                           )}
                         </tbody>

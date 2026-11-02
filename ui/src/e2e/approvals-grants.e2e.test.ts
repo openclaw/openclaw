@@ -24,34 +24,36 @@ const grant: ExecApprovalStandingGrant = {
   useCount: 3,
 };
 suite.define(() => {
-  it.each([700, 769, 820, 900, 901, 1100, 1280])(
-    "keeps both tables inside the page at %ipx",
+  it.each([390, 700, 769, 820, 900, 901, 1100, 1280, 1440])(
+    "keeps history readable at %ipx",
     async (width) => {
       const sessionKey = "agent:main:telegram:group:release-coordination-and-rollout-review";
-      const history = {
-        id: "approval-long",
-        status: "denied",
-        presentation: {
-          kind: "exec",
-          commandText:
-            "pnpm --filter ./packages/synthetic-long-package-name-without-breaks run build",
-          allowedDecisions: ["deny"],
-        },
-        urlPath: "/approve/approval-long",
+      const commandText =
+        "pnpm --filter ./packages/synthetic-long-package-name-without-breaks run build";
+      const record = (id: string, fields: object) => ({
+        id,
+        presentation: { kind: "exec", commandText, allowedDecisions: ["allow-once", "deny"] },
+        urlPath: `/approve/${id}`,
         createdAtMs: 1_000,
         expiresAtMs: 61_000,
         resolvedAtMs: 2_000,
-        decision: "deny",
-        reason: "user",
         source: { agentId: "main", sessionKey },
         resolver: { kind: "device", id: "reviewer-device" },
-      };
+        ...fields,
+      });
       await suite.withPage(
         { viewport: { width, height: 900 }, locale: "en-US", reducedMotion: "reduce" },
         async ({ page }) => {
           await installMockGateway(page, {
             methodResponses: {
-              "approval.history": { items: [history] },
+              "approval.history": {
+                items: [
+                  record("a", { status: "allowed", decision: "allow-always", reason: "user" }),
+                  record("d", { status: "denied", decision: "deny", reason: "user" }),
+                  record("e", { status: "expired", reason: "timeout" }),
+                  record("c", { status: "cancelled", reason: "run-aborted" }),
+                ],
+              },
               "exec.approval.grants.list": {
                 grants: [
                   { ...grant, command: `tar -czf /var/backups/${"workspace-".repeat(8)}.tgz` },
@@ -60,17 +62,32 @@ suite.define(() => {
             },
           });
           await page.goto(new URL("settings/approvals", suite.server.baseUrl).href);
-          await page
-            .locator(".approval-history-table")
-            .getByText(sessionKey, { exact: false })
-            .waitFor();
+          const history = page.locator(".approval-history-table");
+          await history.getByText(commandText).first().waitFor();
           await page.locator(".standing-grants-table").getByText(grant.cronJobName!).waitFor();
-          const overflow = await page.evaluate(() =>
-            [...document.querySelectorAll(".data-table-container")].map(
+          for (const status of ["Allowed · Always allow", "Denied", "Expired", "Cancelled"]) {
+            await history.locator(".settings-status").getByText(status, { exact: true }).waitFor();
+          }
+          const layout = await page.evaluate(() => ({
+            overflow: [...document.querySelectorAll(".data-table-container")].map(
               (container) => container.scrollWidth - container.clientWidth,
             ),
-          );
-          expect(overflow).toEqual([0, 0]);
+            compact:
+              getComputedStyle(document.querySelector(".approval-history-table")!).display ===
+              "block",
+            rowHeight: document
+              .querySelector(".approval-history-table tbody tr")!
+              .getBoundingClientRect().height,
+          }));
+          expect(layout.overflow).toEqual([0, 0]);
+          expect(layout.compact).toBe(width < 1440);
+          if (layout.compact) {
+            // The long session key wraps, but a record stays far below the old seven lines.
+            expect(layout.rowHeight).toBeLessThan(140);
+            await expect
+              .poll(() => history.locator("td[title]").first().getAttribute("title"))
+              .toBe(commandText);
+          }
         },
       );
     },

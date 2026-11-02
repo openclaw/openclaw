@@ -1479,69 +1479,122 @@ textarea.settings-input {
   white-space: normal;
 }
 
-/* Seven columns outgrow the Settings column well above phone width, with or
-   without the Settings sidebar, so history uses the phone records there too. */
+/* Seven columns outgrow the Settings column, with or without the Settings
+   sidebar, so narrow history reads as two-line records at every smaller width. */
 .approval-history {
   container: approval-history / inline-size;
 }
 
-@container approval-history (max-width: 800px) {
+@container approval-history (max-width: 900px) {
   .approval-history .data-table-container {
     max-height: none;
     overflow: visible;
   }
 
-  .approval-history-table {
+  .approval-history-table,
+  .approval-history-table tbody {
     display: block;
-    width: 100%;
-    min-width: 0;
   }
 
   .approval-history-table thead {
     position: absolute;
     width: 1px;
     height: 1px;
-    padding: 0;
-    margin: -1px;
     overflow: hidden;
     clip-path: inset(50%);
-    white-space: nowrap;
-  }
-
-  .approval-history-table :is(tbody, tr, td) {
-    display: block;
-    width: 100%;
-    min-width: 0;
-    max-width: 100%;
   }
 
   .approval-history-table tbody tr {
-    padding: var(--space-3) var(--space-4);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    padding: var(--space-2) var(--space-3);
   }
 
   .approval-history-table tbody tr + tr {
-    margin-top: var(--space-4);
+    margin-top: var(--space-2);
+  }
+
+  /* Ends the first line: the request and decision come before it, metadata after. */
+  .approval-history-table tbody tr::before {
+    content: "";
+    order: 3;
+    flex-basis: 100%;
+    margin-top: var(--space-1);
   }
 
   .approval-history-table tbody td {
-    padding: var(--space-2) 0;
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+    padding: 0;
     border: 0;
-    white-space: normal;
-    overflow-wrap: anywhere;
-    text-align: start;
-  }
-
-  .approval-history-table td[data-label] {
-    display: grid;
-    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
-    gap: var(--space-3);
-    align-items: start;
-  }
-
-  .approval-history-table td[data-label]::before {
-    content: attr(data-label);
+    font-family: inherit;
+    font-size: var(--control-ui-text-sm);
+    line-height: 1.45;
     color: var(--muted);
-    font: 500 var(--control-ui-text-sm) / 1.45 var(--font-body);
+    overflow-wrap: anywhere;
+  }
+
+  .approval-history-table tbody td.data-table-empty-cell {
+    flex-basis: 100%;
+  }
+
+  .approval-history-table tbody td.approval-history__request {
+    order: 1;
+    flex: 1 1 0;
+    margin-inline-end: var(--space-3);
+    overflow: hidden;
+    font-family: var(--mono);
+    color: var(--text);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .approval-history-table tbody td.approval-history__decision {
+    order: 2;
+    flex: none;
+    white-space: nowrap;
+  }
+
+  /* Metadata order: time, kind, source, resolver, reason. */
+  .approval-history-table tbody td:nth-child(1) {
+    order: 4;
+  }
+
+  .approval-history-table tbody td:nth-child(2) {
+    order: 5;
+  }
+
+  .approval-history-table tbody td:nth-child(6) {
+    order: 6;
+  }
+
+  .approval-history-table tbody td:nth-child(7) {
+    order: 7;
+  }
+
+  .approval-history-table tbody td:nth-child(5) {
+    order: 8;
+  }
+
+  .approval-history-table
+    tbody
+    td:is(:nth-child(1), :nth-child(2), :nth-child(6), :nth-child(7))::after {
+    content: "·";
+    margin-inline: 0.4em;
+  }
+
+  /* A bare "Unknown" doesn't say which field it is. */
+  .approval-history-table tbody td[data-unknown]::before {
+    content: attr(data-label) ": ";
+  }
+
+  /* Touch has no hover to reveal a truncated request. */
+  @media (hover: none) {
+    .approval-history-table tbody td.approval-history__request {
+      white-space: normal;
+    }
   }
 }
 
