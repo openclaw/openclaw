@@ -235,6 +235,19 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
             }
             return [...union.values()];
           });
+          const selfOnlyPeople = () => {
+            const viewer = gateway?.read().snapshot.selfUser?.identity;
+            const associatedPeople = desktopPeople();
+            return (
+              viewer &&
+              props.props?.sessionFactsReady &&
+              !partialPeople() &&
+              [owner(), session()?.createdActor].every((actor) => !actor || actor.identity) &&
+              associatedPeople.length === 1 &&
+              sessionParticipantIdentityKey(associatedPeople[0]!.identity) ===
+                sessionParticipantIdentityKey(viewer)
+            );
+          };
           const outputs = createMemo<ChatDetailsOutputs | null>(() => {
             const snapshot = props.props?.outputs;
             if (!snapshot) {
@@ -428,7 +441,10 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                   {(presentation) => (
                     <>
                       <Show
-                        when={desktopPeople().length > 0 || count() > 0 || creatorName() || owner()}
+                        when={
+                          !selfOnlyPeople() &&
+                          (desktopPeople().length > 0 || count() > 0 || creatorName() || owner())
+                        }
                       >
                         <ChatDetailsDesktopSection
                           section="people"
