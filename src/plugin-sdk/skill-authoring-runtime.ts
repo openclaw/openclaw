@@ -14,10 +14,23 @@ export {
   SKILL_FILE,
   SkillAuthoringError,
   splitSkillFrontmatter,
-  validateSkillFile,
   type SkillAuthoringErrorCode,
   type SkillAuthoringFinding,
 } from "../skills/lifecycle/skill-authoring.js";
+
+/**
+ * Validates one file's next content against the same rules `writeSkillFile` enforces: the path
+ * must be `SKILL.md` or an allowed support path, then frontmatter, limits, and the security scan.
+ * Returns the SKILL.md description. Throws SkillAuthoringError.
+ */
+export function validateSkillFile(
+  params: Parameters<typeof authoring.validateSkillFileContent>[0],
+): { description?: string } {
+  return authoring.validateSkillFileContent({
+    ...params,
+    filePath: authoring.normalizeSkillFilePath(params.filePath),
+  });
+}
 
 /** The agent whose skills the calling plugin reads or changes. */
 export type SkillAuthoringTarget = { config: OpenClawConfig; agentId: string };

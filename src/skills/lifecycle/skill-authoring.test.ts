@@ -17,7 +17,7 @@ import {
   resolveAgentSkillsRoot,
   SkillAuthoringError,
   splitSkillFrontmatter,
-  validateSkillFile,
+  validateSkillFileContent,
   writeSkillRootFile,
 } from "./skill-authoring.js";
 
@@ -80,13 +80,21 @@ it("refuses unsafe content before anything is written", async () => {
 
 it("parses frontmatter strictly for writes and leniently for reads", () => {
   expect(
-    validateSkillFile({ skillName: "deploy", filePath: "SKILL.md", content: skill("deploy") }),
+    validateSkillFileContent({
+      skillName: "deploy",
+      filePath: "SKILL.md",
+      content: skill("deploy"),
+    }),
   ).toEqual({ description: "Deploy staging builds" });
   expect(() =>
-    validateSkillFile({ skillName: "deploy", filePath: "SKILL.md", content: skill("other") }),
+    validateSkillFileContent({
+      skillName: "deploy",
+      filePath: "SKILL.md",
+      content: skill("other"),
+    }),
   ).toThrow(refusal("invalid_frontmatter", /name: deploy/));
   expect(() =>
-    validateSkillFile({
+    validateSkillFileContent({
       skillName: "deploy",
       filePath: "SKILL.md",
       content: skill("deploy"),
@@ -196,4 +204,75 @@ it("refuses SDK effects outside a plugin call", async () => {
       content: skill("deploy"),
     }),
   ).rejects.toThrow(/must run inside a plugin call/);
+});
+
+it("validates plugin files with the same path contract writes enforce", async () => {
+  const sdk = await import("../../plugin-sdk/skill-authoring-runtime.js");
+  const validate = (filePath: string) =>
+    sdk.validateSkillFile({ skillName: "deploy", filePath, content: "Notes\n" });
+  expect(() => validate("../escape.md")).toThrow(refusal("invalid_path"));
+  expect(() => validate("notes.md")).toThrow(refusal("invalid_path"));
+  expect(validate("references/notes.md")).toEqual({});
+});
+
+it("commits nothing when the owning plugin is revoked during filesystem preparation", async () => {
+  const sdk = await import("../../plugin-sdk/skill-authoring-runtime.js");
+  const { PluginInstance } = await import("../../plugins/plugin-instance.js");
+  const { createEmptyPluginRegistry } = await import("../../plugins/registry-empty.js");
+  const { createPluginRecord } = await import("../../plugins/status.test-helpers.js");
+  const hook = vi.fn();
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([{ hookName: "skill_changed", handler: hook }]),
+  );
+  const record = createPluginRecord({ id: "authoring-owner", agentSkillsDir: "proof-skills" });
+  const instance = new PluginInstance(record.id, {
+    record,
+    registry: { ...createEmptyPluginRegistry(), plugins: [record] },
+  });
+  // Redacted trace: phase names only, never paths or content.
+  const trace: string[] = [];
+  const realMkdir = fs.mkdir.bind(fs);
+  let disposal: Promise<unknown> | undefined;
+  const mkdir = vi.spyOn(fs, "mkdir").mockImplementation(async (target, options) => {
+    const made = await realMkdir(target, options);
+    if (String(target).endsWith(path.join("proof-skills", "deploy")) && !disposal) {
+      // Authority was captured when the call began; revoke it before the final write.
+      trace.push("prepare:skill-dir");
+      disposal = instance.dispose();
+      await vi.waitFor(() => expect(instance.owner?.revoked).toBe(true));
+      trace.push("owner:revoked");
+    }
+    return made;
+  });
+  try {
+    await expect(
+      instance.run(() =>
+        sdk.commitSkillChange({
+          config: {},
+          agentId: "main",
+          skillName: "deploy",
+          apply: async () => {
+            trace.push("authority:captured");
+            await sdk.writeSkillFile({
+              config: {},
+              agentId: "main",
+              skillName: "deploy",
+              filePath: "SKILL.md",
+              content: skill("deploy"),
+            });
+            trace.push("write:committed");
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({ name: "PluginInstanceUnavailableError" });
+    trace.push("refused");
+  } finally {
+    mkdir.mockRestore();
+    await (disposal ?? instance.dispose());
+  }
+  expect(trace).toEqual(["authority:captured", "prepare:skill-dir", "owner:revoked", "refused"]);
+  await expect(fs.stat(path.join(skillsRoot, "deploy", "SKILL.md"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  expect(hook).not.toHaveBeenCalled();
 });

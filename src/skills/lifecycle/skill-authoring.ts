@@ -145,7 +145,7 @@ export function splitSkillFrontmatter(content: string): {
   try {
     frontmatter = parseSkillFrontmatter(content);
   } catch {
-    // Callers that need valid frontmatter use validateSkillFile.
+    // Callers that need valid frontmatter use validateSkillFileContent.
   }
   return { frontmatter, body: stripFrontmatterBlock(content) };
 }
@@ -189,7 +189,7 @@ function validateSkillMarkdown(skillName: string, content: string, maxSkillBytes
  * Validates one file's next content: support path shape, SKILL.md frontmatter or support size,
  * then the security scan. Returns the SKILL.md description. Throws SkillAuthoringError.
  */
-export function validateSkillFile(params: {
+export function validateSkillFileContent(params: {
   skillName: string;
   filePath: string;
   content: string;
@@ -249,7 +249,7 @@ export async function writeSkillRootFile(params: {
 }): Promise<{ description?: string }> {
   const assertCurrent = params.assertCurrent ?? noop;
   const filePath = normalizeSkillFilePath(params.filePath);
-  const validated = validateSkillFile({ ...params, filePath });
+  const validated = validateSkillFileContent({ ...params, filePath });
   assertCurrent();
   await fs.mkdir(params.skillsRoot, { recursive: true });
   assertCurrent();
@@ -306,6 +306,8 @@ export async function commitSkillRootChange<T>(params: {
   /** Host-resolved plugin owner, reported with `source: "plugin"`. */
   pluginId?: string;
   apply: () => Promise<T>;
+  /** Core callers' bookkeeping after discovery refresh; a throw skips the dispatch. */
+  beforeDispatch?: (result: T) => Promise<void>;
   assertCurrent?: () => void;
 }): Promise<T> {
   const assertCurrent = params.assertCurrent ?? noop;
@@ -335,6 +337,7 @@ export async function commitSkillRootChange<T>(params: {
   } catch (error) {
     log.warn(`Skill changed, but discovery refresh failed: ${formatErrorMessage(error)}`);
   }
+  await params.beforeDispatch?.(result);
   if (before || after) {
     assertCurrent();
     await dispatchCommittedSkillChangeBestEffort({

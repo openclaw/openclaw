@@ -17,7 +17,7 @@ import {
   SKILL_FILE,
   SkillAuthoringError,
   splitSkillFrontmatter,
-  validateSkillFile,
+  validateSkillFileContent,
   writeSkillRootFile,
 } from "../lifecycle/skill-authoring.js";
 import { recordWorkshopChange } from "./changes.js";
@@ -103,7 +103,7 @@ export function validateWorkshopSkillFile(
   content: string,
 ): string | undefined {
   try {
-    return validateSkillFile({
+    return validateSkillFileContent({
       skillName: name,
       filePath,
       content,
@@ -236,8 +236,9 @@ export async function mutateSkill(
   const lockKeys = [paths.skillDir, ...alsoLock.map((other) => other.skillDir)];
   return await withSkillLocks(lockKeys, async () => {
     ctx.assertLive?.();
-    // Core refreshes discovery and tells skill_changed observers once the change commits.
-    return await commitSkillRootChange({
+    let change: WorkshopChange | undefined;
+    // Core refreshes discovery, then records the change, then tells skill_changed observers.
+    await commitSkillRootChange({
       config: ctx.config,
       agentId: ctx.agentId,
       skillsRoot: paths.root,
@@ -245,12 +246,14 @@ export async function mutateSkill(
       source: "workshop",
       apply: async () => {
         // Checked at lock time to skip needless work, and again right before each file effect.
-        const { summary, versionId } = await apply({
-          ...paths,
-          assertLive: () => ctx.assertLive?.(),
-        });
+        const applied = await apply({ ...paths, assertLive: () => ctx.assertLive?.() });
         await pruneVersions(paths.versionsDir);
-        const change: WorkshopChange = {
+        return applied;
+      },
+      // The change log is written after discovery refresh, so a failed record never leaves a
+      // committed skill undiscovered.
+      beforeDispatch: async ({ summary, versionId }) => {
+        change = {
           id: randomUUID(),
           agentId: ctx.agentId,
           skillName: name,
@@ -263,9 +266,12 @@ export async function mutateSkill(
           createdAtMs: Date.now(),
         };
         await recordWorkshopChange(change);
-        return change;
       },
     });
+    if (!change) {
+      throw new Error("Skill change finished without a change record.");
+    }
+    return change;
   });
 }
 
