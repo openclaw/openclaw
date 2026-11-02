@@ -322,8 +322,9 @@ export function createPositionRail(props: PositionRailParams) {
           const box = root.getBoundingClientRect();
           const left = box.left + root.clientLeft;
           const top = box.top + root.clientTop;
-          const right = left + root.clientWidth;
-          const bottom = top + root.clientHeight;
+          // Client dimensions round; keep the fractional scrollport edges.
+          const right = box.right - (root.offsetWidth - root.clientWidth - root.clientLeft);
+          const bottom = box.bottom - (root.offsetHeight - root.clientHeight - root.clientTop);
           const offset = root.scrollTop;
           const messages = [...observedMessages].map(
             ([element, message]) => [message, element.getBoundingClientRect()] as const,

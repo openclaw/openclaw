@@ -10,10 +10,10 @@ it("seeds the native observer's zero-area, edge-touching, and horizontal clippin
   const cases = [
     { id: "inside", left: 20, top: 20, width: 20, height: 20, visible: true },
     { id: "zero-inside", left: 40, top: 40, width: 0, height: 0, visible: true },
-    { id: "zero-edge", left: 1200, top: 40, width: 0, height: 0, visible: true },
-    { id: "touch-edge", left: 20, top: 400, width: 20, height: 20, visible: false },
-    { id: "clipped", left: 1201, top: 100, width: 20, height: 20, visible: false },
-    { id: "partial", left: 1199, top: 150, width: 20, height: 20, visible: true },
+    { id: "zero-edge", left: 1200.5, top: 40, width: 0, height: 0, visible: true },
+    { id: "touch-edge", left: 20, top: 400.5, width: 20, height: 20, visible: false },
+    { id: "clipped", left: 1200.75, top: 100, width: 20, height: 20, visible: false },
+    { id: "partial", left: 1200.25, top: 150, width: 20, height: 20, visible: true },
   ];
   const session = new ChatSessionVirtualizerHost(() => {});
   const positions = {
@@ -26,10 +26,10 @@ it("seeds the native observer's zero-area, edge-touching, and horizontal clippin
       data-position-rail-gutter
       style={{
         position: "relative",
-        width: "1200px",
-        height: "400px",
+        width: "1200.5px",
+        height: "400.5px",
         padding: "0",
-        "--chat-position-rail-viewport-height": "400px",
+        "--chat-position-rail-viewport-height": "400.5px",
         "--chat-thread-padding-top": "0px",
         "--chat-thread-padding-bottom": "0px",
       }}
