@@ -48,9 +48,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Vincent Koc approved 1,280,000 B for cold-menu focus ordering (#191106, 2026-11-02).
-  // Includes existing overage; the build-variance allowance remains unchanged.
-  chatBootJsGzipBytes: 1_280_000,
+  // Cached context ring at first composer frame (#190824): 1,278,732 B; main measured 1,278,887 B.
+  // Lead approved the exact raise on 2026-11-02. Retain 64 B build variance.
+  chatBootJsGzipBytes: 1_278_732,
   newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
