@@ -283,17 +283,7 @@ async function executeHookAuthCase(fixture: CliAuthFixture, signal: AbortSignal)
       });
       return { status: response.status, body: await response.json() };
     };
-    // The public API encodes this matching model as the agent default, without an account pin.
-    await gateway.client.request("sessions.create", {
-      agentId: "missing",
-      key: canonicalKey("missing"),
-      model: modelRef,
-    });
-    const defaultSession = (await loadGatewaySessionEntryReadOnlyAsync(canonicalKey("missing")))
-      .entry;
-    expect(defaultSession?.modelOverrideSource).toBe("default");
-    expect(defaultSession?.modelOverride).toBeUndefined();
-    expect(defaultSession?.authProfileOverride).toBeUndefined();
+    // Fresh persistent hooks create their own session before selecting its agent default.
     for (const agentId of ["main", "missing"]) {
       expect(await hasAnyAuthProfileStoreSourceAsync(state.agentDir(agentId))).toBe(false);
       const before = await launches();
