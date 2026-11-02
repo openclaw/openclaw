@@ -1,6 +1,8 @@
 // Synthetic warm-reload attribution only; never records widget or message contents.
 (() => {
-  if (window !== window.top) return;
+  if (window !== window.top) {
+    return;
+  }
   const events = [];
   const frames = new WeakMap();
   let nextFrame = 0;
@@ -11,7 +13,9 @@
   let allWidgetsVisibleMs = null;
   let cachedBoardLayoutMs = null;
   const frameId = (frame) => {
-    if (!frames.has(frame)) frames.set(frame, ++nextFrame);
+    if (!frames.has(frame)) {
+      frames.set(frame, ++nextFrame);
+    }
     return frames.get(frame);
   };
   const record = (kind, detail) => events.push({ atMs: performance.now(), kind, ...detail });
@@ -35,7 +39,9 @@
     const frame = [...document.querySelectorAll("iframe")].find(
       (candidate) => candidate.contentWindow === event.source,
     );
-    if (!frame?.closest("openclaw-board-view")) return;
+    if (!frame?.closest("openclaw-board-view")) {
+      return;
+    }
     const method = event.data?.method ?? event.data?.type;
     if (typeof method === "string" && /sandbox|widget/u.test(method)) {
       record("message", { frame: frameId(frame), method });
@@ -43,7 +49,9 @@
   });
   const observer = new MutationObserver(() => {
     for (const frame of document.querySelectorAll("openclaw-board-view iframe")) {
-      if (frames.has(frame)) continue;
+      if (frames.has(frame)) {
+        continue;
+      }
       record("iframe-created", {
         frame: frameId(frame),
         path: new URL(frame.src, location.href).pathname,
@@ -53,8 +61,10 @@
   });
   observer.observe(document, { childList: true, subtree: true });
   function sample() {
-    const proof = window.__warmReloadProof;
-    if (proof) proof.boardWidgetTimeline = events;
+    const proof = Reflect.get(window, "__warmReloadProof");
+    if (proof) {
+      proof.boardWidgetTimeline = events;
+    }
     if (proof?.stopped) {
       observer.disconnect();
       return;
@@ -101,7 +111,9 @@
       })),
     }));
     const now = performance.now();
-    if (document.querySelector("openclaw-board-view .board-widget")) cachedBoardLayoutMs ??= now;
+    if (document.querySelector("openclaw-board-view .board-widget")) {
+      cachedBoardLayoutMs ??= now;
+    }
     skeletonMs += (now - previousAt) * skeletonCount;
     previousAt = now;
     skeletonCount = skeletons.reduce(

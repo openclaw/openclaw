@@ -218,7 +218,9 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
       value,
       sources: Array.isArray(sources)
         ? sources.flatMap((source: unknown) => {
-            if (!source || typeof source !== "object") return [];
+            if (!source || typeof source !== "object") {
+              return [];
+            }
             const node: unknown = Reflect.get(source, "node");
             const previous: unknown = Reflect.get(source, "previousRect");
             const current: unknown = Reflect.get(source, "currentRect");
@@ -226,8 +228,9 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
               !(node instanceof Element) ||
               !(previous instanceof DOMRectReadOnly) ||
               !(current instanceof DOMRectReadOnly)
-            )
+            ) {
               return [];
+            }
             const parents: string[] = [];
             for (
               let parent = node.parentElement;
