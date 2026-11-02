@@ -37,7 +37,7 @@ import { i18n } from "../../i18n/lib/translate.ts";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { isComposingKeyboardEvent, recordCompositionEnd } from "../../lib/ime.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
@@ -56,6 +56,16 @@ import { SearchSetup, AdvancedSearchSettings } from "./search-setup.tsx";
 registerRouteSubtitlesEnglish();
 
 registerEnglishCatalog(registerSettingsEnglish);
+
+/** Results arrive unvalidated, and the page renders these fields without further checks. */
+function isSearchStatus(value: unknown): value is WebSearchStatusResult {
+  const status = asNullableRecord(value);
+  return Boolean(
+    asNullableRecord(status?.route) &&
+    asNullableRecord(status?.model) &&
+    Array.isArray(status?.providers),
+  );
+}
 
 export function SearchPage() {
   const context = useApplication();
@@ -215,11 +225,11 @@ export function SearchPage() {
         if (!current()) {
           return;
         }
-        const status = await scope.client.request<WebSearchStatusResult>(
-          "webSearch.status",
-          selected,
-        );
+        const status = await scope.client.request<unknown>("webSearch.status", selected);
         if (current()) {
+          if (!isSearchStatus(status)) {
+            throw new UserFacingError(t("searchPage.statusNotReady"));
+          }
           setModels(catalog?.models ?? []);
           setResult(status);
           if (!status.providers.some((provider) => provider.id === setupProvider())) {
