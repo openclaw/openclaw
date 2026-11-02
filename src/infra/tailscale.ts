@@ -62,7 +62,7 @@ function tailnetHostnameFromStatus(parsed: Record<string, unknown>): string {
   throw new Error("Could not determine Tailscale DNS or IP");
 }
 
-export async function findTailscaleBinary(): Promise<string | null> {
+export async function findTailscaleBinary(platform = process.platform): Promise<string | null> {
   const checkBinary = async (filePath: string): Promise<boolean> => {
     if (!filePath || !existsSync(filePath)) {
       return false;
@@ -95,6 +95,9 @@ export async function findTailscaleBinary(): Promise<string | null> {
     return macAppPath;
   }
 
+  if (platform !== "darwin") {
+    return null;
+  }
   try {
     const { stdout } = await runExec("locate", ["Tailscale.app"]);
     const candidates = stdout
