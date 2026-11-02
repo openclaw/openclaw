@@ -254,16 +254,16 @@ async function installCandidatePackage(
           return { result, capabilityConsent };
         }
         const mode = params.mode === "update" || existingNpmPackagePath ? "update" : "install";
-        const install = (installMode: "install" | "update") =>
+        const installNpm = (installMode: "install" | "update") =>
           installPluginFromNpmSpec({
             ...options,
             npmDir,
             mode: installMode,
             trustedSourceLinkedOfficialInstall: candidate.trustedSourceLinkedOfficialInstall,
           });
-        let result = await install(mode);
+        let result = await installNpm(mode);
         if (!result.ok && mode === "install" && /\bplugin already exists:/.test(result.error)) {
-          result = await install("update");
+          result = await installNpm("update");
         }
         retainPluginInstallTransaction(params, result);
         return { result, capabilityConsent };
