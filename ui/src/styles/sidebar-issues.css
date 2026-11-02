@@ -34,6 +34,12 @@
   box-shadow: var(--overlay-shadow);
 }
 
+/* --overlay-border is nearly the panel's own color in light, so the edge disappears
+   there. The sheet keeps its existing top edge; its backdrop already separates it. */
+:root[data-theme-mode="light"] .shell:not(.shell--mobile-nav) .sidebar-issues-panel {
+  border-color: var(--border-strong);
+}
+
 /* Mono themes set wider labels; tighter buttons keep the decision row on one line. */
 :root:is(
     [data-theme="crt"],
