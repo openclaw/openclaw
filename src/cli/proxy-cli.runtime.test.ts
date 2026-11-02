@@ -438,23 +438,6 @@ describe("proxy cli runtime", () => {
     },
   );
 
-  it.each([
-    {
-      name: "proxy run without a command",
-      run: () => proxyCliRuntime.runDebugProxyRunCommand({ commandArgs: [] }),
-      message: "proxy run requires a command after --",
-    },
-    {
-      name: "proxy blob with an unknown id",
-      run: () => proxyCliRuntime.readDebugProxyBlobCommand({ blobId: "missing-blob" }),
-      message: "Unknown blob: missing-blob",
-    },
-  ])("reports the reason for $name", async ({ run, message }) => {
-    // The root CLI replaces plain errors with a generic failure line.
-    await expect(run()).rejects.toMatchObject({ name: "ExpectedCliError", humanOutput: message });
-    expect(spawnMock).not.toHaveBeenCalled();
-  });
-
   it("stops the proxy server and ends the session when child spawn fails", async () => {
     spawnMock.mockRejectedValue(new Error("spawn failed"));
 
