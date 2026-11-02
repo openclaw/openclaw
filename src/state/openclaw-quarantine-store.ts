@@ -2,6 +2,7 @@
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
@@ -20,6 +21,7 @@ import {
   type SqliteFileGeneration,
 } from "../infra/sqlite-file-generation.js";
 import { SqliteSnapshotCleanupError } from "../infra/sqlite-readonly-location-cleanup.js";
+import { SqliteSynchronousPreparationError } from "../infra/sqlite-readonly-worker-context.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import {
   openSqliteReadOnlyDatabase,
@@ -204,7 +206,11 @@ export function prepareOpenClawQuarantineRead(
     .catch((error: unknown) => {
       // Failed preparation remains in the inspection scope. Native guards retain
       // their existing broken-index tolerance without retrying a synchronous copy.
-      if (error instanceof SqliteSnapshotCleanupError || error instanceof AggregateError) {
+      if (
+        error instanceof SqliteSnapshotCleanupError ||
+        error instanceof AggregateError ||
+        error instanceof SqliteSynchronousPreparationError
+      ) {
         throw error;
       }
       signal?.throwIfAborted();
@@ -329,7 +335,10 @@ function resolveQuarantineDecision(
       if (!sameSqliteFileGeneration(verifiedGeneration, currentGeneration)) {
         return undefined;
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof SqliteSynchronousPreparationError) {
+        throw error;
+      }
       return undefined;
     }
   }
@@ -351,6 +360,13 @@ export function readOpenClawDatabaseQuarantineFailure(
   try {
     quarantine = readOpenClawDatabaseQuarantine(pathname, options);
   } catch (error) {
+    if (
+      collectNestedErrorCandidates(error).some(
+        (cause) => cause instanceof SqliteSynchronousPreparationError,
+      )
+    ) {
+      throw error;
+    }
     if (!(error instanceof OpenClawQuarantineReadCleanupError)) {
       return undefined;
     }

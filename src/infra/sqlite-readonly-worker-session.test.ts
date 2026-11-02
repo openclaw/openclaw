@@ -13,6 +13,7 @@ import { createSqliteReadOnlyWorkerSession } from "./sqlite-readonly-worker-sess
 import {
   createSqliteReadOnlyWorkerScope,
   resolveSqliteInspectionSignal,
+  runScopedSqliteInspection,
   createScopedSqliteReadOnlyWorker,
   withSqliteReadOnlyWorkerScope,
 } from "./sqlite-readonly-worker.js";
@@ -354,5 +355,34 @@ it("counts admitted SQLite children in spawn diagnostics", () => {
     setDiagnosticsEnabledForProcess(false);
     emitChildProcessSpawnSample();
     clock.mockRestore();
+  }
+});
+
+it("cancels and joins a nested mode-only Doctor scope's admitted child with its parent", async () => {
+  const controller = new AbortController();
+  const parent = createSqliteReadOnlyWorkerScope({ signal: controller.signal, asyncOnly: true });
+  const nested = parent.run(() => createSqliteReadOnlyWorkerScope({ asyncOnly: true }));
+  const { session, child } = createSession();
+  const result = nested.run(() =>
+    runScopedSqliteInspection(undefined, (signal) =>
+      session.run("/fixture/source.sqlite", { mode: "staging-create", signal }),
+    ),
+  );
+  const observed = result.catch((error: unknown) => error);
+  const cancelled = new Error("parent Doctor cancelled");
+  try {
+    controller.abort(cancelled);
+    await nextTurn();
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+    const closing = nested.close();
+    const closed = observeSettlement(closing);
+    await nextTurn();
+    expect(closed.settled).toBe(false);
+    child.emit("close", null, "SIGKILL");
+    await closing;
+    expect(await observed).toBe(cancelled);
+  } finally {
+    child.emit("close", null, "SIGKILL");
+    await Promise.all([nested.close(), parent.close()]);
   }
 });

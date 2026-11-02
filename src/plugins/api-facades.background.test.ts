@@ -4,6 +4,7 @@ import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worke
 import {
   createSqliteReadOnlyWorkerScope,
   runScopedSqliteInspection,
+  runSqliteReadOnlyWorkerSync,
 } from "../infra/sqlite-readonly-worker.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
@@ -37,10 +38,14 @@ function fixture() {
   return { registry, record, instance, run: api.lifecycle.runInBackgroundContext! };
 }
 
-it.each([false, true])(
-  "owns readers when registration closes before background work settles (alreadyClosed=%s)",
-  async (alreadyClosed) => {
-    const registration = createSqliteReadOnlyWorkerScope();
+it.each([
+  { alreadyClosed: false, asyncOnly: undefined },
+  { alreadyClosed: true, asyncOnly: undefined },
+  { alreadyClosed: false, asyncOnly: true },
+] as const)(
+  "owns readers after registration closes (alreadyClosed=$alreadyClosed, Doctor=$asyncOnly)",
+  async ({ alreadyClosed, asyncOnly }) => {
+    const registration = createSqliteReadOnlyWorkerScope({ asyncOnly });
     const owner = registration.run(fixture);
     const caller = createSqliteReadOnlyWorkerScope();
     const release = createDeferredCore();
@@ -54,6 +59,17 @@ it.each([false, true])(
         owner.run(async () => {
           readers = captureSqliteReadOnlyWorkerScope();
           await release.promise;
+          if (asyncOnly) {
+            expect(() =>
+              runSqliteReadOnlyWorkerSync(
+                "/fixture/background.sqlite",
+                undefined,
+                "file-generation",
+              ),
+            ).toThrowError(
+              expect.objectContaining({ code: "SQLITE_SYNCHRONOUS_PREPARATION_DISALLOWED" }),
+            );
+          }
           return runScopedSqliteInspection(undefined, async (signal) => {
             signal?.throwIfAborted();
             return "background read completed";

@@ -29,6 +29,7 @@ import { tryProcessCwd } from "./safe-cwd.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import type { SqliteReadOnlyOperations } from "./sqlite-readonly-operation-registry.js";
 import {
+  assertSqliteSynchronousPreparationAllowed,
   createSqliteReadOnlyWorkerScope,
   readOnlyWorkerScope,
   SqliteReadOnlyWorkerScopeClosedError,
@@ -142,7 +143,7 @@ export function sqliteInspectionTimeoutError(
 
 export async function withSqliteReadOnlyWorkerScope<T>(
   operation: () => Promise<T>,
-  options?: { signal: AbortSignal; deadlineOwnedByCaller: boolean },
+  options?: Parameters<typeof createSqliteReadOnlyWorkerScope>[0],
 ): Promise<T> {
   if (!options && readOnlyWorkerScope.getStore()?.active) {
     return operation();
@@ -544,6 +545,7 @@ export function runSqliteReadOnlyWorkerSync(
   mode: "sync" | "content-version" | "file-generation" | "update-generation" = "sync",
   expectedSourceIdentity?: DatabaseFileIdentity,
 ): string {
+  assertSqliteSynchronousPreparationAllowed(pathname);
   assertChildRuntimeAvailable();
   const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
   const result = spawnSync(

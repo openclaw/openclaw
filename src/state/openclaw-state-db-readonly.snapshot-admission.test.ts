@@ -682,3 +682,41 @@ it("keeps captured schema authority while selecting current rows", async () => {
   expect(mocks.forbiddenNative).not.toHaveBeenCalled();
   expect(mocks.cleanup).toHaveBeenCalledOnce();
 });
+
+it("refuses synchronous Doctor preparation before starting a lazy producer, while allowing awaited reads", async () => {
+  const stagingRoot = directories.make("doctor-no-sync-staging-");
+  await snapshotWorker.withSqliteReadOnlyWorkerScope(
+    () =>
+      snapshotWorker.withSqliteReadOnlyWorkerScope(
+        () =>
+          withSnapshot(
+            async () => {
+              expect(() => activeSnapshot(options)).toThrowError(
+                expect.objectContaining({
+                  code: "SQLITE_SYNCHRONOUS_PREPARATION_DISALLOWED",
+                }),
+              );
+              expectCalls(0, mocks.start, mocks.capture, mocks.forbiddenNative);
+              for (const mode of [
+                "sync",
+                "file-generation",
+                "update-generation",
+                "content-version",
+              ] as const) {
+                expect(() =>
+                  snapshotWorker.runSqliteReadOnlyWorkerSync(source, stagingRoot, mode),
+                ).toThrowError(
+                  expect.objectContaining({ code: "SQLITE_SYNCHRONOUS_PREPARATION_DISALLOWED" }),
+                );
+              }
+              await expect(readRows()).resolves.toMatchObject({ runs: [] });
+              expect(activeSnapshot(options)?.location).toBe("/fixture/private.sqlite");
+            },
+            { ...options, lazy: true },
+          ),
+        { signal: new AbortController().signal, deadlineOwnedByCaller: false },
+      ),
+    { asyncOnly: true },
+  );
+  expectCalls(1, mocks.start, mocks.cleanup, mocks.closePreparation);
+});

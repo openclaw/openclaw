@@ -20,7 +20,6 @@ describe.skipIf(!fixtures.connection)("database port command PostgreSQL conforma
         const before = fixtures.canonical(source);
         const query = async (sql: string) => (await client.query(sql)).rows;
         const privateSources = new Set<string>();
-        const isolatedReads = vi.spyOn(sourceSnapshots, "prepareSqliteReadOnlyLocationSync");
         const isolatedCopies = vi.spyOn(sourceSnapshots, "prepareSqliteReadOnlyLocation");
         const run = tasks.runDatabasePortTask;
         vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
@@ -58,11 +57,7 @@ describe.skipIf(!fixtures.connection)("database port command PostgreSQL conforma
         }
         expect(fixtures.canonical(source)).toEqual(before);
         expect(privateSources.size).toBeGreaterThan(0);
-        expect(
-          [...isolatedReads.mock.calls, ...isolatedCopies.mock.calls].filter(([file]) =>
-            privateSources.has(file),
-          ),
-        ).toEqual([]);
+        expect(isolatedCopies.mock.calls.filter(([file]) => privateSources.has(file))).toEqual([]);
         expect(await readBackupEngine(source)).toEqual({ engine: "sqlite" });
         expect(JSON.parse(fs.readFileSync(state.configPath, "utf8"))).toMatchObject(
           fixtures.portConfig,

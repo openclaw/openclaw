@@ -1,4 +1,7 @@
-import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
+import {
+  createSqliteReadOnlyWorkerScope,
+  readOnlyWorkerScope,
+} from "../infra/sqlite-readonly-worker-context.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { getBoundLegacyPluginSdkResourceHost } from "./legacy-sdk-resource-host.js";
@@ -18,7 +21,11 @@ export function createPluginBackgroundRunner(
   onDispose: (cleanup: () => void) => void,
 ): <T>(run: () => T) => T {
   const spawnBroker = getSpawnBroker();
-  const readOnlyWorkers = createSqliteReadOnlyWorkerScope();
+  const asyncOnly = readOnlyWorkerScope.getStore()?.asyncOnly;
+  // Retained readers keep Doctor's preparation policy; their module owns cancellation.
+  const readOnlyWorkers = readOnlyWorkerScope.exit(() =>
+    createSqliteReadOnlyWorkerScope({ asyncOnly }),
+  );
   // Close after admitted work and plugin cleanup, never with the loading caller.
   instance.onModuleDispose(() => readOnlyWorkers.close());
   const authority = instance.owner?.record.generationOverlap

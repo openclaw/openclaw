@@ -24,7 +24,7 @@ serveWorkerTasks<DoctorDatabaseBloatResult, DoctorDatabaseBloatInput>(
               env: input.context.environment,
               signal: control.signal,
             }),
-          { signal: control.signal, deadlineOwnedByCaller: true },
+          { signal: control.signal, deadlineOwnedByCaller: true, asyncOnly: true },
         ),
       );
     // Cancellation retains the worker until its snapshot children and private files close.

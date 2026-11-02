@@ -9,6 +9,7 @@ export type SqliteReadOnlyWorkerScope = {
   controller: AbortController;
   pending: Set<Promise<unknown>>;
   deadlineOwnedByCaller: boolean;
+  asyncOnly?: true;
   worker?: SqliteReadOnlyWorkerSession;
   releaseReadWorker?: () => Promise<void>;
 };
@@ -24,21 +25,43 @@ export class SqliteReadOnlyWorkerScopeClosedError extends Error {
   }
 }
 
+export class SqliteSynchronousPreparationError extends Error {
+  readonly code = "SQLITE_SYNCHRONOUS_PREPARATION_DISALLOWED";
+
+  constructor(pathname: string) {
+    super(
+      `Doctor refused synchronous SQLite preparation for ${pathname} because it would block cancellation. This inspection requires an asynchronous preparation path; report this Doctor failure and retry after upgrading OpenClaw.`,
+    );
+    this.name = "SqliteSynchronousPreparationError";
+  }
+}
+
+export function assertSqliteSynchronousPreparationAllowed(pathname: string): void {
+  if (readOnlyWorkerScope.getStore()?.asyncOnly) {
+    throw new SqliteSynchronousPreparationError(pathname);
+  }
+}
+
 /** Reuse child imports until the lifecycle owner closes; reads reacquire source admission. */
 export function createSqliteReadOnlyWorkerScope(options?: {
-  signal: AbortSignal;
-  deadlineOwnedByCaller: boolean;
+  signal?: AbortSignal;
+  deadlineOwnedByCaller?: boolean;
+  asyncOnly?: true;
 }) {
+  const parent = readOnlyWorkerScope.getStore();
+  const asyncOnly = options?.asyncOnly ?? parent?.asyncOnly;
+  const signal = options?.signal ?? (asyncOnly ? parent?.controller.signal : undefined);
   const scope: SqliteReadOnlyWorkerScope = {
     active: true,
     busy: false,
     controller: new AbortController(),
     pending: new Set(),
     deadlineOwnedByCaller: options?.deadlineOwnedByCaller ?? false,
+    asyncOnly,
   };
-  const abort = () => scope.controller.abort(options?.signal.reason);
-  options?.signal.addEventListener("abort", abort, { once: true });
-  if (options?.signal.aborted) {
+  const abort = () => scope.controller.abort(signal?.reason);
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) {
     abort();
   }
   let closing: Promise<void> | undefined;
@@ -48,7 +71,7 @@ export function createSqliteReadOnlyWorkerScope(options?: {
     },
     close(): Promise<void> {
       closing ??= (async () => {
-        options?.signal.removeEventListener("abort", abort);
+        signal?.removeEventListener("abort", abort);
         scope.active = false;
         scope.controller.abort(new SqliteReadOnlyWorkerScopeClosedError());
         materializeErrorStack(scope.controller.signal.reason);

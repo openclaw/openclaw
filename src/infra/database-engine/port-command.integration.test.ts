@@ -24,6 +24,7 @@ import * as disk from "../disk-space.js";
 import { acquireGatewayLock } from "../gateway-lock.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../runtime-worker-url.js";
+import * as sourceSnapshots from "../sqlite-snapshot-source.js";
 import * as snapshots from "../sqlite-snapshot.js";
 import {
   canonical,
@@ -110,6 +111,43 @@ async function loseOneCommittedReply(original: string) {
 }
 
 describe("database port command custody and inspection", () => {
+  it("cleans an acquired inspection image when cancellation prevents consuming it", async () => {
+    await fixture(async ({ source }) => {
+      const controller = new AbortController();
+      const cancelled = new Error("port inspection cancelled after snapshot acquisition");
+      const family = () =>
+        ["", "-wal", "-shm", "-journal"].map((suffix) =>
+          fs.existsSync(source + suffix) ? fs.readFileSync(source + suffix) : null,
+        );
+      const before = family();
+      const images: Awaited<ReturnType<typeof sourceSnapshots.prepareSqliteReadOnlyLocation>>[] =
+        [];
+      const prepare = sourceSnapshots.prepareSqliteReadOnlyLocation;
+      vi.spyOn(sourceSnapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
+        async (...args) => {
+          const image = await prepare(...args);
+          images.push(image);
+          expect(fs.existsSync(image.location)).toBe(true);
+          controller.abort(cancelled);
+          return image;
+        },
+      );
+      await expect(
+        tasks.runDatabasePortTask(
+          { operation: "inspect", sourcePath: source, config: {}, to: "sqlite" },
+          { assertCurrent() {}, signal: controller.signal },
+        ),
+      ).rejects.toBe(cancelled);
+      expect(images).toHaveLength(1);
+      for (const image of images) {
+        assert(image.cleanupRoot);
+        expect(fs.existsSync(image.location)).toBe(false);
+        expect(fs.existsSync(image.cleanupRoot)).toBe(false);
+      }
+      expect(family()).toEqual(before);
+    });
+  });
+
   it.each(["canonical", "symlinked ancestor"])(
     "takes no persistent action for a dry run through a %s state path, including disabled workboard stores",
     async (statePath) => {

@@ -223,7 +223,7 @@ serveWorkerTasks<DoctorDatabaseEngineInspection, DoctorDatabaseEngineInspectionI
             withSqliteReadOnlyWorkerScope(
               () =>
                 selection ? withDatabaseEngineSelection(selection, inspectState) : inspectState(),
-              { signal: control.signal, deadlineOwnedByCaller: true },
+              { signal: control.signal, deadlineOwnedByCaller: true, asyncOnly: true },
             ),
           { agentDatabases: true },
         ),

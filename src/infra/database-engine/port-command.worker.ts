@@ -9,7 +9,9 @@ import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { getPostgresPool } from "../postgres-sync/pool.js";
 import { runtimeProcessEntrypoints } from "../runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
-import { prepareSqliteReadOnlyLocationSync } from "../sqlite-snapshot-source.js";
+import { withPreparedSqliteSnapshot } from "../sqlite-readonly-location-cleanup.js";
+import { resolveSqliteInspectionSignal } from "../sqlite-readonly-worker.js";
+import { prepareSqliteReadOnlyLocation } from "../sqlite-snapshot-source.js";
 import { createSqliteWalCheckpoint } from "../sqlite-wal-checkpoint.js";
 import { WorkerTaskError } from "../worker-task-pool.js";
 import { resolveDatabaseEngineInput } from "./config.js";
@@ -127,13 +129,16 @@ async function inspectSqliteImage(
   };
 }
 async function inspectSqlite(sourcePath: string, descriptor: PortDescriptor) {
-  const prepared = prepareSqliteReadOnlyLocationSync(sourcePath);
-  try {
-    using db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
+  const signal = resolveSqliteInspectionSignal();
+  const prepared = await prepareSqliteReadOnlyLocation(sourcePath, {
+    preserveSourceArtifacts: true,
+    signal,
+  });
+  return withPreparedSqliteSnapshot(prepared, async (location) => {
+    signal?.throwIfAborted();
+    using db = openNodeSqliteDatabase(location, { readOnly: true });
     return await inspectSqliteImage(db, descriptor);
-  } finally {
-    prepared.cleanup();
-  }
+  });
 }
 async function inspectPostgres(
   db: import("pg").Client,
@@ -362,12 +367,17 @@ export async function executeDatabasePortTask(
   const { loadDatabasePortDescriptor } = await import("./port-provider-descriptor.js");
   const source = await (async () => {
     // Published sources still need process isolation; private phase inputs already have it.
+    const signal = resolveSqliteInspectionSignal();
     const prepared =
       task.operation === "migrate" || task.operation === "stage"
         ? undefined
-        : prepareSqliteReadOnlyLocationSync(task.sourcePath);
-    const imagePath = prepared?.location ?? task.sourcePath;
-    try {
+        : await prepareSqliteReadOnlyLocation(task.sourcePath, {
+            preserveSourceArtifacts: true,
+            signal,
+          });
+    const inspectSource = async (imagePath: string) => {
+      signal?.throwIfAborted();
+      assertCurrent();
       const engine = readBackupEngineImage(imagePath, task.sourcePath);
       if (engine.engine === "postgres") {
         if (task.operation === "migrate" || task.operation === "stage") {
@@ -391,9 +401,10 @@ export async function executeDatabasePortTask(
         task.operation === "inspect" || task.operation === "migrate",
       );
       return { engine, descriptor, facts };
-    } finally {
-      prepared?.cleanup();
-    }
+    };
+    return prepared
+      ? withPreparedSqliteSnapshot(prepared, inspectSource)
+      : inspectSource(task.sourcePath);
   })();
   const { engine, descriptor } = source;
   const descriptorHash = createHash("sha256").update(JSON.stringify(descriptor)).digest("hex");

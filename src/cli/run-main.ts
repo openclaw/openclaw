@@ -625,6 +625,25 @@ export async function runCli(
     return;
   }
   const builtInMachineOutput = resolveBuiltInMachineOutput(originalInvocation);
+  const invocation = resolveCliArgvInvocation(rewriteUpdateFlagArgv(originalArgv));
+  const withDoctorInspections = async <T>(operation: () => Promise<T>): Promise<T> => {
+    if (invocation.hasHelpOrVersion || invocation.primary !== "doctor") {
+      return operation();
+    }
+    const [
+      { withSqliteReadOnlyWorkerScope },
+      { resolveCommandProcessSignal },
+      { getAsyncWorkSignal },
+    ] = await Promise.all([
+      import("../infra/sqlite-readonly-worker.js"),
+      import("../process/exec-spawn.js"),
+      import("../shared/async-work-scope.js"),
+    ]);
+    return withSqliteReadOnlyWorkerScope(operation, {
+      signal: resolveCommandProcessSignal(getAsyncWorkSignal()),
+      asyncOnly: true,
+    });
+  };
   const invoke = () =>
     withConsoleLogsRoutedToStderrForJson(
       originalArgv,
@@ -647,7 +666,11 @@ export async function runCli(
                 }),
               );
             const resources = harnessCleanup?.pluginResources;
-            return await (resources ? resources.run(invokeCommand) : invokeCommand());
+            // The executable's cancellation owner exists only after resources.run enters it.
+            const invokeAdmittedCommand = () => withDoctorInspections(invokeCommand);
+            return await (resources
+              ? resources.run(invokeAdmittedCommand)
+              : invokeAdmittedCommand());
           } catch (error) {
             // Selection and Commander preactions run before the Gateway action's failure boundary.
             if (isGatewayRunInvocationArgv(originalArgv) && !originalInvocation.hasHelpOrVersion) {
@@ -686,11 +709,11 @@ export async function runCli(
         retainRoutingUntilProcessExit: options.retainConsoleRoutingUntilProcessExit,
       },
     );
-  const invocation = resolveCliArgvInvocation(rewriteUpdateFlagArgv(originalArgv));
-  return !invocation.hasHelpOrVersion &&
-    ["update", "doctor", "proxy"].includes(invocation.primary ?? "")
-    ? await withDeferredDebugProxyCapture(invoke)
-    : await invoke();
+  return withDoctorInspections(() =>
+    !invocation.hasHelpOrVersion && ["update", "doctor", "proxy"].includes(invocation.primary ?? "")
+      ? withDeferredDebugProxyCapture(invoke)
+      : invoke(),
+  );
 }
 
 async function runCliWithPreparedOutputMode(

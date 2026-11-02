@@ -18,6 +18,7 @@ import type {
   RetainedSqliteSnapshotPreparation,
   SqlitePrivateSnapshotFamily,
 } from "../infra/sqlite-readonly-location.types.js";
+import { assertSqliteSynchronousPreparationAllowed } from "../infra/sqlite-readonly-worker-context.js";
 import {
   readSqliteInspectionBudget,
   sqliteInspectionTimeoutError,
@@ -225,6 +226,9 @@ export async function prepareOpenClawStateReadSnapshotSource({
     },
     readSource: (): StateReadSnapshotSource | undefined => {
       if (lazy) {
+        if (!prepared && existingPathOrUndefined(pathname)) {
+          assertSqliteSynchronousPreparationAllowed(pathname);
+        }
         const pending = startLazySource();
         if (pending) {
           const pause = new Int32Array(new SharedArrayBuffer(4));

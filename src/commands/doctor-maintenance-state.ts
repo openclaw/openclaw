@@ -188,6 +188,7 @@ export async function createDoctorMaintenanceState(options: {
       inspections = createSqliteReadOnlyWorkerScope({
         signal: options.signal,
         deadlineOwnedByCaller: false,
+        asyncOnly: true,
       });
     } catch (error) {
       await acquired.release();

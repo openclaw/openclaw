@@ -61,13 +61,13 @@ export async function runDoctorConfigPreflight(
   await using snapshots = createConfigPreflightSnapshotReader();
   let result: DoctorConfigPreflightResult;
   // Reuse child imports for this state operation; every read still acquires fresh admission.
-  if (
-    options.migrateState !== false &&
-    (options.doctorOnlyStateMigrations === true || options.automaticHeartbeatRepair)
-  ) {
+  const doctor =
+    options.invocationPurpose === "doctor" || options.doctorOnlyStateMigrations === true;
+  if (doctor || (options.migrateState !== false && options.automaticHeartbeatRepair)) {
     const { withSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");
-    result = await withSqliteReadOnlyWorkerScope(() =>
-      runDoctorConfigPreflightOperation(options, snapshots),
+    result = await withSqliteReadOnlyWorkerScope(
+      () => runDoctorConfigPreflightOperation(options, snapshots),
+      doctor ? { asyncOnly: true } : undefined,
     );
   } else {
     result = await runDoctorConfigPreflightOperation(options, snapshots);

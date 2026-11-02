@@ -119,7 +119,7 @@ export async function runDoctorLintCliInProcess(
             ),
           { agentDatabases: true },
         ),
-      signal ? { signal, deadlineOwnedByCaller: false } : undefined,
+      { signal, deadlineOwnedByCaller: false, asyncOnly: true },
     );
     if (!reported) {
       report(execution);
@@ -149,7 +149,7 @@ export async function collectDoctorFindings(
         () => prepareDoctorLintExecution(runtime, { severityMin: "info" }),
         { agentDatabases: true },
       ),
-    signal ? { signal, deadlineOwnedByCaller: false } : undefined,
+    { signal, deadlineOwnedByCaller: false, asyncOnly: true },
   );
   return execution.findings;
 }
