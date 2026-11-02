@@ -117,22 +117,27 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main1940af245311: strengthen three Telegram rich-block splitter oracles.
-The preformatted surrogate check can pass after content loss, the link check
-accepts damaged URL suffixes, and the table check constrains only output budgets.
+Pinned main1940af245311: strengthen three Telegram rich-block split content
+oracles. Truncating preformatted pieces, shortening URL suffixes, or dropping the
+last table row each passes its corresponding original case. Each same fault
+fails only its named repaired case. Unselected cases in these controls are
+skipped; they are not counted as passing proof. The actual splitter was restored
+byte-for-byte after every control.
 
-Preserve all 23 physical declarations/33 cases in the selected suite and the
-three companion suites' 31 physical declarations/51 cases. Keep every existing
-input and assertion. Add exact preformatted text reconstruction, complete link
-targets, and ordered table-cell content. No production, helper, export,
-declaration, assertion or input-row removal.
+The untouched official baseline and clean candidate each pass all 84 cases
+across four suites on their normal extension-telegram owner. The repaired cases
+require reconstructed preformatted text, complete URL targets, and exact ordered
+table rows. Existing surrogate, nonempty-prefix and budget assertions remain.
 
-Selected source, determining owners/supports, actual callers, siblings, history,
-instructions, static routing and dependency inputs are qualified at the frozen
-base. Untouched official baseline, independent actual-owner fault controls,
-exact restoration, candidate, focused checks, fresh review, published proof
-and CI remain pending. These local formatting contracts provide no live
-Gateway, Telegram transport or client-rendering proof.
+All 54 physical declarations/84 cases, original assertions and input rows
+remain. Twelve additional test lines have an exact twelve-line allocation; production
+and the shared test-line scalar are unchanged. Typed lint, scoped extensions
+test types, format, ledger MDX and whitespace pass. No declaration, existing
+assertion, row, helper or export retirement; removal scans do not apply.
+
+Fresh review, final published proof and CI remain pending. These local rich-block
+contracts provide no live Gateway, Telegram transport, Bot API or client
+rendering proof.
 
 ## Completed source review
 
