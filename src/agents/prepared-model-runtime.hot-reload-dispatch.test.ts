@@ -6,7 +6,7 @@ import {
 } from "./prepared-model-runtime.test-harness.js";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { assert, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { dispatchLowLevelChannelReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
@@ -17,12 +17,24 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
+import {
+  closeTestConfigReloaders,
+  createReloaderHarness,
+  makeSnapshot,
+  makeWrite,
+} from "../gateway/config-reload.test-support.js";
 import { readPreparedGatewayModelCatalogOwnerSnapshot as readCatalog } from "../gateway/server-model-catalog.js";
+import { createPluginReloadRecoveryFixture } from "../gateway/server-plugin-reload.recovery.test-support.js";
 import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
+import { withPluginLifecycleLeaseAsync } from "../plugins/plugin-lifecycle-lease.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -101,6 +113,9 @@ function createPluginReloadHandler(
   requestRecoveryRestart?: Parameters<
     typeof createGatewayReloadHandlers
   >[0]["requestRecoveryRestart"],
+  getPluginRegistry: Parameters<
+    typeof createGatewayReloadHandlers
+  >[0]["getPluginRegistry"] = createEmptyPluginRegistry,
 ) {
   type ReloadParams = Parameters<typeof createGatewayReloadHandlers>[0];
   let reloadState: ReturnType<ReloadParams["getState"]> = {
@@ -124,7 +139,7 @@ function createPluginReloadHandler(
     setState: (next) => {
       reloadState = next;
     },
-    getPluginRegistry: createEmptyPluginRegistry,
+    getPluginRegistry,
     startChannel: vi.fn(async () => new Map()),
     stopChannel: vi.fn(async () => {}),
     releaseChannelRouteHandoffs: vi.fn(),
@@ -780,6 +795,133 @@ it.each(["success", "activation failure"] as const)(
       ]);
     } finally {
       handler.stopRestartRetries();
+    }
+  },
+);
+
+it.for(["config write", "plugins.reload"] as const)(
+  "recovers failed reply publication after %s without waiting on its own lifecycle lease",
+  async (entrypoint, { signal }) => {
+    const events: string[] = [];
+    const restart = createDeferred();
+    const cleanups: Array<() => Promise<void>> = [];
+    const initialConfig: OpenClawConfig = {
+      plugins: { allow: ["first", "sibling"], entries: { first: { config: { revision: 0 } } } },
+    };
+    let diskConfig = initialConfig;
+    let reloadParams: Parameters<PluginReload>[0] | undefined;
+    let failure: unknown;
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    const plugins = await createPluginReloadRecoveryFixture(
+      { cleanups, logMocks: logger },
+      {
+        config: initialConfig,
+        abortOnCandidateStart: false,
+        initialStop: async () => {
+          throw new Error("Synthetic plugin service refuses cleanup");
+        },
+        prepareConfigEffects: (replacement) => {
+          assert(reloadParams);
+          return reloadParams.prepareConfigEffects(replacement);
+        },
+        assertInvokerOwned: () => reloadParams?.assertInvokerOwned?.(),
+      },
+    );
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(
+      () => plugins.registryOwner.registry,
+    );
+    const emitRestart = vi.fn(() => {
+      events.push("restart emitted");
+      restart.resolve();
+      return { status: "emitted" as const };
+    });
+    const handler = createPluginReloadHandler(
+      async (params) => {
+        reloadParams = params;
+        return plugins.reload(params.nextConfig, ["first"], [...params.changedPaths], {
+          checkpoint: params.checkpoint,
+          isAborted: params.isAborted,
+        });
+      },
+      emitRestart,
+      () => plugins.registryOwner.registry,
+    );
+    const configOwner = createReloaderHarness(async () => makeSnapshot({ config: diskConfig }), {
+      initialConfig,
+      scheduler: createTestGatewayScheduler(),
+      onHotReload: async (plan, config, ownership) => {
+        try {
+          return await handler.applyHotReload(plan, config, {
+            sourceConfig: config,
+            isCurrent: ownership.isCurrent,
+            checkpoint: ownership.checkpoint,
+            assertInvokerOwned: ownership.assertInvokerOwned,
+            prepareRestartRuntimeConfig: () =>
+              ownership.withRestartPreparation(async (current) => {
+                await current.checkpoint();
+                events.push("restart prepared");
+                return config;
+              }),
+            publish: async (commit) => {
+              await commit();
+              ownership.markRuntimeCommitted(config, plan);
+            },
+          });
+        } catch (error) {
+          failure = error;
+          events.push("operation failed");
+          // The real request/watcher still holds its lease; restart must not await it here.
+          expect(emitRestart).not.toHaveBeenCalled();
+          throw error;
+        }
+      },
+    });
+    try {
+      await publish(initialConfig);
+      await expect(loadDispatch({ agentId: "default" })).resolves.toMatchObject({
+        config: initialConfig,
+      });
+      await configOwner.reloader.ready;
+      if (entrypoint === "plugins.reload") {
+        await expect(
+          withPluginLifecycleLeaseAsync({}, () =>
+            configOwner.reloader.applyPluginLifecycleChange({
+              config: diskConfig,
+              pluginIds: ["first"],
+              reason: "reload",
+            }),
+          ),
+        ).rejects.toBeInstanceOf(PluginRuntimeApplicationError);
+      } else {
+        diskConfig = {
+          plugins: { ...initialConfig.plugins, entries: { first: { config: { revision: 1 } } } },
+        };
+        const applied = createRuntimeConfigWriteApplication();
+        configOwner.emitWrite(
+          attachRuntimeConfigWriteApplication(makeWrite(diskConfig, "changed"), applied),
+        );
+        await expect(applied.result).resolves.toBe("failed");
+      }
+      expect(failure).toMatchObject({ details: { phase: "drain", committed: false } });
+      expect(String(failure)).toContain(
+        "Plugin runtime rollback could not republish the model runtime",
+      );
+      // This synchronous observation fails on the base, before waiting for absent restart work.
+      expect(handler.hasOutstandingGatewayRestart() || emitRestart.mock.calls.length === 1).toBe(
+        true,
+      );
+      await withinTest(restart.promise, signal);
+      expect(events).toEqual(["operation failed", "restart prepared", "restart emitted"]);
+      expect(emitRestart).toHaveBeenCalledOnce();
+      expect(configOwner.onConfigApplied).not.toHaveBeenCalled();
+    } finally {
+      handler.stopRestartRetries();
+      await closeTestConfigReloaders();
+      configOwner.watcher.restore();
+      await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
+      for (const cleanup of cleanups.toReversed()) {
+        await cleanup();
+      }
     }
   },
 );
