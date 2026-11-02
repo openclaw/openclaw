@@ -355,6 +355,7 @@ Heartbeat configuration is strict: only the fields listed above are accepted. Ac
 
   </Accordion>
   <Accordion title="Visibility and skip behavior">
+    - An ordinary message sent to a shared chat session during a heartbeat waits for that heartbeat to finish. Heartbeats suppress intermediate chat prompts. If a tool needs to ask a question in chat, the Gateway reports that it could not deliver the prompt so the tool can finish without waiting for an answer.
     - If the heartbeat turn fails before the model can reply, the failure notice names the reason whenever OpenClaw itself refused the run. One example is a session runtime that is still busy in another runner. Raw provider or runtime errors stay behind the verbose failure-detail setting (`/verbose on` or `/verbose full`), as in normal chats.
     - If `showOk`, `showAlerts`, and `useIndicator` are all disabled, the run is skipped up front as `reason=alerts-disabled`.
     - If only alert delivery is disabled, OpenClaw can still run the heartbeat, update due-task timestamps, restore the session idle timestamp, and suppress the outward alert payload.

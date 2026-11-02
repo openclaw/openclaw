@@ -35,7 +35,10 @@ import {
 import { resetInboundDedupe } from "./inbound-dedupe.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
-import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
+import {
+  REPLY_OPERATION_RUN_STATE,
+  resolveReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -124,6 +127,35 @@ it("delivers approval-unavailable notices when verbose tool progress is disabled
 
   expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
   expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(finalReply);
+});
+
+it("reports cancelled delivery for a heartbeat question while ordinary tool output stays silent", async () => {
+  const dispatcher = createDispatcher();
+  let questionFailure: unknown;
+  await dispatchReplyFromConfig({
+    ctx: buildTestCtx({ Provider: "slack", ChatType: "direct" }),
+    cfg: automaticDirectReplyConfig,
+    dispatcher,
+    replyOptions: {
+      isHeartbeat: true,
+      [REPLY_OPERATION_RUN_STATE]: { heartbeat: { prepareReply: async () => ({}) } },
+    },
+    replyResolver: async (_ctx, opts) => {
+      const send = requireToolResultHandler(opts?.onToolResult);
+      await send({ text: "Read complete" });
+      try {
+        await send({
+          text: "Continue?",
+          channelData: { askUser: { questionId: "ask_heartbeat" } },
+        });
+      } catch (error) {
+        questionFailure = error;
+      }
+      return undefined;
+    },
+  });
+  expect(questionFailure).toMatchObject({ outcome: "cancelled" });
+  expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
 });
 
 function createQuestionDispatch(name: string) {

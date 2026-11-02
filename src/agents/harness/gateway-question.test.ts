@@ -48,6 +48,19 @@ describe("gateway harness questions", () => {
       cleanup();
     }),
   );
+  it("cancels a heartbeat secret question without consuming the next message as its answer", async () => {
+    const sessionKey = "agent:main:slack:direct:heartbeat-secret";
+    const request = runAgentHarnessGatewayQuestion({
+      questions: [{ ...questions[0], isSecret: true }],
+      sessionKey,
+      timeoutMs: 60_000,
+      delivery: { trigger: "heartbeat", onBlockReply: vi.fn() },
+    });
+    const claimed = await claimPendingAgentQuestionAnswer({ sessionKey, text: "next message" });
+    expect(claimed).toBe(false);
+    await expect(request).resolves.toEqual({ status: "cancelled" });
+  });
+
   it.each([
     "committed",
     "failed",
