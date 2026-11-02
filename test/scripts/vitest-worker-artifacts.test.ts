@@ -1597,6 +1597,7 @@ export default class {
           export const preservedModuleBuildAssets = [];
           `,
         );
+        // Retain the declaration inputs exercised by the integrity assertions below.
         const declarations = "scripts/lib/vitest-worker-declarations.mts";
         fs.renameSync(
           path.join(fixture, declarations),
@@ -1608,6 +1609,8 @@ export default class {
           `export * from "./vitest-worker-declarations.original.mts";
           export const vitestWorkerDeclarationEntries = {
             "infra/runtime-process-entrypoints": "src/infra/runtime-process-entrypoints.ts",
+            "plugins/runtime-retention-entrypoint.test-support": "src/plugins/runtime-retention-entrypoint.test-support.ts",
+            "tui/tui-pty-runtime-test-support": "src/tui/tui-pty-runtime-test-support.ts",
           };
           `,
         );
