@@ -17,6 +17,7 @@ import { guardSessionManager } from "../../src/agents/session-tool-result-guard-
 import { SessionManager } from "../../src/agents/sessions/session-manager.js";
 import type { Message } from "../../src/llm/types.js";
 import { isDeeplyFrozenPlainData } from "../../src/shared/immutable-data.js";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 
 const { values } = parseArgs({
   options: {
@@ -125,16 +126,9 @@ if (inspector) {
   });
 }
 const gc: { kind: number; ms: number }[] = [];
-const observer = new PerformanceObserver((list) => {
-  for (const entry of list.getEntries()) {
-    if (entry.startTime >= started && entry.startTime < ended) {
-      gc.push({
-        kind: (entry as typeof entry & { detail: { kind: number } }).detail.kind,
-        ms: entry.duration,
-      });
-    }
-  }
-});
+const observer = new PerformanceObserver((list) =>
+  recordGcCollections(list.getEntries(), gc, started, ended),
+);
 observer.observe({ entryTypes: ["gc"] });
 const hostLoad = loadavg();
 const cpu = process.cpuUsage();

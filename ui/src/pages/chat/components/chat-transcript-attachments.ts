@@ -1,3 +1,4 @@
+import { foldSearchCase } from "../../../../../src/shared/search-case.js";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import type { readChatTranscriptAttachmentSource } from "../chat-history-state.ts";
 import { resolveCappedMessageId } from "../chat-message-recovery.ts";
@@ -42,6 +43,13 @@ export function projectTranscriptAttachments(
         ...options,
         sessionKey: source.sessionKey,
         connectionEpoch: source.connectionEpoch,
+        onFindWorkspaceFile:
+          normalized.senderSession &&
+          (normalized.senderSession.sessionKey !== source.sessionKey ||
+            (normalized.senderSession.agentId &&
+              normalized.senderSession.agentId !== options.agentId))
+            ? undefined
+            : options.onFindWorkspaceFile,
       },
       media,
     );
@@ -94,10 +102,9 @@ export function projectTranscriptAttachments(
 }
 
 export function transcriptAttachmentMatches(entry: TranscriptAttachmentEntry, query: string) {
-  return entry.label
-    .toLowerCase()
+  return foldSearchCase(entry.label)
     .normalize("NFC")
-    .includes(query.trim().toLowerCase().normalize("NFC"));
+    .includes(foldSearchCase(query.trim()).normalize("NFC"));
 }
 
 export function hasTranscriptAttachments(source: TranscriptAttachments | undefined, query = "") {

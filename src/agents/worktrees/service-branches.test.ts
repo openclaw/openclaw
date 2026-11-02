@@ -73,6 +73,8 @@ describe("ManagedWorktreeService branch discovery", () => {
 
   beforeEach(async () => {
     root = tempDirs.make("openclaw-worktree-branches-", await fs.realpath(os.tmpdir()));
+    // Inherited command-line config disables the worker's filesystem cache admission.
+    vi.stubEnv("GIT_CONFIG_PARAMETERS", undefined);
     vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
     vi.stubEnv("GIT_CONFIG_GLOBAL", path.join(root, "global.gitconfig"));
     const template = path.join(root, "git-template");
@@ -187,6 +189,42 @@ describe("ManagedWorktreeService branch discovery", () => {
         }
       } finally {
         logs.cleanup();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "checks linked reservations without rejected missing-file reads (unreadable: %s)",
+    async (unreadable) => {
+      const localHead = await git(repo, "rev-parse", "HEAD");
+      const remoteHead = await createChildCommit();
+      await createRemote(remoteHead);
+      const linked = path.join(root, "idle-linked");
+      await git(repo, "worktree", "add", "--detach", linked);
+      const gitDir = await git(linked, "rev-parse", "--absolute-git-dir");
+      if (unreadable) {
+        // A directory produces EISDIR, which must not be treated as an absent reservation.
+        await fs.mkdir(path.join(gitDir, "BISECT_START"));
+      }
+      const reads = vi.spyOn(fs, "readFile");
+      const selected = await resolveWorktreeBase(
+        repo,
+        undefined,
+        undefined,
+        undefined,
+        "fast-forward",
+      );
+      expect(selected.commit).toBe(remoteHead);
+      expect(await git(repo, "rev-parse", "main")).toBe(unreadable ? localHead : remoteHead);
+      if (unreadable) {
+        expect(selected.warning).toContain("Git worktree operation state could not be checked");
+      } else {
+        expect(selected.warning).toBeUndefined();
+        expect(
+          reads.mock.calls.filter(
+            ([file]) => typeof file === "string" && file.startsWith(`${gitDir}${path.sep}`),
+          ),
+        ).toHaveLength(0);
       }
     },
   );

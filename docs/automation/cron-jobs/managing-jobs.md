@@ -159,7 +159,9 @@ openclaw automations create "0 6 * * *" "Check ops queue" --name "Ops sweep" --s
 openclaw automations edit <jobId> --clear-agent
 ```
 
-Archiving a session (Control UI, or `sessions.patch { key, archived: true, expectedSessionId }` using the durable ID from `sessions.list`) disables every enabled automation job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session requires the same observed identity and does not re-enable those jobs; use `openclaw automations enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar.
+Conversation automation views use the conversation's physical key and selected agent. With `session.scope: "global"`, jobs targeting `session:global` or that agent's main-session alias belong to its `global` conversation. An explicitly agent-qualified named target remains separate, and another agent's `global` conversation keeps its own jobs.
+
+Archiving a session (Control UI, or `sessions.patch { key, archived: true, expectedSessionId }` using the durable ID from `sessions.list`) disables every enabled automation job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session requires the same observed identity and does not re-enable those jobs; use `openclaw automations enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar. An agent's main session, including `global`, cannot be archived.
 
 Before archiving or deleting a session with an enabled bound job, the Control UI asks for confirmation. The dialog names the jobs that will pause and offers **Archive anyway** or **Delete anyway**; the warning appears even if you turned off delete confirmations. Archiving a nested session tree lists the jobs bound to any session in the tree. Sessions without a bound job archive and delete as before. The browser console records each warning as `[session-automation-confirm] <archive|delete> shown`, followed by `confirmed` or `cancelled`.
 
@@ -176,6 +178,20 @@ Run history keeps payload execution in `status` (`ok`, `error`, or `skipped`) an
 Once a successful one-shot consumes its scheduled occurrence, its finished event and run history omit `nextRunAtMs`, including when the job auto-deletes. An early manual run that preserves a future occurrence still reports that occurrence.
 
 Control UI run history shows `OK · Error` or `OK · Unknown` when execution succeeded but whole-run completion failed or remains unknown. Its status filter still selects the execution status.
+
+A scheduled run can use the automations tool with `action: "runs"`, its own
+`jobId`, and optional `limit`, `offset`, or `runId` to read its job's recorded
+outcomes. This includes `deliveryStatus`, the recorded channel and target, and
+`delivery.receipts` with message IDs for confirmed scheduler announcements.
+Older records and providers that did not return message IDs may have only the
+status and target. The current run's automatic announcement happens after the
+agent finishes, so its receipt becomes available to later runs.
+
+This access follows the job identity bound to the active scheduled admission,
+including a scheduler-admitted restart continuation. It does not grant another
+job's history, channel history, or transcript access. A different delivery account
+does not change the job's identity. An admitted paced job or one-shot session
+continuation also retains `next_check`; a session key alone cannot restore it.
 
 Run-history search matches summaries, task names, and execution or delivery errors. You can search the delivery error shown on a run even when its execution status is `ok`.
 

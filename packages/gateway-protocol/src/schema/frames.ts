@@ -102,6 +102,8 @@ export const HelloOkSchema = closedObject({
   server: closedObject({
     version: NonEmptyString,
     buildId: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })),
+    commit: Type.Optional(Type.String({ pattern: "^[0-9a-f]{7,40}$" })),
+    builtAt: Type.Optional(NonEmptyString),
     bootId: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })),
     controlUiBuildSource: Type.Optional(stringLiteralUnion(["bundled", "configured"])),
     connId: NonEmptyString,
@@ -114,6 +116,8 @@ export const HelloOkSchema = closedObject({
   snapshot: SnapshotSchema,
   // Public Control UI origin and mount path, independent of local SSH tunnels.
   controlUiUrl: Type.Optional(NonEmptyString),
+  // Additive: Control UI mount path on this listener, for clients that reach it by host and port.
+  controlUiBasePath: Type.Optional(NonEmptyString),
   // Additive: plugin-declared Control UI tabs (surface "tab" descriptors).
   controlUiTabs: Type.Optional(Type.Array(ControlUiPluginTabSchema)),
   // Additive: active plugin widget kinds whose renderers ship in the trusted UI bundle.

@@ -15,7 +15,7 @@ import {
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
-it("reobserves a retained row after its detached observer receipt retires the cache", async () => {
+it("retains row measurements across hidden and detached observer receipts", async () => {
   const viewport = document.body.appendChild(document.createElement("div"));
   const row = viewport.appendChild(document.createElement("div"));
   row.dataset.index = "0";
@@ -61,6 +61,18 @@ it("reobserves a retained row after its detached observer receipt retires the ca
     observer.emitTarget(row, 800, 160);
   }
   expect(virtualizer.itemSizeCache.get("retained")).toBe(160);
+
+  // The virtualizer applies ResizeObserver receipts in a later animation frame;
+  // a hidden measurement can arrive after the pane is visible again.
+  Object.defineProperty(viewport, "clientHeight", { value: 300 });
+  for (const observer of resizeObservers) {
+    observer.emitTarget(row, 0, 0);
+  }
+  expect(virtualizer.itemSizeCache.get("retained")).toBe(160);
+  for (const observer of resizeObservers) {
+    observer.emitTarget(row, 800, 0);
+  }
+  expect(virtualizer.itemSizeCache.get("retained")).toBe(0);
 
   row.remove();
   bind();

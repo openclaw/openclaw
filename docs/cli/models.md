@@ -375,7 +375,7 @@ openclaw models accounts list --timeout 45000 --json
 
 `models auth list` escapes control characters in terminal output. Its `--json` output preserves the original field values.
 
-These commands manage **System / agent** credentials, not personal Gateway accounts. Before provider sign-in, `models auth login` shows the selected agent and that it is operating on the machine running OpenClaw.
+These commands manage **System / agent** credentials, not personal Gateway accounts. On a shared Gateway, `models auth login` shows the selected agent and that it is operating on the machine running OpenClaw before provider sign-in. A Gateway counts as shared when it has two or more people's profiles, uses `gateway.auth.mode: "trusted-proxy"`, sets `gateway.roles` or `gateway.auth.identityScopes`, or runs with `gateway.mode: "remote"`. Otherwise the note is omitted, including for several agents or provider credentials that belong to one person, and on a Tailscale Serve Gateway until a second person connects.
 
 `models auth paste-api-key --provider <id>` can save a key while the local Gateway
 is running. The CLI sends the key to that state owner's authenticated Gateway;
@@ -396,7 +396,7 @@ Gateway that lacks this support.
 `models auth login` and `models auth login-github-copilot` also delegate to the
 local Gateway that owns the selected state directory. The CLI renders the
 Gateway's wizard in your terminal, including browser URLs, device codes,
-protected inputs, and model-access choices. `--provider`, `--method`,
+protected inputs, and status notes. `--provider`, `--method`,
 `--device-code`, and `--agent` select the declared credential-only plugin flow.
 Omit the provider or method to choose from the available flows. An unavailable
 or ambiguous plugin method is not silently replaced with a different login.
@@ -463,9 +463,9 @@ openclaw models auth order clear --provider <id>
 
 `models auth login` runs a provider plugin's auth flow (OAuth/API key). Use `openclaw plugins list` to see which providers are installed. `login` accepts `--profile-id <id>` for providers that support named profiles during login (use this to keep multiple logins for the same provider separate), `--method <id>` to pick a specific auth method, `--device-code` as a shortcut for `--method device-code`, `--set-default` to apply the provider's recommended default model, and `--force` to remove existing profiles for that provider first (use when a cached OAuth profile is stuck or you want to switch accounts).
 
-After credentials are saved, an existing model restriction can prompt **Show all &lt;Provider&gt; models** or **Keep current restrictions**. Only the first choice adds that provider's wildcard to the current restriction. Credentials stay saved either way. The CLI, private-chat login, and Control UI use the same choice. No prompt appears when the provider is already unrestricted. If restrictions change during sign-in, OpenClaw preserves the newer settings and asks you to choose model access again.
+Saving credentials for a provider makes its models visible. When a model restriction (`modelPolicy.allow`) hides every model of that provider, OpenClaw adds `<provider>/*` to the restriction that governs the agent and reports "Added `<provider>/*` to allowed models." A restriction that already names some of the provider's models, by exact ref or a narrower wildcard, stays unchanged, and so does a configuration with no restriction. The CLI (`login`, `paste-api-key`, `paste-token`), private-chat login, and Control UI follow the same rule. Provider plugin setup defaults cannot change restrictions.
 
-The CLI reports saved model access separately from confirmed Gateway application.
+The CLI reports the allowlist change separately from confirmed Gateway application.
 Offline changes become active when the Gateway next starts.
 
 Without `--set-default`, login preserves the current default, including an unset default, and keeps unrelated configuration edits made while login is running. If credentials are saved but provider settings cannot be applied, the error reports the saved credentials separately. A Gateway refresh warning does not undo a saved change; start the Gateway after the offline operation finishes.

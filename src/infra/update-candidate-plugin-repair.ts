@@ -5,7 +5,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isPluginInPackageBundledRoots } from "../plugins/bundled-dir.js";
 import { discoverConfiguredPluginLoadPaths } from "../plugins/discovery.js";
-import { inspectPluginSourceDependencies } from "../plugins/plugin-generation-source-inspection.js";
+import { inspectPluginSourceDependenciesAsync } from "../plugins/plugin-generation-worker.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
@@ -15,7 +16,7 @@ import {
   resolveUpdateCandidatePluginSourcePath,
 } from "./update-candidate-paths.js";
 import {
-  inspectUpdateCandidatePluginSource,
+  inspectUpdateCandidatePluginSourceAsync,
   resolveUpdateCandidatePluginSourceEntries,
 } from "./update-candidate-plugin-sources.js";
 import {
@@ -38,7 +39,9 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     return { copiedFiles: 0, warnings };
   }
   const privateRoot = await fs.realpath(rehearsalRoot);
+  const signal = getAsyncWorkSignal();
   const assertPrivate = (file: string) => {
+    signal?.throwIfAborted();
     if (
       !isPathInside(privateRoot, path.resolve(file)) ||
       !isPathInside(privateRoot, resolvePathViaExistingAncestorSync(file))
@@ -87,13 +90,13 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     ),
     params.config,
   );
-  const originals: Array<ReturnType<typeof inspectPluginSourceDependencies>> = [];
+  const originals: Array<Awaited<ReturnType<typeof inspectPluginSourceDependenciesAsync>>> = [];
   const project = (source: string) =>
     resolveUpdateCandidatePluginPath(privateRoot, privateRoot, source);
   for (const entry of entries) {
     assertPrivate(entry.rootDir);
     assertPrivate(entry.entryFile);
-    const copiedGraph = inspectUpdateCandidatePluginSource(entry, warnings, {
+    const copiedGraph = await inspectUpdateCandidatePluginSourceAsync(entry, warnings, {
       root: privateRoot,
       onUnresolvable: (name, importer) => {
         if (warnings.length < UPDATE_RUN_DIAGNOSTIC_LIMIT) {
@@ -106,6 +109,8 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
         }
       },
     });
+    assertPrivate(entry.rootDir);
+    assertPrivate(entry.entryFile);
     if (!copiedGraph) {
       continue;
     }
@@ -145,10 +150,12 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
       warnings.push(`Plugin source for update checks is no longer available: ${entryFile}.`);
       continue;
     }
-    let available: ReturnType<typeof inspectPluginSourceDependencies>;
+    let available: Awaited<ReturnType<typeof inspectPluginSourceDependenciesAsync>>;
     try {
-      available = inspectPluginSourceDependencies([{ rootDir, entryFile }]);
+      available = await inspectPluginSourceDependenciesAsync([{ rootDir, entryFile }]);
+      signal?.throwIfAborted();
     } catch (error) {
+      signal?.throwIfAborted();
       // Source edits cannot invalidate an already runnable copy. Without a
       // supplied missing edge, candidate execution still owns optional imports.
       warnings.push(

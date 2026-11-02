@@ -1,7 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
-  ensureMemoryChunkProvenance,
-  ensureMemoryRecallMetadataSchema,
   migrateMemoryIndexSourcesIdentity,
   migrateMemoryIndexStorage,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
@@ -32,6 +30,10 @@ import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { configureSqlitePreSchemaPragmas } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  admitAgentDatabaseStartupStructure,
+  type AgentDatabaseStartupIntegrity,
+} from "./agent-database-startup-integrity.js";
 import { assertAgentDeletionRecoveryAllowsMutation } from "./agent-deletion-journal-recovery.js";
 import * as agentDeletion from "./agent-deletion-journal.js";
 import { ensureOpenClawAgentBoardSchemaInTransaction } from "./openclaw-agent-board-schema.js";
@@ -45,8 +47,10 @@ import {
   canonicalSessionValidationSchemaSql,
 } from "./openclaw-agent-canonical-validation-schema.js";
 import { AGENT_COLD_ARCHIVE_CHUNKS_SQL } from "./openclaw-agent-cold-archive-chunks-schema.js";
+import { migrateAgentColdNavigationInTransaction } from "./openclaw-agent-cold-navigation-schema.js";
 import {
   AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION,
+  AGENT_COLD_NAVIGATION_SCHEMA_VERSION,
   AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
   AGENT_MEDIA_SCHEMA_VERSION,
   AGENT_MEMORY_REVISION_SCHEMA_VERSION,
@@ -78,11 +82,13 @@ import {
   finishAgentSchemaMigration,
   hasPendingCurrentVersionAgentDatabaseMigration,
   hasPendingMemoryChunkMetadataMigration,
+  migrateMemoryChunkMetadataSchema,
   migrateRetiredAgentStateLeaseSchema,
   ensureSessionKeyContractSchemaInTransaction,
   ensureSessionReactionsSchemaInTransaction,
   readExistingAgentSchemaMeta,
   repairAndAssertOpenClawAgentV14SchemaForMigration,
+  repairAndAssertOpenClawAgentV16Validity,
 } from "./openclaw-agent-db-schema-helpers.js";
 import { hasAgentDatabaseApplicationSchema } from "./openclaw-agent-db-schema-read.js";
 import {
@@ -130,11 +136,6 @@ import { resolveSchemaMigrationIntegrityTables } from "./schema-migration-integr
 
 const agentDbLog = createSubsystemLogger("state/agent-db");
 
-function migrateMemoryChunkMetadataSchema(db: DatabaseSync): void {
-  ensureMemoryRecallMetadataSchema(db);
-  ensureMemoryChunkProvenance(db);
-}
-
 export function* agentDatabaseIntegrityBeforeMutationSteps(
   database: DatabaseSync,
   agentId: string,
@@ -145,6 +146,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
   admittedSchema = false,
   integrityCheck?: "quick" | "full",
   integrityTables?: readonly string[],
+  startupIntegrity?: AgentDatabaseStartupIntegrity,
 ): SqliteIntegrityOperation<boolean> {
   if (reuseRuntimeIntegrity && admittedSchema) {
     if (diagnostics) {
@@ -189,6 +191,14 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     );
   }
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
+    if (
+      !verification &&
+      !reuseRuntimeIntegrity &&
+      integrityCheck !== "full" &&
+      admitAgentDatabaseStartupStructure(database, pathname, agentId, startupIntegrity, diagnostics)
+    ) {
+      return false;
+    }
     const reuseIntegrity =
       reuseRuntimeIntegrity ||
       (verification !== undefined && !migrationPending && !hasPendingCurrentVersionMigration);
@@ -253,7 +263,7 @@ function migrateAgentStorageInTransaction(
     );
   }
   maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
-  migrateTranscriptPayloadStorageInTransaction(db);
+  migrateTranscriptPayloadStorageInTransaction(db, schemaSql);
   maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
   migrateMemoryIndexStorage(db, {
     renewAuthority: maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent,
@@ -407,6 +417,9 @@ function ensureAgentSchema(
         if (crossesVersion(AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION)) {
           db.exec(AGENT_COLD_ARCHIVE_CHUNKS_SQL);
         }
+        if (crossesVersion(AGENT_COLD_NAVIGATION_SCHEMA_VERSION)) {
+          migrateAgentColdNavigationInTransaction(db);
+        }
         // Historical rebuilds also converge indexes. Later version steps own
         // only their declared tables; additive index repair stays at admission.
         if (previousVersion < CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION) {
@@ -516,6 +529,9 @@ function ensureAgentSchema(
           verifyPhysicalIntegrity: false,
           integrity: integrityCheck ? integrity : undefined,
         });
+        if (previousVersion === 16) {
+          repairAndAssertOpenClawAgentV16Validity(db, pathname, schemaSql);
+        }
         persistAgentSchemaMetadata(db, agentId, targetVersion);
         assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion }, schemaSql);
         maintenanceAuthority.assertAgentDatabaseMaintenanceAuthorityIfPresent();

@@ -260,6 +260,7 @@ export type UserTurnTranscriptRecorder = {
   ) => Promise<AgentRunTerminalOutcome | undefined>;
   getPendingInputMessage?: () => PersistedUserTurnMessage | undefined;
   isPendingInputConsumed?: () => boolean;
+  validateCommittedReplay?: () => Promise<void>;
   withPendingInput?: <T>(run: () => T) => T;
   withPendingInputCurrent?: <T>(run: () => T) => Promise<Awaited<T>>;
   assertPendingInputLifetimeCurrent?: () => void;

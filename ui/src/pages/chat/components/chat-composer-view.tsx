@@ -9,7 +9,6 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../styles/chat/composer-surface.css";
 import "../../../styles/chat/composer-mobile.css";
 import { McpAppContextStrip } from "../../../components/solid/mcp-app-context-strip.tsx";
-import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -53,7 +52,6 @@ const HumanMentionMenuView = lazy(() => import("./chat-composer-mention-menu.tsx
   export: "HumanMentionMenuView",
 });
 const EmojiMenu = lazy(() => import("./chat-composer-emoji.tsx"), { export: "EmojiMenu" });
-warmWhenIdle(SlashMenu.preload, SkillMenu.preload, HumanMentionMenuView.preload, EmojiMenu.preload);
 const ChatGoal = lazy(() => import("./chat-composer-goal.tsx"), { export: "ChatGoal" });
 const ChatGoalRecoveryNotice = lazy(() => import("./chat-composer-goal.tsx"), {
   export: "ChatGoalRecoveryNotice",
@@ -77,13 +75,14 @@ export function renderChatComposerView(
   const inputHandle = createChatAttachmentInputHandle();
   let shell: HTMLDivElement | undefined;
   let placeholderElement: HTMLSpanElement | undefined;
-  const { mobileEditing, keyboardNavigation, lifecycle } = createComposerMobileInteraction(
-    context,
-    props,
-    state,
-    () => shell,
-    () => placeholderElement,
-  );
+  const { mobileEditing, mobileResting, keyboardNavigation, lifecycle } =
+    createComposerMobileInteraction(
+      context,
+      props,
+      state,
+      () => shell,
+      () => placeholderElement,
+    );
   const [capabilityOpen, setCapabilityOpen] = createSignal(false);
   const capabilityAvailable = createMemo(() => Boolean(props.capabilityMenu));
   const [capabilityView, setCapabilityView] = createSignal<ChatComposerPlusMenuView>(
@@ -292,10 +291,11 @@ export function renderChatComposerView(
       ref={[footerControl, (element) => (shell = element), elementRef(props.onComposerShellRef)]}
       data-mobile-composer={props.mobileComposer ? "true" : undefined}
       data-composer-editing={mobileEditing() ? "true" : "false"}
+      data-composer-resting={mobileResting() ? "true" : undefined}
       data-composer-keyboard={props.mobileKeyboardVisible ? "true" : undefined}
       data-composer-keyboard-navigation={keyboardNavigation() ? "true" : undefined}
-      onPointerEnter={prepareComposerWidthEdge}
-      onKeyDown={prepareComposerWidthEdge}
+      onPointerEnter={() => void prepareComposerWidthEdge()}
+      onKeyDown={() => void prepareComposerWidthEdge()}
     >
       {lifecycle}
       <div class="agent-chat__composer-float" ref={[elementRef(props.onComposerFloatRef)]}>
@@ -405,9 +405,7 @@ export function renderChatComposerView(
               },
             ]}
             aria-busy={props.disabledReasonBusy ? "true" : "false"}
-            data-composer-layout={
-              props.mobileComposer && !mobileEditing() ? "single-line" : undefined
-            }
+            data-composer-layout={mobileResting() ? "single-line" : undefined}
             data-incognito={props.selectedSession?.incognito ? "true" : undefined}
             onOpenclaw-composer-dismiss-invocations={() => {
               context().state.slashMenu.reset();
@@ -670,6 +668,10 @@ export function renderChatComposerView(
                     gateway={props.contextGateway}
                     agentId={props.currentAgentId}
                     onOpenContext={props.onOpenContext}
+                    onCompact={props.onCompact}
+                    compactionStatus={props.compactionStatus}
+                    runActive={props.runActive}
+                    connected={props.connected}
                   />
                 </div>
                 <Show when={props.composerControls}>

@@ -104,6 +104,7 @@ const collectCronCodexRuntimePolicyTargetsReadOnly = vi.hoisted(() =>
 const runPostCorePluginConvergence = vi.hoisted(() =>
   vi.fn(async (): Promise<StartupConvergenceResult> => ({
     changes: [],
+    configChanges: [],
     notices: [],
     warnings: [],
     errored: false,

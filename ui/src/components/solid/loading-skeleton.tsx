@@ -1,3 +1,4 @@
+import type { JSX as SolidJSX } from "@solidjs/web";
 import { onSettled, Repeat, Show } from "solid-js";
 import { bootComposerElement, settleBootComposer } from "../../app/boot-composer.ts";
 import { beginNativeWindowDrag } from "../../app/native-window-drag.ts";
@@ -9,32 +10,59 @@ function BootComposer() {
   const textarea = bootComposerElement();
   onSettled(settleBootComposer);
   return (
-    <div class="skeleton loading-skeleton__composer" aria-hidden={textarea ? undefined : "true"}>
+    <div
+      class={["loading-skeleton__composer", { skeleton: !textarea }]}
+      aria-hidden={textarea ? undefined : "true"}
+    >
       {textarea}
     </div>
   );
 }
 
-export function LoadingSkeleton(props: { messagesOnly?: boolean; composer?: boolean } = {}) {
+export function LoadingSkeleton(
+  props: {
+    messagesOnly?: boolean;
+    composer?: boolean;
+    header?: boolean;
+    renderContent?: () => SolidJSX.Element;
+  } = {},
+) {
   return (
     <div class="loading-skeleton">
-      <Show when={!props.messagesOnly}>
+      <Show when={!props.messagesOnly && props.header !== false}>
         <div class="loading-skeleton__header" aria-hidden="true">
           <div class="skeleton loading-skeleton__avatar" />
           <div class="skeleton skeleton-line loading-skeleton__title" />
         </div>
       </Show>
-      <div class="loading-skeleton__messages" aria-hidden="true">
-        <div class="loading-skeleton__message loading-skeleton__message--user">
-          <div class="skeleton skeleton-line" />
-          <div class="skeleton skeleton-line skeleton-line--medium" />
-        </div>
-        <div class="loading-skeleton__message">
-          <div class="skeleton loading-skeleton__avatar" />
-          <div class="skeleton skeleton-line" />
-          <div class="skeleton skeleton-line skeleton-line--long" />
-          <div class="skeleton skeleton-line skeleton-line--medium" />
-        </div>
+      <div
+        class={[
+          "loading-skeleton__messages",
+          { "loading-skeleton__content": Boolean(props.renderContent) },
+        ]}
+        aria-hidden={props.renderContent ? undefined : "true"}
+        onMouseDown={(event) => {
+          if (props.renderContent) {
+            event.stopPropagation();
+          }
+        }}
+      >
+        {props.renderContent ? (
+          props.renderContent()
+        ) : (
+          <>
+            <div class="loading-skeleton__message loading-skeleton__message--user">
+              <div class="skeleton skeleton-line" />
+              <div class="skeleton skeleton-line skeleton-line--medium" />
+            </div>
+            <div class="loading-skeleton__message">
+              <div class="skeleton loading-skeleton__avatar" />
+              <div class="skeleton skeleton-line" />
+              <div class="skeleton skeleton-line skeleton-line--long" />
+              <div class="skeleton skeleton-line skeleton-line--medium" />
+            </div>
+          </>
+        )}
       </div>
       <Show when={!props.messagesOnly}>
         <Show
@@ -48,7 +76,10 @@ export function LoadingSkeleton(props: { messagesOnly?: boolean; composer?: bool
   );
 }
 
-export function ConnectingSplash(props: { status?: string }) {
+export function ConnectingSplash(props: {
+  status?: string;
+  renderContent?: () => SolidJSX.Element;
+}) {
   const basePath = document.documentElement.dataset.openclawControlUiBasePath ?? "";
   const pathname = location.pathname.slice(basePath.length) || "/";
   // The document's inline boot frame uses this same data-free route selection.
@@ -79,14 +110,16 @@ export function ConnectingSplash(props: { status?: string }) {
           <Repeat count={6}>{() => <div class="skeleton skeleton-line" />}</Repeat>
         </aside>
         <div class="connect-splash__main">
-          <LoadingSkeleton composer={route === "chat"} />
-          <span
-            class="connect-splash__status"
-            aria-hidden="true"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            {props.status ?? t("common.loading")}
-          </span>
+          <LoadingSkeleton composer={route === "chat"} renderContent={props.renderContent} />
+          <Show when={!props.renderContent}>
+            <span
+              class="connect-splash__status"
+              aria-hidden="true"
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              {props.status ?? t("common.loading")}
+            </span>
+          </Show>
         </div>
       </div>
     </main>

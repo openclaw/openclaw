@@ -268,10 +268,9 @@ function stripOwnMentionsForCommandBody(
     }
     cursor = Math.max(cursor, span.end);
   }
-  if (cursor < content.length) {
-    output += content.slice(cursor);
-  }
-  return output.replace(/\s+/g, " ").trim();
+  output = (output + content.slice(cursor)).trim();
+  // Multiline command arguments must survive mention removal before core dispatch.
+  return output.startsWith("/") && /[\r\n]/.test(output) ? output : output.replace(/\s+/g, " ");
 }
 
 function stripLeadingAtMentionForCommand(content: string): string {

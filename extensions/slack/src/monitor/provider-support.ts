@@ -82,12 +82,23 @@ function installSlackNativeReconnectFailureObserver(
           ? pingTimeoutMs
           : OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS) * nextFailureCount;
       return new Promise((resolve, reject) => {
-        const reconnectTimer = setTimeout(() => {
-          Reflect.set(this, "reconnectionTimer", undefined);
-          if (Reflect.get(this, "shuttingDown")) {
+        const cancel = () => {
+          if (callback === Reflect.get(this, "start")) {
             resolve(undefined);
-            return;
+          } else {
+            reject(new Error("Slack Socket Mode stopped during reconnect"));
           }
+        };
+        if (Reflect.get(this, "shuttingDown")) {
+          cancel();
+          return;
+        }
+        // disconnect() clears the SDK timer before emitting disconnecting.
+        // Settle its waiter too, or startup retains the channel's plugin custody.
+        this.once("disconnecting", cancel);
+        const reconnectTimer = setTimeout(() => {
+          this.off("disconnecting", cancel);
+          Reflect.set(this, "reconnectionTimer", undefined);
           this.emit("reconnecting");
           callback.call(this).then(resolve, (error: unknown) => {
             if (callback === Reflect.get(this, "start")) {

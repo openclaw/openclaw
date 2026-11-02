@@ -24,6 +24,7 @@ import {
   touchTranscriptWindowRecency,
 } from "./session-accessor.sqlite-transcript-state.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type { TranscriptMutationAdvance } from "./session-transcript-mutation-projection.js";
 import { scheduleTranscriptProjectionReconcile } from "./session-transcript-reconcile.js";
 import { copyRetainedTranscriptPayload } from "./session-transcript-retained-data.js";
@@ -110,24 +111,37 @@ export function createTranscriptAppendBatch(
       projectionNeedsRebuild: boolean,
       logicalAdvance?: TranscriptMutationAdvance,
     ) {
+      let version: SessionTranscriptContextVersion | undefined;
       // A caller may catch an iterator error and commit the accepted prefix.
       // Settle its index and attempt recency without advancing the mutation fence.
       preserveSessionEntryCacheAcrossWrite(database, () => {
         flushRows(false);
+        const index = cursor.appendToIndex;
+        const touches = completed && appended > 0 && options.touchMutation !== false;
+        const actorWindow = readSessionActorTransactionState(database, scope)?.window;
         const flushProjectionWithMutation =
-          completed &&
-          appended > 0 &&
-          options.touchMutation !== false &&
-          !projectionNeedsRebuild &&
-          isPostgresSqlConnection(database.db) &&
-          readSessionActorTransactionState(database, scope)?.window
-            ? cursor.appendToIndex?.flush
+          touches && !projectionNeedsRebuild && isPostgresSqlConnection(database.db) && actorWindow
+            ? index?.flush
             : undefined;
-        if (!flushProjectionWithMutation) {
-          cursor.appendToIndex?.flush();
+        const postimage = !projectionNeedsRebuild ? index?.readPostimage() : undefined;
+        const generation = cursor.generation;
+        const rawSeq = (cursor.nextSeq ?? 0) - 1;
+        const fold =
+          touches &&
+          logicalAdvance !== undefined &&
+          !actorWindow &&
+          isPostgresSqlConnection(database.db) &&
+          index &&
+          generation &&
+          postimage?.state.indexedSeq === rawSeq
+            ? { index, generation, rawSeq, state: postimage.state }
+            : undefined;
+        if (!flushProjectionWithMutation && !fold) {
+          index?.flush();
         }
-        if (completed && appended > 0 && options.touchMutation !== false) {
-          touchTranscriptMutationInTransaction(
+        let flushedWithWindow = false;
+        if (touches) {
+          version = touchTranscriptMutationInTransaction(
             database,
             scope.sessionId,
             {
@@ -135,11 +149,34 @@ export function createTranscriptAppendBatch(
               rowTranscript: projectionNeedsRebuild ? undefined : cursor.rowTranscript,
               projectionReady: !projectionNeedsRebuild,
               writeActorMutation: flushProjectionWithMutation,
+              ...(fold
+                ? {
+                    writeWindowMutation: (update) => {
+                      const window = fold.index.flush(update);
+                      flushedWithWindow = true;
+                      return window
+                        ? {
+                            sessionId: scope.sessionId,
+                            ...window,
+                            generation: fold.generation,
+                            rawSeq: fold.rawSeq,
+                            leafEventId: fold.state.leafEventId,
+                            indexedSeq: fold.state.indexedSeq,
+                            activeMessageCount: fold.state.activeMessageCount,
+                            needsRebuild: 0,
+                          }
+                        : undefined;
+                    },
+                  }
+                : {}),
             },
             logicalAdvance,
           );
         } else if (cursor.windowUpdatedAt !== undefined) {
           touchTranscriptWindowRecency(database, scope.sessionId, cursor.windowUpdatedAt, cursor);
+        }
+        if (fold && !flushedWithWindow) {
+          index?.flush();
         }
       });
       if (completed && appended > 0) {
@@ -150,6 +187,7 @@ export function createTranscriptAppendBatch(
           options,
         );
       }
+      return version;
     },
   };
 }

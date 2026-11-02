@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { runNodeScript } from "../../../../test/helpers/run-node-script.js";
@@ -291,17 +292,50 @@ console.log("headless-read-ok");`,
     await expectReadText(tool, { path: filePath, offset: 2 }, "last line\n");
   });
 
+  it.each(["utf8", "utf16le", "utf16be"])(
+    "preserves Unicode and CRLF across large %s source pages",
+    async (encoding) => {
+      const line = "α🦞x";
+      const source = `${`${line}\r\n`.repeat(200_000)}last line\r\n`;
+      const utf16 = Buffer.from(source, "utf16le");
+      const bytes =
+        encoding === "utf8"
+          ? Buffer.from(source)
+          : Buffer.concat([
+              Buffer.from(encoding === "utf16le" ? [0xff, 0xfe] : [0xfe, 0xff]),
+              encoding === "utf16le" ? utf16 : utf16.swap16(),
+            ]);
+      const { tool, filePath } = await fileFixture("unicode.txt", bytes);
+      const page = await executeRead(tool, { path: filePath, offset: 130_000, limit: 2_000 });
+      expect(page.details).toMatchObject({
+        kind: "truncated",
+        content: `${line}\n`.repeat(2_000).slice(0, -1),
+        continuation: { kind: "line", offset: 132_000 },
+      });
+      await expectReadText(tool, { path: filePath, offset: 200_001 }, "last line\n");
+    },
+  );
+
   it("reports the byte count when a BOM-only file decodes to empty text", async () => {
     const tool = memoryRead(Buffer.from([0xef, 0xbb, 0xbf]));
     await expectReadText(tool, { path: "bom.txt" }, "File contains no readable text (3 bytes).");
   });
 
-  it("does not decode PDF bytes from a renamed .bin file", async () => {
-    const { tool } = await fileFixture(
-      "pdf.bin",
-      Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF", "ascii"),
-    );
-    const result = await executeRead(tool, { path: "pdf.bin" });
+  it.each(["PDF", "OOXML"])("does not decode %s bytes from a renamed .bin file", async (kind) => {
+    const zip = kind === "OOXML" ? new JSZip() : undefined;
+    if (zip) {
+      zip.file("padding.bin", Buffer.alloc(100 * 1024));
+      zip.file(
+        "[Content_Types].xml",
+        '<Types><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+      );
+      zip.file("word/document.xml", "<xml/>");
+    }
+    const bytes = zip
+      ? await zip.generateAsync({ type: "nodebuffer", compression: "STORE" })
+      : Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF", "ascii");
+    const { tool } = await fileFixture("document.bin", bytes);
+    const result = await executeRead(tool, { path: "document.bin" });
     expect(textContent(result)).toMatch(
       /^Read did not return file contents because it detected a binary document \[.+\]\. Use an available document parser or converter, or convert the file to text, Markdown, or CSV, then read the converted file\.$/,
     );
@@ -415,6 +449,31 @@ console.log("headless-read-ok");`,
     }
     expect(first.details.content + second.details.content).toBe(longLine);
     expect(textContent(second)).toContain("offset=3");
+  });
+
+  it("caps a non-EOF selection ending on a blank line and continues from that line", async () => {
+    const prefix = "é🦞\n".repeat(1999);
+    const { tool } = await fileFixture("selected-blank.txt", `${prefix}\n\nfiné`);
+    const first = await executeRead(tool, { path: "selected-blank.txt", limit: 2001 });
+    expect(first.details).toMatchObject({
+      kind: "truncated",
+      content: prefix,
+      continuation: { kind: "line", offset: 2001, limit: 1 },
+      truncation: {
+        truncatedBy: "lines",
+        outputLines: 2000,
+        outputBytes: Buffer.byteLength(prefix),
+        maxLines: 2000,
+      },
+    });
+    const next = await executeRead(tool, { path: "selected-blank.txt", offset: 2001, limit: 1 });
+    expect(next.details).toMatchObject({
+      kind: "truncated",
+      content: "",
+      continuation: { kind: "line", offset: 2002, limit: 1 },
+    });
+    const last = await executeRead(tool, { path: "selected-blank.txt", offset: 2002, limit: 1 });
+    expect(last.details).toEqual({ kind: "text", content: "finé" });
   });
 
   it("clamps non-positive line limits before slicing file content", async () => {

@@ -165,19 +165,19 @@ it("quotes carriage returns in formula-neutralized CSV cells", async () => {
 it("writes an export bundle to the literal CLI output directory", async () => {
   const outputDir = path.join(tempDir, process.platform === "win32" ? "out" : "out ");
   const readBundleFile = (name: string) => readFileSync(path.join(outputDir, name), "utf8");
-  await runRecordCommand("export", ["--include-doc-bodies", "--zip", "--output", outputDir]);
+  const flags = ["--include-doc-bodies", "--no-transcript-entries", "--zip"];
+  await runRecordCommand("export", [...flags, "--output", outputDir]);
   expect(output()).toContain(`export: ${outputDir}`);
   cli.expectText(
     readBundleFile("summary.md"),
     "# Google Meet Artifacts",
     `## ${record}`,
-    `### Transcript Entries: ${transcript}`,
-    "Hello from the transcript.",
+    "Transcript entries: 0",
   );
   expect(readBundleFile("attendance.csv")).toContain("conferenceRecords/rec-1,Alice,users/alice");
   cli.expectText(
     readBundleFile("transcript.md"),
-    "Hello from the transcript.",
+    "_No transcript entries._",
     "Transcript document body.",
   );
   const manifest = JSON.parse(readBundleFile("manifest.json"));

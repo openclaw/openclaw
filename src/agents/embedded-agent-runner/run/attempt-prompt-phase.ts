@@ -1,3 +1,4 @@
+import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import {
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
@@ -144,7 +145,13 @@ export async function runEmbeddedAttemptPromptPhase(
     operation: attempt.operation,
   });
   const previousThresholdDeferral = activeSession[agentSessionDeferThresholdCompaction];
-  if (providerCompactionAtRequestBoundary) {
+  // Provider-owned thresholds defer client maintenance, never the hard window guard.
+  if (
+    providerCompactionAtRequestBoundary ||
+    (compactionReplayEnabled &&
+      (attempt.model.api === "anthropic-messages" ||
+        resolveOpenAIResponsesServerCompactionPlan(attempt.model, effectiveExtraParams).enabled))
+  ) {
     activeSession[agentSessionDeferThresholdCompaction] = true;
   }
 
@@ -182,6 +189,11 @@ export async function runEmbeddedAttemptPromptPhase(
 
   let transcriptLeafId: string | null = null;
   try {
+    if (attempt.inputAlreadyDelivered) {
+      runAbortController.signal.throwIfAborted();
+      input.sessionLock.ownedTranscriptWriteContext.assertCommitAllowed?.();
+      return { promptStartedAt, transcriptLeafId };
+    }
     const promptAssembly = await prepareEmbeddedAttemptPromptAssembly({
       attempt,
       activeSession,

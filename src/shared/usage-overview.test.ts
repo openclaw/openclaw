@@ -309,6 +309,16 @@ it("counts activity independently of recently modified empty comparison rows", (
 it.each(["tokens", "cost"] as const)(
   "sorts and displays compact %s for selected days while retaining canonical history",
   (sort) => {
+    const metadata = {
+      computedAt: 2,
+      sessionId: "usage-session",
+      lastActivity: 2,
+      durationMs: 1,
+      messageCounts: { ...zeroMessages, total: 1, assistant: 1 },
+      toolUsage: tools(1),
+      modelUsage: [{ model: "synthetic", count: 1, totals: usage({ totalTokens: 1 }) }],
+      latency: latency(1, 10, 10, 10),
+    };
     const rows = [
       { key: "first", total: 100, selected: 90 },
       { key: "second", total: 1000, selected: 1 },
@@ -316,6 +326,7 @@ it.each(["tokens", "cost"] as const)(
       key,
       agentId: "main",
       usage: usage({
+        ...metadata,
         totalTokens: total,
         totalCost: total / 10,
         firstActivity: 1,
@@ -344,6 +355,7 @@ it.each(["tokens", "cost"] as const)(
       ["first", 90, 9],
     ]);
     expect(compact.overview.selectedRows[0]?.usage?.dailyBreakdown).toBeUndefined();
+    expect(compact.overview.selectedRows[0]?.usage).toMatchObject(metadata);
     expect(canonical.overview.selectedRows[0]?.usage?.dailyBreakdown).toHaveLength(2);
     expect(compact.overview).toMatchObject({
       selectedUsageComplete: true,

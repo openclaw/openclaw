@@ -102,15 +102,20 @@ pnpm release:push
 ```
 
 This wrapper refreshes and pins `origin/main`, requires a clean canonical
-`release/YYYY.M.PATCH` worktree, captures `HEAD`, and runs changed
-static/type checks, production dead-code analysis, and changed tests from a
-fresh detached worktree with a frozen dependency install. It pushes that
-captured SHA itself only after every gate passes and the source branch,
-worktree, and HEAD remain unchanged. Do not use a separate `git push`:
-validation and push must stay one operation. A failed gate, concurrent commit,
-or non-fast-forward remote update blocks the push and FRV dispatch. Record the
-passing SHA and comparison base in the handoff; do not substitute
-`release:prepush`, a worker's partial check, or an earlier branch state.
+`release/YYYY.M.PATCH` worktree, captures `HEAD`, verifies that it fast-forwards
+the remote release branch, and runs only a short `git diff --check` plus the
+dependency-free release-changelog layout check. It pushes that captured SHA
+only if the source branch, worktree, and HEAD remain unchanged. Do not use a
+separate `git push`: exact-SHA verification and push stay one operation. A
+failed preflight, concurrent commit, or non-fast-forward remote update blocks
+the push and FRV dispatch. Record the pushed SHA and comparison base in the
+handoff; do not substitute `release:prepush` or an earlier branch state.
+
+PR CI and Full Release Validation own formatting, lint, type checking, Knip,
+and test coverage. Do not run those broad gates locally before a release push
+or delay FRV for them. Use focused local checks only to diagnose a concrete
+remote failure, then push the repaired exact SHA and start remote validation
+immediately.
 
 Then run deterministic source preflight and validate the same exact Code SHA:
 
@@ -373,8 +378,10 @@ and its readiness receipt; do not also dispatch the normal publisher.
 For `normal`, dispatch `.github/workflows/openclaw-release-publish.yml` using the candidate
 helper's protected `release-publish/<tooling-sha12>-<epoch>` ref. Pass matching
 `npm_dist_tag`, `preflight_run_id`, `full_release_validation_run_id` and its
-exact successful `full_release_validation_run_attempt`. The sealed manifest
-supplies SDK evidence and npm decisions;
+exact successful `full_release_validation_run_attempt`. For an FRV-qualified
+candidate, both run-ID inputs are the **FRV parent run ID**, not its
+`artifact:npm` child; use the exact successful FRV parent attempt. The sealed
+manifest supplies SDK evidence and npm decisions;
 explicit publisher inputs override them. The candidate helper retains its
 explicit SDK acknowledgement when needed. Optional Windows source tag and
 candidate-approved digests are supplied together or both omitted.

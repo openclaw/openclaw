@@ -83,9 +83,16 @@ describe("automatic candidates during provenance repair", () => {
       let candidates: ReturnType<typeof lookups> = [];
       try {
         signal.throwIfAborted();
+        if (startupCatchup) {
+          vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+        }
         const upgraded = await getFreshManager(cfg);
         if (startupCatchup) {
+          // Let real startup discovery finish before advancing its scheduled quiet period.
+          await (upgraded as unknown as { awaitManagerIdle(): Promise<void> }).awaitManagerIdle();
+          await vi.advanceTimersByTimeAsync(30_000);
           await batchEntered.promise;
+          vi.useRealTimers();
           signal.throwIfAborted();
         }
         candidates = lookups(upgraded);
