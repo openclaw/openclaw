@@ -22,6 +22,15 @@ struct RootSidebarTypographyTests {
 }
 
 struct OpenClawTypographyTests {
+    @Test func localDeviceSettingsUseBrandedTypography() throws {
+        let source = try String(
+            contentsOf: Self.sourceURL("Settings/DeviceSettings/LocalDeviceSettingsScreen.swift"),
+            encoding: .utf8)
+        #expect(source.contains("OpenClawType.body"))
+        #expect(source.contains("OpenClawType.footnote"))
+        #expect(!source.contains(".font(."))
+    }
+
     @Test func `About support links use the branded shared row`() throws {
         let settings = try String(contentsOf: Self.sourceURL("Design/SettingsProTabSections.swift"), encoding: .utf8)
         let supportRow = try Self.extract(settings, from: "title: \"Support\"", to: "!)")

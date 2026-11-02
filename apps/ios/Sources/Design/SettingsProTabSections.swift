@@ -19,6 +19,12 @@ extension SettingsProTab {
     var offlineDeviceSection: some View {
         Section {
             self.settingsListRow(
+                icon: "iphone",
+                iconColor: .gray,
+                title: "Device Settings",
+                route: .deviceSettings)
+                .accessibilityIdentifier("settings-device-row")
+            self.settingsListRow(
                 icon: "applewatch",
                 iconColor: .green,
                 title: "Apple Watch",
@@ -64,20 +70,28 @@ extension SettingsProTab {
     }
 
     func destination(for route: SettingsRoute) -> some View {
-        List {
-            switch route {
-            case .gateway:
-                self.gatewayDestination
-            case .appleWatch:
-                self.appleWatchDestination
-            case .approvals:
-                self.approvalsDestination
-            case .diagnostics:
-                self.diagnosticsDestination
-            case .about:
-                self.aboutDestination
-            case .licenses:
-                self.licensesDestination
+        Group {
+            if route == .deviceSettings {
+                LocalDeviceSettingsScreen()
+            } else {
+                List {
+                    switch route {
+                    case .deviceSettings:
+                        EmptyView()
+                    case .gateway:
+                        self.gatewayDestination
+                    case .appleWatch:
+                        self.appleWatchDestination
+                    case .approvals:
+                        self.approvalsDestination
+                    case .diagnostics:
+                        self.diagnosticsDestination
+                    case .about:
+                        self.aboutDestination
+                    case .licenses:
+                        self.licensesDestination
+                    }
+                }
             }
         }
         .font(OpenClawType.body)

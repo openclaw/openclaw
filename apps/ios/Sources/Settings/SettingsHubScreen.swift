@@ -50,6 +50,15 @@ struct SettingsHubScreen: View {
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
+                            self.push(.deviceSettings)
+                        } label: {
+                            Text("Device")
+                                .font(OpenClawType.subheadSemiBold)
+                        }
+                        .accessibilityIdentifier("SettingsHub.Device")
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
                             self.push(.gateway)
                         } label: {
                             Text("Gateway")
