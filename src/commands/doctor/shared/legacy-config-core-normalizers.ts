@@ -133,27 +133,25 @@ function retainPinnedLegacyCliProviders(
   blockedModelIdentities: ReadonlySet<LegacyCodexModelIdentity> | undefined,
   warnings: string[],
 ): ReadonlySet<string> {
-  const pins = new Map<string, { path: string; runtime: string }>();
+  const pins = new Map<string, Array<{ path: string; runtime: string }>>();
   for (const [path, agent] of agentScopes(cfg.agents)) {
     for (const [ref, entry] of Object.entries(isRecord(agent.models) ? agent.models : {})) {
       const runtime = normalizeOptionalLowercaseString(
         isRecord(entry) && isRecord(entry.agentRuntime) ? entry.agentRuntime.id : undefined,
       );
-      if (runtime && runtime !== "auto" && !pins.has(ref)) {
-        pins.set(ref, { path: `${path}.models.${sanitizeForLog(ref)}`, runtime });
+      if (runtime && runtime !== "auto") {
+        const pin = { path: `${path}.models.${sanitizeForLog(ref)}`, runtime };
+        pins.set(ref, [...(pins.get(ref) ?? []), pin]);
       }
     }
   }
   const retained = new Set<string>();
   rewriteModelRefs(cfg, "config", [], (ref) => {
     const migrated = migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities);
-    const pin = migrated?.cli ? pins.get(migrated.ref) : undefined;
-    if (
-      migrated &&
-      pin &&
-      pin.runtime !== migrated.runtime &&
-      !retained.has(migrated.legacyProvider)
-    ) {
+    const pin = migrated?.cli
+      ? pins.get(migrated.ref)?.find(({ runtime }) => runtime !== migrated.runtime)
+      : undefined;
+    if (migrated && pin && !retained.has(migrated.legacyProvider)) {
       retained.add(migrated.legacyProvider);
       warnings.push(
         `Kept legacy ${migrated.legacyProvider}/* model refs: ${pin.path} pins the ${sanitizeForLog(pin.runtime)} runtime, so moving ${sanitizeForLog(ref)} there would switch its route away from ${migrated.runtime}. Both routes keep working.`,

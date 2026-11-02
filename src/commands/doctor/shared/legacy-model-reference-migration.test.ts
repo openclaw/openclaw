@@ -177,6 +177,28 @@ describe("canonical model-reference migration", () => {
     },
   );
 
+  it("finds a conflicting agent pin behind a matching defaults pin", () => {
+    const config: OpenClawConfigWithLegacyRoster = {
+      agents: {
+        defaults: { models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } } },
+        entries: {
+          main: {
+            model: "claude-cli/claude-opus-5",
+            models: { "anthropic/claude-opus-5": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+      },
+    };
+    const warnings: string[] = [];
+
+    expect(normalizeRefs(config, [], warnings)).toEqual(config);
+    expect(warnings).toEqual([
+      expect.stringContaining(
+        "agents.entries.main.models.anthropic/claude-opus-5 pins the openclaw",
+      ),
+    ]);
+  });
+
   it("still migrates other legacy CLI providers beside a retained Claude CLI route", () => {
     const config = defaults({
       model: selection("claude-cli/claude-opus-5", "google-gemini-cli/gemini-pro"),
