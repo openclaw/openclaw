@@ -47,6 +47,7 @@ const WORKER_STARTUP_PHASES = new Map<unknown, string>([
   ["database-generations", "database generation verification"],
   ["sqlite-generations", "SQLite generation verification"],
   ["database-backup", "database backup"],
+  ["migration-filesystem-backup", "migration filesystem backup and verification"],
   ["database-restore-preparation", "database restore preparation"],
   ["runtime-retention", "runtime dependency inventory"],
 ]);

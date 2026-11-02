@@ -429,24 +429,25 @@ describe("preserved update activation with real version guards", () => {
         mocks.systemOwnership.mockRejectedValue(new Error("System unit owns this installation"));
         vi.spyOn(systemdExec, "assertSystemdAvailable").mockResolvedValue(undefined);
       }
-      const owner = {
-        pid: orphanPid,
-        host: hostname(),
-        startedAt: ownership === "reused pid" ? -1 : startedAt,
-        owner: "orphan-owner",
-        port: 19305,
-        mode:
-          ownership === "another supervisor" ? ("supervised" as const) : ("foreground" as const),
-        supervisor:
-          ownership === "another supervisor"
-            ? { kind: "external" as const, name: "operator" }
-            : null,
-        state: "live" as const,
-        expired: false,
-      };
-      vi.spyOn(gatewayOwner, "readGatewayOwnerLeaseAsync").mockImplementation(async () =>
-        processIdentity.isPidAlive(orphanPid) ? owner : undefined,
-      );
+      if (ownership === "another supervisor") {
+        // Native restart admission reads the persisted owner in its own transaction.
+        await servingOwner.publish("launchd");
+      } else {
+        const owner = {
+          pid: orphanPid,
+          host: hostname(),
+          startedAt: ownership === "reused pid" ? -1 : startedAt,
+          owner: "orphan-owner",
+          port: 19305,
+          mode: "foreground" as const,
+          supervisor: null,
+          state: "live" as const,
+          expired: false,
+        };
+        vi.spyOn(gatewayOwner, "readGatewayOwnerLeaseAsync").mockImplementation(async () =>
+          processIdentity.isPidAlive(orphanPid) ? owner : undefined,
+        );
+      }
       let current = true;
       if (ownership === "revoked authority") {
         mocks.recoveryScope.mockImplementationOnce(async () => {

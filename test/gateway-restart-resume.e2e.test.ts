@@ -331,6 +331,7 @@ async function providerFixture(signal: AbortSignal) {
         responseId: `resp_${held.ordinal}`,
       });
       heldResumes.delete(cycle);
+      ready.delete(`resume:${cycle}:stream`);
     },
     close: () =>
       runQaGatewayFixture(
@@ -340,6 +341,75 @@ async function providerFixture(signal: AbortSignal) {
       ),
   };
 }
+
+it.skipIf(process.platform === "win32")(
+  "resumes a persisted mid-turn main session exactly once after SIGKILL",
+  { timeout: 120_000 },
+  async ({ signal }) => {
+    const provider = await providerFixture(signal);
+    const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
+    const instance = await createOpenClawTestInstance({
+      name: "gateway-kill-resume",
+      signal,
+      config: restartResumeConfig(model),
+      env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
+    });
+    let client: GatewayClient | undefined;
+    const sessionKey = key(0, "stream");
+    await runQaGatewayFixture(
+      async () => {
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        await client.request("sessions.create", { key: sessionKey, agentId: "other" });
+        await client.request("chat.send", {
+          sessionKey,
+          message: marker(0, "stream"),
+          idempotencyKey: randomUUID(),
+        });
+        await provider.wait("ready:0:stream");
+        await instance.crashGateway();
+        await client.stopAndWait();
+        client = undefined;
+        const interrupted = readRestartSession(instance.state.agentDir("other"), sessionKey);
+        expect(interrupted?.lifecycleRunId).toEqual(expect.any(String));
+        expect(interrupted?.resumeAfterRestart).toBeUndefined();
+        provider.restart();
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        await vi.waitFor(
+          () =>
+            expect(
+              provider.calls.filter((call) => call.resumeInput),
+              instance.logs(),
+            ).toHaveLength(1),
+          { timeout: 15_000 },
+        );
+        provider.release(0);
+        await vi.waitFor(
+          async () => {
+            const history = await client!.request<{
+              messages: unknown[];
+              sessionInfo: { hasActiveRun: boolean };
+            }>("chat.history", { sessionKey });
+            expect(JSON.stringify(history.messages)).toContain("RESUMED_0_stream");
+            expect(history.sessionInfo.hasActiveRun).toBe(false);
+          },
+          { timeout: 15_000 },
+        );
+        await client.stopAndWait();
+        client = undefined;
+        await instance.stopGateway();
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        await client.request("chat.history", { sessionKey });
+        expect(provider.calls.filter((call) => call.resumeInput)).toHaveLength(1);
+      },
+      () => client?.stopAndWait(),
+      () => instance.cleanup(),
+      provider.close,
+    );
+  },
+);
 
 it.skipIf(process.platform === "win32").for([true, false])(
   "restart markers survive graceful shutdown (suspend/reopen and blocked store: %s)",
@@ -835,11 +905,14 @@ it.skipIf(process.platform === "win32").for([true, false])(
         provider.restart();
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
+        await waitProvider("resume:2:stream");
+        provider.release(2);
+        await waitFinal(crashKey, "RESUMED_2_stream");
         await send(crashKey, AFTER_CRASH);
         await waitFinal(crashKey, `HANDLED_${AFTER_CRASH}`);
         expect(
           provider.calls.filter((call) => call.cycle === 2 && call.current.includes(RESUME)),
-        ).toEqual([]);
+        ).toHaveLength(1);
         const crashHistory = await history(crashKey);
         expectCleanHistory(crashHistory.messages);
         provider.prepare();

@@ -93,5 +93,10 @@ it("initializes the same startup facts as real packaged repair", { timeout: 360_
     "[qa-initializer] readiness diagnostics",
     states.map(({ diagnostics }) => diagnostics),
   );
+  for (const { state } of states) {
+    expect(state.workspaces).toContainEqual(
+      expect.objectContaining({ path: path.join("<fixture>", "workspace") }),
+    );
+  }
   expect(states[1].state).toEqual(states[0].state);
 });
