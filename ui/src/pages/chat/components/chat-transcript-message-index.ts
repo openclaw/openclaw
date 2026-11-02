@@ -1,8 +1,8 @@
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { nativeHistoryMessageIdentity } from "../../../lib/chat/history-message-identity.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import {
   agentRunFrameActiveStatusParts,
   chatItemGroups,

@@ -465,6 +465,7 @@ export async function handleWindowAct(
         {
           pid: window.pid,
           window_id: window.windowId,
+          tree_format: "elements",
           include_screenshot: input.includeScreenshot ?? true,
           max_elements: input.maxElements ?? 2_000,
           ...(input.depth !== undefined ? { max_depth: Math.max(1, input.depth) } : {}),

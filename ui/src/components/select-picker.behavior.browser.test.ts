@@ -5,6 +5,7 @@ import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { Picker, type PickerParams, type PickerOption } from "./select-picker.ts";
 import overlayStyles from "./solid/overlay.css?inline";
+import "../styles/base.css";
 
 // Geometry assertions measure the settled list, not the Select entry scale.
 document.documentElement.style.setProperty("--select-enter-duration", "0s");
