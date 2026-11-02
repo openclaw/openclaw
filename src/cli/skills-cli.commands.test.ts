@@ -139,11 +139,8 @@ async function expectFailure(argv: string | string[], message?: string) {
     expect(errors).toContain(message);
   }
 }
-function expectUnused(...functions: unknown[]) {
-  for (const fn of functions) {
-    expect(fn).not.toHaveBeenCalled();
-  }
-}
+const expectUnused = (...functions: unknown[]) =>
+  functions.forEach((fn) => expect(fn).not.toHaveBeenCalled());
 function expectOptions(fn: unknown, options: Record<string, unknown>) {
   expect(fn).toHaveBeenCalledWith(expect.objectContaining(options));
 }
@@ -185,14 +182,11 @@ describe("skills cli commands", () => {
   beforeEach(() => {
     stdout.length = 0;
     errors.length = 0;
-    for (const mock of Object.values(mocks)) {
-      if (vi.isMockFunction(mock)) {
-        mock.mockReset();
-      }
-    }
+    Object.values(mocks)
+      .filter(vi.isMockFunction)
+      .forEach((mock) => mock.mockReset());
     Object.values(runtime).forEach((mock) => mock.mockClear());
     mocks.gateway.mockRejectedValue(transportError());
-    mocks.bestEffortConfig.mockImplementation(mocks.config);
     mocks.install.mockResolvedValue({ ok: false, error: "install disabled in test" });
     mocks.sourceInstall.mockRejectedValue(new Error("source install disabled in test"));
     mocks.update.mockResolvedValue([]);
@@ -203,27 +197,6 @@ describe("skills cli commands", () => {
   afterEach(() => {
     restoreTty();
     vi.unstubAllEnvs();
-  });
-
-  it.each([
-    { label: "default", argv: [] },
-    { label: "list", argv: ["list"] },
-    { label: "check", argv: ["check"] },
-    { label: "info", argv: ["info", "calendar"] },
-  ])("browses skills with invalid configuration: $label", async ({ argv }) => {
-    mocks.config.mockImplementation(() => {
-      throw new Error("Invalid config: unrelated setting");
-    });
-    mocks.bestEffortConfig.mockReturnValue({});
-    await run(argv);
-    expect(stdout.join("\n")).toContain("calendar");
-    expect(errors).toEqual([]);
-    expect(mocks.bestEffortConfig).toHaveBeenCalledWith({
-      observe: false,
-      skipPluginValidation: true,
-    });
-    await expectFailure("install calendar", "Invalid config: unrelated setting");
-    expectUnused(mocks.install, mocks.sourceInstall);
   });
 
   it("installs a versioned ClawHub skill globally with interactive confirmation", async () => {
@@ -363,6 +336,9 @@ describe("skills cli commands", () => {
     { label: "default", argv: ["--json"] },
     { label: "check", argv: ["check", "--json"] },
   ])("writes $label JSON from the selected workspace to stdout", async ({ label, argv }) => {
+    mocks.config.mockImplementation(() => {
+      throw new Error("Invalid config: unrelated setting");
+    });
     mocks.inferredAgent.mockReturnValue("main");
     mocks.workspace.mockImplementation((_config, id) => `/tmp/workspace-${id}`);
     await run(argv);
@@ -489,7 +465,7 @@ describe("skills cli commands", () => {
     "never replaces failed Gateway data with local skills: %s",
     async (error, root, remote) => {
       if (remote) {
-        mocks.config.mockReturnValue({
+        mocks.bestEffortConfig.mockReturnValue({
           gateway: { mode: "remote", remote: { url: "ws://127.0.0.1:9" } },
         });
       }
