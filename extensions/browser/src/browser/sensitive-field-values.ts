@@ -40,6 +40,7 @@ export function parseFieldDescriptor(value: unknown): FieldDescriptor | null {
   if (!value || typeof value !== "object") {
     return null;
   }
+  // SAFETY: The object check permits property reads; each field is validated below.
   const record = value as Record<string, unknown>;
   const { tagName, type, autocomplete } = record;
   if (
@@ -64,7 +65,9 @@ export function isSensitiveFieldDescriptor(field: FieldDescriptor): boolean {
 }
 
 /** Return valued form fields from a structured snapshot in snapshot order. */
-export function findValuedSnapshotFields<T extends SnapshotValueNode>(root: T): T[] {
+export function findValuedSnapshotFields<
+  T extends Omit<SnapshotValueNode, "children"> & { children?: T[] },
+>(root: T): T[] {
   const fields: T[] = [];
   const pending = [root];
   for (let node = pending.pop(); node; node = pending.pop()) {
@@ -76,7 +79,7 @@ export function findValuedSnapshotFields<T extends SnapshotValueNode>(root: T): 
       fields.push(node);
     }
     for (const child of node.children?.toReversed() ?? []) {
-      pending.push(child as T);
+      pending.push(child);
     }
   }
   return fields;
