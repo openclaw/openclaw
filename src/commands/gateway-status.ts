@@ -22,6 +22,7 @@ import {
   buildGatewayDiscoveryTarget,
   serializeGatewayDiscoveryBeacon,
 } from "../infra/gateway-discovery-targets.js";
+import { formatHostForUrl } from "../infra/net/hostname.js";
 import { pickBestEffortPrimaryTailnetIPv4 } from "../infra/network-discovery-display.js";
 import type { SshTunnel } from "../infra/ssh-tunnel.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
@@ -57,7 +58,7 @@ function buildSshTarget(input: { user?: string; host?: string; port?: number }):
     return null;
   }
   const user = normalizeOptionalString(input.user) ?? "";
-  return `${user ? `${user}@` : ""}${host}${input.port ? `:${input.port}` : ""}`;
+  return `${user ? `${user}@` : ""}${formatHostForUrl(host)}${input.port ? `:${input.port}` : ""}`;
 }
 
 export async function gatewayStatusCommand(
@@ -269,7 +270,7 @@ export async function gatewayStatusCommand(
                 const parsed = parseSshTarget(sshRouteTarget);
                 if (parsed) {
                   const config = await resolveSshConfig(parsed, {
-                    explicitPort: /:\d+$/.test(sshRouteTarget.trim()),
+                    explicitPort: parsed.explicitPort,
                     identity: sshIdentity ?? undefined,
                     timeoutMs: Math.min(800, remainingMs()),
                     signal: controller.signal,
