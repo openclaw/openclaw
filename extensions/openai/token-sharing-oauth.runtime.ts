@@ -304,7 +304,10 @@ async function isIpv6LoopbackTaken(): Promise<boolean> {
 
 /** Holds a pasted redirect to the listener's rules; returns the problem as text when it fails. */
 function readPastedRedirect(input: string, state: string): Authorization | string {
-  const parameters = URL.parse(input.trim())?.searchParams;
+  // The masked prompt keeps rejected text, so a retried paste lands after it.
+  const parameters = URL.parse(
+    input.slice(Math.max(input.lastIndexOf("http://"), 0)).trim(),
+  )?.searchParams;
   if (!parameters?.has("state")) {
     return "Paste the full URL from your browser's address bar, not just the code.";
   }

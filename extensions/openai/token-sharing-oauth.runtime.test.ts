@@ -626,6 +626,12 @@ describe("ChatGPT token-sharing with port 8080 taken", () => {
     },
   );
 
+  it("accepts a retried paste that lands after rejected text in the masked field", async () => {
+    const ctx = pasteContext(() => `rejected_text${redirectFor([["code", "test-code"]])}`);
+    await loginTokenSharing(ctx);
+    expect(exchangeForm().get("code")).toBe("test-code");
+  });
+
   it("keeps first sign-in out of the token exchange when the paste drops client_id", async () => {
     const ctx = pasteContext(() => redirectFor([["code", "test-code"]]), { existingProfiles: [] });
     await expect(loginTokenSharing(ctx)).rejects.toThrow("invalid OAuth client ID");
