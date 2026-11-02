@@ -9,6 +9,8 @@ import {
 } from "./worker-operation-registry.js";
 
 const loaders = {
+  durableProcess: () =>
+    import("../agents/bash-durable-process-store.js").then((m) => m.durableProcessReadOperations),
   workerEnvironments: () =>
     import("../gateway/worker-environments/store-row-codec.js").then(
       (m) => m.workerEnvironmentReadOperations,

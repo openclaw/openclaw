@@ -474,7 +474,11 @@ describe("memory-core plugin runtime registration", () => {
       throw new Error("expected memory-core host operations");
     }
 
-    const target = { providerId: "local", baseUrl: "http://127.0.0.1:11434" };
+    const target: Parameters<OpenClawPluginApi["runtime"]["llm"]["acquireLocalService"]>[0] = {
+      providerId: "local",
+      baseUrl: "http://127.0.0.1:11434",
+      onReadinessWait: vi.fn(),
+    };
     await injectedHost.acquireLocalService(target);
     const storeOptions = { namespace: "lazy-host", maxEntries: 1 };
     injectedHost.openKeyedStore(storeOptions);

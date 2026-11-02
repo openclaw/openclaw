@@ -1,6 +1,5 @@
 import path from "node:path";
 import { toUSVString } from "node:util";
-import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { markPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import type { SqlitePrivateSnapshotFamily } from "./sqlite-readonly-location.types.js";
@@ -24,7 +23,6 @@ export type SqliteReadOnlyWorkerMode =
   | "staged-async"
   | "metadata"
   | "consolidated"
-  | "reclaim"
   | "auth-profile-rows"
   | "operation"
   | "staging-create"
@@ -44,7 +42,6 @@ export type SqliteReadOnlyWorkerResult =
   | { ok: true; location: string }
   | { ok: true; contentVersion: string }
   | { ok: true; generation: string }
-  | { ok: true; warnings: string[] }
   | { ok: false; message: string };
 
 export class SqliteReadOnlyInspectionContentionError extends Error {}
@@ -129,7 +126,6 @@ export type SqliteReadOnlyWorkerOutput =
   | { kind: "launch-failed"; error: Error };
 export type SqliteReadOnlyWorkerValue =
   | string
-  | string[]
   | SqliteAuthProfileRows
   | SqliteReadOnlyOperationResult;
 export const SQLITE_READONLY_STDERR_TAIL_CHARS = 4_000;
@@ -148,7 +144,6 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
       typeof value.contentVersion === "string" &&
       /^(?:[a-f0-9]{64})?$/.test(value.contentVersion)) ||
     (value.ok === true && "generation" in value && typeof value.generation === "string") ||
-    (value.ok === true && "warnings" in value && isStringArray(value.warnings)) ||
     (value.ok === false && "message" in value && typeof value.message === "string")
   );
 }
@@ -199,10 +194,6 @@ export function readSqliteReadOnlyWorkerValue(
     | "file-generation"
     | "update-generation",
 ): string;
-export function readSqliteReadOnlyWorkerValue(
-  params: SqliteReadOnlyWorkerOutput,
-  mode: "reclaim",
-): string[];
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
   mode: SqliteReadOnlyWorkerMode,
@@ -264,9 +255,6 @@ export function readSqliteReadOnlyWorkerValue(
   }
   if ((mode === "file-generation" || mode === "update-generation") && "generation" in result) {
     return result.generation;
-  }
-  if (mode === "reclaim" && "warnings" in result) {
-    return result.warnings;
   }
   throw createSqliteReadOnlyWorkerError(
     "returned a result for a different operation",

@@ -16,17 +16,13 @@ import {
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
-import {
-  prepareSessionForkFromParent,
-  MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE,
-} from "../auto-reply/reply/session-fork.js";
+import { MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE } from "../auto-reply/reply/session-fork.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import {
   createSessionEntryWithTranscript,
   type SessionEntryCreateWithTranscriptOptions,
 } from "../config/sessions/session-accessor.js";
-import { runWithSessionEntryCreationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
 import { buildSessionParentLink } from "../config/sessions/session-entry-lineage.js";
@@ -73,7 +69,7 @@ import {
   existingSessionSelectionWouldChange,
   sessionCreatePolicyAdoptionError,
 } from "./session-create-existing-selection.js";
-import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
+import { prepareGatewaySessionFork } from "./session-create-fork.js";
 import {
   inheritSessionCreateParentFields,
   prepareSessionCreateParent,
@@ -94,7 +90,6 @@ import {
   prepareSessionCreateModelSelection,
   projectSessionCreateSpawnModelSelection,
   resolveSessionCreateModelInputError,
-  resolveSessionForkMaxTokens,
 } from "./session-create-model-selection.js";
 import { tryResetGatewaySessionForCreation } from "./session-create-reset.js";
 import type {
@@ -120,6 +115,7 @@ import {
   rollbackGatewaySessionPreparation,
 } from "./session-lifecycle-preparation.js";
 import { loadSessionLifecycleRuntime } from "./session-lifecycle-runtime-loader.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { prepareSessionPublicShareGrant } from "./session-publication-grant.js";
 import * as sessionAgent from "./session-request-agent.js";
@@ -159,12 +155,21 @@ async function createGatewaySessionInScope(
   // Fresh account authority covers title generation and resource preparation,
   // not just the final row. An inherited parent pin is not a new selection.
   let validateRuntimeSelection: (() => ErrorShape | undefined) | undefined;
+  let validateVisibility: (() => ErrorShape | undefined) | undefined;
   let releaseRuntimeSelection: (() => void) | undefined;
-  const commitGuard = resolveSessionCreationCommitGuard(params, {
+  const assertCreationCurrent = resolveSessionCreationCommitGuard(params, {
     readOperatorAuthority: () => operatorAuthority,
     assertPreparedTargetCurrent: () => assertPreparedTargetCurrent?.(),
     validateSelection: () => validateRuntimeSelection?.(),
   });
+  const commitGuard = () => {
+    assertCreationCurrent?.();
+    // Creation restrictions end at commit; a later policy change cannot block this chat's turn.
+    const error = !createdTargetCommitted && validateVisibility?.();
+    if (error) {
+      throw new SessionMutationAuthorizationChangedError(error);
+    }
+  };
   commitGuard?.();
   const displayName = truncateUtf16Safe(params.displayName?.trim() ?? "", 500).trimEnd();
   const label = normalizeOptionalString(params.label);
@@ -511,6 +516,14 @@ async function createGatewaySessionInScope(
       return targetRead;
     }
     const currentTargetEntry = targetRead.value;
+    const visibilityAdmission = resolveSessionCreateVisibility(
+      params,
+      currentTargetEntry,
+      currentParentSessionEntry,
+    );
+    if (!visibilityAdmission.ok) {
+      return visibilityAdmission;
+    }
     // Delegated isolation survives changes to the creator's current role.
     const creationSandbox =
       creation?.sandbox ?? (creation ? resolveCreatorSandbox(params.cfg, creation) : undefined);
@@ -642,9 +655,23 @@ async function createGatewaySessionInScope(
         if (freshSessionError) {
           return freshSessionError;
         }
-        const visibility = resolveSessionCreateVisibility(params, existingEntry);
+        const visibility = resolveSessionCreateVisibility(
+          params,
+          existingEntry,
+          currentParentSessionEntry,
+        );
         if (!visibility.ok) {
           return visibility;
+        }
+        if (!existingEntry && visibility.value) {
+          validateVisibility = () => {
+            const current = resolveSessionCreateVisibility(
+              params,
+              undefined,
+              currentParentSessionEntry,
+            );
+            return current.ok ? undefined : current.error;
+          };
         }
         // Adoption of an existing key must not stamp provenance or emit a
         // `created` event; only a genuinely new row is a node creation.
@@ -930,65 +957,17 @@ async function createGatewaySessionInScope(
         if (!canonicalParentSessionKey || !currentParentSessionEntry || !parentSessionTarget) {
           return unavailableSessionRequest("failed to resolve parent session for fork");
         }
-        const forkMaxTokens = await resolveSessionForkMaxTokens({
-          cfg: params.cfg,
-          agentId: target.agentId,
-          sessionKey: target.canonicalKey,
+        const forkResult = await prepareGatewaySessionFork({
+          request: params,
+          target,
           entry,
-          loadGatewayModelCatalogSnapshot: params.loadGatewayModelCatalogSnapshot,
+          existingEntry,
+          parent: { entry: currentParentSessionEntry, target: parentSessionTarget },
+          commitGuard,
+          withCommit: preparedLifecycle?.withCommit,
+          creationOperation,
         });
-        // The storage owner selects one source for both size admission and copying,
-        // so an active tail cannot make a smaller stable prefix fail the cap.
-        const forkFromParent = async (assertSourceCurrent?: () => void) =>
-          await prepareSessionForkFromParent({
-            parentEntry: currentParentSessionEntry,
-            agentId: parentSessionTarget.agentId,
-            ...(commitGuard || assertSourceCurrent
-              ? {
-                  commitGuard: () => {
-                    commitGuard?.();
-                    assertSourceCurrent?.();
-                  },
-                }
-              : {}),
-            parentSessionKey: canonicalParentSessionKey,
-            sessionKey: target.canonicalKey,
-            storePath: parentSessionTarget.storePath,
-            ...(forkMaxTokens ? { maxTokens: forkMaxTokens } : {}),
-            // Keep the fork transcript owned by the child store across agent boundaries.
-            targetStorePath: target.storePath,
-            ...(params.forkFrom ? { forkFrom: params.forkFrom } : {}),
-          });
-        const forkWithCreation = (assertSourceCurrent?: () => void) =>
-          creationOperation
-            ? runWithSessionEntryCreationPublication(creationOperation, () =>
-                forkFromParent(assertSourceCurrent),
-              )
-            : forkFromParent(assertSourceCurrent);
-        const forkResult = preparedLifecycle?.withCommit
-          ? await preparedLifecycle.withCommit(forkWithCreation)
-          : await forkWithCreation();
-        if (forkResult.status === "too-large") {
-          return invalidSessionRequest(
-            `parent session is too large to fork (${forkResult.decision.parentTokens}/${forkResult.decision.maxTokens} tokens)`,
-          );
-        }
-        if (forkResult.status !== "prepared") {
-          return unavailableSessionRequest("failed to fork parent session transcript");
-        }
-        return {
-          ...patched,
-          transcriptEvents: forkResult.events,
-          entry: buildForkedGatewaySessionEntry(
-            entry,
-            forkResult.transcript,
-            {
-              sessionKey: canonicalParentSessionKey,
-              entry: currentParentSessionEntry,
-            },
-            existingEntry,
-          ),
-        };
+        return forkResult.ok ? { ...patched, ...forkResult } : forkResult;
       },
       {
         onPhase,
@@ -999,7 +978,7 @@ async function createGatewaySessionInScope(
               requireWriteSuccess: true,
             }
           : {}),
-        ...(commitGuard ? { commitGuard } : {}),
+        commitGuard,
         followRegistration,
         ...(bindPreparedCreation || params.bindSharingCreation
           ? {

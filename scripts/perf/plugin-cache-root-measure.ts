@@ -9,13 +9,12 @@
  * keeps only the final generation. This does not measure Gateway latency.
  */
 import assert from "node:assert/strict";
-import { Session, type HeapProfiler } from "node:inspector/promises";
-import { registerHooks } from "node:module";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
-import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 
 const { values } = parseArgs({
   options: { owner: { type: "string" }, allocations: { type: "boolean" } },
@@ -23,23 +22,10 @@ const { values } = parseArgs({
 const gc = globalThis.gc;
 assert(gc, "Use --expose-gc");
 const ownerUrl = new URL("../../src/plugins/plugin-cache.ts", import.meta.url).href;
-let replaced = false;
-if (values.owner) {
-  const replacement = pathToFileURL(path.resolve(values.owner)).href;
-  registerHooks({
-    load(url, context, nextLoad) {
-      if (url !== ownerUrl) {
-        return nextLoad(url, context);
-      }
-      replaced = true;
-      const result = nextLoad(replacement, context);
-      return { format: result.format, source: result.source, shortCircuit: true };
-    },
-  });
-}
+const wasOwnerReplaced = registerPerfOwnerReplacement(ownerUrl, values.owner);
 const { createPluginCache, getPluginCacheRoot, withPluginCache } =
   await import("../../src/plugins/plugin-cache.js");
-assert(!values.owner || replaced, "Baseline owner was not loaded");
+assert(!values.owner || wasOwnerReplaced(), "Baseline owner was not loaded");
 const roots = Array.from(
   { length: 4000 },
   (_, index) => `/synthetic/plugins/${index % 40}/${index}`,
@@ -58,9 +44,6 @@ async function collect() {
   await setImmediate();
   gc!();
   gc!();
-}
-function bytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + bytes(child), 0);
 }
 acquire();
 await collect();
@@ -84,7 +67,7 @@ for (let iteration = 0; iteration < iterations; iteration++) {
 const wallMs = performance.now() - started;
 const used = process.threadCpuUsage(cpu);
 const allocatedBytes = values.allocations
-  ? bytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+  ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
   : undefined;
 inspector.disconnect();
 await collect();

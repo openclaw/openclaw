@@ -110,11 +110,11 @@ it("shows the advanced execution model as the inherited model default", async ()
   await openPicker(row.querySelector("openclaw-select-picker")!);
 
   expect(row.textContent).toContain("Default: openai/gpt-5.6");
+  expect(
+    row.querySelector('[role="option"][data-value="__openclaw_custom_model__"]')?.textContent,
+  ).toContain("Custom model…");
   expect(row.querySelector('[role="option"][data-value="anthropic/claude-sonnet"]')).not.toBeNull();
-  const custom = expectDefined(
-    row.querySelector<HTMLInputElement>(".model-picker__custom"),
-    "Missing custom model input",
-  );
+  const custom = getQueriesForElement(row).getByLabelText<HTMLInputElement>("Custom model…");
   expect(custom.hidden).toBe(false);
   editNumber(custom, "vendor/model with spaces", true);
   expect(onPatch).toHaveBeenCalledWith(["model"], "vendor/model with spaces");

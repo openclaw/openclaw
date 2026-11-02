@@ -51,6 +51,7 @@ import type {
 } from "./models-auth-status.types.js";
 import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
 import { respondError, respondUnavailableOnThrow } from "./response.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -183,7 +184,9 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    let assertCurrent: (() => void) | undefined;
+    // The save writes credentials and can widen the model allowlist: both need live requester authority.
+    const requestAuthority = readGatewayRequestMutationAuthority(options);
+    let assertCurrent: () => void = requestAuthority.assertCurrent;
     if (expectedOwnerId !== undefined) {
       if (typeof expectedOwnerId !== "string" || !expectedOwnerId.trim()) {
         respondError(
@@ -198,7 +201,11 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         return;
       }
       try {
-        assertCurrent = captureLocalStateMutationGuard(expectedOwnerId, options);
+        const assertOwnerCurrent = captureLocalStateMutationGuard(expectedOwnerId, options);
+        assertCurrent = () => {
+          requestAuthority.assertCurrent();
+          assertOwnerCurrent();
+        };
       } catch (error) {
         respond(false, undefined, localStateOwnerChangedError(error));
         return;
@@ -208,28 +215,37 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     await respondUnavailableOnThrow(respond, async () => {
       const config = context.getRuntimeConfig();
       // CLI-only target semantics must not load the model-command runtime during Gateway startup.
-      const scope = assertCurrent
-        ? {
-            ok: true as const,
-            ...(await import("../../commands/models/shared.js")).resolveModelsTargetAgent(
-              config,
-              params.agentId,
-              { kind: "mutation" },
-            ),
-          }
-        : resolveModelAuthAgentScope(config, params.agentId);
+      const scope =
+        expectedOwnerId !== undefined
+          ? {
+              ok: true as const,
+              ...(await import("../../commands/models/shared.js")).resolveModelsTargetAgent(
+                config,
+                params.agentId,
+                { kind: "mutation" },
+              ),
+            }
+          : resolveModelAuthAgentScope(config, params.agentId);
       if (!scope.ok) {
         respond(false, undefined, scope.error);
         return;
       }
       const { saveModelProviderApiKey } = await import("../../commands/models/auth-api-key.js");
-      const { profileId, warning: configWarning } = await saveModelProviderApiKey({
+      const {
+        profileId,
+        warning: configWarning,
+        modelAccess,
+      } = await saveModelProviderApiKey({
         config,
         provider,
         apiKey: params.apiKey,
+        agentId: scope.agentId,
         agentDir: scope.agentDir,
         assertCurrent,
       });
+      if (modelAccess) {
+        log.info(modelAccess);
+      }
       const refreshWarning = await refreshAfterCredentialMutation(context, scope.agentId);
       const warning = [configWarning, refreshWarning].filter(Boolean).join(" ");
       const result: ModelsAuthSetApiKeyResult = {

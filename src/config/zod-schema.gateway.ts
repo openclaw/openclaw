@@ -5,6 +5,7 @@ import { CONTROL_UI_ENVIRONMENT_COLORS } from "../gateway/control-ui-bootstrap-c
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
+  CRON_SCOPE,
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
@@ -31,6 +32,7 @@ const OperatorScopeSchema = z.enum([
   ADMIN_SCOPE,
   READ_SCOPE,
   WRITE_SCOPE,
+  CRON_SCOPE,
   SESSION_READ_SCOPE,
   SESSION_WRITE_SCOPE,
   APPROVALS_SCOPE,
@@ -93,6 +95,8 @@ export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
       .array(z.string().trim().min(1).refine(isValidAgentId, "Invalid agent id"))
       .transform((agents) => uniqueValues(agents.map(normalizeAgentId))),
   ]),
+  /** Cloud profiles this role may explicitly dispatch its own sessions to. */
+  workerProfiles: z.array(z.string().trim().min(1)).transform(uniqueValues).optional(),
   /** Optional model ceiling for this role; defaults to the source agent's primary and fallbacks. */
   modelPolicy: z
     .strictObject({
@@ -188,6 +192,7 @@ export const GatewayConfigSchema = z
       })
       .optional(),
     github: GatewayGitHubEndpointSchema.optional(),
+    repositoryIntegration: z.string().trim().min(1).optional(),
     projects: z
       .strictObject({
         defaultRepository: z

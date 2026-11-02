@@ -454,7 +454,9 @@ export function formatWikiLink(params: {
   const destination = /[\s()<>]/.test(linkTarget)
     ? `<${linkTarget.replace(/[<>]/g, "\\$&")}>`
     : linkTarget;
-  return `[${params.title}](${destination})`;
+  // Titles are metadata: unmatched brackets or a trailing backslash must not break the link.
+  const label = params.title.replace(/[\\[\]`]/g, "\\$&");
+  return `[${label}](${destination})`;
 }
 
 export function renderMarkdownFence(content: string, infoString = "text"): string {

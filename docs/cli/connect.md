@@ -221,6 +221,10 @@ such as `http://127.0.0.1/j/<shortcode>`. Direct setup codes can carry the
 Gateway TLS certificate fingerprint, which lets the node host pin a self-signed
 Gateway certificate after decoding the payload.
 
+Ctrl-C or SIGTERM stops an in-progress join HTTP lookup before entering the node
+runtime. A join code already redeemed by the Gateway remains single-use; mint a
+new code before retrying if it was consumed.
+
 The payload determines the saved host, port, TLS mode, WebSocket context path,
 and ordered fallback endpoints. Normal and foreground connections do not add
 `openclaw.json` keys; `--service --session-host` explicitly persists the worker

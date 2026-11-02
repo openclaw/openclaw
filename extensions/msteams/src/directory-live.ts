@@ -64,7 +64,8 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
     ? normalizeStringEntries(rawQuery.split("/", 2))
     : [rawQuery, null];
 
-  const normalizedChannelQuery = normalizeLowercaseStringOrEmpty(channelQuery);
+  // Canonical forms compare equal here; channel entries keep their original spelling.
+  const normalizedChannelQuery = normalizeLowercaseStringOrEmpty(channelQuery).normalize("NFC");
   const { items: teams } = await listTeamsByNameWithPageInfo(token, teamQuery);
   const results: ChannelDirectoryEntry[] = [];
 
@@ -93,7 +94,9 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
       if (!name) {
         continue;
       }
-      if (!normalizeLowercaseStringOrEmpty(name).includes(normalizedChannelQuery)) {
+      if (
+        !normalizeLowercaseStringOrEmpty(name).normalize("NFC").includes(normalizedChannelQuery)
+      ) {
         continue;
       }
       results.push({

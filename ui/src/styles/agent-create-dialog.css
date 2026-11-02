@@ -9,11 +9,7 @@
   max-height: calc(100dvh - 48px);
   grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  background: var(--bg-elevated);
   color: var(--text);
-  box-shadow: var(--shadow-xl);
 }
 
 .agent-create-dialog__header {
@@ -22,24 +18,24 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 16px;
+  padding: 12px var(--overlay-modal-padding);
   border-bottom: 1px solid var(--border);
 }
 
 .agent-create-dialog__header h2 {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--overlay-modal-title-size);
   font-weight: 600;
 }
 
 .agent-create-dialog__close {
   display: grid;
-  width: 30px;
-  height: 30px;
+  width: var(--overlay-modal-close-size);
+  height: var(--overlay-modal-close-size);
   flex: 0 0 auto;
   place-items: center;
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--menu-item-radius);
   background: transparent;
   color: var(--muted);
 }

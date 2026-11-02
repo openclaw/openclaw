@@ -100,6 +100,98 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
+  it("checkpoints individual reasoning occurrences around work and retains them once after settlement", async () => {
+    const params = await checkpointParams();
+    const { harness, run, raw, completed } = await startCheckpointAttempt(params);
+    const reasoning = (id: string, text: string) => ({
+      type: "reasoning",
+      id,
+      summary: [text],
+      content: [],
+    });
+    await harness.notify(itemNotification("item/started", reasoning("reason-1", "")));
+    await harness.notify({
+      method: "item/reasoning/summaryTextDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "reason-1",
+        summaryIndex: 0,
+        delta: "Draft",
+      },
+    });
+    await completed(reasoning("reason-1", "Checking the boundaries."));
+    expect((await readTranscriptMessagesByIdentity(params)).at(-1)).toMatchObject({
+      content: [{ type: "thinking", thinking: "Checking the boundaries." }],
+      __openclaw: { mirrorIdentity: "turn-1:reasoning:reason-1" },
+    });
+    // Native stream recovery can leave an earlier reasoning item unfinished.
+    // Optional reasoning must never block completed work from reaching disk.
+    await harness.notify(itemNotification("item/started", reasoning("orphan", "")));
+    await harness.notify({
+      method: "item/reasoning/summaryTextDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "orphan",
+        summaryIndex: 0,
+        delta: "Interrupted check.",
+      },
+    });
+    await harness.notify({
+      method: "error",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        willRetry: true,
+        error: { message: "Stream interrupted", codexErrorInfo: "other" },
+      },
+    });
+    await completed(agentMessage("commentary-1", "commentary", "Running the check."));
+    await raw({
+      type: "function_call",
+      call_id: "check",
+      name: "exec_command",
+      arguments: '{"cmd":"check"}',
+    });
+    await completed(commandExecution("check", "OK"));
+    await raw({ type: "function_call_output", call_id: "check", output: "OK" });
+    // Equal text belongs to distinct native occurrences; completion-only text
+    // must use the same live/history handoff as streamed text.
+    await completed(reasoning("reason-2", "Checking the boundaries."));
+    const checkpoint = await readTranscriptMessagesByIdentity(params);
+    expect(checkpoint.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "assistant",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect(checkpoint.at(-1)).toMatchObject({
+      content: [{ type: "thinking", thinking: "Checking the boundaries." }],
+      __openclaw: { mirrorIdentity: "turn-1:reasoning:reason-2" },
+    });
+    await harness.notify(
+      turnCompleted({
+        id: "turn-1",
+        status: "completed",
+        items: [
+          reasoning("reason-1", "Checking the boundaries."),
+          reasoning("reason-2", "Checking the boundaries."),
+          agentMessage("answer", "final_answer", "Done."),
+        ],
+      }),
+    );
+    await run;
+    const messages = await readTranscriptMessagesByIdentity(params);
+    expect(messages.slice(0, checkpoint.length)).toEqual(checkpoint);
+    expect(messages.slice(checkpoint.length)).toMatchObject([
+      { content: [{ type: "thinking", thinking: "Interrupted check." }] },
+      { content: [{ type: "text", text: "Done." }] },
+    ]);
+  });
+
   it("checkpoints the complete native response, not the earlier execution preview", async () => {
     const params = await checkpointParams();
     // Prepare the history reader before the attempt budget starts.

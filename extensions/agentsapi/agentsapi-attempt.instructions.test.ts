@@ -419,6 +419,8 @@ it("includes shared policies for the admitted Gateway tools in the initial instr
   await fixture.run();
   const instructions = fixture.requests[0]?.agent.instructions;
   expect(instructions).toContain("## UI Presentation");
+  expect(instructions).toContain("Permission blocks:");
+  expect(instructions).toContain("Omit unverified remediation advice");
   expect(instructions).toContain("## Skill Workshop");
   expect(instructions).toContain("## Delegation");
   expect(instructions).toContain("Use or store credentials the user supplies as requested");

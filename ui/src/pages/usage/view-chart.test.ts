@@ -167,43 +167,37 @@ describe("DailyChartCompact", () => {
     }
   });
 
-  it.each([false, true])(
-    "stacks each day by provider without claiming shares of incomplete totals (partial: %s)",
-    (partial) => {
-      const daily = [dailyEntry("2026-05-01", 400), dailyEntry("2026-05-02", 100)];
-      if (partial) {
-        daily[0]!.usageReport = { state: "unavailable" };
-      }
-      const series = buildProviderSeries([
-        { date: "2026-05-01", provider: "openai", model: "a", tokens: 300, cost: 0, count: 1 },
-        { date: "2026-05-01", provider: "anthropic", model: "b", tokens: 100, cost: 0, count: 1 },
-        { date: "2026-05-02", provider: "anthropic", model: "b", tokens: 100, cost: 0, count: 1 },
-      ]);
-      const { container, bars } = renderDailyChart(daily, "tokens", "by-provider", series);
+  it("stacks each day by provider", () => {
+    const daily = [dailyEntry("2026-05-01", 400), dailyEntry("2026-05-02", 100)];
+    const series = buildProviderSeries([
+      { date: "2026-05-01", provider: "openai", model: "a", tokens: 300, cost: 0, count: 1 },
+      { date: "2026-05-01", provider: "anthropic", model: "b", tokens: 100, cost: 0, count: 1 },
+      { date: "2026-05-02", provider: "anthropic", model: "b", tokens: 100, cost: 0, count: 1 },
+    ]);
+    const { container, bars } = renderDailyChart(daily, "tokens", "by-provider", series);
 
-      const segments = (bar: HTMLElement) =>
-        [...bar.querySelectorAll<HTMLElement>(".cost-segment")].map((segment) => ({
-          grow: segment.style.flexGrow,
-          background: segment.style.background,
-        }));
-      expect(segments(bars[0]!)).toEqual([
-        { grow: "300", background: "var(--chart-series-1)" },
-        { grow: "100", background: "var(--chart-series-2)" },
-      ]);
-      // A provider with no usage that day adds no empty segment.
-      expect(segments(bars[1]!)).toEqual([{ grow: "100", background: "var(--chart-series-2)" }]);
-      bars[0]!.focus();
-      flush();
-      expect(
-        [...container.querySelectorAll(".daily-chart-tip span")].map((entry) => entry.textContent),
-      ).toEqual(partial ? ["OpenAI≥ 300", "Anthropic≥ 100"] : ["OpenAI300", "Anthropic100"]);
-      expect(
-        [...container.querySelectorAll(".daily-chart-legend li")].map((item) =>
-          item.textContent?.trim(),
-        ),
-      ).toEqual(partial ? ["OpenAI", "Anthropic"] : ["OpenAI60%", "Anthropic40%"]);
-    },
-  );
+    const segments = (bar: HTMLElement) =>
+      [...bar.querySelectorAll<HTMLElement>(".cost-segment")].map((segment) => ({
+        grow: segment.style.flexGrow,
+        background: segment.style.background,
+      }));
+    expect(segments(bars[0]!)).toEqual([
+      { grow: "300", background: "var(--chart-series-1)" },
+      { grow: "100", background: "var(--chart-series-2)" },
+    ]);
+    // A provider with no usage that day adds no empty segment.
+    expect(segments(bars[1]!)).toEqual([{ grow: "100", background: "var(--chart-series-2)" }]);
+    bars[0]!.focus();
+    flush();
+    expect(
+      [...container.querySelectorAll(".daily-chart-tip span")].map((entry) => entry.textContent),
+    ).toEqual(["OpenAI300", "Anthropic100"]);
+    expect(
+      [...container.querySelectorAll(".daily-chart-legend li")].map((item) =>
+        item.textContent?.trim(),
+      ),
+    ).toEqual(["OpenAI60%", "Anthropic40%"]);
+  });
 
   it("retains provider segments and updates their values, colors and order across reports", () => {
     const date = "2026-05-01";

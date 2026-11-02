@@ -36,6 +36,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "sessions.branches.list",
   "sessions.get",
   "sessions.github.options",
+  "sessions.github.readiness",
   "sessions.github.status",
   "sessions.resolve",
   "sessions.search",
@@ -43,6 +44,8 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "sessions.files.get",
   "sessions.files.download",
   "sessions.files.assets",
+  "sessions.files.preview",
+  "sessions.files.preview.release",
   "sessions.setInvolvement",
   "chat.history",
   "chat.startup",
@@ -52,6 +55,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "session.members.listEvidence",
   "themes.get",
   "themes.list",
+  "tools.effective",
   "users.mentionable",
   "users.personalFile.get",
   "users.personalFile.set",
@@ -76,7 +80,6 @@ const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
   "sessions.patch",
   "sessions.patchMany",
   "sessions.fork",
-  "sessions.recover",
   "sessions.send",
   "sessions.steer",
   "sessions.processes.stop",
@@ -154,9 +157,6 @@ export function resolveBaseSessionMutationRequiredScope(
   method: string,
   params?: unknown,
 ): SessionMutationOperatorScope | undefined {
-  if (method === "sessions.recover") {
-    return "operator.write";
-  }
   if (method === "sessions.create") {
     if (!isRecord(params)) {
       return "operator.write";

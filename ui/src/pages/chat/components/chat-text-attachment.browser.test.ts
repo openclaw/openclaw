@@ -20,6 +20,65 @@ afterEach(() => {
 });
 
 describe.runIf(browserMode)("Markdown attachment controls", () => {
+  it("preserves literal spaces while inline code wraps in the document reader", async () => {
+    const literal = "alpha   beta";
+    const longLiteral = "alpha   beta gamma   delta epsilon   zeta eta   theta iota   kappa";
+    const text = [
+      "# Literal values",
+      "`alpha beta` and `alpha   beta` are distinct.",
+      "Ordinary   prose still wraps normally around the literal values in a narrow reader.",
+      `\`${longLiteral}\``,
+      "```text\nalpha   beta\nsecond line\n```",
+    ].join("\n\n");
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response(text)));
+    const container = document.createElement("div");
+    container.className = "side-panel__panel";
+    container.style.cssText = "display:flex;width:480px;height:600px;";
+    const panel = document.createElement("openclaw-chat-detail-panel");
+    panel.className = "chat-sidebar";
+    panel.content = {
+      kind: "attachment",
+      title: "literals.md",
+      mimeType: "text/markdown",
+      sourceIdentity: "attachment:literals",
+      resolveSource: () => ({ status: "ready", src: "/literals.md" }),
+    };
+    container.append(panel);
+    document.body.append(container);
+    await expect.poll(() => panel.querySelector("article code")?.textContent).toBe("alpha beta");
+    const article = expectDefined(panel.querySelector("article"), "Markdown reader");
+    const codes = [...article.querySelectorAll<HTMLElement>("p code")];
+    const code = expectDefined(
+      codes.find((element) => element.textContent === literal),
+      "Literal",
+    );
+    const range = document.createRange();
+    const width = (element: Element, start: number, end: number) => {
+      const node = expectDefined(
+        document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode(),
+        "Text node",
+      );
+      range.setStart(node, start);
+      range.setEnd(node, end);
+      return range.getBoundingClientRect().width;
+    };
+    for (const size of [480, 320]) {
+      container.style.width = `${size}px`;
+      expect(code.textContent).toBe(literal);
+      expect(width(code, 6, 7)).toBeGreaterThan(0);
+      expect(width(code, 5, 8)).toBeGreaterThan(width(code, 5, 6) * 2.5);
+      const longCode = expectDefined(
+        codes.find((element) => element.textContent === longLiteral),
+        "Long literal",
+      );
+      expect(longCode.getClientRects().length).toBeGreaterThan(1);
+      expect(article.scrollWidth).toBeLessThanOrEqual(article.clientWidth);
+      const prose = expectDefined(article.querySelectorAll("p")[1], "Ordinary prose");
+      expect(width(prose, 9, 10)).toBe(0);
+      expect(article.querySelector("pre code")?.textContent).toBe("alpha   beta\nsecond line\n");
+    }
+  });
+
   it("keeps native raw-reader focus and scrolling through a transport refresh", async () => {
     const text = Array.from(
       { length: 140 },

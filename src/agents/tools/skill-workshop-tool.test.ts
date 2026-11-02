@@ -5,6 +5,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { consumeRunSkillUsage } from "../../skills/runtime/run-usage.js";
+import { workshopPluginConfig } from "../../skills/workshop/config.test-support.js";
 import { listWorkshopArchive, listWorkshopChanges } from "../../skills/workshop/library.js";
 import { resolveWorkshopDraftsDir } from "../../skills/workshop/skills-root.js";
 import {
@@ -110,7 +111,7 @@ describe("skill_workshop", () => {
     ]);
   });
   it("saves a background review's change as a draft in propose mode and leaves skills unchanged", async () => {
-    setRuntimeConfigSnapshot({ skills: { workshop: { autonomous: { mode: "propose" } } } });
+    setRuntimeConfigSnapshot(workshopPluginConfig({ autonomous: { mode: "propose" } }));
     const review = workshop({ runId: "propose-run", reviewOf: "agent:main:main" });
     await review("view");
     await expect(review("patch", patch)).rejects.toThrow(

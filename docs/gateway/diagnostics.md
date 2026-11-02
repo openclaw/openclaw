@@ -700,8 +700,10 @@ installation root, with URLs such as `openclaw:src/...`, `openclaw:dist/...`, an
 `openclaw:packages/<name>/src/...` or `openclaw:packages/<name>/dist/...` for
 workspace packages. Paths outside the installation root are not OpenClaw code.
 Profiles label dependency frames as `[dep:<pkg>]` with URL
-`node_modules/<pkg>`, including scoped packages and pnpm layouts; symbols,
-versions, filenames, and absolute paths stay hidden. URLs with query or fragment
+`node_modules/<pkg>`, including scoped packages and pnpm layouts. First-party
+`@openclaw/*` packages retain safe function symbols, including private method
+names such as `#prepare`; third-party symbols stay hidden. Versions, filenames,
+and absolute paths stay hidden for all dependencies. URLs with query or fragment
 markers remain redacted. Frames with script ID `0`,
 an empty URL, and a negative line number use `[native]`, except for known V8
 engine labels such as `(root)`, `(V8 API)`, `(GC)`, and `(PARSER)`. Preserving those
@@ -719,8 +721,11 @@ when such references are omitted or a size-capped summary replaces the tree.
 
 The complete result is capped at 1 MiB. When the tree and samples exceed that cap,
 `truncated` is true and `summary` replaces `profile`. Summary entries combine
-identical call stacks, retain up to eight frames in leaf-first order, and contain
-`selfBytes`, inclusive `totalBytes`, and `count` (the number of sampled allocations
+identical call stacks and retain up to eight frames in leaf-first order. Repeated
+recursive runs that fit those slots are collapsed, with `×N` on the last frame of
+the repeated run. Longer stacks retain the allocating leaf, the nearest omitted
+OpenClaw caller, and its outermost OpenClaw owner; `[...]` marks skipped frames.
+Entries contain `selfBytes`, inclusive `totalBytes`, and `count` (the number of sampled allocations
 at those sites, not an exact object count). Entries are ordered by `totalBytes`,
 then `selfBytes`; lower-ranked entries are omitted to fit the cap. Inclusive totals
 overlap across callers, so do not add them together. Start with large `selfBytes`

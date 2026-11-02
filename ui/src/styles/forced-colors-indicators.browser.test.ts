@@ -45,6 +45,8 @@ const css = readStyles(
   "styles/chat/startup-layout",
   "styles/chat/layout",
   "styles/chat/text",
+  "pages/chat/components/chat-processes-panel",
+  "pages/chat/components/chat-subagents-panel-desktop",
 );
 
 function fixtureDocument(direction: "ltr" | "rtl"): string {
@@ -59,6 +61,65 @@ function fixtureDocument(direction: "ltr" | "rtl"): string {
 }
 
 fixture.describe("Control UI forced-colors indicators", () => {
+  it("keeps masked status rings readable against their opaque backing", async () => {
+    await withBrowserPage(
+      fixture.page({ forcedColors: "active", colorScheme: "light" }),
+      async (page) => {
+        await page.setContent(
+          styleDocument(
+            css,
+            `
+        <span id="palette" style="color:CanvasText;background:Canvas"></span>
+        <span class="chat-processes__spinner"></span>
+        <span class="subagents-desktop__spinner"></span>`,
+            'data-theme-mode="dark"',
+          ),
+        );
+        const colors = await page.evaluate(() => {
+          const palette = getComputedStyle(document.getElementById("palette")!);
+          return {
+            expected: [palette.backgroundColor, palette.color],
+            actual: Array.from(
+              document.querySelectorAll(".chat-processes__spinner, .subagents-desktop__spinner"),
+            ).map((element) => [
+              getComputedStyle(element).backgroundColor,
+              getComputedStyle(element, "::before").backgroundColor,
+            ]),
+          };
+        });
+        for (const actual of colors.actual) {
+          expect(actual).toEqual(colors.expected);
+        }
+      },
+    );
+  });
+
+  it("keeps status dots painted when forced colors repaint backgrounds", async () => {
+    await withBrowserPage(
+      fixture.page({ forcedColors: "active", colorScheme: "light" }),
+      async (page) => {
+        await page.setContent(
+          styleDocument(
+            css,
+            `<span id="palette" style="color:CanvasText"></span>
+            <span class="status-dot settings-status__dot"></span>
+            <span class="status-dot cron-table__state-dot"></span>
+            <span class="status-dot activity-pulse__running"></span>
+            <span class="status-dot activity-feed__presence-dot"></span>`,
+          ),
+        );
+        const colors = await page.evaluate(() => ({
+          expected: getComputedStyle(document.getElementById("palette")!).color,
+          actual: Array.from(
+            document.querySelectorAll(".status-dot"),
+            (element) => getComputedStyle(element).backgroundColor,
+          ),
+        }));
+        expect(colors.actual).toEqual(Array(4).fill(colors.expected));
+      },
+    );
+  });
+
   it("keeps row-button keyboard focus visible when forced colors suppress shadows", async () => {
     const classes = [
       "channels-item__detail",
@@ -114,9 +175,21 @@ fixture.describe("Control UI forced-colors indicators", () => {
           });
           await page.emulateMedia({ forcedColors: "none" });
           const normal = await readIndicators(page);
-          const selectStyle = { appearance: "none", image: expect.stringContaining("gradient") };
+          const selectStyle = { appearance: "base-select", image: "none" };
           expect(normal.selects).toEqual([selectStyle, selectStyle]);
           expect(normal.summaryImage).toContain("gradient");
+          // Engines without customizable selects keep the gradient chevron.
+          await page.evaluate(() => {
+            for (const style of document.querySelectorAll("style")) {
+              style.textContent = style.textContent.replaceAll(
+                "@supports (appearance: base-select)",
+                "@supports (appearance: openclaw-unsupported)",
+              );
+            }
+          });
+          const fallback = await readIndicators(page);
+          const fallbackStyle = { appearance: "none", image: expect.stringContaining("gradient") };
+          expect(fallback.selects).toEqual([fallbackStyle, fallbackStyle]);
         },
       );
     }

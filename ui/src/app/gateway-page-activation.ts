@@ -27,6 +27,7 @@ export function startGatewayPageActivation(
   let wasHidden = documentTarget.visibilityState === "hidden";
   let probeTimer: ReturnType<typeof setTimeout> | undefined;
   let probe: AbortController | null = null;
+  let failedProbes = 0;
 
   const recoveryAllowed = () => {
     const { phase, restartPending, suspensionPhase } = gateway.snapshot;
@@ -41,7 +42,9 @@ export function startGatewayPageActivation(
   const shouldProbe = () =>
     recoveryAllowed() &&
     ["connecting", "reconnecting"].includes(gateway.snapshot.phase) &&
-    gateway.snapshot.lastErrorCode !== "GATEWAY_BUSY" &&
+    // A failed upgrade's health probe can straddle link restoration and infer
+    // busy from the now-live endpoint. Prior unreachable evidence allows one retry.
+    (gateway.snapshot.lastErrorCode !== "GATEWAY_BUSY" || failedProbes > 0) &&
     gateway.snapshot.client !== null;
   const clearProbe = () => {
     clearTimeout(probeTimer);
@@ -49,7 +52,16 @@ export function startGatewayPageActivation(
     probe?.abort();
     probe = null;
   };
-  const syncProbe = (delayMs = 2_000 + Math.random() * 1_000) => {
+  // Short interruptions get a fast recovery window. Sustained failures back off
+  // to one health check per 4–5 seconds without resetting transport backoff.
+  const probeDelay = () =>
+    failedProbes < 8
+      ? 750 + Math.random() * 250
+      : (failedProbes === 8 ? 2_000 : 4_000) + Math.random() * 1_000;
+  const syncProbe = (delayMs = probeDelay()) => {
+    if (gateway.snapshot.phase === "connected") {
+      failedProbes = 0;
+    }
     if (!shouldProbe()) {
       clearProbe();
     } else if (probeTimer === undefined && !probe) {
@@ -70,6 +82,9 @@ export function startGatewayPageActivation(
       const timeout = setTimeout(() => controller.abort(), 1_500);
       try {
         const reachable = await probeGatewayReachability(client.gatewayUrl, controller.signal);
+        if (!reachable && probe === controller) {
+          failedProbes = Math.min(9, failedProbes + 1);
+        }
         if (
           reachable &&
           !controller.signal.aborted &&
@@ -78,6 +93,7 @@ export function startGatewayPageActivation(
           client.needsReachabilityReconnect
         ) {
           // The application owner retires the old client and preserves its outbox.
+          failedProbes = 0;
           gateway.connect();
         }
       } finally {
@@ -88,7 +104,7 @@ export function startGatewayPageActivation(
       }
     }
     // Fetch time belongs inside the interval, including an outage's abort timeout.
-    syncProbe(Math.max(0, 2_000 + Math.random() * 1_000 - (Date.now() - checkedAtMs)));
+    syncProbe(Math.max(0, probeDelay() - (Date.now() - checkedAtMs)));
   };
 
   const schedule = (force: boolean) => {
@@ -108,11 +124,15 @@ export function startGatewayPageActivation(
         return;
       }
       const { client } = gateway.snapshot;
+      failedProbes = 0;
+      clearTimeout(probeTimer);
+      probeTimer = undefined;
       if (client && recoveryAllowed() && (forceQueuedRecovery || client.needsWakeReconnect)) {
         // Replacing the client retires Safari's ghost socket synchronously. A
         // socket close would depend on the suspended transport firing `close`.
         gateway.connect();
       }
+      syncProbe(0);
       void import("./sw-refresh.runtime.ts")
         .then(({ refreshControlUiServiceWorker }) => refreshControlUiServiceWorker())
         .catch((error: unknown) => {

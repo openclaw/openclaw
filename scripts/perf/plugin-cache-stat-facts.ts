@@ -16,14 +16,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { Session, type HeapProfiler } from "node:inspector/promises";
-import { registerHooks } from "node:module";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { writeHeapSnapshot } from "node:v8";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -47,24 +47,11 @@ const plugins = integer("plugins", 40);
 const iterations = integer("iterations", 4);
 assert(entries >= plugins * 3, "Each plugin needs at least three entries");
 const ownerUrl = new URL("../../src/plugins/plugin-cache-files.ts", import.meta.url).href;
-let replaced = false;
-if (values.owner) {
-  const replacement = pathToFileURL(path.resolve(values.owner)).href;
-  registerHooks({
-    load(url, context, nextLoad) {
-      if (url !== ownerUrl) {
-        return nextLoad(url, context);
-      }
-      replaced = true;
-      const result = nextLoad(replacement, context);
-      return { format: result.format, source: result.source, shortCircuit: true };
-    },
-  });
-}
+const wasOwnerReplaced = registerPerfOwnerReplacement(ownerUrl, values.owner);
 const { pluginCacheStatSync, pluginCacheLstatSync, readPluginCacheDirectory } =
   await import("../../src/plugins/plugin-cache-files.js");
 const { createPluginCache, withPluginCache } = await import("../../src/plugins/plugin-cache.js");
-assert(!values.owner || replaced, "Baseline owner was not loaded");
+assert(!values.owner || wasOwnerReplaced(), "Baseline owner was not loaded");
 const output = path.resolve(values.output);
 fs.mkdirSync(path.dirname(output), { recursive: true });
 fs.mkdirSync(output);
@@ -96,10 +83,6 @@ async function collect() {
   await nextTurn();
   gc!();
   gc!();
-}
-
-function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
 }
 
 function verify(cache: ReturnType<typeof createPluginCache>) {
@@ -193,7 +176,7 @@ try {
   const wallMs = performance.now() - started;
   const used = process.threadCpuUsage(cpu);
   const allocatedBytes = values.allocations
-    ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+    ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
     : undefined;
   inspector.disconnect();
   await collect();

@@ -58,6 +58,7 @@ export type PluginDiagnosticCode =
   | "dashboard-declaration-invalid"
   | "explicit-config-plugin-selection"
   | "plugin-state-migration"
+  | "plugin-source-snapshot-invalid"
   | "plugin-verification"
   | "sdk-incompatible"
   | "workspace-scope-omitted";
@@ -446,6 +447,8 @@ export type PluginManifest = {
   requiresPlugins?: string[];
   enabledByDefault?: boolean;
   enabledByDefaultOnPlatforms?: PluginManifestDefaultPlatform[];
+  /** Author opt-in: independent generations may coexist through admitted work and cleanup. */
+  generationOverlap?: boolean;
   /** Legacy plugin ids that should normalize to this plugin id. */
   legacyPluginIds?: string[];
   /** Provider ids that should auto-enable this plugin when referenced in auth/config/models. */
@@ -537,6 +540,12 @@ export type PluginManifest = {
   /** Static MCP servers contributed while this plugin is enabled. */
   mcpServers?: Record<string, PluginManifestMcpServer>;
   skills?: string[];
+  /**
+   * One folder of learned skills per agent, named by this single path segment under the
+   * agent's state folder. Skill loading reads it at the learned tier, between bundled and
+   * managed skills, without loading plugin runtime.
+   */
+  agentSkillsDir?: string;
   name?: string;
   description?: string;
   /** Optional presentation hints for plugin catalog surfaces. */

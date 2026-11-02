@@ -16,10 +16,11 @@ import {
   cleanDeferredFinalText,
   mergeDeferredFinalText,
 } from "../../tts/captioned-final.js";
-import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
+import { createTtsDirectiveTextStreamCleaner } from "../../tts/directive-facts.js";
 import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import {
   copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   isReplyPayloadTerminalContent,
   isReplyPayloadTtsSupplement,
@@ -68,11 +69,11 @@ const messageActionRuntimeLoader = createLazyImportLoader(
   () => import("../../infra/outbound/message-action-runner.js"),
 );
 
-export type AcpDispatchDeliveryCoordinator = ReturnType<
-  typeof createAcpDispatchDeliveryCoordinator
+export type AcpDispatchDeliveryCoordinator = Awaited<
+  ReturnType<typeof createAcpDispatchDeliveryCoordinator>
 >;
 
-export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDeliveryParams) {
+export async function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDeliveryParams) {
   const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
   const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
   const deliverySessionKey = normalizeOptionalString(params.sessionKey) ?? params.ctx.SessionKey;
@@ -102,14 +103,14 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
     accumulatedFinalText: "",
     accumulatedDeliveredFinalText: "",
     pendingTranscriptOutcomes: [],
-    cleanBlockTtsDirectiveText: shouldCleanTtsDirectiveText({
+    cleanBlockTtsDirectiveText: (await shouldCleanTtsDirectiveText({
       cfg: params.cfg,
       preparedTtsPreferences: params.preparedTtsPreferences,
       ttsAuto: params.sessionTtsAuto,
       agentId: params.agentId,
       channelId: params.ttsChannel,
       accountId: resolvedAccountId,
-    })
+    }))
       ? createTtsDirectiveTextStreamCleaner()
       : undefined,
     deliveredFinalReply: false,
@@ -254,6 +255,8 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
         : undefined;
       const prepared = routed
         ? normalizeReplyPayloadOutcome(payload, {
+            preserveLeadingSourceBoundary:
+              kind === "block" && getReplyPayloadMetadata(payload)?.streamedSourceBoundary === true,
             transformReplyPayload: createChannelReplyTransform({
               messaging,
               cfg: params.cfg,
@@ -292,7 +295,11 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
         if (!visiblePayload.isCommentary && !visiblePayload.isReasoning) {
           blockSource = pendingBlockSource ?? createBlockReplySource();
         }
-        const text = state.cleanBlockTtsDirectiveText.push(rawBlockPayloadText);
+        const text = state.cleanBlockTtsDirectiveText.push(
+          // Keep authored line boundaries without restoring padding removed by
+          // the existing speech-cleaning path (including private-context gaps).
+          visiblePayload.text?.replace(/^[^\S\r\n]+|[^\S\r\n]+$/g, "") ?? rawBlockPayloadText,
+        );
         if (blockSource) {
           const hasPendingText = state.cleanBlockTtsDirectiveText.hasBufferedDirectiveText();
           blockSource.setComplete(!hasPendingText);

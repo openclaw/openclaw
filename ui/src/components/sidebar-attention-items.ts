@@ -66,10 +66,13 @@ export function buildSidebarAttentionEntries(params: {
       provider.profiles.find(
         (profile) => profile.status === "expired" || profile.status === "missing",
       )?.profileId ?? params.modelAuthAgentId?.trim();
-    const time = formatTimeAgo(
-      Math.max(0, params.now - (params.modelAuthStatus?.ts ?? params.now)),
-      { suffix: false },
-    );
+    // Status snapshots refresh, so a known expiry keeps the row's arrival stable.
+    const expiredAt = provider.expiry?.at;
+    const arrivedAtMs =
+      expiredAt !== undefined && expiredAt <= params.now
+        ? expiredAt
+        : (params.modelAuthStatus?.ts ?? params.now);
+    const time = formatTimeAgo(Math.max(0, params.now - arrivedAtMs), { suffix: false });
     const detail = scope
       ? t("attention.modelAuthExpiredWithScope", { scope, time })
       : t("attention.modelAuthExpiredState", { time });
@@ -85,8 +88,8 @@ export function buildSidebarAttentionEntries(params: {
           meta: {
             ...(scope ? { context: scope } : {}),
             status: t("attention.authExpired"),
-            time,
           },
+          arrivedAtMs,
           inlineAction: {
             label: t("attention.reconnect"),
             routeId: "model-providers",
@@ -140,8 +143,8 @@ export function buildSidebarAttentionEntries(params: {
             meta: {
               ...(context ? { context } : {}),
               status: t(failed ? "attention.failed" : "attention.overdue"),
-              time,
             },
+            arrivedAtMs: timestamp(job),
             action: { kind: "navigate", routeId: "cron" },
             // A later overdue episode must resurface after its planned run changes.
             signature: failed ? job.id : `${job.id}@${job.state?.nextRunAtMs}`,

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { readMemoryHostEventRecords } from "openclaw/plugin-sdk/memory-host-events";
 import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import {
   resetDoctorPluginState,
@@ -793,6 +794,92 @@ describe("memory-core doctor dreaming migration", () => {
       .entries();
     expect(entries).toEqual([]);
     await fs.access(`${eventPath}.migrated`);
+  });
+
+  it.each([false, true])(
+    "cleans archived legacy shadows with configured path=%s",
+    async (custom) => {
+      const base = custom ? path.join(rootDir, "external", "index.db") : legacyPath;
+      const params = custom
+        ? migrationParams(legacyMemorySearchConfig({ store: { path: base } }))
+        : migrationParams();
+      await writeLegacyMemorySidecar(base);
+      await fs.rename(base, `${base}.migrated`);
+      const archive = await fs.readFile(`${base}.migrated`);
+      const uuid = "11111111-2222-3333-4444-555555555555";
+      const shadow = `${base}.tmp-${uuid}`;
+      const survivors = [
+        `${base}.tmp-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`,
+        `${base}.memory-reindex-${uuid}`,
+        `${base}.tmp-not-a-uuid`,
+        `${base}.tmp-${uuid}.backup`,
+      ];
+      const old = new Date(Date.now() - 48 * 60 * 60_000);
+      const removed = ["", "-wal", "-shm", "-journal"].map((suffix) => `${shadow}${suffix}`);
+      for (const file of [...removed, ...survivors]) {
+        await fs.writeFile(file, "preserve or reclaim");
+        await fs.utimes(file, old, old);
+      }
+      // A recent companion protects the entire family, even when its base is old.
+      await fs.writeFile(`${survivors[0]}-wal`, "recent WAL");
+      const linked = `${base}.tmp-22222222-2222-3333-4444-555555555555`;
+      await fs.symlink(`${base}.migrated`, linked);
+      const directory = `${base}.tmp-33333333-2222-3333-4444-555555555555`;
+      await fs.mkdir(directory);
+      const migration = legacyMemoryIndexMigration();
+      expect(await migration.detectLegacyState(params)).not.toBeNull();
+      expect(await migration.collectBackupResources?.(params)).toEqual(
+        expect.arrayContaining(removed.map((file) => ({ path: file, kind: "file" }))),
+      );
+      const reported: string[] = [];
+      const report = vi
+        .spyOn(console, "warn")
+        .mockImplementation((_message: unknown, file: unknown) => {
+          expect(existsSync(String(file))).toBe(true);
+          reported.push(String(file));
+        });
+      try {
+        const result = await migration.migrateLegacyState(params);
+        expect(result.warnings).toEqual([]);
+      } finally {
+        report.mockRestore();
+      }
+      expect(reported.toSorted()).toEqual(removed.toSorted());
+      for (const file of removed) {
+        await expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      for (const file of survivors) {
+        await expect(fs.readFile(file, "utf8")).resolves.toBe("preserve or reclaim");
+      }
+      await expect(fs.readFile(`${base}.migrated`)).resolves.toEqual(archive);
+      expect((await fs.lstat(linked)).isSymbolicLink()).toBe(true);
+      expect((await fs.lstat(directory)).isDirectory()).toBe(true);
+      await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+    },
+  );
+
+  it("preserves legacy shadows needed by unresolved or configured recovery", async () => {
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    const shadow = `${legacyPath}.tmp-11111111-2222-3333-4444-555555555555`;
+    const old = new Date(Date.now() - 48 * 60 * 60_000);
+    await fs.writeFile(shadow, "only recovery copy");
+    await fs.utimes(shadow, old, old);
+    const migration = legacyMemoryIndexMigration();
+    await migration.migrateLegacyState(migrationParams());
+    await expect(fs.readFile(shadow, "utf8")).resolves.toBe("only recovery copy");
+    await fs.writeFile(legacyPath, "unimportable primary");
+    await fs.writeFile(`${legacyPath}.migrated`, "older archive");
+    const result = await migration.migrateLegacyState(migrationParams());
+    expect(result.warnings.length).toBeGreaterThan(0);
+    await expect(fs.readFile(shadow, "utf8")).resolves.toBe("only recovery copy");
+    await expect(fs.readFile(legacyPath, "utf8")).resolves.toBe("unimportable primary");
+    await fs.rm(legacyPath);
+    const recoveryAlias = path.join(rootDir, "recovery.sqlite");
+    await fs.symlink(shadow, recoveryAlias);
+    await migration.migrateLegacyState(
+      migrationParams(legacyMemorySearchConfig({ store: { path: recoveryAlias } })),
+    );
+    await expect(fs.readFile(shadow, "utf8")).resolves.toBe("only recovery copy");
   });
 
   it("removes an empty legacy memory sidecar placeholder without warning", async () => {

@@ -21,6 +21,17 @@ type PreparationPhase =
   | "baseWait"
   | "diskAdmission"
   | "registration"
+  | "registrationInspect"
+  | "registrationMetadata"
+  | "commitPrepare"
+  | "cloneEstimate"
+  | "indexLocate"
+  | "checkoutDestination"
+  | "checkoutMarker"
+  | "promptReady"
+  | "warmPoolTake"
+  | "warmPoolApply"
+  | "templateRelease"
   | "provision"
   | "publication"
   | "indexRefresh"
@@ -53,6 +64,7 @@ type PreparationTimingState = {
   activePhases: number;
   coveredSince: number;
   coveredMs: number;
+  failure?: { error: unknown; phase: PreparationPhase };
 };
 const log = createSubsystemLogger("agents/worktrees");
 const preparation = new AsyncLocalStorage<PreparationTimingState>();
@@ -104,6 +116,13 @@ export async function timeWorktreePreparationPhase<T>(
   const finish = startWorktreePreparationPhase(phase);
   try {
     return await run();
+  } catch (error) {
+    const current = preparation.getStore();
+    // Preserve the innermost failing phase as the error crosses enclosing waits.
+    if (current && (!current.failure || current.failure.error !== error)) {
+      current.failure = { error, phase };
+    }
+    throw error;
   } finally {
     finish();
   }
@@ -126,13 +145,27 @@ export async function withWorktreePreparationTiming<T>(
     coveredMs: 0,
   };
   let outcome = "threw";
+  let failure: unknown;
   try {
     const result = await preparation.run(current, run);
     outcome = "returned";
     return result;
+  } catch (error) {
+    failure = error;
+    throw error;
   } finally {
     if (current.enabled) {
       try {
+        const errorDetails: Record<string, string> =
+          outcome === "threw"
+            ? {
+                errorClass: failure instanceof Error ? failure.name : typeof failure,
+                errorPhase:
+                  current.failure && current.failure.error === failure
+                    ? current.failure.phase
+                    : "unattributed",
+              }
+            : {};
         const end = performance.now();
         const durationMs = Math.round(end - start);
         const coveredMs =
@@ -150,11 +183,12 @@ export async function withWorktreePreparationTiming<T>(
           Math.max(0, end - start - coveredMs),
         );
         log.info("managed worktree preparation", {
-          consoleMessage: `managed worktree preparation kind=${kind} template=${current.template} templateDetails=${JSON.stringify(current.templateDetails)} outcome=${outcome} durationMs=${durationMs} unattributedMs=${unattributedMs} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)}`,
+          consoleMessage: `managed worktree preparation kind=${kind} template=${current.template} templateDetails=${JSON.stringify(current.templateDetails)} outcome=${outcome} errorDetails=${JSON.stringify(errorDetails)} durationMs=${durationMs} unattributedMs=${unattributedMs} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)}`,
           kind,
           template: current.template,
           templateDetails: current.templateDetails,
           outcome,
+          ...errorDetails,
           durationMs,
           unattributedMs,
           phaseDurationsMs,
@@ -174,6 +208,7 @@ export async function withWorktreePreparationTiming<T>(
               ]),
             ),
             outcome,
+            ...errorDetails,
             unattributedMs,
             ...phaseDurationsMs,
           },

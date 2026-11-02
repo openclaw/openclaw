@@ -187,6 +187,34 @@ export function registerChannelAutostartRecoveryTests({
     }
   });
 
+  it("does not start deferred channel accounts after stop wins the startup handoff", async () => {
+    const releaseAccountStart = createDeferred();
+    const measureMock = vi.fn(async (_name: string, run: () => unknown) => await run());
+    const startupTrace = {
+      measure: async <T>(name: string, run: () => T | Promise<T>) =>
+        (await measureMock(name, run)) as T,
+    };
+    const { manager, startAccount } = install(async () => {}, {
+      startupTrace,
+      deferStartupAccountStartsUntil: releaseAccountStart.promise,
+    });
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    expect(startAccount).not.toHaveBeenCalled();
+
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await manager.startChannels();
+    expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(true);
+    releaseAccountStart.resolve();
+    await flushMicrotasks();
+
+    expect(startAccount).not.toHaveBeenCalled();
+    expect(measureMock.mock.calls.map(([name]) => name)).not.toContain(
+      "channels.discord.start-account-handoff",
+    );
+    expect(snapshot(manager)?.running).not.toBe(true);
+  });
+
   describe("crash-loop channel autostart recovery", () => {
     let originalEnv: ReturnType<typeof captureEnv>;
     beforeEach(() => {
