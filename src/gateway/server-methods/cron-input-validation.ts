@@ -430,9 +430,8 @@ export async function captureCronUpdatedInferenceBinding(
   const selection = model
     ? resolveSimpleCompletionSelectionForAgent({ cfg, agentId, modelRef: model })
     : null;
-  // A native CLI login records no binding, so an unbound job must not demand a stored
-  // account. A job that already records one keeps its rejection until an authorized
-  // transition replaces that account.
+  // Native capture validates the actual execution route before authorizing a clear;
+  // other empty captures must never release an existing stored account.
   const cliExecution = selection
     ? resolveCliRuntimeExecutionProvider({
         cfg,
@@ -461,22 +460,19 @@ export async function captureCronUpdatedInferenceBinding(
   // An account edit keeps the runtime the job records; otherwise it resolves the way create does.
   const recordedRuntime = nextJob.inferenceBinding?.runtime;
   const executionKey = resolveCronSessionTargetSessionKey(nextJob.sessionTarget);
-  const runtimeSessionEntry = recordedRuntime
-    ? { agentRuntimeOverride: recordedRuntime }
-    : await loadCronRuntimeSessionEntry({
-        cfg,
-        job: nextJob,
-        agentId,
-        executionEntry: executionKey
-          ? (await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionKey, agentId }))
-              ?.entry
-          : undefined,
-      });
+  const runtimeSessionEntry = await loadCronRuntimeSessionEntry({
+    cfg,
+    job: nextJob,
+    agentId,
+    executionEntry: executionKey
+      ? (await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionKey, agentId }))?.entry
+      : undefined,
+  });
   const inference = await captureCronInferenceForCaller(
-    { cfg, agentId, model, runtimeSessionEntry },
+    { cfg, agentId, model, runtimeSessionEntry, recordedRuntime },
     caller,
   );
-  if (!inference.inferenceBinding) {
+  if (inference.inferenceBinding === undefined) {
     if (cliExecution && !nextJob.inferenceBinding) {
       return undefined;
     }
@@ -484,11 +480,13 @@ export async function captureCronUpdatedInferenceBinding(
   }
   // An account edit on the same provider never moves the job off the runtime it records;
   // when that runtime is no longer available, the edit fails and the binding stays as it was.
-  const capturedRuntime = inference.inferenceBinding.runtime;
+  const capturedRuntime =
+    inference.inferenceBinding === null ? cliExecution : inference.inferenceBinding.runtime;
   if (
     recordedRuntime &&
     capturedRuntime !== recordedRuntime &&
-    inference.inferenceBinding.provider === nextJob.inferenceBinding?.provider
+    (inference.inferenceBinding?.provider ?? selection.provider) ===
+      nextJob.inferenceBinding?.provider
   ) {
     inference.disposeInferenceAuthorization();
     throw new Error(

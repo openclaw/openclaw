@@ -368,6 +368,24 @@ function* adaptRecipeForBaseline(
       continue;
     }
     yield adaptStepForBaseline(step, baselineVersion);
+    // 2026.10.5 shipped skills.workshop; later candidates move it into the plugin's config.
+    if (
+      step.id === "skills" &&
+      pinnedVersion &&
+      (compareReleaseVersions(pinnedVersion, "2026.10.5") ?? -1) >= 0
+    ) {
+      yield {
+        id: "skill-workshop-settings",
+        intent: "skill-workshop-settings",
+        argv: [
+          "config",
+          "set",
+          "skills.workshop",
+          JSON.stringify({ autonomous: { mode: "off" }, maxSkillBytes: 8000 }),
+          "--strict-json",
+        ],
+      };
+    }
   }
 }
 
