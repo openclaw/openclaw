@@ -28,7 +28,11 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
-import { formatLeaseRenewalError, OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
+import {
+  createOpenClawStateLeaseLostError,
+  formatLeaseRenewalError,
+  OpenClawStateLeaseError,
+} from "./openclaw-state-lease-error.js";
 import {
   acquireLeaseHeartbeatCarrier,
   type LeaseHeartbeatCarrier,
@@ -207,6 +211,7 @@ export function startOpenClawStateLeaseHeartbeat(
     | "lossPort"
     | "databaseEngineSelection"
   > & {
+    identity: Parameters<typeof createOpenClawStateLeaseLostError>[0];
     /** The caller retains its shared-state actor through startup and failure teardown. */
     startupContext?: OpenClawStateWorkerContext;
     retainCleanup?: (cleanup: LeaseHeartbeatCleanup) => void;
@@ -283,6 +288,12 @@ export function startOpenClawStateLeaseHeartbeat(
     const loss = readWorkerLoss();
     return loss ? ` (lossPath=${loss.path}, lossOutcome=${loss.outcome})` : "";
   };
+  const lost = (cause: Error, loss = readWorkerLoss()?.leaseLoss) => {
+    // Bounded reports need identity first; keep the original heartbeat diagnostics too.
+    const error = createOpenClawStateLeaseLostError(params.identity, cause, loss);
+    error.message += `: ${cause.message}`;
+    return error;
+  };
   const fail = (cause: Error) => {
     if (lossReported || Atomics.load(shared, state.status) === state.closed) {
       return;
@@ -290,13 +301,7 @@ export function startOpenClawStateLeaseHeartbeat(
     lossReported = true;
     const loss = readWorkerLoss()?.leaseLoss;
     const error =
-      loss && !(cause instanceof OpenClawStateLeaseError && cause.loss)
-        ? new OpenClawStateLeaseError(cause.message, {
-            code: "OPENCLAW_STATE_LEASE_LOST",
-            loss,
-            cause,
-          })
-        : cause;
+      loss && !(cause instanceof OpenClawStateLeaseError && cause.loss) ? lost(cause, loss) : cause;
     // Shared-state checks can win before worker events; decorate the first loss here.
     error.message += lossDetail();
     Atomics.store(shared, state.status, state.lost);
@@ -309,10 +314,7 @@ export function startOpenClawStateLeaseHeartbeat(
   const assertRunning = () => {
     // Shared loss can precede carrier notification; publish it before returning to the owner.
     if (Atomics.load(shared, state.status) !== state.ready) {
-      const error = new OpenClawStateLeaseError("state lease heartbeat is not running", {
-        code: "OPENCLAW_STATE_LEASE_LOST",
-        loss: readWorkerLoss()?.leaseLoss,
-      });
+      const error = lost(new Error("state lease heartbeat is not running"));
       fail(error);
       throw error;
     }
