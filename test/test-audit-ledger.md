@@ -99,26 +99,23 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [190868](https://github.com/openclaw/openclaw/pull/190868): Remove the parity default catalog's unselected runtime-control-ui row. Actual request-deduplication fault fails the retained repeated-start keeper; owner/test bytes restored exactly. Both declarations/three cases remain; baseline/candidate/published three, focused checks, every removal scan and fresh review pass;57 CI checks succeed. Three fewer formatted test lines; production unchanged.
 
+- [190883](https://github.com/openclaw/openclaw/pull/190883): Remove the allowlist frozen-input echo and implied DeepSeek DSML absence assertion. With both absent, actual in-place-sort and emitted-DSML faults fail their retained keepers; owner/test bytes restored exactly. All ten declarations/eighteen cases remain; baseline/candidate/published eighteen, focused checks, every removal scan and fresh review pass;56 CI checks succeed. Two fewer test lines; production unchanged.
+
 ## Current qualification
 
-Pinned main 52c106496b85: remove two absorbed assertions from the tool-name
-allowlist and DeepSeek text-filter tests. All ten physical declarations/eighteen
-expanded cases remain, including every input, exact result, the output-mutation/
-iterator check and partial-buffer/immediate-output cases.
+Pinned main fca1c6ec13f4: give the fallback-skip-cache fixture an explicit absent
+TTL environment and strengthen its existing missing-session case. Exercise both
+undefined and empty session writes with a positive TTL; require no cache bucket
+and a valid-session positive control. Keep all eight declarations/cases, every
+existing input/assertion and the shared reset/restore owners. Production unchanged.
 
-Untouched official baseline and clean candidate pass all eighteen cases.
-With both retired assertions absent, an actual in-place-sort fault fails the
-retained frozen-input case; an actual DSML-output fault fails all nine retained
-exact-output rows. All temporary owner/test bytes were restored exactly.
-Typed lint, scoped core-test types, format, ledger MDX and whitespace pass.
-Every dependency, unused-file and production/full-tree/script export phase passes.
-Every other test byte and the test-line baseline remain unchanged.
-Two fewer test lines; production unchanged. Fresh review, final published proof
-and CI remain pending.
-
-No public API, runtime configuration, migration or state contract change.
-Local allowlist and streaming-filter contracts are not live provider, Gateway
-or agent proof.
+Fresh tests, owner, support, callers, history and agents-core routing are
+qualified. Untouched official baseline, inherited-positive-TTL default-case
+counterfactual, actual missing-session write-guard fault against old/repaired
+oracles, exact restoration, clean candidate and positive-environment proof,
+focused checks, exact test-line allocation, fresh review and CI remain pending.
+No helper, export or assertion retirement: this is a proof repair, not a removal
+batch. Local cache contracts do not prove a live provider, agent or Gateway flow.
 
 ## Completed source review
 
