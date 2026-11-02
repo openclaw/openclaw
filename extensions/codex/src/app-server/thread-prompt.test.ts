@@ -1,11 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
   type JsonObject,
 } from "./protocol.js";
-import { buildDeveloperInstructions, type CodexThreadPromptContext } from "./thread-prompt.js";
+import {
+  buildCodexBaseInstructions,
+  buildDeveloperInstructions,
+  type CodexThreadPromptContext,
+} from "./thread-prompt.js";
 
 function tool(
   name: string,
@@ -57,13 +61,50 @@ function render(
 
 describe("buildDeveloperInstructions deferred tool discovery", () => {
   it.each(["full", "minimal"] as const)(
-    "keeps shared permission recovery guidance in %s mode",
+    "carries shared permission recovery guidance once in %s mode",
     (promptMode) => {
-      const instructions = render({ promptMode }, { dynamicTools: [] });
-      expect(instructions.match(/Permission blocks:/g)).toHaveLength(1);
-      expect(instructions).toContain("Omit unverified remediation advice");
+      const params = { agentId: "main", config: {}, modelId: "gpt-5.6-luna", promptMode };
+      const base = buildCodexBaseInstructions(params, { dynamicTools: [] });
+      expect(base.match(/Permission blocks:/g)).toHaveLength(1);
+      expect(base).toContain("Omit unverified remediation advice");
+      expect(render({ promptMode }, { dynamicTools: [] })).not.toContain("Permission blocks:");
     },
   );
+
+  it("keeps policy in the developer carrier when the prompt mode leaves the base identity-only", () => {
+    const instructions = render({ promptMode: "none" }, { dynamicTools: [] });
+    expect(instructions.match(/Permission blocks:/g)).toHaveLength(1);
+  });
+
+  it("renders the provider's stable policy into the base instructions", () => {
+    const resolveSystemPromptContribution = vi.fn(() => ({
+      stablePrefix: "<provider_contract>stay exact</provider_contract>",
+    }));
+    const base = buildCodexBaseInstructions(
+      {
+        agentId: "main",
+        config: {},
+        modelId: "gpt-5.6-luna",
+        runtimePlan: {
+          prompt: { provider: "openai", resolveSystemPromptContribution },
+        } as unknown as CodexThreadPromptContext["runtimePlan"],
+      },
+      { dynamicTools: [] },
+    );
+    expect(base).toContain("<provider_contract>stay exact</provider_contract>");
+    expect(resolveSystemPromptContribution).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openai", modelId: "gpt-5.6-luna", promptMode: "full" }),
+    );
+  });
+
+  it("keeps policy in the developer carrier for ring-zero threads, which have no base", () => {
+    const instructions = render(
+      { toolsAllow: ["openclaw"] },
+      { dynamicTools: [], hostSystemAgentActive: true },
+    );
+    expect(instructions).toContain("You are a personal agent running inside OpenClaw.");
+    expect(instructions.match(/Permission blocks:/g)).toHaveLength(1);
+  });
 
   it.each([
     [false, false, false],

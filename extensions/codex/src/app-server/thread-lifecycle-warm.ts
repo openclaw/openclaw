@@ -541,6 +541,7 @@ export async function tryReuseCodexLiveThread(
       incognito &&
       (!ephemeralPolicy ||
         ephemeralPolicy.developerInstructions !== params.developerInstructions ||
+        ephemeralPolicy.baseInstructions !== resumeParams.baseInstructions ||
         getCodexInferenceThread(params.client, binding.threadId) !== params.inferenceRoute ||
         [...(params.inferenceProviderRoutes?.keys() ?? [])].some(
           (provider) =>

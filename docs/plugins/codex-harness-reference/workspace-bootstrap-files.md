@@ -12,6 +12,17 @@ How `AGENTS.md`, persona, skills, and memory files reach a native Codex turn. Pa
 
 ## Workspace bootstrap files
 
+Ordinary threads replace Codex's model prompt with OpenClaw's own policy through
+`thread/start.baseInstructions`, the same execution, tool-call, care, control, and
+documentation sections the regular engine renders, plus a short Codex runtime
+section covering its channels, steering, compaction, and native tools. The text
+renders from thread-stable facts only, so turn, channel, workspace, and skill
+facts keep their existing carriers below. A changed base prompt reaches an
+existing thread on its next cold resume; restricted threads rotate instead, and
+incognito threads reject the change like any other generic policy change.
+Ring-zero threads keep empty base instructions, and app-server tool declarations
+are unchanged.
+
 The full generic developer policy, including a `before_prompt_build.systemPrompt`
 replacement, remains native session configuration for compaction and native-child
 inheritance. Ordinary persistent cold or changed-configuration resumes require an

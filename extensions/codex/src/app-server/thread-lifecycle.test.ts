@@ -83,7 +83,12 @@ it("uses direct OpenClaw functions and hosted web search for subscription sharin
       selectedAuthMode: "oauth",
       selectedAuthFlow: "chatgpt-token-sharing",
     },
-  } as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
+    prompt: {
+      provider: "openai",
+      modelId: params.modelId,
+      resolveSystemPromptContribution: () => undefined,
+    },
+  } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
   const nativeCodeModeEnabled = shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
     nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params),
   });
@@ -846,8 +851,18 @@ describe("Codex app-server turn params", () => {
         sandbox: "danger-full-access",
         serviceTier: "flex",
         personality: "none",
+        baseInstructions: expect.stringContaining(
+          "You are a personal assistant running inside OpenClaw.",
+        ),
         developerInstructions: resumeParams.developerInstructions,
       });
+      const startParams = await buildThreadStartParams(params, {
+        cwd: params.workspaceDir ?? "/workspace",
+        dynamicTools: [],
+        appServer,
+      });
+      // Warm reuse compares the resume request with the creation request.
+      expect(startParams.baseInstructions).toBe(resumeParams.baseInstructions);
       expect(resumeParams.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
       const turnParams = await buildTurnStartParams(params, {
         threadId: "thread-1",

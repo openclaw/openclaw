@@ -717,7 +717,12 @@ export async function startFreshCodexThread(
     // Restricted ephemeral threads also need creation policy for fenced warm reuse.
     liveThreadEphemeralPolicy: startParams.ephemeral
       ? createCodexEphemeralThreadPolicy(
-          { ...params, config: startParams.config },
+          {
+            ...params,
+            // Resume requests omit ring-zero's empty base, so compare it as absent.
+            baseInstructions: startParams.baseInstructions || undefined,
+            config: startParams.config,
+          },
           context.effectiveConfig.config,
         )
       : undefined,

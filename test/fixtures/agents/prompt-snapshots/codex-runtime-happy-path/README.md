@@ -8,7 +8,7 @@ These fixtures capture the default OpenAI/Codex happy path for prompt review:
 - Codex harness default coverage for tool-only visible source replies.
 - Telegram direct chat and Discord group chat with ordinary visible replies through the message tool.
 
-The materialized Markdown snapshots show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: Codex `gpt-5.5` model instructions from a pinned Codex model catalog fixture, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, turn input with simulated OpenClaw workspace bootstrap runtime context, and references to the complete dynamic tool catalog.
+The materialized Markdown snapshots show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: OpenClaw base instructions, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, turn input with simulated OpenClaw workspace bootstrap runtime context, and references to the complete dynamic tool catalog.
 
 The workspace bootstrap simulation includes dummy workspace contents so prompt reviewers can see how managed OpenClaw inference adds profile files to parent-only request instructions and keeps `MEMORY.md` in turn input. `AGENTS.md` is intentionally not repeated here because Codex loads it natively.
 

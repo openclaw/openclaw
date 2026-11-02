@@ -39,7 +39,12 @@ import {
   resolveCodexAppServerModelProvider,
   resolveCodexAppServerRequestModelSelection,
 } from "./thread-model-selection.js";
-import { buildDeveloperInstructions, type CodexThreadPromptContext } from "./thread-prompt.js";
+import {
+  buildCodexBaseInstructions,
+  buildDeveloperInstructions,
+  isCodexRingZeroThread,
+  type CodexThreadPromptContext,
+} from "./thread-prompt.js";
 import { applyCodexManagedShellEnvironment } from "./thread-shell-environment.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
@@ -180,6 +185,7 @@ export function buildCodexThreadConfiguration(
           dynamicTools: options.dynamicTools,
           nativeCodeModeEnabled: options.nativeCodeModeEnabled !== false,
           nativeCodeModeOnlyEnabled: config["features.code_mode_only"] === true,
+          hostSystemAgentActive: options.hostSystemAgentActive,
         }),
       options.refreshableInstructions,
     ),
@@ -203,10 +209,9 @@ export async function buildThreadStartParams(
   return {
     ...modelSelection,
     ...buildCodexThreadConfiguration(params, options),
-    ...((options.hostSystemAgentActive ?? isHostScopedAgentToolActive("openclaw")) &&
-    isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)
-      ? { baseInstructions: CODEX_RING_ZERO_BASE_INSTRUCTIONS }
-      : {}),
+    baseInstructions: isCodexRingZeroThread(params, options.hostSystemAgentActive)
+      ? CODEX_RING_ZERO_BASE_INSTRUCTIONS
+      : buildCodexBaseInstructions(params, options),
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     serviceName: "OpenClaw",
     threadSource: "openclaw",
@@ -260,6 +265,10 @@ export async function buildThreadResumeParams(
     },
     ...modelSelection,
     ...buildCodexThreadConfiguration(params, options),
+    // Warm reuse compares this request with the creation request, so both carry the base.
+    ...(isCodexRingZeroThread(params, options.hostSystemAgentActive)
+      ? {}
+      : { baseInstructions: buildCodexBaseInstructions(params, options) }),
     personality: CODEX_NATIVE_PERSONALITY_NONE,
   };
 }

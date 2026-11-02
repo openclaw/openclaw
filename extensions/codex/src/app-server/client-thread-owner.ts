@@ -42,6 +42,7 @@ export function isThreadBackgroundOnly(
 export type CodexEphemeralThreadPolicy = {
   autoCompactTokenLimit?: number;
   autoCompactTokenLimitScope?: string;
+  baseInstructions?: string;
   developerInstructions?: string;
   refreshableInstructions?: string;
   /**
@@ -217,10 +218,14 @@ export function revertRetainedThreadInstructions(
 
 export function createCodexEphemeralThreadPolicy(
   {
+    baseInstructions,
     developerInstructions,
     refreshableInstructions,
     config,
-  }: Pick<CodexEphemeralThreadPolicy, "developerInstructions" | "refreshableInstructions"> & {
+  }: Pick<
+    CodexEphemeralThreadPolicy,
+    "baseInstructions" | "developerInstructions" | "refreshableInstructions"
+  > & {
     config?: {
       model_auto_compact_token_limit?: unknown;
       model_auto_compact_token_limit_scope?: unknown;
@@ -237,6 +242,7 @@ export function createCodexEphemeralThreadPolicy(
   return {
     ...(typeof limit === "number" ? { autoCompactTokenLimit: limit } : {}),
     ...(typeof scope === "string" ? { autoCompactTokenLimitScope: scope } : {}),
+    baseInstructions,
     developerInstructions,
     refreshableInstructions,
     nativeRefreshableInstructions: refreshableInstructions,

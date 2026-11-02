@@ -1866,6 +1866,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         ...(change === "compaction-scope"
           ? { autoCompactTokenLimit: 120_000, autoCompactTokenLimitScope: "body_after_prefix" }
           : {}),
+        baseInstructions: expect.any(String),
         developerInstructions: "generic policy",
         refreshableInstructions: firstSkills,
         // Creation carries the catalog natively, so compaction restores this one.
@@ -1920,6 +1921,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         threadId: first.threadId,
         lifecycle: { action: "resumed" },
         liveThreadEphemeralPolicy: {
+          baseInstructions: expect.any(String),
           developerInstructions: "generic policy",
           refreshableInstructions: skills,
           // A refresh never rewrites native instructions, so the creation-time

@@ -267,7 +267,7 @@ describe("happy path prompt snapshots", () => {
     const statsSection = renderedPromptSection(
       telegram,
       "### Rough Text Token Estimates",
-      "### System: Codex Model Instructions",
+      "### System: OpenClaw Base Instructions",
     );
     const stats = JSON.parse(statsSection.match(/```json\n([\s\S]*?)\n```/u)![1]!) as {
       additionalContext: { chars: number };
