@@ -27,7 +27,7 @@ vi.mock("../../runtime.js", async (importOriginal) => ({
 }));
 const { registerCronCli } = await import("../cron-cli.js");
 
-it("warns only about dropped command environment keys after a successful edit", async () => {
+it("persists command edits and warns only about dropped environment keys", async () => {
   await withOpenClawTestState(
     { layout: "home", prefix: "openclaw-command-env-" },
     async (state) => {
@@ -88,12 +88,17 @@ it("warns only about dropped command environment keys after a successful edit", 
           kind: "command",
           argv: ["echo", "fixture"],
           env: { KEEP: "old-synthetic-value", DROP: "dropped-synthetic-secret" },
+          timeoutSeconds: 60,
+          noOutputTimeoutSeconds: 5,
         },
         delivery: { mode: "none" },
       });
       try {
         await edit("--command-input", "");
         expect(warning()).toBe("");
+        expect(await storedEnv()).toMatchObject({ timeoutSeconds: 60, noOutputTimeoutSeconds: 5 });
+        await edit("--no-output-timeout-seconds", "0");
+        expect(await storedEnv()).toMatchObject({ timeoutSeconds: 60, noOutputTimeoutSeconds: 0 });
         await edit("--command-env", "KEEP=new-synthetic-value");
         expect(await storedEnv()).toMatchObject({ env: { KEEP: "new-synthetic-value" } });
         expect(await storedEnv()).not.toHaveProperty("env.DROP");

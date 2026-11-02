@@ -74,6 +74,14 @@ openclaw automations create "*/15 * * * *" \
 
 `--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution. Command jobs capture stdout/stderr, record normal run history, and route output through the same `announce`, `webhook`, or `none` delivery modes as isolated jobs. A command that prints only `NO_REPLY` is suppressed.
 
+For command jobs, `--no-output-timeout-seconds <n>` accepts a non-negative whole
+number of idle seconds. Omit it when creating a job to leave the no-output
+watchdog unset; omitting it on edit preserves the stored value. Set it to `0`
+to use the runner's effectively-unbounded sentinel: a finite timer of
+2,147,483,647 ms (about 24.9 days), not a literally disabled watchdog. The
+independent wall-clock limit from `--timeout-seconds` remains unchanged, so quiet
+commands can keep a finite execution deadline.
+
 Use `--display-name <name>` when the list and detail views should show a
 human-readable label distinct from the automation's stable name. Set or update
 that label with `automations add|edit --display-name`. Use
