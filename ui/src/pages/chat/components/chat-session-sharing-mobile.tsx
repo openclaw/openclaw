@@ -22,7 +22,7 @@ import { Menu } from "../../../components/solid/menu.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { SessionOwnerAvatar } from "../../../components/solid/session-owner-chip.tsx";
 import { SettingsToggleRow } from "../../../components/solid/settings-ui.tsx";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import { registerSessionPeopleEnglish } from "../../../i18n/locales/en-session-people.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "../../../styles/settings.css";
@@ -33,7 +33,7 @@ import {
   type ChatSessionSharingRosterRow,
 } from "./chat-session-sharing-shared.tsx";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionSharingEnglish);
 
 registerEnglishCatalog(registerSessionPeopleEnglish);
 
@@ -211,10 +211,10 @@ function SharingPermissions(props: {
   let input: HTMLInputElement | undefined;
   let trigger: HTMLButtonElement | undefined;
   const matches = () => {
-    const terms = query().trim().toLocaleLowerCase().split(/\s+/u);
+    const terms = query().trim().toLocaleLowerCase().normalize("NFC").split(/\s+/u);
     return props.data.rows.filter(({ identity }) =>
       terms.every((term) =>
-        [identity.label, identity.id].join(" ").toLocaleLowerCase().includes(term),
+        [identity.label, identity.id].join(" ").toLocaleLowerCase().normalize("NFC").includes(term),
       ),
     );
   };

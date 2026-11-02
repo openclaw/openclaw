@@ -16,6 +16,8 @@ import {
   runCapabilityWithParentAgent,
   runModelAuthWithAgent,
 } from "./capability-cli.test-harness.js";
+import { registerVideoOutputCapabilityCliTests } from "./capability-cli.video-output.test-support.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 
 const PNG_1X1_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
@@ -1249,63 +1251,6 @@ describe("capability cli", () => {
     });
   });
 
-  it("passes image output format, quality, and OpenAI hints through to edit runtime", async () => {
-    const png = Buffer.from(PNG_1X1_BASE64, "base64");
-    primeGeneratedImage("gpt-image-1.5", "transparent-edit.png", png);
-    const directory = tempDirs.make("capability-image-edit-");
-    const inputPath = path.join(directory, "input.png");
-    const outputPath = path.join(directory, "output.png");
-    await fs.writeFile(inputPath, png);
-
-    await runCapability(
-      "image",
-      "edit",
-      ...cliOptions({
-        file: [inputPath, inputPath],
-        count: 3,
-        size: "2160x3840",
-        "aspect-ratio": "9:16",
-        resolution: "4K",
-        background: "opaque",
-        "timeout-ms": 180000,
-        prompt: "make background transparent",
-        model: "openai/gpt-image-1.5",
-        "output-format": "png",
-        "openai-background": "transparent",
-        "openai-moderation": "auto",
-        quality: "high",
-        output: outputPath,
-        json: true,
-      }),
-    );
-
-    const generationCall = firstImageGenerationCall();
-    const inputImages = generationCall?.inputImages as Array<Record<string, unknown>>;
-    expect(generationCall).toMatchObject({
-      prompt: "make background transparent",
-      modelOverride: "openai/gpt-image-1.5",
-      outputFormat: "png",
-      quality: "high",
-      count: 3,
-      size: "2160x3840",
-      aspectRatio: "9:16",
-      resolution: "4K",
-      background: "opaque",
-      timeoutMs: 180000,
-    });
-    expect(generationCall?.providerOptions).toEqual({
-      openai: {
-        background: "transparent",
-        moderation: "auto",
-      },
-    });
-    expect(firstJsonOutput()?.outputs).toEqual([
-      expect.objectContaining({ path: outputPath, mimeType: "image/png" }),
-    ]);
-    expect(inputImages).toHaveLength(2);
-    expect(inputImages[0]?.fileName).toBe(path.basename(inputPath));
-  });
-
   it.each(["generate", "edit"])(
     "rejects invalid image %s resolution before dispatch",
     async (action) => {
@@ -1328,18 +1273,47 @@ describe("capability cli", () => {
   );
 
   it.each([
-    ["--timeout-ms", ""],
-    ["--timeout-ms", "1000ms"],
-  ])("rejects invalid image option %s %j before dispatch", async (flag, value) => {
-    await expect(generateImage(flag, value)).rejects.toThrow("exit 1");
-    expectRuntimeErrorContains("Invalid --timeout-ms. Use a positive millisecond value");
-    expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-    expect(mocks.generateVideo).not.toHaveBeenCalled();
-    expect(mocks.describeImageFile).not.toHaveBeenCalled();
-    expect(mocks.prepareImageDescriptionInput).not.toHaveBeenCalled();
-    expect(mocks.describePreparedImageWithModel).not.toHaveBeenCalled();
-    expect(mocks.generateImage).not.toHaveBeenCalled();
-  });
+    [
+      "capability",
+      ["image", "generate", "--prompt", "friendly lobster", "--json", "--timeout-ms"],
+      "",
+      "Invalid --timeout-ms. Use a positive millisecond value, e.g. --timeout-ms 30000.",
+    ],
+    [
+      "capability",
+      ["image", "generate", "--prompt", "friendly lobster", "--json", "--timeout-ms"],
+      "1000ms",
+      'Invalid --timeout-ms. Use a positive millisecond value, e.g. --timeout-ms 30000. Received: "1000ms".',
+    ],
+    [
+      "infer",
+      ["web", "search", "--query", "ping", "--limit"],
+      "",
+      "--limit must be a positive integer",
+    ],
+  ] as const)(
+    "rejects invalid numeric input before %s %j dispatch",
+    async (command, argv, raw, message) => {
+      const webSearchRuntime = await import("../web-search/runtime.js");
+      vi.mocked(webSearchRuntime.runWebSearch).mockClear();
+      const run = runCap(command, ...argv, raw);
+      await expect(run).rejects.toBeInstanceOf(ExpectedCliError);
+      await expect(run).rejects.toMatchObject({
+        message,
+        humanOutput: message,
+        machineOutput: message,
+      });
+      expect(mocks.runtime.error).not.toHaveBeenCalled();
+      expect(mocks.runtime.exit).not.toHaveBeenCalled();
+      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+      expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
+      expect(mocks.generateVideo).not.toHaveBeenCalled();
+      expect(mocks.describeImageFile).not.toHaveBeenCalled();
+      expect(mocks.prepareImageDescriptionInput).not.toHaveBeenCalled();
+      expect(mocks.describePreparedImageWithModel).not.toHaveBeenCalled();
+      expect(mocks.generateImage).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([false, true])(
     "downloads generated videos with private-network opt-in %s",
@@ -1376,21 +1350,14 @@ describe("capability cli", () => {
     },
   );
 
-  it("preserves an existing --output and removes its temp when a video stream fails", async () => {
-    primeGeneratedVideoUrl("https://example.com/broken-video.mp4");
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode("partial-video"));
-        controller.error(new Error("video stream exploded"));
-      },
-    });
-    mockVideoFetch(stream);
-    const fixture = await outputFixture(".mp4", "keep-existing-video");
-    const { outputBase } = fixture;
-    await expect(generateVideo("--output", outputBase)).rejects.toThrow("exit 1");
-
-    expectRuntimeErrorContains("video stream exploded");
-    await expectOutputFile(fixture, "keep-existing-video");
+  registerVideoOutputCapabilityCliTests({
+    mocks,
+    generateVideo,
+    primeGeneratedVideoUrl,
+    mockVideoFetch,
+    outputFixture,
+    expectOutputFile,
+    expectRuntimeErrorContains,
   });
 
   it("preserves buffered image output when publication fails", async () => {
@@ -1594,44 +1561,19 @@ describe("capability cli", () => {
     }
   });
 
-  it.each([
-    [
-      "infer",
-      ["web", "search", "--query", "ping", "--limit"],
-      "",
-      "--limit must be a positive integer",
-    ],
-    [
-      "capability",
-      ["video", "generate", "--prompt", "clip", "--duration"],
-      "   ",
-      "--duration must be a positive duration (1–9007199254740991s after rounding",
-    ],
-  ] as const)(
-    "rejects blank numeric input before %s %j dispatch",
-    async (command, argv, raw, message) => {
-      const webSearchRuntime = await import("../web-search/runtime.js");
-      vi.mocked(webSearchRuntime.runWebSearch).mockClear();
-
-      await expect(runCap(command, ...argv, raw)).rejects.toThrow("exit 1");
-
-      expectRuntimeErrorContains(message);
-      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-      expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
-      expect(mocks.generateImage).not.toHaveBeenCalled();
-      expect(mocks.generateVideo).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["0", "-5", "0.4", "abc", "Infinity", "1e309", "9007199254740992"])(
+  it.each(["   ", "0", "-5", "0.4", "abc", "Infinity", "1e309", "9007199254740992"])(
     "rejects invalid video duration %s before dispatch",
     async (duration) => {
+      const webSearchRuntime = await import("../web-search/runtime.js");
+      vi.mocked(webSearchRuntime.runWebSearch).mockClear();
       await expect(generateVideo("--duration", duration)).rejects.toThrow("exit 1");
 
       expectRuntimeErrorContains(
         "--duration must be a positive duration (1–9007199254740991s after rounding; e.g. 1, 2.5, 10).",
       );
       expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+      expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
+      expect(mocks.generateImage).not.toHaveBeenCalled();
       expect(mocks.generateVideo).not.toHaveBeenCalled();
     },
   );

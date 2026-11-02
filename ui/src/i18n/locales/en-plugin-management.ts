@@ -136,21 +136,6 @@ const enPluginManagement = {
     },
   },
   pluginsPage: {
-    installTrust: {
-      title: "Plugin code",
-      description:
-        "Plugins can run code inside the Gateway. If a plugin includes native web UI, that code also runs in the OpenClaw web app with the signed-in user’s Gateway permissions. Only install plugins you trust.",
-    },
-    bundleTrust: {
-      title: "Bundle contents",
-      description:
-        "Bundles can add content and configure tools, hooks, or external services. Only install bundles you trust.",
-    },
-    nativeUi: {
-      title: "Includes native web UI",
-      description:
-        "This plugin runs code in the OpenClaw web app. It can read and modify the app’s interface and use the Gateway permissions of the signed-in user. Only enable plugins you trust.",
-    },
     compatibilityDeprecatedDated:
       "Uses OpenClaw APIs that retire on {date}. It keeps working until then; check for a plugin update.",
     compatibilityDeprecatedUndated:
@@ -351,9 +336,14 @@ const enPluginManagement = {
       edit: "Edit",
       connected: "Connected",
       configured: "Configured",
-      editAccount: "Edit {name} connection",
       editCredential: "Edit {name}",
       connectAccount: "Sign in to {name}",
+      signOut: "Sign out",
+      signOutAccount: "Sign out of {name}",
+      signOutConfirmTitle: "Sign out of {name}?",
+      signOutUnavailable: "Sign-out could not open. Your account is still connected; try again.",
+      signOutConfirmMessage:
+        "OpenClaw removes the saved sign-in for {name}. Its tools stop working until you sign in again.",
       configure: "Configure",
       configureCredential: "Configure {name}",
       connect: "Sign in",

@@ -18,7 +18,6 @@ import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { presenceConnectivitySignature } from "../../lib/nodes/inventory.ts";
@@ -40,7 +39,7 @@ import { createPageRequest } from "../../lib/page-request.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage, type GatewayPageChange } from "../../lib/reactive/gateway-page.ts";
-import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
@@ -54,8 +53,6 @@ import {
 } from "./view-inventory-readiness.tsx";
 import { DevicesView } from "./view.tsx";
 import type { DevicesProps, DevicesRouteData } from "./view.types.ts";
-
-registerEnglishCatalog(registerDevicesEnglish);
 
 export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   const context = useApplication();
@@ -623,6 +620,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       configRead: policyReads.config,
       execApprovalsRead: policyReads.approvals,
       loading: devices.nodesLoading,
+      initialInventoryReady: routeDataInitialized,
       inventoryRead,
       inventoryScope: inventoryScope(),
       onReloadInventory: () => {

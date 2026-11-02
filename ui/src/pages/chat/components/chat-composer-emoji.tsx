@@ -3,7 +3,6 @@ import { createOverlay, findOverlayParent } from "../../../components/overlay-li
 import "../../../components/solid/overlay.css";
 import "../../../styles/chat/emoji-menu.css";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
-import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import { acquireNativeOverlaySurface } from "../../../lib/native-overlay-occlusion.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
@@ -14,7 +13,6 @@ import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 const EmojiMenuOptions = lazy(() => import("./chat-composer-emoji-options.tsx"), {
   export: "EmojiMenuOptions",
 });
-warmWhenIdle(EmojiMenuOptions.preload);
 
 registerEnglishCatalog(registerChatComposerEnglish);
 

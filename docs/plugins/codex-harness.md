@@ -28,6 +28,11 @@ current owned proxy. Context-only projection refreshes use that same logical
 inference identity when background work retains its predecessor, rather than
 comparing the private relay URL with the logical route fingerprint.
 
+If Codex discards an unused native thread, the next turn starts a replacement
+through the existing thread lifecycle and logs a warning. A binding with recorded
+conversation history is preserved when its native thread cannot be found;
+OpenClaw reports the error instead of silently starting over.
+
 If active work still claims a native thread, OpenClaw rejects configuration
 changes that would release it without trying fallback models. Wait for that work
 to finish or stop it before retrying. The original thread and its configuration
@@ -432,6 +437,33 @@ legacy Codex GPT refs. Put OpenAI agent auth order under `auth.order.openai`.
 Legacy Codex auth profile ids and legacy Codex auth order entries are
 repaired by `openclaw doctor --fix`.
 
+### Parent-local inference connection recovery
+
+When an ordinary managed turn ends with the exact `Codex parent-local inference
+transport failed` error, OpenClaw settles its recorded output before retiring
+that connection from future acquisitions. Retirement is skipped while sibling
+work or idle Incognito history still owns the process: Incognito history cannot
+be resumed from disk. Existing sibling turns
+continue normally; preserving their ownership takes priority over this optional
+connection refresh.
+The next eligible attempt can resume the saved thread on a fresh connection.
+The relay does not replay tools or add a retry loop; existing retry limits and
+side-effect checks still apply. Unrelated upstream 502s, supervised sessions,
+and client-bound native tool catalogs do not trigger this retirement.
+
+The logs include `codex inference HTTP relay failed` with a bounded stage and
+cause classification, plus `codex inference transport retired after settled failure`
+when retirement occurs. These diagnostics omit private routes, credentials,
+request bodies, and arbitrary exception text.
+
+After installing a repair, verify its live activation receipt before calling it
+active. If activation is pending, an authorized operator can run
+`openclaw plugins reload codex --json`. Then verify a reply and a read-only tool
+call in the affected session. For background-worker incidents, also follow up
+with the same worker through its parent and verify the worker's completed result;
+a successful parent reply alone does not establish worker recovery. Reconcile
+previous tool results and delivery receipts before retrying external work.
+
 With provider/model runtime policy unset or `auto`, the `openai/*` prefix alone
 never selects this harness. OpenAI may select Codex implicitly only for an
 exact official HTTPS Platform Responses or ChatGPT Responses route with no
@@ -443,6 +475,14 @@ runtime by themselves. See
 If Codex owns auth before Platform versus ChatGPT routing is known, OpenClaw
 still requires every candidate route to declare Codex compatibility. Native
 auth ownership alone never bypasses that route check.
+
+For managed local stdio, automatic selection uses the built-in OpenClaw harness
+when no native Codex binary is available. This includes platforms without a
+published binary, such as Linux RISC-V64. An explicitly selected or pinned Codex
+runtime reports an error instead. Install a native Codex build and set
+`plugins.entries.codex.config.appServer.command` or `OPENCLAW_CODEX_APP_SERVER_BIN`
+to use it. Configured commands, WebSocket connections, Unix sockets, and
+worker-hosted app-servers retain their own startup validation.
 
 When no OpenClaw sandbox is active, OpenClaw starts Codex app-server threads
 with Codex native code mode enabled (code-mode-only stays off by default), so
@@ -570,6 +610,9 @@ session generation. After Stop settles, you can send another message in the same
 chat without reconnecting.
 Stop also retires an already-interrupted child without interrupting its finished
 turn again, so that child cannot keep its parent session blocked.
+Before retiring a canceled native child, Stop also waits for its owned process
+cleanup. An interrupted turn alone does not prove its commands stopped. This
+includes children whose parent has yielded and children interrupted before Stop.
 If its previous native process is already closing, Stop cancels the waiting run
 without waiting for physical exit. A replacement writer still waits for that exit.
 Session-wide Stop preserves the caller's request ownership, protected-run, and

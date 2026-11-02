@@ -49,6 +49,7 @@ export function enforceGatewayRunFutureConfigGuard(params: {
     snapshot: params.snapshot,
     config: params.config,
     env: guardEnv,
+    serviceMode,
   });
   if (!block) {
     return true;

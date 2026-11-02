@@ -46,6 +46,10 @@ describe("update run ledger compaction", () => {
       "candidate-gateway-startup",
       "openclaw doctor",
       "managed-service-restart",
+      "managed-service update handoff",
+      "service-stop",
+      "service-start",
+      "service-running",
       "update-driver-handoff",
     ].map((step) => timedStep(step, step === "global update" ? "failed" : "completed"));
     const refusal = {

@@ -60,7 +60,7 @@ function CodeBlock(props: { title: string; value: unknown; format?: (value: unkn
   );
 }
 
-function SecurityRow(props: { status: DebugData["status"] }) {
+function SecurityRow(props: { status: DebugData["status"]; pending: boolean }) {
   const summary = () =>
     // SAFETY: status.get publishes numeric security-audit counters in this field.
     (props.status as { securityAudit?: { summary?: Record<string, number> } } | null)?.securityAudit
@@ -68,6 +68,9 @@ function SecurityRow(props: { status: DebugData["status"] }) {
   const critical = () => summary()?.critical ?? 0;
   const warn = () => summary()?.warn ?? 0;
   const label = () => {
+    if (!summary()) {
+      return t(props.pending ? "common.loading" : "debug.overlay.unavailable");
+    }
     const info = summary()?.info ?? 0;
     const text =
       critical() > 0
@@ -78,22 +81,23 @@ function SecurityRow(props: { status: DebugData["status"] }) {
     return text + (info > 0 ? ` · ${t("debug.security.info", { count: String(info) })}` : "");
   };
   return (
-    <Show when={summary()}>
-      <Row
-        title={t("debug.security.audit")}
-        description={
-          <>
-            {t("debug.security.runPrefix")} <span class="mono">openclaw security audit --deep</span>{" "}
-            {t("debug.security.runSuffix")}
-          </>
-        }
-        control={
-          <>
-            <Status kind={critical() > 0 ? "danger" : warn() > 0 ? "warn" : "ok"} label={label()} />
-          </>
-        }
-      />
-    </Show>
+    <Row
+      title={t("debug.security.audit")}
+      description={
+        <>
+          {t("debug.security.runPrefix")} <span class="mono">openclaw security audit --deep</span>{" "}
+          {t("debug.security.runSuffix")}
+        </>
+      }
+      control={
+        <span class="debug-security-status" aria-busy={props.pending ? "true" : "false"}>
+          <Status
+            kind={!summary() ? "muted" : critical() > 0 ? "danger" : warn() > 0 ? "warn" : "ok"}
+            label={label()}
+          />
+        </span>
+      }
+    />
   );
 }
 
@@ -303,13 +307,18 @@ export function DebugPage() {
   function RefreshButton(props: { pending: boolean }) {
     return (
       <button
-        class="btn"
+        class="btn debug-refresh"
+        data-refresh-label={t("common.refresh")}
+        data-refreshing-label={t("common.refreshing")}
         disabled={gateway.read().snapshot.phase !== "connected" || props.pending}
         onClick={() => void loadDiagnostics()}
       >
-        {gateway.read().snapshot.phase === "connected" && props.pending
-          ? t("common.refreshing")
-          : t("common.refresh")}
+        <Show
+          when={gateway.read().snapshot.phase === "connected" && props.pending}
+          fallback={<span>{t("common.refresh")}</span>}
+        >
+          <span>{t("common.refreshing")}</span>
+        </Show>
       </button>
     );
   }
@@ -319,7 +328,22 @@ export function DebugPage() {
       <SettingsPage wide>
         <Section
           title={t("debug.snapshotsTitle")}
-          description={t("debug.snapshotsSubtitle")}
+          description={
+            <span class="debug-read-feedback">
+              <Errored
+                fallback={(error) => (
+                  <span role="alert">
+                    <Status kind="danger" label={t("common.failed")} /> {formatUiError(error())}
+                  </span>
+                )}
+              >
+                <Loading fallback={t("debug.snapshotsSubtitle")}>
+                  {readFeedback()}
+                  {t("debug.snapshotsSubtitle")}
+                </Loading>
+              </Errored>
+            </span>
+          }
           actions={
             <Loading on={diagnosticsRead.receipt()} fallback={<RefreshButton pending />}>
               <RefreshButton pending={isPending(diagnosticsRead.ready)} />
@@ -336,21 +360,14 @@ export function DebugPage() {
               description={t("debug.offlineSnapshots")}
             />
           </Show>
-          <Errored
-            fallback={(error) => (
-              <div class="settings-row" role="alert">
-                <div class="settings-row__text">
-                  <span class="settings-row__title">
-                    <Status kind="danger" label={t("common.failed")} />
-                  </span>
-                  <span class="settings-row__desc">{formatUiError(error())}</span>
-                </div>
-              </div>
-            )}
-          >
-            <Loading>{readFeedback()}</Loading>
-          </Errored>
-          <SecurityRow status={read("data").status} />
+          <SecurityRow
+            status={read("data").status}
+            pending={
+              read("data").status === null &&
+              !read("diagnosticsError") &&
+              gateway.read().snapshot.phase === "connected"
+            }
+          />
           <For each={["status", "health", "heartbeat"] as const}>
             {(key) => {
               const title = () => t(key === "heartbeat" ? "debug.lastHeartbeat" : `debug.${key}`);

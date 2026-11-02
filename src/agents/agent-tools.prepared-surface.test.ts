@@ -13,6 +13,7 @@ import {
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import * as coreCodingTools from "./core-coding-tools.js";
 import { prepareCoreToolPolicy, projectAgentToolDefinition } from "./prepared-tool-surface.js";
+import { explainToolAvailability } from "./tool-availability-explanation.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -93,6 +94,15 @@ it("logs unknown allow entries once during async tool assembly", async () => {
     toolConstructionPlan: { ...base.toolConstructionPlan, includeShellTools: false },
   };
   const expected = `tools: tools.allow allowlist contains unknown entries (${entry}). These entries won't match any tool unless the plugin is enabled.`;
+  const report = await explainToolAvailability({
+    config: options.config,
+    toolNames: ["read", "write"],
+  });
+  expect(report.tools).toEqual([
+    { name: "read", available: true },
+    { name: "write", available: false, block: expect.objectContaining({ stage: "allowlist" }) },
+  ]);
+  expect(warn.mock.calls.filter(([message]) => message === expected)).toHaveLength(0);
   for (let assembly = 0; assembly < 2; assembly++) {
     const tools = await createOpenClawCodingToolsInternalAsync(options);
     expect(tools.map((tool) => tool.name)).toEqual(["read"]);

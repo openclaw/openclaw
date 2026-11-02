@@ -44,6 +44,10 @@ export const SCHEMA_MIGRATION_HISTORICAL_REPAIR_TABLES: Readonly<
     "operator_approvals",
     "session_watch_cursors",
     "subagent_runs",
+    "worker_session_placements",
+    "meeting_transcript_sessions",
+    "meeting_transcript_summaries",
+    "delivery_queue_entries",
     "worker_turn_tool_authorities",
     "worker_session_tool_operations",
     "migration_runs",
@@ -59,6 +63,8 @@ const migrationTables: Readonly<
 > = {
   agent: {
     ...SCHEMA_MIGRATION_BACKUP_TABLES.agent,
+    // Only the stored CHECK definition widens; no transcript rows or indexes change.
+    39: [],
     10: ["session_transcript_active_events", "session_transcript_index_state"],
     11: ["sessions", "conversations", "session_conversations"],
     13: ["transcript_rewrite_watermarks"],
@@ -97,6 +103,7 @@ const migrationTables: Readonly<
     ],
     24: ["session_nodes", "session_entry_snapshots"],
     25: [
+      "session_pending_inputs",
       "session_nodes",
       "session_windows",
       "session_key_contract",
@@ -160,6 +167,10 @@ const migrationTables: Readonly<
       ...indexStatistics,
     ],
     22: [
+      "worker_session_placements",
+      "meeting_transcript_sessions",
+      "meeting_transcript_summaries",
+      "delivery_queue_entries",
       "acp_sessions",
       "operator_approvals",
       "cron_run_receipts",
@@ -177,6 +188,14 @@ const migrationTables: Readonly<
 export function resolveSchemaMigrationIntegrityTables(
   migration: SchemaMigration,
 ): readonly string[] {
+  // This crossing changes only the stored constraint, including its finalizer.
+  if (
+    migration.kind === "agent" &&
+    migration.foundVersion === 38 &&
+    migration.supportedVersion === 39
+  ) {
+    return ["schema_meta"];
+  }
   const tables = new Set(["schema_meta"]);
   if (migration.foundVersion === migration.supportedVersion) {
     for (const table of SCHEMA_MIGRATION_HISTORICAL_REPAIR_TABLES[migration.kind]) {

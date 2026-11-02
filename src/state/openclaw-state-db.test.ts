@@ -41,7 +41,10 @@ import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-sup
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { listOpenClawRegisteredAgentDatabases } from "./openclaw-agent-db-registry.js";
 import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
-import { snapshotPreflightSourceManifest } from "./openclaw-database-preflight.test-support.js";
+import {
+  expectLiveReadSourceManifest,
+  snapshotPreflightSourceManifest,
+} from "./openclaw-database-preflight.test-support.js";
 import { seedOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.test-support.js";
 import { recordOpenClawStateDatabaseOpenFailure } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
@@ -52,6 +55,7 @@ import {
 } from "./openclaw-state-db-corruption.test-support.js";
 import { hasDanglingSkillWorkshopCollectionReviewIndex } from "./openclaw-state-db-doctor-schema.js";
 import {
+  expectedStateMigrationsFromV27,
   expectV2026_7_1_2CronHistoryPreserved,
   markStateDatabaseVersion,
   materializeV2026_7_1_2StateDatabase,
@@ -1290,7 +1294,7 @@ describe("openclaw state database", () => {
     insertLegacyAttestation.run("wk-orphan", 3_000, 3_100);
 
     legacy.exec(`
-          DROP TABLE workspace_path_aliases; DROP INDEX idx_worker_session_placements_environment;
+          DROP TABLE workspace_path_aliases;
           PRAGMA user_version = 1;
           UPDATE schema_meta SET schema_version = 1, app_version = '2026.6.35'
            WHERE meta_key = 'primary';
@@ -1623,13 +1627,7 @@ describe("openclaw state database", () => {
       { kind: "portable-identity-columns-v22", path: fixture.databasePath },
       { kind: "task-run-indexes-v24", path: fixture.databasePath },
       { kind: "subagent-operator-recovery-v25", path: fixture.databasePath },
-      { kind: "state-write-indexes-v27", path: fixture.databasePath },
-      { kind: "github-publication-draft-v28", path: fixture.databasePath },
-      { kind: "local-client-credentials-v29", path: fixture.databasePath },
-      { kind: "automation-policy-fence-v30", path: fixture.databasePath },
-      { kind: "local-workspace-manifests-v31", path: fixture.databasePath },
-      { kind: "local-workspace-cas-v35", path: fixture.databasePath },
-      { kind: "template-names-v36", path: fixture.databasePath },
+      ...expectedStateMigrationsFromV27(fixture.databasePath),
       { kind: "audit-events-v2", path: fixture.databasePath },
       { kind: "strict-tables-v3", path: fixture.databasePath },
     ]);
@@ -1833,13 +1831,7 @@ describe("openclaw state database", () => {
       { kind: "task-run-indexes-v24", path: seeded.databasePath },
       { kind: "subagent-operator-recovery-v25", path: seeded.databasePath },
       { kind: "session-state-head-layout-v26", path: seeded.databasePath },
-      { kind: "state-write-indexes-v27", path: seeded.databasePath },
-      { kind: "github-publication-draft-v28", path: seeded.databasePath },
-      { kind: "local-client-credentials-v29", path: seeded.databasePath },
-      { kind: "automation-policy-fence-v30", path: seeded.databasePath },
-      { kind: "local-workspace-manifests-v31", path: seeded.databasePath },
-      { kind: "local-workspace-cas-v35", path: seeded.databasePath },
-      { kind: "template-names-v36", path: seeded.databasePath },
+      ...expectedStateMigrationsFromV27(seeded.databasePath),
       { kind: "session-watch-cursor-provenance-v4", path: seeded.databasePath },
     ]);
     await expectRepair(options, [
@@ -1947,20 +1939,16 @@ describe("openclaw state database", () => {
 
   it("rejects a missing stable v5 table before migration through startup admission", async () => {
     const { stateDir, options, databasePath } = createStateFixture();
+    const ready = () =>
+      assertOpenClawDatabasesReady({ env: options.env, operation: "gateway-startup", config: {} });
 
     {
       const intact = openNativeDatabase(databasePath);
       markStateDatabaseVersion(intact, 5);
       intact.close();
       const before = snapshotPreflightSourceManifest(stateDir);
-      await expect(
-        assertOpenClawDatabasesReady({
-          env: options.env,
-          operation: "gateway-startup",
-          config: {},
-        }),
-      ).resolves.toBeUndefined();
-      expect(snapshotPreflightSourceManifest(stateDir)).toEqual(before);
+      await expect(ready()).resolves.toBeUndefined();
+      expectLiveReadSourceManifest(stateDir, before, databasePath);
     }
     const damaged = openNativeDatabase(databasePath);
     damaged.exec("DROP TABLE apns_registration_tombstones;");
@@ -1972,14 +1960,8 @@ describe("openclaw state database", () => {
     const message = `SQLite schema is incomplete or noncanonical for ${databasePath}: missing table apns_registration_tombstones; run openclaw doctor --fix to repair it.`;
     {
       const before = snapshotPreflightSourceManifest(stateDir);
-      await expect(
-        assertOpenClawDatabasesReady({
-          env: options.env,
-          operation: "gateway-startup",
-          config: {},
-        }),
-      ).rejects.toThrow(new SqliteSchemaMismatchError(message));
-      expect(snapshotPreflightSourceManifest(stateDir)).toEqual(before);
+      await expect(ready()).rejects.toThrow(new SqliteSchemaMismatchError(message));
+      expectLiveReadSourceManifest(stateDir, before, databasePath);
     }
 
     withReadOnlyDatabase(databasePath, (after) => {
@@ -2047,13 +2029,7 @@ describe("openclaw state database", () => {
 
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "subagent-operator-recovery-v25", path: databasePath },
-      { kind: "state-write-indexes-v27", path: databasePath },
-      { kind: "github-publication-draft-v28", path: databasePath },
-      { kind: "local-client-credentials-v29", path: databasePath },
-      { kind: "automation-policy-fence-v30", path: databasePath },
-      { kind: "local-workspace-manifests-v31", path: databasePath },
-      { kind: "local-workspace-cas-v35", path: databasePath },
-      { kind: "template-names-v36", path: databasePath },
+      ...expectedStateMigrationsFromV27(databasePath),
     ]);
 
     await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));

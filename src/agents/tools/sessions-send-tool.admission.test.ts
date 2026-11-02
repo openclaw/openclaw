@@ -719,7 +719,9 @@ describe("sessions_send dispatch admission", () => {
     const sourceId = self ? "self-session" : "requester-session";
     const targetId = self ? sourceId : "target-session";
     const originalRoute = { channel: "telegram", accountId: "default", to: "original-recipient" };
-    if (slack) originalRoute.channel = "slack";
+    if (slack) {
+      originalRoute.channel = "slack";
+    }
     const laterRoute = { channel: "telegram", accountId: "other", to: "later-recipient" };
     const entry = { sessionId: sourceId, updatedAt: 1, lifecycleRevision: "original-generation" };
     const settled = await trackActualReplyFlow();

@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fnv1a from "../../../../../src/shared/fnv1a.js";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { resetWorkingProgress } from "../chat-progress.ts";
 import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
@@ -10,6 +11,7 @@ import {
   projectTranscriptIndex,
   projectTranscriptRows,
 } from "./chat-transcript-message-index.ts";
+import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 
 const sessionKey = "agent:main:dashboard:0f6d5a1c-5a9e-4c1e-9b1a-2f3c4d5e6f70";
 
@@ -138,6 +140,27 @@ it("changes the footprint revision when the same message ID receives new content
   expect(replay.kind === "item" && replay.revision).toBe(before.kind === "item" && before.revision);
 });
 
+it("fingerprints loaded rows once when an older page rebuilds the index", () => {
+  const turn = (id: string, seq: number, content: string) =>
+    makeMessage(id, seq, { role: seq % 2 ? "user" : "assistant", runId: `run-${seq}`, content });
+  const body = "Loaded reply. ".repeat(400);
+  const loaded = Array.from({ length: 20 }, (_, index) =>
+    turn(`loaded-${index}`, 21 + index, body),
+  );
+  const older = Array.from({ length: 20 }, (_, index) =>
+    turn(`older-${index}`, 1 + index, "Older"),
+  );
+  const before = indexFor(projectHistory(loaded)).rows;
+  const hash = vi.spyOn(fnv1a, "fnv1aUtf16");
+  const after = indexFor(projectHistory([...older, ...loaded])).rows;
+  const hashed = hash.mock.calls.reduce((sum, [value]) => sum + value.length, 0);
+  hash.mockRestore();
+  expect(after.slice(-before.length).map((row) => row.kind === "item" && row.revision)).toEqual(
+    before.map((row) => row.kind === "item" && row.revision),
+  );
+  expect(hashed).toBeLessThan(body.length);
+});
+
 it("invalidates only a changed reaction row while retaining other cached footprints", () => {
   const chain = projectHistory([
     finalAnswer("answer", 2),
@@ -238,42 +261,35 @@ describe("completed reply frame ownership", () => {
     const original = structuredClone(messages);
     const options = { sessionKey: key };
     const chain = projectHistory(messages, options);
-    const frame = framesOf(chain).at(-1);
-    const workFrame = framesOf(chain)[0]!;
+    const [frame] = framesOf(chain);
     expect(chain.transcriptItems).toEqual([
       ...(prompt ? [expect.objectContaining({ role: "user" })] : []),
-      ...(failed ? [workFrame, expect.objectContaining({ outcome: { kind: "failed" } })] : []),
       frame,
     ]);
     expect(frame).toMatchObject({
-      key: failed
-        ? 'agent-run:["run-1","send:run-1","group:assistant:msg:id:failed-attempt:0"]'
-        : 'agent-run:["run-1","send:run-1"]',
+      key: 'agent-run:["run-1","send:run-1"]',
       ...replyFrameShape(
         completedOutcome(messages.at(-1)),
-        ...(failed ? [] : [{ kind: key === sessionKey ? "work-group" : "group" }]),
+        { kind: key === sessionKey ? "work-group" : "group" },
         { kind: "group", role: "assistant" },
       ),
     });
-    const work = workFrame.parts[0]!;
+    const work = frame!.parts[0]!;
     if (key === sessionKey) {
       if (work.kind !== "work-group") {
         throw new Error("expected work inside the reply frame");
       }
-      expect(work.groups.map((group) => group.runId)).toEqual(workRunIds);
-      expect(work.durationMs).toBeNull();
-      expect(messagesIn([work])).not.toContain(failure);
+      if (failed) {
+        expect(messagesIn([work])).toContain(failure);
+      } else {
+        expect(work.groups.map((group) => group.runId)).toEqual(workRunIds);
+      }
     }
-    expect(messagesIn(framesOf(chain))).toEqual(messages.slice(prompt ? 1 : 0));
-    if (failed) {
-      const failedFrame = framesOf(chain)[1]!;
-      expect(frameShows(failedFrame, failure)).toBe(true);
-      expect(indexFor(chain).messageRowKeysById.get("failed-attempt")).toBe(failedFrame.key);
-    }
+    expect(messagesIn([frame!])).toEqual(messages.slice(prompt ? 1 : 0));
     expect(messages).toEqual(original);
     const index = indexFor(chain);
     expect(index.transcriptMessageKeys.get(chatItemGroups(work)[0]!.messages[0]!.key)).toBe(
-      workFrame.key,
+      frame?.key,
     );
     expect(index.messageRowKeysById.get("final")).toBe(frame?.key);
     if (!prompt) {
@@ -308,14 +324,15 @@ describe("completed reply frame ownership", () => {
     messages.splice(prompt ? 2 : 1, 0, inserted);
     const chain = projectHistory(messages);
     expect(framesOf(chain).at(-1)?.outcome).toMatchObject(completedOutcome(messages.at(-1)));
-    const work = kind(transcriptParts(chain), "work-group")[0];
+    const work = (forwarded ? chain.transcriptItems : transcriptParts(chain)).find(
+      (item) => item.kind === "work-group",
+    );
+    expect(work).toBeDefined();
     if (forwarded) {
       expect(messagesIn(framesOf(chain))).not.toContain(inserted);
-      expect(messagesIn(kind(chain.transcriptItems, "group"))).toContain(inserted);
-      expect(messagesIn(kind(transcriptParts(chain), "work-group"))).not.toContain(inserted);
-      expect(messagesIn(chain.transcriptItems)).toEqual(messages);
+      const standalone = phase ? kind(chain.transcriptItems, "group") : [work!];
+      expect(messagesIn(standalone)).toContain(inserted);
     } else {
-      expect(work).toBeDefined();
       expect(
         messagesIn(
           kind(transcriptParts(chain), "group").filter((item) => item.role === "assistant"),
@@ -324,8 +341,9 @@ describe("completed reply frame ownership", () => {
       expect(framesOf(chain).map((frame) => frame.runId)).toEqual(
         runId === "run-1" ? ["run-1"] : ["run-other", "run-1"],
       );
-      expect(framesOf(chain)[0]?.parts[0]).toBe(work);
-      expect(work?.replyRunId).toBe(runId);
+      expect(runId === "run-1" ? framesOf(chain)[0]?.parts[0] : chain.transcriptItems[1]).toBe(
+        work,
+      );
     }
   });
 
@@ -566,6 +584,12 @@ describe("subagent handoff", () => {
   });
   const waitingChain = () =>
     projectHistory(waiting, { subagentWait: { startedAt: 32, runId: "run-1" } });
+  const resumedSession = {
+    key: sessionKey,
+    lastRunId: "announce:resume",
+    status: "done",
+    runtimeMs: 4_000,
+  } as const;
   it.each([
     [
       "waiting",
@@ -575,7 +599,7 @@ describe("subagent handoff", () => {
     ],
     ["wait ended", {}, "run-1", null],
     ["resume pending", { runWorking: true, runActive: true }, undefined, { startedAt: 10 }],
-    ["answered", {}, "announce:resume", null],
+    ["answered", { session: resumedSession }, "announce:resume", null],
   ] as const)("preserves handoff: %s", (state, options, runId, statusShape) => {
     const waitingKey = onlyFrame(waitingChain()).key;
     if (state === "resume pending") {
@@ -649,7 +673,7 @@ describe("subagent handoff", () => {
     expect(logsOf([...waiting, spoke, resumedRow, answer])).toEqual([]);
   });
 
-  it("keeps successful and failed late work after the answer without crossing channel boundaries", () => {
+  it("moves successful late work before the answer but preserves failure and channel ordering", () => {
     const wrapper = readRow("wrapper", "announce:resume", 9);
     const stopped = makeMessage("stopped", 9, {
       content: [{ type: "toolCall", id: "late", name: "read", arguments: {} }],
@@ -658,7 +682,7 @@ describe("subagent handoff", () => {
       runId: "announce:resume",
     });
     for (const [trailing, answerLast, logSizes, key] of [
-      [wrapper, false, [2], sessionKey],
+      [wrapper, true, [3], sessionKey],
       [{ ...wrapper, isError: true }, false, [2], sessionKey],
       [stopped, false, undefined, sessionKey],
       [wrapper, false, [2], "agent:main:main"],
@@ -666,6 +690,7 @@ describe("subagent handoff", () => {
       const { parts } = onlyFrame(
         projectHistory([...waiting, readRow("read-2", "announce:resume", 7), answer, trailing], {
           sessionKey: key,
+          session: { key, lastRunId: "announce:resume", status: "done" },
         }),
       );
       const last = parts.at(-1);
@@ -752,29 +777,44 @@ describe("system event presentation", () => {
   });
 });
 
-it.each([false, true])(
-  "indexes the original split envelope with a visible reply anchor (trailing work=%s)",
-  (trailingWork) => {
-    const message = finalAnswer("mixed-source", 1, {
-      content: [
-        { type: "text", text: "First finding" },
-        { type: "thinking", thinking: "Private work" },
-        { type: "text", text: "Second finding" },
-        ...(trailingWork ? [{ type: "toolCall", id: "call", name: "read", arguments: {} }] : []),
-      ],
-    });
-    const chain = projectHistory([message]);
-    const index = indexFor(chain);
-    const source = index.loadedReplySources.get("mixed-source");
-    expect(source?.message).toBe(message);
-    expect(source?.messageId).toBe(
-      chatItems({ messages: [message] }).flatMap(chatItemGroups)[0]?.messages[0]?.key,
-    );
-    const rowKey = index.messageRowKeysById.get("mixed-source");
-    const row = index.rows.find((candidate) => candidate.key === rowKey);
-    expect(
-      row?.kind === "item" &&
-        chatItemGroups(row.item).some((group) => group.visibleContent === "text"),
-    ).toBe(true);
+it.each([
+  ["work in both runs", true],
+  ["work only in the later run", false],
+] as const)(
+  "keeps a collapsed browser preview after an earlier run's reply: %s",
+  (_name, early) => {
+    const browse = {
+      ...makeMessage("browse", 4, { role: "toolResult", content: "Opened", runId: "run-b" }),
+      toolName: "browser",
+      toolCallId: "browse",
+      details: {
+        browserTab: {
+          profile: "managed",
+          target: "host",
+          targetId: "tab-1",
+          url: "https://example.com",
+          title: "Example",
+        },
+      },
+    };
+    const chain = projectHistory([
+      history[0],
+      ...(early ? [makeTool("work-0", 2, "run-a", 20)] : []),
+      makeMessage("reply-a", 3, { runId: "run-a", stopReason: "stop" }),
+      browse,
+      makeMessage("reply-b", 5, { runId: "run-b", stopReason: "stop" }),
+    ]);
+    // No visible reply owns the rollup, so it stays outside the frames; its preview follows reply A.
+    expect(chain.transcriptItems.map((item) => item.kind)).toEqual([
+      "group",
+      "work-group",
+      "agent-run-frame",
+      "agent-run-frame",
+    ]);
+    const expanded = new Map<string, boolean>();
+    const previews = projectTranscriptWorkPreviews(chain.workGroups, { sessionKey, expanded });
+    const rows = projectTranscriptRows(indexFor(chain, expanded).rows, previews, []);
+    const [firstFrame] = framesOf(chain);
+    expect(rows.map((row) => row.key)).toContain(`work-previews:${firstFrame!.key}`);
   },
 );

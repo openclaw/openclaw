@@ -1,4 +1,5 @@
 import type { StopReason } from "../../../packages/llm-core/src/types.js";
+import type { AcquireConfiguredProviderLocalService } from "../../agents/provider-local-service-target.js";
 import type { CreateChannelIngressDrainOptions } from "../../channels/message/ingress-drain.js";
 import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.types.js";
 import type { ConfigMutationBase } from "../../config/mutation-types.js";
@@ -191,7 +192,7 @@ export type PluginRuntimeCore = {
   version: string;
   /** Optional host behavior guarantees; absent capabilities remain unsupported on older hosts. */
   readonly capabilities?: readonly string[];
-  decisions: import("../../decisions/types-v2.js").DecisionRuntimeV2;
+  decisions: import("../../decisions/runtime-types.js").DecisionRuntimeV2;
   config: {
     /** Current process runtime config snapshot. Prefer config passed into the active call path. */
     current: {
@@ -274,6 +275,17 @@ export type PluginRuntimeCore = {
     resolveCliBackendDispatchEligibility: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibility;
     resolveCliBackendDispatchEligibilityAsync: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibilityAsync;
     ensureAgentWorkspace: typeof import("./runtime-agent-workspace.js").ensurePluginAgentWorkspace;
+    /**
+     * Explain whether named tools reach an agent (configured policy) or one session
+     * (adds its model, harness and sandbox), naming the stage and config path that
+     * removed each blocked tool. Read-only; uses the current runtime config.
+     */
+    explainToolAvailability: (
+      params: Omit<
+        import("../../agents/tool-availability-explanation.js").ExplainToolAvailabilityParams,
+        "config"
+      >,
+    ) => Promise<import("../../agents/tool-availability-explanation.js").ToolAvailabilityReport>;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
       createSessionEntry: (
@@ -437,6 +449,10 @@ export type PluginRuntimeCore = {
     captureSessionEventTarget: typeof import("./runtime-session-events.js").captureSessionEventTarget;
     enqueueSessionEvent: typeof import("./runtime-session-events.js").enqueueSessionEvent;
     enqueueSystemEvent: typeof import("./system-events.js").enqueueSystemEventFromSdk;
+    /** Current generation of a session; a later `postSessionNotice` skips it once reset or replaced. */
+    captureSessionGeneration: typeof import("./runtime-session-notice.js").capturePluginSessionGeneration;
+    /** Post this plugin's background notice to the session generation it observed. */
+    postSessionNotice: typeof import("./runtime-session-notice.js").postPluginSessionNotice;
     runCommandWithTimeout: typeof import("../../process/exec.js").runCommandWithTimeout;
     formatNativeDependencyHint: typeof import("./native-deps.js").formatNativeDependencyHint;
   };
@@ -451,7 +467,7 @@ export type PluginRuntimeCore = {
   tts: {
     /** Await machine preference preparation before rendering; optional for older custom runtimes. */
     buildSystemPromptHintAsync?: TtsRuntimeApi["buildTtsSystemPromptHintAsync"];
-    prepareTtsRequest: TtsRuntimeApi["prepareTtsRequest"];
+    prepareTtsRequest: typeof import("../../tts/tts-request.js").prepareTtsRequest;
     textToSpeech: typeof import("../../tts/tts.js").textToSpeech;
     textToSpeechStream: TtsRuntimeApi["textToSpeechStream"];
     textToSpeechTelephony: TtsRuntimeApi["textToSpeechTelephony"];
@@ -472,7 +488,7 @@ export type PluginRuntimeCore = {
     ) => Promise<import("../../image-generation/runtime-types.js").GenerateImageRuntimeResult>;
     listProviders: (
       params?: RuntimeProviderListParams,
-    ) => import("../../image-generation/types.js").ImageGenerationProvider[];
+    ) => import("../../image-generation/provider-types.js").ImageGenerationProvider[];
   };
   videoGeneration: {
     generate: (
@@ -480,7 +496,7 @@ export type PluginRuntimeCore = {
     ) => Promise<import("../../video-generation/runtime-types.js").GenerateVideoRuntimeResult>;
     listProviders: (
       params?: RuntimeProviderListParams,
-    ) => import("../../video-generation/types.js").VideoGenerationProvider[];
+    ) => import("../../video-generation/provider-types.js").VideoGenerationProvider[];
   };
   musicGeneration: {
     generate: (
@@ -488,7 +504,7 @@ export type PluginRuntimeCore = {
     ) => Promise<import("../../music-generation/runtime-types.js").GenerateMusicRuntimeResult>;
     listProviders: (
       params?: RuntimeProviderListParams,
-    ) => import("../../music-generation/types.js").MusicGenerationProvider[];
+    ) => import("../../music-generation/provider-types.js").MusicGenerationProvider[];
   };
   webSearch: {
     /** @deprecated Await listProvidersAsync so discovery policy is prepared off-thread. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
@@ -557,15 +573,7 @@ export type PluginRuntimeCore = {
   };
   llm: {
     complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
-    acquireLocalService: (
-      target: {
-        providerId: string;
-        baseUrl: string;
-        headers?: HeadersInit;
-        reconcile?: import("../provider-plugin.types.js").ProviderPlugin["reconcileLocalService"];
-      },
-      signal?: AbortSignal | null,
-    ) => Promise<{ release: () => void } | undefined>;
+    acquireLocalService: AcquireConfiguredProviderLocalService;
   };
   modelConfig: {
     /** Read-only model selection; no session mutation or harness execution authority. */

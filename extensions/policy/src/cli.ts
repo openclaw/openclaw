@@ -290,7 +290,7 @@ function resolvePolicyCommandAgentId(
 
 async function policyCompareCandidatePath(options: PolicyCompareOptions): Promise<string> {
   if (options.policy !== undefined && options.policy.trim() !== "") {
-    return options.policy.trim();
+    return options.policy;
   }
   const snapshot = await readConfigFileSnapshot({ observe: false });
   if (!snapshot.valid) {

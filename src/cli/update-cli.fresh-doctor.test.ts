@@ -83,7 +83,10 @@ describe("update-cli", () => {
   });
 
   it("runs updated plugin migrations for a plugin-only current-process update", async () => {
-    vi.spyOn(update.doctorChild, "inspectUpdateDoctorChildSupport").mockResolvedValue(true);
+    vi.spyOn(update.doctorChild, "inspectUpdateDoctorChildSupport").mockResolvedValue({
+      doctorConfigWrites: true,
+      doctorRetirementOnly: true,
+    });
     mocks.readPackageVersion.mockResolvedValue(VERSION);
     vi.mocked(update.updateGitCheckout).mockResolvedValue(
       runtimeRecovery.currentGitCoreFixture(process.cwd(), VERSION).outcome,
@@ -274,7 +277,17 @@ describe("update-cli", () => {
         reason: "preflight-node-runtime-incompatible",
       });
       expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-      expectNoSideEffects(recoverNode, mocks.serviceStop);
+      expectNoSideEffects(mocks.serviceStop);
+      if (capability === "writable") {
+        expect(recoverNode).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            engine: ">=26.12.1",
+            recovery: { env: expect.any(Object) },
+          }),
+        );
+      } else {
+        expect(recoverNode).not.toHaveBeenCalled();
+      }
       expect((await mocks.serviceReadCommand(process.env)).programArguments[0]).toBe(serviceNode);
       expect(await installedVersion(fixture.root)).toBe("2026.5.18");
     },

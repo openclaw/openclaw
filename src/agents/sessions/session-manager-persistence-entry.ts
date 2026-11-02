@@ -5,7 +5,7 @@ import type {
   TranscriptWriteSnapshot,
 } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionActorAppendCommitted } from "../../config/sessions/session-actor-contract.js";
-import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json.js";
+import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json-normalize.js";
 import { isIndexedSessionEntry } from "./session-manager-codec.js";
 import type {
   AppendPersistenceOptions,

@@ -45,6 +45,28 @@ function receiveHello(connection: Connection): void {
   assert(frame);
   respond(connection, frame.id, { type: "hello-ok" });
 }
+
+it("rejects an oversized connect using the shared pre-auth limit before transport", async () => {
+  const onConnectFailure = vi.fn(() => ({
+    closeCode: 1008,
+    closeReason: "connect failed",
+    keepOpen: true,
+  }));
+  const { connection } = startProtocolHarness({
+    buildConnectParams: () => ({ pathEnv: "x".repeat(65_536) }),
+    onConnectFailure,
+  });
+  receiveConnectChallenge(connection);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(onConnectFailure).toHaveBeenCalledWith(
+    expect.objectContaining({
+      message: expect.stringMatching(/payload limit.*\(\d+ > 65536 bytes\)/),
+    }),
+    expect.anything(),
+  );
+  expect(connection.frames).toEqual([]);
+  expect(connection.close).not.toHaveBeenCalled();
+});
 const errorMessage = (message: unknown) => expect.objectContaining({ message });
 async function expectCountAfter(ms: number, items: readonly unknown[], count: number) {
   await vi.advanceTimersByTimeAsync(ms);
