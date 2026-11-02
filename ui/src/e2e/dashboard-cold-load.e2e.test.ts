@@ -337,7 +337,7 @@ suite.define(() => {
               expect(
                 await page.evaluate(() =>
                   Reflect.get(window, "dashboardPaints").every(
-                    (frame: { shimmers: number }) => frame.shimmers === 0,
+                    (paint: { shimmers: number }) => paint.shimmers === 0,
                   ),
                 ),
               ).toBe(true);
