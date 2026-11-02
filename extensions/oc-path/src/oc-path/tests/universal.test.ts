@@ -187,6 +187,16 @@ describe("setOcPath", () => {
     }
   });
 
+  it.each(["9name", "name.dot", "café"])(
+    "rejects unreadable frontmatter insertion key %j without changing the document",
+    (key) => {
+      const ast = parseMd("---\nname: original\n---\n## Keep\n");
+      const before = structuredClone(ast);
+      expectEditError(ast, `oc://X.md/[frontmatter]/+${key}`, "changed", "not-writable");
+      expect(ast).toEqual(before);
+    },
+  );
+
   it("keeps the insertion-value guard separate from new frontmatter keys", () => {
     const md = parseMd("---\nname: x\n---\n");
     const result = edit(md, `oc://X.md/[frontmatter]/+${REDACTED_SENTINEL}`, "safe");
@@ -198,9 +208,9 @@ describe("setOcPath", () => {
     [
       "frontmatter",
       "\uFEFF## Existing\r\n* keep: literal",
-      "oc://X.md/[frontmatter]/+name",
+      "oc://X.md/[frontmatter]/+_Name-9",
       "x",
-      "\uFEFF---\r\nname: x\r\n---\r\n## Existing\r\n* keep: literal",
+      "\uFEFF---\r\n_Name-9: x\r\n---\r\n## Existing\r\n* keep: literal",
     ],
     [
       "empty frontmatter",
@@ -215,6 +225,9 @@ describe("setOcPath", () => {
     const result = edit(md, path, value);
     expect(result.kind).toBe("md");
     expect(result.raw).toBe(expected);
+    if (path.includes("[frontmatter]")) {
+      expectLeaf(resolve(parseMd(result.raw), path.replace("/+", "/")), value);
+    }
     expect(md).toEqual(before);
   });
 
