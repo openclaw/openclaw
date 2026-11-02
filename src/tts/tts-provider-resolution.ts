@@ -15,8 +15,8 @@ import {
   listSpeechProviders,
   normalizeSpeechProviderId,
 } from "./provider-registry.js";
-import type { SpeechProviderConfig } from "./provider-types.js";
 import { withSpeakerSelectionCompat } from "./speaker.js";
+import type { SpeechProviderConfig } from "./tts-runtime-types.js";
 import {
   DEFAULT_TTS_TIMEOUT_MS,
   asProviderConfig,

@@ -13,7 +13,6 @@ import { truncateUtf16Safe } from "../utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import { parseTtsDirectives, resolveTtsDirectiveFacts } from "./directives.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
-import type { SpeechVoiceOption } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable, isSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { isCodeHeavySpeechText, normalizeSpeechText } from "./speech-text.js";
 import { summarizeText } from "./tts-core.js";
@@ -23,7 +22,7 @@ import {
   resolveSpeechProviderTimeoutMs,
   resolveTtsProviderAsync,
 } from "./tts-provider-resolution.js";
-import type { TtsStatusEntry } from "./tts-runtime-types.js";
+import type { SpeechVoiceOption, TtsStatusEntry } from "./tts-runtime-types.js";
 import {
   getTtsMaxLength,
   isSummarizationEnabled,
