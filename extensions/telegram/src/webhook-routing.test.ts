@@ -7,15 +7,13 @@ vi.mock("./bot.js", () => ({ createTelegramBot }));
 
 describe("Telegram webhook routes", () => {
   it.each([
-    ...["/healthz", "/healthz?token=known"].flatMap((path) =>
-      [undefined, false as const, { port: 8787 }].map((legacyWebhook) => ({
-        path,
-        legacyWebhook,
-        error: /webhook path "\/healthz" conflicts with the health path/,
-      })),
-    ),
+    ...[undefined, false as const, { port: 8787 }].map((legacyWebhook) => ({
+      path: "/healthz",
+      legacyWebhook,
+      error: /webhook path "\/healthz" conflicts with the health path/,
+    })),
     ...telegramReservedGatewayPaths
-      .filter((path) => ["/health", "/ready", "/startup"].includes(path))
+      .filter((path) => ["/health", "/healthz?token=known", "/ready", "/startup"].includes(path))
       .map((path) => ({
         path,
         legacyWebhook: false as const,

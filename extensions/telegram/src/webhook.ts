@@ -31,7 +31,6 @@ import {
   registerWebhookTarget,
   resolveRequestClientIp,
   resolveSingleWebhookTarget,
-  resolveWebhookTargets,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import {
@@ -87,6 +86,8 @@ function resolveSingleHeaderValue(header: string | string[] | undefined): string
 
 type TelegramWebhookTarget = {
   path: string;
+  /** Exact configured path; query-bearing configured identities keep their raw-URL contract. */
+  requestPath: string;
   secret: string;
   legacyListener?: { port: number; host?: string };
   legacyAuthGuard?: ReturnType<typeof createTelegramLegacyWebhookAuthLimiter>;
@@ -100,6 +101,47 @@ const webhookState = createPluginRuntimeStore<{
   rateLimiter: ReturnType<typeof createFixedWindowRateLimiter>;
 }>({ key: "telegram:webhook", errorMessage: "Telegram webhook routes are not registered" });
 
+type ResolvedTelegramWebhookRoute = {
+  /** Registry key the targets resolved under; doubles as the failed-auth budget identity. */
+  path: string;
+  targets: TelegramWebhookTarget[];
+};
+
+function configuredRouteHasQuery(requestPath: string): boolean {
+  return (URL.parse(requestPath, "http://localhost")?.search ?? "") !== "";
+}
+
+// Exact configured identity always wins: query-bearing configured paths keep
+// their raw-URL contract (accounts on /hook?tenant=a and /hook?tenant=b stay
+// distinct buckets; a proxy-appended variant must not merge them). Only
+// query-free configured routes accept incoming variants, because reverse
+// proxies append query parameters (ngrok/Cloudflare tokens) or trailing
+// slashes to the configured webhookUrl and those deliveries must still reach
+// the target.
+function resolveTelegramWebhookRouteTargets(
+  req: IncomingMessage,
+  webhookTargets: Map<string, TelegramWebhookTarget[]>,
+): ResolvedTelegramWebhookRoute | null {
+  const requestUrl = req.url ?? "";
+  const exactKey = normalizeWebhookPath(requestUrl);
+  const exactTargets = (webhookTargets.get(exactKey) ?? []).filter(
+    (target) => target.requestPath === requestUrl,
+  );
+  if (exactTargets.length > 0) {
+    return { path: exactKey, targets: exactTargets };
+  }
+  const requestPathname = normalizeWebhookPath(
+    URL.parse(requestUrl, "http://localhost")?.pathname ?? requestUrl,
+  );
+  const variantTargets = (webhookTargets.get(requestPathname) ?? []).filter(
+    (target) => !configuredRouteHasQuery(target.requestPath),
+  );
+  if (variantTargets.length === 0) {
+    return null;
+  }
+  return { path: requestPathname, targets: variantTargets };
+}
+
 async function handleTelegramWebhook(
   webhookTargets: Map<string, TelegramWebhookTarget[]>,
   rateLimiter: ReturnType<typeof createFixedWindowRateLimiter>,
@@ -107,17 +149,15 @@ async function handleTelegramWebhook(
   res: ServerResponse,
 ): Promise<boolean> {
   const legacyListener = getWebhookLegacyListener(req);
-  // Route identity is the normalized request pathname: reverse proxies commonly
-  // append query parameters (ngrok/Cloudflare tokens) or a trailing slash to the
-  // configured webhookUrl, and those variants must resolve to the same target.
-  const targets = resolveWebhookTargets(req, webhookTargets)?.targets.filter(
+  const resolved = resolveTelegramWebhookRouteTargets(req, webhookTargets);
+  const targets = resolved?.targets.filter(
     (target) =>
       target.isActive() &&
       (!legacyListener ||
         (target.legacyListener?.port === legacyListener.port &&
           target.legacyListener?.host === legacyListener.host)),
   );
-  if (!targets?.length || req.method !== "POST") {
+  if (!resolved || !targets || targets.length === 0 || req.method !== "POST") {
     res.writeHead(404);
     res.end();
     return true;
@@ -134,14 +174,16 @@ async function handleTelegramWebhook(
     // failed secret guesses are rate-limited, before the body is read.
     // An invalid secret cannot identify an account. Shared legacy endpoints use
     // their first live target's failure budget and shipped proxy-hop policy.
+    // Both limiter paths key on the resolved route identity so query variants
+    // of one route share a single failed-auth budget.
     const legacyAuthGuard = legacyListener ? targets[0]?.legacyAuthGuard : undefined;
     const allowed = legacyAuthGuard
-      ? legacyAuthGuard(req, res)
+      ? legacyAuthGuard(req, res, resolved.path)
       : applyBasicWebhookRequestGuards({
           req,
           res,
           rateLimiter,
-          rateLimitKey: `${req.url}:${resolveRequestClientIp(req) ?? "unknown"}`,
+          rateLimitKey: `${resolved.path}:${resolveRequestClientIp(req) ?? "unknown"}`,
         });
     if (!allowed) {
       return true;
@@ -184,12 +226,7 @@ export async function startTelegramWebhook(opts: {
   const { targets: webhookTargets, rateLimiter } = state;
   const readConfig = createRuntimeConfigReader(opts.config ?? {});
   const legacyListener = resolveTelegramLegacyWebhookListener(opts.legacyWebhook);
-  const configuredPath = opts.path ?? DEFAULT_TELEGRAM_WEBHOOK_PATH;
-  // Route identity is the pathname: configured webhookPath values may carry
-  // query text, which must not leak into the registered route or target keys.
-  const path = normalizeWebhookPath(
-    URL.parse(configuredPath, "http://localhost")?.pathname ?? configuredPath,
-  );
+  const path = opts.path ?? DEFAULT_TELEGRAM_WEBHOOK_PATH;
   const pathConflict = resolveTelegramWebhookPathConflict(path);
   if (pathConflict?.kind === "health") {
     throw new Error(`Telegram webhook path "${path}" conflicts with the health path.`);
@@ -419,6 +456,7 @@ export async function startTelegramWebhook(opts: {
   await runStartupPhase(() => {
     const target: TelegramWebhookTarget = {
       path,
+      requestPath: path,
       secret,
       legacyListener,
       legacyAuthGuard: legacyListener
@@ -522,8 +560,9 @@ export async function startTelegramWebhook(opts: {
   };
 
   if (
-    (webhookTargets.get(path) ?? []).filter((target) => safeEqualSecret(target.secret, secret))
-      .length > 1
+    (webhookTargets.get(normalizeWebhookPath(path)) ?? []).filter(
+      (target) => target.requestPath === path && safeEqualSecret(target.secret, secret),
+    ).length > 1
   ) {
     runtime.error?.(
       `Telegram accounts on Gateway route ${path} share a webhook secret. Give each account a distinct webhookSecret or webhookPath. Separate legacy endpoints retain account routing while you update the Gateway routes.`,
