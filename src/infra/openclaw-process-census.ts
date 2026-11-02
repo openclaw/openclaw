@@ -11,7 +11,7 @@ import { parseWindowsNativeCommandLine } from "../process/windows-command-line.j
 import { isPidDefinitelyDead, readLinuxProcessStat } from "../shared/pid-alive.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { isRosettaTranslatedProcess } from "../shared/rosetta-translation.js";
-import { getRootOptionAwareCommandPath } from "./cli-root-options.js";
+import { getRootOptionAwareCommandPath, rewriteUpdateFlagArgv } from "./cli-root-options.js";
 import { isContainerEnvironment } from "./container-environment.js";
 import {
   classifyOpenClawArgv,
@@ -67,30 +67,40 @@ function isStandardSystemdLoginProcess(
 
 type ArtifactCustody =
   | { kind: "not-holder" }
-  /** notUpdater: no artifact evidence, and its OpenClaw command is known and not `update`. */
-  | { kind: "holder"; paths?: string[]; notUpdater?: true }
+  /** gateway: no artifact evidence, and positively a Gateway process (never an updater). */
+  | { kind: "holder"; paths?: string[]; gateway?: true }
   | { kind: "unknown"; reason: string };
 
 // Without an artifact reference, an OpenClaw process can hold a runtime only as
-// the `update` that created it. Process titles erase a Gateway's script path, so
-// its title, visible subcommand, or worker entrypoint shows that it is not one.
-function readOpenClawCommand(
+// the updater that created it, and `update`, its wizard, Doctor's git update,
+// and update workers all run it in-process. Only the Gateway and its spawn
+// broker never do; the Gateway's process title erases its script path.
+const gatewayWorkerEntrypoints = [
+  path.posix.normalize(`src/infra/${runtimeProcessEntrypoints.spawnBroker.sourceWorkerName}.ts`),
+  `dist/${runtimeProcessEntrypoints.spawnBroker.distWorkerPath}`,
+];
+
+function isGatewayProcess(
   argv: readonly string[],
   identity: ReturnType<typeof classifyOpenClawArgv>,
-): string | undefined {
-  const title = /^openclaw-([a-z0-9-]+)$/u.exec(
-    path.basename((argv[0] ?? "").replaceAll("\\", "/")).replace(/\.(exe|cmd|bat)$/iu, ""),
-  );
-  if (title) {
-    return title[1];
+): boolean {
+  const executable = path
+    .basename((argv[0] ?? "").replaceAll("\\", "/"))
+    .replace(/\.(exe|cmd|bat)$/iu, "");
+  if (executable === "openclaw-gateway") {
+    return true;
   }
   if (identity.kind !== "openclaw" || identity.entryIndex === undefined) {
-    return undefined;
+    return false;
   }
   const entry = (argv[identity.entryIndex] ?? "").replaceAll("\\", "/");
-  return workerEntrypoints.some((worker) => entry.endsWith(`/${worker}`))
-    ? "worker"
-    : getRootOptionAwareCommandPath(["node", ...argv.slice(identity.entryIndex)], 1)[0];
+  return (
+    gatewayWorkerEntrypoints.some((worker) => entry.endsWith(`/${worker}`)) ||
+    getRootOptionAwareCommandPath(
+      rewriteUpdateFlagArgv(["node", ...argv.slice(identity.entryIndex)]),
+      1,
+    )[0] === "gateway"
+  );
 }
 
 function classifyProcessArtifactCustody(
@@ -131,13 +141,11 @@ function classifyProcessArtifactCustody(
     return unknown ? { kind: "unknown", reason: unknown } : { kind: "holder", paths };
   }
   const identity = classifyOpenClawArgv(argv, options);
-  const openClawCommand = readOpenClawCommand(argv, identity);
+  const gateway = isGatewayProcess(argv, identity);
   // Artifact evidence, including a resolved alias, keeps an unscoped holder conservative.
   let artifactEvidence = references.length > 0 || paths.length > 0;
   const unscoped = (): Extract<ArtifactCustody, { kind: "holder" }> =>
-    artifactEvidence || openClawCommand === undefined || openClawCommand === "update"
-      ? { kind: "holder" }
-      : { kind: "holder", notUpdater: true };
+    artifactEvidence || !gateway ? { kind: "holder" } : { kind: "holder", gateway: true };
   if (identity.kind === "openclaw") {
     if (!identity.artifactPath) {
       // Preload operands resolve only below; one may still point into a runtime.
@@ -534,7 +542,7 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
         runtimeDirectory &&
         (custody.paths
           ? !custody.paths.some((value) => matches.test(normalize(value)))
-          : custody.notUpdater)
+          : custody.gateway)
       ) {
         continue;
       }
