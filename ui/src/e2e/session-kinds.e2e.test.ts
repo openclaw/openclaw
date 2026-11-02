@@ -124,7 +124,7 @@ suite.define(() => {
         await transcriptInput.waitFor();
         await transcriptInput.press("Escape");
         await filter.click();
-        const sheet = page.locator(".sessions-filter-sheet");
+        const sheet = page.locator(".sessions-filter-popover:popover-open");
         await sheet.getByRole("radiogroup", { name: "Session state" }).waitFor();
         for (const [label, value] of [
           ["Group by", "Agent"],
