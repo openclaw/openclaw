@@ -543,19 +543,21 @@ describe("ChatGPT token-sharing with port 8080 taken", () => {
   const registeredId = "oaiapp_testregistered";
   let occupant: ReturnType<typeof createServer>;
 
-  beforeEach(async () => {
+  const occupy = async (host: string) => {
     occupant = createServer();
     await new Promise<void>((resolve, reject) => {
       occupant.once("error", reject);
-      occupant.listen(8080, "127.0.0.1", resolve);
+      occupant.listen(8080, host, resolve);
     });
-  });
-
-  afterEach(async () => {
+  };
+  const release = async () => {
     await new Promise((resolve) => {
       occupant.close(resolve);
     });
-  });
+  };
+
+  beforeEach(() => occupy("127.0.0.1"));
+  afterEach(release);
 
   // The browser lands on the app holding the port; the address bar keeps the redirect.
   const redirectFor = (extra: string[][]) => {
@@ -604,6 +606,25 @@ describe("ChatGPT token-sharing with port 8080 taken", () => {
       "The app using port 8080 might receive that redirect",
     );
   });
+
+  // macOS lets 127.0.0.1 bind beside these listeners, but localhost reaches them over ::1.
+  it.for(["::1", "::"])(
+    "asks for the paste when %s takes the localhost redirect",
+    async (host, t) => {
+      await release();
+      try {
+        await occupy(host);
+      } catch {
+        await occupy("127.0.0.1");
+        t.skip("IPv6 loopback unavailable");
+      }
+      const ctx = pasteContext(() => redirectFor([["code", "test-code"]]));
+      await expect(loginTokenSharing(ctx)).resolves.toMatchObject({
+        profiles: [{ credential: { authFlow: TOKEN_SHARING_AUTH_FLOW } }],
+      });
+      expect(ctx.prompter.text).toHaveBeenCalledOnce();
+    },
+  );
 
   it("keeps first sign-in out of the token exchange when the paste drops client_id", async () => {
     const ctx = pasteContext(() => redirectFor([["code", "test-code"]]), { existingProfiles: [] });

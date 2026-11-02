@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { connect } from "node:net";
 import { createLocalJWKSet, decodeJwt, jwtVerify } from "jose";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import type { ProviderAuthContext, ProviderAuthResult } from "openclaw/plugin-sdk/plugin-entry";
@@ -283,6 +284,24 @@ export async function refreshTokenSharingCredential(
   }
 }
 
+/**
+ * macOS lets 127.0.0.1 bind beside a `::` or `::1` listener, so EADDRINUSE misses an app that
+ * would take the localhost redirect over IPv6. Hosts without IPv6 loopback report not taken.
+ */
+async function isIpv6LoopbackTaken(): Promise<boolean> {
+  const port = Number(new URL(TOKEN_SHARING_REDIRECT_URI).port);
+  return await new Promise((resolve) => {
+    const socket = connect({ host: "::1", port, timeout: 1000 });
+    const finish = (taken: boolean) => {
+      socket.destroy();
+      resolve(taken);
+    };
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+    socket.once("timeout", () => finish(false));
+  });
+}
+
 /** Holds a pasted redirect to the listener's rules; returns the problem as text when it fails. */
 function readPastedRedirect(input: string, state: string): Authorization | string {
   const parameters = URL.parse(input.trim())?.searchParams;
@@ -399,14 +418,16 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
   }).toString();
   let callback: CallbackServer | undefined;
   try {
-    callback = await startProviderOAuthLoopbackCallbackServer({
-      redirectUrl: TOKEN_SHARING_REDIRECT_URI,
-      expectedState: state,
-      signal: owner.signal,
-      // SSH forwards target IPv4 loopback; keep the registered localhost redirect unchanged.
-      bindOnlyHostname: "127.0.0.1",
-      deferResponse: true,
-    });
+    if (!(await isIpv6LoopbackTaken())) {
+      callback = await startProviderOAuthLoopbackCallbackServer({
+        redirectUrl: TOKEN_SHARING_REDIRECT_URI,
+        expectedState: state,
+        signal: owner.signal,
+        // SSH forwards target IPv4 loopback; keep the registered localhost redirect unchanged.
+        bindOnlyHostname: "127.0.0.1",
+        deferResponse: true,
+      });
+    }
   } catch (error) {
     // OpenAI registers this exact port, so another port cannot replace it; the user pastes instead.
     if (extractErrorCode(error) !== "EADDRINUSE") {
