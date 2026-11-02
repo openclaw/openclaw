@@ -43,7 +43,8 @@
   margin-block-start: var(--space-3);
 }
 
-.transcripts-filters summary {
+.transcripts-filters summary,
+.transcripts-source-details {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }
@@ -252,8 +253,6 @@
 
 .transcripts-source-details {
   margin-block: var(--space-3);
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
 }
 
 .transcripts-reader__header h1 {

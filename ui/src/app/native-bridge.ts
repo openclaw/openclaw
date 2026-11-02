@@ -1,4 +1,3 @@
-// Application-owned native draft delivery.
 type WebView2Bridge = {
   postMessage(message: unknown): void;
   addEventListener(type: "message", listener: (event: MessageEvent) => void): void;
@@ -10,44 +9,22 @@ export type NativeChatDrafts = {
   dispose: () => void;
 };
 
-function getWebview(): WebView2Bridge | undefined {
-  const webview = (window as unknown as { chrome?: { webview?: WebView2Bridge } }).chrome?.webview;
-  return webview;
-}
-
-// Keep WebView2 messaging distinct from the DOM Window.postMessage contract.
-function sendToNative(message: unknown): void {
-  getWebview()?.postMessage(message);
-}
-
 function readNativeDraft(raw: unknown): string | null {
-  if (!raw || typeof raw !== "object") {
+  if (!raw || typeof raw !== "object" || !("type" in raw) || raw.type !== "draft-text") {
     return null;
   }
-  const msg = raw as Record<string, unknown>;
-  if (typeof msg.type !== "string") {
-    return null;
-  }
-  if (msg.type === "draft-text") {
-    const text =
-      msg.payload && typeof msg.payload === "object"
-        ? (msg.payload as Record<string, unknown>).text
-        : undefined;
-    if (typeof text === "string") {
-      return text;
-    }
-  }
-  return null;
+  const payload = "payload" in raw ? raw.payload : null;
+  const text = payload && typeof payload === "object" && "text" in payload ? payload.text : null;
+  return typeof text === "string" ? text : null;
 }
 
 /**
- * Subscribes to WebView2 native messages and sends the ready handshake.
- * addEventListener is called BEFORE the ready handshake so no messages
- * are missed between the handshake and the first listen.
+ * WebView2's message-only bridge is not a DOM EventTarget. Subscribe before
+ * the ready handshake and pair its native subscription with disposal below.
  * Drafts received while Chat is not mounted are retained for its next subscriber.
  */
 export function createNativeChatDrafts(): NativeChatDrafts {
-  const bridge = getWebview();
+  const bridge = (window as Window & { chrome?: { webview?: WebView2Bridge } }).chrome?.webview;
   if (!bridge) {
     return {
       subscribe: () => () => {},
@@ -72,7 +49,9 @@ export function createNativeChatDrafts(): NativeChatDrafts {
   };
 
   bridge.addEventListener("message", handler);
-  sendToNative({ type: "ready" });
+  // WebView2's one-argument host API is distinct from Window.postMessage.
+  // oxlint-disable-next-line unicorn/require-post-message-target-origin
+  bridge.postMessage({ type: "ready" });
 
   return {
     subscribe(listener) {

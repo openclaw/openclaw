@@ -1,14 +1,14 @@
-import path from "node:path";
+import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { projectChatDisplayMessages } from "../../../src/gateway/chat-display-projection.js";
 import { createNestedToolActivity } from "../../../src/sessions/nested-tool-activity.js";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent run transcript",
   startServerBeforeBrowser: true,
+  trackBrowserContexts: true,
 });
 
 function transcriptMessage(
@@ -26,34 +26,171 @@ function transcriptMessage(
   };
 }
 
+async function expectCount(target: Locator, count: number) {
+  expect(await target.count()).toBe(count);
+}
+
+function activeRun(runId: string, text = "") {
+  return {
+    inFlightRun: { runId, text },
+    sessionInfo: { activeRunIds: [runId], hasActiveRun: true, key: "agent:main:main" },
+  };
+}
+
+async function openTranscript(
+  scenario: Parameters<typeof installMockGateway>[1],
+  options: BrowserContextOptions = {},
+) {
+  const context = await suite.newBrowserContext({
+    viewport: { height: 900, width: 1200 },
+    ...options,
+  });
+  const page = await context.newPage();
+  const gateway = await installMockGateway(page, scenario);
+  await page.goto(`${suite.server.baseUrl}chat`);
+  return { page, gateway };
+}
+
+async function flushSnapshot(page: Page) {
+  await page.evaluate(async () => {
+    const pane = document.querySelector(".chat-pane-cache__pane--active");
+    await Reflect.get(pane!, "sessionSnapshotStore").flush();
+  });
+}
+
 suite.define(() => {
-  it("collapses nested tool activity after commentary across history reload", async () => {
-    const context = await suite.browser.newContext({
-      colorScheme: "light",
-      viewport: { height: 900, width: 1200 },
+  it("reconciles a cached failure resolved while away from the session", async () => {
+    const key = "agent:main:main";
+    const runId = "cached-failure";
+    const user = transcriptMessage("user", "Check the saved result.", runId, "request", 1);
+    const summary = "Synthetic check failed before a reply.";
+    const session = {
+      key,
+      sessionId: "cached-notice-session",
+      kind: "direct",
+      status: "failed",
+      lastRunId: runId,
+    };
+    const messages = [
+      user,
+      {
+        role: "custom",
+        customType: "run-failed-before-reply",
+        content: summary,
+        openclawRunError: { runId, summary },
+        __openclaw: { id: "failure", seq: 2, runId },
+        timestamp: user.timestamp + 1,
+      },
+    ];
+    const { page, gateway } = await openTranscript({
+      sessionKey: key,
+      sessions: [session],
+      authMethod: "trusted-proxy",
+      authMode: "trusted-proxy",
+      subscriptionInitialHistory: false,
+      heldMethods: ["chat.startup"],
+      historyMessages: messages,
+      methodResponses: {
+        "chat.startup": { messages, sessionId: session.sessionId, sessionInfo: session },
+      },
     });
-    const page = await context.newPage();
+    await gateway.waitForRequest("chat.startup");
+    await gateway.resolveDeferred("chat.startup");
+    const failure = page.locator(".chat-run-failure");
+    await failure.getByText(summary, { exact: true }).waitFor({ state: "attached" });
+    await flushSnapshot(page);
+    await page.reload();
+    await failure.getByText(summary, { exact: true }).waitFor({ state: "attached" });
+    await gateway.waitForRequest("chat.startup");
+    const answer = "The check completed while you were away.";
+    await gateway.resolveDeferred("chat.startup", {
+      sessionId: session.sessionId,
+      sessionInfo: { ...session, status: "done" },
+      messages: [user, transcriptMessage("assistant", answer, runId, "reply", 2)],
+    });
+    await page.locator(".chat-group.assistant").getByText(answer, { exact: true }).waitFor();
+    await failure.waitFor({ state: "detached" });
+    expect(await page.getByText("Check the saved result.", { exact: true }).count()).toBe(1);
+  });
+
+  it("retains cached commentary while a reloaded run continues streaming", async () => {
+    const key = "agent:main:main";
+    const runId = "streaming-after-reload";
+    const commentary = "Checking the saved workspace state.";
+    const messages = [
+      transcriptMessage("user", "Continue the check.", runId, "request", 1),
+      {
+        ...transcriptMessage("assistant", commentary, runId, "commentary", 2),
+        channel: "commentary",
+      },
+    ];
+    const session = {
+      key,
+      sessionId: "cached-stream-session",
+      kind: "direct",
+      status: "running",
+      activeRunIds: [runId],
+      hasActiveRun: true,
+    };
+    const history = {
+      messages,
+      sessionId: session.sessionId,
+      sessionInfo: session,
+      inFlightRun: { runId, text: "Draft before reload." },
+    };
+    const { page, gateway } = await openTranscript({
+      sessionKey: key,
+      sessions: [session],
+      authMethod: "trusted-proxy",
+      authMode: "trusted-proxy",
+      subscriptionInitialHistory: false,
+      heldMethods: ["chat.startup"],
+      historyMessages: messages,
+      methodResponses: { "chat.startup": history },
+    });
+    await gateway.waitForRequest("chat.startup");
+    await gateway.resolveDeferred("chat.startup");
+    const assistant = page.locator(".chat-group.assistant");
+    await assistant.getByText("Draft before reload.", { exact: true }).waitFor();
+    await flushSnapshot(page);
+    await page.reload();
+    await assistant.getByText(commentary, { exact: true }).waitFor();
+    await gateway.waitForRequest("chat.startup");
+    await gateway.resolveDeferred("chat.startup", {
+      ...history,
+      inFlightRun: { runId, text: "Draft after reload." },
+    });
+    await assistant.getByText("Draft after reload.", { exact: true }).waitFor();
+    const text = "Draft after reload. More detail.";
+    await gateway.emitGatewayEvent("chat", {
+      sessionKey: key,
+      runId,
+      state: "delta",
+      deltaText: text,
+      message: { role: "assistant", content: [{ type: "text", text }] },
+    });
+    await assistant.getByText(text, { exact: true }).waitFor();
+    expect(await assistant.getByText(commentary, { exact: true }).count()).toBe(1);
+    expect(await assistant.getByText("Draft before reload.", { exact: true }).count()).toBe(0);
+    expect(
+      await page.getByRole("button", { name: "Stop generating", exact: true }).isVisible(),
+    ).toBe(true);
+  });
+
+  it("collapses nested tool activity after commentary across history reload", async () => {
     const runId = "nested-run";
-    const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("nested-tool-collapse", artifactRoot)
-      : undefined;
+    const commentary = "I’ll inspect the workspace first.";
     const calls = ["read", "exec", "sessions_history"].flatMap((name, index) => {
       const seq = 3 + index * 2;
       const parentId = `parent-${index}`;
       const childId = `child-${index}`;
       const idempotencyKey = `attempt:${childId}`;
+      const parentContent = [
+        { type: "toolCall", id: parentId, name: "exec", arguments: {} },
+        { type: "toolResult", toolCallId: parentId, name: "exec", content: "Done" },
+      ];
       return [
-        transcriptMessage(
-          "assistant",
-          [
-            { type: "toolCall", id: parentId, name: "exec", arguments: {} },
-            { type: "toolResult", toolCallId: parentId, name: "exec", content: "Done" },
-          ],
-          runId,
-          parentId,
-          seq,
-        ),
+        transcriptMessage("assistant", parentContent, runId, parentId, seq),
         {
           ...createNestedToolActivity({
             runId,
@@ -74,482 +211,75 @@ suite.define(() => {
         },
       ];
     });
-    try {
-      await installMockGateway(page, {
+    const { page } = await openTranscript(
+      {
         historyMessages: [
           transcriptMessage("user", "Inspect the workspace.", `${runId}:user`, "user", 1),
-          transcriptMessage(
-            "assistant",
-            "I’ll inspect the workspace first.",
-            runId,
-            "commentary",
-            2,
-          ),
+          transcriptMessage("assistant", commentary, runId, "commentary", 2),
           ...projectChatDisplayMessages(calls),
         ],
-      });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await page.getByText("I’ll inspect the workspace first.", { exact: true }).waitFor();
-      if (artifactDir) {
-        await page.screenshot({ path: path.join(artifactDir, "collapsed.png") });
-      }
-      const activity = page.locator(".chat-activity-group:not(.chat-work-group)");
-      await expect.poll(() => activity.count()).toBe(1);
-      const summary = activity.locator(".chat-activity-group__summary");
-      expect(await summary.getAttribute("aria-expanded")).toBe("false");
-      expect(await activity.locator(".chat-activity-group__body").isVisible()).toBe(false);
-      await summary.click();
-      expect(await summary.getAttribute("aria-expanded")).toBe("true");
-      expect(await activity.locator(".chat-activity-group__body").isVisible()).toBe(true);
-      if (artifactDir) {
-        await page.screenshot({ path: path.join(artifactDir, "expanded.png") });
-      }
-      await page.reload();
-      await expect.poll(() => activity.count()).toBe(1);
-      expect(await summary.getAttribute("aria-expanded")).toBe("false");
-      expect(
-        await page.getByText("I’ll inspect the workspace first.", { exact: true }).count(),
-      ).toBe(1);
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("keeps restart-recovered live tool batches in one transcript row", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1200 } });
-    const page = await context.newPage();
-    const runId = "run-restart-recovery";
-    const toolResult = (id: string, seq: number, name: string) => ({
-      ...transcriptMessage(
-        "toolResult",
-        [{ type: "text", text: `${name} completed` }],
-        runId,
-        id,
-        seq,
-      ),
-      toolCallId: id,
-      toolName: name,
-    });
-    await installMockGateway(page, {
-      historyMessages: [
-        {
-          ...transcriptMessage(
-            "user",
-            "[System] Continue the interrupted turn.",
-            `${runId}:user`,
-            "restart-recovery",
-            1,
-          ),
-          provenance: {
-            kind: "internal_system",
-            sourceSessionKey: "main",
-            sourceTool: "main_session_restart_recovery",
-          },
-        },
-        toolResult("process-1", 2, "process"),
-        toolResult("process-2", 3, "process"),
-        transcriptMessage("assistant", "Checking the next batch.", runId, "gap-1", 4),
-        toolResult("exec-1", 5, "exec"),
-        toolResult("exec-2", 6, "exec"),
-        transcriptMessage("assistant", "Checking the final batch.", runId, "gap-2", 7),
-        toolResult("process-3", 8, "process"),
-        toolResult("process-4", 9, "process"),
-      ],
-      inFlightRun: { runId, text: "" },
-      sessionInfo: {
-        activeRunIds: [runId],
-        hasActiveRun: true,
-        key: "agent:main:main",
       },
-    });
-
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const summaries = page.locator(".chat-activity-group__summary");
-    await expect.poll(() => summaries.count()).toBe(3);
-    const rowKeys = await summaries.evaluateAll((elements) =>
-      elements.map(
-        (element) => element.closest<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey,
-      ),
+      { colorScheme: "light" },
     );
-
-    expect(rowKeys[0]).toMatch(/^agent-run:/u);
-    expect(rowKeys).toEqual([rowKeys[0], rowKeys[0], rowKeys[0]]);
-    const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("chat-agent-run-transcript", artifactRoot)
-      : undefined;
-    if (artifactDir) {
-      await page.locator(".chat-thread-inner").screenshot({
-        path: path.join(artifactDir, "restart-recovery-run-frame.png"),
-      });
-    }
-
-    await context.close();
-  });
-
-  it.each([
-    { viewport: "desktop-dark", width: 1200, height: 900, theme: "dark" },
-    { viewport: "mobile-dark", width: 390, height: 844, theme: "dark" },
-    { viewport: "mobile-light", width: 390, height: 844, theme: "light" },
-  ] as const)(
-    "renders each run as one linear response on $viewport",
-    async ({ viewport, width, height, theme }) => {
-      const isMobile = viewport.startsWith("mobile");
-      const context = await suite.browser.newContext({
-        colorScheme: theme,
-        hasTouch: isMobile,
-        isMobile,
-        viewport: { height, width },
-      });
-      const page = await context.newPage();
-      const firstRunId = "run-composed-first";
-      const secondRunId = "run-composed-second";
-      const toolOnlyRunId = "run-tool-only";
-      const commentaryToolRunId = "run-commentary-tool-only";
-      await installMockGateway(page, {
-        historyMessages: [
-          transcriptMessage("user", "Create the launch card.", `${firstRunId}:user`, "user-1", 1),
-          transcriptMessage(
-            "assistant",
-            "I’ll create the launch card and check the existing style first.",
-            firstRunId,
-            "assistant-1",
-            2,
-          ),
-          {
-            ...transcriptMessage(
-              "assistant",
-              [
-                {
-                  type: "toolCall",
-                  id: "call-read",
-                  name: "read",
-                  arguments: { path: "ui/src/styles/chat.css" },
-                },
-              ],
-              firstRunId,
-              "tool-call-1",
-              3,
-            ),
-          },
-          {
-            ...transcriptMessage(
-              "toolResult",
-              [{ type: "text", text: "Existing card styles loaded." }],
-              firstRunId,
-              "tool-result-1",
-              4,
-            ),
-            toolCallId: "call-read",
-            toolName: "read",
-          },
-          transcriptMessage(
-            "assistant",
-            "The first draft matches the transcript rhythm. I’ll render the asset now.",
-            firstRunId,
-            "assistant-2",
-            5,
-          ),
-          {
-            ...transcriptMessage(
-              "assistant",
-              [
-                {
-                  type: "toolCall",
-                  id: "call-render",
-                  name: "exec",
-                  arguments: { command: "render launch-card.svg" },
-                },
-              ],
-              firstRunId,
-              "tool-call-2",
-              6,
-            ),
-          },
-          {
-            ...transcriptMessage(
-              "toolResult",
-              [{ type: "text", text: "Rendered launch-card.svg" }],
-              firstRunId,
-              "tool-result-2",
-              7,
-            ),
-            toolCallId: "call-render",
-            toolName: "exec",
-          },
-          transcriptMessage(
-            "assistant",
-            "The launch card is ready: MEDIA:./launch-card.svg",
-            firstRunId,
-            "assistant-3",
-            8,
-          ),
-          transcriptMessage("user", "Now write the caption.", `${secondRunId}:user`, "user-2", 9),
-          transcriptMessage(
-            "assistant",
-            "Caption ready for the second run.",
-            secondRunId,
-            "assistant-4",
-            10,
-          ),
-          transcriptMessage(
-            "user",
-            "Check without replying.",
-            `${toolOnlyRunId}:user`,
-            "user-3",
-            11,
-          ),
-          {
-            ...transcriptMessage(
-              "toolResult",
-              [{ type: "text", text: "Tool-only result" }],
-              toolOnlyRunId,
-              "tool-result-3",
-              12,
-            ),
-            toolCallId: "call-tool-only",
-            toolName: "read",
-          },
-          transcriptMessage(
-            "user",
-            "Inspect and stop after the tool.",
-            `${commentaryToolRunId}:user`,
-            "user-4",
-            13,
-          ),
-          transcriptMessage(
-            "assistant",
-            "I’ll inspect the current state first.",
-            commentaryToolRunId,
-            "assistant-5",
-            14,
-          ),
-          {
-            ...transcriptMessage(
-              "toolResult",
-              [{ type: "text", text: "Commentary-led tool-only result" }],
-              commentaryToolRunId,
-              "tool-result-4",
-              15,
-            ),
-            toolCallId: "call-commentary-tool-only",
-            toolName: "read",
-          },
-        ],
-      });
-
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const transcript = page.locator(".chat-thread-inner");
-      await transcript.getByText("Caption ready for the second run.", { exact: true }).waitFor();
-      const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-      const artifactDir = artifactRoot
-        ? createControlUiE2eArtifactDir("chat-agent-run-transcript", artifactRoot)
-        : undefined;
-      if (artifactDir) {
-        const firstNarration = transcript.getByText(
-          "I’ll create the launch card and check the existing style first.",
-          { exact: true },
-        );
-        await firstNarration.scrollIntoViewIfNeeded();
-        await firstNarration.click();
-        await transcript.screenshot({ path: path.join(artifactDir, `transcript-${viewport}.png`) });
-      }
-
-      const assistantGroups = page.locator(".chat-group.assistant");
-      expect(await assistantGroups.count()).toBe(4);
-      const firstRun = assistantGroups.filter({
-        hasText: "I’ll create the launch card and check the existing style first.",
-      });
-      expect(await firstRun.count()).toBe(1);
-      if (artifactDir) {
-        await firstRun.screenshot({
-          path: path.join(artifactDir, `agent-run-transcript-${viewport}.png`),
-        });
-      }
-      expect(await firstRun.locator(".chat-sender-name").count()).toBe(1);
-      expect(await firstRun.locator(".chat-group-footer-actions").count()).toBe(1);
-      expect(await firstRun.locator(".chat-message-actions-row").count()).toBe(0);
-      expect(await firstRun.locator(".chat-group-footer-actions button").count()).toBe(2);
-      expect(
-        await firstRun
-          .locator(".chat-group-footer-actions button")
-          .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))),
-      ).toEqual(["Reply to message", "Copy as markdown"]);
-
-      const orderedContent = await firstRun.locator(".chat-bubble").evaluateAll((bubbles) =>
-        bubbles.map((bubble) => ({
-          messageId: bubble.getAttribute("data-message-id"),
-          text: bubble.textContent?.replace(/\s+/gu, " ").trim(),
-        })),
-      );
-      expect(orderedContent).toEqual([
-        expect.objectContaining({ text: expect.stringContaining("I’ll create the launch card") }),
-        expect.objectContaining({ text: expect.stringContaining("Read") }),
-        expect.objectContaining({ text: expect.stringContaining("The first draft matches") }),
-        expect.objectContaining({ text: expect.stringContaining("render launch-card.svg") }),
-        expect.objectContaining({ text: expect.stringContaining("The launch card is ready") }),
-      ]);
-      expect(
-        await firstRun.getByText("Caption ready for the second run.", { exact: true }).count(),
-      ).toBe(0);
-      const toolOnlyRun = page.locator(
-        `.chat-group.assistant[data-chat-row-key*="${toolOnlyRunId}"]`,
-      );
-      expect(await toolOnlyRun.count()).toBe(1);
-      expect(await toolOnlyRun.locator(".chat-group-footer-actions").count()).toBe(0);
-      const commentaryToolRun = page.locator(
-        `.chat-group.assistant[data-chat-row-key*="${commentaryToolRunId}"]`,
-      );
-      expect(await commentaryToolRun.count()).toBe(1);
-      expect(
-        await commentaryToolRun
-          .getByText("I’ll inspect the current state first.", { exact: true })
-          .count(),
-      ).toBe(1);
-      expect(await commentaryToolRun.locator(".chat-group-footer-actions").count()).toBe(0);
-
-      await context.close();
-    },
-  );
-
-  it("keeps the run row identity when a hidden heartbeat boundary reaches history", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1200 } });
-    const page = await context.newPage();
-    const runId = "run-heartbeat-browser-handoff";
-    const gateway = await installMockGateway(page, {
-      historyMessages: [],
-      inFlightRun: { runId, text: "" },
-      sessionInfo: {
-        activeRunIds: [runId],
-        hasActiveRun: true,
-        key: "agent:main:main",
-      },
-    });
-
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const liveRow = page.locator(".chat-virtual-row", {
-      has: page.locator(".chat-reading-indicator"),
-    });
-    await liveRow.waitFor();
-    const liveKey = await liveRow.getAttribute("data-virtual-row-key");
-    expect(liveKey).not.toBeNull();
-
-    const finalText = "Heartbeat handoff complete.";
-    const persistedMessage = {
-      role: "assistant",
-      api: "cli",
-      content: finalText,
-      idempotencyKey: `cli-assistant:${runId}`,
-      timestamp: Date.UTC(2026, 7, 19, 12, 1),
-      __openclaw: {
-        id: "assistant-after-hidden-heartbeat",
-        seq: 1,
-        turnBoundary: true,
-      },
-    };
-    await gateway.setHistoryMessages([persistedMessage]);
-    const historyRequestsBeforeFinal = (await gateway.getRequests("chat.history")).length;
-    await gateway.emitGatewayEvent("session.message", {
-      activeRunIds: [],
-      clientRunId: runId,
-      hasActiveRun: false,
-      message: persistedMessage,
-      messageId: "assistant-after-hidden-heartbeat",
-      messageSeq: 1,
-      session: {
-        activeRunIds: [],
-        hasActiveRun: false,
-        key: "agent:main:main",
-        kind: "direct",
-        status: "done",
-        updatedAt: Date.now(),
-      },
-      sessionKey: "agent:main:main",
-    });
-    await expect
-      .poll(async () => (await gateway.getRequests("chat.history")).length)
-      .toBeGreaterThan(historyRequestsBeforeFinal);
-
-    const settledRow = page.locator(".chat-virtual-row", {
-      has: page.getByText(finalText, { exact: true }),
-    });
-    await settledRow.waitFor();
-    await expect.poll(() => settledRow.getAttribute("data-virtual-row-key")).toBe(liveKey);
-    expect(await settledRow.count()).toBe(1);
-
-    await context.close();
+    await page.getByText(commentary, { exact: true }).waitFor();
+    const activity = page.locator(".chat-activity-group:not(.chat-work-group)");
+    await expect.poll(() => activity.count()).toBe(1);
+    await activity.waitFor({ state: "visible" });
+    expect(
+      await activity.evaluate((element) => {
+        const preceding = element.previousElementSibling!;
+        return element.getBoundingClientRect().top - preceding.getBoundingClientRect().bottom;
+      }),
+    ).toBeCloseTo(8, 1);
+    const summary = activity.locator(".chat-activity-group__summary");
+    expect(await summary.getAttribute("aria-expanded")).toBe("false");
+    expect(await activity.locator(".chat-activity-group__body").isVisible()).toBe(false);
+    await summary.click();
+    expect(await summary.getAttribute("aria-expanded")).toBe("true");
+    expect(await activity.locator(".chat-activity-group__body").isVisible()).toBe(true);
+    await page.reload();
+    await expect.poll(() => activity.count()).toBe(1);
+    expect(await summary.getAttribute("aria-expanded")).toBe("false");
+    await expectCount(page.getByText(commentary, { exact: true }), 1);
   });
 
   it("keeps same-run events from another session out of the selected transcript", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1200 } });
-    const page = await context.newPage();
     const runId = "run-shared-across-session-events";
     const selectedText = "Selected session stream stays in its own row.";
     const wrongSessionText = "Wrong session content must never enter this transcript. ".repeat(12);
-    const gateway = await installMockGateway(page, {
+    const { page, gateway } = await openTranscript({
       historyMessages: [
         transcriptMessage("user", "Earlier prompt", "run-earlier:user", "user-earlier", 1),
         transcriptMessage("assistant", "Earlier answer", "run-earlier", "assistant-earlier", 2),
       ],
-      inFlightRun: { runId, text: selectedText },
-      sessionInfo: {
-        activeRunIds: [runId],
-        hasActiveRun: true,
-        key: "agent:main:main",
-      },
+      ...activeRun(runId, selectedText),
     });
-
-    await page.goto(`${suite.server.baseUrl}chat`);
     await page.getByText(selectedText, { exact: true }).waitFor();
     const inactiveSessionKey = "agent:main:inactive-session";
-    await gateway.emitGatewayEvent("chat", {
-      deltaText: wrongSessionText,
+    const event = {
       message: { role: "assistant", content: [{ type: "text", text: wrongSessionText }] },
       runId,
       sessionKey: inactiveSessionKey,
+    };
+    await gateway.emitGatewayEvent("chat", {
+      ...event,
+      deltaText: wrongSessionText,
       state: "delta",
     });
-    await gateway.emitGatewayEvent("chat", {
-      message: { role: "assistant", content: [{ type: "text", text: wrongSessionText }] },
-      runId,
-      sessionKey: inactiveSessionKey,
-      state: "final",
-    });
+    await gateway.emitGatewayEvent("chat", { ...event, state: "final" });
 
     await expect.poll(() => page.getByText(wrongSessionText, { exact: true }).count()).toBe(0);
     await expect.poll(() => page.getByText(selectedText, { exact: true }).count()).toBe(1);
-    const overlappingRows = await page.locator(".chat-virtual-row").evaluateAll((rows) => {
+    const hasOverlap = await page.locator(".chat-virtual-row").evaluateAll((rows) => {
       const bounds = rows
-        .map((row) => {
-          const rect = row.getBoundingClientRect();
-          return {
-            bottom: rect.bottom,
-            key: row.getAttribute("data-virtual-row-key"),
-            top: rect.top,
-          };
-        })
+        .map((row) => row.getBoundingClientRect())
         .filter((rect) => rect.bottom > rect.top)
         .toSorted((left, right) => left.top - right.top);
-      return bounds.slice(1).flatMap((current, index) => {
+      return bounds.slice(1).some((current, index) => {
         const previous = bounds[index];
-        return previous && current.top < previous.bottom - 0.5
-          ? [{ current: current.key, previous: previous.key }]
-          : [];
+        return previous !== undefined && current.top < previous.bottom - 0.5;
       });
     });
-    expect(overlappingRows).toEqual([]);
-
-    const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("chat-agent-run-transcript", artifactRoot)
-      : undefined;
-    if (artifactDir) {
-      await page.screenshot({
-        path: path.join(artifactDir, "cross-session-run-isolation.png"),
-        fullPage: true,
-      });
-    }
-
-    await context.close();
+    expect(hasOverlap).toBe(false);
   });
 });

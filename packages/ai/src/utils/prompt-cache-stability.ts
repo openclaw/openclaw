@@ -37,14 +37,11 @@ export function normalizeStructuredPromptSection(text: string): string {
 /** Normalize, de-dupe, and sort capability ids for stable prompt payloads. */
 export function normalizePromptCapabilityIds(capabilities: ReadonlyArray<string>): string[] {
   const seen = new Set<string>();
-  const normalized: string[] = [];
   for (const capability of capabilities) {
     const value = normalizeLowercaseStringOrEmpty(normalizeStructuredPromptSection(capability));
-    if (!value || seen.has(value)) {
-      continue;
+    if (value) {
+      seen.add(value);
     }
-    seen.add(value);
-    normalized.push(value);
   }
-  return normalized.toSorted((left, right) => left.localeCompare(right));
+  return [...seen].toSorted((left, right) => left.localeCompare(right));
 }

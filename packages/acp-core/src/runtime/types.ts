@@ -1,4 +1,3 @@
-// ACP Core type module defines shared TypeScript contracts.
 export type AcpRuntimePromptMode = "prompt" | "steer";
 
 export type AcpRuntimeSessionMode = "persistent" | "oneshot";
@@ -110,7 +109,6 @@ export type AcpElicitationHandler = (
   context: AcpElicitationContext,
 ) => Promise<AcpElicitationResponse>;
 
-/** Per-turn payload delivered to ACP adapters. */
 export type AcpRuntimeTurnInput = {
   handle: AcpRuntimeHandle;
   text: string;
@@ -161,7 +159,6 @@ export type AcpRuntimeDoctorReport = {
   details?: string[];
 };
 
-/** Streaming event union produced by ACP adapters while a turn is running. */
 export type AcpRuntimeEvent =
   | {
       type: "text_delta";
@@ -201,13 +198,7 @@ export type AcpRuntimeEvent =
       status?: "completed" | "cancelled";
       stopReason?: string;
     }
-  | {
-      type: "error";
-      message: string;
-      code?: string;
-      detailCode?: string;
-      retryable?: boolean;
-    };
+  | ({ type: "error" } & AcpRuntimeTurnResultError);
 
 export type AcpRuntimeTurnResultError = {
   message: string;

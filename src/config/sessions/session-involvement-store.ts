@@ -1,0 +1,54 @@
+import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
+import {
+  publishSessionCollaborationChanges,
+  runSessionCollaborationWrite,
+} from "./session-sharing-store.async.js";
+import type { SessionInvolvementMutation } from "./session-sharing-store.types.js";
+
+type InvolvementParams = SessionInvolvementMutation & { assertCurrent?: () => void };
+
+export async function updateSessionProfileInvolvementAsync(
+  scope: SessionCollaborationScope,
+  { assertCurrent, ...params }: InvolvementParams,
+): Promise<boolean> {
+  const captured = structuredClone(params);
+  let catalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>> | undefined;
+  const selectProfiles = (prepared: NonNullable<typeof catalog>) =>
+    [...new Set(captured.profileIds)].map((profileId) => {
+      const identity = prepared.readCurrentIdentity(profileId);
+      return {
+        profileId: identity?.profileId ?? profileId,
+        // Preserve native ordering for mention generations with equal timestamps.
+        aliases: [...new Set([profileId, ...(identity?.aliases ?? [])])],
+      };
+    });
+  try {
+    return await runSessionCollaborationWrite(
+      scope,
+      { type: "involvement", input: { scope, params: captured, profiles: [] } },
+      (result, location, database, currentKeys) => {
+        if (result.changed && database && (!currentKeys || currentKeys.has(location.sessionKey))) {
+          publishSessionCollaborationChanges(
+            [{ ...location, facts: { kind: "unchanged" } }],
+            database,
+          );
+          emitSessionLifecycleEvent({
+            agentId: location.agentId,
+            sessionKey: location.sessionKey,
+            reason: "involvement",
+          });
+        }
+        return result.accepted;
+      },
+      assertCurrent,
+      async (_operation, capturedScope) => {
+        catalog = await prepareUserProfileCatalog({ env: capturedScope.env });
+        return { scope: capturedScope, params: captured, profiles: selectProfiles(catalog) };
+      },
+    );
+  } finally {
+    catalog?.release();
+  }
+}

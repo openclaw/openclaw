@@ -1,4 +1,3 @@
-// Cron Mcp Cleanup Docker Client script supports OpenClaw repository automation.
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -148,16 +147,6 @@ async function waitForAllProbeExits(params: {
   );
 }
 
-async function resetProbeFiles(params: {
-  pidPath: string;
-  pidsPath: string;
-  exitPath: string;
-}): Promise<void> {
-  await fs.rm(params.pidPath, { force: true });
-  await fs.rm(params.pidsPath, { force: true });
-  await fs.rm(params.exitPath, { force: true });
-}
-
 async function runCronCleanupScenario(params: {
   gateway: GatewayRpcClient;
   pidPath: string;
@@ -250,7 +239,9 @@ async function runSubagentCleanupScenario(params: {
   const harness = await loadMcpChannelsHarness();
   const assert: McpChannelsHarness["assert"] = harness.assert;
   const { gateway, pidPath, pidsPath, exitPath } = params;
-  await resetProbeFiles({ pidPath, pidsPath, exitPath });
+  await fs.rm(pidPath, { force: true });
+  await fs.rm(pidsPath, { force: true });
+  await fs.rm(exitPath, { force: true });
 
   const run = await gateway.request<AgentRunResult>(
     "agent",

@@ -1,7 +1,10 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
+import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { loadOpenClawAgentCanonicalValidationReceipt } from "../../state/openclaw-agent-canonical-validation-receipt.js";
 import {
   isOpenClawAgentDatabasePathCurrent,
   readOpenClawAgentDatabaseIdentity,
@@ -21,40 +24,53 @@ import {
   resolveOpenClawStateDirForDatabasePath,
   resolveOpenClawStateSqlitePath,
 } from "../../state/openclaw-state-db.paths.js";
-import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
-import { withSqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker.js";
+import {
+  withSqliteReclamationWorker,
+  type ClaimedReclamationWorkerUse,
+} from "./session-accessor.sqlite-reclamation-worker.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
-import { hasPendingCanonicalSessionValidation } from "./session-canonical-validation.js";
 
 const MAX_BATCH_ROWS = 128;
 const MAX_BATCH_BYTES = 1024 * 1024;
 const CONTENTION_BACKOFF_MS = [0, 25, 100, 250] as const;
 const log = createSubsystemLogger("sessions/canonical-validation");
+// Share only active runtime drains; native close/reopen creates a different owner.
+const runtimeDrains = new Map<string, Promise<void>>();
 
-/** Certify dirty persisted rows before startup maintenance reads their full entries. */
+/** Startup and Doctor certify pending rows through their retained database owner. */
 export async function certifySessionCanonicalValidationPending(
   options: OpenClawAgentDatabaseOptions,
-  withWorker = withSqliteReclamationWorker,
+  withWorker: ClaimedReclamationWorkerUse = withSqliteReclamationWorker,
   assertCurrentOwner?: () => void,
 ): Promise<void> {
-  assertCurrentOwner?.();
+  const assertOwnerCurrent = () => assertCurrentOwner?.();
+  assertOwnerCurrent();
   const sourceEnv = options.env ?? process.env;
   const pathname = resolveOpenClawAgentSqlitePath(options);
   if (isIncognitoOpenClawAgentSqlitePath(pathname, options)) {
     return;
   }
-  const retained = retainOpenClawAgentDatabaseReadOnly(options);
-  if (!retained.found) {
+  const native = withEngineStoreAdmission(() => retainOpenClawAgentDatabaseReadOnly(options));
+  if (!native.found) {
     return;
   }
-  const { database, claim } = retained;
+  const { database, claim } = native;
+  const validationOwner = { database, isCurrent: claim.isCurrent };
+  const drainKey = readOpenClawAgentDatabaseIdentity(database).incarnation;
   let oversizedRows = 0;
   try {
-    let initializeCanonicalValidation = !hasOpenClawAgentCanonicalValidation(database);
-    if (!initializeCanonicalValidation && !hasPendingCanonicalSessionValidation(database)) {
+    const initialize = withEngineStoreAdmission(() =>
+      runSqliteReadOperationSync(database.db, () => {
+        loadOpenClawAgentCanonicalValidationReceipt(database);
+        // Import, repair, and main-key writers revoke readiness when they queue validation.
+        return !hasOpenClawAgentCanonicalValidation(database);
+      }),
+    );
+    if (!initialize) {
       return;
     }
+    let initializeCanonicalValidation = true;
     const databaseOptions = {
       agentId: normalizeAgentId(options.agentId),
       path: readOpenClawAgentDatabaseIdentity(database).filename,
@@ -70,62 +86,56 @@ export async function certifySessionCanonicalValidationPending(
     return await withSqliteMutationWorkerLifetime(
       databaseOptions,
       async ({ assertCurrent: assertReadinessCurrent }) => {
-        try {
+        const shareRuntimeDrain =
+          withWorker === withSqliteReclamationWorker && assertCurrentOwner === undefined;
+        const drain = async () => {
           let contendedBatches = 0;
-          let validation = getOpenClawAgentDatabaseValidation(database);
           while (true) {
-            assertCurrentOwner?.();
+            assertOwnerCurrent();
             assertReadinessCurrent();
             claim.assertCurrent();
             const result = await withSqliteMutationWorkerLifetime(
               databaseOptions,
-              async ({ assertCurrent, commitGate, signal }) =>
+              async ({ assertCurrent, signal }) =>
                 await withWorker(
                   databaseOptions,
                   claim,
                   async (worker) => {
                     const assertCommitAllowed = () => {
-                      assertCurrentOwner?.();
+                      assertOwnerCurrent();
                       assertReadinessCurrent();
                       assertCurrent();
                       worker.assertCurrent(databaseOptions, claim);
                     };
                     assertCommitAllowed();
-                    return await withSqliteReclamationAuthorization(
-                      commitGate,
-                      database.db,
-                      assertCommitAllowed,
-                      (authorize) =>
-                        worker.runCanonicalValidation({
+                    return await worker.runCanonicalValidation({
+                      databaseOptions,
+                      claim,
+                      validationOwner,
+                      maxRows: MAX_BATCH_ROWS,
+                      maxBytes: MAX_BATCH_BYTES,
+                      initializeCanonicalValidation,
+                      withWriteAdmission: async (run, reclamationAdmission) =>
+                        await runExclusiveSqliteSessionWrite(
                           databaseOptions,
-                          claim,
-                          validationOwner: { database, isCurrent: claim.isCurrent },
-                          commitGate,
-                          maxRows: MAX_BATCH_ROWS,
-                          maxBytes: MAX_BATCH_BYTES,
-                          initializeCanonicalValidation,
-                          onCommitRequest: authorize,
-                          withWriteAdmission: async (run, reclamationAdmission) =>
-                            await runExclusiveSqliteSessionWrite(
-                              databaseOptions,
-                              async () => {
-                                let refusal: { error: unknown } | undefined;
-                                try {
-                                  assertCommitAllowed();
-                                } catch (error) {
-                                  refusal = { error };
-                                }
-                                await run(refusal);
-                              },
-                              "session.canonical-validation.certify",
-                              { reclamationAdmission },
-                              "worker",
-                            ),
-                        }),
-                    );
+                          async () => {
+                            let refusal: { error: unknown } | undefined;
+                            try {
+                              assertCommitAllowed();
+                            } catch (error) {
+                              refusal = { error };
+                            }
+                            await run(refusal);
+                          },
+                          "session.canonical-validation.certify",
+                          { reclamationAdmission },
+                          "worker",
+                          signal,
+                        ),
+                    });
                   },
                   () => {
-                    assertCurrentOwner?.();
+                    assertOwnerCurrent();
                     assertReadinessCurrent();
                     assertCurrent();
                     claim.assertCurrent();
@@ -133,14 +143,13 @@ export async function certifySessionCanonicalValidationPending(
                   signal,
                 ),
             );
-            assertCurrentOwner?.();
+            assertOwnerCurrent();
             assertReadinessCurrent();
             claim.assertCurrent();
             const currentValidation = getOpenClawAgentDatabaseValidation(database);
-            if (!currentValidation || (validation && validation !== currentValidation)) {
+            if (!currentValidation) {
               throw new Error("SQLite session reclamation database owner is no longer current");
             }
-            validation ??= currentValidation;
             oversizedRows += result.oversizedRows;
             if (!result.hasMore) {
               if (
@@ -164,8 +173,35 @@ export async function certifySessionCanonicalValidationPending(
             }
             // The next batch rejoins both existing FIFOs behind already queued work.
           }
+        };
+        let completion: Promise<void> | undefined;
+        let ownsDrain = false;
+        try {
+          assertOwnerCurrent();
+          assertReadinessCurrent();
+          claim.assertCurrent();
+          completion = shareRuntimeDrain ? runtimeDrains.get(drainKey) : undefined;
+          ownsDrain = completion === undefined;
+          if (!completion) {
+            completion = drain();
+            if (shareRuntimeDrain) {
+              runtimeDrains.set(drainKey, completion);
+            }
+          }
+          await completion;
+          assertOwnerCurrent();
+          assertReadinessCurrent();
+          claim.assertCurrent();
+          if (
+            !isOpenClawAgentDatabasePathCurrent(database) ||
+            !hasOpenClawAgentCanonicalValidation(database)
+          ) {
+            throw new Error("SQLite session reclamation database owner is no longer current");
+          }
         } finally {
-          claim.release();
+          if (ownsDrain && runtimeDrains.get(drainKey) === completion) {
+            runtimeDrains.delete(drainKey);
+          }
         }
       },
     );

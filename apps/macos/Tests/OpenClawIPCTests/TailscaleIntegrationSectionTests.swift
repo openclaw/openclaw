@@ -109,7 +109,7 @@ struct TailscaleIntegrationSectionTests {
     func `concurrent status checks share one request despite waiter cancellation`(cancelledWaiter: String) async {
         let loader = TailscaleStatusLoader()
         let completion = TailscaleStatusCompletion()
-        let joinBarrier = TailscaleStatusJoinBarrier()
+        let joinBarrier = AsyncTestGate()
         let service = TailscaleService(
             isInstalled: true,
             isRunning: true,
@@ -117,12 +117,13 @@ struct TailscaleIntegrationSectionTests {
             tailscaleIP: "100.66.5.88",
             appInstallationProbe: { true },
             cliInstallationProbe: { false },
-            statusDataLoader: loader.load,
-            statusCheckJoinHandler: { await joinBarrier.signal() })
+            statusDataLoader: loader.load)
 
         let first = Task { await service.checkTailscaleStatus() }
         await loader.waitForRequestStart()
-        let second = Task {
+        let second = Task { @MainActor in
+            // The test cannot resume on MainActor until this waiter suspends in the status check.
+            joinBarrier.open()
             await service.checkTailscaleStatus()
             await completion.markFinished()
         }
@@ -148,87 +149,40 @@ struct TailscaleIntegrationSectionTests {
         #expect(await loader.requestCount == 2)
     }
 
-    @Test func `general tailscale hydration does not rewrite existing config`() async throws {
-        let stateDir = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
-        let configPath = stateDir.appendingPathComponent("openclaw.json")
-
-        defer { try? FileManager().removeItem(at: stateDir) }
-
-        try FileManager().createDirectory(at: stateDir, withIntermediateDirectories: true)
-        let initialConfig = """
-        {
-          "meta": {
-            "lastTouchedVersion": "2026.3.28",
-            "lastTouchedAt": "2026-03-31T13:15:24.532Z"
-          },
-          "wizard": {
-            "lastRunAt": "2026-03-30T14:24:54.570Z",
-            "lastRunVersion": "2026.3.24"
-          },
-          "gateway": {
-            "mode": "local",
-            "port": 18789,
-            "bind": "auto",
-            "tailscale": {
-              "mode": "serve"
-            },
-            "auth": {
-              "mode": "token",
-              "token": "existing-token"
-            }
-          }
+    @Test func `general tailscale hydration does not rewrite existing config`() async {
+        let loaded = TailscaleIntegrationSection.loadedSettings(from: [
+            "gateway": [
+                "mode": "local",
+                "bind": "auto",
+                "tailscale": ["mode": "serve"],
+                "auth": ["mode": "token", "token": "existing-token"], // pragma: allowlist secret
+            ],
+        ])
+        var saveCount = 0
+        let outcome = await TailscaleIntegrationSection.applySettingsIfChanged(
+            currentSettings: loaded.snapshot,
+            lastAppliedSettings: loaded.snapshot)
+        { _ in
+            saveCount += 1
+            return .saved
         }
-        """
-
-        try initialConfig.write(to: configPath, atomically: true, encoding: .utf8)
-
-        try await TestIsolation.withEnvValues([
-            "OPENCLAW_STATE_DIR": stateDir.path,
-            "OPENCLAW_CONFIG_PATH": configPath.path,
-        ]) {
-            let before = try Data(contentsOf: configPath)
-            let root = try #require(
-                JSONSerialization.jsonObject(with: before) as? [String: Any])
-
-            await TailscaleIntegrationSection.simulateHydrationApplyForTesting(
-                root: root,
-                connectionMode: .local,
-                isPaused: true,
-                saveRoot: { root in
-                    OpenClawConfigFile.saveDict(root, allowGatewayAuthMutation: true)
-                })
-
-            let after = try Data(contentsOf: configPath)
-            #expect(after == before)
-
-            let afterRoot = try #require(
-                JSONSerialization.jsonObject(with: after) as? [String: Any])
-            let gateway = try #require(afterRoot["gateway"] as? [String: Any])
-            let auth = try #require(gateway["auth"] as? [String: Any])
-            let meta = try #require(afterRoot["meta"] as? [String: Any])
-            let wizard = try #require(afterRoot["wizard"] as? [String: Any])
-
-            #expect(gateway["bind"] as? String == "auto")
-            #expect(auth["mode"] as? String == "token")
-            #expect(auth["token"] as? String == "existing-token") // pragma: allowlist secret
-            #expect(meta["lastTouchedAt"] as? String == "2026-03-31T13:15:24.532Z")
-            #expect(wizard["lastRunAt"] as? String == "2026-03-30T14:24:54.570Z")
-            #expect(wizard["lastRunVersion"] as? String == "2026.3.24")
-        }
+        #expect(outcome == .unchanged)
+        #expect(saveCount == 0)
     }
 
-    @Test func `unchanged tailscale apply clears stale messages`() {
-        let messages = TailscaleIntegrationSection.messagesForTesting(
-            didApply: false,
-            success: true,
-            connectionMode: .local,
-            isPaused: false)
-
-        #expect(messages.statusMessage == nil)
-        #expect(messages.validationMessage == nil)
-        #expect(messages.shouldRecordSuccess == false)
-        #expect(messages.shouldRestartGateway == false)
+    @Test func `tailscale apply validates changed passwords before saving`() async {
+        let settings = GatewayTailscaleSettingsSnapshot(
+            mode: .funnel, requireCredentialsForServe: true, password: "  ")
+        var saveCount = 0
+        let outcome = await TailscaleIntegrationSection.applySettingsIfChanged(
+            currentSettings: settings,
+            lastAppliedSettings: nil)
+        { _ in
+            saveCount += 1
+            return .saved
+        }
+        #expect(outcome == .invalid("Password required for this mode."))
+        #expect(saveCount == 0)
     }
 }
 
@@ -285,23 +239,5 @@ private actor TailscaleStatusCompletion {
 
     func markFinished() {
         self.finishedCount += 1
-    }
-}
-
-private actor TailscaleStatusJoinBarrier {
-    private var joined = false
-    private var continuation: CheckedContinuation<Void, Never>?
-
-    func signal() {
-        self.joined = true
-        self.continuation?.resume()
-        self.continuation = nil
-    }
-
-    func wait() async {
-        guard !self.joined else { return }
-        await withCheckedContinuation { continuation in
-            self.continuation = continuation
-        }
     }
 }

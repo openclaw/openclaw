@@ -1,6 +1,9 @@
-import { mock } from "node:test";
+import { mockNativeModuleExports } from "../../test/helpers/native-module-mock.js";
+import { cleanupSummary } from "./sessions-cleanup-summary.test-support.js";
 
 const extension = import.meta.url.endsWith(".ts") ? "ts" : "js";
+const mock = (module: string, exports: Record<string, unknown>) =>
+  mockNativeModuleExports(new URL(`${module}.${extension}`, import.meta.url), exports);
 const count = 150_000;
 const storePath = "/mock/agents/main/agent/openclaw-agent.sqlite";
 const unexpected = () => {
@@ -14,64 +17,44 @@ const beforeStore = Object.fromEntries(
 );
 let serviceCalls = 0;
 
-// Keep the actual command, grid, and label-summary owners. Only fixture the
-// service and unrelated metadata boundaries; no large database is needed.
-mock.module(new URL(`../config/config.${extension}`, import.meta.url), {
-  namedExports: { getRuntimeConfig: () => ({}) },
+// Exercise the real grid and label summary without allocating a 150k-row database.
+mock("../config/config", {
+  getRuntimeConfig: () => ({}),
+  loadConfig: () => ({}),
+  captureRuntimeConfigAsyncReader: () => async () => ({}),
 });
-mock.module(new URL(`./session-store-targets.${extension}`, import.meta.url), {
-  namedExports: { resolveCommandSessionStoreTargets: () => [{ agentId: "main", storePath }] },
+mock("./session-store-targets", {
+  resolveCommandSessionStoreTargets: () => [{ agentId: "main", storePath }],
 });
-mock.module(new URL(`../config/sessions.${extension}`, import.meta.url), {
-  namedExports: {
-    resolveSessionCleanupAction: () => "keep",
-    isSessionsCleanupPartialResult: unexpected,
-    serializeSessionCleanupResult: unexpected,
-    runSessionsCleanup: async () => {
-      serviceCalls += 1;
-      return {
-        mode: "warn",
-        appliedSummaries: [],
-        previewResults: [
-          {
-            summary: {
-              agentId: "main",
-              storePath,
-              mode: "warn",
-              dryRun: true,
-              beforeCount: count,
-              afterCount: count,
-              missing: 0,
-              dmScopeRetired: 0,
-              modelRunPruned: 0,
-              pruned: 0,
-              capped: 0,
-              diskBudget: null,
-              wouldMutate: false,
-            },
-            beforeStore,
-            missingKeys: new Set(),
-            modelRunPrunedKeys: new Set(),
-            archivedKeys: new Set(),
-            staleKeys: new Set(),
-            cappedKeys: new Set(),
-            dmScopeRetiredKeys: new Set(),
-          },
-        ],
-      };
-    },
+mock("../config/sessions", {
+  resolveSessionCleanupAction: () => "keep",
+  isSessionsCleanupPartialResult: unexpected,
+  serializeSessionCleanupResult: unexpected,
+  runSessionsCleanup: async () => {
+    serviceCalls += 1;
+    return {
+      mode: "warn",
+      appliedSummaries: [],
+      previewResults: [
+        {
+          summary: cleanupSummary({ storePath, beforeCount: count, afterCount: count }),
+          beforeStore,
+        },
+      ],
+    };
   },
 });
-mock.module(new URL(`../gateway/call.${extension}`, import.meta.url), {
-  namedExports: { callGateway: unexpected, isGatewayTransportError: () => false },
+mock("../gateway/call", {
+  buildGatewayConnectionDetails: unexpected,
+  callGateway: unexpected,
+  isImplicitLocalGatewayTarget: unexpected,
 });
-mock.module(new URL(`../config/sessions/session-sqlite-target.${extension}`, import.meta.url), {
-  namedExports: { resolveSqliteTargetFromSessionStorePath: () => ({ path: storePath }) },
+mock("../gateway/call-mutation-fallback", { resolveGatewayMutationFallback: unexpected });
+mock("../config/sessions/session-sqlite-target", {
+  resolveSqliteTargetFromSessionStorePath: () => ({ path: storePath }),
 });
-mock.module(new URL(`./sessions-display-model.${extension}`, import.meta.url), {
-  namedExports: {
-    resolveSessionDisplayModel: (_cfg: unknown, row: { model: string }) => row.model,
-  },
+mock("./sessions-display-model", {
+  resolveSessionDisplayModelRef: (_cfg: unknown, row: { model: string }) => ({ model: row.model }),
 });
 
 const { sessionsCleanupCommand } = await import("./sessions-cleanup.js");
@@ -84,15 +67,9 @@ await sessionsCleanupCommand(
   {
     log: (value: unknown) => {
       const line = String(value);
-      if (line.includes("Action") && line.includes("Flags")) {
-        gridPrinted = true;
-      }
-      if (line === "Summary by Label:") {
-        summaryPrinted = true;
-      }
-      if (/^label-\d+ +1 kept, 0 pruned$/u.test(line)) {
-        labelRows += 1;
-      }
+      gridPrinted ||= line.includes("Action") && line.includes("Flags");
+      summaryPrinted ||= line === "Summary by Label:";
+      labelRows += Number(/^label-\d+ +1 kept, 0 pruned$/u.test(line));
       if (line.startsWith("Total:")) {
         total = line;
       }
@@ -102,4 +79,3 @@ await sessionsCleanupCommand(
   },
 );
 console.log(JSON.stringify({ serviceCalls, gridPrinted, summaryPrinted, labelRows, total }));
-mock.restoreAll();

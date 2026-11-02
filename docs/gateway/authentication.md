@@ -107,7 +107,7 @@ Automation-friendly check, exit `1` when expired/missing, `2` when expiring:
 openclaw models status --check
 ```
 
-Live auth probes (add `--probe-provider`, `--probe-profile`, `--probe-timeout`, `--probe-concurrency`, or `--probe-max-tokens` to narrow scope):
+Live auth checks (add `--probe-provider`, `--probe-profile`, `--probe-timeout`, `--probe-concurrency`, or `--probe-max-tokens` to narrow scope):
 
 ```bash
 openclaw models status --probe
@@ -115,9 +115,9 @@ openclaw models status --probe
 
 Notes:
 
-- Probe rows can come from auth profiles, env credentials, or `models.json`.
-- If `auth.order.<provider>` omits a stored profile, probe reports `excluded_by_auth_order` for that profile instead of trying it.
-- If auth exists but OpenClaw can't resolve a probeable model for that provider, probe reports `status: no_model`.
+- Check rows can come from auth profiles, env credentials, or `models.json`.
+- If `auth.order.<provider>` omits a stored profile, the check reports `excluded_by_auth_order` for that profile instead of trying it.
+- If auth exists but OpenClaw can't resolve a model that can be tested for that provider, the check reports `status: no_model`.
 - Rate-limit cooldowns can be model-scoped: a profile cooling down for one model can still serve a sibling model on the same provider.
 
 Optional ops scripts (systemd/Termux): [Auth monitoring scripts](/help/scripts#auth-monitoring-scripts).
@@ -151,7 +151,7 @@ When you remove provider auth through the gateway control plane, OpenClaw delete
 
 ### OpenAI and legacy `openai-codex` ids
 
-OpenAI API-key profiles and ChatGPT/Codex OAuth profiles both use the canonical provider id `openai`. Use `openai:*` profile ids and `auth.order.openai` for new config.
+OpenAI API-key profiles and ChatGPT/Codex OAuth profiles both use the standard provider id `openai`. Use `openai:*` profile ids and `auth.order.openai` for new config.
 
 If you see `openai-codex` in older config, auth profile ids, or `auth.order.openai-codex`, treat it as legacy migration input — don't create new `openai-codex` profiles. Run:
 
@@ -160,7 +160,7 @@ openclaw doctor --fix
 openclaw models auth list --provider openai
 ```
 
-Doctor rewrites legacy `openai-codex:*` profile ids and `auth.order.openai-codex` entries to the canonical `openai` route. For OpenAI-specific model/runtime routing, see [OpenAI](/providers/openai).
+Doctor rewrites legacy `openai-codex:*` profile ids and `auth.order.openai-codex` entries to the current `openai` route. For OpenAI-specific model/runtime routing, see [OpenAI](/providers/openai).
 
 ### During login (CLI)
 

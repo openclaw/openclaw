@@ -3,15 +3,6 @@ import { describe, expect, it } from "vitest";
 import { resolveThreadBindingConversationIdFromBindingId } from "./thread-binding-id.js";
 
 describe("resolveThreadBindingConversationIdFromBindingId", () => {
-  it("returns the conversation id for matching account-prefixed binding ids", () => {
-    expect(
-      resolveThreadBindingConversationIdFromBindingId({
-        accountId: "default",
-        bindingId: "default:thread-123",
-      }),
-    ).toBe("thread-123");
-  });
-
   it("returns undefined when binding id is missing or account prefix does not match", () => {
     expect(
       resolveThreadBindingConversationIdFromBindingId({

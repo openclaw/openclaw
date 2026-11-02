@@ -72,8 +72,7 @@ class DeviceAuthStore(
     deviceId: String,
     role: String,
   ): DeviceAuthEntry? {
-    val key = tokenKey(gatewayId, deviceId, role)
-    val token = prefs.getString(key)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val token = prefs.getString(tokenKey(gatewayId, deviceId, role))?.trim()?.takeIf { it.isNotEmpty() } ?: return null
     val normalizedRole = normalizeRole(role)
     val metadata =
       prefs
@@ -101,7 +100,12 @@ class DeviceAuthStore(
       if (replacesStoredToken != null && loadEntry(gatewayId, deviceId, role)?.token != replacesStoredToken.trim()) {
         return@synchronized false
       }
-      val normalizedScopes = normalizeScopes(scopes)
+      val normalizedScopes =
+        scopes
+          .map(String::trim)
+          .filter(String::isNotEmpty)
+          .distinct()
+          .sorted()
       val key = tokenKey(gatewayId, deviceId, role)
       prefs.commitSecureStrings(
         mapOf(
@@ -135,41 +139,23 @@ class DeviceAuthStore(
     gatewayId: String,
     deviceId: String,
     role: String,
-  ): String {
-    val normalizedGateway = normalizeGatewayId(gatewayId)
-    val normalizedDevice = normalizeDeviceId(deviceId)
-    val normalizedRole = normalizeRole(role)
-    // Keep key normalization shared with metadata keys so token and metadata
-    // are added/removed as one logical auth entry.
-    return "gateway.deviceToken.$normalizedGateway.$normalizedDevice.$normalizedRole"
-  }
+  ): String = "gateway.deviceToken.${keySuffix(gatewayId, deviceId, role)}"
 
   private fun metadataKey(
     gatewayId: String,
     deviceId: String,
     role: String,
+  ): String = "gateway.deviceTokenMeta.${keySuffix(gatewayId, deviceId, role)}"
+
+  private fun keySuffix(
+    gatewayId: String,
+    deviceId: String,
+    role: String,
   ): String {
-    val normalizedGateway = normalizeGatewayId(gatewayId)
-    val normalizedDevice = normalizeDeviceId(deviceId)
-    val normalizedRole = normalizeRole(role)
-    return "gateway.deviceTokenMeta.$normalizedGateway.$normalizedDevice.$normalizedRole"
+    val gateway = gatewayId.trim().also { require(it.isNotEmpty()) }
+    return "$gateway.${deviceId.trim().lowercase()}.${normalizeRole(role)}"
   }
-
-  private fun normalizeGatewayId(gatewayId: String): String = gatewayId.trim().also { require(it.isNotEmpty()) }
-
-  /** Normalizes device ids before they become encrypted preference key segments. */
-  private fun normalizeDeviceId(deviceId: String): String = deviceId.trim().lowercase()
 
   /** Normalizes role names so node/operator token slots are stable across callers. */
   private fun normalizeRole(role: String): String = role.trim().lowercase()
-
-  /** Stores scopes in deterministic order for display and restart comparisons. */
-  private fun normalizeScopes(scopes: List<String>): List<String> =
-    scopes
-      .map { it.trim() }
-      .filter { it.isNotEmpty() }
-      // Persist deterministic scope lists because they are displayed and may be
-      // compared across process restarts.
-      .distinct()
-      .sorted()
 }

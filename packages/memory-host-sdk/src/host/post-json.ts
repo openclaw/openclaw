@@ -1,5 +1,5 @@
 import { createProviderHttpError, type SsrFPolicy } from "./openclaw-runtime-network.js";
-import { withRemoteHttpResponse } from "./remote-http.js";
+import { withRemoteHttpResponse, type RemoteEmbeddingRequestAuth } from "./remote-http.js";
 import { readResponseJsonWithLimit } from "./response-snippet.js";
 
 // Shared JSON POST helper for guarded remote memory provider calls.
@@ -10,36 +10,48 @@ export async function postJson<T>(params: {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
+  resolveRequestHeaders?: RemoteEmbeddingRequestAuth;
   signal?: AbortSignal;
   body: unknown;
   errorPrefix: string;
   maxResponseBytes?: number;
+  onResponse?: (response: Response) => void;
+  mapResponseError?: (error: unknown) => unknown;
   parse: (payload: unknown) => T | Promise<T>;
 }): Promise<T> {
   return await withRemoteHttpResponse({
     url: params.url,
     ssrfPolicy: params.ssrfPolicy,
     fetchImpl: params.fetchImpl,
+    resolveRequestHeaders: params.resolveRequestHeaders,
     signal: params.signal,
     init: {
       method: "POST",
       headers: params.headers,
       body: JSON.stringify(params.body),
     },
-    onResponse: async (res) => {
-      if (!res.ok) {
-        throw await createProviderHttpError(res, params.errorPrefix, {
-          requestHeaders: params.headers,
+    onResponse: async (res, requestHeaders) => {
+      params.onResponse?.(res);
+      try {
+        if (!res.ok) {
+          throw await createProviderHttpError(res, params.errorPrefix, {
+            requestHeaders,
+            signal: params.signal,
+            maxBodyBytes: 8 * 1024,
+          });
+        }
+        const payload = await readResponseJsonWithLimit(res, {
+          errorPrefix: params.errorPrefix,
+          maxBytes: params.maxResponseBytes,
           signal: params.signal,
-          maxBodyBytes: 8 * 1024,
         });
+        return await params.parse(payload);
+      } catch (error) {
+        if (params.signal?.aborted) {
+          throw error;
+        }
+        throw params.mapResponseError ? params.mapResponseError(error) : error;
       }
-      const payload = await readResponseJsonWithLimit(res, {
-        errorPrefix: params.errorPrefix,
-        maxBytes: params.maxResponseBytes,
-        signal: params.signal,
-      });
-      return await params.parse(payload);
     },
   });
 }

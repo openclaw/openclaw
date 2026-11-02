@@ -1,3 +1,4 @@
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
 import { requireGit, requireGitBuffer } from "./git.js";
 
@@ -74,15 +75,11 @@ export async function resolveWorktreeSourceProfile(
             part.toLowerCase() === ".git",
         );
       // These are literal cone directories, not patterns, commands or C-quoted paths.
-      let hasControlCharacter = false;
-      for (let index = 0; index < directory.length; index += 1) {
-        const code = directory.charCodeAt(index);
-        if (code < 0x20 || code === 0x7f) {
-          hasControlCharacter = true;
-          break;
-        }
-      }
-      if (invalidComponent || hasControlCharacter || /[\\:*?[\]!"<>|]/u.test(directory)) {
+      if (
+        invalidComponent ||
+        containsAsciiControlCharacter(directory) ||
+        /[\\:*?[\]!"<>|]/u.test(directory)
+      ) {
         throw new Error(
           `Worktree profile ${definition} contains an invalid cone directory: ${JSON.stringify(directory)}.`,
         );

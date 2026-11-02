@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "../scenario-catalog.js";
 import * as discordScenarioRuntime from "./discord/scenario-runtime.js";
 import * as slackScenarioRuntime from "./slack/scenario-runtime.js";
-import * as whatsappScenarioRuntime from "./whatsapp/scenario-runtime.js";
 
 const LANES = [
   {
@@ -18,13 +17,6 @@ const LANES = [
     modulePath: "./live-transports/slack/scenario-runtime.js",
     runnerName: "runSlackScenario",
     runtime: slackScenarioRuntime,
-  },
-  {
-    channel: "whatsapp",
-    contextExpression: "whatsappScenarioContext",
-    modulePath: "./live-transports/whatsapp/scenario-runtime.js",
-    runnerName: "runWhatsAppScenario",
-    runtime: whatsappScenarioRuntime,
   },
 ] as const;
 

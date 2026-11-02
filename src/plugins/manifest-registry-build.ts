@@ -1,9 +1,9 @@
-// Maintains plugin manifest lookup tables for discovery and runtime planning.
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
@@ -47,37 +47,22 @@ import {
   pluginCacheStatSync,
   readPluginCacheFile,
 } from "./plugin-cache-files.js";
-import type { PluginOrigin } from "./plugin-origin.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
+import { groupPluginRecords, PLUGIN_ORIGIN_PRIORITIES } from "./record-groups.js";
 
 type SeenIdEntry = {
   candidate: PluginCandidate;
   record: PluginManifestRecord;
 };
 
-// Canonicalize identical physical plugin roots with the most explicit source.
-// This only applies when multiple candidates resolve to the same on-disk plugin.
-const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
-  config: 0,
-  workspace: 1,
-  global: 2,
-  bundled: 3,
-};
-
 function rejectCaseFoldedIdCollisions(
   records: readonly PluginManifestRecord[],
   diagnostics: PluginDiagnostic[],
 ): PluginManifestRecord[] {
-  const recordsByPolicyId = new Map<string, PluginManifestRecord[]>();
-  for (const record of records) {
-    const policyId = normalizePluginPolicyId(record.id);
-    const matches = recordsByPolicyId.get(policyId) ?? [];
-    matches.push(record);
-    recordsByPolicyId.set(policyId, matches);
-  }
-
   const rejected = new Set<PluginManifestRecord>();
-  for (const [policyId, matches] of recordsByPolicyId) {
+  for (const [policyId, matches] of groupPluginRecords(records, (record) =>
+    normalizePluginPolicyId(record.id),
+  )) {
     const declaredIds = [...new Set(matches.map((record) => record.id))].toSorted();
     if (declaredIds.length < 2) {
       continue;
@@ -104,12 +89,13 @@ function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
   if (params.record.origin === "bundled" || params.record.format === "bundle") {
     return;
   }
-  const configuredEntry = params.normalized?.entries[params.record.id];
+  const policyId = normalizePluginPolicyId(params.record.id);
+  const configuredEntry = params.normalized?.entries[policyId];
   if (
     params.normalized?.enabled === false ||
     configuredEntry?.enabled === false ||
-    params.normalized?.deny.includes(params.record.id) ||
-    (params.normalized?.allow.length && !params.normalized.allow.includes(params.record.id))
+    params.normalized?.deny.includes(policyId) ||
+    (params.normalized?.allow.length && !params.normalized.allow.includes(policyId))
   ) {
     return;
   }
@@ -139,25 +125,17 @@ function dedupePluginDiagnostics(
   diagnostics: PluginDiagnostic[],
   discoveryDiagnostics: ReadonlySet<PluginDiagnostic>,
 ): PluginDiagnostic[] {
-  const seen = new Set<string>();
-  const deduped: PluginDiagnostic[] = [];
-  for (const diagnostic of diagnostics) {
-    // Discovery diagnostics belong to package roots; generated compatibility warnings belong to ids.
-    const key = JSON.stringify([
+  // Discovery diagnostics belong to package roots; generated compatibility warnings belong to ids.
+  return dedupeByKey(diagnostics, (diagnostic) =>
+    JSON.stringify([
       diagnostic.level,
       diagnostic.pluginId ?? "",
       diagnostic.message,
       diagnostic.level === "error" || discoveryDiagnostics.has(diagnostic)
         ? (diagnostic.source ?? "")
         : "",
-    ]);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    deduped.push(diagnostic);
-  }
-  return deduped;
+    ]),
+  );
 }
 
 function isStaleForeignBundledPin(params: {
@@ -171,9 +149,7 @@ function isStaleForeignBundledPin(params: {
 }
 
 function resolveDuplicatePrecedenceRank(params: {
-  pluginId: string;
   candidate: PluginCandidate;
-  config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
 }): number {
@@ -192,13 +168,7 @@ function resolveDuplicatePrecedenceRank(params: {
   if (
     params.candidate.origin === "global" &&
     !isStaleForeignBundledPin({ candidate: params.candidate, env: params.env }) &&
-    matchesInstalledPluginRecord({
-      pluginId: params.pluginId,
-      candidate: params.candidate,
-      config: params.config,
-      env: params.env,
-      installRecords: params.installRecords,
-    })
+    matchesInstalledPluginRecord(params)
   ) {
     return 2;
   }
@@ -210,40 +180,6 @@ function resolveDuplicatePrecedenceRank(params: {
     return 4;
   }
   return 5;
-}
-
-function isIntentionalInstalledBundledDuplicate(params: {
-  pluginId: string;
-  left: PluginCandidate;
-  right: PluginCandidate;
-  config?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  installRecords: Record<string, PluginInstallRecord>;
-}): boolean {
-  const leftIsInstalled = matchesInstalledPluginRecord({
-    pluginId: params.pluginId,
-    candidate: params.left,
-    config: params.config,
-    env: params.env,
-    installRecords: params.installRecords,
-  });
-  const rightIsInstalled = matchesInstalledPluginRecord({
-    pluginId: params.pluginId,
-    candidate: params.right,
-    config: params.config,
-    env: params.env,
-    installRecords: params.installRecords,
-  });
-  return (
-    (leftIsInstalled &&
-      !isStaleForeignBundledPin({ candidate: params.left, env: params.env }) &&
-      params.right.origin === "bundled" &&
-      !isBundledPluginInsideDevSourceRoot({ rootDir: params.right.rootDir, env: params.env })) ||
-    (rightIsInstalled &&
-      !isStaleForeignBundledPin({ candidate: params.right, env: params.env }) &&
-      params.left.origin === "bundled" &&
-      !isBundledPluginInsideDevSourceRoot({ rootDir: params.left.rootDir, env: params.env }))
-  );
 }
 
 function isSameGlobalPackageDuplicate(left: PluginCandidate, right: PluginCandidate): boolean {
@@ -297,8 +233,15 @@ export function buildPluginManifestRegistry(
       }));
   const discovered = new Set(discovery.diagnostics);
   const diagnostics: PluginDiagnostic[] = [...discovered];
-  const candidates: PluginCandidate[] = discovery.candidates;
+  // Decide explicit overrides before diagnosing lower-precedence collisions.
+  const candidates = discovery.candidates.toSorted(
+    (left, right) =>
+      Number(right.origin === "config" || right.configSelected === true) -
+      Number(left.origin === "config" || left.configSelected === true),
+  );
   const seenIds = new Map<string, SeenIdEntry>();
+  const manifestWarnings = new Map<string, string[]>();
+  const reportedExplicitOverrides = new Set<string>();
   const currentHostVersion = resolveCompatibilityHostVersion(env);
   const explicitConfiguredFileSources = new Set(
     normalized.loadPaths
@@ -349,6 +292,9 @@ export function buildPluginManifestRegistry(
                 manifest: {
                   id: candidate.idHint,
                   configSchema: { type: "object", additionalProperties: false },
+                  // A standalone file has nowhere to declare activation; listing it in
+                  // plugins.load.paths is the startup opt-in. Enablement policy still applies.
+                  activation: { onStartup: true },
                 },
                 manifestPath: candidate.source,
               }
@@ -365,6 +311,9 @@ export function buildPluginManifestRegistry(
       });
       continue;
     }
+    if ("warnings" in manifestRes && manifestRes.warnings) {
+      manifestWarnings.set(manifestRes.manifestPath, manifestRes.warnings);
+    }
     const manifest = manifestRes.manifest;
     const effectivePluginId = candidate.effectivePluginId ?? manifest.id;
     if (candidate.origin !== "bundled") {
@@ -375,9 +324,7 @@ export function buildPluginManifestRegistry(
       const allowLegacyBareMinHostVersion =
         candidate.origin === "global" &&
         matchesInstalledPluginRecord({
-          pluginId: effectivePluginId,
           candidate,
-          config,
           env,
           installRecords: getInstallRecords(),
         });
@@ -417,6 +364,7 @@ export function buildPluginManifestRegistry(
       ) {
         diagnostics.push({
           level: "warn",
+          configDisposition: "preserve",
           pluginId: effectivePluginId,
           source: packageManifestSource,
           message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${currentHostVersion}; skipping load (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")`,
@@ -458,7 +406,6 @@ export function buildPluginManifestRegistry(
           configSchema,
           trust: resolvePluginTrust({
             registryPath,
-            pluginId: effectivePluginId,
             candidate,
             env,
             installRecords: getInstallRecords(),
@@ -496,23 +443,22 @@ export function buildPluginManifestRegistry(
         }
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
-        if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
+        if (
+          PLUGIN_ORIGIN_PRIORITIES[candidate.origin]?.explicit <
+          PLUGIN_ORIGIN_PRIORITIES[existing.candidate.origin]?.explicit
+        ) {
           seenIds.set(effectivePluginId, { candidate, record });
         }
         continue;
       }
 
       const candidateRank = resolveDuplicatePrecedenceRank({
-        pluginId: effectivePluginId,
         candidate,
-        config,
         env,
         installRecords: getInstallRecords(),
       });
       const existingRank = resolveDuplicatePrecedenceRank({
-        pluginId: effectivePluginId,
         candidate: existing.candidate,
-        config,
         env,
         installRecords: getInstallRecords(),
       });
@@ -522,15 +468,21 @@ export function buildPluginManifestRegistry(
       if (candidateWins) {
         seenIds.set(effectivePluginId, { candidate, record });
       }
+      const existingCandidate = existing.candidate;
+      const installRecords = getInstallRecords();
       if (
-        isIntentionalInstalledBundledDuplicate({
-          pluginId: effectivePluginId,
-          left: candidate,
-          right: existing.candidate,
-          config,
-          env,
-          installRecords: getInstallRecords(),
-        })
+        (
+          [
+            [candidate, existingCandidate],
+            [existingCandidate, candidate],
+          ] as const
+        ).some(
+          ([installed, bundled]) =>
+            matchesInstalledPluginRecord({ candidate: installed, env, installRecords }) &&
+            !isStaleForeignBundledPin({ candidate: installed, env }) &&
+            bundled.origin === "bundled" &&
+            !isBundledPluginInsideDevSourceRoot({ rootDir: bundled.rootDir, env }),
+        )
       ) {
         continue;
       }
@@ -541,20 +493,30 @@ export function buildPluginManifestRegistry(
         winnerCandidate.origin === "bundled" &&
         isStaleForeignBundledPin({ candidate: overriddenCandidate, env }) &&
         matchesInstalledPluginRecord({
-          pluginId: effectivePluginId,
           candidate: overriddenCandidate,
           env,
           installRecords: getInstallRecords(),
         });
+      const explicitOverride =
+        !staleForeignPin &&
+        Math.min(candidateRank, existingRank) === 0 &&
+        candidateRank !== existingRank;
+      if (explicitOverride) {
+        if (reportedExplicitOverrides.has(effectivePluginId)) {
+          continue;
+        }
+        reportedExplicitOverrides.add(effectivePluginId);
+      }
       diagnostics.push({
-        level: "warn",
+        level: explicitOverride ? "info" : "warn",
+        ...(explicitOverride ? { code: "explicit-config-plugin-selection" as const } : {}),
         pluginId: effectivePluginId,
         source: overriddenCandidate.source,
         message: staleForeignPin
           ? `stale plugin install record: "${effectivePluginId}" is pinned to ${overriddenCandidate.rootDir}, which belongs to a different OpenClaw installation. This installation's bundled plugin is being used instead. No uninstall is needed to use the bundled plugin. Uninstalling, even with \`--keep-files\`, removes plugin configuration; re-enabling does not restore it.`
-          : winnerCandidate.origin === "config"
+          : explicitOverride
             ? `duplicate plugin id resolved by explicit config-selected plugin; ${overriddenCandidate.origin} plugin will be overridden by config plugin (${winnerCandidate.source})`
-            : `duplicate plugin id detected; ${overriddenCandidate.origin} plugin will be overridden by ${winnerCandidate.origin} plugin (${winnerCandidate.source})`,
+            : `duplicate plugin id detected; ${overriddenCandidate.origin} plugin will be overridden by ${winnerCandidate.origin} plugin (${winnerCandidate.source}); ignored plugin source: ${overriddenCandidate.source}`,
       });
       continue;
     }
@@ -565,10 +527,17 @@ export function buildPluginManifestRegistry(
   const records = [...seenIds.values()].map(({ record }) => record);
   const plugins = rejectCaseFoldedIdCollisions(records, diagnostics);
   for (const record of plugins) {
+    for (const warning of manifestWarnings.get(record.manifestPath) ?? []) {
+      diagnostics.push({
+        level: "warn",
+        pluginId: sanitizeForLog(record.id),
+        source: sanitizeForLog(record.manifestPath),
+        message: sanitizeForLog(warning),
+      });
+    }
     pushNonBundledChannelConfigDescriptorDiagnostic({ record, diagnostics, normalized });
   }
-  const registry = { plugins, diagnostics: dedupePluginDiagnostics(diagnostics, discovered) };
-  return registry;
+  return { plugins, diagnostics: dedupePluginDiagnostics(diagnostics, discovered) };
 }
 
 /** Load manifest metadata from the bundled/source plugin tree without consulting operator state. */

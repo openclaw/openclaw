@@ -20,6 +20,7 @@ export type {
   EmbeddingProviderCreateResult,
   EmbeddingProviderIndexIdentity,
   EmbeddingProviderRuntime,
+  EmbeddingUsage,
   RegisteredEmbeddingProvider,
 } from "./embedding-provider-types.js";
 

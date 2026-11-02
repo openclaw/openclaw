@@ -8,11 +8,7 @@ import {
 } from "../../../agents/provider-tool-policy.js";
 import { createToolPolicyMatcher } from "../../../agents/tool-policy-match.js";
 import { normalizeToolList, resolveToolProfilePolicy } from "../../../agents/tool-policy-shared.js";
-import {
-  defineLegacyConfigMigration,
-  getRecord,
-  type LegacyConfigMigrationSpec,
-} from "../../../config/legacy.shared.js";
+import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 import { visitAgentEntries } from "./legacy-config-record-shared.js";
 import { isToolPolicyPath, TOOL_POLICY_ROOTS } from "./legacy-tool-policy-scopes.js";
 
@@ -164,9 +160,8 @@ export function collectToolPolicyConflictWarnings(raw: unknown): string[] {
 }
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TOOL_POLICY_CONFLICTS: LegacyConfigMigrationSpec[] = [
-  defineLegacyConfigMigration({
+  {
     id: "tools.allow-also-allow-conflict",
-    describe: "Merge tool policy alsoAllow grants into allow when a scope sets both",
     legacyRules: TOOL_POLICY_ROOTS.map((root) => ({
       path: [root],
       message:
@@ -194,5 +189,5 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TOOL_POLICY_CONFLICTS: LegacyConfi
         }
       }
     },
-  }),
+  },
 ];

@@ -108,11 +108,7 @@ export function publicResultScopeKey(result: ResolvedChannelMessageIngress): str
   }
   const routes: unknown[] = [];
   for (let index = 0; index < routeCount; index += 1) {
-    const descriptor = safeOwnPropertyDescriptor(routeFacts, String(index));
-    if (descriptor === INVALID_SCOPE_VALUE) {
-      return undefined;
-    }
-    const route = descriptor && "value" in descriptor ? descriptor.value : undefined;
+    const route = ownDataValue(routeFacts, String(index));
     if (!route || typeof route !== "object") {
       return undefined;
     }
@@ -238,7 +234,7 @@ export function snapshotContextBinding(
   ) {
     return undefined;
   }
-  return Object.freeze({ agentId, sessionKey, messageId, nativeChannelId, inboundEventKind });
+  return { agentId, sessionKey, messageId, nativeChannelId, inboundEventKind };
 }
 
 export function normalizeScopeId(value: unknown): string | undefined | typeof INVALID_SCOPE_VALUE {

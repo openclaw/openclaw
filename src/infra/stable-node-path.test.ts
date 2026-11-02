@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { resolveStableNodePath } from "./stable-node-path.js";
+import { resolveLaunchableNodePath, resolveStableNodePath } from "./stable-node-path.js";
 
 describe("resolveStableNodePath", () => {
   it("returns non-cellar paths unchanged", async () => {
@@ -38,6 +38,27 @@ describe("resolveStableNodePath", () => {
 
       await expect(resolveStableNodePath(defaultNode)).resolves.toBe(binNode);
       await expect(resolveStableNodePath(versionedNode)).resolves.toBe(versionedNode);
+      await fs.rm(binNode);
+      await expect(resolveStableNodePath(defaultNode)).resolves.toBe(defaultNode);
+    });
+  });
+});
+
+describe("resolveLaunchableNodePath", () => {
+  it("keeps the running Cellar executable until an upgrade removes it", async () => {
+    await withTestDir({ prefix: "openclaw-launchable-node-" }, async (prefix) => {
+      const cellarNode = path.join(prefix, "Cellar", "node", "26.8.1", "bin", "node");
+      const optNode = path.join(prefix, "opt", "node", "bin", "node");
+      await fs.mkdir(path.dirname(cellarNode), { recursive: true });
+      await fs.mkdir(path.dirname(optNode), { recursive: true });
+      await fs.writeFile(cellarNode, "", "utf8");
+      await fs.writeFile(optNode, "", "utf8");
+
+      expect(resolveLaunchableNodePath(cellarNode)).toBe(cellarNode);
+      await fs.rm(cellarNode);
+      expect(resolveLaunchableNodePath(cellarNode)).toBe(optNode);
+      await fs.rm(optNode);
+      expect(resolveLaunchableNodePath(cellarNode)).toBe(cellarNode);
     });
   });
 });

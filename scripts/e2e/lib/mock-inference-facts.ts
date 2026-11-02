@@ -1,3 +1,8 @@
+import {
+  hasLegacyRuntimeContextEnvelope,
+  RUNTIME_CONTEXT_FOOTER,
+  RUNTIME_CONTEXT_HEADER,
+} from "../../../packages/llm-core/src/types.ts";
 import { isRecord } from "../../../packages/normalization-core/src/record-coerce.ts";
 
 export type MockInferenceFacts = {
@@ -18,6 +23,18 @@ function contentText(content: unknown): string {
         .map((part) => (isRecord(part) && typeof part.text === "string" ? part.text : ""))
         .join("\n")
     : "";
+}
+
+export function readMockUserText(message: unknown): string | undefined {
+  if (!isRecord(message) || message.role !== "user") {
+    return undefined;
+  }
+  const text = contentText(message.content);
+  // Provider projections can place runtime context after the current turn's tool output.
+  return hasLegacyRuntimeContextEnvelope(text) ||
+    (text.startsWith(`${RUNTIME_CONTEXT_HEADER}\n`) && text.endsWith(`\n${RUNTIME_CONTEXT_FOOTER}`))
+    ? undefined
+    : text;
 }
 
 /** Keep bounded purpose facts before the mock clips request bodies; never retain prompt excerpts. */
@@ -51,13 +68,8 @@ export function summarizeMockInferenceRequest(body: unknown): MockInferenceFacts
       continue;
     }
     if (item.role === "user") {
-      const text = contentText(item.content);
-      // Responses projects the runtime-context carrier as a user message after
-      // its owner. Skip only that complete wrapper, never a later ordinary user.
-      if (
-        text.startsWith("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n") &&
-        text.endsWith("\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>")
-      ) {
+      const text = readMockUserText(item);
+      if (text === undefined) {
         continue;
       }
       marker = text.match(/benchmark (?:(warmup) )?(?:tool )?stream (\d+)\./u);

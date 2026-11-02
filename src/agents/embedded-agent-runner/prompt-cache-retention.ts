@@ -8,6 +8,16 @@ import type { OpenAICompletionsCompat } from "../../llm/types.js";
 
 type CacheRetention = "none" | "short" | "long";
 
+export function resolveExplicitCachedContent(extraParams: Record<string, unknown> | undefined) {
+  const raw =
+    typeof extraParams?.cachedContent === "string"
+      ? extraParams.cachedContent
+      : typeof extraParams?.cached_content === "string"
+        ? extraParams.cached_content
+        : undefined;
+  return raw?.trim() || undefined;
+}
+
 export function parseCacheRetention(value: unknown): CacheRetention | undefined {
   return value === "none" || value === "short" || value === "long" ? value : undefined;
 }
@@ -20,6 +30,7 @@ export function isGooglePromptCacheEligible(params: {
     return false;
   }
   const normalizedModelId = normalizeLowercaseStringOrEmpty(params.modelId);
+  // This gates explicit cachedContents creation; Gemini 4 supports implicit caching only.
   return normalizedModelId.startsWith("gemini-2.5") || normalizedModelId.startsWith("gemini-3");
 }
 

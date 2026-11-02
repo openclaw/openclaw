@@ -1,27 +1,15 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-
-function normalizeIdentity(value: string | null | undefined): string | null {
-  return normalizeOptionalString(value) ?? null;
-}
-
-function normalizeIdentities(values: readonly string[] | null | undefined): string[] {
-  const normalized = new Set<string>();
-  for (const value of values ?? []) {
-    const identity = normalizeIdentity(value);
-    if (identity) {
-      normalized.add(identity);
-    }
-  }
-  return [...normalized];
-}
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 
 /** Match a durable binding after the caller's broad authority has been established. */
 export function matchesOperatorApprovalReviewerBinding(
   binding: { reviewerDeviceIds?: readonly string[] | null },
   deviceId: string | null | undefined,
 ): boolean {
-  const clientDeviceId = normalizeIdentity(deviceId);
-  const reviewerDeviceIds = normalizeIdentities(binding.reviewerDeviceIds);
+  const clientDeviceId = normalizeOptionalString(deviceId);
+  const reviewerDeviceIds = normalizeUniqueTrimmedStringList([
+    ...(binding.reviewerDeviceIds ?? []),
+  ]);
   if (reviewerDeviceIds.length > 0) {
     return Boolean(clientDeviceId && reviewerDeviceIds.includes(clientDeviceId));
   }

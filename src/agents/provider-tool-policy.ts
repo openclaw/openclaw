@@ -17,10 +17,6 @@ export function normalizeToolProviderPolicyKey(value: string): string {
   return modelId ? `${provider}/${modelId}` : provider;
 }
 
-export function isCanonicalToolProviderPolicyKey(value: string): boolean {
-  return normalizeLowercaseStringOrEmpty(value) === normalizeToolProviderPolicyKey(value);
-}
-
 type ProviderToolPolicyEntry = {
   key: string;
   policy: ToolPolicyConfig;
@@ -50,7 +46,7 @@ export function resolveProviderToolPolicyEntry(params: {
     if (!normalized) {
       continue;
     }
-    const canonical = isCanonicalToolProviderPolicyKey(key);
+    const canonical = normalizeLowercaseStringOrEmpty(key) === normalized;
     const existing = lookup.get(normalized);
     if (!existing || (canonical && !existing.canonical)) {
       lookup.set(normalized, {
@@ -63,16 +59,10 @@ export function resolveProviderToolPolicyEntry(params: {
 
   const normalizedProvider = normalizeToolProviderPolicyKey(provider);
   const rawModelId = normalizeOptionalLowercaseString(params.modelId);
-  const fullModelId = rawModelId ? `${normalizedProvider}/${rawModelId}` : undefined;
-  const candidates = [...(fullModelId ? [fullModelId] : []), normalizedProvider];
-
-  for (const key of candidates) {
-    const match = lookup.get(key);
-    if (match) {
-      return { key: match.key, policy: match.policy };
-    }
-  }
-  return undefined;
+  const match =
+    (rawModelId ? lookup.get(`${normalizedProvider}/${rawModelId}`) : undefined) ??
+    lookup.get(normalizedProvider);
+  return match ? { key: match.key, policy: match.policy } : undefined;
 }
 
 export function resolveProviderToolPolicy(params: {

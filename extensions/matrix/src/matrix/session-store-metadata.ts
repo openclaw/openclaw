@@ -16,23 +16,6 @@ function resolveMatrixRoomTargetId(value: unknown): string | undefined {
   return target?.kind === "room" && target.id.startsWith("!") ? target.id : undefined;
 }
 
-function resolveMatrixSessionAccountId(value: unknown): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  return trimmed ? normalizeAccountId(trimmed) : undefined;
-}
-
-function resolveMatrixStoredRoomId(params: {
-  deliveryTo?: unknown;
-  originNativeChannelId?: unknown;
-  originTo?: unknown;
-}): string | undefined {
-  return (
-    resolveMatrixRoomTargetId(params.deliveryTo) ??
-    resolveMatrixRoomTargetId(params.originNativeChannelId) ??
-    resolveMatrixRoomTargetId(params.originTo)
-  );
-}
-
 type MatrixStoredSessionEntryLike = Pick<SessionEntry, "chatType" | "delivery">;
 
 export function resolveMatrixStoredSessionMeta(entry?: MatrixStoredSessionEntryLike): {
@@ -48,13 +31,12 @@ export function resolveMatrixStoredSessionMeta(entry?: MatrixStoredSessionEntryL
   const origin = sessionDeliveryOrigin(entry);
   const channel =
     normalizeOptionalString(deliveryContext?.channel) ?? normalizeOptionalString(origin?.provider);
-  const accountId =
-    resolveMatrixSessionAccountId(deliveryContext?.accountId ?? origin?.accountId) ?? undefined;
-  const roomId = resolveMatrixStoredRoomId({
-    deliveryTo: deliveryContext?.to,
-    originNativeChannelId: origin?.nativeChannelId,
-    originTo: origin?.to,
-  });
+  const storedAccountId = normalizeOptionalString(deliveryContext?.accountId ?? origin?.accountId);
+  const accountId = storedAccountId ? normalizeAccountId(storedAccountId) : undefined;
+  const roomId =
+    resolveMatrixRoomTargetId(deliveryContext?.to) ??
+    resolveMatrixRoomTargetId(origin?.nativeChannelId) ??
+    resolveMatrixRoomTargetId(origin?.to);
   const chatType =
     normalizeOptionalString(origin?.chatType) ?? normalizeOptionalString(entry.chatType);
   const directUserId =

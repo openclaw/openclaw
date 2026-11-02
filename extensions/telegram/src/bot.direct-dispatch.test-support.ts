@@ -51,7 +51,6 @@ export function createDirectDispatchContext(
       reset: vi.fn(),
     },
     ackReactionPromise: null,
-    reactionApi: null,
     statusReactionController: null,
     accountId: "default",
   };
