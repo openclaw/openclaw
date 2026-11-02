@@ -86,7 +86,7 @@ suite.define(() => {
     const dialog = page.getByRole("dialog", { name: "Switch to Demo model B?", exact: true });
     await dialog.waitFor();
     await dialog
-      .getByText("This conversation is cached for Demo model A.", { exact: false })
+      .getByText("Switching re-sends the whole conversation to Demo model B", { exact: false })
       .waitFor();
     await dialog.getByRole("checkbox", { name: "Don’t ask again", exact: true }).check();
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
