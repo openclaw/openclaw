@@ -121,11 +121,11 @@ it("uses sub-hourly windows, skips clock jumps, and rearms hot schedule changes"
     update: { channel: "beta", auto: { enabled: true, schedule: "*/5 * * * *" } },
   };
   process.env.NODE_ENV = "production";
-  const check = createTestUpdateCheck({
+  const updateCheck = createTestUpdateCheck({
     cfg: () => cfg,
     activeWorkInspectors: idleActiveWorkInspectors(),
   });
-  check.start();
+  updateCheck.start();
   await clock.advanceBy(0);
   expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
   await clock.advanceBy(60_000);

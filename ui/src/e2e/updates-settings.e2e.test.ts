@@ -1,6 +1,7 @@
 // Control UI tests cover the routed Updates settings page through a mocked Gateway.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -79,7 +80,7 @@ suite.define(() => {
           await expect
             .poll(async () => {
               const requests = await gateway.getRequests("config.set");
-              const raw = requests.at(-1)?.params?.raw;
+              const raw = asNullableRecord(requests.at(-1)?.params)?.raw;
               return typeof raw === "string" ? JSON.parse(raw).update.auto : null;
             })
             .toEqual({ enabled: true, ...(schedule === undefined ? {} : { schedule }) });
