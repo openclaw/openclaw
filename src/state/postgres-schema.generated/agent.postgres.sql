@@ -304,6 +304,18 @@ CREATE TABLE "session_conversations" (
   CHECK (("role" IN ('primary', 'participant', 'related')))
 );
 
+CREATE TABLE "session_creation_operations" (
+  "operation_digest" text COLLATE "C" NOT NULL,
+  "request_fingerprint" text COLLATE "C" NOT NULL,
+  "session_key" text COLLATE "C" NOT NULL,
+  "session_id" text COLLATE "C" NOT NULL,
+  "lifecycle_revision" text COLLATE "C",
+  "role" text COLLATE "C",
+  "scopes_json" text COLLATE "C" NOT NULL,
+  "expires_at" bigint NOT NULL,
+  PRIMARY KEY ("operation_digest")
+);
+
 CREATE TABLE "session_entry_snapshots" (
   "session_key" text COLLATE "C" NOT NULL,
   "field" text COLLATE "C" NOT NULL,
@@ -690,6 +702,8 @@ CREATE INDEX "idx_agent_context_engine_turn_outbox_engine" ON "context_engine_tu
 
 CREATE INDEX "idx_agent_conversation_deliveries_reply" ON "conversation_deliveries" (("conversation_id") ASC, ("platform_message_id") ASC NULLS FIRST, ("prepared_message_id") ASC NULLS FIRST) WHERE ("status" IN ('queued', 'sent', 'replied'));
 
+CREATE INDEX "idx_agent_conversation_deliveries_source_session" ON "conversation_deliveries" (("source_session_key") ASC NULLS FIRST, ("operation_id") ASC);
+
 CREATE INDEX "idx_agent_conversation_deliveries_updated" ON "conversation_deliveries" (("updated_at") DESC, ("operation_id") ASC);
 
 CREATE UNIQUE INDEX "idx_agent_conversations_identity" ON "conversations" (("channel") ASC, ("account_id") ASC, ("kind") ASC, ("peer_id") ASC, (coalesce("parent_conversation_id", '')) ASC NULLS FIRST, (coalesce("thread_id", '')) ASC NULLS FIRST);
@@ -712,7 +726,11 @@ CREATE INDEX "idx_agent_session_conversations_conversation" ON "session_conversa
 
 CREATE UNIQUE INDEX "idx_agent_session_conversations_primary" ON "session_conversations" (("session_id") ASC) WHERE ("role" = 'primary');
 
+CREATE INDEX "idx_agent_session_creation_operations_expiry" ON "session_creation_operations" (("expires_at") ASC);
+
 CREATE INDEX "idx_agent_session_goal_operations_expiry" ON "session_goal_operations" (("expires_at") ASC);
+
+CREATE INDEX "idx_agent_session_input_completions_session_key" ON "session_input_completions" (("session_key") ASC);
 
 CREATE INDEX "idx_agent_session_members_identity" ON "session_members" (("identity_id") ASC, ("session_key") ASC);
 

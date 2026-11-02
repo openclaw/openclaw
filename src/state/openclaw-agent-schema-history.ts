@@ -2,6 +2,10 @@ import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { withoutAgentColdArchiveChunks } from "./openclaw-agent-cold-archive-chunks-schema.js";
 import { withoutAgentColdNavigation } from "./openclaw-agent-cold-navigation-schema.js";
 import {
+  AGENT_CREATION_OPERATIONS_SCHEMA_VERSION,
+  withoutAgentCreationOperations,
+} from "./openclaw-agent-creation-operations-schema.js";
+import {
   AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION,
   AGENT_COLD_NAVIGATION_SCHEMA_VERSION,
   AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
@@ -307,16 +311,24 @@ function withLegacyAgentWriteLayout(schema: string): string {
     );
 }
 
+const AGENT_SCHEMA_BEFORE_CREATION_OPERATIONS =
+  withoutAgentCreationOperations(OPENCLAW_AGENT_SCHEMA_SQL);
+
 // Same-version schema-39 additions must not rewrite earlier admission contracts.
-const AGENT_SCHEMA_BEFORE_SESSION_DELETION_INDEXES = OPENCLAW_AGENT_SCHEMA_SQL.replace(
-  /\nCREATE INDEX IF NOT EXISTS idx_agent_(?:session_input_completions_session_key|conversation_deliveries_source_session)\b[^;]*;\n/gu,
-  "",
-);
+const AGENT_SCHEMA_BEFORE_SESSION_DELETION_INDEXES =
+  AGENT_SCHEMA_BEFORE_CREATION_OPERATIONS.replace(
+    /\nCREATE INDEX IF NOT EXISTS idx_agent_(?:session_input_completions_session_key|conversation_deliveries_source_session)\b[^;]*;\n/gu,
+    "",
+  );
 
 /** Compare historical migration targets against only the representation they support. */
 export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
   const schemaSql =
-    targetVersion < 39 ? AGENT_SCHEMA_BEFORE_SESSION_DELETION_INDEXES : OPENCLAW_AGENT_SCHEMA_SQL;
+    targetVersion < 39
+      ? AGENT_SCHEMA_BEFORE_SESSION_DELETION_INDEXES
+      : targetVersion < AGENT_CREATION_OPERATIONS_SCHEMA_VERSION
+        ? AGENT_SCHEMA_BEFORE_CREATION_OPERATIONS
+        : OPENCLAW_AGENT_SCHEMA_SQL;
   const navigationSchemaSql =
     targetVersion < AGENT_COLD_NAVIGATION_SCHEMA_VERSION
       ? withoutAgentColdNavigation(schemaSql)

@@ -554,6 +554,13 @@ test("sessions.create replays an identical creation once and rejects conflicting
       idempotencyKey: expect.any(String),
       message: "start this task exactly once",
     });
+    const restarted = await directSessionReq<{ key: string }>("sessions.create", params, {
+      client: clientFor() as never,
+      context: { dedupe: new Map() },
+    });
+    expectOk(restarted);
+    expect(restarted.payload?.key).toBe(first.payload?.key);
+    expect(chatSend).toHaveBeenCalledOnce();
     const conflict = await request({ ...params, message: "start a different task" });
     expect(conflict).toMatchObject({
       ok: false,
@@ -582,4 +589,65 @@ test("sessions.create replays an identical creation once and rejects conflicting
   } finally {
     chatSend.mockRestore();
   }
+});
+
+test("durable creation replays before label claims and refuses a reset incarnation", async () => {
+  const client = {
+    connect: {
+      role: "operator",
+      scopes: ["operator.write", "operator.admin"],
+      device: { id: "receipt-device" },
+    },
+    authenticatedUserProfile: { profileId: ensureProfileForEmail("receipt-owner@example.test").id },
+  };
+  const params = {
+    agentId: "main",
+    label: "Receipt original",
+    idempotencyKey: "receipt-label-once",
+  };
+  const request = (scopes = client.connect.scopes) =>
+    directSessionReq<CreatedSession>("sessions.create", params, {
+      client: { ...client, connect: { ...client.connect, scopes } } as never,
+      context: { dedupe: new Map() },
+    });
+  const first = await request();
+  expectOk(first);
+  const created = first.payload!;
+  expectOk(
+    await directSessionReq(
+      "sessions.patch",
+      { key: created.key, label: "Renamed original" },
+      { client: client as never },
+    ),
+  );
+  expectOk(
+    await directSessionReq(
+      "sessions.create",
+      { agentId: "main", label: params.label },
+      { client: client as never },
+    ),
+  );
+  const replay = await request();
+  expect(replay).toMatchObject({
+    ok: true,
+    payload: {
+      key: created.key,
+      sessionId: created.sessionId,
+      entry: { label: "Renamed original" },
+      runStarted: false,
+      creationReplayed: true,
+    },
+  });
+  expect(await request(["operator.write"])).toMatchObject({
+    ok: false,
+    error: { code: "FORBIDDEN" },
+  });
+  expectOk(
+    await directSessionReq("sessions.reset", { key: created.key }, { client: client as never }),
+  );
+  expect(readEntry(created.key)?.sessionId).toBe(created.sessionId);
+  expect(await request()).toMatchObject({
+    ok: false,
+    error: { message: "The original creation incarnation is no longer available." },
+  });
 });

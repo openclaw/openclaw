@@ -81,6 +81,7 @@ async function resetGatewaySessionForCreation(
       ? { requestingOperatorProfileId: params.requestingOperatorProfileId }
       : {}),
     ...(params.operatorRoleActor ? { operatorRoleActor: params.operatorRoleActor } : {}),
+    creationOperation: params.creationOperation,
     reason: "new",
     commandSource: params.commandSource,
     ...(params.creation ? { creation: params.creation } : {}),

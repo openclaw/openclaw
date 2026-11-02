@@ -188,11 +188,13 @@ const migrationTables: Readonly<
 export function resolveSchemaMigrationIntegrityTables(
   migration: SchemaMigration,
 ): readonly string[] {
-  // This crossing changes only the stored constraint, including its finalizer.
+  // These crossings only widen a stored CHECK or add an empty receipt table/index.
+  // No existing payloads, indexes, or foreign keys are rewritten.
   if (
     migration.kind === "agent" &&
-    migration.foundVersion === 38 &&
-    migration.supportedVersion === 39
+    migration.foundVersion >= 38 &&
+    migration.foundVersion < migration.supportedVersion &&
+    migration.supportedVersion <= 40
   ) {
     return ["schema_meta"];
   }

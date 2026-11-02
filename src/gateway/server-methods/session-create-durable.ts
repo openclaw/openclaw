@@ -1,0 +1,222 @@
+import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import {
+  ErrorCodes,
+  errorShape,
+  missingScopeErrorShape,
+  validateSessionsCreateParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import type { SessionCreationOperation } from "../../config/sessions/session-creation-operation.js";
+import { readSessionCreationReceiptInWorker } from "../../config/sessions/session-creation-receipt-read.js";
+import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
+import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { prepareGatewaySessionLifecycleTargets } from "../session-lifecycle-preparation.js";
+import { resolveSessionCreateAgentId } from "../session-request-agent.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
+import type { GatewayInflightResult } from "./inflight.js";
+import { idempotentSessionCreate } from "./session-create-idempotency.js";
+import {
+  bindGatewayRequestHandlerMutationAuthority,
+  readGatewayRequestMutationAuthority,
+} from "./session-mutation-guards.js";
+import type { GatewayRequestHandler, GatewayRequestHandlerOptions } from "./types.js";
+
+/** Binds the existing public idempotency key; no deployment-specific inputs or session IDs. */
+async function prepareCreation(request: GatewayRequestHandlerOptions) {
+  const p = request.params;
+  if (
+    !validateSessionsCreateParams(p) ||
+    !p.idempotencyKey ||
+    p.incognito ||
+    isIncognitoSessionKey(p.key) ||
+    isIncognitoSessionKey(p.parentSessionKey)
+  ) {
+    return undefined;
+  }
+  const operator = request.client?.internal?.operatorRunAuthority;
+  const principal =
+    request.client?.authenticatedUserProfile?.profileId ??
+    request.client?.authenticatedUserId ??
+    operator?.profileId;
+  const device = request.client?.connect.device?.id?.trim();
+  if (!principal && !device) {
+    return undefined; // The enclosing idempotency owner rejects anonymous keys.
+  }
+  const owner = principal ? "principal:" + principal : "device:" + device;
+  const cfg = request.context.getRuntimeConfig();
+  const selected = resolveSessionCreateAgentId(cfg, p);
+  if (!selected.ok) {
+    return { error: selected.error };
+  }
+  const authority = readGatewayRequestMutationAuthority(request);
+  const assertCurrent = () => {
+    authority.assertCurrent();
+    operator?.assertCurrent();
+    request.sessionMutationAuthorization?.assertCurrent();
+  };
+  assertCurrent();
+  const operation: SessionCreationOperation = {
+    digest: sha256Hex(JSON.stringify(["session.create", owner, p.idempotencyKey])),
+    fingerprint: sha256Hex(stableStringify(p)),
+    authorization: {
+      role: request.client?.connect.role ?? null,
+      scopes: request.client?.connect.scopes?.toSorted() ?? [],
+    },
+  };
+  const agentId = selected.agentId;
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  const stored = await readSessionCreationReceiptInWorker(
+    { agentId, storePath },
+    operation.digest,
+    assertCurrent,
+  );
+  return { cfg, agentId, storePath, operation, stored, assertCurrent };
+}
+
+async function replayCreation(
+  request: GatewayRequestHandlerOptions,
+  prepared: Exclude<Awaited<ReturnType<typeof prepareCreation>>, undefined | { error: unknown }>,
+  cached?: GatewayInflightResult,
+): Promise<GatewayInflightResult | undefined> {
+  const { stored, operation, assertCurrent, agentId, storePath, cfg } = prepared;
+  if (!stored) {
+    return undefined;
+  }
+  const { receipt, entry } = stored;
+  const reject = (
+    message: string,
+    code: Parameters<typeof errorShape>[0] = ErrorCodes.INVALID_REQUEST,
+  ): GatewayInflightResult => ({
+    ok: false,
+    error: errorShape(code, message),
+  });
+  if (receipt.fingerprint !== operation.fingerprint) {
+    return reject("session creation idempotency key was reused with different parameters");
+  }
+  if (receipt.authorization.role !== operation.authorization.role) {
+    return reject("session creation authorization changed; start again", ErrorCodes.FORBIDDEN);
+  }
+  const missingScope = receipt.authorization.scopes.find(
+    (scope) => !operation.authorization.scopes.includes(scope),
+  );
+  if (missingScope) {
+    return {
+      ok: false,
+      error: missingScopeErrorShape({ missingScope, requiredScopes: receipt.authorization.scopes }),
+    };
+  }
+  if (
+    !entry ||
+    entry.sessionId !== receipt.sessionId ||
+    (entry.lifecycleRevision ?? null) !== receipt.lifecycleRevision
+  ) {
+    return reject("The original creation incarnation is no longer available.");
+  }
+  const target = { agentId, storePath, canonicalKey: receipt.sessionKey };
+  await using lifecycle = prepareGatewaySessionLifecycleTargets({
+    cfg,
+    getCurrentConfig: request.context.getRuntimeConfig,
+    targets: [{ target, entry }],
+  });
+  const held = await Promise.all(lifecycle.preparations);
+  const sharing = await resolveSessionMutationAuthorizationAsync({
+    client: request.client,
+    context: request.context,
+    method: "sessions.create",
+    requestParams: { key: receipt.sessionKey, agentId },
+    expectedTarget: {
+      agentId,
+      storePath,
+      sessionKey: receipt.sessionKey,
+      sessionId: receipt.sessionId,
+    },
+    sessionScope: readGatewayRequestMutationAuthority(request).sessionScope,
+    assertInvocationCurrent: assertCurrent,
+  });
+  try {
+    if (sharing.error) {
+      return { ok: false, error: sharing.error };
+    }
+    assertCurrent();
+    sharing.authorization?.assertCurrent();
+    lifecycle.assertCurrent();
+    if (!held.every((source) => source.matchesCurrent(request.context.getRuntimeConfig()))) {
+      return reject("The original creation incarnation is no longer available.");
+    }
+    if (cached) {
+      return cached;
+    }
+    const model = resolveSessionModelRef(request.context.getRuntimeConfig(), entry, agentId);
+    return {
+      ok: true,
+      payload: {
+        ok: true,
+        key: receipt.sessionKey,
+        sessionId: entry.sessionId,
+        entry: projectPublicSessionEntry(entry),
+        runStarted: false,
+        creationReplayed: true,
+        publicRead: Boolean(resolveSessionPublicShare(entry)),
+        resolved: { modelProvider: model.provider, model: model.model },
+      },
+      meta: { cached: true },
+    };
+  } finally {
+    sharing.authorization?.release?.();
+  }
+}
+
+function durableSessionCreate(handler: GatewayRequestHandler): GatewayRequestHandler {
+  return async (request) => {
+    const prepared = await prepareCreation(request);
+    if (prepared && "error" in prepared) {
+      request.respond(false, undefined, prepared.error);
+      return;
+    }
+    const replay = prepared ? await replayCreation(request, prepared) : undefined;
+    if (replay) {
+      request.respond(replay.ok, replay.payload, replay.error, replay.meta);
+      return;
+    }
+    await handler(
+      bindGatewayRequestHandlerMutationAuthority(
+        request,
+        {
+          ...request,
+          sessionCreationOperation: prepared?.operation,
+        },
+        undefined,
+      ),
+    );
+  };
+}
+
+/** Even the warm cache must prove current caller and original session incarnation. */
+async function replayDurableSessionCreate(
+  request: GatewayRequestHandlerOptions,
+  cached: GatewayInflightResult,
+) {
+  const prepared = await prepareCreation(request);
+  if (prepared && "error" in prepared) {
+    return { ok: false, error: prepared.error };
+  }
+  if (!prepared) {
+    readGatewayRequestMutationAuthority(request).assertCurrent();
+    return cached;
+  }
+  return (
+    (await replayCreation(request, prepared, cached)) ?? {
+      ok: false,
+      error: errorShape(ErrorCodes.UNAVAILABLE, "Session creation receipt expired; start again."),
+    }
+  );
+}
+
+export function idempotentDurableSessionCreate(
+  handler: GatewayRequestHandler,
+): GatewayRequestHandler {
+  return idempotentSessionCreate(durableSessionCreate(handler), replayDurableSessionCreate);
+}

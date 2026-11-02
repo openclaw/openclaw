@@ -39,6 +39,7 @@ import type {
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import { commitSessionCreationReceipt } from "./session-creation-receipts.js";
 import {
   captureSessionEntryPublicationSource,
   discardSessionEntryPublicationSource,
@@ -395,6 +396,18 @@ export function commitSessionEntryReplacementsInDatabase(
     ) {
       throw new Error("Session owner assignment lost its creation target");
     }
+  }
+  if (input.creationOperation) {
+    const created = input.replacements[0];
+    if (!created || input.replacements.length !== 1) {
+      throw new Error("Creation receipt requires one exact session target");
+    }
+    commitSessionCreationReceipt(
+      database,
+      input.creationOperation,
+      created.sessionKey,
+      created.entry,
+    );
   }
   const preservation = maintenance?.preservation;
   const maintenancePlan =

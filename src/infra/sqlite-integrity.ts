@@ -258,7 +258,7 @@ export function assertSqliteIntegrity(
   } = {},
 ): SqliteIntegrityChecks {
   if (options.check === "quick" && options.schemaOnly) {
-    // The owner only widens a stored CHECK; unchanged payloads and FKs need no scan.
+    // Schema-only migrations leave existing payloads and FKs unchanged.
     runSqliteCheck(database, databaseLabel, "quick_check", "schema_meta");
     return { integrityCheck: "ok" };
   }
