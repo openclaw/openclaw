@@ -1,11 +1,12 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { createMemo, For, lazy, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import {
   createFooterControlRef,
   ShellLayoutBoundary,
 } from "../../app/shell-layout-traits-solid.tsx";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
+import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
@@ -27,10 +28,6 @@ import { ScheduleSection } from "./view-schedule.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
 
 registerEnglishCatalog(registerPreferencesEnglish);
-
-const MarkdownHtml = lazy(() => import("../../components/solid/markdown-html.tsx"), {
-  export: "MarkdownHtml",
-});
 
 export function Editor(
   props: CronProps & {
@@ -174,14 +171,6 @@ function PromptSection(
   // code block instead of a textarea; every other kind stays an editable field. The code
   // block carries no aria-invalid/describedby because validateCronForm skips payloadText
   // for locked payloads, so this branch can never render a payload error.
-  const codeLanguage = () =>
-    props.payloadLocked
-      ? props.form.payloadKind === "script"
-        ? "javascript"
-        : props.form.payloadKind === "command"
-          ? "bash"
-          : ""
-      : "";
   const modelError = () => props.fieldErrors.payloadModel;
   const modelOptions = createMemo(() =>
     uniqueStrings(props.modelSuggestions).map((value) => {
@@ -193,7 +182,7 @@ function PromptSection(
     <SettingsSection>
       <FieldRow
         label={promptLabel()}
-        controlId={codeLanguage() ? "" : "cron-payload-text"}
+        controlId={props.payloadLocked ? "" : "cron-payload-text"}
         required
         help={promptHelp()}
         stacked
@@ -201,7 +190,7 @@ function PromptSection(
         error={props.fieldErrors.payloadText}
         errorId={errorIdForField("payloadText")}
         control={
-          codeLanguage() ? (
+          props.payloadLocked ? (
             <pre
               id="cron-payload-text"
               class="code-block cron-payload-code"
@@ -213,7 +202,10 @@ function PromptSection(
               <SanitizedHtml
                 tag="code"
                 class="hljs"
-                html={highlightCodeHtml(props.form.payloadText, codeLanguage())}
+                html={highlightCodeHtml(
+                  props.form.payloadText,
+                  props.form.payloadKind === "script" ? "javascript" : "bash",
+                )}
               />
             </pre>
           ) : (
@@ -222,7 +214,6 @@ function PromptSection(
               class="settings-input"
               rows="6"
               value={props.form.payloadText}
-              readonly={props.payloadLocked}
               aria-required="true"
               placeholder={t("cron.form.promptPlaceholder")}
               aria-invalid={props.fieldErrors.payloadText ? "true" : "false"}
@@ -238,9 +229,6 @@ function PromptSection(
           )
         }
       />
-      {props.isAgentTurn && props.form.payloadText.trim() ? (
-        <MarkdownHtml class="chat-text" markdown={props.form.payloadText} />
-      ) : undefined}
       {props.payloadLocked ? (
         <FieldRow
           label={t("cron.form.action")}
@@ -267,6 +255,9 @@ function PromptSection(
       )}
       {props.isAgentTurn ? (
         <>
+          {props.form.payloadText.trim() ? (
+            <MarkdownHtml class="chat-text" markdown={props.form.payloadText} />
+          ) : undefined}
           <FieldRow
             label={t("cron.form.model")}
             controlId=""
